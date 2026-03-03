@@ -1,0 +1,22 @@
+{
+  "name": "rawgentic",
+  "version": "1.0.0",
+  "description": "9 SDLC workflow skills for Claude Code: issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, and incident response.",
+  "author": {
+    "name": "3D-Stories",
+    "url": "https://github.com/3D-Stories"
+  },
+  "homepage": "https://github.com/3D-Stories/rawgentic",
+  "repository": "https://github.com/3D-Stories/rawgentic",
+  "license": "MIT",
+  "keywords": [
+    "sdlc",
+    "workflow",
+    "tdd",
+    "code-review",
+    "quality-gates",
+    "conventional-commits",
+    "security-audit",
+    "incident-response"
+  ]
+}
