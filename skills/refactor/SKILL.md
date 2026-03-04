@@ -4,6 +4,7 @@ description: Refactor code using the WF4 14-step workflow with characterization 
 argument-hint: Scope description (e.g., "extract post-trade steps") or issue number
 ---
 
+
 # WF4: Refactoring Workflow
 
 <role>
@@ -36,7 +37,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF4 terminates after deployment verification. No auto-transition to other workflows.
+WF4 terminates after deployment verification. No auto-transition to other workflows. WF4 terminates ONLY after the completion-gate (after Step 14) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
 </termination-rule>
 
 <context-compaction>
@@ -67,15 +68,22 @@ Before modifying any code, WF4 requires characterization tests that capture curr
 5. Clean up: keep tests that add coverage, remove duplicates
 </characterization-testing>
 
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF4 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Refactoring Scope
 
 ### Instructions
 
-1. If argument is an issue number: fetch via `gh issue view <number> --repo ${REPO}`
-2. If free text: confirm scope understanding with user
-3. Verify the scope is a true refactoring (no behavior changes)
-4. If scope implies behavior changes, suggest WF2 instead
-5. Update `claude_docs/session_notes.md` with: scope, category (preliminary), initial assessment.
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, DEV_HOST). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. If argument is an issue number: fetch via `gh issue view <number> --repo ${REPO}`
+3. If free text: confirm scope understanding with user
+4. Verify the scope is a true refactoring (no behavior changes)
+5. If scope implies behavior changes, suggest WF2 instead
+6. Update `claude_docs/session_notes.md` with: scope, category (preliminary), initial assessment.
 
 ### Output Format
 
@@ -358,7 +366,7 @@ Wait for CI via `gh run list --branch <branch>`. Max 2 fix-and-retry cycles.
 ### Instructions
 
 1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${REPO}`
-2. Deploy: `${PROJECT_ROOT}/scripts/deploy-dev.sh`
+2. Deploy: `${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}`
 3. Verify health.
 
 ### Failure Modes
@@ -426,10 +434,27 @@ WF4 complete.
 
 ---
 
+<completion-gate>
+Before declaring WF4 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] PR URL documented
+5. [ ] Behavioral equivalence verified (tests pass, no regressions)
+6. [ ] E2E passed
+
+If ANY item fails, go back and complete it before declaring "WF4 complete."
+You may NOT output "WF4 complete" until all items pass.
+</completion-gate>
+
+---
+
 ## Workflow Resumption
 
 If this skill is invoked mid-conversation, detect the current state:
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR merged? → Step 13 (post-deploy)
 2. PR exists and CI passed? → Step 12 (merge)
 3. PR exists? → Step 11 (CI)

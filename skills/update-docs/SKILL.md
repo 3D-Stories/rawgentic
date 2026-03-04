@@ -4,6 +4,7 @@ description: Update, create, or restructure project documentation using the WF7 
 argument-hint: Description of docs to update (e.g., "update CLAUDE.md testing section") or issue number
 ---
 
+
 # WF7: Documentation Update Workflow
 
 <role>
@@ -43,7 +44,7 @@ Code is authoritative. If docs and code disagree, fix the docs, NOT the code (un
 </accuracy-first-principle>
 
 <termination-rule>
-WF7 terminates after merge and deployment. No auto-transition to other workflows.
+WF7 terminates after merge and deployment. No auto-transition to other workflows. WF7 terminates ONLY after the completion-gate (after Step 10) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
 </termination-rule>
 
 <context-compaction>
@@ -54,17 +55,24 @@ Per CLAUDE.md shared invariant #9: before context compaction, document in `claud
 Per CLAUDE.md shared invariant #1: STOP and ask the user when documentation requirements are ambiguous, accuracy verification yields conflicting results (code vs existing docs disagree on behavior), or the scope of changes expands beyond the original request. The accuracy-first principle makes this especially critical — incorrect documentation is worse than missing documentation, so when in doubt, STOP and ask rather than guess.
 </ambiguity-circuit-breaker>
 
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF7 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Documentation Scope
 
 ### Instructions
 
-1. If argument is an issue number: fetch via `gh issue view <number> --repo ${REPO}` and display.
-2. Clarify scope with the user:
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, SMB_USER, COMPOSE_INFRA). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. If argument is an issue number: fetch via `gh issue view <number> --repo ${REPO}` and display.
+3. Clarify scope with the user:
    - Which files need updating?
    - What kind of change? Classify as: **correction** / **addition** / **restructure** / **generation**
    - For SMB-shared docs: ensure `${SMB_USER}` has r/w access (per CLAUDE.md rule)
-3. Confirm scope with user before proceeding.
-4. Update `claude_docs/session_notes.md` with: documentation scope, target files, accuracy audit plan.
+4. Confirm scope with user before proceeding.
+5. Update `claude_docs/session_notes.md` with: documentation scope, target files, accuracy audit plan.
 
 ### Output Format
 
@@ -348,7 +356,7 @@ CI pass status.
    ```
 2. Deploy to dev (docs are part of the repo):
    ```bash
-   ${PROJECT_ROOT}/scripts/deploy-dev.sh
+   ${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}
    ```
 3. Verify SMB access if docs are in a shared location.
 
@@ -359,7 +367,7 @@ Merged and deployed documentation.
 ### Failure Modes
 
 - Merge conflict on squash → rebase branch on latest main, re-verify accuracy, force-push
-- Deploy script fails → check SSH connectivity to chorestory-dev
+- Deploy script fails → check SSH connectivity to ${DEV_HOST}
 - SMB access not configured for shared docs → set permissions for `${SMB_USER}` after deploy
 
 ---
@@ -413,10 +421,27 @@ Completion summary. WF7 terminates.
 
 ---
 
+<completion-gate>
+Before declaring WF7 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] Documentation committed
+5. [ ] PR URL documented (if branch)
+6. [ ] Cross-references verified
+
+If ANY item fails, go back and complete it before declaring "WF7 complete."
+You may NOT output "WF7 complete" until all items pass.
+</completion-gate>
+
+---
+
 ## Workflow Resumption
 
 If this skill is invoked mid-conversation, detect the current state:
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR merged? → Step 10 (summary)
 2. PR exists and CI passed? → Step 9 (merge)
 3. PR exists? → Step 8 (CI check)

@@ -48,6 +48,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 
 <termination-rule>
 WF2 ALWAYS terminates after deployment verification and completion summary. Do NOT suggest "shall I create another issue?" or "would you like to start WF1?" Do NOT restart WF2 for the same issue. The workflow produces a single completion summary and stops.
+WF2 terminates ONLY after the completion-gate (after Step 16) passes. All steps must have markers in session notes.
 </termination-rule>
 
 <loop-back-budget>
@@ -70,6 +71,7 @@ global_loopback_total = 0
 <resumption-protocol>
 WF2 may span multiple Claude Code sessions. On resumption, detect the current step:
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR exists and is merged? -> Resume at Step 15 (post-deploy verification)
 2. PR exists and CI passed? -> Resume at Step 14 (merge + deploy)
 3. PR exists? -> Resume at Step 13 (CI verification)
@@ -109,32 +111,40 @@ Active at ALL quality gates (Steps 4, 6, 9, 11, 15). Triggers when:
 When triggered: STOP the workflow at the current step. Present ALL problematic findings to the user. Wait for resolution. Do NOT auto-apply unambiguous findings separately -- the full set is applied together after resolution.
 </ambiguity-circuit-breaker>
 
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF2 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Issue Reference
 
 ### Instructions
 
-1. Parse the user's input to extract the GitHub issue number. Accept:
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, DEV_HOST, ENGINE_HOST, DB_NAME, DB_USER, POSTGRES_CONTAINER, COMPOSE_INFRA, COMPOSE_ENGINE). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+
+2. Parse the user's input to extract the GitHub issue number. Accept:
    - Bare number: `155`
    - Hash-prefixed: `#155`
    - URL: `https://github.com/${REPO}/issues/155`
 
-2. Fetch the issue via gh CLI:
+3. Fetch the issue via gh CLI:
 
    ```bash
    gh issue view <number> --repo ${REPO} --json number,title,body,labels,state
    ```
 
-3. Validate:
+4. Validate:
    - Issue exists (gh returns valid JSON)
    - Issue is open (`state == "OPEN"`)
    - If closed: ask user if they want to reopen or reference a different issue
 
-4. Check for WF1 origin:
+5. Check for WF1 origin:
    - If labels include "wf1-created": set `is_wf1_created = true`
    - Extract acceptance criteria, affected components, complexity from the issue body
    - If any are missing (manually created issue without WF1 structure): generate them from the description and ask user to confirm
 
-5. Display to user:
+6. Display to user:
 
    ```
    ISSUE #NNN: [title]
@@ -153,8 +163,8 @@ When triggered: STOP the workflow at the current step. Present ALL problematic f
    Confirm this is the correct issue to implement, or provide corrections.
    ```
 
-6. Update `claude_docs/session_notes.md` with: issue reference, initial scope assessment, classification (simple_bugfix/standard_feature/complex_feature), WF1 origin flag.
-7. Wait for user confirmation before proceeding.
+7. Update `claude_docs/session_notes.md` with: issue reference, initial scope assessment, classification (simple_bugfix/standard_feature/complex_feature), WF1 origin flag.
+8. Wait for user confirmation before proceeding.
 
 ### Output
 
@@ -776,23 +786,23 @@ CI status (pass/fail) with logs if failed.
    cd ${PROJECT_ROOT} && git checkout main && git pull origin main
    ```
 
-3. **Deploy to chorestory-dev:** The PostToolUse deploy hook triggers `scripts/deploy-dev.sh` which:
-   - SSHs to chorestory-dev (${DEV_HOST}), pulls latest main, restarts containers
-   - Runs E2E tests on chorestory-dev via Playwright
+3. **Deploy to ${DEV_HOST}:** The PostToolUse deploy hook triggers `scripts/${DEPLOY_COMMAND}` which:
+   - SSHs to ${DEV_HOST} (${DEV_HOST}), pulls latest main, restarts containers
+   - Runs E2E tests on ${DEV_HOST} via Playwright
    - If deploy hook does not fire automatically, trigger manually:
      ```bash
-     ${PROJECT_ROOT}/scripts/deploy-dev.sh
+     ${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}
      ```
 
-4. **Deploy to darwin (manual):**
+4. **Deploy to ${ENGINE_HOST} (manual):**
 
    ```bash
-   ssh root@${ENGINE_HOST} "cd /opt/millions && git pull origin main && docker compose -f ${COMPOSE_ENGINE} up -d --build --force-recreate"
+   ssh root@${ENGINE_HOST} "cd ${PROJECT_ROOT} && git pull origin main && docker compose -f ${COMPOSE_ENGINE} up -d --build --force-recreate"
    ```
 
 5. **Database migration execution (if applicable):**
    ```bash
-   ssh root@${DEV_HOST} "docker exec -i ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d ${DB_NAME} < /opt/millions/postgres-migrations/<migration-file>.sql"
+   ssh root@${DEV_HOST} "docker exec -i ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d ${DB_NAME} < ${PROJECT_ROOT}/postgres-migrations/<migration-file>.sql"
    ```
 
 ### Output
@@ -802,8 +812,8 @@ Merged PR, deployed to dev environment on both VMs.
 ### Failure Modes
 
 - Merge conflicts: rebase and re-push
-- Deploy fails on chorestory-dev: check deploy script logs, SSH and inspect container logs
-- Deploy fails on darwin: SSH, check engine logs, rollback if needed
+- Deploy fails on ${DEV_HOST}: check deploy script logs, SSH and inspect container logs
+- Deploy fails on ${ENGINE_HOST}: SSH, check engine logs, rollback if needed
 - E2E tests fail post-deploy: this is Gate 3 -- fix or rollback
 - **E2E test data cleanup:** If the feature added test seed data, ensure `afterAll` cleanup runs. Cumulative test data affects risk calculations.
 
@@ -817,8 +827,8 @@ Merged PR, deployed to dev environment on both VMs.
    - **E2E results verification:** Parse the E2E test output from Step 14's deploy script
    - **Health check verification:**
      ```bash
-     curl -s http://${DEV_HOST}:8082/api/health
-     curl -s http://${ENGINE_HOST}:8888/health
+     curl -s http://${DEV_HOST}:${DASHBOARD_PORT}/api/health
+     curl -s http://${ENGINE_HOST}:${ENGINE_API_PORT}/health
      ```
    - **Acceptance criteria spot-check:** For each criterion, verify evidence of correct behavior
    - **Regression check:** Did any existing functionality break?
@@ -866,8 +876,8 @@ Quality Gates:
 - Step 15 (Post-Deploy): [pass / fail with details]
 
 Deployment:
-- chorestory-dev (${DEV_HOST}): [success / failed]
-- darwin (${ENGINE_HOST}): [success / failed / manual required]
+- ${DEV_HOST} (${DEV_HOST}): [success / failed]
+- ${ENGINE_HOST}: [success / failed / manual required]
 
 Tests:
 - Total run: N (Python: N, Node.js: N)
@@ -893,3 +903,21 @@ Completion summary. WF2 terminates.
 ### Failure Modes
 
 - None — this is an informational step. If previous steps had partial failures, this step reports the partial completion status with clear next steps.
+
+---
+
+<completion-gate>
+Before declaring WF2 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] PR URL documented
+5. [ ] All commits pushed
+6. [ ] CI passed
+7. [ ] E2E passed on dev
+8. [ ] CLAUDE.md updated if architecture changed
+
+If ANY item fails, go back and complete it before declaring "WF2 complete."
+You may NOT output "WF2 complete" until all items pass.
+</completion-gate>
