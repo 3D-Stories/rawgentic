@@ -4,6 +4,7 @@ description: Update project dependencies using the WF8 12-step workflow with inc
 argument-hint: Update scope (e.g., "all", "security", "react", or issue number)
 ---
 
+
 # WF8: Dependency Update Workflow
 
 <role>
@@ -38,7 +39,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF8 terminates after deployment verification. No auto-transition.
+WF8 terminates after deployment verification. No auto-transition. WF8 terminates ONLY after the completion-gate (after Step 12) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
 </termination-rule>
 
 <ambiguity-circuit-breaker>
@@ -56,15 +57,22 @@ Per CLAUDE.md shared invariant #9: before context compaction, document in `claud
 4. For Docker base images: tag the old image before pulling new one
 </rollback-strategy>
 
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF8 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Update Scope
 
 ### Instructions
 
-1. Parse scope: determine which package manager(s) affected (npm, pip, docker).
-2. If issue number: fetch via `gh issue view <number> --repo ${REPO}`
-3. Confirm scope with user.
-4. For "all" scope: warn about risk and suggest starting with security-only.
-5. Update `claude_docs/session_notes.md` with: dependency update scope, security audit results, update strategy.
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, DEV_HOST). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. Parse scope: determine which package manager(s) affected (npm, pip, docker).
+3. If issue number: fetch via `gh issue view <number> --repo ${REPO}`
+4. Confirm scope with user.
+5. For "all" scope: warn about risk and suggest starting with security-only.
+6. Update `claude_docs/session_notes.md` with: dependency update scope, security audit results, update strategy.
 
 ### Output Format
 
@@ -282,7 +290,7 @@ Wait for CI via `gh run list --branch <branch>`. Max 2 fix-and-retry cycles. Dep
 ### Instructions
 
 1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${REPO}`
-2. Deploy: `${PROJECT_ROOT}/scripts/deploy-dev.sh`
+2. Deploy: `${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}`
 3. **Extra verification for dependency updates:**
    - Verify Docker containers build and start successfully
    - Verify no runtime import errors (some dep issues only surface at runtime)
@@ -300,7 +308,7 @@ Wait for CI via `gh run list --branch <branch>`. Max 2 fix-and-retry cycles. Dep
 ### Instructions
 
 1. Hit health endpoints (dashboard + engine)
-2. Run E2E tests: `ssh root@${DEV_HOST} "cd /opt/millions/dashboard/e2e && npx playwright test"`
+2. Run E2E tests: `ssh root@${DEV_HOST} "cd ${PROJECT_ROOT}/dashboard/e2e && npx playwright test"`
 3. Check Docker logs for runtime errors (last 5 minutes)
 4. Verify no performance degradation
 
@@ -351,8 +359,25 @@ WF8 complete.
 
 ---
 
+<completion-gate>
+Before declaring WF8 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] Update summary table presented
+5. [ ] Deferred updates documented with reasons
+6. [ ] npm audit status documented
+
+If ANY item fails, go back and complete it before declaring "WF8 complete."
+You may NOT output "WF8 complete" until all items pass.
+</completion-gate>
+
+---
+
 ## Workflow Resumption
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR merged? → Step 11 (smoke test)
 2. PR exists and CI passed? → Step 10 (merge)
 3. PR exists? → Step 9 (CI)
