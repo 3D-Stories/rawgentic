@@ -78,7 +78,7 @@ All code-producing workflows (WF2, WF3, WF4, WF8, WF9, WF10, WF11) share a commo
 
 **I. CI Verification** — GitHub Actions. Max 2 fix-and-retry cycles. Enforces P7 (Gate 2).
 
-**J. Merge + Deploy** — `gh pr merge --squash` + deploy-dev.sh. Enforces P6 (Main-to-Dev Sync), P7 (Gate 3 start).
+**J. Merge + Deploy** — `gh pr merge --squash` + ${DEPLOY_COMMAND}. Enforces P6 (Main-to-Dev Sync), P7 (Gate 3 start).
 
 **K. Post-Deploy Verify** — Hit health endpoints, run E2E tests (scope-dependent), check Docker logs. Enforces P7 (Gate 3 completion). Some workflows have domain-specific verification (WF10: benchmarks, WF9: security scan, WF8: smoke test).
 
@@ -95,7 +95,7 @@ These behaviors are identical across ALL code-producing workflows:
 5. **Commit Convention**: `<type>(scope): <description>` where type = feat/fix/refactor/docs/deps/perf/security/hotfix matching branch prefix.
 6. **Branch from main**: All branches created from `origin/main` (not from other feature branches).
 7. **Squash merge**: All PRs use `gh pr merge --squash` (not regular merge or rebase).
-8. **Deploy to dev only**: Workflows deploy to chorestory-dev + darwin dev environments. Production deployment is outside workflow scope.
+8. **Deploy to dev only**: Workflows deploy to ${DEV_HOST} + ${ENGINE_HOST} dev environments. Production deployment is outside workflow scope.
 9. **Context compaction protocol**: Before compaction, document current step, quality gate state, branch name, last commit SHA.
 
 ---

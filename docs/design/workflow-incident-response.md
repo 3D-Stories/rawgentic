@@ -14,7 +14,7 @@
 **Inputs:**
 
 - Incident description (symptoms, affected services, user impact)
-- Runtime environment access (SSH to darwin and chorestory-dev for immediate diagnosis)
+- Runtime environment access (SSH to ${ENGINE_HOST} and ${DEV_HOST} for immediate diagnosis)
 - Service logs and health endpoints
 - Recent deployment history (to check if this is a deploy-caused regression)
 
@@ -94,16 +94,16 @@ For common incident types, WF11 provides quick diagnostic steps:
 
 ### Database Issues
 
-1. Check PostgreSQL: `docker exec millions-postgres-dev pg_isready`
-2. Check connections: `docker exec millions-postgres-dev psql -U millions_dev -c "SELECT count(*) FROM pg_stat_activity"`
-3. Check slow queries: `docker exec millions-postgres-dev psql -U millions_dev -c "SELECT * FROM pg_stat_activity WHERE state = 'active' AND query_start < now() - interval '30 seconds'"`
+1. Check PostgreSQL: `docker exec ${POSTGRES_CONTAINER} pg_isready`
+2. Check connections: `docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -c "SELECT count(*) FROM pg_stat_activity"`
+3. Check slow queries: `docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -c "SELECT * FROM pg_stat_activity WHERE state = 'active' AND query_start < now() - interval '30 seconds'"`
 4. Common fixes: kill hung queries, restart PostgreSQL, check disk space
 
 ### Trading Engine Issues
 
-1. Check engine status: `curl -H "X-API-Key: $KEY" http://10.0.17.204:8080/status`
-2. Check IBKR connection: engine logs for "connected"/"disconnected"
-3. Check scheduler: `curl -H "X-API-Key: $KEY" http://10.0.17.204:8080/scheduler`
+1. Check engine status: `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:${ENGINE_API_PORT}/status`
+2. Check broker connection: engine logs for "connected"/"disconnected"
+3. Check scheduler: `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:${ENGINE_API_PORT}/scheduler`
 4. Common fixes: restart engine, restart IB Gateway, check market hours
 
 ---
