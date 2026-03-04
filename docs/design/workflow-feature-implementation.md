@@ -17,7 +17,7 @@
 - GitHub issue number or URL (created by WF1 or manually)
 - Existing codebase context (CLAUDE.md, MEMORY.md, session notes)
 - Phase 2 principles (for quality gate placement)
-- Runtime environment access (SSH to darwin and my-api-dev for testing and deployment)
+- Runtime environment access (SSH to `${ENGINE_HOST}` and `${DEV_HOST}` for testing and deployment)
 
 **Outputs:**
 
@@ -36,7 +36,7 @@
 - P3: Frequent Local Commits (commit every 5 minutes of active work)
 - P4: Regular Remote Sync (push to origin every 30 minutes)
 - P5: TDD Enforcement (tests before code, tests pass before PR)
-- P6: Main-to-Dev Sync (deploy after merge -- my-api-dev automated, darwin manual)
+- P6: Main-to-Dev Sync (deploy after merge -- `${DEV_HOST}` automated, `${ENGINE_HOST}` manual)
 - P7: Triple-Gate Testing (local pre-PR, CI post-PR, dev server post-merge)
 - P8: Shift-Left Critique (full critique post-design, reflect post-plan/post-TDD/post-deploy)
 - P9: Continuous Memorization (memorize after quality gates with reusable insights)
@@ -522,7 +522,7 @@ After review findings are applied:
    - **Base branch:** main
 4. **Gate 1 check (P7 Triple-Gate):** Before creating the PR, the PreToolUse hook runs the full test suite (Python + Node.js). If tests fail, PR creation is BLOCKED until they pass.
 
-**Output:** PR URL (e.g., `https://github.com/3D-Stories/millions/pull/NNN`)
+**Output:** PR URL (e.g., `https://github.com/${REPO}/pull/NNN`)
 **Failure mode:** (1) Test suite fails (Gate 1 blocks PR creation). Recovery: fix the failing tests, re-run, retry PR creation. (2) Push fails (network). Recovery: retry after 5 seconds; if persistent, save PR body locally for manual creation. (3) `gh` CLI auth failure. Recovery: verify PAT is valid with Issues and PRs (r/w) scope. (4) PR creation fails (branch has conflicts with main). Recovery: rebase feature branch on main, resolve conflicts, re-push.
 **Principle alignment:** P7 (Triple-Gate Testing) -- Gate 1 (local pre-PR tests); P12 (Conventional Commit Discipline) -- PR title and commits follow conventional format; P14 (Documentation-Gated PRs) -- PR body includes documentation changes.
 **Critique level:** N/A (not a quality gate -- this is an execution step)
@@ -558,20 +558,20 @@ Claude monitors CI status via `gh run list --branch <branch>` and `gh run view <
 
 **Type:** automated
 **Actor:** sub-agent + hook (deploy-on-push)
-**Command:** `gh pr merge <number> --squash --delete-branch`, then deploy-dev.sh (triggered by PostToolUse hook on push)
+**Command:** `gh pr merge <number> --squash --delete-branch`, then `${DEPLOY_COMMAND}` (triggered by PostToolUse hook on push)
 **Input:** Passing CI from Step 13, PR number
 **Action:**
 
 1. **Merge PR:** `gh pr merge <number> --squash --delete-branch` -- squash merge to keep main history clean, auto-delete feature branch.
 2. **Pull main:** `git checkout main && git pull origin main`
-3. **Deploy:** The PostToolUse deploy hook triggers `scripts/deploy-dev.sh` which:
-   - SSHs to my-api-dev (192.0.2.10), pulls latest main, restarts containers
-   - Runs E2E tests on my-api-dev via Playwright
-   - (Note: darwin deployment is currently manual -- deploy script only covers my-api-dev)
-4. **Darwin deploy (manual step):** SSH to darwin (root@192.0.2.12), pull main, restart engine container: `ssh root@192.0.2.12 "cd /opt/millions && git pull origin main && docker compose -f docker-compose.engine.dev.yml up -d --build --force-recreate"`
+3. **Deploy:** The PostToolUse deploy hook triggers `${DEPLOY_COMMAND}` which:
+   - SSHs to `${DEV_HOST}`, pulls latest main, restarts containers
+   - Runs E2E tests on `${DEV_HOST}` via Playwright
+   - (Note: engine host deployment is currently manual -- deploy script only covers `${DEV_HOST}`)
+4. **Engine host deploy (manual step):** SSH to `${ENGINE_HOST}`, pull main, restart engine container: `ssh root@${ENGINE_HOST} "cd ${PROJECT_ROOT} && git pull origin main && docker compose -f ${COMPOSE_ENGINE} up -d --build --force-recreate"`
 
 **Output:** Merged PR, deployed to dev environment on both VMs
-**Failure mode:** (1) Merge conflicts. Recovery: should not happen if CI passed on a clean branch, but if they do, rebase and re-push. (2) Deploy fails on my-api-dev. Recovery: check deploy script logs, SSH to my-api-dev and inspect container logs. (3) Deploy fails on darwin. Recovery: SSH to darwin, check engine logs, rollback if needed (`git checkout <previous-sha>`). (4) E2E tests fail post-deploy. Recovery: this is Gate 3 -- fix the issue (may require a hotfix branch) or rollback.
+**Failure mode:** (1) Merge conflicts. Recovery: should not happen if CI passed on a clean branch, but if they do, rebase and re-push. (2) Deploy fails on `${DEV_HOST}`. Recovery: check deploy script logs, SSH to `${DEV_HOST}` and inspect container logs. (3) Deploy fails on `${ENGINE_HOST}`. Recovery: SSH to `${ENGINE_HOST}`, check engine logs, rollback if needed (`git checkout <previous-sha>`). (4) E2E tests fail post-deploy. Recovery: this is Gate 3 -- fix the issue (may require a hotfix branch) or rollback.
 **Principle alignment:** P6 (Main-to-Dev Sync) -- deploy after merge; P7 (Triple-Gate Testing) -- Gate 3 (dev server post-deploy E2E).
 **Critique level:** N/A (not a quality gate -- this is deployment execution)
 **User selection:** no -- automated deployment (user already approved via PR)
@@ -588,8 +588,8 @@ Claude monitors CI status via `gh run list --branch <branch>` and `gh run view <
 
 1. **E2E results verification:** Did all E2E tests pass? If any failed, which acceptance criteria are affected?
 2. **Health check verification:** Are all services healthy?
-   - Dashboard: `curl http://192.0.2.10:8082/api/health`
-   - Engine: `curl http://192.0.2.12:8888/health`
+   - Dashboard: `curl http://${DEV_HOST}:${DASHBOARD_PORT}/api/health`
+   - Engine: `curl http://${ENGINE_HOST}:${ENGINE_API_PORT}/health`
 3. **Acceptance criteria spot-check:** For each acceptance criterion, verify there is evidence of correct behavior (either from E2E test results or manual API call results).
 4. **Regression check:** Did any existing functionality break? (Covered by E2E suite, but reflect may identify untested regressions based on the change scope.)
 
@@ -614,10 +614,10 @@ Applies the ambiguity circuit breaker.
 - GitHub PR URL with clickable link
 - GitHub issue URL (with `Closes #<number>` status)
 - Summary of quality gates: findings at each gate, how many applied, how many triggered circuit breaker
-- Deployment status: pass/fail for each VM (my-api-dev, darwin)
+- Deployment status: pass/fail for each VM (`${DEV_HOST}`, `${ENGINE_HOST}`)
 - Test results: total tests run, passed, failed, new tests added
 - Memorized insights (if any)
-- Any open follow-up items (e.g., "darwin deployment needs manual verification", "E2E test gap identified for X")
+- Any open follow-up items (e.g., "engine host deployment needs manual verification", "E2E test gap identified for X")
 - Explicit termination notice: "WF2 complete for issue #NNN. Feature deployed to dev environment."
 
 **Output:** Completion summary message
@@ -669,12 +669,12 @@ The workflow was validated against all 14 Phase 2 principles. Findings:
 
 ### Principles Partially Enforced
 
-- **P6 (Main-to-Dev Sync):** Deploy script covers my-api-dev automatically but darwin requires manual SSH (Step 14). This is a known gap documented in CLAUDE.md ("deploy script only covers one of two VMs").
+- **P6 (Main-to-Dev Sync):** Deploy script covers `${DEV_HOST}` automatically but `${ENGINE_HOST}` requires manual SSH (Step 14). This is a known gap documented in CLAUDE.md ("deploy script only covers one of two VMs").
 - **P10 (Diagram-Driven Design):** Conditional diagram creation in Step 3 (only when architecture changes are significant). Not every feature needs a diagram -- the condition is assessed in Step 2.
 
 ### Gaps Identified
 
-1. **Darwin auto-deploy not in deploy script.** Impact: Step 14 requires manual darwin deployment. Mitigation: documented as a manual step with explicit SSH command. Future enhancement: extend deploy-dev.sh.
+1. **Engine host auto-deploy not in deploy script.** Impact: Step 14 requires manual engine host deployment. Mitigation: documented as a manual step with explicit SSH command. Future enhancement: extend `${DEPLOY_COMMAND}`.
 2. **E2E tests not in CI (Gate 2).** Impact: Gate 2 only runs unit/integration tests. E2E runs at Gate 3 (post-deploy). Mitigation: this is the existing CI design; adding E2E to CI requires self-hosted runner or SSH action.
 
 ### Rollback Plan
@@ -686,8 +686,8 @@ If a deployed feature causes issues, follow this rollback sequence:
 3. **Post-deploy (Steps 14-16):**
    - Record the pre-merge SHA from the deploy log or `git log --oneline -5 main`
    - Revert on main: `git revert <merge-sha> && git push origin main`
-   - Re-deploy to my-api-dev: `ssh root@192.0.2.10 "cd /opt/millions && git pull origin main && docker compose -f docker-compose.infra.dev.yml up -d --build --force-recreate"`
-   - Re-deploy to darwin: `ssh root@192.0.2.12 "cd /opt/millions && git pull origin main && docker compose -f docker-compose.engine.dev.yml up -d --build --force-recreate"`
+   - Re-deploy to ${DEV_HOST}: `ssh root@${DEV_HOST} "cd ${PROJECT_ROOT} && git pull origin main && docker compose -f ${COMPOSE_INFRA} up -d --build --force-recreate"`
+   - Re-deploy to ${ENGINE_HOST}: `ssh root@${ENGINE_HOST} "cd ${PROJECT_ROOT} && git pull origin main && docker compose -f ${COMPOSE_ENGINE} up -d --build --force-recreate"`
    - If database migrations were applied: run the corresponding rollback migration (migration files should include a `-- ROLLBACK:` comment with the reverse SQL)
    - Verify health checks pass after rollback
 4. **Multi-PR rollback:** Revert sub-PRs in reverse order (last merged first). Each revert is its own PR with CI verification.
@@ -755,7 +755,7 @@ Updated CLAUDE.md                    Reviewed code (Critical/High fixed)
                                             |
                                             v
                                      Step 14: Merge PR + Deploy
-                                       [gh pr merge + deploy-dev.sh]
+                                       [gh pr merge + ${DEPLOY_COMMAND}]
                                        [GATE 3: E2E post-deploy]
                                             |
                                             v
