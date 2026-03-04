@@ -4,6 +4,7 @@ description: Respond to a production incident using the WF11 14-step two-phase w
 argument-hint: Incident description (e.g., "dashboard not loading", "engine stopped trading") or issue number
 ---
 
+
 # WF11: Incident Response & Root Cause Analysis Workflow
 
 <role>
@@ -13,7 +14,7 @@ You are the WF11 orchestrator implementing a 14-step incident response workflow 
 <constants>
 REPO = "<inferred from `git remote -v` at workflow start>"
 PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
-ENGINE_HOST = "<from CLAUDE.md infrastructure — darwin server IP>"
+ENGINE_HOST = "<from CLAUDE.md infrastructure — ${ENGINE_HOST} server IP>"
 POSTGRES_CONTAINER = "<from CLAUDE.md infrastructure — PostgreSQL container name>"
 DB_USER = "<from CLAUDE.md database section — dev database user>"
 DB_NAME = "<from CLAUDE.md database section — dev database name>"
@@ -32,7 +33,7 @@ LOOPBACK_BUDGET:
 Constants are populated at workflow start (Step 1) by running:
 - `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
 - `PROJECT_ROOT`: `git rev-parse --show-toplevel`
-- `ENGINE_HOST`: Read from CLAUDE.md infrastructure section (darwin server IP)
+- `ENGINE_HOST`: Read from CLAUDE.md infrastructure section (${ENGINE_HOST} server IP)
 - `POSTGRES_CONTAINER`: Read from CLAUDE.md infrastructure section (PostgreSQL container name)
 - `DB_USER`: Read from CLAUDE.md database section (dev database user)
 - `DB_NAME`: Read from CLAUDE.md database section (dev database name)
@@ -42,7 +43,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF11 terminates after RCA is complete and action items are created. Permanent fix may be delegated to WF2/WF3.
+WF11 terminates ONLY after the completion-gate (after Step 14) passes. All 14 steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing. Permanent fix may be delegated to WF2/WF3, but Steps 11-14 are still mandatory.
 </termination-rule>
 
 <ambiguity-circuit-breaker>
@@ -81,9 +82,9 @@ All principles fully enforced during Phase B.
 
 ### Trading Engine Issues
 
-1. `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:8080/status` — engine status
-2. Engine logs: look for "connected"/"disconnected" — IBKR connection
-3. `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:8080/scheduler` — scheduler status
+1. `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:8100/status` — engine status
+2. Engine logs: look for "connected"/"disconnected" — broker connection
+3. `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:8100/scheduler` — scheduler status
 4. Common fixes: restart engine, restart IB Gateway, check market hours
 
 </quick-diagnostic-playbook>
@@ -98,12 +99,14 @@ All principles fully enforced during Phase B.
 
 #### Instructions
 
-1. Log incident start time.
-2. Classify severity (SEV-1 through SEV-4).
-3. Identify affected services and user impact.
-4. **SEV-1/SEV-2:** Skip confirmation, proceed immediately to diagnosis.
-5. **SEV-3/SEV-4:** Confirm priority with user.
-6. Update `claude_docs/session_notes.md` with: incident description, severity classification, initial impact assessment.
+1. **Run environment-setup commands FIRST** — populate all `<constants>` values by executing the commands in the `<environment-setup>` block. Log the resolved values in session notes.
+2. Log incident start time (UTC).
+3. Classify severity (SEV-1 through SEV-4).
+4. Identify affected services and user impact.
+5. **SEV-1/SEV-2:** Skip confirmation, proceed immediately to diagnosis.
+6. **SEV-3/SEV-4:** Confirm priority with user.
+7. Update `claude_docs/session_notes.md` with: resolved constants, incident description, severity classification, initial impact assessment.
+8. Log in session notes: `### WF11 Step 1: Receive Incident Report — DONE`
 
 ### Failure Modes
 
@@ -117,6 +120,10 @@ All principles fully enforced during Phase B.
 
 #### Instructions
 
+**Fast-path for code-level bugs:** If the error message identifies a specific code location (stack trace, SQL constraint violation with column name, module path in traceback), skip infrastructure checks (items 1, 4, 5) and go directly to code analysis. Still verify the service is running (item 2) but don't waste time on Docker stats or connectivity when the error is obviously a code bug.
+
+**Full diagnostic path (infrastructure/unknown issues):**
+
 1. **Check recent deployments:** `git log --oneline -5` on affected servers — deploy-caused?
 2. **Check service health:** Hit health endpoints for all services.
 3. **Check logs:** Tail last 200 lines, look for errors/exceptions.
@@ -124,6 +131,8 @@ All principles fully enforced during Phase B.
 5. **Check connectivity:** Services reaching each other? (dashboard↔postgres, engine↔postgres, engine↔redis)
 6. **Use quick diagnostic playbook** for the incident type.
 7. **Form hypothesis:** Most likely cause based on evidence.
+
+Log in session notes: `### WF11 Step 2: Rapid Diagnosis — DONE (fast-path|full)`
 
 ### Failure Modes
 
@@ -142,10 +151,13 @@ Choose one (safest to most invasive):
 1. **Restart:** Transient failure (OOM, connection drop) → restart service
 2. **Rollback:** Recent deploy caused it → `git revert` and redeploy
 3. **Config fix:** Misconfiguration → fix config and restart
-4. **Workaround:** Complex root cause → temporary fix (disable feature, increase resources)
-5. **Escalate:** Inconclusive diagnosis + SEV-1 → escalate to user
+4. **Code fix:** Bug identified in code → fix, test, deploy
+5. **Workaround:** Complex root cause → temporary fix (disable feature, increase resources)
+6. **Escalate:** Inconclusive diagnosis + SEV-1 → escalate to user
 
 **For destructive actions (rollback, DB operations):** Always get user approval first.
+
+Log in session notes: `### WF11 Step 3: Strategy — [chosen strategy] (temporary|permanent)`
 
 ### Failure Modes
 
@@ -162,6 +174,7 @@ Choose one (safest to most invasive):
 1. Execute chosen strategy.
 2. Monitor recovery: health endpoints, logs for new errors, user-facing functionality.
 3. If first strategy fails, try next option from Step 3.
+4. Log in session notes: `### WF11 Step 4: Execute — DONE (branch: <name>, commit: <sha>)`
 
 ### Failure Modes
 
@@ -180,6 +193,7 @@ Choose one (safest to most invasive):
 3. Engine processing (if applicable).
 4. Monitor 5 minutes — no recurring errors.
 5. SEV-1/SEV-2: run abbreviated E2E smoke test.
+6. Log in session notes: `### WF11 Step 5: Verify Restoration — DONE (health: OK|FAIL, E2E: OK|SKIP)`
 
 ### Failure Modes
 
@@ -195,6 +209,7 @@ Choose one (safest to most invasive):
 
 1. Document in session notes: incident timeline, stabilization actions, temporary vs permanent fix.
 2. Ask user: proceed to Phase B (RCA) now or in a separate session?
+3. Log in session notes: `### WF11 Step 6: Stabilization Summary — DONE (Phase B: now|later)`
 
 ### Failure Modes
 
@@ -204,6 +219,23 @@ Choose one (safest to most invasive):
 ---
 
 <!-- PHASE B: ROOT CAUSE ANALYSIS -->
+
+<mandatory-rule>
+EVEN IF the Phase A fix is the permanent fix, Steps 11-14 are NEVER optional.
+After deployment verification (Step 5), you MUST eventually execute:
+- Step 11: Preventive measures (test gaps, CLAUDE.md, playbook, same-class bug scan)
+- Step 12: Action items (GitHub issues for systemic findings)
+- Step 13: Memorize (`/reflexion:memorize`)
+- Step 14: Formal closure (WF11 COMPLETE template)
+
+When the Phase A fix IS the permanent fix:
+
+- Steps 7-10 may be abbreviated (5 Whys can be inline, no separate design/implement cycle)
+- Steps 11-14 remain MANDATORY — these are POST-FIX tasks, not part of the fix itself
+- Step 6 MUST still ask the user whether to proceed to Phase B now or later
+
+You may NOT declare WF11 complete until the completion-gate (after Step 14) passes.
+</mandatory-rule>
 
 ## Phase B: Analyze & Prevent
 
@@ -226,6 +258,8 @@ Update `claude_docs/session_notes.md` with: Phase A summary, stabilization actio
    - Missing documentation
    - Insufficient resource limits
 
+Log in session notes: `### WF11 Step 7: RCA (5 Whys) — DONE (root cause: <summary>)`
+
 ### Failure Modes
 
 - 5 Whys reaches dead end → broaden investigation, check infrastructure
@@ -242,6 +276,7 @@ Update `claude_docs/session_notes.md` with: Phase A summary, stabilization actio
 2. Design preventive measures: tests, monitoring, documentation.
 3. If complex (>10 files, architecture change): delegate to WF2.
 4. If simple: proceed within WF11.
+5. Log in session notes: `### WF11 Step 8: Design Fix — DONE (scope: WF11|WF2, complexity: simple|complex)`
 
 ### Failure Modes
 
@@ -261,6 +296,8 @@ Invoke `/reflexion:reflect` (lightweight):
 - Does the permanent fix address the root cause?
 - Are preventive measures sufficient?
 - Related areas with same vulnerability?
+
+Log in session notes: `### WF11 Step 9: RCA Critique — DONE (confidence: high|medium|low)`
 
 ### Failure Modes
 
@@ -286,6 +323,8 @@ If fix is within WF11 scope:
 
 If complex: create GitHub issue and delegate to WF2/WF3.
 
+Log in session notes: `### WF11 Step 10: Implement Fix — DONE (branch: <name>, PR: #<N>, delegated: no|WF2|WF3)`
+
 ### Failure Modes
 
 - Reproduction test passes immediately → stabilization fix already resolved permanently; skip to Step 11 with confirmation
@@ -298,15 +337,19 @@ If complex: create GitHub issue and delegate to WF2/WF3.
 
 #### Instructions
 
-1. Add missing tests.
-2. Update monitoring/alerting (if applicable).
-3. Add diagnostic commands to quick playbook (if new incident type).
-4. Update CLAUDE.md with new pitfalls or patterns.
+1. Add missing tests that would have caught this incident.
+2. **Same-class bug scan:** If the root cause is a missing parameter, wrong default, or interface mismatch — grep for ALL callers of the affected function and verify they don't have the same bug. Log findings in session notes.
+3. Update monitoring/alerting (if applicable).
+4. Add diagnostic commands to quick playbook (if new incident type).
+5. Update CLAUDE.md with new pitfalls or patterns.
+
+Log in session notes: `### WF11 Step 11: Preventive Measures — DONE (N items)`
 
 ### Failure Modes
 
 - Monitoring/alerting requires infrastructure changes beyond session scope → create GitHub issue for follow-up
 - Playbook update conflicts with existing entries → merge and resolve duplicates
+- Same-class scan finds additional bugs → fix them in the same PR or create separate issues
 
 ---
 
@@ -322,6 +365,8 @@ Create GitHub issues for:
 - Documentation gaps
 
 Label: `incident-followup`, priority based on severity.
+
+Log in session notes: `### WF11 Step 12: Action Items — DONE (N issues created)`
 
 ### Failure Modes
 
@@ -340,6 +385,8 @@ Run `/reflexion:memorize` — incidents produce the MOST valuable learnings. Cur
 - Update "Known Recurring Issues" if this is a pattern
 - Add to quick diagnostic playbook
 - Document root cause and fix approach
+
+Log in session notes: `### WF11 Step 13: Memorize — DONE (N patterns saved)`
 
 ### Failure Modes
 
@@ -388,6 +435,8 @@ Memorized: [N patterns saved to CLAUDE.md]
 WF11 complete.
 ```
 
+Log in session notes: `### WF11 Step 14: Incident Closure — DONE`
+
 ### Failure Modes
 
 - GitHub issue doesn't exist yet → create one with the incident report as the body
@@ -396,8 +445,27 @@ WF11 complete.
 
 ---
 
+<completion-gate>
+Before declaring WF11 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Service health verified (Step 5 marker present)
+3. [ ] Step 6 gate: user asked about Phase B timing
+4. [ ] Step 11: Preventive measures implemented (test gaps, same-class scan, CLAUDE.md)
+5. [ ] Step 12: Action items created as GitHub issues
+6. [ ] Step 13: Patterns memorized to CLAUDE.md via `/reflexion:memorize`
+7. [ ] Step 14: WF11 COMPLETE template printed to user
+8. [ ] Session notes updated with final incident report
+
+If ANY item fails, go back and complete it before declaring WF11 complete.
+You may NOT output "WF11 complete" until all items pass.
+</completion-gate>
+
+---
+
 ## Workflow Resumption
 
+0. All step markers present but completion-gate not printed? → Run completion-gate
 1. Incident closed (issue closed + report)? → Terminated
 2. Action items created? → Step 13 (memorize)
 3. RCA + permanent fix deployed? → Step 12 (action items)
