@@ -9,7 +9,7 @@
 | P3  | Frequent Local Commits  | Commit after each meaningful change; never lose more than 15 min of work                                |
 | P4  | Regular Remote Sync     | Push to remote at every natural checkpoint (after tests pass, after review)                             |
 | P5  | TDD Enforcement         | Write tests before implementation; variant per workflow type                                            |
-| P6  | Main-to-Dev Sync        | After merge to main, deploy to dev immediately via deploy-dev.sh                                        |
+| P6  | Main-to-Dev Sync        | After merge to main, deploy to dev immediately via `${DEPLOY_COMMAND}`                                  |
 | P7  | Triple-Gate Testing     | Gate 1: local tests, Gate 2: CI (GitHub Actions), Gate 3: post-deploy E2E                               |
 | P8  | Shift-Left Critique     | Quality gates (critique/reflect) run BEFORE implementation, not after                                   |
 | P9  | Continuous Memorization | Curate reusable insights into CLAUDE.md via `/reflexion:memorize`                                       |
@@ -46,7 +46,7 @@ All code-producing workflows share these step patterns:
 - **G. Code Review** — Pre-PR review. Full 4-agent (WF2/WF4/WF10), focused (WF3/WF8), abbreviated (WF11).
 - **H. Create PR** — `gh pr create`. Conventional commit title. P12, P14 enforced.
 - **I. CI Verification** — GitHub Actions. Max 2 fix-and-retry cycles. P7 Gate 2.
-- **J. Merge + Deploy** — `gh pr merge --squash` + deploy-dev.sh. P6, P7 Gate 3 start.
+- **J. Merge + Deploy** — `gh pr merge --squash` + `${DEPLOY_COMMAND}`. P6, P7 Gate 3 start.
 - **K. Post-Deploy Verify** — Health endpoints, E2E tests, Docker logs. P7 Gate 3 completion.
 - **L. Completion Summary** — Update session notes, close issue, present summary. P14.
 
