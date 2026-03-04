@@ -78,6 +78,8 @@ Auto-detect as much as possible, then ask the user to confirm or override detect
 - **DB_NAME / DB_USER** — Only ask if database infrastructure detected.
 - **POSTGRES_CONTAINER** — Only ask if a PostgreSQL Docker service is detected.
 - **COMPOSE_INFRA / COMPOSE_ENGINE** — Only ask if multiple Docker Compose files are found.
+- **DASHBOARD_PORT** — Only ask if a web server/dashboard is detected (e.g., Vite dev server, nginx proxy, Express listening port). Detect from `vite.config.*` (`server.port`), `package.json` scripts, Docker Compose port mappings, or `.env*` files (`PORT`, `DASHBOARD_PORT`).
+- **ENGINE_API_PORT** — Only ask if a separate backend/engine API server is detected (e.g., aiohttp, FastAPI, Express on a different port). Detect from Docker Compose port mappings, `.env*` files, or Python entry points.
 - **SMB_USER** — Only ask if the user mentions SMB/network shares or if documentation references SMB access.
 
 ### Output format:

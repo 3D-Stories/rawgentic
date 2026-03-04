@@ -75,6 +75,8 @@ DB_USER = "${DB_USER}" # Optional
 POSTGRES_CONTAINER = "${POSTGRES_CONTAINER}"  # Optional — only if Docker
 COMPOSE_INFRA = "${COMPOSE_INFRA}" # Optional
 COMPOSE_ENGINE = "${COMPOSE_ENGINE}" # Optional
+DASHBOARD_PORT = "${DASHBOARD_PORT}" # Optional — dashboard/frontend port
+ENGINE_API_PORT = "${ENGINE_API_PORT}" # Optional — engine/backend API port
 SMB_USER = "${SMB_USER}" # Optional — only if SMB shares
 
 ## Test Commands (detected by /rawgentic:setup)
