@@ -222,7 +222,7 @@ fi
         "hooks": [
           {
             "type": "command",
-            "command": "bash $HOME/millions/.claude/hooks/start-commit-timer.sh"
+            "command": "bash ${PROJECT_ROOT}/.claude/hooks/start-commit-timer.sh"
           }
         ]
       }
@@ -233,7 +233,7 @@ fi
         "hooks": [
           {
             "type": "command",
-            "command": "bash $HOME/millions/.claude/hooks/check-commit-timer.sh"
+            "command": "bash ${PROJECT_ROOT}/.claude/hooks/check-commit-timer.sh"
           }
         ]
       }
@@ -338,7 +338,7 @@ exit 0
 
 **Trade-offs:**
 
-- Every push triggers `deploy-on-push.sh` (300s timeout), which deploys to my-api-dev and runs E2E tests. Pushing every 30 minutes means up to 16 deploy+E2E cycles per 8-hour session. This is expensive but acceptable if E2E tests are fast (approximately 2 minutes currently).
+- Every push triggers `deploy-on-push.sh` (300s timeout), which deploys to `${DEV_HOST}` and runs E2E tests. Pushing every 30 minutes means up to 16 deploy+E2E cycles per 8-hour session. This is expensive but acceptable if E2E tests are fast (approximately 2 minutes currently).
 - Pushing WIP code to origin means incomplete features are visible on the remote. Feature branches mitigate this -- the code is not on main.
 - If the push triggers CI on GitHub, frequent pushes consume GitHub Actions minutes. The current CI runs on push to main and PRs targeting main only, so feature branch pushes do NOT trigger CI. No conflict.
 - Network outage: if push fails, the reminder will fire again on the next cycle. The hook should handle push failures gracefully (log and retry next cycle, not block).
@@ -389,14 +389,14 @@ CWD=$(echo "$INPUT" | jq -r '.cwd')
 
 # Run Python tests
 echo "Running Python tests before PR creation..." >&2
-PYTEST_RESULT=$(ssh root@192.0.2.12 \
-  "cd /opt/millions && docker compose -f docker-compose.engine.dev.yml exec -T engine python -m pytest tests/ -v --tb=short" 2>&1)
+PYTEST_RESULT=$(ssh root@${ENGINE_HOST} \
+  "cd ${PROJECT_ROOT} && docker compose -f ${COMPOSE_ENGINE} exec -T engine python -m pytest tests/ -v --tb=short" 2>&1)
 PYTEST_EXIT=$?
 
 # Run Node.js tests
 echo "Running Node.js tests before PR creation..." >&2
-VITEST_RESULT=$(ssh root@192.0.2.10 \
-  "cd /opt/millions && docker compose -f docker-compose.infra.dev.yml exec -T dashboard npx vitest run" 2>&1)
+VITEST_RESULT=$(ssh root@${DEV_HOST} \
+  "cd ${PROJECT_ROOT} && docker compose -f ${COMPOSE_INFRA} exec -T dashboard npx vitest run" 2>&1)
 VITEST_EXIT=$?
 
 if [ $PYTEST_EXIT -ne 0 ] || [ $VITEST_EXIT -ne 0 ]; then
@@ -420,7 +420,7 @@ exit 0
 **Trade-offs:**
 
 - Running full test suites before PR creation adds significant time (Python tests: approximately 30s, Node.js tests: approximately 15s, E2E: approximately 3 minutes). The hook should run unit+integration tests (fast) and defer E2E to the deploy step.
-- SSH to remote VMs (darwin, my-api-dev) to run tests adds network latency and introduces a point of failure -- if the VM is unreachable, the hook will fail and block PR creation. Need a fallback or timeout.
+- SSH to remote VMs (`${ENGINE_HOST}`, `${DEV_HOST}`) to run tests adds network latency and introduces a point of failure -- if the VM is unreachable, the hook will fail and block PR creation. Need a fallback or timeout.
 - The 60-second default hook timeout may be insufficient for full test suite execution. Must set a custom timeout (120-180s).
 - Does not enforce TDD order (red-green-refactor) -- only enforces that tests pass at PR creation time. True TDD enforcement requires workflow-level discipline, not just a gate.
 
@@ -436,24 +436,24 @@ exit 0
 
 **Industry basis:** Continuous Deployment (CD). The deploy-on-merge pattern ensures the development environment always reflects the latest main branch. This is a simplified version of GitOps where the desired state (main branch) is automatically reconciled with the actual state (dev servers).
 
-**Discovery validation:** Phase 1 confirms the `deploy-on-push.sh` PostToolUse hook already triggers `deploy-dev.sh` after pushes, but this only fires within Claude Code sessions and only deploys to my-api-dev (not darwin). The discovery doc flags: "deploy script only covers one of two VMs" and "engine deployment on darwin is fully manual." This principle formalizes and extends the existing pattern.
+**Discovery validation:** Phase 1 confirms the `deploy-on-push.sh` PostToolUse hook already triggers the deploy script after pushes, but this only fires within Claude Code sessions and only deploys to `${DEV_HOST}` (not `${ENGINE_HOST}`). The discovery doc flags: "deploy script only covers one of two VMs" and "engine deployment on the engine host is fully manual." This principle formalizes and extends the existing pattern.
 
 **Enforcement:** PostToolUse hook (extend existing deploy-on-push.sh) + GitHub Actions workflow (webhook on merge)
 
 **Tooling:**
 
-- Existing `deploy-on-push.sh` hook -- extend to also deploy engine on darwin
+- Existing `deploy-on-push.sh` hook -- extend to also deploy engine on `${ENGINE_HOST}`
 - `cicd-automation:workflow-automate` -- wshobson/agents for GitHub Actions CD pipeline setup
 - `deployment-validation:config-validate` -- wshobson/agents for pre-deploy validation
-- Custom: extend `scripts/deploy-dev.sh` to SSH to darwin and pull+rebuild engine
+- Custom: extend `${DEPLOY_COMMAND}` to SSH to `${ENGINE_HOST}` and pull+rebuild engine
 
 **Source:** wshobson/agents + custom extension of existing scripts
 
 **Trade-offs:**
 
-- Adding darwin deployment to the hook increases the timeout required (currently 300s for my-api-dev only; darwin rebuild could add 120-180s more).
-- Auto-deploying after merge assumes the merged code is safe -- but CI should have already validated it. The E2E step in deploy-dev.sh provides a post-deploy safety net.
-- If darwin deployment fails, the dev environment is in a split state (new dashboard, old engine). The hook must handle partial failure gracefully -- deploy dashboard, then engine, and report the status of each independently.
+- Adding engine host deployment to the hook increases the timeout required (currently 300s for `${DEV_HOST}` only; `${ENGINE_HOST}` rebuild could add 120-180s more).
+- Auto-deploying after merge assumes the merged code is safe -- but CI should have already validated it. The E2E step in `${DEPLOY_COMMAND}` provides a post-deploy safety net.
+- If `${ENGINE_HOST}` deployment fails, the dev environment is in a split state (new dashboard, old engine). The hook must handle partial failure gracefully -- deploy dashboard, then engine, and report the status of each independently.
 - GitHub Actions-based CD would run outside Claude Code sessions, which is more reliable but requires additional infrastructure setup (self-hosted runner or SSH action).
 
 **Priority:** 8
@@ -472,7 +472,7 @@ exit 0
 
 - Gate 1 (local pre-PR): Not enforced -- tests exist but no gate prevents PR creation with failures.
 - Gate 2 (CI post-PR): Exists via `.github/workflows/test.yml` -- runs Python and Node.js tests. But E2E and lint are missing from CI.
-- Gate 3 (dev server post-merge): Partially exists via `deploy-dev.sh` which runs E2E after deploy. But only covers my-api-dev, not darwin.
+- Gate 3 (dev server post-merge): Partially exists via `${DEPLOY_COMMAND}` which runs E2E after deploy. But only covers `${DEV_HOST}`, not `${ENGINE_HOST}`.
 
 This principle formalizes and completes the existing partial pattern.
 
@@ -482,7 +482,7 @@ This principle formalizes and completes the existing partial pattern.
 
 - Gate 1: Custom PreToolUse hook on `gh pr create` (see Principle 5)
 - Gate 2: Existing `.github/workflows/test.yml` -- extend with lint checks (ruff, prettier), E2E tests (requires Playwright in CI or on a self-hosted runner), and coverage reporting
-- Gate 3: Existing `deploy-dev.sh` -- extend to cover darwin and add post-deploy health checks for both VMs
+- Gate 3: Existing `${DEPLOY_COMMAND}` -- extend to cover `${ENGINE_HOST}` and add post-deploy health checks for both VMs
 - `cicd-automation:workflow-automate` -- wshobson/agents for CI pipeline enhancement
 - `code-review:review-pr` -- NeoLabHQ/context-engineering-kit for automated PR review in CI (6-agent review)
 
@@ -490,7 +490,7 @@ This principle formalizes and completes the existing partial pattern.
 
 **Trade-offs:**
 
-- E2E tests in CI require either: (a) spinning up Docker containers in GitHub Actions (complex, slow), (b) a self-hosted runner on the LAN with access to the dev stack, or (c) running E2E on my-api-dev triggered by CI via SSH. Option (c) is most pragmatic for this project.
+- E2E tests in CI require either: (a) spinning up Docker containers in GitHub Actions (complex, slow), (b) a self-hosted runner on the LAN with access to the dev stack, or (c) running E2E on `${DEV_HOST}` triggered by CI via SSH. Option (c) is most pragmatic for this project.
 - Three gates add latency to the merge pipeline. Local tests (approximately 45s) + CI (approximately 2 min) + E2E deploy (approximately 5 min) = approximately 8 minutes total. Acceptable for this project's pace.
 - Gate 2 (CI) and Gate 3 (dev server) overlap in test coverage. This is intentional -- CI runs in an isolated environment (catches dependency issues), while dev server runs against real infrastructure (catches deployment issues).
 - Adding lint/format checks to CI (Gate 2) may fail on existing code that was never formatted. Must do a one-time format pass on the entire codebase before enabling the CI gate.
@@ -582,7 +582,7 @@ This principle formalizes and completes the existing partial pattern.
 
 **Industry basis:** Architecture Decision Records (ADRs) + visual modeling. C4 architecture model advocates diagrams at multiple abstraction levels. The "diagram first" approach from domain-driven design ensures shared understanding before code. Simon Brown's "diagrams as code" movement emphasizes keeping diagrams in sync with implementation.
 
-**Discovery validation:** Phase 1 confirms Excalidraw MCP is configured and operational (canvas sync at my-api-dev:3100). However, "No `.excalidraw` files exist anywhere in the repository" and the `diagrams/` directory is empty. This is entirely aspirational -- no diagramming practice exists today. The existing design documentation (24 plan/design docs) is text-only.
+**Discovery validation:** Phase 1 confirms Excalidraw MCP is configured and operational (canvas sync at `${DEV_HOST}:3100`). However, "No `.excalidraw` files exist anywhere in the repository" and the `diagrams/` directory is empty. This is entirely aspirational -- no diagramming practice exists today. The existing design documentation (24 plan/design docs) is text-only.
 
 **Enforcement:** Manual (workflow discipline) -- no automated enforcement mechanism exists for "diagram before implement"
 
@@ -600,7 +600,7 @@ This principle formalizes and completes the existing partial pattern.
 - Excalidraw diagrams are binary blobs -- they do not diff well in git. Changes are not easily reviewable in PRs. Mermaid diagrams (text-based) are more git-friendly but less visually flexible.
 - Maintaining diagram-code parity is a manual discipline that degrades over time. Without automated sync (which does not exist), diagrams become stale.
 - For a solo developer workflow, the overhead of maintaining diagrams for every change may not justify the benefit. Consider limiting the requirement to: (a) new feature architecture, (b) cross-service interaction changes, and (c) database schema changes.
-- The Excalidraw MCP canvas sync is pointed at my-api-dev:3100 -- this requires the dev VM to be running for diagramming to work. If the VM is down, diagramming is blocked.
+- The Excalidraw MCP canvas sync is pointed at `${DEV_HOST}:3100` -- this requires the dev VM to be running for diagramming to work. If the VM is down, diagramming is blocked.
 
 **Priority:** 11
 
@@ -766,7 +766,7 @@ Principles are ranked considering: (1) foundational dependencies, (2) gap severi
 | 3   | Frequent Local Commits  | Continuous integration / rollback safety | Custom background timer + PostToolUse    | Custom build (watchdog + marker file)                                 | 5        |
 | 4   | Regular Remote Sync     | CI / remote backup                       | Custom background timer + PostToolUse    | Custom build (same pattern as P3)                                     | 7        |
 | 5   | TDD Enforcement         | Test-Driven Development                  | PreToolUse hook (block PR if tests fail) | tdd:write-tests (context-engineering-kit) + tdd-workflows (wshobson)  | 3        |
-| 6   | Main-to-Dev Sync        | Continuous Deployment                    | PostToolUse hook + GitHub Actions        | cicd-automation (wshobson) + deploy-dev.sh extension                  | 8        |
+| 6   | Main-to-Dev Sync        | Continuous Deployment                    | PostToolUse hook + GitHub Actions        | cicd-automation (wshobson) + `${DEPLOY_COMMAND}` extension            | 8        |
 | 7   | Triple-Gate Testing     | Progressive testing / defense in depth   | Hook + CI + deploy script                | code-review:review-pr (context-engineering-kit) + CI extension        | 4        |
 | 8   | Shift-Left Critique     | Shift-left quality / LLM-as-Judge        | Workflow-level (manual at gates)         | reflexion:critique + reflexion:reflect (context-engineering-kit)      | 6        |
 | 9   | Continuous Memorization | Organizational learning                  | Workflow-level (post-critique)           | reflexion:memorize (context-engineering-kit) + mem0                   | 9        |

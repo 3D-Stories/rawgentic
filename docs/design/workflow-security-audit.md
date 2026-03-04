@@ -78,7 +78,7 @@ All data channels must be audited independently (per CLAUDE.md):
 1. REST API (Express) -- JWT authenticate middleware
 2. Socket.IO (Express) -- JWT handshake middleware
 3. Redis pub/sub -- requirepass
-4. Engine HTTP API (aiohttp) -- api_key_middleware
+4. Engine HTTP API -- api_key_middleware
 
 ---
 
@@ -166,7 +166,7 @@ After audit, user decides:
 **Input:** Scope from Step 1
 **Action:**
 
-1. **Endpoint inventory:** List all API endpoints (Express routes, Engine aiohttp routes)
+1. **Endpoint inventory:** List all API endpoints (dashboard backend routes, engine API routes)
 2. **Authentication mapping:** For each endpoint, verify auth middleware is applied
 3. **Data channel mapping:** Identify all data channels (REST, Socket.IO, Redis, Engine HTTP)
 4. **Input boundary mapping:** Identify all points where external data enters the system (req.body, req.params, req.query, WebSocket messages, Redis messages)

@@ -4,6 +4,7 @@ description: Conduct a security audit using the WF9 14-step workflow with STRIDE
 argument-hint: Audit scope (e.g., "full", "REST API", "CVE-2024-1234", "deps")
 ---
 
+
 # WF9: Security Audit & Remediation Workflow
 
 <role>
@@ -23,7 +24,7 @@ DATA_CHANNELS:
   - REST API (Express) — JWT authenticate middleware
   - Socket.IO (Express) — JWT handshake middleware
   - Redis pub/sub — requirepass
-  - Engine HTTP API (aiohttp) — api_key_middleware
+  - Engine HTTP API (engine API) — api_key_middleware
 SEVERITY_SLA:
   Critical: fix immediately (same session)
   High: fix within 24 hours
@@ -44,7 +45,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF9 terminates after audit report delivery (audit-only mode) or after remediation deployment verification (audit+fix mode). No auto-transition.
+WF9 terminates after audit report delivery (audit-only mode) or after remediation deployment verification (audit+fix mode). No auto-transition. In audit+fix mode, WF9 terminates ONLY after the completion-gate (after Step 14) passes. In audit-only mode, WF9 terminates after Step 6 issue creation with step markers for Steps 1-6 logged. All steps must have markers in session notes.
 </termination-rule>
 
 <ambiguity-circuit-breaker>
@@ -55,16 +56,27 @@ If audit findings are ambiguous, severity classification is uncertain, or remedi
 Per CLAUDE.md shared invariant #9: before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, audit mode, STRIDE findings so far, remediation scope decision, and loop-back budget state.
 </context-compaction>
 
+<mandatory-rule>
+In audit+fix mode, Steps 12-14 (Merge and Deploy, Post-Deploy Security Verification, Update Security Documentation) are NEVER optional. A security audit without formal closure leaves vulnerabilities untracked. Execute all three steps even if no vulnerabilities were found (the report should confirm a clean audit). In audit-only mode (user chose "Audit only" in Step 6), the workflow terminates after Step 6 — Steps 7-14 do not apply.
+</mandatory-rule>
+
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF9 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Audit Scope
 
 ### Instructions
 
-1. Parse scope and determine audit mode (full/targeted/reactive/dependency).
-2. If CVE: fetch CVE details via web search or NVD.
-3. If component: identify all files, endpoints, and data channels in scope.
-4. If deps: suggest delegating to WF8 (`/update-deps security`).
-5. Confirm scope with user.
-6. Update `claude_docs/session_notes.md` with: audit scope, audit mode (full/targeted/reactive/dependency), data channels in scope, initial assessment.
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. Parse scope and determine audit mode (full/targeted/reactive/dependency).
+3. If CVE: fetch CVE details via web search or NVD.
+4. If component: identify all files, endpoints, and data channels in scope.
+5. If deps: suggest delegating to WF8 (`/update-deps security`).
+6. Confirm scope with user.
+7. Update `claude_docs/session_notes.md` with: audit scope, audit mode (full/targeted/reactive/dependency), data channels in scope, initial assessment.
 
 ### Output Format
 
@@ -91,7 +103,7 @@ Proceeding to enumerate attack surface. Confirm scope.
 
 ### Instructions
 
-1. **Endpoint inventory:** List all API endpoints (Express routes, Engine aiohttp routes).
+1. **Endpoint inventory:** List all API endpoints (Express routes, Engine engine API routes).
 2. **Authentication mapping:** For each endpoint, verify auth middleware is applied.
 3. **Data channel mapping:** Identify all 4 data channels and their auth mechanisms.
 4. **Input boundary mapping:** All points where external data enters (req.body, req.params, req.query, WebSocket messages, Redis messages).
@@ -129,7 +141,7 @@ All 4 data channels must be audited independently (per CLAUDE.md mandate).
 
 - STRIDE category yields no findings → verify you checked all code paths, not just obvious ones
 - Finding severity unclear → default to higher severity, let Step 5 critique adjust
-- Data channel auth mechanism unclear → trace middleware registration in Express.js and aiohttp app setup
+- Data channel auth mechanism unclear → trace middleware registration in dashboard backend and engine API app setup
 
 ---
 
@@ -317,7 +329,7 @@ Wait for CI via `gh run list --branch <branch>`. Security PRs should be fast-tra
 ### Instructions
 
 1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${REPO}`
-2. Deploy: `${PROJECT_ROOT}/scripts/deploy-dev.sh`
+2. Deploy: `${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}`
 3. Extra security verification post-deploy:
    - Re-run key security tests against deployed environment
    - Verify auth endpoints reject unauthenticated requests
@@ -326,7 +338,7 @@ Wait for CI via `gh run list --branch <branch>`. Security PRs should be fast-tra
 ### Failure Modes
 
 - Merge conflicts → rebase on latest main and re-run tests
-- Deploy script fails → check SSH connectivity to my-api-dev, verify Docker status
+- Deploy script fails → check SSH connectivity to ${DEV_HOST}, verify Docker status
 - Post-deploy security verification fails → investigate environment-specific config differences
 
 ---
@@ -387,10 +399,35 @@ WF9 complete.
 - GitHub issues fail to create → verify PAT scopes (Issues r/w), retry
 - Session notes too long → archive to `session_notes_NNN.md` and start fresh
 
+<completion-gate>
+Before declaring WF9 complete, verify ALL of the following. Print the checklist with pass/fail for each item.
+
+**Audit+Fix mode (Steps 1-14):**
+
+1. [ ] Step markers logged for ALL executed steps (1-14) in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] Audit report committed
+5. [ ] Remediation PRs listed
+6. [ ] Residual risks documented with severity
+7. [ ] Security documentation updated
+
+**Audit-only mode (Steps 1-6):**
+
+1. [ ] Step markers logged for Steps 1-6 in session notes
+2. [ ] GitHub issues created for all findings
+3. [ ] Audit report presented to user
+4. [ ] Session notes updated with audit summary
+
+If ANY item fails for the active mode, go back and complete it before declaring "WF9 complete."
+You may NOT output "WF9 complete" until all items for the active mode pass.
+</completion-gate>
+
 ---
 
 ## Workflow Resumption
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR merged and deployed? → Step 14 (update docs)
 2. PR exists and CI passed? → Step 12 (merge)
 3. PR exists? → Step 11 (CI)

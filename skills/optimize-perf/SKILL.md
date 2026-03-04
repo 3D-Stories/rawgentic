@@ -4,6 +4,7 @@ description: Optimize performance using the WF10 15-step workflow with baseline 
 argument-hint: Performance scope (e.g., "API response times", "db-queries", or issue number)
 ---
 
+
 # WF10: Performance Optimization Workflow
 
 <role>
@@ -36,7 +37,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF10 terminates after deployment verification with benchmark comparison. No auto-transition.
+WF10 terminates after deployment verification with benchmark comparison. No auto-transition. WF10 terminates ONLY after the completion-gate (after Step 15) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
 </termination-rule>
 
 <ambiguity-circuit-breaker>
@@ -54,18 +55,25 @@ Per CLAUDE.md shared invariant #9: before context compaction, document in `claud
 4. Watch for regression in other areas
 </measure-dont-guess>
 
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF10 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Performance Scope
 
 ### Instructions
 
-1. Parse scope: identify affected subsystem.
-2. If issue: fetch via `gh issue view <number> --repo ${REPO}`
-3. Clarify expectations:
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. Parse scope: identify affected subsystem.
+3. If issue: fetch via `gh issue view <number> --repo ${REPO}`
+4. Clarify expectations:
    - What is "slow"? (current latency, expected latency)
    - What is the acceptable target? (specific numbers, not "faster")
    - Is this user-facing or internal?
-4. Confirm scope with user.
-5. Update `claude_docs/session_notes.md` with: performance target, baseline metrics, optimization scope.
+5. Confirm scope with user.
+6. Update `claude_docs/session_notes.md` with: performance target, baseline metrics, optimization scope.
 
 ### Failure Modes
 
@@ -334,13 +342,13 @@ Wait for CI via `gh run list --branch <branch>`. Max 2 fix-and-retry cycles.
 ### Instructions
 
 1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${REPO}`
-2. Deploy: `${PROJECT_ROOT}/scripts/deploy-dev.sh`
+2. Deploy: `${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}`
 3. Re-run benchmarks against deployed environment to confirm improvement holds.
 
 ### Failure Modes
 
 - Merge conflicts → rebase on latest main and re-run tests
-- Deploy script fails → check SSH connectivity to my-api-dev, verify Docker status
+- Deploy script fails → check SSH connectivity to ${DEV_HOST}, verify Docker status
 - Post-deploy benchmarks show no improvement → investigate cold cache, different data volume, resource allocation
 
 ---
@@ -404,8 +412,26 @@ WF10 complete.
 
 ---
 
+<completion-gate>
+Before declaring WF10 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] Benchmark before/after table presented
+5. [ ] PR URL documented
+6. [ ] E2E passed
+7. [ ] Performance metrics documented
+
+If ANY item fails, go back and complete it before declaring "WF10 complete."
+You may NOT output "WF10 complete" until all items pass.
+</completion-gate>
+
+---
+
 ## Workflow Resumption
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR merged? → Step 14 (post-deploy verify)
 2. PR exists and CI passed? → Step 13 (merge)
 3. PR exists? → Step 12 (CI)

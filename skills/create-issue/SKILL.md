@@ -4,6 +4,7 @@ description: Create a GitHub issue (feature request or bug report) using the WF1
 argument-hint: Description of the feature to request or bug to report
 ---
 
+
 # WF1: Issue Creation Workflow (v1.0)
 
 <role>
@@ -31,7 +32,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF1 ALWAYS terminates after issue creation. WF2 (Feature Implementation) requires explicit, separate invocation. There is NO auto-transition from WF1 to WF2 under ANY circumstance. Do not suggest "shall I implement this?" or "would you like to start WF2?"
+WF1 ALWAYS terminates after issue creation. WF2 (Feature Implementation) requires explicit, separate invocation. There is NO auto-transition from WF1 to WF2 under ANY circumstance. Do not suggest "shall I implement this?" or "would you like to start WF2?" WF1 terminates ONLY after the completion-gate passes. All steps must have markers in session notes.
 </termination-rule>
 
 <context-compaction>
@@ -42,23 +43,30 @@ Per CLAUDE.md shared invariant #9: before context compaction, document in `claud
 Per CLAUDE.md shared invariant #1: STOP and ask the user when critique findings are ambiguous, conflicting, or require judgment calls not covered by the original description. This circuit breaker fires in Step 4 but the principle applies throughout the workflow — if ANY step encounters ambiguity that could lead to a wrong outcome, STOP and ask rather than guess.
 </ambiguity-circuit-breaker>
 
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF1 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive User Intent
 
 ### Instructions
 
 1. Acknowledge the user's request.
-2. Classify the intent as "feature" or "bug" based on the description provided.
-3. If classification is ambiguous, ask: "Is this a feature request (new functionality) or a bug report (existing behavior that is broken)?"
-4. Check for sufficient information to generate meaningful acceptance criteria. If insufficient, ask targeted clarifying questions:
+2. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+3. Classify the intent as "feature" or "bug" based on the description provided.
+4. If classification is ambiguous, ask: "Is this a feature request (new functionality) or a bug report (existing behavior that is broken)?"
+5. Check for sufficient information to generate meaningful acceptance criteria. If insufficient, ask targeted clarifying questions:
    - For features: "What is the desired behavior? Which part of the system is affected? What problem does this solve?"
    - For bugs: "What is the expected behavior? What is the actual behavior? Can you reproduce it? Which VM/container is affected?"
-5. Run a deduplication check:
+6. Run a deduplication check:
    ```bash
    gh issue list --repo ${REPO} --search "<keywords from description>" --limit 10
    ```
-6. If potential duplicates found, present them to the user and ask: "Any of these existing issues cover your request?"
-7. Update `claude_docs/session_notes.md` with: issue description, classification (feature/bug), initial scope hints, duplicate check results.
-8. Confirm classification with the user before proceeding.
+7. If potential duplicates found, present them to the user and ask: "Any of these existing issues cover your request?"
+8. Update `claude_docs/session_notes.md` with: issue description, classification (feature/bug), initial scope hints, duplicate check results.
+9. Confirm classification with the user before proceeding.
 
 ### Output Format
 
@@ -443,7 +451,7 @@ Approved specification (or cancellation). Step 8 only runs after explicit approv
      ```
    - If a needed label does not exist, create it:
      ```bash
-     gh label create "engine" --repo ${REPO} --description "Engine (Python/darwin)" --color "0E8A16"
+     gh label create "engine" --repo ${REPO} --description "Engine (Python backend)" --color "0E8A16"
      ```
 
 4. Create the issue:
@@ -521,10 +529,27 @@ Completion summary message. WF1 terminates.
 
 ---
 
+<completion-gate>
+Before declaring WF1 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] Issue URL documented in session notes
+5. [ ] Memorize step completed (insights saved or correctly skipped)
+6. [ ] Issue body matches critique findings
+
+If ANY item fails, go back and complete it before declaring "WF1 complete."
+You may NOT output "WF1 complete" until all items pass.
+</completion-gate>
+
+---
+
 ## Workflow Resumption
 
 If this skill is invoked mid-conversation, detect the current state:
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. Was a GitHub issue just created? → Step 9 (summary only)
 2. Was the spec approved by user? → Step 8 (create issue)
 3. Is there a refined spec with critique findings applied? → Step 7 (user review)
