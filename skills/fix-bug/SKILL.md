@@ -4,6 +4,7 @@ description: Fix a bug using the WF3 14-step workflow with reproduce-first TDD, 
 argument-hint: GitHub issue number (e.g., "42") or issue URL
 ---
 
+
 # WF3: Bug Fix Workflow
 
 <role>
@@ -42,7 +43,7 @@ If any constant cannot be resolved, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
-WF3 terminates after deployment verification and completion summary. No auto-transition to other workflows.
+WF3 terminates after deployment verification and completion summary. No auto-transition to other workflows. WF3 terminates ONLY after the completion-gate (after Step 14) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
 </termination-rule>
 
 <context-compaction>
@@ -72,16 +73,27 @@ WF3 accepts bug reports of any complexity. However:
 Inherited from WF2 (identical behavior): Apply ALL findings from quality gates automatically. If any finding is ambiguous, conflicting, or requires judgment — STOP and present to user for resolution before proceeding. User has final authority (P11).
 </ambiguity-circuit-breaker>
 
+<mandatory-rule>
+Steps 12-14 (Merge and Deploy, Post-Deploy Verification, Completion Summary) are NEVER optional, even when the fix is confirmed working after merge. A bug fix without formal closure risks repeating the same class of bug. If the fix is permanent (no Phase B needed), you may execute these steps quickly, but you MUST execute them.
+</mandatory-rule>
+
+<step-tracking>
+At the end of each step, log a marker in `claude_docs/session_notes.md`:
+`### WF3 Step X: <Name> — DONE (<key detail>)`
+This enables workflow resumption if context is lost.
+</step-tracking>
+
 ## Step 1: Receive Bug Report Reference
 
 ### Instructions
 
-1. Parse the argument as a GitHub issue number or URL.
-2. Fetch the issue: `gh issue view <number> --repo ${REPO}`
-3. Confirm the issue is open and labeled as bug (or has bug report template format).
-4. Display to the user: title, steps to reproduce, expected vs actual behavior, environment.
-5. Ask user to confirm this is the correct bug to fix.
-6. If the issue lacks reproduction steps or expected behavior, ask user to provide them before proceeding.
+1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, DEV_HOST, ENGINE_HOST, DB_NAME, DB_USER, POSTGRES_CONTAINER, COMPOSE_INFRA, COMPOSE_ENGINE). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. Parse the argument as a GitHub issue number or URL.
+3. Fetch the issue: `gh issue view <number> --repo ${REPO}`
+4. Confirm the issue is open and labeled as bug (or has bug report template format).
+5. Display to the user: title, steps to reproduce, expected vs actual behavior, environment.
+6. Ask user to confirm this is the correct bug to fix.
+7. If the issue lacks reproduction steps or expected behavior, ask user to provide them before proceeding.
 
 ### Output Format
 
@@ -259,11 +271,11 @@ Execute the plan from Step 5 using strict reproduce-first TDD:
 ### Test Commands
 
 ```bash
-# Python engine tests (on darwin)
-ssh root@${ENGINE_HOST} "cd /opt/millions && docker compose -f ${COMPOSE_ENGINE} exec engine python -m pytest tests/ -v"
+# Python engine tests (on ${ENGINE_HOST})
+ssh root@${ENGINE_HOST} "cd ${PROJECT_ROOT} && docker compose -f ${COMPOSE_ENGINE} exec engine python -m pytest tests/ -v"
 
-# Node.js dashboard tests (on chorestory-dev)
-ssh root@${DEV_HOST} "cd /opt/millions && docker compose -f ${COMPOSE_INFRA} exec dashboard npx vitest run"
+# Node.js dashboard tests (on ${DEV_HOST})
+ssh root@${DEV_HOST} "cd ${PROJECT_ROOT} && docker compose -f ${COMPOSE_INFRA} exec dashboard npx vitest run"
 ```
 
 ### Output
@@ -422,9 +434,9 @@ CI pass/fail status.
    ```
 2. Deploy to dev:
    ```bash
-   ${PROJECT_ROOT}/scripts/deploy-dev.sh
+   ${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}
    ```
-3. If the fix includes a database migration, run it on chorestory-dev:
+3. If the fix includes a database migration, run it on ${DEV_HOST}:
    ```bash
    ssh root@${DEV_HOST} "docker exec -i ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d ${DB_NAME}" < postgres-migrations/0XX-name.sql
    ```
@@ -448,10 +460,11 @@ Merged PR + deployed dev environment.
 1. **Symptom verification:** Check that the original bug symptoms no longer occur in the dev environment.
 2. **E2E verification (if applicable):** Run relevant E2E tests:
    ```bash
-   ssh root@${DEV_HOST} "cd /opt/millions/dashboard/e2e && npx playwright test <relevant-spec>"
+   ssh root@${DEV_HOST} "cd ${PROJECT_ROOT}/dashboard/e2e && npx playwright test <relevant-spec>"
    ```
 3. **Health check:** Verify all services are healthy after deployment.
 4. **Quick reflect:** Does the deployed fix match what was intended?
+5. **Same-class bug scan:** If the root cause was a missing/incorrect parameter at a call site, grep ALL callers of the affected function to check for the same class of bug at other call sites. Document findings in session notes.
 
 ### Output
 
@@ -502,12 +515,28 @@ WF3 complete.
 
 - None — this is an informational step. If previous steps had partial failures, this step reports the partial completion status.
 
+<completion-gate>
+Before declaring WF3 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
+
+1. [ ] Step markers logged for ALL executed steps in session notes
+2. [ ] Final step output (completion summary) presented to user
+3. [ ] Session notes updated with completion summary
+4. [ ] PR URL documented
+5. [ ] Root cause documented in session notes
+6. [ ] Same-class bug scan completed
+7. [ ] E2E passed
+
+If ANY item fails, go back and complete it before declaring "WF3 complete."
+You may NOT output "WF3 complete" until all items pass.
+</completion-gate>
+
 ---
 
 ## Workflow Resumption
 
 If this skill is invoked mid-conversation, detect the current state:
 
+0. All step markers present but completion-gate not printed? → Run completion-gate, then terminate.
 1. PR merged? → Step 13 (post-deploy verification)
 2. PR exists and CI passed? → Step 12 (merge)
 3. PR exists? → Step 11 (CI check)
