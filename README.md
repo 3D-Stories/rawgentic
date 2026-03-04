@@ -310,19 +310,19 @@ The setup wizard runs once per project to configure your environment:
 
 The setup wizard populates these project-specific values in your CLAUDE.md:
 
-| Constant                | Example                         | Source                          |
-| ----------------------- | ------------------------------- | ------------------------------- |
-| `${REPO}`               | `org/repo-name`                 | `git remote get-url origin`     |
-| `${PROJECT_ROOT}`       | `/home/user/project`            | `git rev-parse --show-toplevel` |
-| `${DEV_HOST}`           | `192.168.1.100`                 | User-provided                   |
-| `${ENGINE_HOST}`        | `192.168.1.101`                 | User-provided                   |
-| `${DASHBOARD_PORT}`     | `3000`                          | Detected or user-provided       |
-| `${ENGINE_API_PORT}`    | `8080`                          | Detected or user-provided       |
-| `${DB_NAME}`            | `myapp_dev`                     | Detected or user-provided       |
-| `${DB_USER}`            | `myapp_dev`                     | Detected or user-provided       |
-| `${POSTGRES_CONTAINER}` | `myapp-postgres-dev`            | `docker compose config`         |
-| `${COMPOSE_INFRA}`      | `docker-compose.infra.dev.yml`  | Detected                        |
-| `${COMPOSE_ENGINE}`     | `docker-compose.engine.dev.yml` | Detected                        |
+| Constant                | Example              | Source                          |
+| ----------------------- | -------------------- | ------------------------------- |
+| `${REPO}`               | `org/repo-name`      | `git remote get-url origin`     |
+| `${PROJECT_ROOT}`       | `/home/user/project` | `git rev-parse --show-toplevel` |
+| `${DEV_HOST}`           | `192.168.1.100`      | User-provided                   |
+| `${ENGINE_HOST}`        | `192.168.1.101`      | User-provided                   |
+| `${DASHBOARD_PORT}`     | `3000`               | Detected or user-provided       |
+| `${ENGINE_API_PORT}`    | `8080`               | Detected or user-provided       |
+| `${DB_NAME}`            | `myapp_dev`          | Detected or user-provided       |
+| `${DB_USER}`            | `myapp_dev`          | Detected or user-provided       |
+| `${POSTGRES_CONTAINER}` | `myapp-postgres-dev` | `docker compose config`         |
+| `${COMPOSE_INFRA}`      | `docker-compose.yml` | Detected                        |
+| `${COMPOSE_ENGINE}`     | `compose.engine.yml` | Detected                        |
 
 ### How Constants Work
 
