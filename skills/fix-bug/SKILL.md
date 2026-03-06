@@ -12,15 +12,7 @@ You are the WF3 orchestrator implementing a 14-step bug fix workflow. You guide 
 </role>
 
 <constants>
-REPO = "<inferred from `git remote -v` at workflow start>"
 PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
-DEV_HOST = "<from CLAUDE.md infrastructure section>"
-ENGINE_HOST = "<from CLAUDE.md infrastructure section>"
-DB_NAME = "<from CLAUDE.md database section>"
-DB_USER = "<from CLAUDE.md database section>"
-POSTGRES_CONTAINER = "<from docker compose config>"
-COMPOSE_INFRA = "<from docker compose config>"
-COMPOSE_ENGINE = "<from docker compose config>"
 BRANCH_PREFIX = "fix/"
 COMPLEXITY_THRESHOLDS:
   simple_bug: 1-3 files, clear root cause, no migration needed
@@ -32,14 +24,49 @@ LOOPBACK_BUDGET:
   global_cap: 2
 </constants>
 
-<environment-setup>
-Constants are populated at workflow start (Step 1) by running:
-- `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
-- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
-- `DEV_HOST`, `ENGINE_HOST`, `DB_NAME`, `DB_USER`, `POSTGRES_CONTAINER`: Read from CLAUDE.md infrastructure and database sections
-- `COMPOSE_INFRA`, `COMPOSE_ENGINE`: Read from project root docker compose files
+<config-loading>
+Before executing any workflow steps, load the project configuration:
 
-If any constant cannot be resolved, STOP and ask the user. Do not assume values.
+1. Read `.rawgentic_workspace.json` from the Claude root directory.
+   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - Extract the active project entry (active == true).
+
+2. Read `<activeProject.path>/.rawgentic.json`.
+   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
+   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
+   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
+   - Parse full JSON into `config` object.
+
+3. Build the `capabilities` object from config:
+   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
+   - test_commands: config.testing.frameworks[].command
+   - has_ci: config.ci exists AND config.ci.provider exists
+   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
+   - has_database: config.database exists AND config.database.type exists
+   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
+   - project_type: config.project.type
+   - repo: config.repo.fullName
+   - default_branch: config.repo.defaultBranch
+
+All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+<learning-config>
+If this workflow discovers new project capabilities during execution (e.g., a new test framework, a previously unknown service), update `.rawgentic.json` before completing:
+- Append to arrays (e.g., add new test framework to testing.frameworks[])
+- Set fields that are currently null or missing
+- Do NOT overwrite existing non-null values without asking the user
+- Always read full file, modify in memory, write full file back
+</learning-config>
+
+<environment-setup>
+PROJECT_ROOT is populated at workflow start (Step 1) by running:
+- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
+
+All other project-specific values (repo, hosts, database, docker compose files, test commands) come from `config` and `capabilities` loaded via the `<config-loading>` block. Do not read CLAUDE.md for infrastructure or database details.
+
+If config loading fails, STOP and tell the user which config step failed.
 </environment-setup>
 
 <termination-rule>
@@ -47,7 +74,7 @@ WF3 terminates after deployment verification and completion summary. No auto-tra
 </termination-rule>
 
 <context-compaction>
-Per CLAUDE.md shared invariant #9: before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, bug classification, RCA findings, and loop-back budget state.
+Per rawgentic workflow principle (context preservation): before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, bug classification, RCA findings, and loop-back budget state.
 </context-compaction>
 
 <reproduce-first-principle>
@@ -87,9 +114,9 @@ This enables workflow resumption if context is lost.
 
 ### Instructions
 
-1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, DEV_HOST, ENGINE_HOST, DB_NAME, DB_USER, POSTGRES_CONTAINER, COMPOSE_INFRA, COMPOSE_ENGINE). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+1. **Execute `<config-loading>`** to load the project configuration and build the `capabilities` object. Then execute `<environment-setup>`** to populate PROJECT_ROOT. Log resolved config values in session notes. If config loading fails, STOP and tell the user which step failed.
 2. Parse the argument as a GitHub issue number or URL.
-3. Fetch the issue: `gh issue view <number> --repo ${REPO}`
+3. Fetch the issue: `gh issue view <number> --repo capabilities.repo`
 4. Confirm the issue is open and labeled as bug (or has bug report template format).
 5. Display to the user: title, steps to reproduce, expected vs actual behavior, environment.
 6. Ask user to confirm this is the correct bug to fix.
@@ -135,7 +162,7 @@ Wait for user confirmation before proceeding to Step 2.
    - `simple_bug`: 1-3 files, clear root cause, no migration needed
    - `moderate_bug`: 4-10 files, root cause requires investigation, may need migration
    - `complex_bug`: 10+ files, cross-service, unclear root cause → **prompt upgrade to WF2**
-5. **Related issues check:** `gh issue list --repo ${REPO} --search "<keywords>" --limit 10`
+5. **Related issues check:** `gh issue list --repo capabilities.repo --search "<keywords>" --limit 10`
 
 ### Output
 
@@ -233,13 +260,13 @@ Fix plan with ordered tasks, file paths, and test expectations.
 
 ### Instructions
 
-1. Ensure main is up to date:
+1. Ensure the default branch is up to date:
    ```bash
-   git fetch origin main
+   git fetch origin capabilities.default_branch
    ```
-2. Create branch from main:
+2. Create branch from the default branch:
    ```bash
-   git checkout -b fix/<issue-number>-<short-desc> origin/main
+   git checkout -b fix/<issue-number>-<short-desc> origin/capabilities.default_branch
    ```
 3. Verify branch created successfully.
 
@@ -265,18 +292,14 @@ Execute the plan from Step 5 using strict reproduce-first TDD:
 2. **GREEN — Minimal fix:** Make the reproduction test pass with the smallest possible code change. Resist the urge to refactor surrounding code.
 3. **REFACTOR (minimal):** Only refactor if the fix introduced obvious code smells. Bug fix PRs should be focused, not cleanup opportunities.
 4. **Regression tests:** Add 2-3 edge case tests around the fix boundary.
-5. **Full suite:** Run `pytest` (engine) and/or `vitest` (dashboard) to confirm no regressions.
+5. **Full suite:** Run test commands from `capabilities.test_commands` to confirm no regressions. Iterate over all configured test frameworks.
 6. **Commit frequently:** Follow P3 (every 5 min active work) and P12 (conventional commits): `fix(scope): brief description`
 
 ### Test Commands
 
-```bash
-# Python engine tests (on ${ENGINE_HOST})
-ssh root@${ENGINE_HOST} "cd ${PROJECT_ROOT} && docker compose -f ${COMPOSE_ENGINE} exec engine python -m pytest tests/ -v"
+Test commands are derived from `capabilities.test_commands` (loaded from `config.testing.frameworks[].command`). If `capabilities.has_docker`, run tests via the compose files from `config.infrastructure.docker.composeFiles[]`. If tests are configured to run on remote hosts, use `config.infrastructure.hosts[]` to determine connection details.
 
-# Node.js dashboard tests (on ${DEV_HOST})
-ssh root@${DEV_HOST} "cd ${PROJECT_ROOT} && docker compose -f ${COMPOSE_INFRA} exec dashboard npx vitest run"
-```
+Do not hardcode test runners or compose file names — always derive from config.
 
 ### Output
 
@@ -321,7 +344,7 @@ Verification pass/fail.
 Launch a focused 2-agent code review in parallel using Agent tool calls (subagent_type per the PR review toolkit):
 
 1. `pr-review-toolkit:silent-failure-hunter` — silent failure detection (critical for bug fixes — ensure the fix doesn't suppress errors)
-2. `pr-review-toolkit:code-reviewer` — CLAUDE.md compliance + general review
+2. `pr-review-toolkit:code-reviewer` — project standards compliance + general review
 
 For bug fixes, focus reviewers on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused. Type design and code simplification are deferred — bug fixes should be minimal and targeted.
 
@@ -329,7 +352,7 @@ Apply findings automatically. Circuit breaker on ambiguity.
 
 **Part B: Conditional Memorize**
 
-If the bug fix reveals a pattern worth remembering (new pitfall, gotcha, or recurring issue), invoke `/reflexion:memorize` to curate insights into CLAUDE.md. Skip if the fix is routine.
+If the bug fix reveals a pattern worth remembering (new pitfall, gotcha, or recurring issue), invoke `/reflexion:memorize` to curate insights into project knowledge. Skip if the fix is routine.
 
 Memorize triggers:
 
@@ -341,7 +364,7 @@ Memorize triggers:
 
 ### Output
 
-Review-clean code + optional CLAUDE.md updates.
+Review-clean code + optional project knowledge updates.
 
 ### Failure Modes
 
@@ -366,7 +389,7 @@ Review-clean code + optional CLAUDE.md updates.
 4. Create PR:
 
    ```bash
-   gh pr create --repo ${REPO} \
+   gh pr create --repo capabilities.repo \
      --title "fix(scope): description" \
      --body "$(cat <<'EOF'
    ## Summary
@@ -395,7 +418,7 @@ PR URL.
 - Tests fail (Gate 1 blocks PR creation) → fix and retry
 - Push fails → retry after 5 seconds; if persistent, save PR body for manual creation
 - gh auth failure → verify PAT with `gh auth status`
-- Branch has conflicts with main → rebase (`git pull --rebase origin main`), resolve conflicts, re-push
+- Branch has conflicts with default branch → rebase (`git pull --rebase origin capabilities.default_branch`), resolve conflicts, re-push
 
 ---
 
@@ -405,7 +428,7 @@ PR URL.
 
 1. Wait for CI pipeline to complete:
    ```bash
-   gh run list --repo ${REPO} --branch fix/<branch-name> --limit 3
+   gh run list --repo capabilities.repo --branch fix/<branch-name> --limit 3
    ```
 2. If CI passes → proceed to Step 12.
 3. If CI fails → analyze failure with `gh run view <id> --log-failed`, fix, push, and re-check (max 2 retries).
@@ -430,16 +453,10 @@ CI pass/fail status.
 
 1. Squash-merge PR:
    ```bash
-   gh pr merge <number> --squash --delete-branch --repo ${REPO}
+   gh pr merge <number> --squash --delete-branch --repo capabilities.repo
    ```
-2. Deploy to dev:
-   ```bash
-   ${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}
-   ```
-3. If the fix includes a database migration, run it on ${DEV_HOST}:
-   ```bash
-   ssh root@${DEV_HOST} "docker exec -i ${POSTGRES_CONTAINER} psql -U ${DB_USER} -d ${DB_NAME}" < postgres-migrations/0XX-name.sql
-   ```
+2. Deploy to dev: If `capabilities.has_deploy`, use the deploy method and commands from `config.deploy`. Otherwise, ask the user for deployment instructions.
+3. If the fix includes a database migration and `capabilities.has_database`, run it using the database CLI from `config.database.cli` against the database specified in `config.database`. If the database runs in a container, derive the container name and credentials from `config.database` and `config.infrastructure.docker`.
 4. Verify deployment health.
 
 ### Output
@@ -448,8 +465,8 @@ Merged PR + deployed dev environment.
 
 ### Failure Modes
 
-- Merge conflicts → rebase on main, resolve, push
-- Deploy fails → check docker logs, rollback if needed via `git revert` on main
+- Merge conflicts → rebase on default branch, resolve, push
+- Deploy fails → check logs, rollback if needed via `git revert` on the default branch
 
 ---
 
@@ -458,10 +475,7 @@ Merged PR + deployed dev environment.
 ### Instructions
 
 1. **Symptom verification:** Check that the original bug symptoms no longer occur in the dev environment.
-2. **E2E verification (if applicable):** Run relevant E2E tests:
-   ```bash
-   ssh root@${DEV_HOST} "cd ${PROJECT_ROOT}/dashboard/e2e && npx playwright test <relevant-spec>"
-   ```
+2. **E2E verification (if applicable):** If `capabilities.has_tests` and config includes E2E test commands, run the relevant E2E specs using the test command from `config.testing.frameworks[]` (filtered for E2E type). If tests run on a remote host, use the appropriate host from `config.infrastructure.hosts[]`.
 3. **Health check:** Verify all services are healthy after deployment.
 4. **Quick reflect:** Does the deployed fix match what was intended?
 5. **Same-class bug scan:** If the root cause was a missing/incorrect parameter at a call site, grep ALL callers of the affected function to check for the same class of bug at other call sites. Document findings in session notes.
@@ -473,7 +487,7 @@ Deployment verified OR rollback needed.
 ### Failure Modes
 
 - Bug still reproduces in dev → investigate env-specific differences
-- New issues introduced → rollback via `git revert` on main
+- New issues introduced → rollback via `git revert` on the default branch
 
 ---
 
@@ -484,7 +498,7 @@ Deployment verified OR rollback needed.
 1. Update `claude_docs/session_notes.md` with fix summary.
 2. Close GitHub issue with closing comment:
    ```bash
-   gh issue close <number> --repo ${REPO} \
+   gh issue close <number> --repo capabilities.repo \
      --comment "Fixed in PR #<pr-number>. Root cause: <brief>. Fix: <brief>."
    ```
 3. Present completion summary to user:

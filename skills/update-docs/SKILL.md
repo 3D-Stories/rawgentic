@@ -1,7 +1,7 @@
 ---
 name: rawgentic:update-docs
 description: Update, create, or restructure project documentation using the WF7 10-step workflow with accuracy verification, user review, and conventional commit PR. Invoke with /update-docs followed by a description of the documentation change or an issue number.
-argument-hint: Description of docs to update (e.g., "update CLAUDE.md testing section") or issue number
+argument-hint: Description of docs to update (e.g., "update API reference section") or issue number
 ---
 
 
@@ -12,10 +12,6 @@ You are the WF7 orchestrator implementing a 10-step documentation update workflo
 </role>
 
 <constants>
-REPO = "<inferred from `git remote -v` at workflow start>"
-PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
-SMB_USER = "<from CLAUDE.md documentation section>"
-COMPOSE_INFRA = "<from docker compose config>"
 DOC_CATEGORIES:
   correction: Fix inaccurate docs (lightweight reflect)
   addition: Add missing documentation (full user review)
@@ -24,14 +20,47 @@ DOC_CATEGORIES:
 BRANCH_PREFIX = "docs/"
 </constants>
 
-<environment-setup>
-Constants are populated at workflow start (Step 1) by running:
-- `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
-- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
-- `SMB_USER`: Read from CLAUDE.md documentation section
-- `COMPOSE_INFRA`: Read from CLAUDE.md and docker compose config
+<config-loading>
+Before executing any workflow steps, load the project configuration:
 
-If any constant cannot be resolved, STOP and ask the user. Do not assume values.
+1. Read `.rawgentic_workspace.json` from the Claude root directory.
+   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - Extract the active project entry (active == true).
+
+2. Read `<activeProject.path>/.rawgentic.json`.
+   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
+   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
+   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
+   - Parse full JSON into `config` object.
+
+3. Build the `capabilities` object from config:
+   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
+   - test_commands: config.testing.frameworks[].command
+   - has_ci: config.ci exists AND config.ci.provider exists
+   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
+   - has_database: config.database exists AND config.database.type exists
+   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
+   - project_type: config.project.type
+   - repo: config.repo.fullName
+   - default_branch: config.repo.defaultBranch
+
+All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+<learning-config>
+If this workflow discovers new documentation files or conventions, update `.rawgentic.json` before completing:
+- Append to config.documentation.primaryFiles[]
+- Set config.documentation.format if currently missing
+- Do NOT overwrite existing non-null values without asking the user
+- Always read full file, modify in memory, write full file back
+</learning-config>
+
+<environment-setup>
+Configuration is loaded at workflow start (Step 1) via `<config-loading>`.
+All project-specific values (repo, paths, services, ports) come from `.rawgentic.json`.
+
+If config loading fails, STOP and follow the error guidance in `<config-loading>`.
 </environment-setup>
 
 <accuracy-first-principle>
@@ -48,11 +77,11 @@ WF7 terminates after merge and deployment. No auto-transition to other workflows
 </termination-rule>
 
 <context-compaction>
-Per CLAUDE.md shared invariant #9: before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, documentation category, which files have been updated vs pending, and user review feedback state.
+Before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, documentation category, which files have been updated vs pending, and user review feedback state.
 </context-compaction>
 
 <ambiguity-circuit-breaker>
-Per CLAUDE.md shared invariant #1: STOP and ask the user when documentation requirements are ambiguous, accuracy verification yields conflicting results (code vs existing docs disagree on behavior), or the scope of changes expands beyond the original request. The accuracy-first principle makes this especially critical — incorrect documentation is worse than missing documentation, so when in doubt, STOP and ask rather than guess.
+STOP and ask the user when documentation requirements are ambiguous, accuracy verification yields conflicting results (code vs existing docs disagree on behavior), or the scope of changes expands beyond the original request. The accuracy-first principle makes this especially critical — incorrect documentation is worse than missing documentation, so when in doubt, STOP and ask rather than guess.
 </ambiguity-circuit-breaker>
 
 <step-tracking>
@@ -65,12 +94,11 @@ This enables workflow resumption if context is lost.
 
 ### Instructions
 
-1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, SMB_USER, COMPOSE_INFRA). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
-2. If argument is an issue number: fetch via `gh issue view <number> --repo ${REPO}` and display.
+1. **Execute `<config-loading>`** to load `.rawgentic_workspace.json` and `.rawgentic.json`. Build `config` and `capabilities` objects. Log resolved values in session notes. If config loading fails, STOP and follow the error guidance.
+2. If argument is an issue number: fetch via `gh issue view <number> --repo ${capabilities.repo}` and display.
 3. Clarify scope with the user:
    - Which files need updating?
    - What kind of change? Classify as: **correction** / **addition** / **restructure** / **generation**
-   - For SMB-shared docs: ensure `${SMB_USER}` has r/w access (per CLAUDE.md rule)
 4. Confirm scope with user before proceeding.
 5. Update `claude_docs/session_notes.md` with: documentation scope, target files, accuracy audit plan.
 
@@ -93,7 +121,7 @@ Wait for user confirmation before proceeding to Step 2.
 ### Failure Modes
 
 - Scope is actually a code change disguised as docs → redirect to WF2 or WF3
-- User cannot specify which files need updating → suggest auditing CLAUDE.md and MEMORY.md as a starting point
+- User cannot specify which files need updating → suggest auditing files listed in `config.documentation.primaryFiles[]` as a starting point
 - Issue references stale documentation without specifying what is wrong → ask user for specifics before proceeding
 
 ---
@@ -105,7 +133,7 @@ Wait for user confirmation before proceeding to Step 2.
 1. Read all affected documentation files.
 2. Cross-reference factual claims against codebase:
    - File paths → Glob / `ls`
-   - Port numbers → grep .env files and docker-compose YAML
+   - Port numbers → derive from `config.services[].port` and verify against .env files
    - Command syntax → grep scripts and package.json
    - Architecture claims → Serena MCP (`get_symbols_overview`, `find_symbol`)
    - Config values → grep source files for defaults
@@ -138,14 +166,13 @@ Do NOT present the full audit to the user — it feeds into Step 3.
 1. Draft all documentation changes based on audit report and scope.
 2. For each factual claim, include verification source:
    - File path verified: `ls /path/to/file` or Glob match
-   - Port number verified: `.env.dev:LINE_N` or `${COMPOSE_INFRA}:LINE_N`
+   - Port number verified: `config.services[].port` or `.env:LINE_N`
    - Command verified: tested and output matches
 3. For code examples, test them (run commands, verify output matches).
 4. Follow existing documentation style:
-   - CLAUDE.md conventions (heading levels, section ordering)
+   - Match `config.documentation.format` conventions if specified
    - Markdown formatting (no unnecessary emojis)
    - Match existing indentation and list styles
-5. For SMB-shared docs: note access requirements.
 
 ### Output
 
@@ -191,7 +218,7 @@ Active documentation branch.
 1. Apply documentation changes to files using Edit tool (prefer edits over full rewrites).
 2. Run accuracy verification pass:
    - All file paths mentioned in the docs exist (Glob check)
-   - All port numbers match .env / docker-compose files (Grep check)
+   - All port numbers match `config.services[].port` (Grep check)
    - All command examples are syntactically valid
    - All cross-references (links between docs) are valid
    - All code symbol references match actual codebase (Serena verify)
@@ -209,7 +236,7 @@ Documentation changes committed on branch.
 
 - File paths mentioned in docs do not exist → fix paths or note that the path is planned (aspirational docs violate accuracy-first)
 - Cross-references between doc files are broken → fix links before committing
-- Port numbers in docs do not match .env or docker-compose → update docs to match current config
+- Port numbers in docs do not match `config.services[].port` → update docs to match current config
 
 ---
 
@@ -288,7 +315,7 @@ User-approved documentation changes committed on branch.
 
    ```bash
    gh pr create \
-     --repo ${REPO} \
+     --repo ${capabilities.repo} \
      --title "docs(<scope>): <description>" \
      --body "$(cat <<'EOF'
    ## Summary
@@ -296,7 +323,7 @@ User-approved documentation changes committed on branch.
 
    ## Verification
    - All file paths verified against codebase
-   - All port numbers verified against .env/docker-compose
+   - All port numbers verified against config.services
    - All command examples tested
    - User reviewed and approved
 
@@ -328,7 +355,7 @@ PR URL.
 
 1. Wait for CI to complete:
    ```bash
-   gh run list --repo ${REPO} --branch docs/<scope-desc> --limit 3
+   gh run list --repo ${capabilities.repo} --branch docs/<scope-desc> --limit 3
    ```
 2. If CI fails, investigate:
    - Documentation-only PRs should not break tests
@@ -352,23 +379,19 @@ CI pass status.
 
 1. Squash-merge the PR:
    ```bash
-   gh pr merge --squash --repo ${REPO}
+   gh pr merge --squash --repo ${capabilities.repo}
    ```
-2. Deploy to dev (docs are part of the repo):
-   ```bash
-   ${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}
-   ```
-3. Verify SMB access if docs are in a shared location.
+2. If `capabilities.has_deploy`: run the project's deploy method per `config.deploy`.
+   Otherwise: skip deploy (docs are merged to main).
 
 ### Output
 
-Merged and deployed documentation.
+Merged documentation (and deployed if applicable).
 
 ### Failure Modes
 
 - Merge conflict on squash → rebase branch on latest main, re-verify accuracy, force-push
-- Deploy script fails → check SSH connectivity to ${DEV_HOST}
-- SMB access not configured for shared docs → set permissions for `${SMB_USER}` after deploy
+- Deploy fails → check deploy config in `.rawgentic.json` and connectivity
 
 ---
 
@@ -385,7 +408,7 @@ Merged and deployed documentation.
 2. Close GitHub issue if one was referenced:
 
    ```bash
-   gh issue close <number> --repo ${REPO} --comment "Resolved by PR #NNN"
+   gh issue close <number> --repo ${capabilities.repo} --comment "Resolved by PR #NNN"
    ```
 
 3. Present completion summary:
@@ -403,7 +426,7 @@ Verification:
 - User review iterations: [N]
 - CI: [passed]
 
-Documentation deployed to dev.
+Documentation merged (and deployed if applicable).
 
 WF7 complete.
 ```
@@ -412,7 +435,7 @@ WF7 complete.
 
 Completion summary. WF7 terminates.
 
-4. **Conditional Memorization (P9):** If this documentation update revealed patterns worth memorizing (e.g., recurring stale doc areas, naming conventions, documentation structure insights), invoke `/reflexion:memorize` to curate insights into CLAUDE.md. Skip for simple corrections or additions.
+4. **Conditional Memorization (P9):** If this documentation update revealed patterns worth memorizing (e.g., recurring stale doc areas, naming conventions, documentation structure insights), update `.rawgentic.json` or session notes as appropriate. Skip for simple corrections or additions.
 
 ### Failure Modes
 
@@ -463,4 +486,4 @@ After completing documentation restructuring, check if the restructuring reveale
 - File organization patterns that should be followed going forward
 - Recurring documentation gaps that indicate missing process
 
-If insights are found, use the reflexion:memorize workflow to update CLAUDE.md. This is conditional — skip for simple corrections or additions.
+If insights are found, update `.rawgentic.json` or session notes as appropriate. This is conditional — skip for simple corrections or additions.

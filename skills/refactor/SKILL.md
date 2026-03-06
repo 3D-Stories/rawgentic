@@ -12,9 +12,6 @@ You are the WF4 orchestrator implementing a 14-step refactoring workflow. You gu
 </role>
 
 <constants>
-REPO = "<inferred from `git remote -v` at workflow start>"
-PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
-DEV_HOST = "<from CLAUDE.md infrastructure section>"
 BRANCH_PREFIX = "refactor/"
 REFACTORING_CATEGORIES:
   rename: 1-5 files, symbol renames → lightweight reflect
@@ -27,13 +24,48 @@ LOOPBACK_BUDGET:
   global_cap: 3
 </constants>
 
-<environment-setup>
-Constants are populated at workflow start (Step 1) by running:
-- `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
-- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
-- `DEV_HOST`: Read from CLAUDE.md infrastructure section
+<config-loading>
+Before executing any workflow steps, load the project configuration:
 
-If any constant cannot be resolved, STOP and ask the user. Do not assume values.
+1. Read `.rawgentic_workspace.json` from the Claude root directory.
+   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - Extract the active project entry (active == true).
+
+2. Read `<activeProject.path>/.rawgentic.json`.
+   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
+   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
+   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
+   - Parse full JSON into `config` object.
+
+3. Build the `capabilities` object from config:
+   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
+   - test_commands: config.testing.frameworks[].command
+   - has_ci: config.ci exists AND config.ci.provider exists
+   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
+   - has_database: config.database exists AND config.database.type exists
+   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
+   - project_type: config.project.type
+   - repo: config.repo.fullName
+   - default_branch: config.repo.defaultBranch
+
+All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+<learning-config>
+If this workflow discovers new project capabilities during refactoring, update `.rawgentic.json` before completing:
+- Append to arrays
+- Set fields that are currently null or missing
+- Do NOT overwrite existing non-null values without asking the user
+- Always read full file, modify in memory, write full file back
+</learning-config>
+
+<environment-setup>
+Constants are populated at workflow start (Step 1) by running `<config-loading>`.
+- `capabilities.repo`, `config.project`, `config.infrastructure` etc. are available after config load.
+- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
+
+If config loading fails, follow the STOP instructions in `<config-loading>`. Do not assume values.
 </environment-setup>
 
 <termination-rule>
@@ -41,11 +73,11 @@ WF4 terminates after deployment verification. No auto-transition to other workfl
 </termination-rule>
 
 <context-compaction>
-Per CLAUDE.md shared invariant #9: before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, refactoring category, characterization test status, and loop-back budget state.
+Before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, refactoring category, characterization test status, and loop-back budget state.
 </context-compaction>
 
 <ambiguity-circuit-breaker>
-Per CLAUDE.md shared invariant #1: STOP and ask the user when critique findings are ambiguous, conflicting, or require judgment calls. For refactoring workflows, this is especially critical when the behavioral-preservation invariant is uncertain — if a proposed refactoring MIGHT change external behavior, STOP and ask rather than guess. The circuit breaker fires in Step 4 (quality gate) but applies throughout the workflow.
+STOP and ask the user when critique findings are ambiguous, conflicting, or require judgment calls. For refactoring workflows, this is especially critical when the behavioral-preservation invariant is uncertain — if a proposed refactoring MIGHT change external behavior, STOP and ask rather than guess. The circuit breaker fires in Step 4 (quality gate) but applies throughout the workflow.
 </ambiguity-circuit-breaker>
 
 <behavioral-preservation-invariant>
@@ -78,8 +110,8 @@ This enables workflow resumption if context is lost.
 
 ### Instructions
 
-1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT, DEV_HOST). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
-2. If argument is an issue number: fetch via `gh issue view <number> --repo ${REPO}`
+1. **Execute `<config-loading>`** to populate `config` and `capabilities`. Log resolved values in session notes. If config loading fails, follow the STOP instructions.
+2. If argument is an issue number: fetch via `gh issue view <number> --repo <capabilities.repo>`
 3. If free text: confirm scope understanding with user
 4. Verify the scope is a true refactoring (no behavior changes)
 5. If scope implies behavior changes, suggest WF2 instead
@@ -212,8 +244,8 @@ Ordered task list with behavioral verification points.
 ### Instructions
 
 ```bash
-git fetch origin main
-git checkout -b refactor/<desc> origin/main
+git fetch origin <capabilities.default_branch>
+git checkout -b refactor/<desc> origin/<capabilities.default_branch>
 ```
 
 ### Failure Modes
@@ -318,7 +350,7 @@ Apply findings. Circuit breaker on ambiguity.
 2. Create PR:
 
    ```bash
-   gh pr create --repo ${REPO} \
+   gh pr create --repo <capabilities.repo> \
      --title "refactor(scope): description" \
      --body "$(cat <<'EOF'
    ## Summary
@@ -365,8 +397,8 @@ Wait for CI via `gh run list --branch <branch>`. Max 2 fix-and-retry cycles.
 
 ### Instructions
 
-1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${REPO}`
-2. Deploy: `${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}`
+1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo <capabilities.repo>`
+2. Deploy per `config.deploy` settings (skip if `capabilities.has_deploy` is false)
 3. Verify health.
 
 ### Failure Modes
