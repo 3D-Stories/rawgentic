@@ -1,0 +1,26 @@
+{
+  "skill_name": "rawgentic:incident",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "We have an incident! The sentinel-api service is returning 502 errors. Workspace: /tmp/rawgentic-incident-test/health-checks-sentinel/.rawgentic_workspace.json, project: /tmp/rawgentic-incident-test/health-checks-sentinel/projects/sentinel-infra. Check service health and diagnose. Save a transcript to the outputs directory.",
+      "expected_output": "Agent uses config service endpoints, docker compose files, and infrastructure hosts from config",
+      "files": [],
+      "expectations": [
+        "Uses health endpoint from config.services[] (e.g., /health/sentinel-check)",
+        "References docker compose file from config.infrastructure (docker-compose.prod.yml)",
+        "Mentions sentinel-repo-42 from config"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "URGENT: Complete outage! All services down, users getting 500 errors across the board, potential data loss. Workspace: /tmp/rawgentic-incident-test/severity-classification/.rawgentic_workspace.json, project: /tmp/rawgentic-incident-test/severity-classification/projects/sentinel-infra. Save a transcript to the outputs directory.",
+      "expected_output": "Agent classifies as high/critical severity, follows Phase A (stabilize) before Phase B (RCA)",
+      "files": [],
+      "expectations": [
+        "Classifies severity as high or critical (SEV-1 or SEV-2)",
+        "Phase A (stabilize) actions come before Phase B (RCA)"
+      ]
+    }
+  ]
+}

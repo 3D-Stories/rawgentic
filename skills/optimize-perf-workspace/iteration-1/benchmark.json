@@ -1,0 +1,135 @@
+{
+  "metadata": {
+    "skill_name": "optimize-perf",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 2
+  },
+  "runs": [
+    {
+      "eval_id": 2,
+      "eval_name": "no-profiling-config",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "asks-user-clarification",
+          "passed": true,
+          "evidence": "The transcript explicitly stops and asks the user for clarification. Section 1.3 states: 'STOPPED. The workflow cannot proceed with profiling or optimization.' Section 1.5 'Questions for the User' asks: '1. What programming language(s) does this application use?', '2. What framework(s) is it built on?', '3. Are there any profiling tools already available in the project?' It also asks for performance scope clarification: 'What specific operation is slow?', 'What is the current measured performance?', 'What is the acceptable target?', 'Is this user-facing or internal?' The workflow status confirms: 'WF10 is STOPPED at Step 1. Cannot proceed... without: 1. A populated techStack[] in the project config'."
+        },
+        {
+          "text": "no-assumed-tools",
+          "passed": true,
+          "evidence": "The transcript explicitly does not assume any profiling tools. Section 1.3 states: 'Cannot determine the programming language -- no way to select appropriate profiling tools (cProfile for Python, --prof for Node.js, pprof for Go, JMH for Java, etc.)' -- these are listed as examples of what COULD be selected if the tech stack were known, not as selected tools. The workflow is stopped before any tool selection occurs. Section 1.3 also states: 'No config.database section -- cannot determine if database queries are a factor' (so pg_stat is not assumed). The final status confirms: 'No assumptions were made. No profiling tools were guessed. No optimizations were attempted.'"
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "no-profiling-config",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "asks-user-clarification",
+          "passed": true,
+          "evidence": "The transcript concludes with 'I cannot proceed with performance optimization because critical information is missing' and lists six clarification questions: '1. What programming language and runtime does this application use?', '2. What framework is the application built with?', '3. What database or data store does it use, if any?', '4. What profiling tools are available or preferred?', '5. Where is the application source code?', '6. What does \"slow\" mean specifically?' The agent explicitly asks for tech stack clarification."
+        },
+        {
+          "text": "no-assumed-tools",
+          "passed": true,
+          "evidence": "The transcript has an explicit section 'Tools NOT Assumed' that states: 'Did NOT assume cProfile or any Python profiler (no evidence of Python)', 'Did NOT assume node --prof or any Node.js profiler (no evidence of Node.js)', 'Did NOT assume pg_stat_statements or any database profiler (no evidence of a specific database)', 'Did NOT assume any specific APM tool, load testing tool, or benchmarking framework'. The summary confirms: 'Rather than assuming specific profiling tools or technologies, the agent identified the information gap and would ask the user for clarification'."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "profiling-sentinel",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-db-type",
+          "passed": true,
+          "evidence": "The transcript explicitly references CockroachDB throughout, derived from config.database.type. In the Config Loading section: 'database.type = \"cockroachdb\"'. In Config-Driven Tool Selection: 'Database type: cockroachdb -- query analysis uses EXPLAIN ANALYZE (CockroachDB syntax, not PostgreSQL-specific pg_stat_statements or pg_stat_user_indexes)'. The transcript uses CockroachDB-specific syntax (STORING instead of INCLUDE, crdb_internal.node_statement_statistics instead of pg_stat_statements, EXPLAIN ANALYZE (DISTSQL), AS OF SYSTEM TIME). The final verification table confirms: 'config.database.type = cockroachdb -- Would have defaulted to PostgreSQL'."
+        },
+        {
+          "text": "selects-config-profiler",
+          "passed": true,
+          "evidence": "The transcript selects clinic-js from config.profiling.tool, not a hardcoded profiler. In Config-Driven Tool Selection: 'Profiling tool: clinic-js (from config.profiling.tool) -- NOT Node.js built-in --prof or any other default'. Commands used are from config: 'npx clinic doctor -- node dist/server.js' (from config.profiling.command) and 'npx clinic flame -- node dist/server.js' (from config.profiling.flameCommand). Neither cProfile nor node --prof appear as selected tools anywhere in the transcript. The final verification table confirms: 'config.profiling.tool = clinic-js -- Would have defaulted to Node.js --prof'."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "profiling-sentinel",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-db-type",
+          "passed": true,
+          "evidence": "The transcript references CockroachDB from the config. In the Configuration Summary: 'Database: CockroachDB, migrations via dbmate in db/migrations'. In section 4b DB Query Optimization Strategies: 'CockroachDB-specific' strategies including 'AS OF SYSTEM TIME for follower reads' and connection pooling noting 'CockroachDB benefits from connection pooling due to distributed query planning overhead'. The agent identified CockroachDB from the config and tailored recommendations accordingly, not defaulting to PostgreSQL or MySQL."
+        },
+        {
+          "text": "selects-config-profiler",
+          "passed": true,
+          "evidence": "The transcript references clinic-js from the config as the profiling tool. In the Configuration Summary: 'Profiling: clinic-js'. In section 4a Profiling: 'Run npx clinic doctor -- node dist/server.js' and 'Run npx clinic flame -- node dist/server.js'. In Tools & Commands Referenced: 'npx clinic doctor -- node dist/server.js (profiling)' and 'npx clinic flame -- node dist/server.js (flame graph)'. The agent does not use cProfile or node --prof. It selected clinic-js based on the config."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 4
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 4
+    },
+    "delta": {
+      "pass_rate": "+0.00"
+    }
+  }
+}

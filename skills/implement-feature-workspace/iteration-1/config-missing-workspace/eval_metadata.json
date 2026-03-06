@@ -1,0 +1,8 @@
+{
+  "eval_id": 5,
+  "eval_name": "config-missing-workspace",
+  "prompt": "Implement issue #10 for me. The workspace file should be at /tmp/rawgentic-implement-feature-test/config-missing-workspace/.rawgentic_workspace.json (but it doesn't exist). The issue is: 'Add notifications'. Save a transcript of your work to the outputs directory.",
+  "assertions": [
+    {"text": "stops-with-new-project-ref", "description": "/rawgentic:new-project mentioned in response"}
+  ]
+}

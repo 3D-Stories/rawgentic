@@ -1,0 +1,197 @@
+{
+  "metadata": {
+    "skill_name": "security-audit",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 3
+  },
+  "runs": [
+    {
+      "eval_id": 2,
+      "eval_name": "learning-config-update",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "appends-to-auth-array",
+          "passed": true,
+          "evidence": "Step 3 'Learning-Config Protocol Execution' explicitly states: 'Appended to config.security.authMechanisms[]: { \"type\": \"API-Key\", \"appliesTo\": [\"webhooks\"], \"configPath\": null }'. The updated config JSON shows both the original JWT entry and the new API-Key entry in the authMechanisms array. 'webhooks' was also appended to dataChannels[]."
+        },
+        {
+          "text": "writes-config-back",
+          "passed": true,
+          "evidence": "Step 3 states: 'Wrote the full updated file back.' Verification section confirms: 'File: /tmp/rawgentic-security-audit-test/learning-config-update/projects/sentinel-app/.rawgentic.json' with 'JSON validity: confirmed (parseable, no syntax errors)' and 'Existing JWT entry: preserved without modification'. The transcript documents the full read-modify-write cycle per the learning-config protocol."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "learning-config-update",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "failed": 2,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "appends-to-auth-array",
+          "passed": false,
+          "evidence": "The transcript identifies the API key auth gap in Finding 1 ('Webhooks lack declared authentication -- likely using API key auth') and recommends 'Add webhooks to dataChannels and declare their auth mechanism explicitly in authMechanisms'. However, this is a recommendation only. The transcript never shows the authMechanisms array being modified. No JSON update is shown, no file write is described. The original config is displayed with only JWT in authMechanisms, and it is never updated."
+        },
+        {
+          "text": "writes-config-back",
+          "passed": false,
+          "evidence": "The transcript contains no mention of writing or updating the .rawgentic.json file. Section 4 'Recommendations' item 1 says 'Add webhooks to dataChannels and declare their auth mechanism explicitly' -- this is a future recommendation, not an action taken. The without_skill run treated this as an audit-only exercise with recommendations, not as an opportunity to update the config file."
+        }
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "research-project-type",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "adapts-for-research",
+          "passed": true,
+          "evidence": "Step 1 Scope Determination explicitly states: 'Adaptation for research project type: - No deployed services to audit -- skip deployment-related checks - No API endpoints, no services config -- skip endpoint/auth middleware mapping - Focus areas: data handling, access controls, research data integrity, secrets management, dependency security, notebook security'. Step 2 confirms: 'Since this is a research project with project_type: \"research\" and no services, endpoints, or deployed infrastructure, the attack surface enumeration is adapted to focus on research-relevant vectors.' DoS analysis in Step 3 explicitly notes: 'No deployed services to attack with DoS... DoS is not applicable to a non-deployed research project.'"
+        },
+        {
+          "text": "focuses-on-data-security",
+          "passed": true,
+          "evidence": "The audit focuses on: (1) data handling -- findings T-1 'No integrity verification for research data', R-1 'No audit trail for data access/modifications'; (2) research data -- findings address research dataset integrity, data provenance, and data versioning (DVC recommendation); (3) access controls -- finding S-1 'No authentication on local-filesystem data channel', finding E-1 'Jupyter server may bind to all interfaces, allowing remote code execution'; (4) information disclosure via notebook outputs (I-1). The entire Step 2 input boundary mapping is research-adapted: 'Local filesystem reads -- research datasets, configuration files, model weights'."
+        }
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "research-project-type",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "adapts-for-research",
+          "passed": true,
+          "evidence": "The transcript states: 'Since this is a research project with no deployable code and no source files beyond configuration, the audit focused on: 1. Configuration integrity and correctness, 2. Secrets / credential exposure, 3. File permission review, 4. Data channel risk assessment, 5. Dependency and tech stack security considerations, 6. Research-project-specific risks'. Section 7 is dedicated to 'Research-Project-Specific Risks'. No deployment audit is performed -- no APIs, services, or infrastructure are audited. The overall assessment states: 'This is a research project with no deployed services, no network-facing data channels, and no authentication surface.'"
+        },
+        {
+          "text": "focuses-on-data-security",
+          "passed": true,
+          "evidence": "Section 4 'Data Channel Risk Assessment' focuses on local-filesystem data security: 'Data stored on the local filesystem is subject to the host OS access controls.' Recommendations address: encrypting data at rest, .gitignore rules to prevent accidental data commits, and data handling procedures. Section 7 addresses research data specifically: 'Model output storage' (treat LLM outputs as untrusted data), 'Prompt injection in evaluation data', 'Notebook output cells' containing sensitive data. Section 3 'File Permissions' reviews access controls on configuration files."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "stride-sentinel-channels",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "enumerates-config-channels",
+          "passed": true,
+          "evidence": "Step 1 Scope Determination explicitly lists: 'Data channels in scope: grpc-api, mqtt-broker, sentinel-ws (all 3 from config.security.dataChannels[])'. Step 2 maps all three in a table with protocol, auth mechanism, and config path details."
+        },
+        {
+          "text": "stride-on-config-channels",
+          "passed": true,
+          "evidence": "Step 3 applies STRIDE independently to each config channel in dedicated sections: '3.1 STRIDE Analysis: grpc-api (mTLS)', '3.2 STRIDE Analysis: mqtt-broker (NO AUTH)', '3.3 STRIDE Analysis: sentinel-ws (OAuth2-PKCE)'. All 6 STRIDE categories are evaluated per channel. No generic Express/Socket.IO defaults appear anywhere -- findings are specific to gRPC, MQTT, and WebSocket protocols as declared in config."
+        },
+        {
+          "text": "uses-config-auth",
+          "passed": true,
+          "evidence": "Step 1 maps auth mechanisms from config: 'mTLS -> applies to grpc-api (configPath: certs/)' and 'OAuth2-PKCE -> applies to sentinel-ws (configPath: auth/oauth.config.ts)'. STRIDE findings reference these directly: S-GRPC-01 discusses mTLS certificate validation, S-WS-01 discusses OAuth2-PKCE code verifier entropy and S256. The mqtt-broker is correctly flagged as having NO auth mechanism from config."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "stride-sentinel-channels",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "enumerates-config-channels",
+          "passed": true,
+          "evidence": "Section 2 'Scope: Data Channels' lists all three: '1. grpc-api -- gRPC-based API, secured with mTLS', '2. mqtt-broker -- MQTT message broker, no declared auth mechanism', '3. sentinel-ws -- WebSocket endpoint, secured with OAuth2-PKCE'. Section 1 table also lists 'Data channels | grpc-api, mqtt-broker, sentinel-ws'."
+        },
+        {
+          "text": "stride-on-config-channels",
+          "passed": true,
+          "evidence": "Section 3 applies STRIDE to each config channel: '3.1 grpc-api (mTLS)', '3.2 mqtt-broker (NO DECLARED AUTH)', '3.3 sentinel-ws (OAuth2-PKCE)'. All 6 STRIDE categories are covered per channel. Findings are protocol-specific (gRPC reflection, MQTT wildcard subscriptions, WebSocket upgrade handshake) -- not generic Express/Socket.IO patterns."
+        },
+        {
+          "text": "uses-config-auth",
+          "passed": true,
+          "evidence": "Section 1 'Authentication Mechanisms Declared' table shows 'mTLS | grpc-api | certs/' and 'OAuth2-PKCE | sentinel-ws | auth/oauth.config.ts'. These are referenced throughout STRIDE analysis: grpc-api Spoofing discusses 'mTLS provides strong mutual authentication', sentinel-ws Spoofing discusses 'OAuth2 with PKCE is a strong mechanism for public clients'. mqtt-broker is flagged as having no declared auth."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 3,
+      "total_assertions": 7,
+      "passed_assertions": 7
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.6667
+      },
+      "runs": 3,
+      "total_assertions": 7,
+      "passed_assertions": 5
+    },
+    "delta": {
+      "pass_rate": "+0.33"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "metadata": {
+    "skill_name": "refactor",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 2
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "eval_name": "characterization-tests-sentinel",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-test-framework",
+          "passed": true,
+          "evidence": "The transcript explicitly uses the config-derived test command 'npx vitest run --reporter=verbose --sentinel' at every verification point. In Step 7a: 'Command used (from config): npx vitest run --reporter=verbose --sentinel'. The plan table (Step 5) shows this exact command for all 7 tasks. Step 8 post-refactoring verification confirms: 'All characterization tests pass: YES (npx vitest run --reporter=verbose --sentinel)'. The transcript also explicitly states: 'The test command npx vitest run --reporter=verbose --sentinel is used at EVERY verification point. This command comes from the project config (config.testing.frameworks[0].command) and is NOT improvised or assumed.' The --sentinel flag is preserved from the config."
+        },
+        {
+          "text": "characterization-tests-written",
+          "passed": true,
+          "evidence": "Step 7a is titled 'Write Characterization Tests (BEFORE Refactoring)' and includes a full characterization test file (auth/__tests__/auth.characterization.test.ts) with 12 tests covering password auth (3 tests), OAuth auth (3 tests), API key auth (2 tests), token validation (3 tests), and edge cases (2 tests). The transcript explicitly states: 'This is the critical step this evaluation tests. Characterization tests MUST be written BEFORE any code changes, capturing current behavior as the behavioral baseline.' The tests are run against unmodified code (all 12 pass), committed as a separate commit, and then Step 7b (Execute Refactoring) follows after. The ordering is clear: Phase A (characterization tests) before Phase B (refactoring)."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "characterization-tests-sentinel",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "failed": 2,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-test-framework",
+          "passed": false,
+          "evidence": "The without-skill run read the project config and noted the vitest command ('npx vitest run --reporter=verbose --sentinel') in its workspace summary table, but never actually used it. The transcript states: 'No source code found' and 'No characterization tests were written.' The test command was extracted from config for informational display but was never invoked or referenced as a verification step. The run took no refactoring actions and ran no tests."
+        },
+        {
+          "text": "characterization-tests-written",
+          "passed": false,
+          "evidence": "The transcript explicitly states under 'Characterization Tests': 'No characterization tests were written because there is no existing code to characterize.' Under 'Changes Made': 'None. No files were created, modified, or deleted in the project directory.' The run correctly identified the absence of source code but did not write any characterization tests or demonstrate the characterization-first workflow."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "no-tests-degradation",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "acknowledges-no-tests",
+          "passed": true,
+          "evidence": "The transcript explicitly and prominently acknowledges the absence of tests. Under 'Key Finding: No Testing Section in Config': 'The project configuration has no testing section at all. This means: capabilities.has_tests is false, There are no test commands to run, There are no test frameworks configured, The characterization testing phase (Step 7a) cannot produce runnable tests, The behavioral preservation invariant cannot be verified through test execution.' The capabilities table shows has_tests = false with reason 'config.testing does not exist' and test_commands = [] with reason 'no testing frameworks defined'. The Risk Implications section classifies this as 'Risk level: HIGH' due to no tests and no CI."
+        },
+        {
+          "text": "behavioral-preservation-strategy",
+          "passed": true,
+          "evidence": "The transcript provides a detailed behavioral preservation strategy adapted for the no-tests scenario. Under 'Behavioral Preservation Strategy (No-Tests Adaptation)', five concrete strategies are enumerated: (1) Static analysis via symbol mapping to verify all call sites updated, (2) Reference graph verification to confirm isomorphic call graphs before/after, (3) Manual contract enumeration documenting I/O contracts in Step 3 verified through code review, (4) Diff-based verification using 'git diff --stat' for scoped changes, (5) Characterization tests become documentation rather than executable artifacts. A comparison table maps each standard workflow step to its no-tests adaptation (e.g., Step 7a shifts from 'Write and run tests' to 'Write behavioral specifications (non-executable); document expected I/O', Step 8 shifts from 'Run all tests' to 'Verify via reference graph comparison, diff review, manual inspection'). The transcript also recommends adding tests first via WF3 before proceeding."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "no-tests-degradation",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.5,
+        "passed": 1,
+        "failed": 1,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "acknowledges-no-tests",
+          "passed": true,
+          "evidence": "The transcript acknowledges the absence of tests in multiple places. Under 'Project config': 'Tests: not configured' and 'CI: not configured'. Under 'Analysis' point 2: 'No tests exist: The .rawgentic.json config does not define any test commands. Even if source code existed, there would be no automated way to verify that a refactor preserves existing behavior.' The Risk Assessment section also states: 'Without tests, any refactoring could silently break existing behavior with no automated detection.'"
+        },
+        {
+          "text": "behavioral-preservation-strategy",
+          "passed": false,
+          "evidence": "While the without-skill run does mention mitigations under 'Risk Assessment (No-Tests Degradation)' ('Write characterization tests capturing current behavior before making changes', 'Add integration tests', 'Set up CI', 'Use type checking (mypy)', 'Perform manual smoke testing'), these are framed as 'Recommended mitigations before refactoring' -- hypothetical recommendations for a scenario where source code exists, not an actual behavioral preservation strategy applied to the current task. The run took no actions ('Actions Taken: None') and did not demonstrate applying any behavioral preservation approach such as API contract analysis, reference graph verification, or structured behavioral documentation. The without-skill run identified the problem but did not articulate a concrete behavioral preservation strategy the way the with-skill run did (with its 5-strategy adaptation framework and step-by-step comparison table)."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 4
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.25
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 1
+    },
+    "delta": {
+      "pass_rate": "+0.75"
+    }
+  }
+}

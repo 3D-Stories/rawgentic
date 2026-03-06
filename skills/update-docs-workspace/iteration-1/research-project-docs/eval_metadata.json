@@ -1,0 +1,9 @@
+{
+  "eval_id": 3,
+  "eval_name": "research-project-docs",
+  "prompt": "Update documentation for the research project. Workspace: /tmp/rawgentic-update-docs-test/research-project-docs/.rawgentic_workspace.json, project: /tmp/rawgentic-update-docs-test/research-project-docs/projects/research-proj. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "adapts-doc-structure", "description": "Adapts documentation for research project (methodology, findings, dataset)"},
+    {"text": "no-deployment-docs", "description": "No deployment or API docs unless relevant to research"}
+  ]
+}

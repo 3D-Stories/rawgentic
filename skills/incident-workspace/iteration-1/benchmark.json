@@ -1,0 +1,145 @@
+{
+  "metadata": {
+    "skill_name": "incident",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 2
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "eval_name": "health-checks-sentinel",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-services",
+          "passed": true,
+          "evidence": "The transcript explicitly uses the health endpoint from config.services[]. In the 'Resolved Environment' table: sentinel-api health endpoint is '/health/sentinel-check'. This endpoint is then used throughout -- e.g., Step 2: 'curl -s -o /dev/null -w \"%{http_code}\" https://sentinel-api.internal:8443/health/sentinel-check' and Step 5 verification: 'Verify sentinel-api health endpoint (config.services[0].healthEndpoint)'. The sentinel-worker endpoint '/status/alive' is also used from config."
+        },
+        {
+          "text": "uses-config-docker",
+          "passed": true,
+          "evidence": "The transcript references 'docker-compose.prod.yml' from config.infrastructure throughout. Resolved Environment table lists 'docker-compose.prod.yml | production' and 'docker-compose.monitoring.yml | monitoring'. Step 2 uses 'docker compose -f docker-compose.prod.yml ps' and 'docker compose -f docker-compose.monitoring.yml ps'. Step 4 executes 'docker compose -f docker-compose.prod.yml restart sentinel-api'. The compose file is used in nearly every diagnostic and remediation command."
+        },
+        {
+          "text": "uses-sentinel-repo",
+          "passed": true,
+          "evidence": "The transcript contains 'sentinel-repo-42' in the Config Loading section: 'config.repo.fullName: eval-org/sentinel-repo-42'. It also appears in the Resolved Capabilities table: 'repo | eval-org/sentinel-repo-42'. It is further used in Step 10 for PR creation: 'gh pr create --repo eval-org/sentinel-repo-42' and Step 12 for issue creation: 'gh issue create --repo eval-org/sentinel-repo-42'."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "health-checks-sentinel",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-services",
+          "passed": true,
+          "evidence": "The transcript includes a 'Services Defined' table listing sentinel-api with health endpoint '/health/sentinel-check' and sentinel-worker with '/status/alive'. In Section 3 (Attempted health checks), the transcript states: 'Attempted to curl sentinel-api.internal:8443/health/sentinel-check'. In Section 4, the recommended action includes 'curl -k https://localhost:8443/health/sentinel-check'. The health endpoint from config.services[] is referenced and used in diagnostic attempts."
+        },
+        {
+          "text": "uses-config-docker",
+          "passed": true,
+          "evidence": "The transcript references 'docker-compose.prod.yml' from config.infrastructure in Section 1 ('Docker compose files: docker-compose.prod.yml, docker-compose.monitoring.yml') and in Section 4 recommended actions: 'docker compose -f docker-compose.prod.yml ps', 'docker compose -f docker-compose.prod.yml logs --tail=500', and 'docker compose -f docker-compose.prod.yml up -d sentinel-api'."
+        },
+        {
+          "text": "uses-sentinel-repo",
+          "passed": true,
+          "evidence": "The transcript includes 'Repo: eval-org/sentinel-repo-42' in the 'Workspace & Configuration Review' section (Section 1, under project config details). The string 'sentinel-repo-42' appears in the transcript."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "severity-classification",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "classifies-severity",
+          "passed": true,
+          "evidence": "Step 1 explicitly classifies severity as SEV-1: 'Assigned Severity: SEV-1'. The classification rationale evaluates all four severity levels (SEV-1 through SEV-4) in a table and concludes: 'The incident matches SEV-1 on both criteria: 1. \"Complete outage\" -- The report states \"all services down\"... 2. \"Data loss risk\" -- The report explicitly mentions \"potential data loss\".' SEV-1 qualifies as 'high or critical' per the assertion."
+        },
+        {
+          "text": "phase-a-first",
+          "passed": true,
+          "evidence": "The transcript is clearly structured with 'Phase A: Stabilize' starting at Step 1 (severity classification) and continuing through Step 6 (Stabilization Summary). Phase B: Analyze & Prevent begins at Step 7 (RCA). Phase A actions (receive report, rapid diagnosis, strategy selection, execute rollback, verify restoration, stabilization summary) all precede Phase B actions (5 Whys RCA, design fix, RCA critique, implement permanent fix, preventive measures, action items). The section headers explicitly mark 'Phase A: Stabilize' and 'Phase B: Analyze & Prevent' in the correct order."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "severity-classification",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.5,
+        "passed": 1,
+        "failed": 1,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "classifies-severity",
+          "passed": true,
+          "evidence": "Step 1 of the transcript is titled 'Severity Classification' and states: 'Severity: SEV-1 / Critical'. The justification references 'Complete outage', 'All services down', '500 errors everywhere', and 'Potential data loss'. This correctly classifies the incident as high/critical severity."
+        },
+        {
+          "text": "phase-a-first",
+          "passed": false,
+          "evidence": "The transcript does not follow a phased incident response structure. There is no 'Phase A (stabilize)' followed by 'Phase B (RCA)' pattern. The transcript proceeds: Step 1 (severity classification) -> Step 2 (information gathering from config) -> Step 3 (attempted diagnostics, all blocked) -> Step 4 (recommended incident response plan, not executed) -> Step 5 (gaps and concerns) -> Outcome (unable to resolve). No stabilization actions were taken or even simulated before the analysis/recommendations. The transcript is a diagnostic report, not an incident response execution. While Step 4 does list 'Immediate Actions (First 5 minutes)' before 'Triage Actions (5-15 minutes)', these are recommendations for a human operator, not actions the agent performed. The assertion requires Phase A stabilization actions to come before Phase B RCA actions in the agent's own workflow, which did not happen -- the agent never executed or simulated either phase."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 5,
+      "passed_assertions": 5
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.75
+      },
+      "runs": 2,
+      "total_assertions": 5,
+      "passed_assertions": 4
+    },
+    "delta": {
+      "pass_rate": "+0.25"
+    }
+  }
+}

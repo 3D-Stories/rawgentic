@@ -1,0 +1,26 @@
+{
+  "skill_name": "rawgentic:fix-bug",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Fix the bug in issue #15. The workspace file is at /tmp/rawgentic-fix-bug-test/reproduce-first-sentinel/.rawgentic_workspace.json and the project is at /tmp/rawgentic-fix-bug-test/reproduce-first-sentinel/projects/sentinel-app. The bug is: 'Date parser crashes on ISO 8601 format input'. When asked for confirmation, say 'yes'. Save a transcript to the outputs directory.",
+      "expected_output": "Agent loads config with sentinel values, uses reproduce-first TDD with vitest --sentinel command, writes failing test BEFORE fix",
+      "files": [],
+      "expectations": [
+        "Transcript mentions sentinel-repo-42",
+        "Transcript uses vitest run --sentinel as test command",
+        "Failing test written BEFORE fix code (reproduce-first)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Fix the bug in issue #20. The workspace file is at /tmp/rawgentic-fix-bug-test/no-tests-verify-mode/.rawgentic_workspace.json and the project is at /tmp/rawgentic-fix-bug-test/no-tests-verify-mode/projects/no-tests-app. The bug is: 'parse_date function crashes on ISO format dates like 2026-03-06'. When asked for confirmation, say 'yes'. Save a transcript to the outputs directory.",
+      "expected_output": "Agent detects no test framework, uses verify mode instead of TDD, does not attempt test commands",
+      "files": [],
+      "expectations": [
+        "No pytest/vitest/jest/npm test commands attempted",
+        "Uses manual verification or implement-verify mode"
+      ]
+    }
+  ]
+}

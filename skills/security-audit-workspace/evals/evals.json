@@ -1,0 +1,36 @@
+{
+  "skill_name": "rawgentic:security-audit",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run a security audit. Workspace: /tmp/rawgentic-security-audit-test/stride-sentinel-channels/.rawgentic_workspace.json, project: /tmp/rawgentic-security-audit-test/stride-sentinel-channels/projects/sentinel-app. Focus on the data channels. Save a transcript to the outputs directory.",
+      "expected_output": "Agent enumerates config data channels (grpc-api, mqtt-broker, sentinel-ws), applies STRIDE to them, uses config auth mechanisms",
+      "files": [],
+      "expectations": [
+        "Enumerates grpc-api AND mqtt-broker AND sentinel-ws from config",
+        "STRIDE analysis applied to config channels (not Express/Socket.IO defaults)",
+        "References auth mechanisms from config.security (mTLS, OAuth2-PKCE)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Run a security audit. Workspace: /tmp/rawgentic-security-audit-test/learning-config-update/.rawgentic_workspace.json, project: /tmp/rawgentic-security-audit-test/learning-config-update/projects/sentinel-app. The audit should discover that the app also uses API key auth for the webhook endpoint. Save a transcript to the outputs directory.",
+      "expected_output": "Agent discovers new auth mechanism and appends it to config.security.authMechanisms[]",
+      "files": [],
+      "expectations": [
+        "New auth mechanism added to config.security.authMechanisms[] array",
+        ".rawgentic.json written/updated with new auth mechanism"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Run a security audit. Workspace: /tmp/rawgentic-security-audit-test/research-project-type/.rawgentic_workspace.json, project: /tmp/rawgentic-security-audit-test/research-project-type/projects/research-proj. This is a research project with no deployed services. Save a transcript to the outputs directory.",
+      "expected_output": "Agent adapts audit for research project type - focuses on data security rather than deployment",
+      "files": [],
+      "expectations": [
+        "Adapts for research project (no deployment audit)",
+        "Focuses on data handling, research data, or access controls"
+      ]
+    }
+  ]
+}

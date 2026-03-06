@@ -1,0 +1,20 @@
+{
+  "expectations": [
+    {
+      "text": "skips-tdd-steps",
+      "passed": true,
+      "evidence": "The transcript shows no TDD Red-Green-Refactor cycle. The agent used a straightforward implement-then-verify approach: Step 5 implemented the function, Step 6 verified via syntax check, Step 7 noted no test framework configured. No test files were written."
+    },
+    {
+      "text": "skips-ci-gate",
+      "passed": true,
+      "evidence": "Step 8 states: \"The .rawgentic.json configuration has no CI section and no deploy section. There are no CI pipelines to trigger.\" No CI verification was attempted."
+    },
+    {
+      "text": "skips-deploy",
+      "passed": true,
+      "evidence": "Step 8 states: \"no deployment steps to execute.\" No deployment was attempted. Summary table confirms: \"CI/Deploy | No CI/deploy configured; skipped\"."
+    }
+  ],
+  "summary": {"passed": 3, "failed": 0, "total": 3, "pass_rate": 1.00}
+}

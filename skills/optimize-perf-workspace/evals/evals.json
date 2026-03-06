@@ -1,0 +1,25 @@
+{
+  "skill_name": "rawgentic:optimize-perf",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Optimize performance of the API endpoints. Workspace: /tmp/rawgentic-optimize-perf-test/profiling-sentinel/.rawgentic_workspace.json, project: /tmp/rawgentic-optimize-perf-test/profiling-sentinel/projects/sentinel-app. The main bottleneck is database queries. Save a transcript to the outputs directory.",
+      "expected_output": "Agent uses cockroachdb from config, clinic-js profiler from config, not hardcoded defaults",
+      "files": [],
+      "expectations": [
+        "References cockroachdb (not postgres/mysql) from config",
+        "Uses profiler from config (clinic-js), not hardcoded cProfile or node --prof"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Optimize performance. Workspace: /tmp/rawgentic-optimize-perf-test/no-profiling-config/.rawgentic_workspace.json, project: /tmp/rawgentic-optimize-perf-test/no-profiling-config/projects/minimal-app. The app is slow. Save a transcript to the outputs directory.",
+      "expected_output": "Agent detects incomplete techStack and asks for clarification rather than assuming tools",
+      "files": [],
+      "expectations": [
+        "Asks user for clarification or requests more info about the stack",
+        "Does not assume cProfile, node --prof, or pg_stat without config support"
+      ]
+    }
+  ]
+}

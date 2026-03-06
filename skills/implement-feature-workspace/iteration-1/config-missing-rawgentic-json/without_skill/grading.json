@@ -1,0 +1,15 @@
+{
+  "expectations": [
+    {
+      "text": "stops-with-setup-ref",
+      "passed": false,
+      "evidence": "Transcript never mentions /rawgentic:setup. The agent noted the missing .rawgentic.json but proceeded anyway: \"Since I have no .rawgentic.json to guide technology choices and no existing source code to infer the stack, I will attempt to implement user authentication using reasonable defaults.\" Final recommendation mentions needing config but says it generically, not referencing /rawgentic:setup."
+    },
+    {
+      "text": "workflow-does-not-proceed",
+      "passed": false,
+      "evidence": "The agent proceeded through Steps 5-7, creating full implementation files (package.json, tsconfig.json, auth.service.ts, auth.middleware.ts, auth.routes.ts, index.ts) despite the missing config. It explicitly decided: \"I will attempt to implement user authentication using reasonable defaults.\""
+    }
+  ],
+  "summary": {"passed": 0, "failed": 2, "total": 2, "pass_rate": 0.00}
+}

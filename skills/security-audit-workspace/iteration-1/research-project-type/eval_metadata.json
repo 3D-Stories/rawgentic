@@ -1,0 +1,9 @@
+{
+  "eval_id": 3,
+  "eval_name": "research-project-type",
+  "prompt": "Run a security audit. Workspace: /tmp/rawgentic-security-audit-test/research-project-type/.rawgentic_workspace.json, project: /tmp/rawgentic-security-audit-test/research-project-type/projects/research-proj. This is a research project with no deployed services. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "adapts-for-research", "description": "No deployment audit or explicitly adapts for research project"},
+    {"text": "focuses-on-data-security", "description": "Focuses on data handling, research data, or access controls"}
+  ]
+}

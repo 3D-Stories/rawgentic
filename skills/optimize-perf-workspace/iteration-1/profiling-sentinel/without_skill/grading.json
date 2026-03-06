@@ -1,0 +1,42 @@
+{
+  "expectations": [
+    {
+      "text": "uses-config-db-type",
+      "passed": true,
+      "evidence": "The transcript references CockroachDB from the config. In the Configuration Summary: 'Database: CockroachDB, migrations via dbmate in db/migrations'. In section 4b DB Query Optimization Strategies: 'CockroachDB-specific' strategies including 'AS OF SYSTEM TIME for follower reads' and connection pooling noting 'CockroachDB benefits from connection pooling due to distributed query planning overhead'. The agent identified CockroachDB from the config and tailored recommendations accordingly, not defaulting to PostgreSQL or MySQL."
+    },
+    {
+      "text": "selects-config-profiler",
+      "passed": true,
+      "evidence": "The transcript references clinic-js from the config as the profiling tool. In the Configuration Summary: 'Profiling: clinic-js'. In section 4a Profiling: 'Run npx clinic doctor -- node dist/server.js' and 'Run npx clinic flame -- node dist/server.js'. In Tools & Commands Referenced: 'npx clinic doctor -- node dist/server.js (profiling)' and 'npx clinic flame -- node dist/server.js (flame graph)'. The agent does not use cProfile or node --prof. It selected clinic-js based on the config."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "The project directory contains only the .rawgentic.json configuration file with no source code",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 3 states: 'Searched the entire project directory for source files. Result: The project directory contains only the .rawgentic.json configuration file. No source code, no tests, no migration files, no package.json, no tsconfig.json, and no vitest.config.ts exist.' This is consistent with it being a test fixture."
+    },
+    {
+      "claim": "Task could not be completed end-to-end due to missing source code",
+      "type": "process",
+      "verified": true,
+      "evidence": "Outcome section: 'Status: Incomplete due to missing source code. Full optimization plan documented above.' This is an honest assessment."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Both with_skill and without_skill runs pass these assertions. The without_skill agent also correctly read the config, identified CockroachDB, and selected clinic-js. This means the assertions do not discriminate between having the skill and not having it for this scenario. Consider adding assertions that test skill-specific behaviors like structured step execution, quality gates, or config-driven tool selection that goes beyond just naming the tool (e.g., using CockroachDB-specific STORING syntax vs PostgreSQL INCLUDE)."
+      }
+    ],
+    "overall": "Both runs pass both assertions, indicating these assertions do not differentiate skill from no-skill behavior in this scenario. The without_skill agent read the config and correctly identified the tools without any skill guidance. More discriminating assertions are needed."
+  }
+}

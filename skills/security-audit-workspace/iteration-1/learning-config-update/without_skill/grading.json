@@ -1,0 +1,38 @@
+{
+  "expectations": [
+    {
+      "text": "appends-to-auth-array",
+      "passed": false,
+      "evidence": "The transcript identifies the API key auth gap in Finding 1 ('Webhooks lack declared authentication -- likely using API key auth') and recommends 'Add webhooks to dataChannels and declare their auth mechanism explicitly in authMechanisms'. However, this is a recommendation only. The transcript never shows the authMechanisms array being modified. No JSON update is shown, no file write is described. The original config is displayed with only JWT in authMechanisms, and it is never updated."
+    },
+    {
+      "text": "writes-config-back",
+      "passed": false,
+      "evidence": "The transcript contains no mention of writing or updating the .rawgentic.json file. Section 4 'Recommendations' item 1 says 'Add webhooks to dataChannels and declare their auth mechanism explicitly' -- this is a future recommendation, not an action taken. The without_skill run treated this as an audit-only exercise with recommendations, not as an opportunity to update the config file."
+    }
+  ],
+  "summary": {
+    "passed": 0,
+    "failed": 2,
+    "total": 2,
+    "pass_rate": 0.0
+  },
+  "claims": [
+    {
+      "claim": "The app uses API key authentication for webhooks",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The transcript states this is 'evident because' of the absence of webhook auth in the config and because 'Webhook receivers in sentinel/monitoring applications commonly authenticate inbound requests via a shared API key'. This is an inference, not a code-level discovery. The reasoning is plausible but the claim is derived from general knowledge about sentinel apps, not from inspecting actual webhook handler code."
+    },
+    {
+      "claim": "API key auth is weaker than JWT or HMAC signature verification",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The transcript correctly identifies that API keys are 'static, long-lived secrets with no expiration mechanism', can leak in logs, and provide 'no payload integrity verification'. These are well-established security properties."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [],
+    "overall": "This scenario effectively discriminates between with_skill and without_skill runs. The without_skill run correctly identified the API key auth gap but did not know to update the config file -- exactly the behavior the learning-config protocol in the skill is designed to produce. The assertions are well-chosen."
+  }
+}

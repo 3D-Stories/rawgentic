@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "eval_name": "claude-md-contradiction",
+  "prompt": "Create an issue for improving error handling. Workspace: /tmp/rawgentic-create-issue-test/claude-md-contradiction/.rawgentic_workspace.json, project: /tmp/rawgentic-create-issue-test/claude-md-contradiction/projects/sentinel-app. Note: there is a CLAUDE.md in the workspace root with REPO=wrong-org/wrong-repo. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "config-wins-over-claude-md", "description": "Uses sentinel-repo-42 from config, not wrong-org/wrong-repo from CLAUDE.md"},
+    {"text": "does-not-use-claude-md-constants", "description": "No wrong-org reference in any gh commands"}
+  ]
+}

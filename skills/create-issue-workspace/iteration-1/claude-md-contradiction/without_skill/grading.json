@@ -1,0 +1,58 @@
+{
+  "expectations": [
+    {
+      "text": "config-wins-over-claude-md",
+      "passed": true,
+      "evidence": "The transcript includes a 'Conflict Analysis and Resolution' section that identifies the contradiction between CLAUDE.md ('wrong-org/wrong-repo') and .rawgentic.json ('eval-org/sentinel-repo-42'). The resolution states: 'The .rawgentic.json file is the authoritative source for project configuration.' Three reasons are given: (1) project-specific scope, (2) structured JSON format, (3) canonical metadata chain from workspace config. The decision is explicit: 'Use eval-org/sentinel-repo-42 as the repository.' The gh issue create command uses '--repo eval-org/sentinel-repo-42'."
+    },
+    {
+      "text": "does-not-use-claude-md-constants",
+      "passed": true,
+      "evidence": "The only gh command in the transcript is 'gh issue create --repo eval-org/sentinel-repo-42 --title \"Improve error handling across sentinel-app\" ...'. The string 'wrong-org' does not appear in any gh command. It only appears in the CLAUDE.md content quote and the conflict analysis table. The Key Reasoning Notes section at the end confirms: 'The gh issue create command targets eval-org/sentinel-repo-42 (from .rawgentic.json), NOT wrong-org/wrong-repo (from CLAUDE.md).'"
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "timing": {
+    "total_tokens": 12394,
+    "duration_ms": 58416,
+    "total_duration_seconds": 58.4
+  },
+  "claims": [
+    {
+      "claim": "The CLAUDE.md annotation 'DELIBERATELY WRONG - for eval' was a factor in the resolution",
+      "type": "process",
+      "verified": true,
+      "evidence": "The transcript states: 'The CLAUDE.md file at the workspace root is explicitly annotated as \"DELIBERATELY WRONG - for eval\" in its own header comment, confirming it contains incorrect data.' However, the transcript also says 'Even without that annotation, the project-level .rawgentic.json should take precedence' and provides three structural reasons."
+    },
+    {
+      "claim": "The agent would have resolved correctly even without the annotation",
+      "type": "quality",
+      "verified": false,
+      "evidence": "The transcript claims this ('Even without that annotation, the project-level .rawgentic.json should take precedence'), but this is an unverifiable counterfactual. The annotation may have influenced the decision. Without a test variant that removes the annotation, this claim cannot be verified."
+    },
+    {
+      "claim": "The default branch is trunk, not main",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The .rawgentic.json shows 'defaultBranch: trunk', the CLAUDE.md shows 'DEFAULT_BRANCH=main'. The issue body's Technical Context section correctly uses 'Default Branch: trunk'."
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "does-not-use-claude-md-constants",
+        "reason": "Same concern as with_skill: the 'DELIBERATELY WRONG - for eval' annotation in CLAUDE.md makes it easy to reject those values without needing any principled config resolution strategy. The without_skill run explicitly cites this annotation as a factor. A harder test would use a plausible, unannotated CLAUDE.md."
+      },
+      {
+        "reason": "The without_skill run produces a less detailed workflow (no multi-step critique, no dedup check command, simpler issue body) compared to the with_skill run. No assertion measures the quality or completeness of the workflow process itself, only the correctness of repo targeting. Adding assertions about dedup checks, acceptance criteria quality, or workflow completeness would better differentiate skill vs no-skill runs."
+      }
+    ],
+    "overall": "Both assertions pass. The without_skill agent correctly resolves the config conflict, though it partly relies on the CLAUDE.md annotation rather than a formal config-loading protocol. The eval would benefit from assertions that measure workflow depth and quality, not just correctness of the repo target."
+  }
+}

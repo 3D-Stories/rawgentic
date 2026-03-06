@@ -1,0 +1,73 @@
+{
+  "expectations": [
+    {
+      "text": "uses-sentinel-repo",
+      "passed": true,
+      "evidence": "eval-org/sentinel-repo-42 appears in all gh commands throughout the transcript. Examples: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --limit 10' (Step 1.4 dedup), 'gh label list --repo eval-org/sentinel-repo-42' (Step 8.3), 'gh issue create --repo eval-org/sentinel-repo-42 ...' (Step 8.4). The Summary of All gh Commands section at the end lists 6 commands, all targeting eval-org/sentinel-repo-42."
+    },
+    {
+      "text": "dedup-check-shown",
+      "passed": true,
+      "evidence": "Step 1.4 'Deduplication Check' performs two searches before issue creation: (1) 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --limit 10' and (2) 'gh issue list --repo eval-org/sentinel-repo-42 --search \"real-time websocket ws socket\" --limit 10'. Both searches return no matching issues. This occurs before Step 8 where the issue is created."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "timing": {
+    "total_tokens": 28104,
+    "duration_ms": 173259,
+    "total_duration_seconds": 173.3
+  },
+  "claims": [
+    {
+      "claim": "The workflow follows a 9-step issue creation process (WF1)",
+      "type": "process",
+      "verified": true,
+      "evidence": "Transcript documents Steps 1 through 9 plus a Pre-Workflow config loading step, following the SKILL.md workflow structure."
+    },
+    {
+      "claim": "Three parallel judge agents critiqued the draft specification",
+      "type": "process",
+      "verified": false,
+      "evidence": "The transcript describes simulated critique from three judges (Requirements Validator, Solution Architect, Code Quality Reviewer) but this was simulated, not actually executed via parallel Agent tool calls. The transcript says 'In a real run, three parallel Agent tool calls would be launched.'"
+    },
+    {
+      "claim": "No duplicate issues were found",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The dedup check was simulated ('Simulated output: No matching issues found'). The gh commands were not actually executed, so the no-duplicate claim is assumed rather than verified."
+    },
+    {
+      "claim": "The issue was created at https://github.com/eval-org/sentinel-repo-42/issues/1",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The 'gh issue create' command was described but marked as 'Simulated output'. The issue creation was not actually executed."
+    },
+    {
+      "claim": "7 critique findings were applied to improve the specification",
+      "type": "quality",
+      "verified": true,
+      "evidence": "The transcript lists 7 specific findings in Step 3, maps each to an amendment in Step 4, and shows the amended specification in Step 5 with all 7 changes incorporated (e.g., criterion #8 added for close codes, ws library justification added, auth wording improved)."
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "uses-sentinel-repo",
+        "reason": "This assertion checks that eval-org/sentinel-repo-42 appears in gh commands, but since the test fixture only provides one repo in the config, any agent that reads the config would pass. A stronger test would check that the repo was sourced specifically from .rawgentic.json (the config-loading protocol), not from some other discovery method like scanning for .git/config."
+      },
+      {
+        "reason": "The entire workflow is simulated -- no gh commands were actually executed. The transcript shows 'Command that would be run' and 'Simulated output' throughout. An assertion checking that actual tool calls (Bash) were made to run gh commands would distinguish between a real execution and a simulated walkthrough."
+      },
+      {
+        "reason": "No assertion checks the quality of the generated issue body (acceptance criteria, scope, risk assessment). The with_skill run produces a significantly more detailed issue than the without_skill run, but no assertion captures this difference."
+      }
+    ],
+    "overall": "The assertions test the correct repo targeting and dedup behavior, which are the core differentiators for this scenario. However, both assertions are satisfied by simulated commands (not actual executions), which limits confidence. Consider adding an assertion that verifies actual tool execution occurred."
+  }
+}

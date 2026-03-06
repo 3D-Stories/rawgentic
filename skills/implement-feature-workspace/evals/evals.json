@@ -1,0 +1,78 @@
+{
+  "skill_name": "rawgentic:implement-feature",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Implement issue #42 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-loading-sentinel/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-loading-sentinel/projects/sentinel-app. The issue is: 'Add health check endpoint that returns service status'. When asked for confirmation, say 'yes, looks good' to approve. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent loads config, detects sentinel values (sentinel-repo-42, trunk branch, vitest, circleci, cockroachdb, rsync deploy), and uses them throughout the workflow steps",
+      "files": [],
+      "expectations": [
+        "Transcript mentions sentinel-repo-42 (the repo name from config)",
+        "Transcript references trunk as the default branch (not main or master)",
+        "Transcript mentions vitest run --reporter=verbose --sentinel as the test command",
+        "Transcript mentions circleci as the CI provider (not github-actions)",
+        "Transcript mentions cockroachdb as the database type",
+        "Transcript mentions rsync as the deploy method"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Implement issue #10 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-missing-rawgentic-json/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-missing-rawgentic-json/projects/missing-config-app. The issue is: 'Add user authentication'. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent detects missing .rawgentic.json, STOPs, and tells user to run /rawgentic:setup",
+      "files": [],
+      "expectations": [
+        "Agent stops and mentions /rawgentic:setup",
+        "Workflow does not proceed beyond config loading (no Step 1+ output)"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Implement issue #10 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-corrupted-json/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-corrupted-json/projects/corrupt-app. The issue is: 'Fix login page'. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent detects corrupted JSON in .rawgentic.json, STOPs with corruption message, suggests /rawgentic:setup",
+      "files": [],
+      "expectations": [
+        "Agent mentions corrupted or malformed JSON",
+        "Agent suggests /rawgentic:setup"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Implement issue #10 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-version-mismatch/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-version-mismatch/projects/version-app. The issue is: 'Add search feature'. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent warns about version mismatch when it sees version: 99",
+      "files": [],
+      "expectations": [
+        "Agent warns about version mismatch or unsupported version"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Implement issue #10 for me. The workspace file should be at /tmp/rawgentic-implement-feature-test/config-missing-workspace/.rawgentic_workspace.json (but it doesn't exist). The issue is: 'Add notifications'. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent detects no .rawgentic_workspace.json, STOPs, tells user to run /rawgentic:new-project",
+      "files": [],
+      "expectations": [
+        "Agent stops and mentions /rawgentic:new-project"
+      ]
+    },
+    {
+      "id": 6,
+      "prompt": "Implement issue #42 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-driven-no-tests-no-ci/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-driven-no-tests-no-ci/projects/python-minimal. The issue is: 'Add CSV export function to main.py'. When asked for confirmation, say 'yes' to approve. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent detects no testing, no CI, no deploy from config. Uses implement-verify mode instead of TDD. Skips CI gate and deployment steps.",
+      "files": [],
+      "expectations": [
+        "Agent uses implement-verify mode (not TDD/Red-Green-Refactor)",
+        "Agent skips or notes no CI configured",
+        "Agent skips or notes no deployment configured"
+      ]
+    },
+    {
+      "id": 7,
+      "prompt": "Implement issue #42 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-contradicts-filesystem/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-contradicts-filesystem/projects/jest-contradiction. The issue is: 'Add rate limiting middleware'. When asked for confirmation, say 'yes' to approve. Save a transcript of your work to the outputs directory.",
+      "expected_output": "Agent follows config (no testing frameworks listed) and uses implement-verify mode, even though jest.config.js exists on disk. Does NOT run jest.",
+      "files": [],
+      "expectations": [
+        "Agent uses implement-verify mode (follows config, not filesystem)",
+        "Agent does not run jest, vitest, pytest, or npm test commands"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "skill_name": "rawgentic:refactor",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Refactor the user authentication module to use the strategy pattern. Workspace: /tmp/rawgentic-refactor-test/characterization-tests-sentinel/.rawgentic_workspace.json, project: /tmp/rawgentic-refactor-test/characterization-tests-sentinel/projects/sentinel-app. Save a transcript to the outputs directory.",
+      "expected_output": "Agent uses config test framework for characterization tests",
+      "files": [],
+      "expectations": [
+        "Uses vitest run --sentinel (config test command) for characterization tests",
+        "Writes characterization or snapshot tests before refactoring"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Refactor the data processing pipeline for better readability. Workspace: /tmp/rawgentic-refactor-test/no-tests-degradation/.rawgentic_workspace.json, project: /tmp/rawgentic-refactor-test/no-tests-degradation/projects/no-tests-app. Save a transcript to the outputs directory.",
+      "expected_output": "Agent acknowledges no test framework and uses behavioral preservation strategy",
+      "files": [],
+      "expectations": [
+        "Acknowledges no test framework or uses manual verification",
+        "Uses behavioral preservation strategy (API contract or behavioral check)"
+      ]
+    }
+  ]
+}

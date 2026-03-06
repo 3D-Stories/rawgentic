@@ -1,0 +1,10 @@
+{
+  "eval_id": 1,
+  "eval_name": "health-checks-sentinel",
+  "prompt": "We have an incident! The sentinel-api service is returning 502 errors. Workspace: /tmp/rawgentic-incident-test/health-checks-sentinel/.rawgentic_workspace.json, project: /tmp/rawgentic-incident-test/health-checks-sentinel/projects/sentinel-infra. Check service health and diagnose. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "uses-config-services", "description": "Health endpoint from config.services[] used (e.g., /health/sentinel-check)"},
+    {"text": "uses-config-docker", "description": "Docker compose file from config.infrastructure referenced (docker-compose.prod.yml)"},
+    {"text": "uses-sentinel-repo", "description": "sentinel-repo-42 appears in transcript"}
+  ]
+}

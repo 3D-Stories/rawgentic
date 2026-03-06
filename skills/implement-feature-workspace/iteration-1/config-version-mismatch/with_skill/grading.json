@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {
+      "text": "warns-version-mismatch",
+      "passed": true,
+      "evidence": "Transcript clearly warns: \"WARNING: Config version mismatch detected.\" and \"The project configuration file .rawgentic.json for project version-app has \\\"version\\\": 99, but this workflow expects version 1.\" It lists possible causes and recommendations."
+    }
+  ],
+  "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.00}
+}

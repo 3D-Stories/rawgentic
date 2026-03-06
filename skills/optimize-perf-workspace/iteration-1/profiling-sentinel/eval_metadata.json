@@ -1,0 +1,9 @@
+{
+  "eval_id": 1,
+  "eval_name": "profiling-sentinel",
+  "prompt": "Optimize performance of the API endpoints. Workspace: /tmp/rawgentic-optimize-perf-test/profiling-sentinel/.rawgentic_workspace.json, project: /tmp/rawgentic-optimize-perf-test/profiling-sentinel/projects/sentinel-app. The main bottleneck is database queries. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "uses-config-db-type", "description": "References cockroachdb (not postgres/mysql) from config"},
+    {"text": "selects-config-profiler", "description": "Uses profiler from config (clinic-js), not hardcoded cProfile/node --prof"}
+  ]
+}

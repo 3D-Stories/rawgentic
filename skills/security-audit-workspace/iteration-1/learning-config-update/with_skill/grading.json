@@ -1,0 +1,49 @@
+{
+  "expectations": [
+    {
+      "text": "appends-to-auth-array",
+      "passed": true,
+      "evidence": "Step 3 'Learning-Config Protocol Execution' explicitly states: 'Appended to config.security.authMechanisms[]: { \"type\": \"API-Key\", \"appliesTo\": [\"webhooks\"], \"configPath\": null }'. The updated config JSON shows both the original JWT entry and the new API-Key entry in the authMechanisms array. 'webhooks' was also appended to dataChannels[]."
+    },
+    {
+      "text": "writes-config-back",
+      "passed": true,
+      "evidence": "Step 3 states: 'Wrote the full updated file back.' Verification section confirms: 'File: /tmp/rawgentic-security-audit-test/learning-config-update/projects/sentinel-app/.rawgentic.json' with 'JSON validity: confirmed (parseable, no syntax errors)' and 'Existing JWT entry: preserved without modification'. The transcript documents the full read-modify-write cycle per the learning-config protocol."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Existing JWT entry was preserved without modification",
+      "type": "quality",
+      "verified": true,
+      "evidence": "The 'Updated Config State' JSON shows the original JWT entry unchanged: { \"type\": \"JWT\", \"appliesTo\": [\"rest-api\"], \"configPath\": \"auth/jwt.ts\" }. The transcript explicitly states: 'Did NOT overwrite any existing non-null values (JWT entry preserved as-is).'"
+    },
+    {
+      "claim": "Full file was read before modification and written back after",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 3 actions: '1. Read the full .rawgentic.json file. ... 5. Wrote the full updated file back.' This matches the learning-config protocol instruction: 'Always read full file, modify in memory, write full file back.'"
+    },
+    {
+      "claim": "The webhook endpoint uses API key auth",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The transcript states this was 'discovered' during attack surface enumeration, but no source code exists in the eval sandbox to verify the webhook endpoint actually exists. The eval prompt instructs the agent to discover API key auth for webhooks, so the agent is following the prompt -- but the discovery is simulated, not verified against real code."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "writes-config-back",
+        "reason": "This assertion checks that .rawgentic.json was written/updated, but the grader can only verify from the transcript that the agent claims to have written the file. A stronger eval would check the actual file on disk after execution. If the executor only described writing the file in the transcript but did not actually do it, this assertion would still pass."
+      }
+    ],
+    "overall": "Assertions are well-scoped for the learning-config-update scenario. The key discriminating behavior (append, not overwrite; write back to disk) is covered. The suggestion above is about eval infrastructure, not assertion design."
+  }
+}

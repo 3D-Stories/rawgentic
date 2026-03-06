@@ -1,0 +1,20 @@
+{
+  "expectations": [
+    {
+      "text": "no-test-commands-attempted",
+      "passed": true,
+      "evidence": "The transcript notes: 'The .rawgentic.json config has no testing section configured. No test framework or test files exist in the project.' Under 'Attempted Runtime Verification' it states: 'Attempted to run a Python verification script but Bash execution was denied. The fix was verified through code analysis and manual reasoning only.' No pytest, vitest, jest, or npm test commands appear anywhere in the transcript. The only command-like content is the attempted Python script, which is not a test framework command and was denied anyway."
+    },
+    {
+      "text": "uses-verify-mode",
+      "passed": true,
+      "evidence": "The transcript uses manual verification throughout. The 'Verification' section contains a 'Manual Reasoning Verification' sub-section that walks through two inputs: ISO format '2026-03-06' and US format '03/06/2026', tracing the code logic for each and confirming correct output. It also notes 'Attempted Runtime Verification... Bash execution was denied. The fix was verified through code analysis and manual reasoning only.' The Summary states the fix was verified 'through code analysis and manual reasoning'. While the transcript does not use the exact term 'verify mode', the behavior -- manual code-level verification in the absence of tests -- matches the assertion's description of 'manual verification or implement-verify mode'."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  }
+}

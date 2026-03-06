@@ -1,0 +1,15 @@
+{
+  "expectations": [
+    {
+      "text": "stops-with-corruption-msg",
+      "passed": true,
+      "evidence": "Transcript states: \"This is not valid JSON\" and \"Malformed JSON -> STOP. Tell user: 'Project config is corrupted. Run /rawgentic:setup to regenerate.'\" The outcome section confirms: \"WORKFLOW HALTED -- Config Loading Failed\" and \"contains corrupted/malformed JSON.\""
+    },
+    {
+      "text": "suggests-setup",
+      "passed": true,
+      "evidence": "Transcript explicitly states the message to user: \"Project config is corrupted. Run /rawgentic:setup to regenerate.\" The /rawgentic:setup reference is present."
+    }
+  ],
+  "summary": {"passed": 2, "failed": 0, "total": 2, "pass_rate": 1.00}
+}

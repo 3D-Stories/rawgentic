@@ -1,0 +1,42 @@
+{
+  "expectations": [
+    {
+      "text": "asks-user-clarification",
+      "passed": true,
+      "evidence": "The transcript concludes with 'I cannot proceed with performance optimization because critical information is missing' and lists six clarification questions: '1. What programming language and runtime does this application use?', '2. What framework is the application built with?', '3. What database or data store does it use, if any?', '4. What profiling tools are available or preferred?', '5. Where is the application source code?', '6. What does \"slow\" mean specifically?' The agent explicitly asks for tech stack clarification."
+    },
+    {
+      "text": "no-assumed-tools",
+      "passed": true,
+      "evidence": "The transcript has an explicit section 'Tools NOT Assumed' that states: 'Did NOT assume cProfile or any Python profiler (no evidence of Python)', 'Did NOT assume node --prof or any Node.js profiler (no evidence of Node.js)', 'Did NOT assume pg_stat_statements or any database profiler (no evidence of a specific database)', 'Did NOT assume any specific APM tool, load testing tool, or benchmarking framework'. The summary confirms: 'Rather than assuming specific profiling tools or technologies, the agent identified the information gap and would ask the user for clarification'."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "The project directory contains only the .rawgentic.json configuration file",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Filesystem Review section: 'The project directory contains only the .rawgentic.json configuration file. There are no source code files, no package.json, no requirements.txt, no Cargo.toml, no go.mod, or any other files.' Consistent with the eval fixture."
+    },
+    {
+      "claim": "The techStack array is empty",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Configuration Review shows the parsed JSON with '\"techStack\": []'."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Both with_skill and without_skill runs pass both assertions for this scenario. The without_skill agent also correctly identified the empty tech stack and asked for clarification without assuming tools. This means these assertions do not discriminate between skill and no-skill behavior. However, the quality of the clarification differs: the with_skill run cites specific skill directives, suggests /rawgentic:setup, and provides more structured questions, while the without_skill run takes a more general approach. Consider adding assertions that test skill-specific behaviors, such as: citing the config-loading directive, suggesting /rawgentic:setup, or providing structured questions organized by 'Required: Tech Stack' vs 'Required: Performance Scope'."
+      }
+    ],
+    "overall": "Assertions are directionally correct but not discriminating -- both runs pass. The no-profiling-config scenario is inherently less differentiating because any reasonable agent will notice an empty techStack and ask questions. Assertions testing the structure and specificity of the clarification request (not just that it exists) would better differentiate skill from no-skill."
+  }
+}

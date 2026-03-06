@@ -1,0 +1,68 @@
+{
+  "expectations": [
+    {
+      "text": "uses-config-services",
+      "passed": true,
+      "evidence": "The transcript explicitly uses the health endpoint from config.services[]. In the 'Resolved Environment' table: sentinel-api health endpoint is '/health/sentinel-check'. This endpoint is then used throughout -- e.g., Step 2: 'curl -s -o /dev/null -w \"%{http_code}\" https://sentinel-api.internal:8443/health/sentinel-check' and Step 5 verification: 'Verify sentinel-api health endpoint (config.services[0].healthEndpoint)'. The sentinel-worker endpoint '/status/alive' is also used from config."
+    },
+    {
+      "text": "uses-config-docker",
+      "passed": true,
+      "evidence": "The transcript references 'docker-compose.prod.yml' from config.infrastructure throughout. Resolved Environment table lists 'docker-compose.prod.yml | production' and 'docker-compose.monitoring.yml | monitoring'. Step 2 uses 'docker compose -f docker-compose.prod.yml ps' and 'docker compose -f docker-compose.monitoring.yml ps'. Step 4 executes 'docker compose -f docker-compose.prod.yml restart sentinel-api'. The compose file is used in nearly every diagnostic and remediation command."
+    },
+    {
+      "text": "uses-sentinel-repo",
+      "passed": true,
+      "evidence": "The transcript contains 'sentinel-repo-42' in the Config Loading section: 'config.repo.fullName: eval-org/sentinel-repo-42'. It also appears in the Resolved Capabilities table: 'repo | eval-org/sentinel-repo-42'. It is further used in Step 10 for PR creation: 'gh pr create --repo eval-org/sentinel-repo-42' and Step 12 for issue creation: 'gh issue create --repo eval-org/sentinel-repo-42'."
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Severity was classified as SEV-2 (partial outage, degraded service)",
+      "type": "quality",
+      "verified": true,
+      "evidence": "The transcript classifies this as SEV-2 with rationale: '502 errors from sentinel-api indicate the service is degraded or unreachable behind the proxy. This is a partial outage affecting API consumers.' This is a reasonable classification for 502 errors on a single service."
+    },
+    {
+      "claim": "Root cause was OOM kill due to missing container memory limits",
+      "type": "factual",
+      "verified": false,
+      "evidence": "This is a simulated/hypothesized root cause. The transcript says 'confirmed via dmesg | grep oom on host 10.0.42.1' but this is written as a hypothetical diagnostic, not actually executed. Since this is a sandbox environment with no real infrastructure, the RCA is plausible but fabricated."
+    },
+    {
+      "claim": "Service was restored in ~12 minutes",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The timeline table shows T+0 to T+12 min, but these are simulated timestamps. No actual service was restarted. The claim is part of the simulated narrative."
+    },
+    {
+      "claim": "All diagnostic commands reference config values correctly",
+      "type": "process",
+      "verified": true,
+      "evidence": "Config values (hosts 10.0.42.1/10.0.42.2, ports 8443/9090, health endpoints /health/sentinel-check and /status/alive, compose files docker-compose.prod.yml and docker-compose.monitoring.yml) are consistently and correctly used throughout all commands in the transcript. These match the .rawgentic.json config structure."
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "uses-config-services",
+        "reason": "This assertion checks that a health endpoint from config.services[] appears in the transcript, but it would pass even if the endpoint were mentioned in passing without being used in any diagnostic command. Consider tightening to require the endpoint appears in a curl or health-check command context."
+      },
+      {
+        "assertion": "uses-sentinel-repo",
+        "reason": "This assertion only checks that 'sentinel-repo-42' appears in the transcript. It would trivially pass if the agent merely logged the config contents without actually using the repo in any meaningful way (e.g., for git operations or PR/issue creation). The with_skill run does use it meaningfully; the assertion should verify usage context."
+      },
+      {
+        "reason": "No assertion checks whether the response follows a structured incident workflow (Phase A stabilize before Phase B RCA). The with_skill run demonstrates clear phased structure while the without_skill run does not -- this is a key differentiator that goes untested."
+      }
+    ],
+    "overall": "Assertions verify config value usage but not workflow quality or structure. Adding an assertion for phased incident response (stabilize-then-analyze) would better distinguish skill-guided from unguided runs."
+  }
+}

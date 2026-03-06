@@ -1,0 +1,58 @@
+{
+  "expectations": [
+    {
+      "text": "appends-to-primary-files",
+      "passed": true,
+      "evidence": "Step 10 (Completion Summary) under 'Conditional Memorization (P9)' explicitly shows CONTRIBUTING.md being appended to primaryFiles. The transcript states: 'Action required: Append CONTRIBUTING.md to config.documentation.primaryFiles[]' and shows the modified JSON with 'primaryFiles': ['docs/README.md', 'CONTRIBUTING.md']. The Key Observations section further confirms: 'Append CONTRIBUTING.md to config.documentation.primaryFiles[] -- the new doc is a discovered documentation file that should be tracked.'"
+    },
+    {
+      "text": "writes-config-back",
+      "passed": true,
+      "evidence": "Step 10 shows the full modified .rawgentic.json that would be written back, with the updated primaryFiles array and new format field. The transcript states: 'Would read /tmp/rawgentic-update-docs-test/learning-config-new-doc/projects/sentinel-app/.rawgentic.json, modify in memory' and then shows the complete modified JSON. It also states: 'Would write the modified JSON back to the same file.' The learning-config directive requirements are explicitly quoted and followed: 'Always read full file, modify in memory, write full file back'."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "The workflow follows the learning-config directive from the skill",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 10 quotes the learning-config directive verbatim and maps each requirement to an action taken. The Key Observations section repeats these mappings."
+    },
+    {
+      "claim": "Existing non-null values were preserved (docs/README.md, generator: typedoc)",
+      "type": "quality",
+      "verified": true,
+      "evidence": "The modified JSON in Step 10 retains 'docs/README.md' in primaryFiles and 'typedoc' as generator. The transcript states: 'documentation.generator: left unchanged (typedoc is an existing non-null value)' and 'did not overwrite existing docs/README.md'."
+    },
+    {
+      "claim": "documentation.format was set to 'markdown' because it was missing",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 10 shows 'documentation.format: set to markdown (was missing/null, so setting it does not violate the do not overwrite existing non-null values rule)'. The original config had no format field, and the modified JSON includes 'format': 'markdown'."
+    },
+    {
+      "claim": "The workflow is simulated, not actually executed",
+      "type": "process",
+      "verified": true,
+      "evidence": "Multiple steps use 'Would run', 'Would read', 'Would write', 'Would present to user' language. Step 1 states 'In this simulation, I proceed as if the user confirmed the scope.' No actual files were created or modified."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "writes-config-back",
+        "reason": "The assertion passes based on the transcript describing what it 'would' do, but the .rawgentic.json was never actually written. Both assertions grade a simulation/plan rather than actual file mutations. Consider adding a check that verifies the actual file on disk was modified, or at minimum, that a Write/Edit tool call was actually issued (not just described). As written, a transcript that merely describes the correct intent without executing it satisfies both assertions."
+      },
+      {
+        "reason": "No assertion checks whether the CONTRIBUTING.md file itself was created or contains meaningful content. The skill's primary job is updating docs, but only the config-update side-effect is tested."
+      }
+    ],
+    "overall": "Assertions test the right concepts (config learning) but accept simulated intent as equivalent to actual execution. This is a significant gap -- a run that perfectly describes what it would do but never does it gets full marks."
+  }
+}

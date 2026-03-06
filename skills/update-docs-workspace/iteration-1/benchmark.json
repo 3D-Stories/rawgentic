@@ -1,0 +1,177 @@
+{
+  "metadata": {
+    "skill_name": "update-docs",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 3
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "eval_name": "accuracy-sentinel-paths",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "failed": 0,
+        "total": 1,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "uses-config-doc-paths",
+          "passed": true,
+          "evidence": "The transcript explicitly references all three sentinel paths from config.documentation.primaryFiles. Step 1 (Config Loading) shows: 'The config specifies documentation.primaryFiles with three sentinel paths: 1. docs/SENTINEL-ARCHITECTURE.md 2. docs/SENTINEL-API-SPEC.md 3. docs/SENTINEL-DEPLOY-GUIDE.md'. The Scope Determination section states: 'The files listed above come directly from config.documentation.primaryFiles. The skill does NOT default to README.md or any other generic path.' Step 2 and Step 3 both use these three paths as the documentation targets."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "accuracy-sentinel-paths",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "failed": 0,
+        "total": 1,
+        "time_seconds": 75.7,
+        "tokens": 14631
+      },
+      "expectations": [
+        {
+          "text": "uses-config-doc-paths",
+          "passed": true,
+          "evidence": "The transcript references all three sentinel paths from config.documentation.primaryFiles. Step 2 reads the project config and explicitly identifies 'Primary documentation files: 1. docs/SENTINEL-ARCHITECTURE.md 2. docs/SENTINEL-API-SPEC.md 3. docs/SENTINEL-DEPLOY-GUIDE.md'. Steps 4.2 through 4.6 plan work against exactly these three files. The 'Key Documentation Paths (from config)' summary lists all three sentinel paths. The without_skill run also correctly identifies these config-driven paths."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "learning-config-new-doc",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 138.7,
+        "tokens": 23870
+      },
+      "expectations": [
+        {
+          "text": "appends-to-primary-files",
+          "passed": true,
+          "evidence": "Step 10 (Completion Summary) under 'Conditional Memorization (P9)' explicitly shows CONTRIBUTING.md being appended to primaryFiles. The transcript states: 'Action required: Append CONTRIBUTING.md to config.documentation.primaryFiles[]' and shows the modified JSON with 'primaryFiles': ['docs/README.md', 'CONTRIBUTING.md']. The Key Observations section further confirms: 'Append CONTRIBUTING.md to config.documentation.primaryFiles[] -- the new doc is a discovered documentation file that should be tracked.'"
+        },
+        {
+          "text": "writes-config-back",
+          "passed": true,
+          "evidence": "Step 10 shows the full modified .rawgentic.json that would be written back, with the updated primaryFiles array and new format field. The transcript states: 'Would read /tmp/rawgentic-update-docs-test/learning-config-new-doc/projects/sentinel-app/.rawgentic.json, modify in memory' and then shows the complete modified JSON. It also states: 'Would write the modified JSON back to the same file.' The learning-config directive requirements are explicitly quoted and followed: 'Always read full file, modify in memory, write full file back'."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "learning-config-new-doc",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 67.3,
+        "tokens": 13011
+      },
+      "expectations": [
+        {
+          "text": "appends-to-primary-files",
+          "passed": true,
+          "evidence": "Step 5b explicitly plans to update the documentation.primaryFiles array to include CONTRIBUTING.md. The transcript shows: 'Change: Update the documentation.primaryFiles array to include the new file' with the modified JSON showing 'primaryFiles': ['docs/README.md', 'CONTRIBUTING.md']. The Summary table also states '.rawgentic.json needs update: Yes -- primaryFiles should include CONTRIBUTING.md'. However, this is described as a plan ('Would edit'), not an actual execution."
+        },
+        {
+          "text": "writes-config-back",
+          "passed": true,
+          "evidence": "Step 5b shows the intent to edit .rawgentic.json with the path explicitly stated: '/tmp/rawgentic-update-docs-test/learning-config-new-doc/projects/sentinel-app/.rawgentic.json'. The modified JSON is shown with the updated primaryFiles array. The Summary also lists '.rawgentic.json needs update: Yes'. Like the with_skill run, this is a described plan rather than actual execution."
+        }
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "research-project-docs",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 146.9,
+        "tokens": 23853
+      },
+      "expectations": [
+        {
+          "text": "adapts-doc-structure",
+          "passed": true,
+          "evidence": "The transcript extensively adapts documentation structure for a research project. Step 1 identifies project_type as 'research' and notes primaryFiles are 'docs/methodology.md' and 'docs/findings.md'. Step 3 drafts research-specific content: methodology.md includes 'Overview, Environment (Python 3.12.0, Jupyter 7.0.0), Evaluation Framework, Data Sources, Metrics' sections. findings.md includes 'Summary, Results, Analysis, Conclusions' sections. The Proposed Document Outlines in Step 2 show research-appropriate structure. The description field 'LLM evaluation research project' is used to inform content. The assertion mentions 'dataset' specifically -- while no standalone dataset doc is created, methodology.md includes a 'Data Sources' section."
+        },
+        {
+          "text": "no-deployment-docs",
+          "passed": true,
+          "evidence": "No deployment or API documentation was generated or planned. The transcript does not create or plan any deployment guide, API spec, or architecture doc. Step 10 Completion Summary lists only 'docs/methodology.md (NEW)' and 'docs/findings.md (NEW)' as files updated. The capabilities object shows has_deploy: false. No deployment-related content appears in any drafted documentation."
+        }
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "research-project-docs",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 77.8,
+        "tokens": 16577
+      },
+      "expectations": [
+        {
+          "text": "adapts-doc-structure",
+          "passed": true,
+          "evidence": "The transcript adapts documentation for a research project. Step 1 identifies project_type as 'research' and notes: 'The paths are config-driven and reflect the research nature of the project -- methodology and findings are the core documentation artifacts for a research project.' The Project Type Adaptation section explicitly states: 'Research projects focus on methodology, findings, datasets, and experimental procedures.' Step 3 drafts research-appropriate content for methodology.md (experimental design, dataset description, evaluation metrics, reproducibility notes) and findings.md (quantitative results, qualitative analysis, comparison with baselines, limitations, future work). The word 'dataset' appears multiple times."
+        },
+        {
+          "text": "no-deployment-docs",
+          "passed": true,
+          "evidence": "Step 3 has an explicit 'What is NOT generated' section that states: 'No deployment guide -- there is no deploy section in config, and research projects do not typically have deployment pipelines' and 'No API specification -- there is no API layer indicated in the config or tech stack' and 'No architecture documentation -- research projects are typically not architected as multi-service applications'. The Research Project Adaptation Verification section reconfirms: 'No deployment guide was generated or planned' and 'No API specification was generated or planned.'"
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 3,
+      "total_assertions": 5,
+      "passed_assertions": 5
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 3,
+      "total_assertions": 5,
+      "passed_assertions": 5
+    },
+    "delta": {
+      "pass_rate": "+0.00"
+    }
+  }
+}

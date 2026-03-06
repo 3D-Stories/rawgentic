@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "eval_name": "no-tests-verify-mode",
+  "prompt": "Fix the bug in issue #20. The workspace file is at /tmp/rawgentic-fix-bug-test/no-tests-verify-mode/.rawgentic_workspace.json and the project is at /tmp/rawgentic-fix-bug-test/no-tests-verify-mode/projects/no-tests-app. The bug is: 'parse_date function crashes on ISO format dates like 2026-03-06'. When asked for confirmation, say 'yes'. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "no-test-commands-attempted", "description": "No pytest/vitest/jest/npm test commands attempted"},
+    {"text": "uses-verify-mode", "description": "Uses manual verification or implement-verify mode"}
+  ]
+}

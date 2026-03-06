@@ -1,0 +1,48 @@
+{
+  "expectations": [
+    {
+      "text": "adapts-for-research",
+      "passed": true,
+      "evidence": "The transcript states: 'Since this is a research project with no deployable code and no source files beyond configuration, the audit focused on: 1. Configuration integrity and correctness, 2. Secrets / credential exposure, 3. File permission review, 4. Data channel risk assessment, 5. Dependency and tech stack security considerations, 6. Research-project-specific risks'. Section 7 is dedicated to 'Research-Project-Specific Risks'. No deployment audit is performed -- no APIs, services, or infrastructure are audited. The overall assessment states: 'This is a research project with no deployed services, no network-facing data channels, and no authentication surface.'"
+    },
+    {
+      "text": "focuses-on-data-security",
+      "passed": true,
+      "evidence": "Section 4 'Data Channel Risk Assessment' focuses on local-filesystem data security: 'Data stored on the local filesystem is subject to the host OS access controls.' Recommendations address: encrypting data at rest, .gitignore rules to prevent accidental data commits, and data handling procedures. Section 7 addresses research data specifically: 'Model output storage' (treat LLM outputs as untrusted data), 'Prompt injection in evaluation data', 'Notebook output cells' containing sensitive data. Section 3 'File Permissions' reviews access controls on configuration files."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Python 3.12.0 is significantly behind on security patches as of 2026-03-06",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Python 3.12.0 was released October 2023. The audit date is March 2026 -- over 2 years later. Python 3.12 has received multiple patch releases since then. The claim is accurate."
+    },
+    {
+      "claim": "No critical or high-severity issues were identified",
+      "type": "quality",
+      "verified": true,
+      "evidence": "The Risk Summary table shows severities of Low and Medium only. No row is marked Critical or High. This is appropriate for a research project with no network-facing services."
+    },
+    {
+      "claim": "Jupyter servers may bind to all interfaces by default",
+      "type": "factual",
+      "verified": false,
+      "evidence": "Modern Jupyter versions (7.x) bind to localhost by default and require token authentication. The claim that Jupyter 'may bind to all interfaces' is slightly overstated for current defaults, though it remains a valid concern if configuration is manually changed. This is a minor inaccuracy."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Both with_skill and without_skill pass both assertions for this scenario. The assertions are necessary but not sufficient to differentiate skill-guided behavior. The with_skill run follows a formal multi-step workflow (WF9 Steps 1-6) with a structured quality gate critique, while the without_skill run produces a competent but less structured audit. Consider adding an assertion that checks for the quality-gate/self-critique step, which is a distinctive skill behavior."
+      }
+    ],
+    "overall": "The assertions verify the correct high-level behavior (adapt for research, focus on data) but don't discriminate between runs. Both runs handle the research project type well. The skill's value in this scenario appears to be structural rigor rather than capability the assertions can measure."
+  }
+}

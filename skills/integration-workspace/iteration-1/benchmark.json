@@ -1,0 +1,72 @@
+{
+  "metadata": {
+    "skill_name": "integration",
+    "model": "claude-opus-4-6",
+    "scenarios": 1
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "eval_name": "setup-to-implement",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "pass_rate": 1.0
+      },
+      "expectations": [
+        {
+          "text": "config-loads-successfully",
+          "passed": true,
+          "evidence": "Phase 1 of the transcript documents config loading in detail. Section 1.1 loads the workspace file (Status: SUCCESS). Section 1.2 loads the project config (Status: SUCCESS). Section 1.3 builds the capabilities object with a 9-row table deriving has_tests, test_commands, has_ci, has_deploy, has_database, has_docker, project_type, repo, and default_branch. Section 1.5 concludes: 'RESULT: CONFIG LOADED SUCCESSFULLY WITHOUT ERRORS'. Both the config loading and capabilities object construction are explicitly demonstrated."
+        },
+        {
+          "text": "schema-compatible",
+          "passed": true,
+          "evidence": "Phase 4 'Error and Warning Documentation' explicitly states: Schema Errors = 'None. The config file is valid JSON with correct field types for all present fields.' Missing Field Warnings = 'None that cause errors.' Undefined Values = 'None. All accessed fields resolve to concrete values.' The capabilities table in Section 1.3 shows all 9 fields derived without undefined values -- absent config sections (testing, ci, deploy, database, infrastructure) resolve to false flags rather than errors. The transcript confirms zero schema errors, zero parse errors, and zero undefined value issues."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "setup-to-implement",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "passed": 1,
+        "failed": 1,
+        "total": 2,
+        "pass_rate": 0.5
+      },
+      "expectations": [
+        {
+          "text": "config-loads-successfully",
+          "passed": false,
+          "evidence": "The transcript shows that the agent read both config files (Steps 1 and 2) and noted they were valid JSON with expected fields. However, the assertion requires that a 'capabilities object is built' -- the without_skill run does NOT build a capabilities object. There is no derivation of has_tests, has_ci, has_deploy, has_database, has_docker, project_type, or any other capability flags. The agent simply read the JSON and moved on to implementation. Config files were read without parse errors, but the capabilities object -- which is the core integration contract between setup and implement-feature -- was never constructed."
+        },
+        {
+          "text": "schema-compatible",
+          "passed": true,
+          "evidence": "The transcript states in the 'Issues Encountered with Config Files' section: 'No issues were found with either config file. Both files were: Valid JSON, Properly structured with expected fields, Consistent with each other, Version fields present and set to 1.' No missing field errors or undefined values are reported anywhere in the transcript. While there was no formal workflow execution (no skill-defined steps), the agent successfully consumed both config files during its execution without encountering any schema-related errors."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.5
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.50"
+    }
+  }
+}

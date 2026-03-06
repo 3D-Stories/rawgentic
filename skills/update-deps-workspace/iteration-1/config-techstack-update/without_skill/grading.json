@@ -1,0 +1,51 @@
+{
+  "expectations": [
+    {
+      "text": "updates-techstack",
+      "passed": true,
+      "evidence": "The transcript under 'Actions Taken > 3. Updated .rawgentic.json techStack entry' states: 'Changed {\"name\": \"react\", \"version\": \"18.2.0\"} to {\"name\": \"react\", \"version\": \"19.0.0\"}. Verified the file was correctly updated.' The Result section confirms: 'Updated .rawgentic.json tech stack from React 18.2.0 to React 19.0.0.' The Files Modified section lists the specific file and change."
+    },
+    {
+      "text": "writes-config-back",
+      "passed": true,
+      "evidence": "The transcript states under Actions Taken step 3: 'Changed {\"name\": \"react\", \"version\": \"18.2.0\"} to {\"name\": \"react\", \"version\": \"19.0.0\"}. Verified the file was correctly updated.' The Files Modified section explicitly lists: '/tmp/rawgentic-update-deps-test/config-techstack-update/projects/sentinel-app/.rawgentic.json -- changed react version from 18.2.0 to 19.0.0'. This confirms the file was written back."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "React version was changed from 18.2.0 to 19.0.0 in .rawgentic.json",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Actions Taken step 3 and Files Modified section both confirm this change."
+    },
+    {
+      "claim": "The project directory contains only .rawgentic.json",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Observations section: 'The project directory contains only the .rawgentic.json configuration file -- no package.json, no source code, no lock files, no node_modules.' Actions Taken step 2: 'Ran ls -la on the project directory -- confirmed only .rawgentic.json exists.'"
+    },
+    {
+      "claim": "No companion updates (react-dom, etc.) were possible",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Limitations section notes: 'No react-dom companion update: React 19 typically requires react-dom to also be updated to 19.x. There is no react-dom entry in the config to update, and no package.json to check.'"
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Both with_skill and without_skill runs pass both assertions for this scenario. The without-skill agent independently figured out it should update the .rawgentic.json techStack entry, which means these assertions do not discriminate between having the skill and not having it. Consider adding assertions that test skill-specific behaviors -- for example, whether the agent follows the WF8 step structure, references the learning-config protocol, or preserves non-null config values per the skill's rules."
+      },
+      {
+        "reason": "The without-skill agent noted important gaps (no react-dom companion update, no breaking change analysis, no dependency compatibility check) that the with-skill agent also did not address. An assertion checking for companion dependency awareness could be valuable."
+      }
+    ],
+    "overall": "Both assertions pass. The without-skill agent performed the core task (update techStack in .rawgentic.json) correctly. However, the assertions are not discriminating enough to show skill value -- a more nuanced eval would test for workflow discipline, config preservation rules, or companion dependency handling."
+  }
+}

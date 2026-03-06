@@ -1,0 +1,8 @@
+{
+  "eval_id": 4,
+  "eval_name": "config-version-mismatch",
+  "prompt": "Implement issue #10 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-version-mismatch/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-version-mismatch/projects/version-app. The issue is: 'Add search feature'. Save a transcript of your work to the outputs directory.",
+  "assertions": [
+    {"text": "warns-version-mismatch", "description": "Warns about version mismatch or unsupported version (version 99)"}
+  ]
+}
