@@ -1,0 +1,61 @@
+{
+  "expectations": [
+    {
+      "text": "valid-json",
+      "passed": true,
+      "evidence": "Parsed successfully"
+    },
+    {
+      "text": "has-version",
+      "passed": true,
+      "evidence": "version=1"
+    },
+    {
+      "text": "has-project-section",
+      "passed": true,
+      "evidence": "type=api"
+    },
+    {
+      "text": "has-repo-section",
+      "passed": true,
+      "evidence": "fullName=datateam/ml-service"
+    },
+    {
+      "text": "detects-pytest",
+      "passed": true,
+      "evidence": "Found in testing"
+    },
+    {
+      "text": "detects-pydantic",
+      "passed": true,
+      "evidence": "Found reference to pydantic"
+    },
+    {
+      "text": "detects-ruff",
+      "passed": true,
+      "evidence": "formatting={'linter': 'ruff', 'configFile': 'pyproject.toml', 'rules': {'lineLength': 100, "
+    },
+    {
+      "text": "no-docker-section",
+      "passed": true,
+      "evidence": "infrastructure=absent"
+    },
+    {
+      "text": "no-database-section",
+      "passed": true,
+      "evidence": "database=present: {'orm': 'sqlalchemy', 'ormVersion': '>=2.0.0', 'notes': 'SQLAlchemy declared as "
+    },
+    {
+      "text": "detects-github-actions",
+      "passed": true,
+      "evidence": "ci={'provider': 'github-actions', 'configPath': '.github/workflows/test.yml', 'work"
+    },
+    {
+      "text": "schema-conformance-techStack-is-array",
+      "passed": false,
+      "evidence": "techStack type: dict"
+    }
+  ],
+  "passed": 10,
+  "total": 11
+}

@@ -1,0 +1,13 @@
+{
+  "eval_id": 3,
+  "eval_name": "blank-project-brainstorm",
+  "prompt": "I just registered a brand new empty project called 'new-idea'. Run /rawgentic:setup to configure it. The workspace file is at /tmp/rawgentic-test-fixtures/workspace-blank.json and the project is at /tmp/rawgentic-test-fixtures/projects/new-idea. This is an empty project — when asked about project intent, say it's a 'research' project for 'exploring LLM evaluation techniques' using Python. Save the generated .rawgentic.json to /tmp/rawgentic-test-fixtures/projects/new-idea/.rawgentic.json",
+  "assertions": [
+    {"name": "valid-json", "description": "Output .rawgentic.json is valid JSON"},
+    {"name": "has-version", "description": "JSON contains \"version\": 1"},
+    {"name": "project-type-research", "description": "project.type is 'research'"},
+    {"name": "has-description", "description": "project.description mentions LLM or evaluation"},
+    {"name": "minimal-config", "description": "No testing, database, services, or infrastructure sections (nothing to detect)"},
+    {"name": "has-custom-section", "description": "custom: {} section present"}
+  ]
+}

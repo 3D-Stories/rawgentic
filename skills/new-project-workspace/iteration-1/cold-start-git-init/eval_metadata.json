@@ -1,0 +1,14 @@
+{
+  "eval_id": 1,
+  "eval_name": "cold-start-git-init",
+  "prompt": "Cold start: no workspace, bare name, git init",
+  "assertions": [
+    {"name": "creates-workspace-file", "description": "Creates .rawgentic_workspace.json"},
+    {"name": "workspace-has-version", "description": "Workspace file has version:1"},
+    {"name": "project-registered", "description": "Project entry exists with name 'my-app'"},
+    {"name": "project-active", "description": "Project has active:true"},
+    {"name": "project-not-configured", "description": "Project has configured:false"},
+    {"name": "project-path-correct", "description": "Project path is ./projects/my-app"},
+    {"name": "delegates-to-setup", "description": "Mentions delegation to /rawgentic:setup"}
+  ]
+}

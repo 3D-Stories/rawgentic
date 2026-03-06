@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "project": {
+    "name": "ml-service",
+    "type": "application",
+    "description": "Machine learning inference API for production models"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "datateam/ml-service",
+    "defaultBranch": "main"
+  },
+  "techStack": [
+    "python",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "sqlalchemy"
+  ],
+  "testing": {
+    "frameworks": [
+      {
+        "name": "pytest",
+        "type": "unit",
+        "command": "pytest",
+        "configFile": "pyproject.toml",
+        "testDir": "tests"
+      }
+    ]
+  },
+  "services": [
+    {
+      "name": "ml-service",
+      "type": "api",
+      "framework": "fastapi",
+      "entryPoint": "src/ml_service/main.py"
+    }
+  ],
+  "ci": {
+    "provider": "github-actions",
+    "workflowDir": ".github/workflows"
+  },
+  "formatting": {
+    "tool": "ruff",
+    "configFile": "pyproject.toml",
+    "command": "ruff check --fix"
+  },
+  "documentation": {
+    "primaryFiles": [
+      "README.md"
+    ],
+    "format": "markdown"
+  },
+  "custom": {}
+}

@@ -1,0 +1,14 @@
+{
+  "eval_id": 1,
+  "eval_name": "cold-start-git-init",
+  "config": "with_skill",
+  "expectations": [
+    {"text": "creates-workspace-file", "passed": true, "evidence": "workspace.json output contains valid JSON with version, projectsDir, and projects array"},
+    {"text": "workspace-has-version", "passed": true, "evidence": "\"version\": 1 present in workspace.json"},
+    {"text": "project-registered", "passed": true, "evidence": "projects array contains entry with \"name\": \"my-app\""},
+    {"text": "project-active", "passed": true, "evidence": "my-app entry has \"active\": true"},
+    {"text": "project-not-configured", "passed": true, "evidence": "my-app entry has \"configured\": false"},
+    {"text": "project-path-correct", "passed": true, "evidence": "my-app entry has \"path\": \"./projects/my-app\""},
+    {"text": "delegates-to-setup", "passed": true, "evidence": "Transcript Step 6: 'Would invoke /rawgentic:setup to detect the project's tech stack'"}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "skill_name": "rawgentic:switch",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run /rawgentic:switch backend-api. The working directory is /tmp/rawgentic-switch-test/normal-switch. There is a .rawgentic_workspace.json with two projects: frontend-app (active:true, configured:true) and backend-api (active:false, configured:false). The directory ./projects/backend-api exists. Save the updated workspace to the outputs directory as workspace.json. Write a transcript of all steps to outputs/transcript.md.",
+      "expected_output": "Finds backend-api in workspace, verifies directory exists, deactivates frontend-app, activates backend-api, updates lastUsed, writes workspace, reports configured:false and suggests /rawgentic:setup"
+    },
+    {
+      "id": 2,
+      "prompt": "Run /rawgentic:switch with no argument. The working directory is /tmp/rawgentic-switch-test/no-arg. There is a .rawgentic_workspace.json with three projects: alpha (active:true, configured:true), beta (active:false, configured:true), gamma (active:false, configured:false). When asked to pick, the user says 'beta'. The directory ./projects/beta exists. Save the updated workspace to outputs/workspace.json. Write a transcript to outputs/transcript.md.",
+      "expected_output": "Lists all 3 projects, user picks beta, deactivates alpha, activates beta, updates lastUsed, writes workspace, reports configured:true and says ready to go"
+    },
+    {
+      "id": 3,
+      "prompt": "Run /rawgentic:switch nonexistent-project. The working directory is /tmp/rawgentic-switch-test/not-found. There is a .rawgentic_workspace.json with one project: my-app (active:true, configured:true). Write a transcript of all steps to outputs/transcript.md showing how the skill handles this case.",
+      "expected_output": "Reads workspace, searches for nonexistent-project by name and path, finds no match, lists registered projects (my-app), suggests /rawgentic:new-project nonexistent-project"
+    }
+  ]
+}

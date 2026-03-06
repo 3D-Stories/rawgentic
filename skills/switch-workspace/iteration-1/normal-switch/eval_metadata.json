@@ -1,0 +1,13 @@
+{
+  "eval_id": 1,
+  "eval_name": "normal-switch",
+  "prompt": "Switch to an existing inactive project",
+  "assertions": [
+    {"name": "frontend-app-deactivated", "description": "frontend-app has active:false in output workspace"},
+    {"name": "backend-api-activated", "description": "backend-api has active:true in output workspace"},
+    {"name": "backend-api-lastused-updated", "description": "backend-api lastUsed is newer than 2026-03-05T15:00:00Z"},
+    {"name": "frontend-app-config-preserved", "description": "frontend-app retains configured:true"},
+    {"name": "suggests-setup-for-unconfigured", "description": "Since backend-api is configured:false, transcript suggests /rawgentic:setup"},
+    {"name": "confirms-switch", "description": "Transcript reports switching to backend-api"}
+  ]
+}

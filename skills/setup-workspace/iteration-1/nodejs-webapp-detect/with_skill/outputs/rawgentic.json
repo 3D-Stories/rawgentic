@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "project": {
+    "name": "webapp",
+    "type": "application",
+    "description": "Internal dashboard for monitoring and analytics"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "acme-corp/webapp",
+    "defaultBranch": "main"
+  },
+  "techStack": [
+    "typescript",
+    "react",
+    "express",
+    "vite",
+    "postgres",
+    "docker"
+  ],
+  "testing": {
+    "frameworks": [
+      {
+        "name": "vitest",
+        "type": "unit",
+        "command": "npx vitest run",
+        "configFile": "vitest.config.ts",
+        "testDir": "src"
+      },
+      {
+        "name": "playwright",
+        "type": "e2e",
+        "command": "npx playwright test",
+        "configFile": "playwright.config.ts",
+        "testDir": "."
+      }
+    ]
+  },
+  "database": {
+    "type": "postgres",
+    "cli": "psql",
+    "name": "webapp_dev",
+    "user": "webapp",
+    "container": "postgres"
+  },
+  "services": [
+    {
+      "name": "app",
+      "type": "frontend",
+      "framework": "react",
+      "port": 3000,
+      "entryPoint": "src/main.tsx"
+    }
+  ],
+  "infrastructure": {
+    "docker": {
+      "composeFiles": [
+        {
+          "name": "default",
+          "path": "docker-compose.yml"
+        }
+      ]
+    }
+  },
+  "deploy": {
+    "method": "script",
+    "command": "gh workflow run deploy.yml"
+  },
+  "security": {
+    "authMechanisms": [
+      {
+        "type": "JWT",
+        "appliesTo": [
+          "app"
+        ],
+        "middlewarePath": "src/auth.ts"
+      }
+    ],
+    "validationLibrary": "zod",
+    "dataChannels": [
+      "rest"
+    ]
+  },
+  "ci": {
+    "provider": "github-actions",
+    "workflowDir": ".github/workflows"
+  },
+  "formatting": {
+    "tool": "prettier",
+    "configFile": ".prettierrc",
+    "command": "npx prettier --write"
+  },
+  "documentation": {
+    "primaryFiles": [
+      "README.md"
+    ],
+    "format": "markdown"
+  },
+  "custom": {}
+}

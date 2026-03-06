@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "no-arg-pick-from-list",
+  "config": "with_skill",
+  "expectations": [
+    {"text": "lists-all-projects", "passed": true, "evidence": "Transcript Step 1: table with alpha, beta, gamma all listed"},
+    {"text": "alpha-deactivated", "passed": true, "evidence": "workspace.json: alpha has \"active\": false"},
+    {"text": "beta-activated", "passed": true, "evidence": "workspace.json: beta has \"active\": true"},
+    {"text": "beta-lastused-updated", "passed": true, "evidence": "lastUsed updated from 2026-03-05T14:00:00Z to 2026-03-06T12:00:00Z"},
+    {"text": "gamma-unchanged", "passed": true, "evidence": "gamma remains active:false, configured:false, lastUsed unchanged"},
+    {"text": "reports-ready", "passed": true, "evidence": "Transcript Step 5: 'Ready to go. All rawgentic workflow skills will now use ./projects/beta/.rawgentic.json'"}
+  ]
+}

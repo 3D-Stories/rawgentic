@@ -1,0 +1,66 @@
+{
+  "expectations": [
+    {
+      "text": "valid-json",
+      "passed": true,
+      "evidence": "Parsed successfully"
+    },
+    {
+      "text": "has-version",
+      "passed": true,
+      "evidence": "version=1"
+    },
+    {
+      "text": "has-project-section",
+      "passed": true,
+      "evidence": "name=webapp, type=application, desc=Internal dashboard for monitoring and analytics"
+    },
+    {
+      "text": "has-repo-section",
+      "passed": true,
+      "evidence": "fullName=acme-corp/webapp"
+    },
+    {
+      "text": "detects-vitest",
+      "passed": true,
+      "evidence": "Found in testing section"
+    },
+    {
+      "text": "detects-playwright",
+      "passed": true,
+      "evidence": "Found in testing section"
+    },
+    {
+      "text": "detects-postgres",
+      "passed": true,
+      "evidence": "database.type=postgres"
+    },
+    {
+      "text": "detects-docker",
+      "passed": true,
+      "evidence": "infrastructure={'docker': {'composeFiles': [{'name': 'default', 'path': 'docker-compose.yml'}]}}"
+    },
+    {
+      "text": "detects-github-actions",
+      "passed": true,
+      "evidence": "ci.provider=github-actions"
+    },
+    {
+      "text": "detects-prettier",
+      "passed": true,
+      "evidence": "formatting.tool=prettier"
+    },
+    {
+      "text": "detects-jwt-security",
+      "passed": true,
+      "evidence": "security section: {'authMechanisms': [{'type': 'JWT', 'appliesTo': ['app'], 'middlewarePath': 'src/auth.ts'}], 'valida"
+    },
+    {
+      "text": "schema-conformance-techStack-is-array",
+      "passed": true,
+      "evidence": "techStack type: list"
+    }
+  ],
+  "passed": 12,
+  "total": 12
+}

@@ -1,0 +1,13 @@
+{
+  "eval_id": 1,
+  "eval_name": "normal-switch",
+  "config": "with_skill",
+  "expectations": [
+    {"text": "frontend-app-deactivated", "passed": true, "evidence": "workspace.json: frontend-app has \"active\": false"},
+    {"text": "backend-api-activated", "passed": true, "evidence": "workspace.json: backend-api has \"active\": true"},
+    {"text": "backend-api-lastused-updated", "passed": true, "evidence": "lastUsed changed from 2026-03-05T15:00:00Z to 2026-03-06T00:00:00Z"},
+    {"text": "frontend-app-config-preserved", "passed": true, "evidence": "frontend-app retains \"configured\": true"},
+    {"text": "suggests-setup-for-unconfigured", "passed": true, "evidence": "Transcript Step 5: 'Run /rawgentic:setup to detect your tech stack and generate .rawgentic.json'"},
+    {"text": "confirms-switch", "passed": true, "evidence": "Transcript: 'Switched to: backend-api (./projects/backend-api)'"}
+  ]
+}

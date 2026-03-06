@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "project": {
+    "name": "webapp",
+    "type": "fullstack-webapp",
+    "description": "ACME Corp internal dashboard for monitoring and analytics"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "acme-corp/webapp",
+    "defaultBranch": "master"
+  },
+  "techStack": {
+    "language": "TypeScript",
+    "languageVersion": "^5.3.0",
+    "runtime": "Node.js",
+    "framework": "React",
+    "frameworkVersion": "^18.2.0",
+    "buildTool": "Vite",
+    "server": "Express",
+    "serverVersion": "^4.18.2",
+    "packageManager": "npm",
+    "key_libraries": [
+      { "name": "react", "version": "^18.2.0", "purpose": "UI framework" },
+      { "name": "react-dom", "version": "^18.2.0", "purpose": "React DOM rendering" },
+      { "name": "express", "version": "^4.18.2", "purpose": "HTTP server" },
+      { "name": "zod", "version": "^3.22.0", "purpose": "Schema validation" },
+      { "name": "jsonwebtoken", "version": "^9.0.0", "purpose": "JWT authentication" }
+    ]
+  },
+  "testing": {
+    "unit": {
+      "framework": "vitest",
+      "version": "^1.0.0",
+      "configFile": "vitest.config.ts",
+      "command": "vitest run"
+    },
+    "e2e": {
+      "framework": "playwright",
+      "version": "^1.40.0",
+      "configFile": "playwright.config.ts",
+      "command": "playwright test"
+    },
+    "commands": {
+      "test": "npm test",
+      "test:e2e": "npm run test:e2e"
+    }
+  },
+  "database": {
+    "type": "PostgreSQL",
+    "version": "16",
+    "connectionString": "postgresql://webapp:secret@localhost:5432/webapp_dev",
+    "name": "webapp_dev",
+    "user": "webapp",
+    "port": 5432
+  },
+  "services": {
+    "app": {
+      "type": "application",
+      "port": 3000,
+      "build": "."
+    },
+    "postgres": {
+      "type": "database",
+      "image": "postgres:16",
+      "port": 5432
+    }
+  },
+  "infrastructure": {
+    "containerization": "docker-compose",
+    "composeVersion": "3.8",
+    "composeFile": "docker-compose.yml",
+    "envFile": ".env"
+  },
+  "deploy": {
+    "pipeline": "GitHub Actions",
+    "workflowFile": ".github/workflows/deploy.yml"
+  },
+  "security": {
+    "authentication": {
+      "method": "JWT",
+      "library": "jsonwebtoken",
+      "implementation": "src/auth.ts"
+    },
+    "validation": {
+      "library": "zod",
+      "purpose": "Runtime schema validation for input data"
+    }
+  },
+  "ci": {
+    "provider": "GitHub Actions",
+    "workflowFile": ".github/workflows/ci.yml"
+  },
+  "formatting": {
+    "tool": "prettier",
+    "version": "^3.1.0",
+    "configFile": ".prettierrc",
+    "lintCommand": "eslint src/",
+    "linter": "eslint"
+  },
+  "documentation": {
+    "readme": "README.md"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "lint": "eslint src/"
+  }
+}

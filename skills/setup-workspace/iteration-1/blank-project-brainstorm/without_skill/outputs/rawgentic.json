@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "project": {
+    "name": "new-idea",
+    "type": "research",
+    "description": "Exploring LLM evaluation techniques"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "",
+    "defaultBranch": "main"
+  },
+  "techStack": {
+    "languages": ["python"]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "not-found",
+  "config": "without_skill",
+  "expectations": [
+    {"text": "detects-not-found", "passed": true, "evidence": "'No project named nonexistent-project exists in the workspace'"},
+    {"text": "lists-registered-projects", "passed": true, "evidence": "Lists my-app as available project"},
+    {"text": "suggests-new-project", "passed": false, "evidence": "Suggests 'register it in .rawgentic_workspace.json first' — does NOT reference /rawgentic:new-project"},
+    {"text": "no-workspace-modification", "passed": true, "evidence": "'Workspace file modified: No'"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "already-registered",
+  "prompt": "Project already in workspace",
+  "assertions": [
+    {"name": "detects-already-registered", "description": "Recognizes my-app is already in workspace"},
+    {"name": "offers-switch-or-resetup", "description": "Offers choice between switch and re-setup"},
+    {"name": "does-not-duplicate", "description": "Does NOT add a second my-app entry"},
+    {"name": "mentions-switch-skill", "description": "References /rawgentic:switch"}
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "skill_name": "rawgentic:setup",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I just registered my Node.js/TypeScript webapp project. Run /rawgentic:setup to configure it. The workspace file is at /tmp/rawgentic-test-fixtures/workspace-webapp.json and the project is at /tmp/rawgentic-test-fixtures/projects/webapp. When asked for confirmation, say 'yes' or 'looks good' to approve each section. Save the generated .rawgentic.json to /tmp/rawgentic-test-fixtures/projects/webapp/.rawgentic.json",
+      "expected_output": "A .rawgentic.json file with detected Node.js stack, vitest + playwright testing, postgres database, Docker compose infrastructure, GitHub Actions CI, prettier formatting, and JWT security patterns",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "I just registered my Python ML service project. Run /rawgentic:setup to configure it. The workspace file is at /tmp/rawgentic-test-fixtures/workspace-ml.json and the project is at /tmp/rawgentic-test-fixtures/projects/ml-service. When asked for confirmation, say 'yes' or 'looks good' to approve each section. Save the generated .rawgentic.json to /tmp/rawgentic-test-fixtures/projects/ml-service/.rawgentic.json",
+      "expected_output": "A .rawgentic.json file with detected Python/FastAPI stack, pytest testing, pydantic validation, GitHub Actions CI, ruff formatting. No database section (no DB connection detected). No Docker section.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "I just registered a brand new empty project called 'new-idea'. Run /rawgentic:setup to configure it. The workspace file is at /tmp/rawgentic-test-fixtures/workspace-blank.json and the project is at /tmp/rawgentic-test-fixtures/projects/new-idea. This is an empty project — when asked about project intent, say it's a 'research' project for 'exploring LLM evaluation techniques' using Python. Save the generated .rawgentic.json to /tmp/rawgentic-test-fixtures/projects/new-idea/.rawgentic.json",
+      "expected_output": "A .rawgentic.json with project type 'research', minimal config (just required fields + techStack), and the brainstorm sub-flow should have been triggered since the directory is empty",
+      "files": []
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "add-second-existing-dir",
+  "prompt": "Add second project to existing workspace",
+  "assertions": [
+    {"name": "two-projects-in-workspace", "description": "Workspace has exactly 2 project entries"},
+    {"name": "second-app-active", "description": "second-app has active:true"},
+    {"name": "first-app-deactivated", "description": "first-app has active:false"},
+    {"name": "second-app-not-configured", "description": "second-app has configured:false"},
+    {"name": "first-app-still-configured", "description": "first-app retains configured:true"},
+    {"name": "delegates-to-setup", "description": "Mentions delegation to /rawgentic:setup"}
+  ]
+}

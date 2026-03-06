@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "no-arg-pick-from-list",
+  "prompt": "No argument provided, pick from list",
+  "assertions": [
+    {"name": "lists-all-projects", "description": "Transcript shows all 3 projects (alpha, beta, gamma) listed"},
+    {"name": "alpha-deactivated", "description": "alpha has active:false in output workspace"},
+    {"name": "beta-activated", "description": "beta has active:true in output workspace"},
+    {"name": "beta-lastused-updated", "description": "beta lastUsed is updated to a recent timestamp"},
+    {"name": "gamma-unchanged", "description": "gamma remains active:false, configured:false"},
+    {"name": "reports-ready", "description": "Since beta is configured:true, transcript says ready to go or similar"}
+  ]
+}
