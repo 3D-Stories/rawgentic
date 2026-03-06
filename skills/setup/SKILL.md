@@ -1,167 +1,291 @@
 ---
 name: rawgentic:setup
-description: First-run configuration wizard that detects your project environment, checks prerequisites (gh CLI, reflexion plugin), and generates a CLAUDE.md SDLC section with project-specific constants.
-argument-hint: (no arguments needed)
+description: Configure a project's .rawgentic.json — the structured config that all rawgentic workflow skills depend on. Auto-detects tech stack, testing, CI, database, services, and more for existing codebases; brainstorms intent for blank projects. Handles migration from old CLAUDE.md-based rawgentic setups. Use this whenever a project needs initial configuration, reconfiguration, or when the session-start hook says "Config missing -- run /rawgentic:setup."
+argument-hint: (no arguments needed — operates on the active project)
 ---
 
 <role>
-You are the rawgentic setup wizard. Your job is to configure the SDLC framework for this project by detecting the environment, checking prerequisites, and generating a CLAUDE.md section with project-specific constants. Follow each step in order. Present findings clearly and ask for user confirmation before writing any files.
+You are the rawgentic setup wizard. Your job is to generate a `.rawgentic.json` configuration file for the active project by detecting its environment, asking the user to confirm your findings, and writing a structured config that all rawgentic workflow skills will consume.
+
+You are technology-agnostic — you detect whatever stack the project uses rather than assuming any particular language, framework, or infrastructure. You present findings section-by-section and only write files after explicit user approval.
 </role>
 
 # Setup Wizard — `/rawgentic:setup`
 
-Run through all 4 steps below sequentially. Do NOT skip steps. Present results at each step and wait for user acknowledgment before proceeding to the next.
+Run through all 9 steps below **sequentially**. Present results at each step and wait for user acknowledgment before proceeding.
+
+<schema-reference>
+The full annotated schema lives at `templates/rawgentic-json-schema.json` in the rawgentic plugin directory. Read it at the start of Step 3 to understand every field and section available. That file is the single source of truth for the `.rawgentic.json` structure.
+</schema-reference>
 
 ---
 
-## Step 1: Check Prerequisites
+## Step 1: Verify Context
 
-Verify the following tools and plugins are available. Run each check and report results in a summary table.
+Read `.rawgentic_workspace.json` from the Claude root directory (the directory Claude was launched from).
 
-### Checks to perform:
+- **File missing** → STOP. Tell the user: "No rawgentic workspace found. Run `/rawgentic:new-project` first to register a project."
+- **Malformed JSON** → STOP. Tell the user: "Workspace file is corrupted. Run `/rawgentic:new-project` to regenerate, or fix `.rawgentic_workspace.json` manually."
+- **No active project** (no entry with `active: true`) → STOP. Tell the user: "No active project. Run `/rawgentic:switch` to select one."
 
-1. **Claude Code CLI** — Confirm we are running inside Claude Code (this is always true if this skill is executing).
-2. **gh CLI** — Run `gh auth status` to verify GitHub CLI is authenticated. Report the authenticated account.
-3. **Git repository** — Run `git rev-parse --show-toplevel` to confirm we are in a git repo. Report the repo root.
-4. **reflexion plugin** — Check if `/reflexion:critique` and `/reflexion:reflect` are available as skills. This is REQUIRED — if missing, STOP and instruct the user to install the reflexion plugin before continuing.
-5. **superpowers plugin** — Check if `/superpowers:brainstorming` is available as a skill. This is RECOMMENDED but not required — if missing, note it as a warning and continue.
+Extract the active project's `name` and `path`. Confirm to the user:
 
-### Output format:
-
-```
-| Prerequisite       | Status | Detail                          |
-|--------------------|--------|---------------------------------|
-| Claude Code CLI    | OK     | Running                         |
-| gh CLI             | OK/FAIL| <account or error>              |
-| Git repository     | OK/FAIL| <repo root or error>            |
-| reflexion plugin   | OK/FAIL| critique + reflect available    |
-| superpowers plugin | OK/WARN| brainstorming available         |
-```
-
-**If reflexion is missing:** Print an error message explaining that the reflexion plugin is required for quality gates (P8) and provide installation instructions. STOP the wizard.
-
-**If superpowers is missing:** Print a warning that `/superpowers:brainstorming` is used by Step C (Design/Plan) in complex workflows. The wizard will continue, but brainstorming-dependent workflows will fall back to inline design.
+> Setting up project: **<name>** at `<path>`
 
 ---
 
-## Step 2: Detect Project Configuration
+## Step 2: Migration Check
 
-Auto-detect as much as possible, then ask the user to confirm or override detected values.
+Check if `CLAUDE.md` (in the Claude root) contains either of these markers from the old rawgentic setup:
+- `## Project Constants (generated by /rawgentic:setup)`
+- `## SDLC Workflow Principles`
 
-### Auto-detection sequence:
+**If found:**
+1. Parse the existing constants section — extract values like REPO, PROJECT_ROOT, test commands, deploy commands, DB_NAME, ports, etc.
+2. Store these as **seed values** that will pre-populate detection in Step 3.
+3. Flag this file for cleanup in Step 7.
+4. Tell the user: "Found old rawgentic configuration in CLAUDE.md. I'll use these values as a starting point and migrate to `.rawgentic.json`."
 
-1. **REPO** — Parse from `git remote get-url origin`. Extract `owner/repo` from HTTPS or SSH URL formats.
-2. **PROJECT_ROOT** — Use `git rev-parse --show-toplevel`.
-3. **Tech stack** — Check for the presence of these files at the repo root:
-   - `package.json` → Node.js (read to detect test scripts, framework)
-   - `requirements.txt` or `pyproject.toml` or `setup.py` → Python
-   - `go.mod` → Go
-   - `Cargo.toml` → Rust
-   - `Dockerfile` → Docker
-   - `docker-compose*.yml` or `compose*.yml` → Docker Compose (list all found files)
-4. **Test commands** — Detect from:
-   - `package.json` scripts: `test`, `test:unit`, `test:e2e`, `vitest`, `jest`, `playwright`
-   - Python: check for `pytest.ini`, `setup.cfg [tool:pytest]`, `pyproject.toml [tool.pytest]`, or `tests/` directory
-   - Go: presence of `*_test.go` files
-   - Rust: `cargo test`
-   - Playwright config: `playwright.config.js` or `playwright.config.ts`
-5. **CI** — Check `.github/workflows/` for workflow files. List them.
-6. **Docker Compose files** — List all `docker-compose*.yml` and `compose*.yml` files. If found, these suggest COMPOSE_INFRA and/or COMPOSE_ENGINE might be relevant.
-7. **Database** — Search for database connection strings or config in:
-   - `.env*` files (look for `DB_NAME`, `DATABASE_URL`, `POSTGRES_*` patterns — do NOT display secrets, only detect presence)
-   - Docker compose files (look for `postgres`, `mysql`, `mongo` service definitions)
-   - If found, DB_NAME and DB_USER become relevant constants.
-
-### For optional constants, only ask if relevant:
-
-- **DEV_HOST / ENGINE_HOST** — Only ask if Docker Compose files suggest multi-host deployment or if the user mentions remote servers.
-- **DB_NAME / DB_USER** — Only ask if database infrastructure detected.
-- **POSTGRES_CONTAINER** — Only ask if a PostgreSQL Docker service is detected.
-- **COMPOSE_INFRA / COMPOSE_ENGINE** — Only ask if multiple Docker Compose files are found.
-- **DASHBOARD_PORT** — Only ask if a web server/dashboard is detected (e.g., Vite dev server, nginx proxy, Express listening port). Detect from `vite.config.*` (`server.port`), `package.json` scripts, Docker Compose port mappings, or `.env*` files (`PORT`, `DASHBOARD_PORT`).
-- **ENGINE_API_PORT** — Only ask if a separate backend/engine API server is detected (e.g., FastAPI, Flask, Express on a different port). Detect from Docker Compose port mappings, `.env*` files, or Python entry points.
-- **SMB_USER** — Only ask if the user mentions SMB/network shares or if documentation references SMB access.
-
-### Output format:
-
-Present detected values in a table:
-
-```
-| Constant           | Detected Value            | Source                    |
-|--------------------|---------------------------|---------------------------|
-| REPO               | owner/repo                | git remote                |
-| PROJECT_ROOT       | /path/to/repo             | git rev-parse             |
-| TEST_COMMAND_UNIT  | npm test                  | package.json scripts.test |
-| TEST_COMMAND_E2E   | npx playwright test       | playwright.config.js      |
-| ...                | ...                       | ...                       |
-```
-
-Then ask:
-
-> "Here are the detected project constants. Please confirm these are correct, or tell me what to change. I will also ask about any optional constants that seem relevant to your setup."
+**If not found:** Continue silently.
 
 ---
 
-## Step 3: Generate CLAUDE.md Section
+## Step 3: Detect or Brainstorm
 
-### 3a. Read the template
+Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to understand the full schema structure.
 
-Read the file `templates/claude-md-sdlc-section.md` from the rawgentic repo (check both the project root and common install locations like `~/.claude/` if not found locally).
+Then determine which of the three sub-flows applies:
 
-### 3b. Fill in detected values
+### Sub-flow A: Existing `.rawgentic.json` (re-run)
 
-Replace all `${VARIABLE}` placeholders with the confirmed values from Step 2. For any optional constant that was NOT detected and NOT provided by the user, remove that entire line from the output (do not leave empty placeholders).
+**Condition:** `<activeProject.path>/.rawgentic.json` exists.
 
-For test commands and deploy commands:
+1. Read and parse the existing config.
+2. Present the current configuration to the user, section by section.
+3. Ask: "What would you like to update? Or say 'full re-detect' to re-scan the project."
+4. If user wants updates: apply changes following the **merge policy** below.
+5. If user wants full re-detect: proceed to Sub-flow B but preserve any values from the existing config that the user hasn't asked to change (these are "learned entries" from previous skill runs).
 
-- If detected, uncomment and fill in the actual command.
-- If not detected, remove the placeholder line entirely.
+<merge-policy>
+When merging with an existing .rawgentic.json:
+- **Append** to arrays — add newly detected items, never remove existing entries
+- **Set** fields that are null, missing, or empty — never overwrite existing non-null values
+- **On conflict** (detected value differs from existing value) — present both to the user and ask which to keep
+- Always read the full file, modify in memory, write the full file back
+</merge-policy>
 
-### 3c. Check for existing CLAUDE.md
+### Sub-flow B: Existing Code, No Config (auto-detect)
 
-- **If CLAUDE.md exists and already contains `## SDLC Workflow Principles`:**
-  This is a re-run. Show the user the current `## Project Constants` section and ask what they want to update. Apply only the requested changes.
+**Condition:** The project directory has files (not empty) but no `.rawgentic.json`.
 
-- **If CLAUDE.md exists but does NOT contain the SDLC section:**
-  Append the generated section at the end of the existing file (separated by `---`).
+Run the detection sequence below. If migration seed values exist from Step 2, use them to pre-fill fields — but still verify them against the actual project files.
 
-- **If no CLAUDE.md exists:**
-  Create a new CLAUDE.md with just the generated section.
+<detection-sequence>
+Scan the project root (`<activeProject.path>`) for each of the following. Only include a section in the config if you actually find evidence for it.
 
-### 3d. Show diff and get approval
+**1. Required: Project metadata**
+- `project.name`: Use the active project name from workspace
+- `project.type`: Infer from what you find — `application` (has runnable services), `library` (has package publishing config), `infrastructure` (primarily IaC/config), `scripts` (utility scripts), `docs` (documentation-focused), `research` (notebooks/data analysis). Ask user to confirm.
+- `project.description`: Draft from README.md first line, or package.json description, or ask user.
 
-Before writing, show the user exactly what will be added/changed using a diff format. Ask:
+**2. Required: Repository**
+- Run `git remote get-url origin` from the project directory.
+- Parse `owner/repo` from HTTPS (`https://github.com/owner/repo.git`) or SSH (`git@github.com:owner/repo.git`) formats.
+- Detect default branch: `git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null` or fall back to `main`.
 
-> "Here is the SDLC section that will be written to CLAUDE.md. Approve to write, or tell me what to change."
+**3. Optional: Tech stack (informational)**
+Build a list of technologies detected. This is informational only — workflow skills use the structured sections below, not this list.
 
-Only write the file after explicit user approval.
+**4. Optional: Testing**
+Search for test framework configuration:
+
+| Indicator | Framework | Type |
+|-----------|-----------|------|
+| `vitest.config.*` or vitest in package.json | vitest | unit |
+| `jest.config.*` or jest in package.json | jest | unit |
+| `playwright.config.*` | playwright | e2e |
+| `cypress.config.*` or `cypress/` dir | cypress | e2e |
+| `pytest.ini`, `pyproject.toml [tool.pytest]`, `setup.cfg [tool:pytest]` | pytest | unit |
+| `*_test.go` files | go test | unit |
+| `Cargo.toml` with `[dev-dependencies]` test entries | cargo test | unit |
+| `.rspec` or `spec/` dir with Gemfile containing rspec | rspec | unit |
+| `phpunit.xml` | phpunit | unit |
+
+For each found: determine the run command (check package.json scripts, Makefile targets, or use framework defaults), config file path, and test directory.
+
+**5. Optional: Database**
+- Check `.env*` files for patterns: `DATABASE_URL`, `DB_HOST`, `DB_NAME`, `POSTGRES_*`, `MYSQL_*`, `MONGO_*` (report presence only — **never display secret values**)
+- Check Docker Compose files for database service images (postgres, mysql, mongo, redis, etc.)
+- If found: determine type, CLI tool, and container name if dockerized.
+
+**6. Optional: Services**
+- Check Docker Compose files for service definitions with port mappings
+- Check package.json for dev server scripts (e.g., `vite`, `next dev`, `express`)
+- Check for Python entry points (`main.py`, `app.py`, `manage.py`)
+- Check for Go entry points (`cmd/*/main.go`)
+- For each service: infer name, type (frontend/backend/worker/api/proxy), framework, port, and entry point.
+
+**7. Optional: Infrastructure**
+- Find all `docker-compose*.yml` and `compose*.yml` files
+- Check for host references in `.env*` files or config
+- Check for Terraform, Pulumi, CloudFormation, or Ansible files
+
+**8. Optional: Deploy**
+- Check for deploy scripts, Makefile deploy targets, or CI deployment steps
+- Infer method: `compose` (Docker Compose up), `script` (custom script), `ssh` (remote deploy), `manual` (nothing automated)
+
+**9. Optional: Security**
+- Search source files for auth patterns: JWT token handling, API key middleware, OAuth config
+- Detect validation libraries: search imports/requires for zod, joi, yup, ajv, pydantic, marshmallow
+- Identify data channels: REST endpoints, WebSocket/Socket.IO, gRPC, message queues
+
+**10. Optional: CI**
+- Check `.github/workflows/` for GitHub Actions
+- Check `.gitlab-ci.yml` for GitLab CI
+- Check `Jenkinsfile`, `.circleci/`, `bitbucket-pipelines.yml`
+
+**11. Optional: Formatting**
+- Check for `.prettierrc*`, `.eslintrc*`, `biome.json`
+- Check `pyproject.toml` for `[tool.black]`, `[tool.ruff]`
+- Check for `.editorconfig`, `rustfmt.toml`
+
+**12. Optional: Documentation**
+- Check for `README.md`, `docs/` directory, `CHANGELOG.md`
+- Detect format (markdown, rst, asciidoc)
+</detection-sequence>
+
+### Sub-flow C: Empty/New Project (brainstorm)
+
+**Condition:** The project directory is empty or contains only git initialization files (`.git/`, `.gitignore`).
+
+1. Tell the user: "This looks like a new project. Let's figure out what you're building."
+2. Invoke `/superpowers:brainstorm` to explore:
+   - What is this project for? (application, library, infrastructure, scripts, docs, research)
+   - What technologies are planned?
+   - What's the core purpose / one-sentence description?
+3. Use the brainstorm results to populate the required fields (`project`, `repo`).
+4. Add any planned technologies to `techStack` (informational).
+5. Leave optional sections empty — they'll be populated by the learning config pattern as workflow skills discover capabilities.
 
 ---
 
-## Step 4: Verify
+## Step 4: Present Detected Config
 
-Run these verification checks and present a summary:
+Show the user the assembled `.rawgentic.json` as formatted JSON. For each section, show where the values came from:
 
-1. **Constants resolve** — Confirm all filled-in constants reference real paths/values (e.g., PROJECT_ROOT exists, REPO is reachable via `gh repo view`).
-2. **Test commands work** — If test commands were detected, run a dry-run or quick validation (e.g., `npm test -- --help` or `python -m pytest --co -q` to confirm the test runner is installed). Do NOT run the full test suite.
-3. **gh can reach repo** — Run `gh repo view <REPO> --json name` to confirm access.
-4. **Template cleanliness** — Verify no `${...}` placeholders remain in the written CLAUDE.md section.
+```
+## Detected Configuration
 
-### Final summary:
+### project (required)
+Source: README.md + git remote
+{
+  "name": "my-app",
+  "type": "application",
+  "description": "A real-time monitoring dashboard"
+}
+
+### repo (required)
+Source: git remote get-url origin
+{
+  "provider": "github",
+  "fullName": "org/my-app",
+  "defaultBranch": "main"
+}
+
+### testing
+Source: vitest.config.ts, playwright.config.ts
+{
+  "frameworks": [...]
+}
+
+[... only sections where something was detected ...]
+```
+
+---
+
+## Step 5: User Confirms/Edits
+
+Walk through each section and ask the user to confirm or edit:
+
+> "Does the **project** section look right?"
+> "Does the **testing** section look right? Any frameworks I missed?"
+> "I didn't detect a **database** — does this project use one?"
+
+Key behaviors:
+- Only present sections that have content (detected or seeded)
+- After all detected sections, ask: "Any sections I missed? (database, deploy, services, security, etc.)"
+- Accept corrections inline — don't make the user rewrite JSON
+- For `project.type`, always ask for explicit confirmation since inference can be wrong
+
+---
+
+## Step 6: Write `.rawgentic.json`
+
+After user approval, write the final config to `<activeProject.path>/.rawgentic.json`.
+
+Requirements:
+- Must include `"version": 1` as the first field
+- Must include the three required sections: `project`, `repo`, and at minimum an empty `custom: {}`
+- Omit optional sections that have no content (don't write empty objects/arrays for undetected capabilities)
+- Format as pretty-printed JSON (2-space indent)
+- Show the user the exact content before writing and get a final "go ahead"
+
+---
+
+## Step 7: Update CLAUDE.md
+
+Check `CLAUDE.md` in the Claude root directory.
+
+**If it contains old rawgentic sections** (flagged in Step 2):
+1. Remove the `## Project Constants (generated by /rawgentic:setup)` section and everything under it until the next `##` heading or end of file
+2. Remove the `## SDLC Workflow Principles` section similarly if present
+3. Remove the `## Test Commands` and `## Deploy Commands` sections if present
+4. Tell the user: "Migrated project constants from CLAUDE.md to .rawgentic.json"
+
+**Ensure the static pointer block is present** (add if missing, leave alone if already there):
+```markdown
+## Rawgentic
+Workspace config: .rawgentic_workspace.json
+```
+
+This pointer never changes — it tells Claude where to find the workspace config.
+
+---
+
+## Step 8: Update Workspace
+
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Write the file back.
+
+---
+
+## Step 9: Verify
+
+Run these checks and present a summary:
+
+1. **File exists** — Confirm `.rawgentic.json` was written at the expected path
+2. **Valid JSON** — Parse the file and confirm no syntax errors
+3. **Required fields** — Confirm `version`, `project.name`, `project.type`, `project.description`, `repo.provider`, `repo.fullName`, `repo.defaultBranch` are all present and non-empty
+4. **No template placeholders** — Confirm no `${...}` or placeholder strings remain
+5. **Repo accessible** — Run `gh repo view <repo.fullName> --json name` to confirm GitHub access (warn but don't fail if gh is not authenticated)
+6. **Workspace updated** — Confirm the active project shows `configured: true`
 
 ```
 Setup Complete!
 
 | Check                    | Status |
 |--------------------------|--------|
-| CLAUDE.md written        | OK     |
-| Constants resolved       | OK     |
-| Test runner available    | OK     |
-| GitHub repo accessible   | OK     |
-| No unresolved variables  | OK     |
+| .rawgentic.json written  | OK     |
+| Valid JSON               | OK     |
+| Required fields present  | OK     |
+| No placeholders          | OK     |
+| GitHub repo accessible   | OK/WARN|
+| Workspace updated        | OK     |
+
+Project "<name>" is now configured.
+All rawgentic workflow skills will use <path>/.rawgentic.json for project constants.
 
 Next steps:
-- Review the SDLC section in your CLAUDE.md
-- Install workflow skills: /rawgentic:implement-feature, /rawgentic:fix-bug, etc.
-- Run /reflexion:critique on your first design to test the quality gate
+- Review your .rawgentic.json if you want to add more detail
+- Try a workflow: /rawgentic:implement-feature, /rawgentic:fix-bug, etc.
+- Skills will update .rawgentic.json as they discover new project capabilities
 ```
