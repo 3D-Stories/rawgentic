@@ -1,0 +1,111 @@
+{
+  "$comment": "Rawgentic project configuration schema v1. Used by /rawgentic:setup as reference when generating .rawgentic.json for a project.",
+  "version": 1,
+  "project": {
+    "name": "my-app",
+    "type": "application",
+    "description": "Description of the project"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "org/repo-name",
+    "defaultBranch": "main"
+  },
+  "techStack": ["typescript", "react", "postgres", "docker"],
+  "testing": {
+    "frameworks": [
+      {
+        "name": "vitest",
+        "type": "unit",
+        "command": "npx vitest run",
+        "configFile": "vitest.config.ts",
+        "testDir": "src/__tests__"
+      },
+      {
+        "name": "playwright",
+        "type": "e2e",
+        "command": "npx playwright test",
+        "configFile": "playwright.config.ts",
+        "testDir": "e2e"
+      }
+    ]
+  },
+  "database": {
+    "type": "postgres",
+    "cli": "psql",
+    "name": "myapp_dev",
+    "user": "myapp_dev",
+    "container": "myapp-postgres-dev",
+    "migrationsDir": "postgres-migrations",
+    "migrationPattern": "0XX-name.sql"
+  },
+  "services": [
+    {
+      "name": "dashboard",
+      "type": "frontend",
+      "framework": "react",
+      "port": 3000,
+      "entryPoint": "src/main.tsx",
+      "healthCheck": "/health"
+    },
+    {
+      "name": "engine",
+      "type": "backend",
+      "framework": "fastapi",
+      "port": 8100,
+      "entryPoint": "engine/main.py",
+      "healthCheck": "/status"
+    }
+  ],
+  "infrastructure": {
+    "hosts": [
+      {
+        "name": "dev",
+        "address": "192.168.1.100",
+        "sshUser": "deploy",
+        "description": "Development server"
+      }
+    ],
+    "docker": {
+      "composeFiles": [
+        { "name": "infra", "path": "docker-compose.infra.yml" },
+        { "name": "engine", "path": "docker-compose.engine.yml" }
+      ]
+    }
+  },
+  "deploy": {
+    "method": "compose",
+    "command": "docker compose -f docker-compose.infra.yml up -d",
+    "targetHost": "dev"
+  },
+  "security": {
+    "authMechanisms": [
+      {
+        "type": "JWT",
+        "appliesTo": ["dashboard", "socketio"],
+        "middlewarePath": "src/middleware/auth.ts"
+      },
+      {
+        "type": "api-key",
+        "appliesTo": ["engine"],
+        "headerName": "X-API-Key"
+      }
+    ],
+    "validationLibrary": "zod",
+    "dataChannels": ["rest", "socketio", "redis-pubsub", "engine-http"]
+  },
+  "ci": {
+    "provider": "github-actions",
+    "workflowDir": ".github/workflows"
+  },
+  "formatting": {
+    "tool": "prettier",
+    "configFile": ".prettierrc",
+    "command": "npx prettier --write"
+  },
+  "documentation": {
+    "primaryFiles": ["README.md", "docs/"],
+    "format": "markdown"
+  },
+  "custom": {}
+}
