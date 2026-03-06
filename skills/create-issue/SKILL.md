@@ -18,17 +18,43 @@ VOLUME_THRESHOLDS:
   High: 5
   Medium: 10
   Low: 10
-REPO = "<inferred from `git remote -v` at workflow start>"
-PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
 TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 </constants>
 
-<environment-setup>
-Constants are populated at workflow start (Step 1) by running:
-- `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
-- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
+<config-loading>
+Before executing any workflow steps, load the project configuration:
 
-If any constant cannot be resolved, STOP and ask the user. Do not assume values.
+1. Read `.rawgentic_workspace.json` from the Claude root directory.
+   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - Extract the active project entry (active == true).
+
+2. Read `<activeProject.path>/.rawgentic.json`.
+   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
+   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
+   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
+   - Parse full JSON into `config` object.
+
+3. Build the `capabilities` object from config:
+   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
+   - test_commands: config.testing.frameworks[].command
+   - has_ci: config.ci exists AND config.ci.provider exists
+   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
+   - has_database: config.database exists AND config.database.type exists
+   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
+   - project_type: config.project.type
+   - repo: config.repo.fullName
+   - default_branch: config.repo.defaultBranch
+
+All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+<environment-setup>
+Constants are populated at workflow start (Step 1) from the config loaded in `<config-loading>`:
+- `capabilities.repo`: from config.repo.fullName
+- `capabilities.default_branch`: from config.repo.defaultBranch
+
+If config loading fails, STOP and follow the error instructions in `<config-loading>`. Do not assume values.
 </environment-setup>
 
 <termination-rule>
@@ -54,7 +80,7 @@ This enables workflow resumption if context is lost.
 ### Instructions
 
 1. Acknowledge the user's request.
-2. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+2. **Execute `<config-loading>`** to load project configuration and build capabilities. Log resolved values in session notes. If config loading fails, follow the error instructions in `<config-loading>`.
 3. Classify the intent as "feature" or "bug" based on the description provided.
 4. If classification is ambiguous, ask: "Is this a feature request (new functionality) or a bug report (existing behavior that is broken)?"
 5. Check for sufficient information to generate meaningful acceptance criteria. If insufficient, ask targeted clarifying questions:
@@ -62,7 +88,7 @@ This enables workflow resumption if context is lost.
    - For bugs: "What is the expected behavior? What is the actual behavior? Can you reproduce it? Which VM/container is affected?"
 6. Run a deduplication check:
    ```bash
-   gh issue list --repo ${REPO} --search "<keywords from description>" --limit 10
+   gh issue list --repo ${capabilities.repo} --search "<keywords from description>" --limit 10
    ```
 7. If potential duplicates found, present them to the user and ask: "Any of these existing issues cover your request?"
 8. Update `claude_docs/session_notes.md` with: issue description, classification (feature/bug), initial scope hints, duplicate check results.
@@ -99,11 +125,11 @@ Wait for user confirmation before proceeding to Step 2.
 **Brainstorming approach:** For complex features (multi-component, architectural changes), invoke `superpowers:brainstorming` to run the full design pipeline (context exploration → clarifying questions → approach proposals → design validation). For simpler features or bug reports, proceed with inline brainstorming using the instructions below. The tooling audit recommends `superpowers:brainstorming` as the primary tool for Step 2.
 
 1. Read the matching GitHub issue template:
-   - Feature: `${PROJECT_ROOT}/.github/ISSUE_TEMPLATE/feature_request.md`
-   - Bug: `${PROJECT_ROOT}/.github/ISSUE_TEMPLATE/bug_report.md`
+   - Feature: `${activeProject.path}/.github/ISSUE_TEMPLATE/feature_request.md`
+   - Bug: `${activeProject.path}/.github/ISSUE_TEMPLATE/bug_report.md`
 
 2. Read codebase context:
-   - CLAUDE.md (architecture, code quality standards, known pitfalls)
+   - config (architecture from config.services and config.techStack, quality standards from project conventions)
    - MEMORY.md (project memory, infrastructure context)
    - Relevant source files identified from scope hints
 
@@ -155,12 +181,12 @@ The draft specification is an internal working artifact. Do NOT present it to th
 
    **Judge 2: Solution Architect**
    - Evaluate: feasibility, complexity estimate accuracy, hidden dependencies
-   - Check: consistency with existing architecture decisions (documented in CLAUDE.md)
+   - Check: consistency with existing architecture (from config.services, config.techStack)
    - Assess: risk assessment completeness
 
    **Judge 3: Code Quality Reviewer**
    - Evaluate: acceptance criteria testability, scope boundaries, wording clarity
-   - Check: alignment with code quality standards and security standards (documented in CLAUDE.md)
+   - Check: alignment with project security standards (from config.security)
    - Verify: no hallucinated claims about codebase capabilities
 
 2. Each judge produces findings with the following structure per finding:
@@ -327,29 +353,29 @@ This step runs concurrently with Step 7 (User Review). It does NOT block Step 7.
 1. Review the critique findings from Step 3. Identify findings that surface reusable insights -- patterns applicable beyond this specific issue:
    - Architecture constraints that future features must respect
    - Anti-patterns discovered during critique
-   - Codebase conventions not yet documented in CLAUDE.md
+   - Codebase conventions not yet documented
    - Recurring pitfalls that should be added to verification checklists
 
 2. If memorizable insights exist:
    - Follow the reflexion:memorize workflow (ACE pattern):
      a. Extract the insight from critique context.
-     b. Check for duplication against existing CLAUDE.md and MEMORY.md content (read both files).
-     c. If novel, append to the appropriate section of CLAUDE.md.
-     d. If CLAUDE.md or MEMORY.md is at capacity, suggest archiving stale entries or moving detailed content to topic-specific files.
-   - Do NOT store in mem0 unless the insight is cross-project (per memory system rules in CLAUDE.md). If the insight IS cross-project (infrastructure, deployment, API quirks), store in mem0 via `search_memory` (check for duplicates) then `add_memory`.
+     b. Check against MEMORY.md and session notes.
+     c. If novel, run /reflexion:memorize for reusable insights.
+     d. If MEMORY.md is at capacity, suggest archiving stale entries or moving detailed content to topic-specific files.
+   - Do NOT store in mem0 unless the insight is cross-project. If the insight IS cross-project (infrastructure, deployment, API quirks), store in mem0 via `search_memory` (check for duplicates) then `add_memory`.
 
 3. If no memorizable insights exist: skip this step entirely. No output.
 
-4. Periodically (suggested: every 10 `/create-issue` invocations), consider running `claude-md-management:claude-md-improver` to optimize CLAUDE.md structure. This is NOT a per-run action.
+4. Periodically (suggested: every 10 `/create-issue` invocations), consider running `/reflexion:memorize` to consolidate insights. This is NOT a per-run action.
 
 ### Output
 
-Updated CLAUDE.md (if insights memorized) or no output (if skipped). Does not affect Step 7.
+Updated memory (if insights memorized via /reflexion:memorize) or no output (if skipped). Does not affect Step 7.
 
 #### Failure Modes
 
 - Over-memorization: storing trivial or context-specific findings as general principles → the memorize command should filter for novelty and generalizability
-- CLAUDE.md/MEMORY.md at capacity → suggest archiving stale entries or moving detailed content to topic-specific files
+- MEMORY.md at capacity → suggest archiving stale entries or moving detailed content to topic-specific files
 - Duplicate memorization → the memorize command should deduplicate against existing content before appending
 
 ---
@@ -447,18 +473,18 @@ Approved specification (or cancellation). Step 8 only runs after explicit approv
    - Scope labels: based on affected components (e.g., `engine`, `dashboard`, `ml`, `infrastructure`, `api`).
    - Only use labels that already exist in the repository. Check with:
      ```bash
-     gh label list --repo ${REPO}
+     gh label list --repo ${capabilities.repo}
      ```
    - If a needed label does not exist, create it:
      ```bash
-     gh label create "engine" --repo ${REPO} --description "Engine (Python backend)" --color "0E8A16"
+     gh label create "engine" --repo ${capabilities.repo} --description "Engine (Python backend)" --color "0E8A16"
      ```
 
 4. Create the issue:
 
    ```bash
    gh issue create \
-     --repo ${REPO} \
+     --repo ${capabilities.repo} \
      --title "feat(engine): implement two-stage entry validation" \
      --body-file /tmp/wf1-issue-body.md \
      --label "enhancement" \
@@ -469,7 +495,7 @@ Approved specification (or cancellation). Step 8 only runs after explicit approv
 
 6. **Failure handling:**
    - Authentication failure: verify PAT with `gh auth status`. The fine-grained PAT has Issues (r/w) scope.
-   - Network failure: retry once after 5 seconds. If still failing, save the specification to `${PROJECT_ROOT}/docs/plans/draft-issue-YYYY-MM-DD.md` and instruct the user to create manually.
+   - Network failure: retry once after 5 seconds. If still failing, save the specification to `${activeProject.path}/docs/plans/draft-issue-YYYY-MM-DD.md` and instruct the user to create manually.
    - Rate limiting: wait 60 seconds and retry.
 
 7. Clean up temp file:
@@ -479,12 +505,12 @@ Approved specification (or cancellation). Step 8 only runs after explicit approv
 
 ### Output
 
-GitHub issue URL (e.g., `https://github.com/${REPO}/issues/NNN`).
+GitHub issue URL (e.g., `https://github.com/${capabilities.repo}/issues/NNN`).
 
 #### Failure Modes
 
 - `gh` CLI authentication failure → verify PAT with `gh auth status`; the fine-grained PAT has Issues (r/w) scope
-- Network failure → retry once after 5 seconds; if still failing, save the issue specification locally to `${PROJECT_ROOT}/docs/plans/draft-issue-YYYY-MM-DD.md` and instruct the user to create manually
+- Network failure → retry once after 5 seconds; if still failing, save the issue specification locally to `${activeProject.path}/docs/plans/draft-issue-YYYY-MM-DD.md` and instruct the user to create manually
 - Rate limiting by GitHub API → wait 60 seconds and retry with exponential backoff
 
 ---
@@ -510,7 +536,7 @@ Critique Summary:
 - Applied: N (X Critical, Y High, Z Medium, W Low)
 - Ambiguity circuit breaker: [triggered / not triggered]
 - Loop-backs: [0 / 1 / 2]
-- Memorized insights: [N insights saved to CLAUDE.md / none]
+- Memorized insights: [N insights saved via /reflexion:memorize / none]
 
 User Review: [N iterations / approved immediately]
 

@@ -1,7 +1,7 @@
 ---
 name: rawgentic:incident
 description: Respond to a production incident using the WF11 14-step two-phase workflow (stabilize first, then RCA). Phase A restores service rapidly with relaxed principles. Phase B conducts 5 Whys root cause analysis and implements preventive measures. Invoke with /incident followed by a description of the incident.
-argument-hint: Incident description (e.g., "dashboard not loading", "engine stopped trading") or issue number
+argument-hint: Incident description (e.g., "dashboard not loading", "API returning 500s", "service unreachable") or issue number
 ---
 
 
@@ -12,12 +12,6 @@ You are the WF11 orchestrator implementing a 14-step incident response workflow 
 </role>
 
 <constants>
-REPO = "<inferred from `git remote -v` at workflow start>"
-PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
-ENGINE_HOST = "<from CLAUDE.md infrastructure — ${ENGINE_HOST} server IP>"
-POSTGRES_CONTAINER = "<from CLAUDE.md infrastructure — PostgreSQL container name>"
-DB_USER = "<from CLAUDE.md database section — dev database user>"
-DB_NAME = "<from CLAUDE.md database section — dev database name>"
 BRANCH_PREFIX = "hotfix/"
 SEVERITY_LEVELS:
   SEV-1: complete outage, data loss risk → immediate response
@@ -29,17 +23,51 @@ LOOPBACK_BUDGET:
   Phase_B: bounded by escalation to WF2/WF3
 </constants>
 
-<environment-setup>
-Constants are populated at workflow start (Step 1) by running:
-- `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
-- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
-- `ENGINE_HOST`: Read from CLAUDE.md infrastructure section (${ENGINE_HOST} server IP)
-- `POSTGRES_CONTAINER`: Read from CLAUDE.md infrastructure section (PostgreSQL container name)
-- `DB_USER`: Read from CLAUDE.md database section (dev database user)
-- `DB_NAME`: Read from CLAUDE.md database section (dev database name)
-- Other constants: Read from CLAUDE.md infrastructure and database sections
+<config-loading>
+Before executing any workflow steps, load the project configuration:
 
-If any constant cannot be resolved, STOP and ask the user. Do not assume values.
+1. Read `.rawgentic_workspace.json` from the Claude root directory.
+   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - Extract the active project entry (active == true).
+
+2. Read `<activeProject.path>/.rawgentic.json`.
+   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
+   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
+   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
+   - Parse full JSON into `config` object.
+
+3. Build the `capabilities` object from config:
+   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
+   - test_commands: config.testing.frameworks[].command
+   - has_ci: config.ci exists AND config.ci.provider exists
+   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
+   - has_database: config.database exists AND config.database.type exists
+   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
+   - project_type: config.project.type
+   - repo: config.repo.fullName
+   - default_branch: config.repo.defaultBranch
+
+All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+<learning-config>
+If this workflow discovers new project capabilities during execution (e.g., a new test framework, a previously unknown service), update `.rawgentic.json` before completing:
+- Append to arrays (e.g., add new test framework to testing.frameworks[])
+- Set fields that are currently null or missing
+- Do NOT overwrite existing non-null values without asking the user
+- Always read full file, modify in memory, write full file back
+</learning-config>
+
+<environment-setup>
+Environment is populated at workflow start (Step 1) from the config loaded in `<config-loading>`:
+- `repo`: `config.repo.fullName`
+- `default_branch`: `config.repo.defaultBranch`
+- `services`: `config.services[]` (names, hosts, ports, health endpoints)
+- `database`: `config.database` (type, cli tools, connection details)
+- `infrastructure`: `config.infrastructure` (hosts, docker compose files, containers)
+
+If any required config field is missing, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
@@ -51,7 +79,7 @@ During Phase B only: if root cause is uncertain, multiple contributing factors c
 </ambiguity-circuit-breaker>
 
 <context-compaction>
-Per CLAUDE.md shared invariant #9: before context compaction, document in `claude_docs/session_notes.md`: current phase (A/B), current step number, branch name, last commit SHA, severity level, and whether service is stabilized.
+Before context compaction, document in `claude_docs/session_notes.md`: current phase (A/B), current step number, branch name, last commit SHA, severity level, and whether service is stabilized.
 </context-compaction>
 
 <principle-relaxations>
@@ -67,25 +95,26 @@ All principles fully enforced during Phase B.
 
 ### Service Not Responding
 
-1. `docker compose -f <compose-file> ps` — check container status
-2. `docker compose -f <compose-file> logs -f <service> --tail=200` — check logs
-3. `curl http://<host>:<port>/health` — health check
-4. `docker stats` — check resources
-5. Common fixes: restart container, increase memory, fix config
+1. For each compose file in `config.infrastructure.docker.composeFiles[]`: run compose `ps` to check container status.
+2. Tail logs for the affected service container (last 200 lines).
+3. Hit the service's health endpoint from `config.services[].healthEndpoint` (or `/health` by default).
+4. `docker stats` — check resource usage across containers.
+5. Common fixes: restart container, increase memory, fix config.
 
 ### Database Issues
 
-1. `docker exec ${POSTGRES_CONTAINER} pg_isready` — PostgreSQL up?
-2. `docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -c "SELECT count(*) FROM pg_stat_activity"` — connections
-3. `docker exec ${POSTGRES_CONTAINER} psql -U ${DB_USER} -c "SELECT * FROM pg_stat_activity WHERE state = 'active' AND query_start < now() - interval '30 seconds'"` — slow queries
-4. Common fixes: kill hung queries, restart PostgreSQL, check disk space
+1. Run database health check using `config.database.cli` (e.g., `pg_isready` for PostgreSQL, `mysqladmin ping` for MySQL).
+2. Check active connections using database-appropriate query via `config.database.cli`.
+3. Check for slow/hung queries using database-appropriate diagnostics.
+4. Common fixes: kill hung queries, restart database service, check disk space.
 
-### Trading Engine Issues
+### Service-Specific Issues
 
-1. `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:8100/status` — engine status
-2. Engine logs: look for "connected"/"disconnected" — broker connection
-3. `curl -H "X-API-Key: $KEY" http://${ENGINE_HOST}:8100/scheduler` — scheduler status
-4. Common fixes: restart engine, restart IB Gateway, check market hours
+For each service in `config.services[]`:
+1. Check service status via its health endpoint (`config.services[].healthEndpoint`) on its host and port (`config.services[].port`).
+2. Tail service logs — look for connection errors, crashes, or dependency failures.
+3. Check dependent services (from `config.services[].dependencies[]` if available).
+4. Common fixes: restart service, restart dependencies, check external connectivity.
 
 </quick-diagnostic-playbook>
 
@@ -99,13 +128,13 @@ All principles fully enforced during Phase B.
 
 #### Instructions
 
-1. **Run environment-setup commands FIRST** — populate all `<constants>` values by executing the commands in the `<environment-setup>` block. Log the resolved values in session notes.
+1. **Load config FIRST** — execute the `<config-loading>` block to populate `config` and `capabilities`. Log the resolved values in session notes.
 2. Log incident start time (UTC).
 3. Classify severity (SEV-1 through SEV-4).
 4. Identify affected services and user impact.
 5. **SEV-1/SEV-2:** Skip confirmation, proceed immediately to diagnosis.
 6. **SEV-3/SEV-4:** Confirm priority with user.
-7. Update `claude_docs/session_notes.md` with: resolved constants, incident description, severity classification, initial impact assessment.
+7. Update `claude_docs/session_notes.md` with: resolved config summary, incident description, severity classification, initial impact assessment.
 8. Log in session notes: `### WF11 Step 1: Receive Incident Report — DONE`
 
 ### Failure Modes
@@ -128,7 +157,7 @@ All principles fully enforced during Phase B.
 2. **Check service health:** Hit health endpoints for all services.
 3. **Check logs:** Tail last 200 lines, look for errors/exceptions.
 4. **Check resources:** Docker stats for CPU/memory/disk.
-5. **Check connectivity:** Services reaching each other? (dashboard↔postgres, engine↔postgres, engine↔redis)
+5. **Check connectivity:** Services reaching each other? (verify inter-service dependencies from `config.services[]`)
 6. **Use quick diagnostic playbook** for the incident type.
 7. **Form hypothesis:** Most likely cause based on evidence.
 
@@ -136,7 +165,7 @@ Log in session notes: `### WF11 Step 2: Rapid Diagnosis — DONE (fast-path|full
 
 ### Failure Modes
 
-- Can't SSH to server → check if server is down entirely (ping first, then Proxmox console)
+- Can't SSH to server → check if server is down entirely (ping hosts from `config.infrastructure.hosts[]`, then check hosting console)
 - No obvious errors in logs → check for silent failures (process exit without logging, OOM kills in `dmesg`)
 - Multiple simultaneous failures → prioritize by dependency order (DB → API → frontend)
 
@@ -190,7 +219,7 @@ Log in session notes: `### WF11 Step 3: Strategy — [chosen strategy] (temporar
 
 1. All health endpoints return healthy.
 2. Critical user paths work (dashboard loads, data appears).
-3. Engine processing (if applicable).
+3. Core service processing verified (check each service in `config.services[]` as applicable).
 4. Monitor 5 minutes — no recurring errors.
 5. SEV-1/SEV-2: run abbreviated E2E smoke test.
 6. Log in session notes: `### WF11 Step 5: Verify Restoration — DONE (health: OK|FAIL, E2E: OK|SKIP)`
@@ -223,7 +252,7 @@ Log in session notes: `### WF11 Step 3: Strategy — [chosen strategy] (temporar
 <mandatory-rule>
 EVEN IF the Phase A fix is the permanent fix, Steps 11-14 are NEVER optional.
 After deployment verification (Step 5), you MUST eventually execute:
-- Step 11: Preventive measures (test gaps, CLAUDE.md, playbook, same-class bug scan)
+- Step 11: Preventive measures (test gaps, .rawgentic.json, playbook, same-class bug scan)
 - Step 12: Action items (GitHub issues for systemic findings)
 - Step 13: Memorize (`/reflexion:memorize`)
 - Step 14: Formal closure (WF11 COMPLETE template)
@@ -312,7 +341,7 @@ Log in session notes: `### WF11 Step 9: RCA Critique — DONE (confidence: high|
 
 If fix is within WF11 scope:
 
-1. Create hotfix branch: `git checkout -b hotfix/<incident-desc> origin/main`
+1. Create hotfix branch: `git checkout -b hotfix/<incident-desc> origin/<default_branch>`
 2. Write test reproducing the incident condition.
 3. Implement permanent fix.
 4. Run all tests.
@@ -341,7 +370,7 @@ Log in session notes: `### WF11 Step 10: Implement Fix — DONE (branch: <name>,
 2. **Same-class bug scan:** If the root cause is a missing parameter, wrong default, or interface mismatch — grep for ALL callers of the affected function and verify they don't have the same bug. Log findings in session notes.
 3. Update monitoring/alerting (if applicable).
 4. Add diagnostic commands to quick playbook (if new incident type).
-5. Update CLAUDE.md with new pitfalls or patterns.
+5. Update `.rawgentic.json` custom section or session notes with new pitfalls or patterns.
 
 Log in session notes: `### WF11 Step 11: Preventive Measures — DONE (N items)`
 
@@ -379,10 +408,10 @@ Log in session notes: `### WF11 Step 12: Action Items — DONE (N issues created
 
 #### Instructions
 
-Run `/reflexion:memorize` — incidents produce the MOST valuable learnings. Curate into CLAUDE.md:
+Run `/reflexion:memorize` — incidents produce the MOST valuable learnings:
 
-- New entry in "Known Pitfalls" or relevant section
-- Update "Known Recurring Issues" if this is a pattern
+- Save new pitfall patterns via `/reflexion:memorize`
+- Update recurring issue patterns if this is a known class of failure
 - Add to quick diagnostic playbook
 - Document root cause and fix approach
 
@@ -390,7 +419,7 @@ Log in session notes: `### WF11 Step 13: Memorize — DONE (N patterns saved)`
 
 ### Failure Modes
 
-- CLAUDE.md is too long → move detailed incident patterns to a dedicated memory topic file and link from MEMORY.md
+- Too many patterns to memorize at once → prioritize by recurrence risk, save the most critical ones first
 - Pattern already documented → update existing entry rather than creating a duplicate
 
 ---
@@ -430,7 +459,7 @@ Phase B (Analyze):
 - Preventive measures: [N implemented, M as action items]
 - Action items: [N GitHub issues created]
 
-Memorized: [N patterns saved to CLAUDE.md]
+Memorized: [N patterns saved via /reflexion:memorize]
 
 WF11 complete.
 ```
@@ -451,9 +480,9 @@ Before declaring WF11 complete, verify ALL of the following. Print the checklist
 1. [ ] Step markers logged for ALL executed steps in session notes
 2. [ ] Service health verified (Step 5 marker present)
 3. [ ] Step 6 gate: user asked about Phase B timing
-4. [ ] Step 11: Preventive measures implemented (test gaps, same-class scan, CLAUDE.md)
+4. [ ] Step 11: Preventive measures implemented (test gaps, same-class scan, .rawgentic.json or session notes)
 5. [ ] Step 12: Action items created as GitHub issues
-6. [ ] Step 13: Patterns memorized to CLAUDE.md via `/reflexion:memorize`
+6. [ ] Step 13: Patterns memorized via `/reflexion:memorize`
 7. [ ] Step 14: WF11 COMPLETE template printed to user
 8. [ ] Session notes updated with final incident report
 

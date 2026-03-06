@@ -1,6 +1,6 @@
 ---
 name: rawgentic:security-audit
-description: Conduct a security audit using the WF9 14-step workflow with STRIDE threat modeling, 4-channel enumeration, critique on audit findings, and optional remediation. Invoke with /security-audit followed by a scope (full, component, CVE, or deps).
+description: Conduct a security audit using the WF9 14-step workflow with STRIDE threat modeling, data channel enumeration, critique on audit findings, and optional remediation. Invoke with /security-audit followed by a scope (full, component, CVE, or deps).
 argument-hint: Audit scope (e.g., "full", "REST API", "CVE-2024-1234", "deps")
 ---
 
@@ -8,23 +8,18 @@ argument-hint: Audit scope (e.g., "full", "REST API", "CVE-2024-1234", "deps")
 # WF9: Security Audit & Remediation Workflow
 
 <role>
-You are the WF9 orchestrator implementing a 14-step security audit and remediation workflow. You use STRIDE threat modeling as the primary framework (mandated by CLAUDE.md), audit all 4 data channels independently, and ensure the audit itself is critiqued for completeness before presenting findings.
+You are the WF9 orchestrator implementing a 14-step security audit and remediation workflow. You use STRIDE threat modeling as the primary framework, audit all data channels independently, and ensure the audit itself is critiqued for completeness before presenting findings.
 </role>
 
 <constants>
-REPO = "<inferred from `git remote -v` at workflow start>"
-PROJECT_ROOT = "<inferred from `git rev-parse --show-toplevel`>"
 BRANCH_PREFIX = "security/"
 AUDIT_MODES:
   full: entire codebase → comprehensive report + remediation PRs
   targeted: specific component → focused report + remediation PRs
   reactive: specific CVE → impact assessment + fix PR
   dependency: npm/pip deps → delegates to WF8 (/update-deps security)
-DATA_CHANNELS:
-  - REST API (Express) — JWT authenticate middleware
-  - Socket.IO (Express) — JWT handshake middleware
-  - Redis pub/sub — requirepass
-  - Engine HTTP API (engine API) — api_key_middleware
+DATA_CHANNELS: Read from config.security.dataChannels[]
+AUTH_MECHANISMS: Read from config.security.authMechanisms[]
 SEVERITY_SLA:
   Critical: fix immediately (same session)
   High: fix within 24 hours
@@ -35,13 +30,49 @@ LOOPBACK_BUDGET:
   global_cap: 2
 </constants>
 
-<environment-setup>
-Constants are populated at workflow start (Step 1) by running:
-- `REPO`: `git remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||'`
-- `PROJECT_ROOT`: `git rev-parse --show-toplevel`
-- Other constants: Read from CLAUDE.md infrastructure and database sections
+<config-loading>
+Before executing any workflow steps, load the project configuration:
 
-If any constant cannot be resolved, STOP and ask the user. Do not assume values.
+1. Read `.rawgentic_workspace.json` from the Claude root directory.
+   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - Extract the active project entry (active == true).
+
+2. Read `<activeProject.path>/.rawgentic.json`.
+   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
+   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
+   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
+   - Parse full JSON into `config` object.
+
+3. Build the `capabilities` object from config:
+   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
+   - test_commands: config.testing.frameworks[].command
+   - has_ci: config.ci exists AND config.ci.provider exists
+   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
+   - has_database: config.database exists AND config.database.type exists
+   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
+   - project_type: config.project.type
+   - repo: config.repo.fullName
+   - default_branch: config.repo.defaultBranch
+
+All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+<learning-config>
+If this workflow discovers new security mechanisms or auth patterns during the audit, update `.rawgentic.json` before completing:
+- Append to config.security.authMechanisms[] and config.security.dataChannels[]
+- Set fields that are currently null or missing
+- Do NOT overwrite existing non-null values without asking the user
+- Always read full file, modify in memory, write full file back
+</learning-config>
+
+<environment-setup>
+Constants are populated at workflow start (Step 1) from the config loaded in `<config-loading>`:
+- `REPO`: `capabilities.repo` (from config.repo.fullName)
+- `PROJECT_ROOT`: the active project path from `.rawgentic_workspace.json`
+- Infrastructure and database details: `config.infrastructure` and `config.database`
+
+If any required config field is missing, STOP and ask the user. Do not assume values.
 </environment-setup>
 
 <termination-rule>
@@ -49,11 +80,11 @@ WF9 terminates after audit report delivery (audit-only mode) or after remediatio
 </termination-rule>
 
 <ambiguity-circuit-breaker>
-If audit findings are ambiguous, severity classification is uncertain, or remediation could have unintended side effects — STOP and present to user for resolution before proceeding. Do not auto-resolve ambiguity. User has final authority (P11).
+If audit findings are ambiguous, severity classification is uncertain, or remediation could have unintended side effects — STOP and present to user for resolution before proceeding. Do not auto-resolve ambiguity. User has final authority.
 </ambiguity-circuit-breaker>
 
 <context-compaction>
-Per CLAUDE.md shared invariant #9: before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, audit mode, STRIDE findings so far, remediation scope decision, and loop-back budget state.
+Before context compaction, document in `claude_docs/session_notes.md`: current step number, branch name, last commit SHA, audit mode, STRIDE findings so far, remediation scope decision, and loop-back budget state.
 </context-compaction>
 
 <mandatory-rule>
@@ -70,7 +101,7 @@ This enables workflow resumption if context is lost.
 
 ### Instructions
 
-1. **Execute `<environment-setup>` commands** to populate constants (REPO, PROJECT_ROOT). Log resolved values in session notes. If any constant cannot be resolved, STOP and ask the user.
+1. **Execute `<config-loading>`** to load project configuration and build capabilities. Then populate constants from `<environment-setup>`. Log resolved values in session notes. If any required config field is missing, STOP and ask the user.
 2. Parse scope and determine audit mode (full/targeted/reactive/dependency).
 3. If CVE: fetch CVE details via web search or NVD.
 4. If component: identify all files, endpoints, and data channels in scope.
@@ -84,7 +115,7 @@ This enables workflow resumption if context is lost.
 Security Audit Scope:
 - Mode: [full / targeted / reactive / dependency]
 - Components: [list or "all"]
-- Data channels: [which of the 4 channels are in scope]
+- Data channels: [which channels from config.security.dataChannels[] are in scope]
 - CVE: [if reactive]
 
 Proceeding to enumerate attack surface. Confirm scope.
@@ -103,10 +134,10 @@ Proceeding to enumerate attack surface. Confirm scope.
 
 ### Instructions
 
-1. **Endpoint inventory:** List all API endpoints (Express routes, Engine engine API routes).
-2. **Authentication mapping:** For each endpoint, verify auth middleware is applied.
-3. **Data channel mapping:** Identify all 4 data channels and their auth mechanisms.
-4. **Input boundary mapping:** All points where external data enters (req.body, req.params, req.query, WebSocket messages, Redis messages).
+1. **Endpoint inventory:** List all API endpoints by enumerating services from `config.services[]` and discovering route definitions in each.
+2. **Authentication mapping:** For each endpoint, verify auth middleware is applied per `config.security.authMechanisms[]`.
+3. **Data channel mapping:** Enumerate all data channels from `config.security.dataChannels[]` and verify their auth mechanisms.
+4. **Input boundary mapping:** All points where external data enters the system (request bodies, parameters, queries, WebSocket messages, message queues, etc.).
 5. **Secret inventory:** Scan for hardcoded secrets, .env patterns, credential storage.
 6. **Dependency inventory:** List packages with known CVEs.
 
@@ -117,8 +148,8 @@ Attack surface map (internal working artifact).
 ### Failure Modes
 
 - Serena MCP unavailable → fall back to Grep for endpoint/symbol discovery
-- Endpoint list incomplete → grep for route definitions across all files (`app.get`, `app.post`, `router.`, `@routes.`)
-- Data channel missed → cross-check against CLAUDE.md 4-channel list (REST, Socket.IO, Redis, Engine HTTP)
+- Endpoint list incomplete → grep for route definitions across all files using patterns appropriate to the project's framework
+- Data channel missed → cross-check against `config.security.dataChannels[]` to ensure all channels are covered
 
 ---
 
@@ -128,20 +159,20 @@ Attack surface map (internal working artifact).
 
 For each STRIDE category, analyze the attack surface:
 
-1. **Spoofing (Authentication):** Are all endpoints protected? JWT validation correct? API keys validated? Socket.IO handshake auth enforced?
-2. **Tampering (Input Validation):** All req.params/query/body validated (Zod)? Numeric params bounded? SQL injection possible? JSONB handled correctly?
-3. **Repudiation (Audit Trail):** Trade executions logged? Auth events logged? Admin actions logged?
-4. **Information Disclosure:** Error responses leak internals? CORS configured? Secrets in git? Health endpoint expose sensitive info?
+1. **Spoofing (Authentication):** Are all endpoints protected? Auth mechanisms from `config.security.authMechanisms[]` correctly implemented and validated? Handshake/connection auth enforced on all channels?
+2. **Tampering (Input Validation):** All user inputs validated? Numeric params bounded? SQL/NoSQL injection possible? Serialization handled correctly?
+3. **Repudiation (Audit Trail):** Critical operations logged? Auth events logged? Admin actions logged?
+4. **Information Disclosure:** Error responses leak internals? CORS configured? Secrets in git? Health endpoints expose sensitive info?
 5. **Denial of Service:** Rate limiting? Unbounded queries? Resource exhaustion vectors?
 6. **Elevation of Privilege:** RBAC where needed? Unauth access to auth endpoints? Regular calls trigger admin ops?
 
-All 4 data channels must be audited independently (per CLAUDE.md mandate).
+All data channels from `config.security.dataChannels[]` must be audited independently.
 
 ### Failure Modes
 
 - STRIDE category yields no findings → verify you checked all code paths, not just obvious ones
 - Finding severity unclear → default to higher severity, let Step 5 critique adjust
-- Data channel auth mechanism unclear → trace middleware registration in dashboard backend and engine API app setup
+- Data channel auth mechanism unclear → trace middleware/auth registration in each service's entry point as listed in `config.services[]`
 
 ---
 
@@ -150,12 +181,12 @@ All 4 data channels must be audited independently (per CLAUDE.md mandate).
 ### Instructions
 
 1. Compile findings: executive summary, per-STRIDE-category findings, per-finding detail (description, affected code, severity, remediation recommendation, effort estimate).
-2. Cross-reference with CLAUDE.md "Known Security Debt" — verify "Fixed" items are actually fixed.
+2. Check `config.custom` for known security debt — verify items marked as fixed are actually fixed.
 3. Prioritize: Critical → High → Medium → Low.
 
 ### Failure Modes
 
-- CLAUDE.md "Fixed" items not actually fixed → reclassify as open findings
+- Previously "fixed" items not actually fixed → reclassify as open findings
 - Finding count is suspiciously low → re-examine attack surface for blind spots
 - Severity distribution skewed (all Low) → challenge the classification, check for under-severity bias
 
@@ -169,13 +200,13 @@ Invoke `/reflexion:critique` — the **audit itself** is critiqued for completen
 
 Three judges evaluate:
 
-- **Completeness judge:** All STRIDE categories covered? All 4 data channels audited? Any blind spots?
+- **Completeness judge:** All STRIDE categories covered? All data channels from `config.security.dataChannels[]` audited? Any blind spots?
 - **Accuracy judge:** Findings genuine (not false positives)? Severity classification correct?
 - **Remediation judge:** Recommendations actionable? Match project architecture?
 
 ALL findings from the quality gate MUST be applied — no severity-based filtering. Apply each finding automatically. If any finding is ambiguous or conflicting, STOP and present to the user.
 
-**Finding Auto-Application (Shared Invariant #2):** ALL findings from the quality gate MUST be applied automatically — no severity-based filtering. If any finding is ambiguous, conflicting, or requires judgment, STOP and present to the user for resolution (P11).
+**Finding Auto-Application:** ALL findings from the quality gate MUST be applied automatically — no severity-based filtering. If any finding is ambiguous, conflicting, or requires judgment, STOP and present to the user for resolution.
 
 Update `claude_docs/session_notes.md` with: STRIDE findings summary, severity counts, critique results, and loop-back budget state.
 
@@ -213,14 +244,14 @@ For fix modes: proceed to Step 7.
 ### Instructions
 
 ```bash
-git fetch origin main
-git checkout -b security/<audit-desc> origin/main
+git fetch origin ${capabilities.default_branch}
+git checkout -b security/<audit-desc> origin/${capabilities.default_branch}
 ```
 
 ### Failure Modes
 
 - Branch name conflicts with existing branch → append date suffix or disambiguate
-- Origin/main is stale → `git fetch origin` before checkout
+- Origin default branch is stale → `git fetch origin` before checkout
 - Uncommitted changes block checkout → stash or commit first
 
 ---
@@ -282,7 +313,7 @@ Run `/reflexion:memorize` — security findings almost always produce patterns w
 
 ```bash
 git push -u origin security/<audit-desc>
-gh pr create --repo ${REPO} \
+gh pr create --repo ${capabilities.repo} \
   --title "security: remediate <N> findings from <audit-type> audit" \
   --body "$(cat <<'EOF'
 ## Summary
@@ -328,8 +359,8 @@ Wait for CI via `gh run list --branch <branch>`. Security PRs should be fast-tra
 
 ### Instructions
 
-1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${REPO}`
-2. Deploy: `${PROJECT_ROOT}/scripts/${DEPLOY_COMMAND}`
+1. Squash-merge: `gh pr merge <number> --squash --delete-branch --repo ${capabilities.repo}`
+2. Deploy using `config.deploy` settings (skip if `capabilities.has_deploy` is false)
 3. Extra security verification post-deploy:
    - Re-run key security tests against deployed environment
    - Verify auth endpoints reject unauthenticated requests
@@ -338,7 +369,7 @@ Wait for CI via `gh run list --branch <branch>`. Security PRs should be fast-tra
 ### Failure Modes
 
 - Merge conflicts → rebase on latest main and re-run tests
-- Deploy script fails → check SSH connectivity to ${DEV_HOST}, verify Docker status
+- Deploy fails → check deploy configuration in `config.deploy` and infrastructure connectivity
 - Post-deploy security verification fails → investigate environment-specific config differences
 
 ---
@@ -356,7 +387,7 @@ Wait for CI via `gh run list --branch <branch>`. Security PRs should be fast-tra
 
 - Fix doesn't work in deployed env → investigate env-specific config (SSL, CORS origins, rate limit settings)
 - New issues introduced by deploy → hotfix or rollback depending on severity
-- E2E auth tests fail → check JWT secret consistency between containers
+- E2E auth tests fail → check auth configuration consistency across services per `config.security.authMechanisms[]`
 
 ---
 
@@ -364,8 +395,8 @@ Wait for CI via `gh run list --branch <branch>`. Security PRs should be fast-tra
 
 ### Instructions
 
-1. Update CLAUDE.md "Security Standards" section: move fixed items to "Fixed", add new patterns, update debt list.
-2. Update `claude_docs/session_notes.md` with: audit summary, findings fixed, CLAUDE.md sections updated, PR URL.
+1. Update `config.security` in `.rawgentic.json` and run `/reflexion:memorize` for broader insights. Move fixed items to resolved, add new patterns, update debt list.
+2. Update `claude_docs/session_notes.md` with: audit summary, findings fixed, config sections updated, PR URL.
 3. Close GitHub issues for fixed findings.
 4. Present completion summary:
 
@@ -375,7 +406,7 @@ WF9 COMPLETE
 
 Audit Mode: [full / targeted / reactive]
 STRIDE Coverage: [all 6 categories]
-Data Channels Audited: [4/4]
+Data Channels Audited: [N/N from config.security.dataChannels[]]
 
 Findings:
 - Critical: [N found, N fixed]
@@ -386,7 +417,7 @@ Findings:
 Remediation:
 - PR: <URL>
 - Security tests added: [N]
-- CLAUDE.md updated: [yes/no]
+- .rawgentic.json updated: [yes/no]
 
 Audit Critique: [passed / N improvements applied]
 
@@ -395,7 +426,7 @@ WF9 complete.
 
 ### Failure Modes
 
-- CLAUDE.md "Fixed" items conflict with new findings → reconcile: update or re-classify
+- Previously resolved items conflict with new findings → reconcile: update or re-classify in `config.security`
 - GitHub issues fail to create → verify PAT scopes (Issues r/w), retry
 - Session notes too long → archive to `session_notes_NNN.md` and start fresh
 
@@ -410,7 +441,7 @@ Before declaring WF9 complete, verify ALL of the following. Print the checklist 
 4. [ ] Audit report committed
 5. [ ] Remediation PRs listed
 6. [ ] Residual risks documented with severity
-7. [ ] Security documentation updated
+7. [ ] Security documentation updated (config.security in .rawgentic.json)
 
 **Audit-only mode (Steps 1-6):**
 
