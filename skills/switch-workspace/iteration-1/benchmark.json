@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "skill_name": "rawgentic:switch",
+    "skill_path": "./skills/switch/SKILL.md",
+    "executor_model": "claude-opus-4-6",
+    "timestamp": "2026-03-06T20:35:00Z",
+    "evals_run": ["normal-switch", "no-arg-pick-from-list", "not-found"],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_name": "normal-switch",
+      "with_skill": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "total": 6,
+        "time_seconds": 41.5,
+        "tokens": 12523
+      },
+      "without_skill": {
+        "pass_rate": 0.83,
+        "passed": 5,
+        "total": 6,
+        "time_seconds": 29.7,
+        "tokens": 10353
+      }
+    },
+    {
+      "eval_name": "no-arg-pick-from-list",
+      "with_skill": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "total": 6,
+        "time_seconds": 64.5,
+        "tokens": 13683
+      },
+      "without_skill": {
+        "pass_rate": 0.83,
+        "passed": 5,
+        "total": 6,
+        "time_seconds": 31.8,
+        "tokens": 10531
+      }
+    },
+    {
+      "eval_name": "not-found",
+      "with_skill": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "total": 4,
+        "time_seconds": 37.3,
+        "tokens": 11924
+      },
+      "without_skill": {
+        "pass_rate": 0.75,
+        "passed": 3,
+        "total": 4,
+        "time_seconds": 25.7,
+        "tokens": 9715
+      }
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": "100% (16/16)",
+      "avg_time_seconds": 47.8,
+      "avg_tokens": 12710
+    },
+    "without_skill": {
+      "pass_rate": "81% (13/16)",
+      "avg_time_seconds": 29.1,
+      "avg_tokens": 10200
+    },
+    "delta": {
+      "pass_rate": "+19%",
+      "time_seconds": "+18.7",
+      "tokens": "+2510"
+    }
+  },
+  "notes": [
+    "The skill's value is in cross-referencing other rawgentic skills — it suggests /rawgentic:setup for unconfigured projects and /rawgentic:new-project for missing ones",
+    "Without the skill, the baseline agent handles the core switch mechanics correctly but doesn't know about the rawgentic ecosystem (no skill cross-references)",
+    "All 3 differentiating assertions test ecosystem awareness: suggests-setup-for-unconfigured, reports-ready (with .rawgentic.json path), suggests-new-project",
+    "The switch skill is simpler than setup or new-project — the baseline handles 81% of cases correctly even without guidance"
+  ]
+}

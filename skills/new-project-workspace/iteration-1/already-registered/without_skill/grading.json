@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "already-registered",
+  "config": "without_skill",
+  "expectations": [
+    {"text": "detects-already-registered", "passed": true, "evidence": "Step 2: 'Duplicate found. The project my-app is already registered'"},
+    {"text": "offers-switch-or-resetup", "passed": true, "evidence": "Two options: Switch to it or Re-run setup"},
+    {"text": "does-not-duplicate", "passed": true, "evidence": "No creation steps taken; workspace unchanged"},
+    {"text": "mentions-switch-skill", "passed": true, "evidence": "'/rawgentic:switch my-app' referenced in Step 5"}
+  ]
+}

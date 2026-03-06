@@ -1,0 +1,14 @@
+{
+  "eval_id": 1,
+  "eval_name": "cold-start-git-init",
+  "config": "without_skill",
+  "expectations": [
+    {"text": "creates-workspace-file", "passed": false, "evidence": "No workspace.json output file produced — all write operations blocked and no workaround attempted"},
+    {"text": "workspace-has-version", "passed": false, "evidence": "No output file to check"},
+    {"text": "project-registered", "passed": false, "evidence": "No output file to check"},
+    {"text": "project-active", "passed": false, "evidence": "No output file to check"},
+    {"text": "project-not-configured", "passed": false, "evidence": "No output file to check"},
+    {"text": "project-path-correct", "passed": false, "evidence": "No output file to check"},
+    {"text": "delegates-to-setup", "passed": false, "evidence": "No transcript or output referencing /rawgentic:setup"}
+  ]
+}

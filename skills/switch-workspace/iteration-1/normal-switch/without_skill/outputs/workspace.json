@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "projectsDir": "./projects",
+  "projects": [
+    {
+      "name": "frontend-app",
+      "path": "./projects/frontend-app",
+      "active": false,
+      "lastUsed": "2026-03-06T10:00:00Z",
+      "configured": true
+    },
+    {
+      "name": "backend-api",
+      "path": "./projects/backend-api",
+      "active": true,
+      "lastUsed": "2026-03-06T13:26:00Z",
+      "configured": false
+    }
+  ]
+}

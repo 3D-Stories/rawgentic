@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "already-registered",
+  "config": "with_skill",
+  "expectations": [
+    {"text": "detects-already-registered", "passed": true, "evidence": "Step 2: 'Match found: Yes. Entry at index 0 matches both name (my-app) and path'"},
+    {"text": "offers-switch-or-resetup", "passed": true, "evidence": "Two choices offered: 1. Switch to it, 2. Re-run setup"},
+    {"text": "does-not-duplicate", "passed": true, "evidence": "Steps 3-6 not executed; no second my-app entry added"},
+    {"text": "mentions-switch-skill", "passed": true, "evidence": "'Run /rawgentic:switch my-app' referenced explicitly"}
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "skill_name": "rawgentic:new-project",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run /rawgentic:new-project my-app. There is no workspace file yet (cold start). The working directory is /tmp/rawgentic-newproj-test/cold-start. When asked about GitHub repo, say no. Save workspace file to /tmp/rawgentic-newproj-test/cold-start/.rawgentic_workspace.json. Do NOT actually invoke /rawgentic:setup — just note that you would delegate to it as the final step.",
+      "expected_output": "Creates ./projects/my-app directory, runs git init, creates .rawgentic_workspace.json with version:1 and one project entry (my-app, active:true, configured:false), then notes delegation to setup"
+    },
+    {
+      "id": 2,
+      "prompt": "Run /rawgentic:new-project ./projects/second-app. The working directory is /tmp/rawgentic-newproj-test/add-second which already has a .rawgentic_workspace.json with first-app as the active project. The directory ./projects/second-app already exists. Save updated workspace to /tmp/rawgentic-newproj-test/add-second/.rawgentic_workspace.json. Do NOT actually invoke /rawgentic:setup — just note delegation.",
+      "expected_output": "Reads existing workspace, finds second-app directory exists, adds it as a new project entry with active:true, sets first-app to active:false, updates workspace file with both projects"
+    },
+    {
+      "id": 3,
+      "prompt": "Run /rawgentic:new-project my-app. The working directory is /tmp/rawgentic-newproj-test/already-reg which already has a .rawgentic_workspace.json with my-app registered. When the skill detects it's already registered, choose 'switch to it'. Do NOT actually invoke /rawgentic:switch — just note what you would do.",
+      "expected_output": "Reads workspace, finds my-app already registered, offers switch or re-setup, user chooses switch, skill notes it would invoke /rawgentic:switch"
+    }
+  ]
+}

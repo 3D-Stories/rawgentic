@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "projectsDir": "./projects",
+  "projects": [
+    {
+      "name": "first-app",
+      "path": "./projects/first-app",
+      "active": false,
+      "lastUsed": "2026-03-06T10:00:00Z",
+      "configured": true
+    },
+    {
+      "name": "second-app",
+      "path": "./projects/second-app",
+      "active": true,
+      "lastUsed": "2026-03-06T13:12:00Z",
+      "configured": false
+    }
+  ]
+}

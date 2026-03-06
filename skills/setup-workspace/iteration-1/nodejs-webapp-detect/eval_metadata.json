@@ -1,0 +1,18 @@
+{
+  "eval_id": 1,
+  "eval_name": "nodejs-webapp-detect",
+  "prompt": "I just registered my Node.js/TypeScript webapp project. Run /rawgentic:setup to configure it. The workspace file is at /tmp/rawgentic-test-fixtures/workspace-webapp.json and the project is at /tmp/rawgentic-test-fixtures/projects/webapp. When asked for confirmation, say 'yes' or 'looks good' to approve each section. Save the generated .rawgentic.json to /tmp/rawgentic-test-fixtures/projects/webapp/.rawgentic.json",
+  "assertions": [
+    {"name": "valid-json", "description": "Output .rawgentic.json is valid JSON"},
+    {"name": "has-version", "description": "JSON contains \"version\": 1"},
+    {"name": "has-project-section", "description": "JSON contains project.name, project.type, project.description"},
+    {"name": "has-repo-section", "description": "JSON contains repo.provider, repo.fullName, repo.defaultBranch"},
+    {"name": "detects-vitest", "description": "testing.frameworks includes vitest"},
+    {"name": "detects-playwright", "description": "testing.frameworks includes playwright"},
+    {"name": "detects-postgres", "description": "database section exists with type postgres"},
+    {"name": "detects-docker", "description": "infrastructure.docker.composeFiles is non-empty"},
+    {"name": "detects-github-actions", "description": "ci.provider mentions github"},
+    {"name": "detects-prettier", "description": "formatting section exists"},
+    {"name": "detects-jwt-security", "description": "security section exists with JWT auth mechanism"}
+  ]
+}

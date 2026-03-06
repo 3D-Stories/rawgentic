@@ -1,0 +1,17 @@
+{
+  "eval_id": 2,
+  "eval_name": "python-fastapi-detect",
+  "prompt": "I just registered my Python ML service project. Run /rawgentic:setup to configure it. The workspace file is at /tmp/rawgentic-test-fixtures/workspace-ml.json and the project is at /tmp/rawgentic-test-fixtures/projects/ml-service. When asked for confirmation, say 'yes' or 'looks good' to approve each section. Save the generated .rawgentic.json to /tmp/rawgentic-test-fixtures/projects/ml-service/.rawgentic.json",
+  "assertions": [
+    {"name": "valid-json", "description": "Output .rawgentic.json is valid JSON"},
+    {"name": "has-version", "description": "JSON contains \"version\": 1"},
+    {"name": "has-project-section", "description": "JSON contains project.name, project.type, project.description"},
+    {"name": "has-repo-section", "description": "JSON contains repo.fullName with datateam/ml-service"},
+    {"name": "detects-pytest", "description": "testing.frameworks includes pytest"},
+    {"name": "detects-pydantic", "description": "security.validationLibrary mentions pydantic OR techStack includes pydantic"},
+    {"name": "detects-ruff", "description": "formatting section mentions ruff"},
+    {"name": "no-docker-section", "description": "No infrastructure.docker section (no Dockerfile/compose in project)"},
+    {"name": "no-database-section", "description": "No database section (no DB connection strings detected)"},
+    {"name": "detects-github-actions", "description": "ci section exists"}
+  ]
+}

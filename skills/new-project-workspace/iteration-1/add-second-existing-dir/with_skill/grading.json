@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "add-second-existing-dir",
+  "config": "with_skill",
+  "expectations": [
+    {"text": "two-projects-in-workspace", "passed": true, "evidence": "workspace.json contains 2 entries: first-app and second-app"},
+    {"text": "second-app-active", "passed": true, "evidence": "second-app has \"active\": true"},
+    {"text": "first-app-deactivated", "passed": true, "evidence": "first-app has \"active\": false"},
+    {"text": "second-app-not-configured", "passed": true, "evidence": "second-app has \"configured\": false"},
+    {"text": "first-app-still-configured", "passed": true, "evidence": "first-app has \"configured\": true"},
+    {"text": "delegates-to-setup", "passed": true, "evidence": "Transcript: '[DELEGATION NOTE] Would invoke /rawgentic:setup here'"}
+  ]
+}

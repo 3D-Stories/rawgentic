@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "skill_name": "rawgentic:new-project",
+    "skill_path": "./skills/new-project/SKILL.md",
+    "executor_model": "claude-opus-4-6",
+    "timestamp": "2026-03-06T20:20:00Z",
+    "evals_run": ["cold-start-git-init", "add-second-existing-dir", "already-registered"],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_name": "cold-start-git-init",
+      "with_skill": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "total": 7,
+        "time_seconds": 157.0,
+        "tokens": 20388
+      },
+      "without_skill": {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "total": 7,
+        "time_seconds": 0,
+        "tokens": 0
+      }
+    },
+    {
+      "eval_name": "add-second-existing-dir",
+      "with_skill": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "total": 6,
+        "time_seconds": 43.3,
+        "tokens": 12695
+      },
+      "without_skill": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "total": 6,
+        "time_seconds": 44.9,
+        "tokens": 11877
+      }
+    },
+    {
+      "eval_name": "already-registered",
+      "with_skill": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "total": 4,
+        "time_seconds": 39.3,
+        "tokens": 12188
+      },
+      "without_skill": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "total": 4,
+        "time_seconds": 44.9,
+        "tokens": 11877
+      }
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": "100% (17/17)",
+      "avg_time_seconds": 79.9,
+      "avg_tokens": 15090
+    },
+    "without_skill": {
+      "pass_rate": "59% (10/17)",
+      "avg_time_seconds": 29.9,
+      "avg_tokens": 7918
+    },
+    "delta": {
+      "pass_rate": "+41%",
+      "time_seconds": "+50.0",
+      "tokens": "+7172"
+    }
+  },
+  "notes": [
+    "Cold-start is the key differentiator — without the skill, the baseline agent produced no workspace output at all (0/7 assertions)",
+    "Add-second and already-registered both pass 100% with and without skill — the task context (existing workspace file) provides enough guidance",
+    "The cold-start without_skill timing.json was missing, indicating the baseline agent failed to produce any usable output",
+    "With-skill runs are slower due to the skill loading and structured 6-step wizard, but produce correct output in all scenarios"
+  ]
+}

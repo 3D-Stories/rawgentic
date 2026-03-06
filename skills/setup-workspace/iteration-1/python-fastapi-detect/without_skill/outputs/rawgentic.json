@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "project": {
+    "name": "ml-service",
+    "type": "api",
+    "description": "Machine learning inference API for production models"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "datateam/ml-service",
+    "defaultBranch": "main"
+  },
+  "techStack": {
+    "language": "python",
+    "languageVersion": ">=3.8",
+    "framework": "fastapi",
+    "frameworkVersion": ">=0.104.0",
+    "runtime": "uvicorn",
+    "packageManager": "pip",
+    "projectLayout": "src",
+    "key_dependencies": [
+      { "name": "fastapi", "version": ">=0.104.0", "purpose": "Web framework / API" },
+      { "name": "uvicorn", "version": ">=0.24.0", "purpose": "ASGI server" },
+      { "name": "pydantic", "version": ">=2.5.0", "purpose": "Data validation and serialization" },
+      { "name": "sqlalchemy", "version": ">=2.0.0", "purpose": "ORM / database toolkit" }
+    ]
+  },
+  "testing": {
+    "framework": "pytest",
+    "configFile": "pyproject.toml",
+    "testDirectory": "tests",
+    "commands": {
+      "unit": "pytest tests/ -v --tb=short",
+      "all": "pytest"
+    },
+    "patterns": {
+      "testFilePattern": "test_*.py",
+      "testDirectory": "tests"
+    }
+  },
+  "database": {
+    "orm": "sqlalchemy",
+    "ormVersion": ">=2.0.0",
+    "notes": "SQLAlchemy declared as dependency; no specific database driver, connection config, or migration tooling (e.g. Alembic) detected in the repository."
+  },
+  "formatting": {
+    "linter": "ruff",
+    "configFile": "pyproject.toml",
+    "rules": {
+      "lineLength": 100,
+      "select": ["E", "F", "I"]
+    },
+    "commands": {
+      "lint": "ruff check .",
+      "format": "ruff format ."
+    }
+  },
+  "ci": {
+    "provider": "github-actions",
+    "configPath": ".github/workflows/test.yml",
+    "workflows": [
+      {
+        "name": "Test",
+        "file": ".github/workflows/test.yml",
+        "triggers": "unknown"
+      }
+    ]
+  },
+  "documentation": {
+    "readme": "README.md"
+  }
+}

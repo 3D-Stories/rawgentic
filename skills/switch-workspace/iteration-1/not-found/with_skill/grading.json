@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "not-found",
+  "config": "with_skill",
+  "expectations": [
+    {"text": "detects-not-found", "passed": true, "evidence": "Step 2: 'NOT found in the workspace. Per the skill instructions, the process STOPS here'"},
+    {"text": "lists-registered-projects", "passed": true, "evidence": "Table listing my-app with path, active, configured status"},
+    {"text": "suggests-new-project", "passed": true, "evidence": "'run /rawgentic:new-project nonexistent-project to register it'"},
+    {"text": "no-workspace-modification", "passed": true, "evidence": "'No changes were made to .rawgentic_workspace.json'"}
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "not-found",
+  "prompt": "Switch to a project not in workspace",
+  "assertions": [
+    {"name": "detects-not-found", "description": "Recognizes nonexistent-project is not in workspace"},
+    {"name": "lists-registered-projects", "description": "Lists my-app as an available project"},
+    {"name": "suggests-new-project", "description": "Suggests /rawgentic:new-project nonexistent-project"},
+    {"name": "no-workspace-modification", "description": "Does NOT produce a modified workspace file (no switch happens)"}
+  ]
+}

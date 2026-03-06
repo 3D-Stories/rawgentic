@@ -1,0 +1,41 @@
+{
+  "expectations": [
+    {
+      "text": "valid-json",
+      "passed": true,
+      "evidence": "Parsed successfully"
+    },
+    {
+      "text": "has-version",
+      "passed": true,
+      "evidence": "version=1"
+    },
+    {
+      "text": "project-type-research",
+      "passed": true,
+      "evidence": "type=research"
+    },
+    {
+      "text": "has-description",
+      "passed": true,
+      "evidence": "description=Exploring LLM evaluation techniques"
+    },
+    {
+      "text": "minimal-config",
+      "passed": true,
+      "evidence": "Extra sections present: none"
+    },
+    {
+      "text": "has-custom-section",
+      "passed": false,
+      "evidence": "custom=absent"
+    },
+    {
+      "text": "schema-conformance-techStack-is-array",
+      "passed": false,
+      "evidence": "techStack type: dict"
+    }
+  ],
+  "passed": 5,
+  "total": 7
+}
