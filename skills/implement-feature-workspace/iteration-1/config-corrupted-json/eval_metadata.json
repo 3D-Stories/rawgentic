@@ -1,0 +1,9 @@
+{
+  "eval_id": 3,
+  "eval_name": "config-corrupted-json",
+  "prompt": "Implement issue #10 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-corrupted-json/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-corrupted-json/projects/corrupt-app. The issue is: 'Fix login page'. Save a transcript of your work to the outputs directory.",
+  "assertions": [
+    {"text": "stops-with-corruption-msg", "description": "Mentions corrupted or malformed JSON"},
+    {"text": "suggests-setup", "description": "/rawgentic:setup referenced in response"}
+  ]
+}

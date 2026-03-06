@@ -1,0 +1,55 @@
+{
+  "expectations": [
+    {
+      "text": "adapts-doc-structure",
+      "passed": true,
+      "evidence": "The transcript extensively adapts documentation structure for a research project. Step 1 identifies project_type as 'research' and notes primaryFiles are 'docs/methodology.md' and 'docs/findings.md'. Step 3 drafts research-specific content: methodology.md includes 'Overview, Environment (Python 3.12.0, Jupyter 7.0.0), Evaluation Framework, Data Sources, Metrics' sections. findings.md includes 'Summary, Results, Analysis, Conclusions' sections. The Proposed Document Outlines in Step 2 show research-appropriate structure. The description field 'LLM evaluation research project' is used to inform content. The assertion mentions 'dataset' specifically -- while no standalone dataset doc is created, methodology.md includes a 'Data Sources' section."
+    },
+    {
+      "text": "no-deployment-docs",
+      "passed": true,
+      "evidence": "No deployment or API documentation was generated or planned. The transcript does not create or plan any deployment guide, API spec, or architecture doc. Step 10 Completion Summary lists only 'docs/methodology.md (NEW)' and 'docs/findings.md (NEW)' as files updated. The capabilities object shows has_deploy: false. No deployment-related content appears in any drafted documentation."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Only config-verified facts were included in documentation drafts",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Step 3 lists verification sources: 'Python 3.12.0 -> verified from .rawgentic.json techStack[0].version', 'Jupyter 7.0.0 -> verified from .rawgentic.json techStack[1].version', 'LLM evaluation research project -> verified from .rawgentic.json project.description'. All other sections are marked TODO/placeholder."
+    },
+    {
+      "claim": "The project directory contains only .rawgentic.json with no source code",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 1 filesystem audit shows only one file: '/tmp/rawgentic-update-docs-test/research-project-docs/projects/research-proj/.rawgentic.json'. Step 2 confirms 'No source code files exist to derive documentation from.'"
+    },
+    {
+      "claim": "The workflow would set documentation.format to 'markdown' in .rawgentic.json",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 10 states: 'config.documentation.format is not set. I would update .rawgentic.json to set config.documentation.format to markdown since that is what was generated.'"
+    },
+    {
+      "claim": "The default branch is trunk, not main, and all git commands use trunk",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 4 explicitly notes: 'The default branch is trunk, not main. The skill template says git fetch origin main but the config specifies defaultBranch: trunk, so I would use trunk.' All git commands shown use 'trunk'."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "adapts-doc-structure",
+        "reason": "The assertion mentions 'dataset' as a keyword to check for, but the with_skill run uses 'Data Sources' as the section name rather than 'dataset'. The assertion is loose enough that this passes, which is appropriate. However, consider being more specific about what 'adapts' means -- e.g., 'does NOT use application-oriented section names like Architecture, API, Controllers' as a negative check."
+      }
+    ],
+    "overall": "Assertions are well-targeted for this scenario. The adapts-doc-structure and no-deployment-docs pair provides both positive and negative coverage. Could be strengthened with a check that methodology/findings content is research-appropriate (not generic boilerplate)."
+  }
+}

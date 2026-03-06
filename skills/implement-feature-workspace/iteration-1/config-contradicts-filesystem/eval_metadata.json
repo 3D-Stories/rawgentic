@@ -1,0 +1,9 @@
+{
+  "eval_id": 7,
+  "eval_name": "config-contradicts-filesystem",
+  "prompt": "Implement issue #42 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-contradicts-filesystem/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-contradicts-filesystem/projects/jest-contradiction. The issue is: 'Add rate limiting middleware'. When asked for confirmation, say 'yes' to approve. Save a transcript of your work to the outputs directory.",
+  "assertions": [
+    {"text": "follows-config-not-filesystem", "description": "Uses implement-verify mode (follows config which has no test frameworks, despite jest.config.js on disk)"},
+    {"text": "does-not-run-jest", "description": "Does not attempt to run jest, vitest, pytest, or npm test"}
+  ]
+}

@@ -1,0 +1,54 @@
+{
+  "expectations": [
+    {
+      "text": "uses-sentinel-repo",
+      "passed": true,
+      "evidence": "eval-org/sentinel-repo-42 appears in multiple gh commands in the transcript: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --state all --limit 50' (Step 3), 'gh issue create --repo eval-org/sentinel-repo-42 --title \"Add WebSocket support to the API\" --body \"...\"' (Step 5), and 'gh issue view 1 --repo eval-org/sentinel-repo-42' (Step 6). The summary table also shows 'Target repo: eval-org/sentinel-repo-42'."
+    },
+    {
+      "text": "dedup-check-shown",
+      "passed": true,
+      "evidence": "Step 3 'Check for Duplicate Issues' explicitly searches for existing issues before creation: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --state all --limit 50'. The reasoning explains: 'Searching for \"WebSocket\" across all issue states (open and closed) ensures we don't create a duplicate.' This occurs before Step 5 where the issue is created."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "timing": {
+    "total_tokens": 12222,
+    "duration_ms": 52439,
+    "total_duration_seconds": 52.4
+  },
+  "claims": [
+    {
+      "claim": "The project uses Node.js 20.11.0 with Vitest testing",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The .rawgentic.json config shown in Step 2 confirms techStack node 20.11.0 and testing framework vitest."
+    },
+    {
+      "claim": "No duplicate issues were found",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The search was simulated: 'Expected output (simulated): No matching issues found.' The command was not actually executed."
+    },
+    {
+      "claim": "The issue was successfully created",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The creation was simulated: 'Expected output (simulated): https://github.com/eval-org/sentinel-repo-42/issues/1'. No actual gh command was executed."
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Same as with_skill: the transcript shows simulated commands, not actual executions. The assertion passes based on command text in the transcript, which is reasonable for a simulation eval but would not verify real behavior."
+      }
+    ],
+    "overall": "Assertions are satisfied. The without_skill run produces a simpler but correct workflow that reads the config, performs a dedup check, and targets the correct repo."
+  }
+}

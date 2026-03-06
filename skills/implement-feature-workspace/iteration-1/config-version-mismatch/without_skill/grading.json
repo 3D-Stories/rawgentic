@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {
+      "text": "warns-version-mismatch",
+      "passed": true,
+      "evidence": "Transcript notes: \"Finding: The project config has \\\"version\\\": 99.\" and \"This is an unrecognized/unsupported version number.\" Step 4 states: \"Config version mismatch (version: 99): The project's .rawgentic.json declares \\\"version\\\": 99, which is not a recognized configuration schema version.\" The agent did warn about and identify the version mismatch."
+    }
+  ],
+  "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.00}
+}

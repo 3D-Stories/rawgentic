@@ -1,0 +1,43 @@
+{
+  "expectations": [
+    {
+      "text": "uses-config-doc-paths",
+      "passed": true,
+      "evidence": "The transcript references all three sentinel paths from config.documentation.primaryFiles. Step 2 reads the project config and explicitly identifies 'Primary documentation files: 1. docs/SENTINEL-ARCHITECTURE.md 2. docs/SENTINEL-API-SPEC.md 3. docs/SENTINEL-DEPLOY-GUIDE.md'. Steps 4.2 through 4.6 plan work against exactly these three files. The 'Key Documentation Paths (from config)' summary lists all three sentinel paths. The without_skill run also correctly identifies these config-driven paths."
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "failed": 0,
+    "total": 1,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "The workflow is a simulation/plan rather than actual execution",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 4 is titled 'Planned Workflow (Simulated)' and states 'Since this is a sandbox without real project files, below is the detailed step-by-step workflow I would execute'. All subsequent steps use 'Commands I would run' and 'Would read' language."
+    },
+    {
+      "claim": "A fourth documentation path (docs/api/) was also identified from config",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The summary lists 'docs/api/ -- auto-generated typedoc output' as item 4 under Key Documentation Paths, derived from config.documentation.outputDir."
+    },
+    {
+      "claim": "Config was correctly parsed",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 2 shows the full JSON of .rawgentic.json with all fields matching the expected config structure."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Both with_skill and without_skill runs pass this assertion. The without_skill run read the config and found the sentinel paths just as effectively. This suggests the assertion may not discriminate between skill-guided and unguided behavior for this scenario -- the config is straightforward enough that any competent agent would read it. Consider adding assertions that test skill-specific behavior (e.g., following a particular step ordering, applying accuracy-first verification, or using specific skill terminology)."
+      }
+    ],
+    "overall": "The without_skill run performs comparably to the with_skill run on this assertion. The eval does not currently distinguish skill-guided behavior from generic competence at reading JSON config files."
+  }
+}

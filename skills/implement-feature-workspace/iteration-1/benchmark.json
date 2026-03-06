@@ -1,0 +1,425 @@
+{
+  "metadata": {
+    "skill_name": "implement-feature",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 7
+  },
+  "runs": [
+    {
+      "eval_id": 7,
+      "eval_name": "config-contradicts-filesystem",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "follows-config-not-filesystem",
+          "passed": true,
+          "evidence": "Transcript explicitly addresses the contradiction and decides: \"I follow the config. The capabilities.has_tests is false because the config has no testing section. This means: The workflow will use Implement-Verify mode (not TDD).\" The decision section states: \"The config is the single source of truth for project capabilities. If the config does not declare a testing framework, the workflow treats the project as untested, regardless of what files exist on disk.\""
+        },
+        {
+          "text": "does-not-run-jest",
+          "passed": true,
+          "evidence": "Transcript states: \"Jest will NOT be run as part of the workflow\" and \"Would jest be run? No. Jest is not in the capabilities. The workflow would use verification commands (syntax checks, health checks, dry-runs) instead of test suites.\" No jest/vitest/pytest/npm test command appears anywhere in the execution steps."
+        }
+      ]
+    },
+    {
+      "eval_id": 7,
+      "eval_name": "config-contradicts-filesystem",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "failed": 2,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "follows-config-not-filesystem",
+          "passed": false,
+          "evidence": "Transcript explicitly states the opposite: \"Decision: Trust the filesystem over the config absence. The project clearly intends to use Jest for testing based on the actual files present. The config simply omits the testing section rather than explicitly disabling it.\" The agent followed filesystem over config."
+        },
+        {
+          "text": "does-not-run-jest",
+          "passed": false,
+          "evidence": "The agent wrote Jest tests (\"Created __tests__/rate-limiter.test.ts\") and attempted to run them: \"Attempted to run npm install and npx jest to verify the tests pass, but Bash permission was denied for both commands.\" The agent tried to run jest even though the config has no testing section."
+        }
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "config-corrupted-json",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "stops-with-corruption-msg",
+          "passed": true,
+          "evidence": "Transcript states: \"This is not valid JSON\" and \"Malformed JSON -> STOP. Tell user: 'Project config is corrupted. Run /rawgentic:setup to regenerate.'\" The outcome section confirms: \"WORKFLOW HALTED -- Config Loading Failed\" and \"contains corrupted/malformed JSON.\""
+        },
+        {
+          "text": "suggests-setup",
+          "passed": true,
+          "evidence": "Transcript explicitly states the message to user: \"Project config is corrupted. Run /rawgentic:setup to regenerate.\" The /rawgentic:setup reference is present."
+        }
+      ]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "config-corrupted-json",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.5,
+        "passed": 1,
+        "failed": 1,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "stops-with-corruption-msg",
+          "passed": true,
+          "evidence": "Transcript identifies the corrupted JSON: \"The file contains corrupted/invalid JSON\" and concludes: \"BLOCKED -- Cannot implement feature.\" and \"The .rawgentic.json configuration file contains corrupted JSON that cannot be parsed.\" The agent did stop, though without the exact prescribed message."
+        },
+        {
+          "text": "suggests-setup",
+          "passed": false,
+          "evidence": "Transcript never mentions /rawgentic:setup. The recommendation section says: \"The .rawgentic.json file must be repaired with valid JSON content\" but does not reference /rawgentic:setup as the mechanism for doing so."
+        }
+      ]
+    },
+    {
+      "eval_id": 6,
+      "eval_name": "config-driven-no-tests-no-ci",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "skips-tdd-steps",
+          "passed": true,
+          "evidence": "Transcript explicitly states: \"has_tests == false --> Use Implement-Verify mode (not TDD) in Steps 5 and 8\". Step 5 shows \"Mode: Implement-Verify (because capabilities.has_tests == false)\" with IMPLEMENT/VERIFY phases instead of RED/GREEN/REFACTOR. Step 8 header confirms: \"Mode: Implement-Verify (capabilities.has_tests == false)\"."
+        },
+        {
+          "text": "skips-ci-gate",
+          "passed": true,
+          "evidence": "Step 13 states: \"capabilities.has_ci == false --> No CI configured. Skipping Gate 2.\" and logs: \"No CI configured -- skipping Gate 2\". Completion checklist marks item 6 as \"[N/A] (conditional: has_ci) CI passed -- has_ci == false, skipped\"."
+        },
+        {
+          "text": "skips-deploy",
+          "passed": true,
+          "evidence": "Step 14 states: \"capabilities.has_deploy == false --> No automated deployment configured.\" and \"Since this is a scripts project with no deployment target, there is nothing to deploy.\" Step 15 states: \"capabilities.has_deploy == false AND no deployment was performed --> Skip.\" Completion checklist marks item 7 as \"[N/A] (conditional: has_deploy) Deployment verified -- has_deploy == false, skipped\"."
+        }
+      ]
+    },
+    {
+      "eval_id": 6,
+      "eval_name": "config-driven-no-tests-no-ci",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "skips-tdd-steps",
+          "passed": true,
+          "evidence": "The transcript shows no TDD Red-Green-Refactor cycle. The agent used a straightforward implement-then-verify approach: Step 5 implemented the function, Step 6 verified via syntax check, Step 7 noted no test framework configured. No test files were written."
+        },
+        {
+          "text": "skips-ci-gate",
+          "passed": true,
+          "evidence": "Step 8 states: \"The .rawgentic.json configuration has no CI section and no deploy section. There are no CI pipelines to trigger.\" No CI verification was attempted."
+        },
+        {
+          "text": "skips-deploy",
+          "passed": true,
+          "evidence": "Step 8 states: \"no deployment steps to execute.\" No deployment was attempted. Summary table confirms: \"CI/Deploy | No CI/deploy configured; skipped\"."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "config-loading-sentinel",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "reads-sentinel-repo",
+          "passed": true,
+          "evidence": "Transcript shows config.repo.fullName = \"eval-org/sentinel-repo-42\" and uses it throughout: \"gh issue view 42 --repo eval-org/sentinel-repo-42\", \"gh pr create --repo eval-org/sentinel-repo-42\""
+        },
+        {
+          "text": "uses-trunk-branch",
+          "passed": true,
+          "evidence": "Transcript shows capabilities.default_branch = \"trunk\" from config.repo.defaultBranch. Used in: \"git pull origin trunk && git checkout -b feature/42-health-check-endpoint\", \"git diff trunk..HEAD\", \"--base trunk\" in PR create"
+        },
+        {
+          "text": "uses-sentinel-test-cmd",
+          "passed": true,
+          "evidence": "Transcript shows test command used throughout: \"npx vitest run --reporter=verbose --sentinel\" in Steps 8, 9, 12, and verification strategy table. Extracted from config.testing.frameworks[0].command"
+        },
+        {
+          "text": "detects-circleci",
+          "passed": true,
+          "evidence": "Transcript shows \"capabilities.has_ci = true\", \"config.ci.provider = circleci\", Step 13: \"CI passes (both build-and-test and deploy-staging workflows succeed)\""
+        },
+        {
+          "text": "detects-cockroachdb",
+          "passed": true,
+          "evidence": "Transcript shows \"config.database.type = cockroachdb\" in capabilities table and config values summary. Used in Step 8: \"uses existing CockroachDB connection pool to run SELECT 1\""
+        },
+        {
+          "text": "uses-rsync-deploy",
+          "passed": true,
+          "evidence": "Transcript shows \"config.deploy.method = rsync\", \"config.deploy.command = rsync -avz dist/ eval-server:/app/\". Step 14: \"deployed via rsync\""
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "config-loading-sentinel",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.67,
+        "passed": 4,
+        "failed": 2,
+        "total": 6,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "reads-sentinel-repo",
+          "passed": true,
+          "evidence": "Transcript mentions: \"Repo: eval-org/sentinel-repo-42 on GitHub\" in Step 1, and uses it in git commands: \"gh pr create ... --body\" referencing sentinel-repo-42. However, the agent read .rawgentic.json directly rather than following a structured config-loading protocol."
+        },
+        {
+          "text": "uses-trunk-branch",
+          "passed": true,
+          "evidence": "Transcript shows \"git checkout trunk\" and \"git pull origin trunk\" in the Git/GitHub commands section, correctly using 'trunk' as the default branch from config."
+        },
+        {
+          "text": "uses-sentinel-test-cmd",
+          "passed": false,
+          "evidence": "Transcript shows \"npx vitest run --reporter=verbose\" WITHOUT the --sentinel flag. The config specifies \"npx vitest run --reporter=verbose --sentinel\" but the agent dropped the --sentinel flag, indicating it did not faithfully use the exact test command from config."
+        },
+        {
+          "text": "detects-circleci",
+          "passed": true,
+          "evidence": "Transcript Step 1 mentions: \"CI: CircleCI\""
+        },
+        {
+          "text": "detects-cockroachdb",
+          "passed": true,
+          "evidence": "Transcript Step 1 mentions: \"Database: CockroachDB with dbmate migrations\" and Step 3 mentions the CockroachDB dependency check."
+        },
+        {
+          "text": "uses-rsync-deploy",
+          "passed": false,
+          "evidence": "The transcript does not mention rsync deployment anywhere. No deploy step was executed or described. The agent noted \"Deploy: rsync-based\" in config findings but never used it in the workflow."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "config-missing-rawgentic-json",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "stops-with-setup-ref",
+          "passed": true,
+          "evidence": "Transcript explicitly states: \"Active project missing-config-app has no config. Run /rawgentic:setup.\" This matches the skill's exact stop message."
+        },
+        {
+          "text": "workflow-does-not-proceed",
+          "passed": true,
+          "evidence": "Transcript states: \"WORKFLOW HALTED at config-loading phase (before Step 1).\" and \"There is no fallback or degraded mode -- the skill explicitly says 'STOP' and directs the user to run the setup command.\" No Step 1-16 output appears."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "config-missing-rawgentic-json",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "failed": 2,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "stops-with-setup-ref",
+          "passed": false,
+          "evidence": "Transcript never mentions /rawgentic:setup. The agent noted the missing .rawgentic.json but proceeded anyway: \"Since I have no .rawgentic.json to guide technology choices and no existing source code to infer the stack, I will attempt to implement user authentication using reasonable defaults.\" Final recommendation mentions needing config but says it generically, not referencing /rawgentic:setup."
+        },
+        {
+          "text": "workflow-does-not-proceed",
+          "passed": false,
+          "evidence": "The agent proceeded through Steps 5-7, creating full implementation files (package.json, tsconfig.json, auth.service.ts, auth.middleware.ts, auth.routes.ts, index.ts) despite the missing config. It explicitly decided: \"I will attempt to implement user authentication using reasonable defaults.\""
+        }
+      ]
+    },
+    {
+      "eval_id": 5,
+      "eval_name": "config-missing-workspace",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "failed": 0,
+        "total": 1,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "stops-with-new-project-ref",
+          "passed": true,
+          "evidence": "Transcript states: \"No rawgentic workspace found. Run /rawgentic:new-project to initialize a workspace before using /rawgentic:implement-feature.\" and \"STOPPED at config-loading step 1. No workflow steps were executed.\""
+        }
+      ]
+    },
+    {
+      "eval_id": 5,
+      "eval_name": "config-missing-workspace",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "failed": 0,
+        "total": 1,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "stops-with-new-project-ref",
+          "passed": true,
+          "evidence": "Transcript states: \"STOPPED -- No rawgentic workspace found.\" and \"To proceed: Run /rawgentic:new-project to initialize a workspace and register a project.\" The /rawgentic:new-project reference is present."
+        }
+      ]
+    },
+    {
+      "eval_id": 4,
+      "eval_name": "config-version-mismatch",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "failed": 0,
+        "total": 1,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "warns-version-mismatch",
+          "passed": true,
+          "evidence": "Transcript clearly warns: \"WARNING: Config version mismatch detected.\" and \"The project configuration file .rawgentic.json for project version-app has \\\"version\\\": 99, but this workflow expects version 1.\" It lists possible causes and recommendations."
+        }
+      ]
+    },
+    {
+      "eval_id": 4,
+      "eval_name": "config-version-mismatch",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 1,
+        "failed": 0,
+        "total": 1,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "warns-version-mismatch",
+          "passed": true,
+          "evidence": "Transcript notes: \"Finding: The project config has \\\"version\\\": 99.\" and \"This is an unrecognized/unsupported version number.\" Step 4 states: \"Config version mismatch (version: 99): The project's .rawgentic.json declares \\\"version\\\": 99, which is not a recognized configuration schema version.\" The agent did warn about and identify the version mismatch."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 7,
+      "total_assertions": 17,
+      "passed_assertions": 17
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.5957
+      },
+      "runs": 7,
+      "total_assertions": 17,
+      "passed_assertions": 10
+    },
+    "delta": {
+      "pass_rate": "+0.40"
+    }
+  }
+}

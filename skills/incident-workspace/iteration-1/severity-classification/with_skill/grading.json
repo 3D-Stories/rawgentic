@@ -1,0 +1,68 @@
+{
+  "expectations": [
+    {
+      "text": "classifies-severity",
+      "passed": true,
+      "evidence": "Step 1 explicitly classifies severity as SEV-1: 'Assigned Severity: SEV-1'. The classification rationale evaluates all four severity levels (SEV-1 through SEV-4) in a table and concludes: 'The incident matches SEV-1 on both criteria: 1. \"Complete outage\" -- The report states \"all services down\"... 2. \"Data loss risk\" -- The report explicitly mentions \"potential data loss\".' SEV-1 qualifies as 'high or critical' per the assertion."
+    },
+    {
+      "text": "phase-a-first",
+      "passed": true,
+      "evidence": "The transcript is clearly structured with 'Phase A: Stabilize' starting at Step 1 (severity classification) and continuing through Step 6 (Stabilization Summary). Phase B: Analyze & Prevent begins at Step 7 (RCA). Phase A actions (receive report, rapid diagnosis, strategy selection, execute rollback, verify restoration, stabilization summary) all precede Phase B actions (5 Whys RCA, design fix, RCA critique, implement permanent fix, preventive measures, action items). The section headers explicitly mark 'Phase A: Stabilize' and 'Phase B: Analyze & Prevent' in the correct order."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Recent deploy (commit a3f91bc) caused the outage by breaking database connectivity",
+      "type": "factual",
+      "verified": false,
+      "evidence": "This is a simulated diagnosis. The transcript marks findings as '[SIMULATED]' (e.g., '[SIMULATED] Recent commits show a deploy 47 minutes ago'). No actual infrastructure was inspected. The narrative is internally consistent but fabricated for the eval context."
+    },
+    {
+      "claim": "Service was restored in ~8 minutes from incident report via rollback",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The timeline shows 14:32:00 (incident reported) to 14:40:00 (5-minute monitoring passed), which is 8 minutes. However, this is a simulated timeline -- no actual rollback or monitoring occurred."
+    },
+    {
+      "claim": "No persistent data loss occurred",
+      "type": "quality",
+      "verified": false,
+      "evidence": "The transcript states 'Database was unreachable but not corrupted. Writes during the 47-minute outage would have failed (500 errors to users), so some user operations were lost (users would need to retry). No stored data was corrupted or deleted.' This is a simulated assessment -- cannot be verified without real infrastructure."
+    },
+    {
+      "claim": "5 GitHub issues were created for follow-up",
+      "type": "process",
+      "verified": false,
+      "evidence": "The transcript documents 5 issues (#42-#46) but marks them as '[SIMULATED] Issue #42 created'. No actual GitHub issues were created. The intent and content are documented but not executed."
+    },
+    {
+      "claim": "The 5 Whys analysis reaches the systemic root cause of zero deploy safety checks",
+      "type": "quality",
+      "verified": true,
+      "evidence": "The 5 Whys table progresses logically: 500 errors -> crash-looping -> nil pointer panic -> DB connection failure from deploy -> no tests/CI/deploy validation. The final answer ('no safety checks in deploy pipeline') is a genuine systemic root cause, not a symptom. The RCA critique in Step 9 also validates this: 'The 5 Whys reached \"no safety checks in deploy pipeline\" -- this is a systemic root cause, not a symptom.'"
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "classifies-severity",
+        "reason": "The assertion checks for 'high or critical (SEV-1 or SEV-2)' which is a very broad target. Given the prompt says 'Complete outage! All services down... potential data loss,' only SEV-1 is correct. SEV-2 (partial outage) would be a misclassification. Consider tightening to require SEV-1 specifically for this scenario."
+      },
+      {
+        "reason": "No assertion checks whether the severity classification includes a rationale. The with_skill run provides a detailed rationale table comparing all severity levels. An unsupported 'SEV-1' label without justification would pass the current assertion equally."
+      },
+      {
+        "reason": "No assertion verifies that stabilization actions are actually taken (restart, rollback, etc.) before moving to analysis. The phase-a-first assertion only checks ordering, not that Phase A contains substantive stabilization work."
+      }
+    ],
+    "overall": "Assertions capture the two key behaviors (severity classification and phase ordering) but at a coarse level. Tightening the severity assertion to require SEV-1 specifically and adding assertions for stabilization substance would improve discrimination."
+  }
+}

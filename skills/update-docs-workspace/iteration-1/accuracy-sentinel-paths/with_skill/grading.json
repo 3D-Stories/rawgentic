@@ -1,0 +1,50 @@
+{
+  "expectations": [
+    {
+      "text": "uses-config-doc-paths",
+      "passed": true,
+      "evidence": "The transcript explicitly references all three sentinel paths from config.documentation.primaryFiles. Step 1 (Config Loading) shows: 'The config specifies documentation.primaryFiles with three sentinel paths: 1. docs/SENTINEL-ARCHITECTURE.md 2. docs/SENTINEL-API-SPEC.md 3. docs/SENTINEL-DEPLOY-GUIDE.md'. The Scope Determination section states: 'The files listed above come directly from config.documentation.primaryFiles. The skill does NOT default to README.md or any other generic path.' Step 2 and Step 3 both use these three paths as the documentation targets."
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "failed": 0,
+    "total": 1,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Config was loaded correctly from .rawgentic_workspace.json and .rawgentic.json",
+      "type": "process",
+      "verified": true,
+      "evidence": "Transcript Step 1 shows the full JSON contents of both config files with correct parsing of version, project name, repo, techStack, and documentation sections."
+    },
+    {
+      "claim": "No fallback to generic paths like README.md",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Transcript explicitly states: 'The workflow did NOT default to README.md or any other generic documentation path. The config-specified sentinel paths were used exclusively.' No mention of README.md as a target anywhere in the workflow steps."
+    },
+    {
+      "claim": "Capabilities were correctly derived as all false",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 1 shows has_tests, has_ci, has_deploy, has_database, has_docker all set to false, which is correct given the minimal config with no testing, ci, deploy, database, or infrastructure sections."
+    },
+    {
+      "claim": "Category was reclassified from 'addition' to 'generation' since doc files don't exist",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 2 states: 'Since all three primary documentation files are missing, the category should be reclassified as generation (creating new documentation from code).'"
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "uses-config-doc-paths",
+        "reason": "This assertion checks that the sentinel file names appear in the transcript, which is good. However, it could be strengthened by also verifying that NO other documentation paths (e.g., README.md) were targeted. The with_skill run does explicitly make this negative claim, but the assertion does not require it. A run that references the sentinel paths AND also targets README.md would still pass."
+      }
+    ],
+    "overall": "Single assertion covers the core behavior but could benefit from a negative check (no non-config paths targeted). Consider also asserting that the config was loaded before any documentation work began (ordering)."
+  }
+}

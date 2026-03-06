@@ -1,0 +1,15 @@
+{
+  "expectations": [
+    {
+      "text": "stops-with-corruption-msg",
+      "passed": true,
+      "evidence": "Transcript identifies the corrupted JSON: \"The file contains corrupted/invalid JSON\" and concludes: \"BLOCKED -- Cannot implement feature.\" and \"The .rawgentic.json configuration file contains corrupted JSON that cannot be parsed.\" The agent did stop, though without the exact prescribed message."
+    },
+    {
+      "text": "suggests-setup",
+      "passed": false,
+      "evidence": "Transcript never mentions /rawgentic:setup. The recommendation section says: \"The .rawgentic.json file must be repaired with valid JSON content\" but does not reference /rawgentic:setup as the mechanism for doing so."
+    }
+  ],
+  "summary": {"passed": 1, "failed": 1, "total": 2, "pass_rate": 0.50}
+}

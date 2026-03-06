@@ -1,0 +1,135 @@
+{
+  "metadata": {
+    "skill_name": "create-issue",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 2
+  },
+  "runs": [
+    {
+      "eval_id": 2,
+      "eval_name": "claude-md-contradiction",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 83.6,
+        "tokens": 22412
+      },
+      "expectations": [
+        {
+          "text": "config-wins-over-claude-md",
+          "passed": true,
+          "evidence": "The transcript explicitly identifies the contradiction in Step 1.4 'CLAUDE.md Contradiction Analysis'. It reads both CLAUDE.md (containing 'REPO=wrong-org/wrong-repo') and .rawgentic.json (containing 'fullName: eval-org/sentinel-repo-42'). The reasoning is thorough: 'The skill's <config-loading> protocol is explicit and unambiguous... The .rawgentic.json config is the authoritative source per the skill's <config-loading> protocol. The CLAUDE.md values (wrong-org/wrong-repo, main) are IGNORED because the skill protocol explicitly defines where these values come from.' Resolved value: 'capabilities.repo = eval-org/sentinel-repo-42 (from .rawgentic.json, NOT from CLAUDE.md)'. The Summary of Config Resolution table at the end reinforces this: CLAUDE.md value 'wrong-org/wrong-repo' marked as 'Used? NO', .rawgentic.json value 'eval-org/sentinel-repo-42' marked as 'Used? YES'."
+        },
+        {
+          "text": "does-not-use-claude-md-constants",
+          "passed": true,
+          "evidence": "All gh commands in the transcript use eval-org/sentinel-repo-42, never wrong-org/wrong-repo. Specific commands: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"error handling\" --limit 10' (Step 1f), 'gh label list --repo eval-org/sentinel-repo-42' (Step 8), 'gh label create \"enhancement\" --repo eval-org/sentinel-repo-42 ...' (Step 8), 'gh issue create --repo eval-org/sentinel-repo-42 ...' (Step 8). The string 'wrong-org' does not appear in any gh command in the transcript. It only appears in the CLAUDE.md file contents quote and the analysis/reasoning sections where the contradiction is documented."
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "claude-md-contradiction",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 58.4,
+        "tokens": 12394
+      },
+      "expectations": [
+        {
+          "text": "config-wins-over-claude-md",
+          "passed": true,
+          "evidence": "The transcript includes a 'Conflict Analysis and Resolution' section that identifies the contradiction between CLAUDE.md ('wrong-org/wrong-repo') and .rawgentic.json ('eval-org/sentinel-repo-42'). The resolution states: 'The .rawgentic.json file is the authoritative source for project configuration.' Three reasons are given: (1) project-specific scope, (2) structured JSON format, (3) canonical metadata chain from workspace config. The decision is explicit: 'Use eval-org/sentinel-repo-42 as the repository.' The gh issue create command uses '--repo eval-org/sentinel-repo-42'."
+        },
+        {
+          "text": "does-not-use-claude-md-constants",
+          "passed": true,
+          "evidence": "The only gh command in the transcript is 'gh issue create --repo eval-org/sentinel-repo-42 --title \"Improve error handling across sentinel-app\" ...'. The string 'wrong-org' does not appear in any gh command. It only appears in the CLAUDE.md content quote and the conflict analysis table. The Key Reasoning Notes section at the end confirms: 'The gh issue create command targets eval-org/sentinel-repo-42 (from .rawgentic.json), NOT wrong-org/wrong-repo (from CLAUDE.md).'"
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "dedup-sentinel-repo",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 173.3,
+        "tokens": 28104
+      },
+      "expectations": [
+        {
+          "text": "uses-sentinel-repo",
+          "passed": true,
+          "evidence": "eval-org/sentinel-repo-42 appears in all gh commands throughout the transcript. Examples: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --limit 10' (Step 1.4 dedup), 'gh label list --repo eval-org/sentinel-repo-42' (Step 8.3), 'gh issue create --repo eval-org/sentinel-repo-42 ...' (Step 8.4). The Summary of All gh Commands section at the end lists 6 commands, all targeting eval-org/sentinel-repo-42."
+        },
+        {
+          "text": "dedup-check-shown",
+          "passed": true,
+          "evidence": "Step 1.4 'Deduplication Check' performs two searches before issue creation: (1) 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --limit 10' and (2) 'gh issue list --repo eval-org/sentinel-repo-42 --search \"real-time websocket ws socket\" --limit 10'. Both searches return no matching issues. This occurs before Step 8 where the issue is created."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "dedup-sentinel-repo",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 52.4,
+        "tokens": 12222
+      },
+      "expectations": [
+        {
+          "text": "uses-sentinel-repo",
+          "passed": true,
+          "evidence": "eval-org/sentinel-repo-42 appears in multiple gh commands in the transcript: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --state all --limit 50' (Step 3), 'gh issue create --repo eval-org/sentinel-repo-42 --title \"Add WebSocket support to the API\" --body \"...\"' (Step 5), and 'gh issue view 1 --repo eval-org/sentinel-repo-42' (Step 6). The summary table also shows 'Target repo: eval-org/sentinel-repo-42'."
+        },
+        {
+          "text": "dedup-check-shown",
+          "passed": true,
+          "evidence": "Step 3 'Check for Duplicate Issues' explicitly searches for existing issues before creation: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"WebSocket\" --state all --limit 50'. The reasoning explains: 'Searching for \"WebSocket\" across all issue states (open and closed) ensures we don't create a duplicate.' This occurs before Step 5 where the issue is created."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 4
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 4
+    },
+    "delta": {
+      "pass_rate": "+0.00"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "eval_name": "learning-config-update",
+  "prompt": "Run a security audit. Workspace: /tmp/rawgentic-security-audit-test/learning-config-update/.rawgentic_workspace.json, project: /tmp/rawgentic-security-audit-test/learning-config-update/projects/sentinel-app. The audit should discover that the app also uses API key auth for the webhook endpoint. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "appends-to-auth-array", "description": "New auth mechanism added to config.security.authMechanisms[]"},
+    {"text": "writes-config-back", "description": ".rawgentic.json written/updated with new auth mechanism"}
+  ]
+}

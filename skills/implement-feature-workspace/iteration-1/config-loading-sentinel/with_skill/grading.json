@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "reads-sentinel-repo",
+      "passed": true,
+      "evidence": "Transcript shows config.repo.fullName = \"eval-org/sentinel-repo-42\" and uses it throughout: \"gh issue view 42 --repo eval-org/sentinel-repo-42\", \"gh pr create --repo eval-org/sentinel-repo-42\""
+    },
+    {
+      "text": "uses-trunk-branch",
+      "passed": true,
+      "evidence": "Transcript shows capabilities.default_branch = \"trunk\" from config.repo.defaultBranch. Used in: \"git pull origin trunk && git checkout -b feature/42-health-check-endpoint\", \"git diff trunk..HEAD\", \"--base trunk\" in PR create"
+    },
+    {
+      "text": "uses-sentinel-test-cmd",
+      "passed": true,
+      "evidence": "Transcript shows test command used throughout: \"npx vitest run --reporter=verbose --sentinel\" in Steps 8, 9, 12, and verification strategy table. Extracted from config.testing.frameworks[0].command"
+    },
+    {
+      "text": "detects-circleci",
+      "passed": true,
+      "evidence": "Transcript shows \"capabilities.has_ci = true\", \"config.ci.provider = circleci\", Step 13: \"CI passes (both build-and-test and deploy-staging workflows succeed)\""
+    },
+    {
+      "text": "detects-cockroachdb",
+      "passed": true,
+      "evidence": "Transcript shows \"config.database.type = cockroachdb\" in capabilities table and config values summary. Used in Step 8: \"uses existing CockroachDB connection pool to run SELECT 1\""
+    },
+    {
+      "text": "uses-rsync-deploy",
+      "passed": true,
+      "evidence": "Transcript shows \"config.deploy.method = rsync\", \"config.deploy.command = rsync -avz dist/ eval-server:/app/\". Step 14: \"deployed via rsync\""
+    }
+  ],
+  "summary": {"passed": 6, "failed": 0, "total": 6, "pass_rate": 1.00}
+}

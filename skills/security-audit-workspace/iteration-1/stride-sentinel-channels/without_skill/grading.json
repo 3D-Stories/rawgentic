@@ -1,0 +1,43 @@
+{
+  "expectations": [
+    {
+      "text": "enumerates-config-channels",
+      "passed": true,
+      "evidence": "Section 2 'Scope: Data Channels' lists all three: '1. grpc-api -- gRPC-based API, secured with mTLS', '2. mqtt-broker -- MQTT message broker, no declared auth mechanism', '3. sentinel-ws -- WebSocket endpoint, secured with OAuth2-PKCE'. Section 1 table also lists 'Data channels | grpc-api, mqtt-broker, sentinel-ws'."
+    },
+    {
+      "text": "stride-on-config-channels",
+      "passed": true,
+      "evidence": "Section 3 applies STRIDE to each config channel: '3.1 grpc-api (mTLS)', '3.2 mqtt-broker (NO DECLARED AUTH)', '3.3 sentinel-ws (OAuth2-PKCE)'. All 6 STRIDE categories are covered per channel. Findings are protocol-specific (gRPC reflection, MQTT wildcard subscriptions, WebSocket upgrade handshake) -- not generic Express/Socket.IO patterns."
+    },
+    {
+      "text": "uses-config-auth",
+      "passed": true,
+      "evidence": "Section 1 'Authentication Mechanisms Declared' table shows 'mTLS | grpc-api | certs/' and 'OAuth2-PKCE | sentinel-ws | auth/oauth.config.ts'. These are referenced throughout STRIDE analysis: grpc-api Spoofing discusses 'mTLS provides strong mutual authentication', sentinel-ws Spoofing discusses 'OAuth2 with PKCE is a strong mechanism for public clients'. mqtt-broker is flagged as having no declared auth."
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "No source code or infrastructure files present in the project",
+      "type": "factual",
+      "verified": false,
+      "evidence": "The transcript states 'The project directory contains only `.rawgentic.json`' but as this is a sandbox eval, we cannot independently verify what files were present. However, the claim is consistent with how the eval scenario was constructed."
+    },
+    {
+      "claim": "Cross-channel lateral movement risk identified",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Section 4.1 'Inconsistent Authentication Coverage' states: 'If it shares a network segment with authenticated channels, it may serve as a lateral movement vector.' This is a genuine cross-channel insight."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [],
+    "overall": "Both with_skill and without_skill runs pass all 3 assertions for this scenario. The assertions do not discriminate between the two runs. The with_skill run produced a more structured, deeper analysis (34 individually-IDed findings with severity ratings vs. a more narrative format), but no assertion captures this quality difference. Consider adding an assertion that checks for structured finding IDs or severity counts to differentiate skill-guided depth from generic competence."
+  }
+}

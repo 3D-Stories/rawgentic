@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "eval_name": "config-techstack-update",
+  "prompt": "Update project dependencies. Workspace: /tmp/rawgentic-update-deps-test/config-techstack-update/.rawgentic_workspace.json, project: /tmp/rawgentic-update-deps-test/config-techstack-update/projects/sentinel-app. React is being updated from 18 to 19. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "updates-techstack", "description": "techStack updated in .rawgentic.json (react version changed)"},
+    {"text": "writes-config-back", "description": ".rawgentic.json written/updated with new version"}
+  ]
+}

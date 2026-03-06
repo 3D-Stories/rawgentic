@@ -1,0 +1,58 @@
+{
+  "expectations": [
+    {
+      "text": "config-wins-over-claude-md",
+      "passed": true,
+      "evidence": "The transcript explicitly identifies the contradiction in Step 1.4 'CLAUDE.md Contradiction Analysis'. It reads both CLAUDE.md (containing 'REPO=wrong-org/wrong-repo') and .rawgentic.json (containing 'fullName: eval-org/sentinel-repo-42'). The reasoning is thorough: 'The skill's <config-loading> protocol is explicit and unambiguous... The .rawgentic.json config is the authoritative source per the skill's <config-loading> protocol. The CLAUDE.md values (wrong-org/wrong-repo, main) are IGNORED because the skill protocol explicitly defines where these values come from.' Resolved value: 'capabilities.repo = eval-org/sentinel-repo-42 (from .rawgentic.json, NOT from CLAUDE.md)'. The Summary of Config Resolution table at the end reinforces this: CLAUDE.md value 'wrong-org/wrong-repo' marked as 'Used? NO', .rawgentic.json value 'eval-org/sentinel-repo-42' marked as 'Used? YES'."
+    },
+    {
+      "text": "does-not-use-claude-md-constants",
+      "passed": true,
+      "evidence": "All gh commands in the transcript use eval-org/sentinel-repo-42, never wrong-org/wrong-repo. Specific commands: 'gh issue list --repo eval-org/sentinel-repo-42 --search \"error handling\" --limit 10' (Step 1f), 'gh label list --repo eval-org/sentinel-repo-42' (Step 8), 'gh label create \"enhancement\" --repo eval-org/sentinel-repo-42 ...' (Step 8), 'gh issue create --repo eval-org/sentinel-repo-42 ...' (Step 8). The string 'wrong-org' does not appear in any gh command in the transcript. It only appears in the CLAUDE.md file contents quote and the analysis/reasoning sections where the contradiction is documented."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "timing": {
+    "total_tokens": 22412,
+    "duration_ms": 83568,
+    "total_duration_seconds": 83.6
+  },
+  "claims": [
+    {
+      "claim": "The skill's <config-loading> protocol does not reference CLAUDE.md as a source for repo information",
+      "type": "process",
+      "verified": true,
+      "evidence": "The transcript cites the config-loading protocol's 3-step process and the quote 'All subsequent steps use config and capabilities -- never probe the filesystem for information that should be in the config.' This correctly identifies that CLAUDE.md is outside the config-loading chain."
+    },
+    {
+      "claim": "Steps 4-9 were completed using the correct repo",
+      "type": "process",
+      "verified": false,
+      "evidence": "Steps 4-9 are summarized as 'Remaining workflow (simulated)' with abbreviated content. The key gh commands are shown and all use eval-org/sentinel-repo-42, but the critique, amendment, and review steps (3-7) are not fully documented. The transcript states 'findings are simulated' for Step 3."
+    },
+    {
+      "claim": "CLAUDE.md contains deliberately wrong values for eval purposes",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The CLAUDE.md content is quoted: '# Project Constants (DELIBERATELY WRONG - for eval)' followed by 'REPO=wrong-org/wrong-repo'. This confirms the contradiction is intentional."
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "does-not-use-claude-md-constants",
+        "reason": "This assertion checks that 'wrong-org' does not appear in gh commands. However, the CLAUDE.md header says 'DELIBERATELY WRONG - for eval', which could tip off the agent. A more discriminating test would use a plausible-looking repo name in CLAUDE.md (e.g., 'eval-org/sentinel-main') without the 'deliberately wrong' annotation, to test whether the agent follows the config protocol rather than simply avoiding obviously-wrong values."
+      },
+      {
+        "reason": "No assertion verifies that the agent explicitly cited the config-loading protocol as the reason for preferring .rawgentic.json over CLAUDE.md. The with_skill run does this thoroughly (citing the protocol rules), while the without_skill run relies on general reasoning about structured config vs freeform markdown. An assertion checking for protocol-based reasoning would better measure skill effectiveness."
+      }
+    ],
+    "overall": "The assertions effectively test the core scenario -- config vs CLAUDE.md conflict resolution. The CLAUDE.md header annotation ('DELIBERATELY WRONG') slightly weakens the test since an agent could reject the values based on the annotation rather than following a principled config-loading protocol. Consider removing the annotation in future iterations."
+  }
+}

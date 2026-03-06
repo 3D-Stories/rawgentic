@@ -1,0 +1,15 @@
+{
+  "expectations": [
+    {
+      "text": "stops-with-setup-ref",
+      "passed": true,
+      "evidence": "Transcript explicitly states: \"Active project missing-config-app has no config. Run /rawgentic:setup.\" This matches the skill's exact stop message."
+    },
+    {
+      "text": "workflow-does-not-proceed",
+      "passed": true,
+      "evidence": "Transcript states: \"WORKFLOW HALTED at config-loading phase (before Step 1).\" and \"There is no fallback or degraded mode -- the skill explicitly says 'STOP' and directs the user to run the setup command.\" No Step 1-16 output appears."
+    }
+  ],
+  "summary": {"passed": 2, "failed": 0, "total": 2, "pass_rate": 1.00}
+}

@@ -1,0 +1,25 @@
+{
+  "expectations": [
+    {
+      "text": "uses-sentinel-repo",
+      "passed": true,
+      "evidence": "The transcript references 'sentinel-repo-42' extensively. In the Config Loading section: 'config.repo.fullName: eval-org/sentinel-repo-42'. Also used in Step 1 ('gh issue view 15 --repo eval-org/sentinel-repo-42'), Step 10 ('gh pr create --repo eval-org/sentinel-repo-42'), and the Key Config Values table at the end."
+    },
+    {
+      "text": "uses-sentinel-test-cmd",
+      "passed": true,
+      "evidence": "The transcript explicitly uses the config-specified test command throughout. In the Capabilities Object: 'test_commands: [\"npx vitest run --reporter=verbose --sentinel\"]'. Step 7 Phase 1 states 'Command (from config): npx vitest run --reporter=verbose --sentinel'. A critical note in Step 7 reads: 'IMPORTANT: The test command is npx vitest run --reporter=verbose --sentinel as specified in config.testing.frameworks[0].command. NOT npm test. NOT jest. NOT bare vitest.' The --sentinel flag is present in every test invocation."
+    },
+    {
+      "text": "reproduce-first",
+      "passed": true,
+      "evidence": "Step 7 is explicitly structured with reproduce-first ordering. Phase 1 (RED) writes the reproduction test FIRST in dateParser.test.ts before any fix. Phase 1 (RUN) confirms the test fails. Only then does Phase 2 (GREEN) implement the fix in dateParser.ts. The 'Reproduce-First Sequence Summary' table confirms: '1st: Write reproduction test -- Test exists BEFORE any fix code; 2nd: Run test -- FAILS; 3rd: Write fix code -- Minimal change'. The final section 'Reproduce-First Principle Enforcement' explicitly states: 'Step 7, Phase 1 (RED): Reproduction test written FIRST -- before any changes to dateParser.ts'."
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3,
+    "pass_rate": 1.0
+  }
+}

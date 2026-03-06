@@ -1,0 +1,61 @@
+{
+  "expectations": [
+    {
+      "text": "acknowledges-no-tests",
+      "passed": true,
+      "evidence": "The transcript explicitly and prominently acknowledges the absence of tests. Under 'Key Finding: No Testing Section in Config': 'The project configuration has no testing section at all. This means: capabilities.has_tests is false, There are no test commands to run, There are no test frameworks configured, The characterization testing phase (Step 7a) cannot produce runnable tests, The behavioral preservation invariant cannot be verified through test execution.' The capabilities table shows has_tests = false with reason 'config.testing does not exist' and test_commands = [] with reason 'no testing frameworks defined'. The Risk Implications section classifies this as 'Risk level: HIGH' due to no tests and no CI."
+    },
+    {
+      "text": "behavioral-preservation-strategy",
+      "passed": true,
+      "evidence": "The transcript provides a detailed behavioral preservation strategy adapted for the no-tests scenario. Under 'Behavioral Preservation Strategy (No-Tests Adaptation)', five concrete strategies are enumerated: (1) Static analysis via symbol mapping to verify all call sites updated, (2) Reference graph verification to confirm isomorphic call graphs before/after, (3) Manual contract enumeration documenting I/O contracts in Step 3 verified through code review, (4) Diff-based verification using 'git diff --stat' for scoped changes, (5) Characterization tests become documentation rather than executable artifacts. A comparison table maps each standard workflow step to its no-tests adaptation (e.g., Step 7a shifts from 'Write and run tests' to 'Write behavioral specifications (non-executable); document expected I/O', Step 8 shifts from 'Run all tests' to 'Verify via reference graph comparison, diff review, manual inspection'). The transcript also recommends adding tests first via WF3 before proceeding."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Config was loaded successfully with version 1 and valid JSON",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The transcript shows the full .rawgentic.json content and confirms 'valid JSON, version 1, one project registered'"
+    },
+    {
+      "claim": "The project has no testing, CI, or deploy sections in config",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The capabilities table explicitly shows has_tests=false (config.testing does not exist), has_ci=false (config.ci does not exist), has_deploy=false (config.deploy does not exist). The shown .rawgentic.json content confirms no testing/ci/deploy keys."
+    },
+    {
+      "claim": "The skill degrades gracefully without tests",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Rather than failing or skipping behavioral preservation, the transcript provides 5 alternative verification strategies, a step-by-step adaptation table, risk classification (HIGH), and a recommendation to add tests first. The summary states: 'The skill degrades gracefully. Rather than failing or skipping behavioral preservation entirely, it substitutes non-executable verification strategies and flags the elevated risk to the user.'"
+    },
+    {
+      "claim": "The workflow halted because no source code exists",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The transcript states: 'The project directory contains only .rawgentic.json. There are no source files, no data processing pipeline, and no code to refactor.' This is consistent with the eval scaffold."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "behavioral-preservation-strategy",
+        "reason": "This assertion is broad enough that listing any reasonable verification approach satisfies it. The with-skill run provides an excellent and thorough adaptation, but the assertion would also pass for a much weaker response that simply says 'we will review the code manually.' Consider tightening to require specific strategies like reference graph analysis or contract enumeration."
+      },
+      {
+        "reason": "No assertion checks whether the skill correctly classifies the risk level as elevated when tests are absent. The with-skill run does this ('Risk level: HIGH'), which is valuable behavior worth asserting explicitly."
+      },
+      {
+        "reason": "No assertion checks whether the skill recommends adding tests before proceeding with the refactor. The with-skill run recommends 'tests be added first (suggesting WF3 or a testing setup task) before proceeding with refactoring' -- this is good defensive behavior that should be captured."
+      }
+    ],
+    "overall": "The two assertions capture the essential behaviors (acknowledge missing tests, provide alternative verification), but could be strengthened with more specificity. Consider adding assertions for risk escalation and recommendation to add tests first."
+  }
+}

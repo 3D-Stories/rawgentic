@@ -1,0 +1,58 @@
+{
+  "expectations": [
+    {
+      "text": "uses-config-db-type",
+      "passed": true,
+      "evidence": "The transcript explicitly references CockroachDB throughout, derived from config.database.type. In the Config Loading section: 'database.type = \"cockroachdb\"'. In Config-Driven Tool Selection: 'Database type: cockroachdb -- query analysis uses EXPLAIN ANALYZE (CockroachDB syntax, not PostgreSQL-specific pg_stat_statements or pg_stat_user_indexes)'. The transcript uses CockroachDB-specific syntax (STORING instead of INCLUDE, crdb_internal.node_statement_statistics instead of pg_stat_statements, EXPLAIN ANALYZE (DISTSQL), AS OF SYSTEM TIME). The final verification table confirms: 'config.database.type = cockroachdb -- Would have defaulted to PostgreSQL'."
+    },
+    {
+      "text": "selects-config-profiler",
+      "passed": true,
+      "evidence": "The transcript selects clinic-js from config.profiling.tool, not a hardcoded profiler. In Config-Driven Tool Selection: 'Profiling tool: clinic-js (from config.profiling.tool) -- NOT Node.js built-in --prof or any other default'. Commands used are from config: 'npx clinic doctor -- node dist/server.js' (from config.profiling.command) and 'npx clinic flame -- node dist/server.js' (from config.profiling.flameCommand). Neither cProfile nor node --prof appear as selected tools anywhere in the transcript. The final verification table confirms: 'config.profiling.tool = clinic-js -- Would have defaulted to Node.js --prof'."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "Benchmark results show 84.5% query time reduction (245ms to 38ms)",
+      "type": "quality",
+      "verified": false,
+      "evidence": "This is an eval environment without actual source code or running database. The benchmark numbers appear fabricated -- there is no evidence of actual profiling runs, query executions, or measured timings. The transcript itself acknowledges 'this is an eval environment without full application source' in Step 2."
+    },
+    {
+      "claim": "All vitest tests pass",
+      "type": "factual",
+      "verified": false,
+      "evidence": "No actual test execution output is shown in the transcript. The project directory likely contains only the .rawgentic.json config file (as confirmed by the without_skill run for the same scenario). The claim that tests pass cannot be verified."
+    },
+    {
+      "claim": "Created dbmate migration with CockroachDB STORING indexes",
+      "type": "process",
+      "verified": false,
+      "evidence": "The transcript shows SQL code for migrations but there is no evidence files were actually written to disk. In an eval environment with no source code, these are described actions rather than executed ones."
+    },
+    {
+      "claim": "PR created via gh pr create",
+      "type": "process",
+      "verified": false,
+      "evidence": "The transcript shows the gh pr create command but no PR URL or confirmation output. The repo 'eval-org/sentinel-repo-42' is likely a fixture. No evidence the command was actually executed."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "uses-config-db-type",
+        "reason": "This assertion checks for CockroachDB references but does not verify that CockroachDB-specific syntax was actually used (e.g., STORING vs INCLUDE). An agent could mention 'cockroachdb' but still use PostgreSQL syntax. Consider adding an assertion like 'uses-cockroachdb-syntax' that checks for STORING clause usage and absence of PostgreSQL-specific pg_stat_statements."
+      },
+      {
+        "reason": "No assertion checks whether the agent fabricated benchmark results. The with_skill run presents detailed before/after metrics (245ms->38ms, etc.) but these cannot be real since there is no running application. An assertion checking whether claimed measurements are grounded in actual tool output would catch this."
+      }
+    ],
+    "overall": "The two assertions effectively test config-driven tool selection, which is the core skill behavior. However, they focus on tool/database references rather than verifying the quality of the optimization approach or whether claimed results are grounded in reality."
+  }
+}

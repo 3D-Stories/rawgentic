@@ -1,0 +1,35 @@
+{
+  "expectations": [
+    {
+      "text": "reads-sentinel-repo",
+      "passed": true,
+      "evidence": "Transcript mentions: \"Repo: eval-org/sentinel-repo-42 on GitHub\" in Step 1, and uses it in git commands: \"gh pr create ... --body\" referencing sentinel-repo-42. However, the agent read .rawgentic.json directly rather than following a structured config-loading protocol."
+    },
+    {
+      "text": "uses-trunk-branch",
+      "passed": true,
+      "evidence": "Transcript shows \"git checkout trunk\" and \"git pull origin trunk\" in the Git/GitHub commands section, correctly using 'trunk' as the default branch from config."
+    },
+    {
+      "text": "uses-sentinel-test-cmd",
+      "passed": false,
+      "evidence": "Transcript shows \"npx vitest run --reporter=verbose\" WITHOUT the --sentinel flag. The config specifies \"npx vitest run --reporter=verbose --sentinel\" but the agent dropped the --sentinel flag, indicating it did not faithfully use the exact test command from config."
+    },
+    {
+      "text": "detects-circleci",
+      "passed": true,
+      "evidence": "Transcript Step 1 mentions: \"CI: CircleCI\""
+    },
+    {
+      "text": "detects-cockroachdb",
+      "passed": true,
+      "evidence": "Transcript Step 1 mentions: \"Database: CockroachDB with dbmate migrations\" and Step 3 mentions the CockroachDB dependency check."
+    },
+    {
+      "text": "uses-rsync-deploy",
+      "passed": false,
+      "evidence": "The transcript does not mention rsync deployment anywhere. No deploy step was executed or described. The agent noted \"Deploy: rsync-based\" in config findings but never used it in the workflow."
+    }
+  ],
+  "summary": {"passed": 4, "failed": 2, "total": 6, "pass_rate": 0.67}
+}

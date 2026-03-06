@@ -1,0 +1,48 @@
+{
+  "expectations": [
+    {
+      "text": "appends-to-primary-files",
+      "passed": true,
+      "evidence": "Step 5b explicitly plans to update the documentation.primaryFiles array to include CONTRIBUTING.md. The transcript shows: 'Change: Update the documentation.primaryFiles array to include the new file' with the modified JSON showing 'primaryFiles': ['docs/README.md', 'CONTRIBUTING.md']. The Summary table also states '.rawgentic.json needs update: Yes -- primaryFiles should include CONTRIBUTING.md'. However, this is described as a plan ('Would edit'), not an actual execution."
+    },
+    {
+      "text": "writes-config-back",
+      "passed": true,
+      "evidence": "Step 5b shows the intent to edit .rawgentic.json with the path explicitly stated: '/tmp/rawgentic-update-docs-test/learning-config-new-doc/projects/sentinel-app/.rawgentic.json'. The modified JSON is shown with the updated primaryFiles array. The Summary also lists '.rawgentic.json needs update: Yes'. Like the with_skill run, this is a described plan rather than actual execution."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "The without_skill run identified that CONTRIBUTING.md should be added to primaryFiles",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 5b reasoning states: 'The .rawgentic.json config tracks which files are primary documentation. Adding the new guide here ensures it is recognized by any tooling that reads this config.'"
+    },
+    {
+      "claim": "The workflow explored the filesystem and found no CONTRIBUTING.md",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 3 shows 'Result: Empty directory -- no files present' for the docs/ directory. Step 4 shows 'glob **/*CONTRIBUTING* across the workspace directory. Result: No files found.'"
+    },
+    {
+      "claim": "docs/README.md referenced in config does not exist on disk",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 3 states 'The config references docs/README.md as a primary doc file, but it does not exist yet.' The Summary table confirms: 'docs/README.md exists: No -- referenced in config but missing'."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "The without_skill run also passes both assertions, meaning the skill provides no measurable advantage on this eval. The without_skill run independently figured out that CONTRIBUTING.md should be added to primaryFiles. Consider adding assertions that test skill-specific behaviors like: quoting the learning-config directive, following the read-modify-write protocol, or setting documentation.format. The with_skill run did set format to 'markdown' -- the without_skill run did not. An assertion checking for documentation.format would discriminate between the two."
+      }
+    ],
+    "overall": "Both runs pass equally. The without_skill run lacks the skill's learning-config directive awareness (e.g., did not set documentation.format) but this is not tested by any assertion."
+  }
+}

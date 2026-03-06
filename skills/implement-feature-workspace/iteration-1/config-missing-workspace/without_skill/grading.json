@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {
+      "text": "stops-with-new-project-ref",
+      "passed": true,
+      "evidence": "Transcript states: \"STOPPED -- No rawgentic workspace found.\" and \"To proceed: Run /rawgentic:new-project to initialize a workspace and register a project.\" The /rawgentic:new-project reference is present."
+    }
+  ],
+  "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.00}
+}

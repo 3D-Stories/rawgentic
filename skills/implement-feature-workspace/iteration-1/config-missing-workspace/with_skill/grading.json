@@ -1,0 +1,10 @@
+{
+  "expectations": [
+    {
+      "text": "stops-with-new-project-ref",
+      "passed": true,
+      "evidence": "Transcript states: \"No rawgentic workspace found. Run /rawgentic:new-project to initialize a workspace before using /rawgentic:implement-feature.\" and \"STOPPED at config-loading step 1. No workflow steps were executed.\""
+    }
+  ],
+  "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": 1.00}
+}

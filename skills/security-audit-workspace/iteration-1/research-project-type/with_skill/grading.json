@@ -1,0 +1,44 @@
+{
+  "expectations": [
+    {
+      "text": "adapts-for-research",
+      "passed": true,
+      "evidence": "Step 1 Scope Determination explicitly states: 'Adaptation for research project type: - No deployed services to audit -- skip deployment-related checks - No API endpoints, no services config -- skip endpoint/auth middleware mapping - Focus areas: data handling, access controls, research data integrity, secrets management, dependency security, notebook security'. Step 2 confirms: 'Since this is a research project with project_type: \"research\" and no services, endpoints, or deployed infrastructure, the attack surface enumeration is adapted to focus on research-relevant vectors.' DoS analysis in Step 3 explicitly notes: 'No deployed services to attack with DoS... DoS is not applicable to a non-deployed research project.'"
+    },
+    {
+      "text": "focuses-on-data-security",
+      "passed": true,
+      "evidence": "The audit focuses on: (1) data handling -- findings T-1 'No integrity verification for research data', R-1 'No audit trail for data access/modifications'; (2) research data -- findings address research dataset integrity, data provenance, and data versioning (DVC recommendation); (3) access controls -- finding S-1 'No authentication on local-filesystem data channel', finding E-1 'Jupyter server may bind to all interfaces, allowing remote code execution'; (4) information disclosure via notebook outputs (I-1). The entire Step 2 input boundary mapping is research-adapted: 'Local filesystem reads -- research datasets, configuration files, model weights'."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "6 findings total: 0 Critical, 0 High, 2 Medium, 4 Low",
+      "type": "factual",
+      "verified": true,
+      "evidence": "STRIDE Findings Summary table lists S-1 (Low), T-1 (Low), R-1 (Low), I-1 (Medium), I-2 (Low), E-1 (Medium). Count: 2 Medium + 4 Low = 6 total, 0 Critical, 0 High. Matches the claim."
+    },
+    {
+      "claim": "Quality gate passed all three judges",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 5 shows: Completeness Judge 'Verdict: PASS with caveat', Accuracy Judge 'Verdict: PASS', Remediation Judge 'Verdict: PASS with additions'. All three pass."
+    },
+    {
+      "claim": "Jupyter notebook output leakage is a Medium severity finding",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Finding I-1 is rated Medium and describes a well-known risk: 'Jupyter notebooks can inadvertently embed sensitive information in cell outputs -- API keys, tokens, database credentials, PII from datasets'. This severity is appropriate for a research project where notebooks are a primary tool."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [],
+    "overall": "Assertions are appropriate for verifying research-project adaptation. Both assertions pass for with_skill and without_skill runs, so they do not discriminate between the two. However, the with_skill run produces a more structured output following the WF9 step sequence with formal critique, while without_skill produces a more generic audit format. An assertion checking for the formal quality-gate/critique step would differentiate them."
+  }
+}

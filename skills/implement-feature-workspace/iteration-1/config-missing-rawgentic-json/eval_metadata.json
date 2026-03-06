@@ -1,0 +1,9 @@
+{
+  "eval_id": 2,
+  "eval_name": "config-missing-rawgentic-json",
+  "prompt": "Implement issue #10 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-missing-rawgentic-json/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-missing-rawgentic-json/projects/missing-config-app. The issue is: 'Add user authentication'. Save a transcript of your work to the outputs directory.",
+  "assertions": [
+    {"text": "stops-with-setup-ref", "description": "/rawgentic:setup mentioned in response"},
+    {"text": "workflow-does-not-proceed", "description": "No Step 1+ workflow output after error"}
+  ]
+}

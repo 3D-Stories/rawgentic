@@ -1,0 +1,9 @@
+{
+  "eval_id": 1,
+  "eval_name": "dedup-sentinel-repo",
+  "prompt": "Create an issue for adding WebSocket support to the API. Workspace: /tmp/rawgentic-create-issue-test/dedup-sentinel-repo/.rawgentic_workspace.json, project: /tmp/rawgentic-create-issue-test/dedup-sentinel-repo/projects/sentinel-app. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "uses-sentinel-repo", "description": "eval-org/sentinel-repo-42 appears in gh commands"},
+    {"text": "dedup-check-shown", "description": "Duplicate check or existing issues searched before creation"}
+  ]
+}

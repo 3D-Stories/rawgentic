@@ -1,0 +1,20 @@
+{
+  "expectations": [
+    {
+      "text": "skips-tdd-steps",
+      "passed": true,
+      "evidence": "Transcript explicitly states: \"has_tests == false --> Use Implement-Verify mode (not TDD) in Steps 5 and 8\". Step 5 shows \"Mode: Implement-Verify (because capabilities.has_tests == false)\" with IMPLEMENT/VERIFY phases instead of RED/GREEN/REFACTOR. Step 8 header confirms: \"Mode: Implement-Verify (capabilities.has_tests == false)\"."
+    },
+    {
+      "text": "skips-ci-gate",
+      "passed": true,
+      "evidence": "Step 13 states: \"capabilities.has_ci == false --> No CI configured. Skipping Gate 2.\" and logs: \"No CI configured -- skipping Gate 2\". Completion checklist marks item 6 as \"[N/A] (conditional: has_ci) CI passed -- has_ci == false, skipped\"."
+    },
+    {
+      "text": "skips-deploy",
+      "passed": true,
+      "evidence": "Step 14 states: \"capabilities.has_deploy == false --> No automated deployment configured.\" and \"Since this is a scripts project with no deployment target, there is nothing to deploy.\" Step 15 states: \"capabilities.has_deploy == false AND no deployment was performed --> Skip.\" Completion checklist marks item 7 as \"[N/A] (conditional: has_deploy) Deployment verified -- has_deploy == false, skipped\"."
+    }
+  ],
+  "summary": {"passed": 3, "failed": 0, "total": 3, "pass_rate": 1.00}
+}

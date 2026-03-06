@@ -1,0 +1,20 @@
+{
+  "expectations": [
+    {
+      "text": "no-test-commands-attempted",
+      "passed": true,
+      "evidence": "The transcript explicitly notes 'capabilities.has_tests = false' and 'No test framework configured'. No pytest, vitest, jest, or npm test commands appear anywhere in the transcript. Step 5 fix plan states: 'Task 1: Write failing reproduction test -- SKIPPED -- no test framework configured' and 'Task 3: Add regression/edge case tests -- SKIPPED -- no test framework configured'. Step 7 is titled 'Bug Fix (Verify Mode -- No TDD)' and sub-step 7d is 'Verify by Reasoning (replaces run full suite)'. Step 8 confirms: 'All tests pass? N/A -- capabilities.has_tests = false. No test suite to run.' Step 11: 'CI Verification: SKIPPED (no CI provider in config)'. No test execution commands were attempted."
+    },
+    {
+      "text": "uses-verify-mode",
+      "passed": true,
+      "evidence": "The transcript explicitly adopts verify mode. The 'Adaptation: No Tests -- Verify Mode' section states: 'The reproduce-first TDD principle from WF3 cannot be followed as written because there is no test framework configured. Adaptation strategy: Skip Step 7's TDD RED/GREEN/REFACTOR cycle... Replace with manual verify mode: read the buggy code, identify the root cause, apply the fix, and verify correctness by code inspection and reasoning'. Step 7 is titled 'Bug Fix (Verify Mode -- No TDD)' with sub-steps: '7a. Identify the Bug (replaces RED phase)', '7b. Apply the Fix (replaces GREEN phase)', '7d. Verify by Reasoning (replaces run full suite)'. A manual verification table tests 5 inputs against expected/actual outputs. The completion summary states: 'TDD reproduce-first cycle replaced with verify mode (code inspection)'."
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  }
+}

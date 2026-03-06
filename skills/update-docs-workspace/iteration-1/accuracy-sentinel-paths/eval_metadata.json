@@ -1,0 +1,8 @@
+{
+  "eval_id": 1,
+  "eval_name": "accuracy-sentinel-paths",
+  "prompt": "Update project documentation to reflect recent API changes. Workspace: /tmp/rawgentic-update-docs-test/accuracy-sentinel-paths/.rawgentic_workspace.json, project: /tmp/rawgentic-update-docs-test/accuracy-sentinel-paths/projects/sentinel-app. Save a transcript to the outputs directory.",
+  "assertions": [
+    {"text": "uses-config-doc-paths", "description": "References primaryFiles from config (SENTINEL-ARCHITECTURE.md, SENTINEL-API-SPEC.md, SENTINEL-DEPLOY-GUIDE.md)"}
+  ]
+}

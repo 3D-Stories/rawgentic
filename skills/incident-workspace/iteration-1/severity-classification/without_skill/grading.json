@@ -1,0 +1,59 @@
+{
+  "expectations": [
+    {
+      "text": "classifies-severity",
+      "passed": true,
+      "evidence": "Step 1 of the transcript is titled 'Severity Classification' and states: 'Severity: SEV-1 / Critical'. The justification references 'Complete outage', 'All services down', '500 errors everywhere', and 'Potential data loss'. This correctly classifies the incident as high/critical severity."
+    },
+    {
+      "text": "phase-a-first",
+      "passed": false,
+      "evidence": "The transcript does not follow a phased incident response structure. There is no 'Phase A (stabilize)' followed by 'Phase B (RCA)' pattern. The transcript proceeds: Step 1 (severity classification) -> Step 2 (information gathering from config) -> Step 3 (attempted diagnostics, all blocked) -> Step 4 (recommended incident response plan, not executed) -> Step 5 (gaps and concerns) -> Outcome (unable to resolve). No stabilization actions were taken or even simulated before the analysis/recommendations. The transcript is a diagnostic report, not an incident response execution. While Step 4 does list 'Immediate Actions (First 5 minutes)' before 'Triage Actions (5-15 minutes)', these are recommendations for a human operator, not actions the agent performed. The assertion requires Phase A stabilization actions to come before Phase B RCA actions in the agent's own workflow, which did not happen -- the agent never executed or simulated either phase."
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "failed": 1,
+    "total": 2,
+    "pass_rate": 0.5
+  },
+  "claims": [
+    {
+      "claim": "All diagnostic commands were blocked by environment restrictions",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 3 states: 'curl http://sentinel-api.internal:8443/health/sentinel-check -- Could not reach service (environment restriction)', 'ping 10.0.42.1 -- Could not reach host (environment restriction)', 'ssh prod-sentinel-1 -- Could not connect (environment restriction)'. The agent correctly identified and reported the environment limitations."
+    },
+    {
+      "claim": "Single host is a single point of failure",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Step 5 identifies: 'Only one production host (prod-sentinel-1). No secondary or failover host is configured. A single host failure means complete outage.' This is a valid observation from the config. Note: the with_skill run's config shows two hosts (prod-sentinel-1 and prod-sentinel-2), while this without_skill run's config appears to show only one, suggesting different test fixtures."
+    },
+    {
+      "claim": "Status is 'Unable to resolve' due to no network access",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The Outcome section states: 'Status: Unable to resolve -- no network access to production environment from this agent context.'"
+    },
+    {
+      "claim": "A prioritized incident response plan was produced",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Step 4 provides a structured plan with 'Immediate Actions (First 5 minutes)' (4 items), 'Triage Actions (5-15 minutes)' (4 items), 'Communication' (2 items), and 'Rollback Consideration' (1 item). The plan is prioritized and includes specific commands."
+    }
+  ],
+  "user_notes_summary": null,
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "phase-a-first",
+        "reason": "This assertion effectively differentiates the with_skill and without_skill runs. The with_skill run executes a full phased workflow (stabilize then analyze), while the without_skill run produces only a static report. However, the assertion wording ('Phase A (stabilize) actions come before Phase B (RCA)') could be clearer about whether it requires the agent to actually perform/simulate stabilization actions or merely mention them in a recommended order. The without_skill run does recommend immediate actions before analysis in its plan -- but those are recommendations for a human, not actions the agent took."
+      },
+      {
+        "reason": "No assertion checks whether the agent actually attempts to resolve the incident (even in simulated form) versus producing only a report. The without_skill run explicitly states it could not resolve the incident and recommends a human operator take over. This is a fundamental capability gap that only the phase-a-first assertion partially captures."
+      }
+    ],
+    "overall": "The assertions differentiate the runs reasonably well for this scenario (1.0 vs 0.5 pass rate). The classifies-severity assertion passes for both runs since both correctly identify SEV-1. The phase-a-first assertion correctly fails the without_skill run, which does not execute a phased incident workflow."
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "expectations": [
+    {
+      "text": "follows-config-not-filesystem",
+      "passed": false,
+      "evidence": "Transcript explicitly states the opposite: \"Decision: Trust the filesystem over the config absence. The project clearly intends to use Jest for testing based on the actual files present. The config simply omits the testing section rather than explicitly disabling it.\" The agent followed filesystem over config."
+    },
+    {
+      "text": "does-not-run-jest",
+      "passed": false,
+      "evidence": "The agent wrote Jest tests (\"Created __tests__/rate-limiter.test.ts\") and attempted to run them: \"Attempted to run npm install and npx jest to verify the tests pass, but Bash permission was denied for both commands.\" The agent tried to run jest even though the config has no testing section."
+    }
+  ],
+  "summary": {"passed": 0, "failed": 2, "total": 2, "pass_rate": 0.00}
+}

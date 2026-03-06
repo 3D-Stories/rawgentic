@@ -1,0 +1,34 @@
+{
+  "skill_name": "rawgentic:update-docs",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Update project documentation to reflect recent API changes. Workspace: /tmp/rawgentic-update-docs-test/accuracy-sentinel-paths/.rawgentic_workspace.json, project: /tmp/rawgentic-update-docs-test/accuracy-sentinel-paths/projects/sentinel-app. Save a transcript to the outputs directory.",
+      "expected_output": "Agent uses primaryFiles from config (sentinel paths), not hardcoded README paths",
+      "files": [],
+      "expectations": [
+        "Uses primaryFiles from config (SENTINEL-ARCHITECTURE.md, SENTINEL-API-SPEC.md, SENTINEL-DEPLOY-GUIDE.md)"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Update documentation. Workspace: /tmp/rawgentic-update-docs-test/learning-config-new-doc/.rawgentic_workspace.json, project: /tmp/rawgentic-update-docs-test/learning-config-new-doc/projects/sentinel-app. I've just added a new CONTRIBUTING.md guide. Save a transcript to the outputs directory.",
+      "expected_output": "Agent discovers new doc file and adds it to config.documentation.primaryFiles[]",
+      "files": [],
+      "expectations": [
+        "New file added to documentation.primaryFiles[] in config",
+        ".rawgentic.json written/updated with new doc path"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Update documentation for the research project. Workspace: /tmp/rawgentic-update-docs-test/research-project-docs/.rawgentic_workspace.json, project: /tmp/rawgentic-update-docs-test/research-project-docs/projects/research-proj. Save a transcript to the outputs directory.",
+      "expected_output": "Agent adapts doc structure for research project type",
+      "files": [],
+      "expectations": [
+        "Adapts documentation for research project (methodology, findings, dataset)",
+        "No deployment or API docs unless relevant to the research"
+      ]
+    }
+  ]
+}

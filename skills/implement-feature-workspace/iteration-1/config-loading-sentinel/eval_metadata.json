@@ -1,0 +1,13 @@
+{
+  "eval_id": 1,
+  "eval_name": "config-loading-sentinel",
+  "prompt": "Implement issue #42 for me. The workspace file is at /tmp/rawgentic-implement-feature-test/config-loading-sentinel/.rawgentic_workspace.json and the project is at /tmp/rawgentic-implement-feature-test/config-loading-sentinel/projects/sentinel-app. The issue is: 'Add health check endpoint that returns service status'. When asked for confirmation, say 'yes, looks good' to approve. Save a transcript of your work to the outputs directory.",
+  "assertions": [
+    {"text": "reads-sentinel-repo", "description": "sentinel-repo-42 appears in transcript"},
+    {"text": "uses-trunk-branch", "description": "trunk referenced as default branch (not main or master)"},
+    {"text": "uses-sentinel-test-cmd", "description": "vitest run --reporter=verbose --sentinel appears in transcript"},
+    {"text": "detects-circleci", "description": "circleci mentioned as CI provider (not github-actions)"},
+    {"text": "detects-cockroachdb", "description": "cockroachdb mentioned as database type"},
+    {"text": "uses-rsync-deploy", "description": "rsync mentioned as deploy method"}
+  ]
+}

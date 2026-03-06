@@ -1,0 +1,53 @@
+{
+  "expectations": [
+    {
+      "text": "acknowledges-no-tests",
+      "passed": true,
+      "evidence": "The transcript acknowledges the absence of tests in multiple places. Under 'Project config': 'Tests: not configured' and 'CI: not configured'. Under 'Analysis' point 2: 'No tests exist: The .rawgentic.json config does not define any test commands. Even if source code existed, there would be no automated way to verify that a refactor preserves existing behavior.' The Risk Assessment section also states: 'Without tests, any refactoring could silently break existing behavior with no automated detection.'"
+    },
+    {
+      "text": "behavioral-preservation-strategy",
+      "passed": false,
+      "evidence": "While the without-skill run does mention mitigations under 'Risk Assessment (No-Tests Degradation)' ('Write characterization tests capturing current behavior before making changes', 'Add integration tests', 'Set up CI', 'Use type checking (mypy)', 'Perform manual smoke testing'), these are framed as 'Recommended mitigations before refactoring' -- hypothetical recommendations for a scenario where source code exists, not an actual behavioral preservation strategy applied to the current task. The run took no actions ('Actions Taken: None') and did not demonstrate applying any behavioral preservation approach such as API contract analysis, reference graph verification, or structured behavioral documentation. The without-skill run identified the problem but did not articulate a concrete behavioral preservation strategy the way the with-skill run did (with its 5-strategy adaptation framework and step-by-step comparison table)."
+    }
+  ],
+  "summary": {
+    "passed": 1,
+    "failed": 1,
+    "total": 2,
+    "pass_rate": 0.5
+  },
+  "claims": [
+    {
+      "claim": "The project directory contains only .rawgentic.json with no source code",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Discovery step 3: 'The project directory contains only .rawgentic.json. No source code files exist (no .py files, no data pipeline code, no modules, no packages).' Step 4: 'Confirmed only two files exist across the entire workspace: the workspace JSON and the project JSON.'"
+    },
+    {
+      "claim": "No code changes were made",
+      "type": "process",
+      "verified": true,
+      "evidence": "Transcript states 'Actions Taken: None. No code changes were made because no source code exists to refactor.' and 'Files changed: 0'"
+    },
+    {
+      "claim": "Regression risk is HIGH without tests",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Risk Assessment states 'Regression risk: HIGH -- Without tests, any refactoring could silently break existing behavior with no automated detection.'"
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "behavioral-preservation-strategy",
+        "reason": "This is a borderline case. The without-skill run does list preservation mitigations (characterization tests, integration tests, type checking, smoke testing), but frames them as future recommendations rather than an applied strategy. The grading decision hinges on whether 'uses behavioral preservation strategy' means 'describes one' or 'applies one in the workflow.' I graded FAIL because the with-skill run provides a substantially more developed and integrated approach, and the assertion description says 'Uses behavioral preservation strategy' (implying active application). If the intent is to check mere awareness, this should be clarified."
+      },
+      {
+        "assertion": "acknowledges-no-tests",
+        "reason": "Both with-skill and without-skill pass this assertion, which is expected -- any competent agent should notice the missing testing config. This assertion has low discriminating power between with-skill and without-skill runs."
+      }
+    ],
+    "overall": "The without-skill run demonstrates competent discovery and risk assessment but lacks the structured behavioral preservation framework that differentiates the with-skill run. The acknowledges-no-tests assertion does not discriminate between runs; behavioral-preservation-strategy provides the key differentiation."
+  }
+}

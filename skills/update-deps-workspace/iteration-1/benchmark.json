@@ -1,0 +1,135 @@
+{
+  "metadata": {
+    "skill_name": "update-deps",
+    "timestamp": "2026-03-06T21:40:56Z",
+    "model": "claude-opus-4-6",
+    "scenarios": 2
+  },
+  "runs": [
+    {
+      "eval_id": 2,
+      "eval_name": "config-techstack-update",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "updates-techstack",
+          "passed": true,
+          "evidence": "Step 7 ('Config Update') explicitly shows the techStack was updated. The config diff shows: 'Before: \"techStack\": [{\"name\": \"node\", \"version\": \"20.11.0\"}, {\"name\": \"react\", \"version\": \"18.2.0\"}]' changed to 'After: \"techStack\": [{\"name\": \"node\", \"version\": \"20.11.0\"}, {\"name\": \"react\", \"version\": \"19.0.0\"}]'. The transcript also states: 'Updated techStack entry for react from 18.2.0 to 19.0.0.' and verification step confirms: 'Re-read .rawgentic.json after update -- confirmed react version is now 19.0.0.'"
+        },
+        {
+          "text": "writes-config-back",
+          "passed": true,
+          "evidence": "Step 7 documents three explicit actions: '1. Read .rawgentic.json -- confirmed techStack contained react at version 18.2.0. 2. Updated techStack entry for react from 18.2.0 to 19.0.0. 3. Wrote updated config back to .rawgentic.json.' The verification step confirms the write succeeded: 'Re-read .rawgentic.json after update -- confirmed react version is now 19.0.0. No other fields were modified. Node version remains 20.11.0 (unchanged). All existing non-null values preserved per learning-config rules.'"
+        }
+      ]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "config-techstack-update",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "updates-techstack",
+          "passed": true,
+          "evidence": "The transcript under 'Actions Taken > 3. Updated .rawgentic.json techStack entry' states: 'Changed {\"name\": \"react\", \"version\": \"18.2.0\"} to {\"name\": \"react\", \"version\": \"19.0.0\"}. Verified the file was correctly updated.' The Result section confirms: 'Updated .rawgentic.json tech stack from React 18.2.0 to React 19.0.0.' The Files Modified section lists the specific file and change."
+        },
+        {
+          "text": "writes-config-back",
+          "passed": true,
+          "evidence": "The transcript states under Actions Taken step 3: 'Changed {\"name\": \"react\", \"version\": \"18.2.0\"} to {\"name\": \"react\", \"version\": \"19.0.0\"}. Verified the file was correctly updated.' The Files Modified section explicitly lists: '/tmp/rawgentic-update-deps-test/config-techstack-update/projects/sentinel-app/.rawgentic.json -- changed react version from 18.2.0 to 19.0.0'. This confirms the file was written back."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "security-first-sentinel",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 2,
+        "failed": 0,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "security-first-ordering",
+          "passed": true,
+          "evidence": "The transcript explicitly demonstrates security-first ordering under 'Step 3: Plan Update Strategy'. The APPLICATION ORDER section shows: (1) jsonwebtoken [SECURITY/CRITICAL], (2) lodash [SECURITY/HIGH], (3) express [SECURITY/HIGH], (4) axios [SECURITY/MEDIUM] -- all four security updates are applied BEFORE any non-security updates (typescript [MINOR], helmet [MAJOR], vitest [MAJOR]). The transcript further explains: 'Security updates are prioritized above all other categories. Within security, they are ordered by severity: CRITICAL > HIGH > MEDIUM > LOW.' Step 5 applies them in this exact order. The analysis section confirms: 'all 4 security updates are applied before ANY non-security updates, even though some security updates are major version bumps that would normally be deferred.'"
+        },
+        {
+          "text": "uses-sentinel-test-cmd",
+          "passed": true,
+          "evidence": "The transcript shows the test command 'npx vitest run --reporter=verbose --sentinel' being used after every update in Step 5. For example, after Update 1/7 (jsonwebtoken): 'npx vitest run --reporter=verbose --sentinel'. The same command appears for all 7 updates. The Config Loading section explicitly notes: 'Test command: npx vitest run --reporter=verbose --sentinel (vitest with --sentinel flag)' and the final analysis states: 'The test command npx vitest run --reporter=verbose --sentinel is taken directly from config and used as-is. The workflow does not modify or interpret the --sentinel flag.' This matches the config's testing.frameworks[0].command value."
+        }
+      ]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "security-first-sentinel",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.0,
+        "passed": 0,
+        "failed": 2,
+        "total": 2,
+        "time_seconds": 0.0,
+        "tokens": 0
+      },
+      "expectations": [
+        {
+          "text": "security-first-ordering",
+          "passed": false,
+          "evidence": "The transcript describes a general security-first approach in Step 4a ('Audit for known vulnerabilities first... Prioritize security patches... Update patch versions... Update minor versions... Evaluate major versions') but this is a high-level methodology description, not an actual demonstration of security-first ordering applied to specific packages. No specific packages were identified, no audit was run, and no updates were applied in any order. The transcript explicitly states: 'No dependency updates could be performed. The project is a configuration-only stub.' Without actual updates being ordered security-first, this assertion fails."
+        },
+        {
+          "text": "uses-sentinel-test-cmd",
+          "passed": false,
+          "evidence": "The transcript acknowledges the test command from config ('npx vitest run --reporter=verbose --sentinel') in Step 4b point 3 as something that would be run after each security update. However, the command was never actually used for verification. Step 4c states: 'No test files exist -- Cannot run npx vitest run --reporter=verbose --sentinel to verify.' The assertion requires that the sentinel test command is used for verification, not merely referenced."
+        }
+      ]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 4
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.5
+      },
+      "runs": 2,
+      "total_assertions": 4,
+      "passed_assertions": 2
+    },
+    "delta": {
+      "pass_rate": "+0.50"
+    }
+  }
+}

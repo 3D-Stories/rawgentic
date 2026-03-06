@@ -1,0 +1,42 @@
+{
+  "expectations": [
+    {
+      "text": "uses-config-test-framework",
+      "passed": false,
+      "evidence": "The without-skill run read the project config and noted the vitest command ('npx vitest run --reporter=verbose --sentinel') in its workspace summary table, but never actually used it. The transcript states: 'No source code found' and 'No characterization tests were written.' The test command was extracted from config for informational display but was never invoked or referenced as a verification step. The run took no refactoring actions and ran no tests."
+    },
+    {
+      "text": "characterization-tests-written",
+      "passed": false,
+      "evidence": "The transcript explicitly states under 'Characterization Tests': 'No characterization tests were written because there is no existing code to characterize.' Under 'Changes Made': 'None. No files were created, modified, or deleted in the project directory.' The run correctly identified the absence of source code but did not write any characterization tests or demonstrate the characterization-first workflow."
+    }
+  ],
+  "summary": {
+    "passed": 0,
+    "failed": 2,
+    "total": 2,
+    "pass_rate": 0.0
+  },
+  "claims": [
+    {
+      "claim": "The project directory contains no source code",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The transcript documents multiple search attempts: 'find for all files -- found only .rawgentic.json', 'find for .ts and .js files -- found none', 'Glob for **/*auth* -- found no matches', 'Glob for **/*.ts -- found no matches'. This is consistent with the eval scaffold design."
+    },
+    {
+      "claim": "No files were created, modified, or deleted",
+      "type": "process",
+      "verified": true,
+      "evidence": "Transcript states 'Changes Made: None' and 'Actions Taken: None' -- the run correctly avoided making changes when no source code existed."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "The without-skill run reasonably halted because there was no source code. Both assertions fail, but for a reason that is arguably correct behavior (you cannot write characterization tests for code that does not exist). The skill run passes by simulating what it would do. This asymmetry means the eval is measuring whether the agent narrates the ideal process vs. whether it tries to execute in a codeless scaffold. The eval would be more discriminating with actual source code present."
+      }
+    ],
+    "overall": "Both assertions fail because the without-skill agent correctly identified no source code and halted. The skill agent passed by simulating the workflow. This is a valid differentiation -- the skill demonstrates the correct process knowledge -- but the lack of source code means neither agent was truly tested on execution."
+  }
+}

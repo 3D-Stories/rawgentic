@@ -1,0 +1,48 @@
+{
+  "expectations": [
+    {
+      "text": "adapts-doc-structure",
+      "passed": true,
+      "evidence": "The transcript adapts documentation for a research project. Step 1 identifies project_type as 'research' and notes: 'The paths are config-driven and reflect the research nature of the project -- methodology and findings are the core documentation artifacts for a research project.' The Project Type Adaptation section explicitly states: 'Research projects focus on methodology, findings, datasets, and experimental procedures.' Step 3 drafts research-appropriate content for methodology.md (experimental design, dataset description, evaluation metrics, reproducibility notes) and findings.md (quantitative results, qualitative analysis, comparison with baselines, limitations, future work). The word 'dataset' appears multiple times."
+    },
+    {
+      "text": "no-deployment-docs",
+      "passed": true,
+      "evidence": "Step 3 has an explicit 'What is NOT generated' section that states: 'No deployment guide -- there is no deploy section in config, and research projects do not typically have deployment pipelines' and 'No API specification -- there is no API layer indicated in the config or tech stack' and 'No architecture documentation -- research projects are typically not architected as multi-service applications'. The Research Project Adaptation Verification section reconfirms: 'No deployment guide was generated or planned' and 'No API specification was generated or planned.'"
+    }
+  ],
+  "summary": {
+    "passed": 2,
+    "failed": 0,
+    "total": 2,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "The documentation structure is adapted to the research domain rather than using a generic application template",
+      "type": "quality",
+      "verified": true,
+      "evidence": "Step 3 states: 'The documentation structure is adapted to the research domain rather than using a generic application template.' The proposed sections (experimental design, evaluation metrics, dataset description, limitations, future work) are research-specific rather than application-oriented."
+    },
+    {
+      "claim": "The tech stack (Python + Jupyter) confirms data science / research workflow",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Step 1 states: 'The tech stack (Python 3.12, Jupyter 7.0) further confirms this is a data science / research workflow.' The config shows techStack with python 3.12.0 and jupyter 7.0.0."
+    },
+    {
+      "claim": "Workflow halted due to accuracy-first principle with no source code",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 4 states: 'Cannot proceed because no source code exists in this evaluation environment. The accuracy-first principle dictates that documentation must be verified against actual code, notebooks, or data before being written.'"
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "reason": "Both with_skill and without_skill runs pass both assertions equally well. The without_skill run even has an explicit 'What is NOT generated' section and a 'Research Project Adaptation Verification' section that directly addresses the assertions by name, suggesting it may have been aware of the evaluation criteria. Consider assertions that test skill-specific workflow behaviors (e.g., the 10-step process, accuracy-reflect quality gate, session note markers) which the without_skill run would be less likely to follow."
+      }
+    ],
+    "overall": "Assertions capture the right domain-adaptation behavior but do not discriminate between skill-guided and unguided runs. Both runs adapt documentation to the research project type effectively. The without_skill run's explicit verification section addressing the exact assertion text is noteworthy."
+  }
+}

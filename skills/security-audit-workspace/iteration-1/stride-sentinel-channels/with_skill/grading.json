@@ -1,0 +1,54 @@
+{
+  "expectations": [
+    {
+      "text": "enumerates-config-channels",
+      "passed": true,
+      "evidence": "Step 1 Scope Determination explicitly lists: 'Data channels in scope: grpc-api, mqtt-broker, sentinel-ws (all 3 from config.security.dataChannels[])'. Step 2 maps all three in a table with protocol, auth mechanism, and config path details."
+    },
+    {
+      "text": "stride-on-config-channels",
+      "passed": true,
+      "evidence": "Step 3 applies STRIDE independently to each config channel in dedicated sections: '3.1 STRIDE Analysis: grpc-api (mTLS)', '3.2 STRIDE Analysis: mqtt-broker (NO AUTH)', '3.3 STRIDE Analysis: sentinel-ws (OAuth2-PKCE)'. All 6 STRIDE categories are evaluated per channel. No generic Express/Socket.IO defaults appear anywhere -- findings are specific to gRPC, MQTT, and WebSocket protocols as declared in config."
+    },
+    {
+      "text": "uses-config-auth",
+      "passed": true,
+      "evidence": "Step 1 maps auth mechanisms from config: 'mTLS -> applies to grpc-api (configPath: certs/)' and 'OAuth2-PKCE -> applies to sentinel-ws (configPath: auth/oauth.config.ts)'. STRIDE findings reference these directly: S-GRPC-01 discusses mTLS certificate validation, S-WS-01 discusses OAuth2-PKCE code verifier entropy and S256. The mqtt-broker is correctly flagged as having NO auth mechanism from config."
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3,
+    "pass_rate": 1.0
+  },
+  "claims": [
+    {
+      "claim": "33 findings identified across 3 channels (later revised to 34 after quality gate)",
+      "type": "factual",
+      "verified": true,
+      "evidence": "The STRIDE Summary Table shows 10 + 11 + 12 = 33 findings. Step 5 adds X-CHAN-01, bringing total to 34. Finding IDs are enumerated and can be counted."
+    },
+    {
+      "claim": "4 Critical findings, all on mqtt-broker",
+      "type": "factual",
+      "verified": true,
+      "evidence": "Critical findings are S-MQTT-01, S-MQTT-02, I-MQTT-01, E-MQTT-01 -- all in section 3.2 (mqtt-broker). No other channel has Critical findings."
+    },
+    {
+      "claim": "Quality gate critique identified 1 blind spot (cross-channel lateral movement)",
+      "type": "process",
+      "verified": true,
+      "evidence": "Step 5 Completeness Judge identifies: 'Cross-channel attacks not assessed' and adds finding X-CHAN-01 with High severity."
+    }
+  ],
+  "eval_feedback": {
+    "suggestions": [
+      {
+        "assertion": "stride-on-config-channels",
+        "reason": "This assertion checks that STRIDE is applied to config channels rather than defaults, but it could be strengthened by requiring a minimum number of distinct findings per channel, ensuring the analysis has genuine depth rather than just correct channel names in section headers."
+      }
+    ],
+    "overall": "Assertions are well-targeted for this scenario. They verify config-driven behavior (channels, auth) rather than generic output, which is appropriately discriminating."
+  }
+}

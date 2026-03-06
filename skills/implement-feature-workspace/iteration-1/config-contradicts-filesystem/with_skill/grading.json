@@ -1,0 +1,15 @@
+{
+  "expectations": [
+    {
+      "text": "follows-config-not-filesystem",
+      "passed": true,
+      "evidence": "Transcript explicitly addresses the contradiction and decides: \"I follow the config. The capabilities.has_tests is false because the config has no testing section. This means: The workflow will use Implement-Verify mode (not TDD).\" The decision section states: \"The config is the single source of truth for project capabilities. If the config does not declare a testing framework, the workflow treats the project as untested, regardless of what files exist on disk.\""
+    },
+    {
+      "text": "does-not-run-jest",
+      "passed": true,
+      "evidence": "Transcript states: \"Jest will NOT be run as part of the workflow\" and \"Would jest be run? No. Jest is not in the capabilities. The workflow would use verification commands (syntax checks, health checks, dry-runs) instead of test suites.\" No jest/vitest/pytest/npm test command appears anywhere in the execution steps."
+    }
+  ],
+  "summary": {"passed": 2, "failed": 0, "total": 2, "pass_rate": 1.00}
+}
