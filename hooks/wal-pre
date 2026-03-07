@@ -1,0 +1,19 @@
+#!/bin/bash
+# WAL Pre-Tool Logger — Logs INTENT before mutation tool execution.
+# Hook: PreToolUse (matcher: Bash|Edit|Write|NotebookEdit|Task)
+# Appends to $CWD/claude_docs/wal.jsonl
+# Error-tolerant: always exits 0 even if logging fails.
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+_do_log() {
+  set -euo pipefail
+  source "$SCRIPT_DIR/wal-lib.sh"
+  wal_parse_input
+  wal_init_file
+  wal_extract_summary
+  wal_append_phase "INTENT" --arg summary "$WAL_SUMMARY" --arg cwd "$WAL_CWD"
+}
+
+_do_log 2>/dev/null || true
+exit 0
