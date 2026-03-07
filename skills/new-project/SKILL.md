@@ -140,7 +140,11 @@ Read `.rawgentic_workspace.json`, then:
 
 **Path conversion:** The `path` field MUST be a relative path from the workspace root (e.g., `./projects/my-app`), NOT an absolute path. This ensures portability across machines. To convert: take the absolute path from Step 1, strip the `WORKSPACE_ROOT` prefix, and prepend `./`. If the path is already relative, use it as-is.
 
-3. Write the updated workspace file back (full read-modify-write — never patch in place).
+3. Write the updated workspace file back (full read-modify-write -- never patch in place).
+4. **Register in session registry:** Create `claude_docs/session_notes/` directory if it doesn't exist. Append a line to `claude_docs/session_registry.jsonl`:
+   ```json
+   {"session_id":"<your session_id>","project":"<name>","project_path":"./<relative-path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
+   ```
 
 Confirm to the user:
 > Registered **<name>** as the active project.
