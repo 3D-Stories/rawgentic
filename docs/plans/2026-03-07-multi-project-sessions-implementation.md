@@ -246,6 +246,9 @@ Replace line 37:
 ```
 With:
 ```bash
+        # Multi-active fallback: with multiple active projects, pick the first one.
+        # The stop hook needs *some* project name for WAL entry. Best-effort is acceptable here
+        # because the session is ending — the WAL entry is informational, not authoritative.
         PROJECT=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | first // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
 ```
 
@@ -495,7 +498,11 @@ fi
 [[ "$FILE_PATH" != /* ]] && exit 0
 
 # Resolve workspace root (directory containing .rawgentic_workspace.json)
-WORKSPACE_ROOT=$(cd "$(dirname "$WORKSPACE_FILE")" && pwd)
+WORKSPACE_ROOT=$(cd "$(dirname "$WORKSPACE_FILE")" && pwd 2>/dev/null) || {
+    # Path resolution failed — fail-open, log to stderr for debugging
+    echo "wal-bind-guard: could not resolve workspace root from $WORKSPACE_FILE" >&2
+    exit 0
+}
 
 # Check if file is under a DIFFERENT project's directory
 VIOLATION=$("$JQ" -r --arg file "$FILE_PATH" --arg bound "$BOUND_PROJECT" --arg root "$WORKSPACE_ROOT" '
@@ -597,7 +604,21 @@ This is the largest change. Three modifications:
 
 **Step 1: Add Section 0 — Project directory reconciliation**
 
-Insert a new section BEFORE Section 1 (WAL Operations). Add after line 38 (`CONTEXT_PARTS=()`), before `# SECTION 1`:
+Insert a new section BEFORE Section 1 (WAL Operations). The insertion point is after line 38 (`CONTEXT_PARTS=()`) but this new section also needs access to `WORKSPACE_FILE` and `_registry_project`, which are defined later in the current code (Section 3, lines 138-153). You must either:
+- Move the workspace-file and registry-project resolution **above** Section 1 (recommended — they're read-only lookups), or
+- Have Section 0 do its own workspace-file resolution internally.
+
+**Recommended approach:** Move lines 137-153 (registry lookup + workspace file resolution) to just after `CONTEXT_PARTS=()` on line 38. Then insert Section 0 after those moved lines, before `# SECTION 1`.
+
+The resulting order after line 38 (`CONTEXT_PARTS=()`) should be:
+1. Registry project lookup (moved from lines 137-145)
+2. Workspace file resolution (moved from lines 147-153)
+3. **Section 0: Reconciliation** (new)
+4. Section 1: WAL Operations (existing)
+5. Section 2: Archival (existing)
+6. Section 3: Rawgentic Workspace Context (remaining logic only — project display)
+
+Section 0 code:
 
 ```bash
 # =========================================================================
@@ -628,15 +649,18 @@ for m in missing:
 
     if [ -n "$MISSING_PROJECTS" ]; then
         # Deactivate missing projects in workspace config
-        python3 -c "
-import json
-ws = json.load(open('${WORKSPACE_FILE}'))
-missing_names = set()
-$(printf 'missing_names.add(\"%s\")\n' $(echo "$MISSING_PROJECTS" | cut -d'|' -f1))
+        # Pass missing names via env var to avoid shell injection
+        MISSING_NAMES=$(echo "$MISSING_PROJECTS" | cut -d'|' -f1 | paste -sd',' -)
+        MISSING_NAMES="$MISSING_NAMES" python3 -c "
+import json, os
+ws_path = os.environ.get('WORKSPACE_FILE', '${WORKSPACE_FILE}')
+missing_names = set(os.environ.get('MISSING_NAMES', '').split(','))
+with open(ws_path) as f:
+    ws = json.load(f)
 for p in ws.get('projects', []):
     if p['name'] in missing_names:
         p['active'] = False
-with open('${WORKSPACE_FILE}', 'w') as f:
+with open(ws_path, 'w') as f:
     json.dump(ws, f, indent=2)
 " 2>/dev/null || true
 
@@ -670,7 +694,16 @@ With:
 
 **Step 3: Update Section 3 — Resume context**
 
-Replace lines 165-198 (the entire active project resolution block inside the `else` after projects count check) with:
+Replace the entire block from `# If registry knows our project` (line 165) through the closing `fi` of `$PROJECTS_COUNT -eq 0 / else` on line 199. This is the block that starts with:
+```bash
+            # If registry knows our project, report that; otherwise use active project
+            if [ -n "$_registry_project" ]; then
+```
+and ends at the matching `fi` that closes the `else` of `$PROJECTS_COUNT -eq 0`.
+
+**Important:** The workspace file resolution and registry lookup will have been moved to before Section 1 (per Step 1), so Section 3 will look different. The block to replace is everything inside the `$PROJECTS_COUNT > 0` else branch that handles project display.
+
+Replace with:
 
 ```python
             # Determine project context
@@ -999,6 +1032,8 @@ one. Multiple projects can be active simultaneously."
 - Modify: `skills/optimize-perf/SKILL.md`
 - Modify: `skills/update-docs/SKILL.md`
 
+**Note:** `new-project` and `switch` do NOT use the `<config-loading>` pattern — they manage project activation directly (updated in Tasks 8 and 9). `setup` has a slightly different format handled separately in Step 3.
+
 **Step 1: Define the updated config-loading pattern**
 
 In each skill, find the `<config-loading>` section. The Level 3 fallback currently reads:
@@ -1044,11 +1079,117 @@ plus setup skill."
 
 ---
 
-### Task 11: Version bump, push, and plugin reinstall
+### Task 11: E2E Integration Test
+
+**Purpose:** Verify the full flow works end-to-end before shipping.
+
+**Step 1: Set up multi-active state**
+
+```bash
+cd $WORKSPACE_ROOT && \
+python3 -c "
+import json
+with open('.rawgentic_workspace.json') as f:
+    ws = json.load(f)
+for p in ws['projects']:
+    if p['name'] in ('my-api', 'rawgentic'):
+        p['active'] = True
+with open('.rawgentic_workspace.json', 'w') as f:
+    json.dump(ws, f, indent=2)
+print('Both my-api and rawgentic set active=true')
+"
+```
+
+**Step 2: Test unbound session is blocked (wal-bind-guard)**
+
+```bash
+echo '{"session_id":"e2e-unbound","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+```
+Expected: JSON with `permissionDecision: deny` mentioning "Multiple projects are active"
+
+**Step 3: Test wal-context cascade with multiple active**
+
+```bash
+echo '{"session_id":"e2e-multi","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
+  bash $PLUGIN_ROOT/hooks/wal-context
+```
+Expected: JSON with `additionalContext` containing "Multiple projects active"
+
+**Step 4: Test session-start with multiple active (startup)**
+
+```bash
+echo '{"session_id":"e2e-startup","cwd":"$WORKSPACE_ROOT","hook_event_name":"startup"}' | \
+  bash $PLUGIN_ROOT/hooks/session-start
+```
+Expected: JSON mentioning multiple active projects
+
+**Step 5: Test bound session allows same-project, denies cross-project**
+
+```bash
+# Register a session to my-api
+echo '{"session_id":"e2e-bound","project":"my-api","project_path":"./projects/my-api","started":"2026-03-07T22:00:00Z","cwd":"$WORKSPACE_ROOT"}' \
+  >> $WORKSPACE_ROOT/claude_docs/session_registry.jsonl
+
+# Same project — should ALLOW (no output)
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$WORKSPACE_ROOT/projects/my-api/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+
+# Cross project — should DENY
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$PLUGIN_ROOT/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+```
+Expected: First command produces no output (allow). Second produces JSON with `permissionDecision: deny`.
+
+**Step 6: Test per-project WAL write**
+
+```bash
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$WORKSPACE_ROOT/projects/my-api/test.js"},"tool_use_id":"tu_e2e","cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PLUGIN_ROOT/hooks/wal-pre && \
+ls -la $WORKSPACE_ROOT/claude_docs/wal/ && \
+tail -1 $WORKSPACE_ROOT/claude_docs/wal/my-api.jsonl
+```
+Expected: WAL entry written to `wal/my-api.jsonl` (not `wal.jsonl`)
+
+**Step 7: Clean up test data**
+
+```bash
+cd $WORKSPACE_ROOT && \
+python3 -c "
+import json
+with open('.rawgentic_workspace.json') as f:
+    ws = json.load(f)
+for p in ws['projects']:
+    if p['name'] == 'rawgentic':
+        p['active'] = False
+with open('.rawgentic_workspace.json', 'w') as f:
+    json.dump(ws, f, indent=2)
+" && \
+# Remove test registry entry
+sed -i '/e2e-bound/d' claude_docs/session_registry.jsonl 2>/dev/null || true && \
+rm -f claude_docs/wal/my-api.jsonl 2>/dev/null || true && \
+echo "E2E cleanup complete"
+```
+
+---
+
+### Task 12: Version bump, push, and plugin reinstall
+
+**Files:**
+- Modify: `.claude-plugin/plugin.json`
 
 **Step 1: Bump version**
 
 Update `.claude-plugin/plugin.json` version from `2.4.0` to `2.5.0`.
+
+**Step 1b: Add .gitignore entry for wal directory (in workspace root)**
+
+Ensure `claude_docs/wal/` is gitignored in the workspace root. Check if `.gitignore` exists in `$WORKSPACE_ROOT/` and add the entry if missing:
+
+```bash
+cd $WORKSPACE_ROOT && \
+grep -q 'claude_docs/wal/' .gitignore 2>/dev/null || echo 'claude_docs/wal/' >> .gitignore
+```
 
 **Step 2: Run full manual verification**
 
