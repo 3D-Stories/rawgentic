@@ -25,12 +25,12 @@ The full annotated schema lives at `templates/rawgentic-json-schema.json` in the
 Determine the active project using this fallback chain:
 1. **Conversation context:** If a previous `/rawgentic:switch` in this session set the active project, use that.
 2. **Session registry:** Read `claude_docs/session_registry.jsonl`. Grep for your session_id. If found, use the project from the most recent matching line.
-3. **Workspace default:** Read `.rawgentic_workspace.json` from the Claude root directory (the directory Claude was launched from). Extract the active project entry (active == true).
+3. **Workspace default:** Read `.rawgentic_workspace.json` from the Claude root directory (the directory Claude was launched from). If exactly one project has `active == true`, use it. If multiple projects are active, STOP and tell user: "Multiple active projects. Run `/rawgentic:switch <name>` to bind this session."
 
 At any level:
 - `.rawgentic_workspace.json` **missing** → STOP. Tell the user: "No rawgentic workspace found. Run `/rawgentic:new-project` first to register a project."
 - `.rawgentic_workspace.json` **malformed** → STOP. Tell the user: "Workspace file is corrupted. Run `/rawgentic:new-project` to regenerate, or fix `.rawgentic_workspace.json` manually."
-- **No active project** found at any level → STOP. Tell the user: "No active project. Run `/rawgentic:switch` to select one."
+- **No active project** found at any level → STOP. Tell the user: "No active project. Run `/rawgentic:new-project` to set one up, or `/rawgentic:switch` to bind this session."
 
 Extract the active project's `name` and `path`. Confirm to the user:
 
