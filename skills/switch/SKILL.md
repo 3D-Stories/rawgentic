@@ -67,6 +67,11 @@ Read `.rawgentic_workspace.json`, then:
 2. Set the **target** project's `active` to `true`.
 3. Update the target's `lastUsed` to the current ISO 8601 timestamp.
 4. Write the updated workspace file back (full read-modify-write).
+5. **Register in session registry:** Append a line to `claude_docs/session_registry.jsonl`:
+   ```json
+   {"session_id":"<your session_id>","project":"<target project name>","project_path":"<target project path>","started":"<current ISO 8601 timestamp>","cwd":"<workspace root>"}
+   ```
+   Create the file and `claude_docs/session_notes/` directory if they don't exist.
 
 **Mechanism note:** The `switch` skill only updates `.rawgentic_workspace.json` — it does NOT change Claude Code's CWD, restart the session, or explicitly load the new project's CLAUDE.md. Layer 3 loading happens naturally: when the next rawgentic workflow skill runs and accesses files in the new project directory, Claude Code discovers and loads that project's CLAUDE.md. The previous project's CLAUDE.md remains in context for the remainder of the session.
 
