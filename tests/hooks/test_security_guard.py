@@ -189,3 +189,136 @@ class TestSuggestGlob:
 
     def test_fallback_to_file_path(self):
         assert suggest_glob("src/utils/helper.js") == "src/utils/helper.js"
+
+
+# Sample patterns for integration testing (mirrors security-patterns.json)
+SAMPLE_PATTERNS = [
+    {
+        "ruleName": "eval_injection",
+        "source": "upstream",
+        "type": "substring",
+        "substrings": ["eval("],
+        "wordBoundary": True,
+        "reminder": "eval() is dangerous.",
+        "suggestedGlobs": ["**/__tests__/**"],
+    },
+    {
+        "ruleName": "innerHTML_xss",
+        "source": "upstream",
+        "type": "substring",
+        "substrings": [".innerHTML =", ".innerHTML="],
+        "wordBoundary": False,
+        "reminder": "innerHTML is dangerous.",
+        "suggestedGlobs": [],
+    },
+    {
+        "ruleName": "github_actions_workflow",
+        "source": "upstream",
+        "type": "path",
+        "pathPattern": ".github/workflows/*.yml",
+        "reminder": "GH Actions injection risk.",
+        "suggestedGlobs": [],
+    },
+]
+
+
+class TestMatchPatterns:
+    def test_eval_matches(self):
+        matches = match_patterns("src/app.js", "x = eval(code)", SAMPLE_PATTERNS)
+        assert len(matches) == 1 and matches[0]["ruleName"] == "eval_injection"
+
+    def test_eval_word_boundary_blocks_medieval(self):
+        assert match_patterns("src/app.js", "medieval(castle)", SAMPLE_PATTERNS) == []
+
+    def test_innerhtml_matches(self):
+        matches = match_patterns("src/app.js", 'el.innerHTML = "hi"', SAMPLE_PATTERNS)
+        assert len(matches) == 1 and matches[0]["ruleName"] == "innerHTML_xss"
+
+    def test_path_pattern_matches_workflow(self):
+        matches = match_patterns(".github/workflows/ci.yml", "name: CI", SAMPLE_PATTERNS)
+        assert len(matches) == 1 and matches[0]["ruleName"] == "github_actions_workflow"
+
+    def test_no_match(self):
+        assert match_patterns("src/app.js", "console.log('hello')", SAMPLE_PATTERNS) == []
+
+    def test_multiple_matches(self):
+        matches = match_patterns("src/app.js", 'eval(x); el.innerHTML = "y"', SAMPLE_PATTERNS)
+        assert len(matches) == 2
+
+    def test_broken_pattern_skipped(self):
+        assert match_patterns("src/app.js", "eval(x)", [{"type": "substring"}]) == []
+
+    def test_pattern_missing_pathPattern(self):
+        """Path pattern with no pathPattern key is skipped."""
+        assert match_patterns("src/app.js", "test", [{"type": "path"}]) == []
+
+
+class TestFilterExceptions:
+    def test_exception_removes_match(self):
+        matches = [{"ruleName": "eval_injection", "reminder": "..."}]
+        exceptions = [{"rule": "eval_injection", "pathPattern": "**/__tests__/**"}]
+        assert filter_exceptions(matches, exceptions, "src/__tests__/foo.test.js") == []
+
+    def test_wrong_rule_not_excepted(self):
+        matches = [{"ruleName": "eval_injection", "reminder": "..."}]
+        exceptions = [{"rule": "innerHTML_xss", "pathPattern": "**/__tests__/**"}]
+        assert len(filter_exceptions(matches, exceptions, "src/__tests__/foo.test.js")) == 1
+
+    def test_wrong_path_not_excepted(self):
+        matches = [{"ruleName": "eval_injection", "reminder": "..."}]
+        exceptions = [{"rule": "eval_injection", "pathPattern": "**/__tests__/**"}]
+        assert len(filter_exceptions(matches, exceptions, "src/app.js")) == 1
+
+    def test_partial_exception(self):
+        matches = [
+            {"ruleName": "eval_injection", "reminder": "..."},
+            {"ruleName": "innerHTML_xss", "reminder": "..."},
+        ]
+        exceptions = [{"rule": "eval_injection", "pathPattern": "**/__tests__/**"}]
+        result = filter_exceptions(matches, exceptions, "src/__tests__/foo.test.js")
+        assert len(result) == 1 and result[0]["ruleName"] == "innerHTML_xss"
+
+    def test_empty_exceptions(self):
+        matches = [{"ruleName": "eval_injection", "reminder": "..."}]
+        assert len(filter_exceptions(matches, [], "src/__tests__/foo.test.js")) == 1
+
+    def test_exception_missing_securityExceptions_key(self):
+        """rawgentic.json with no securityExceptions -> empty list -> no exceptions."""
+        matches = [{"ruleName": "eval_injection", "reminder": "..."}]
+        assert len(filter_exceptions(matches, [], "src/__tests__/foo.test.js")) == 1
+
+
+class TestFormatDeny:
+    def test_single_match_structure(self):
+        result = format_deny([{"ruleName": "eval_injection", "reminder": "eval bad."}], "src/__tests__/foo.test.js")
+        assert result["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "eval_injection" in result["systemMessage"]
+        assert "DO NOT retry" in result["systemMessage"]
+        assert "**/__tests__/**" in result["systemMessage"]
+
+    def test_multiple_matches_aggregated(self):
+        result = format_deny([
+            {"ruleName": "eval_injection", "reminder": "eval bad."},
+            {"ruleName": "innerHTML_xss", "reminder": "innerHTML bad."},
+        ], "src/app.js")
+        assert "eval_injection" in result["systemMessage"]
+        assert "innerHTML_xss" in result["systemMessage"]
+
+    def test_output_is_valid_json(self):
+        result = format_deny([{"ruleName": "eval_injection", "reminder": "bad."}], "src/app.js")
+        parsed = json.loads(json.dumps(result))
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_path_sanitized_in_message(self):
+        result = format_deny([{"ruleName": "eval_injection", "reminder": "bad."}], "src/foo;rm -rf/.js")
+        assert ";" not in result["systemMessage"]
+
+    def test_empty_matches_returns_empty_dict(self):
+        assert format_deny([], "src/app.js") == {}
+
+    def test_reminder_with_newlines_is_valid_json(self):
+        result = format_deny([{"ruleName": "test", "reminder": "line1\nline2\n\"quoted\""}], "src/app.js")
+        json_str = json.dumps(result)
+        parsed = json.loads(json_str)
+        assert "line1" in parsed["systemMessage"]
