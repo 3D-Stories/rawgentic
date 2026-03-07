@@ -80,6 +80,7 @@ wal_extract_summary() {
 #   For DONE/FAIL: wal_append_phase "DONE"
 # Requires: WAL_FILE, WAL_SESSION_ID, WAL_TOOL_NAME, WAL_TOOL_USE_ID to be set.
 wal_append_phase() {
+  [ -n "${WAL_FILE:-}" ] || return 0
   local phase="$1"
   shift
   local ts
