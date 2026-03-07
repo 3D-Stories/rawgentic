@@ -24,12 +24,18 @@ wal_parse_input() {
 }
 
 # --- WAL file setup ---
-# Creates claude_docs directory and sets WAL_FILE path.
-# Requires: WAL_CWD to be set (call wal_parse_input first).
+# Creates claude_docs/wal directory and sets WAL_FILE path.
+# If WAL_PROJECT is set, uses per-project WAL file.
+# If WAL_PROJECT is empty, skips (WAL_FILE left empty).
+# Requires: WAL_CWD to be set. WAL_PROJECT should be set via wal_resolve_project().
 wal_init_file() {
-  WAL_DIR="$WAL_CWD/claude_docs"
+  WAL_FILE=""
+  if [ -z "${WAL_PROJECT:-}" ]; then
+    return 0
+  fi
+  WAL_DIR="$WAL_CWD/claude_docs/wal"
   mkdir -p "$WAL_DIR"
-  WAL_FILE="$WAL_DIR/wal.jsonl"
+  WAL_FILE="$WAL_DIR/${WAL_PROJECT}.jsonl"
 }
 
 # --- Summary extraction ---
@@ -98,5 +104,24 @@ wal_append_phase() {
       --arg phase "$phase" \
       '{ts:$ts, phase:$phase, session:$session, tool:$tool, tool_use_id:$tool_use_id}' \
       >> "$WAL_FILE"
+  fi
+}
+
+# --- Project resolution ---
+# Resolves which project the current session is bound to.
+# Reads session registry and workspace config.
+# Sets: WAL_PROJECT (empty string if unresolvable)
+# Requires: WAL_SESSION_ID, WAL_CWD to be set.
+wal_resolve_project() {
+  WAL_PROJECT=""
+  local registry_file="$WAL_CWD/claude_docs/session_registry.jsonl"
+
+  # Check session registry first
+  if [ -f "$registry_file" ] && [ "$WAL_SESSION_ID" != "unknown" ]; then
+    local reg_line
+    reg_line=$(grep "$WAL_SESSION_ID" "$registry_file" 2>/dev/null | tail -1 || true)
+    if [ -n "$reg_line" ]; then
+      WAL_PROJECT=$(printf '%s' "$reg_line" | "$WAL_JQ" -r '.project // ""' 2>/dev/null || true)
+    fi
   fi
 }
