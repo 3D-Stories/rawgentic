@@ -1,6 +1,6 @@
 {
   "name": "rawgentic",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "12 SDLC workflow skills for Claude Code: workspace management, project setup, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, and incident response.",
   "author": {
     "name": "3D-Stories",
