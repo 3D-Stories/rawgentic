@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# UserPromptSubmit hook — Injects session context on every prompt.
+# Survives context compaction by re-injecting from disk.
+# Error-tolerant: always exits 0.
+# Design: docs/plans/2026-03-06-wal-session-notes-design.md
+
+_do_context() {
+    set -euo pipefail
+
+    INPUT=$(cat)
+
+    JQ="${HOME}/.local/bin/jq"
+    [ -x "$JQ" ] || JQ="jq"
+    command -v "$JQ" &>/dev/null || exit 0
+
+    SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
+    CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
+
+    [ "$SESSION_ID" = "unknown" ] && exit 0
+
+    # Check for rawgentic workspace — skip if not a rawgentic project
+    WORKSPACE_FILE=""
+    [ -f "$CWD/.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
+    [ -z "$WORKSPACE_FILE" ] && [ -f "$CWD/../.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
+    [ -z "$WORKSPACE_FILE" ] && exit 0
+
+    REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+    WAL_FILE="$CWD/claude_docs/wal.jsonl"
+    NOTES_DIR="$CWD/claude_docs/session_notes"
+
+    # --- Lookup project from registry ---
+    PROJECT=""
+    PROJECT_PATH=""
+    if [ -f "$REGISTRY_FILE" ]; then
+        REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
+        if [ -n "$REG_LINE" ]; then
+            PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""')
+            PROJECT_PATH=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project_path // ""')
+        fi
+    fi
+
+    # If not registered, inject reminder and exit
+    if [ -z "$PROJECT" ]; then
+        "$JQ" -nc --arg ctx "SESSION: Not registered. Use /rawgentic:switch or /rawgentic:new-project to register this session." \
+            '{additionalContext: $ctx}'
+        exit 0
+    fi
+
+    CONTEXT="SESSION CONTEXT [${PROJECT} | ${SESSION_ID}]:"
+
+    # --- Session notes status ---
+    NOTES_FILE="$NOTES_DIR/${PROJECT}.md"
+    if [ -f "$NOTES_FILE" ]; then
+        # Find last session header for this session_id
+        LAST_HEADER=$(grep "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
+        if [ -n "$LAST_HEADER" ]; then
+            # Extract task from nearby lines
+            TASK_LINE=$(grep -A2 "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | grep "^## Task:" | tail -1 || true)
+            TASK="${TASK_LINE#*## Task: }"
+            [ -z "$TASK" ] && TASK="(unknown)"
+
+            # Extract status
+            STATUS="IN PROGRESS"
+            if printf '%s' "$LAST_HEADER" | grep -q "COMPLETE"; then
+                STATUS="COMPLETE"
+            fi
+
+            # Extract timestamp and compute age
+            HEADER_TS=$(printf '%s' "$LAST_HEADER" | sed -n 's/.*Session: \([^ ]*\).*/\1/p')
+            AGE=""
+            if [ -n "$HEADER_TS" ]; then
+                HEADER_EPOCH=$(date -d "$HEADER_TS" +%s 2>/dev/null || true)
+                NOW_EPOCH=$(date +%s)
+                if [ -n "$HEADER_EPOCH" ]; then
+                    DIFF_MIN=$(( (NOW_EPOCH - HEADER_EPOCH) / 60 ))
+                    AGE="Session notes last updated: ${DIFF_MIN} minutes ago"
+                fi
+            fi
+
+            CONTEXT="${CONTEXT}
+  Task: ${TASK}
+  Status: ${STATUS}"
+            [ -n "$AGE" ] && CONTEXT="${CONTEXT}
+  ${AGE}"
+        else
+            CONTEXT="${CONTEXT}
+  No session notes for this session yet."
+        fi
+    else
+        CONTEXT="${CONTEXT}
+  No session notes file found for project '${PROJECT}'."
+    fi
+
+    # --- Recent WAL actions ---
+    if [ -f "$WAL_FILE" ]; then
+        RECENT=$(grep "$SESSION_ID" "$WAL_FILE" 2>/dev/null | tail -10 | "$JQ" -r '"    [" + .ts[11:19] + "] " + .phase + ": " + (.summary // .tool)' 2>/dev/null || true)
+        if [ -n "$RECENT" ]; then
+            CONTEXT="${CONTEXT}
+
+  Recent actions (last 10):
+${RECENT}"
+        fi
+    fi
+
+    CONTEXT="${CONTEXT}
+
+  Full session notes: claude_docs/session_notes/${PROJECT}.md"
+
+    "$JQ" -nc --arg ctx "$CONTEXT" '{additionalContext: $ctx}'
+}
+
+_do_context 2>/dev/null || true
+exit 0
