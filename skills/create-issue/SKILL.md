@@ -24,10 +24,15 @@ TEMPLATE_DIR = ".github/ISSUE_TEMPLATE"
 <config-loading>
 Before executing any workflow steps, load the project configuration:
 
-1. Read `.rawgentic_workspace.json` from the Claude root directory.
-   - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
-   - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
-   - Extract the active project entry (active == true).
+1. Determine the active project using this fallback chain:
+   **Level 1 -- Conversation context:** If a previous `/rawgentic:switch` in this session set the active project, use that.
+   **Level 2 -- Session registry:** Read `claude_docs/session_registry.jsonl`. Grep for your session_id. If found, use the project from the most recent matching line.
+   **Level 3 -- Workspace default:** Read `.rawgentic_workspace.json` from the Claude root directory. Extract the active project entry (active == true).
+
+   At any level:
+   - `.rawgentic_workspace.json` missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
+   - `.rawgentic_workspace.json` malformed -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
+   - No active project found at any level -> STOP. Tell user: "No active project. Run /rawgentic:switch to select one."
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 2. Read `<activeProject.path>/.rawgentic.json`.
