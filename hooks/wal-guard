@@ -1,0 +1,74 @@
+#!/bin/bash
+# WAL Guard — Blocks dangerous Bash commands before execution.
+# Hook: PreToolUse (matcher: Bash)
+# Returns JSON deny decision or exits 0 to allow.
+# FAIL-CLOSED: If jq is unavailable, all commands are denied.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/wal-lib.sh"
+
+# --- Fail-closed jq check ---
+# Uses printf (bash builtin) instead of cat to work even with broken PATH
+if ! command -v "$WAL_JQ" &>/dev/null; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"BLOCKED: WAL guard requires jq to evaluate command safety. Install jq to proceed."}}'
+  exit 0
+fi
+
+INPUT=$(cat)
+COMMAND=$(printf '%s' "$INPUT" | "$WAL_JQ" -r '.tool_input.command // empty')
+
+if [ -z "$COMMAND" ]; then
+  exit 0
+fi
+
+deny() {
+  local reason="$1"
+  printf '%s' "$INPUT" | "$WAL_JQ" -c --arg reason "$reason" '{
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: "deny",
+      permissionDecisionReason: $reason
+    }
+  }'
+  exit 0
+}
+
+# --- Data-driven blocked patterns ---
+# Each entry: regex -> human-readable reason -> grep flags
+# Uses \b word boundaries to avoid false positives at end-of-string.
+# PATTERN_FLAGS: empty = case-sensitive, "-i" = case-insensitive
+declare -a PATTERN_KEYS=(
+  'rm\s+-(r|f|rf|fr)\b'
+  'git\s+push\s+.*(-f|--force)\b'
+  'git\s+reset\s+--hard\b'
+  'git\s+(checkout|restore)\s+\.'
+  'git\s+clean\s+-[a-zA-Z]*f'
+  'git\s+branch\s+-D\b'
+  '(deploy|push).*prod|prod.*(deploy|push)'
+  'git\s+commit\s+.*--no-verify\b'
+)
+
+declare -a PATTERN_REASONS=(
+  "BLOCKED: Destructive rm command. Ask the user for explicit permission first."
+  "BLOCKED: git push --force. This can destroy remote history. Ask the user first."
+  "BLOCKED: git reset --hard. This discards all uncommitted changes. Ask the user first."
+  "BLOCKED: git checkout/restore . discards all working tree changes. Ask the user first."
+  "BLOCKED: git clean -f deletes untracked files permanently. Ask the user first."
+  "BLOCKED: git branch -D force-deletes a branch. Ask the user first."
+  "BLOCKED: Possible production deployment detected. Requires explicit user permission."
+  "BLOCKED: --no-verify skips pre-commit hooks. Ask the user first."
+)
+
+# Per-pattern case sensitivity: only deploy/prod needs case-insensitive
+declare -a PATTERN_FLAGS=("" "" "" "" "" "" "-i" "")
+
+for i in "${!PATTERN_KEYS[@]}"; do
+  if printf '%s' "$COMMAND" | grep ${PATTERN_FLAGS[$i]} -qE "${PATTERN_KEYS[$i]}"; then
+    deny "${PATTERN_REASONS[$i]}"
+  fi
+done
+
+# If nothing matched, allow
+exit 0
