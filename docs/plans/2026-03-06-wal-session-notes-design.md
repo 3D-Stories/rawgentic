@@ -47,11 +47,12 @@ Append-only JSONL. One line per session, written when Claude identifies its proj
 {"session_id":"def456","project":"STARS-COC-POC","project_path":"./projects/STARS-COC-POC","started":"2026-03-06T15:30:00Z","cwd":"/home/candrosoff/claude"}
 ```
 
-**Who writes:**
+**Who writes (2 authoritative entry points):**
 - `/rawgentic:switch` — registers session when switching projects
 - `/rawgentic:new-project` — registers session for newly created project
-- Any session's first action — CLAUDE.md instruction tells Claude to register if no entry exists
-- Stop hook — catches unregistered sessions as a last resort
+- Stop hook — fallback: catches unregistered sessions before Claude stops
+
+Note: The UserPromptSubmit hook injects a "register session" reminder if no entry exists, prompting Claude to register via the skills above. No separate CLAUDE.md instruction needed.
 
 **Who reads:**
 - UserPromptSubmit hook — injects project context on every prompt
@@ -66,7 +67,7 @@ Each session APPENDS a block with a machine-parseable header:
 ```markdown
 ---
 
-# Session: 2026-03-06 | ID: abc123 | Status: COMPLETE
+# Session: 2026-03-06T15:30:00Z | ID: abc123 | Status: COMPLETE
 ## Task: WF3 Bug Fix: Issue #155
 ## Project: data_catalogue
 
@@ -85,16 +86,19 @@ Each session APPENDS a block with a machine-parseable header:
 
 Conventions:
 - `---` separator before each session block
-- Line 1: `# Session: YYYY-MM-DD | ID: {session_id} | Status: {IN PROGRESS|COMPLETE}`
+- Line 1: `# Session: {ISO 8601 datetime} | ID: {session_id} | Status: {IN PROGRESS|COMPLETE}`
 - `## Task:` and `## Project:` on dedicated lines (grep-parseable)
 - Freeform detailed notes after header (rich narrative style)
+- Claude may append multiple `IN PROGRESS` blocks during a session (each with a fresh timestamp)
+- The final block before stopping should have `Status: COMPLETE`
 
 ### Archival
 
-Mechanical, triggered by SessionStart hook:
+Mechanical, triggered by SessionStart hook **on `startup` event only** (not on `compact`, `resume`, or `clear`):
 - Check line count of each `session_notes/{project}.md`
-- If >800 lines: move to `archive/{project}_{date}.md`, create fresh file with `# Session Notes — {project}` header
+- If >600 lines: move to `archive/{project}_{date}.md`, create fresh file with `# Session Notes — {project}` header
 - Never discard — archive is permanent
+- Future: JSON archive format with Haiku-extracted insights (see [issue #4](https://github.com/3D-Stories/rawgentic/issues/4))
 
 ---
 
@@ -145,6 +149,7 @@ Output (~150-250 tokens):
 SESSION CONTEXT [data_catalogue | abc123]:
   Task: WF3 Bug Fix: Issue #155
   Status: IN PROGRESS
+  Session notes last updated: 12 minutes ago
 
   Recent actions (last 10):
     [15:30:01] Edit: edit /home/.../exit_monitor.py
@@ -154,18 +159,30 @@ SESSION CONTEXT [data_catalogue | abc123]:
   Full session notes: claude_docs/session_notes/data_catalogue.md
 ```
 
+The "last updated" line passively nudges Claude to update session notes throughout the session, not just at stop time.
+
 Error-tolerant: `_do_context 2>/dev/null || true; exit 0`
 
 #### `hooks/wal-stop` (Stop) — NEW
 
-Forces session notes update before Claude stops:
+Forces session notes update before Claude stops.
+
+**Guard clause:** If no `.rawgentic_workspace.json` exists in CWD, exit 0 immediately (non-rawgentic session).
+
+**Retry limit:** Maximum 2 `continue: false` responses per session. After 2 attempts, allow stop with `continue: true` and log a warning to WAL. This prevents infinite loops if Claude fails to write notes (disk full, permission error, etc.).
+
+**Logic:**
 
 1. Read `session_id` from hook input
-2. Lookup project in registry
-3. **Gate 1 — Registry check:** If unregistered, return `continue: false` with instruction to register + update notes
-4. **Gate 2 — Notes freshness:** Check if `session_notes/{project}.md` was modified in last 2 minutes
-5. If fresh → `continue: true`
-6. If stale → `continue: false` with APPEND-ONLY prompt:
+2. If no `.rawgentic_workspace.json` → `continue: true` (not a rawgentic session)
+3. Lookup project in registry
+4. **Gate 1 — Registry check:** If unregistered, return `continue: false` with instruction to register + update notes (counts as attempt 1)
+5. **Gate 2 — Notes timestamp check:** Find the last session header for this session_id in `session_notes/{project}.md`:
+   - `grep "ID: {session_id}" session_notes/{project}.md | tail -1`
+   - Extract the ISO timestamp from the header
+   - If timestamp is within last **5 minutes** → `continue: true` (notes are fresh)
+   - If timestamp is older than 5 minutes or missing → `continue: false` with APPEND-ONLY prompt
+6. **Attempt tracking:** Write attempt count to a temp file (`/tmp/wal-stop-{session_id}`). If count >= 2, force `continue: true`.
 
 Stop hook prompt language:
 ```
@@ -174,7 +191,7 @@ Before finishing, APPEND a new session summary to claude_docs/session_notes/{pro
 RULES:
 - APPEND ONLY. Do NOT modify, rewrite, or remove any existing content in the file.
 - Start with a --- separator, then the structured header:
-  # Session: {date} | ID: {session_id} | Status: COMPLETE
+  # Session: {ISO datetime} | ID: {session_id} | Status: COMPLETE
   ## Task: <what you worked on>
   ## Project: {project}
 - After the header, include: changes made, verification results, and next steps.
@@ -190,7 +207,7 @@ Also ensure you are registered in claude_docs/session_registry.jsonl.
 Merges existing rawgentic session-start + WAL session-start:
 
 1. **WAL operations:** Sanitize `wal.jsonl`, rotate if >5000 lines, detect incomplete ops
-2. **Session notes archival:** For each `session_notes/*.md`, check line count. If >800, move to `archive/{project}_{date}.md`
+2. **Session notes archival (only on `startup` event):** Check event type from hook input. If `startup`: for each `session_notes/*.md`, check line count. If >600, move to `archive/{project}_{date}.md`. Skip archival for `compact`, `resume`, `clear` events.
 3. **Project context:** Read workspace JSON, find active project, inject context (existing behavior)
 4. **Registry context:** If session_id found in registry, inject project from registry (overrides workspace default)
 
@@ -311,8 +328,8 @@ The UserPromptSubmit hook injects from level 2 on every prompt, so after compact
 
 ### Rawgentic Skill Changes
 
-- `/rawgentic:switch` — append to `session_registry.jsonl` when switching, update `lastUsed` in workspace JSON, set conversation context
-- `/rawgentic:new-project` — append to `session_registry.jsonl` for new project
+- `/rawgentic:switch` — append to `session_registry.jsonl` when switching (primary registration point), update `lastUsed` in workspace JSON, set conversation context
+- `/rawgentic:new-project` — append to `session_registry.jsonl` for new project (primary registration point)
 - All 9 workflow skills — update `<config-loading>` block with 3-level fallback
 - `/rawgentic:setup` — update config-loading equivalent in Step 1
 
@@ -333,21 +350,24 @@ Every mutation action (Bash, Edit, Write, NotebookEdit, Task) is logged to `clau
 before and after execution via hooks. You do not need to manually write to the WAL — the hooks handle it.
 
 ### Session Registration
-On your first meaningful action in a new session, if the UserPromptSubmit hook has not already
-identified your project, append a registration line to `claude_docs/session_registry.jsonl`:
-  {"session_id":"<your session_id>","project":"<project_name>","project_path":"<relative_path>","started":"<ISO timestamp>","cwd":"<working directory>"}
-Use the rawgentic workspace or project CLAUDE.md to determine the project name.
+Session registration is handled automatically by `/rawgentic:switch` and `/rawgentic:new-project`.
+If the UserPromptSubmit hook reports you are unregistered, use one of these skills to register.
+The Stop hook will also catch unregistered sessions as a fallback.
+
+Registry format (one JSONL line per session):
+  {"session_id":"<id>","project":"<name>","project_path":"<path>","started":"<ISO datetime>","cwd":"<cwd>"}
 
 ### Session Notes
 - Notes are stored per-project at `claude_docs/session_notes/{project}.md`
 - **APPEND ONLY** — never modify or remove existing content
 - Use the structured header format:
   ---
-  # Session: YYYY-MM-DD | ID: {session_id} | Status: IN PROGRESS
+  # Session: {ISO 8601 datetime} | ID: {session_id} | Status: IN PROGRESS
   ## Task: <task description>
   ## Project: <project name>
-- Update status to COMPLETE when done
-- The Stop hook will block you from finishing if notes aren't updated
+- Append multiple IN PROGRESS blocks throughout your session (each with a fresh timestamp)
+- Append a final COMPLETE block when done
+- The Stop hook will block you from finishing if notes aren't recent (within 5 minutes)
 
 ### WAL Log Format
 The WAL at `claude_docs/wal.jsonl` contains one JSON object per line:
@@ -383,13 +403,16 @@ No changes needed. Project name already available via `PROJECT_ROOT`, `REPO`, or
 
 ## Migration Plan
 
+### Phase 0: Verify hook payload schema
+0. Create stub hooks for UserPromptSubmit and Stop that dump input JSON to a temp file. Verify `session_id` is present in the payload. If not, identify alternative (e.g. `CLAUDE_SESSION_ID` env var).
+
 ### Phase 1: Move hooks to rawgentic plugin
 1. Copy hook scripts to `rawgentic/hooks/` (wal-lib.sh, wal-guard, wal-pre, wal-post, wal-post-fail)
 2. Update `rawgentic/hooks/hooks.json` with all hook registrations
 3. Merge session-start hooks (rawgentic's + WAL's) into one script
-4. Remove hooks from `~/.claude/hooks/` (except leave wal-guard as global fallback)
-5. Remove hook registrations from `~/.claude/settings.json`
-6. Remove `session-notes-reminder.sh` (replaced by Stop hook)
+4. Remove hooks from `~/.claude/hooks/` **and** remove hook registrations from `~/.claude/settings.json` **in the same step** (atomic swap to prevent double-firing during migration)
+5. Remove `session-notes-reminder.sh` (replaced by Stop hook)
+6. Add idempotency guard in wal-lib: check if last WAL entry has same `tool_use_id` and phase before appending (safety net during migration)
 
 ### Phase 2: Add new hooks
 7. Create `hooks/wal-context` (UserPromptSubmit)
@@ -418,6 +441,9 @@ No changes needed. Project name already available via `PROJECT_ROOT`, `REPO`, or
 | WAL file missing | Session-start: nothing to check. Context hook: skip WAL section. |
 | Disk full | All loggers: exit 0 silently (error-tolerant). Guard: still works (reads stdin, no writes). |
 | Concurrent writes | Registry: JSONL append is atomic on Linux (< PIPE_BUF). Notes: per-project files eliminate cross-session races. |
+| Non-rawgentic session | Stop hook: early exit if no `.rawgentic_workspace.json`. Context hook: exit 0 silently. |
+| Stop hook repeated failure | After 2 `continue: false` attempts, force `continue: true` with WAL warning. Prevents infinite loop. |
+| session_id unavailable | Fallback to `CLAUDE_SESSION_ID` env var or "unknown". Phase 0 verifies before implementation. |
 
 ---
 
@@ -426,10 +452,14 @@ No changes needed. Project name already available via `PROJECT_ROOT`, `REPO`, or
 1. **Guard still blocks** — `rm -rf`, `git push --force`, etc. all blocked after migration
 2. **INTENT/DONE pairs appear** — normal tool use still logged to `wal.jsonl`
 3. **Context injection works** — every prompt shows session context in `additionalContext`
-4. **Stop hook fires** — Claude cannot stop without updating session notes
-5. **Archival works** — session notes >800 lines are moved to archive
-6. **Concurrent sessions isolated** — two sessions on different projects write to separate notes files
-7. **Compaction recovery** — after compaction, Claude still knows its project and recent actions
-8. **Config-loading fallback** — rawgentic skills find active project via registry after compaction
-9. **No-jq degradation** — guard denies, loggers exit 0, context hook exits 0
-10. **Plugin install/uninstall** — installing rawgentic registers all hooks, uninstalling removes them cleanly
+4. **Stop hook fires** — Claude cannot stop without updating session notes (within 5-min freshness)
+5. **Stop hook retry limit** — after 2 failed attempts, Stop hook allows exit gracefully
+6. **Stop hook non-rawgentic** — sessions without `.rawgentic_workspace.json` are not blocked
+7. **Archival works** — session notes >600 lines are moved to archive on `startup` event only
+8. **Concurrent sessions isolated** — two sessions on different projects write to separate notes files
+9. **Compaction recovery** — after compaction, Claude still knows its project and recent actions
+10. **Config-loading fallback** — rawgentic skills find active project via registry after compaction
+11. **No-jq degradation** — guard denies, loggers exit 0, context hook exits 0
+12. **Plugin install/uninstall** — installing rawgentic registers all hooks, uninstalling removes them cleanly
+13. **Hook payload verification** — `session_id` confirmed available in UserPromptSubmit and Stop payloads
+14. **Migration atomicity** — no double WAL entries during hook migration (idempotency guard works)
