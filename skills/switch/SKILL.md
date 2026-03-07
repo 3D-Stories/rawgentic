@@ -47,6 +47,8 @@ Search the `projects` array:
 
 Check that the target project's `path` directory exists on disk.
 
+**Path resolution:** The `path` field in `.rawgentic_workspace.json` is relative (e.g., `./projects/my-app`). Resolve it against the workspace root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path before checking existence.
+
 **If the directory is missing:**
 - Warn the user: "The directory `<path>` no longer exists on disk."
 - Offer two choices:
@@ -65,6 +67,8 @@ Read `.rawgentic_workspace.json`, then:
 2. Set the **target** project's `active` to `true`.
 3. Update the target's `lastUsed` to the current ISO 8601 timestamp.
 4. Write the updated workspace file back (full read-modify-write).
+
+**Mechanism note:** The `switch` skill only updates `.rawgentic_workspace.json` — it does NOT change Claude Code's CWD, restart the session, or explicitly load the new project's CLAUDE.md. Layer 3 loading happens naturally: when the next rawgentic workflow skill runs and accesses files in the new project directory, Claude Code discovers and loads that project's CLAUDE.md. The previous project's CLAUDE.md remains in context for the remainder of the session.
 
 ---
 

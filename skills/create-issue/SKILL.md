@@ -28,6 +28,7 @@ Before executing any workflow steps, load the project configuration:
    - Missing -> STOP. Tell user: "No rawgentic workspace found. Run /rawgentic:new-project."
    - Malformed JSON -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
    - Extract the active project entry (active == true).
+   - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 2. Read `<activeProject.path>/.rawgentic.json`.
    - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
