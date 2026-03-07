@@ -39,36 +39,47 @@ _do_context() {
         fi
     fi
 
-    # If not registered, try to infer project from active workspace entry
+    # If not registered, use detection cascade
     if [ -z "$PROJECT" ]; then
-        ACTIVE_PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
-        ACTIVE_PATH=$("$JQ" -r '.projects[] | select(.active == true) | .path' "$WORKSPACE_FILE" 2>/dev/null || true)
+        # Count active projects
+        ACTIVE_COUNT=$("$JQ" '[.projects[] | select(.active == true)] | length' "$WORKSPACE_FILE" 2>/dev/null || echo "0")
 
-        if [ -n "$ACTIVE_PROJECT" ]; then
-            # Auto-register this session for the active project
-            mkdir -p "$CWD/claude_docs/session_notes"
-            TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-            "$JQ" -nc \
-                --arg sid "$SESSION_ID" \
-                --arg proj "$ACTIVE_PROJECT" \
-                --arg ppath "$ACTIVE_PATH" \
-                --arg ts "$TS" \
-                --arg cwd "$CWD" \
-                '{session_id:$sid, project:$proj, project_path:$ppath, started:$ts, cwd:$cwd}' \
-                >> "$REGISTRY_FILE" 2>/dev/null || true
+        if [ "$ACTIVE_COUNT" -eq 0 ]; then
+            "$JQ" -nc --arg ctx "No active projects in workspace. Use /rawgentic:new-project to set one up." \
+                '{additionalContext: $ctx}'
+            exit 0
+        elif [ "$ACTIVE_COUNT" -eq 1 ]; then
+            # Single active project — auto-bind
+            ACTIVE_PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
+            ACTIVE_PATH=$("$JQ" -r '.projects[] | select(.active == true) | .path' "$WORKSPACE_FILE" 2>/dev/null || true)
 
-            # Initialize session notes file if missing
-            NOTES_FILE="$NOTES_DIR/${ACTIVE_PROJECT}.md"
-            if [ ! -f "$NOTES_FILE" ]; then
-                mkdir -p "$NOTES_DIR"
-                printf '# Session Notes -- %s\n' "$ACTIVE_PROJECT" > "$NOTES_FILE"
+            if [ -n "$ACTIVE_PROJECT" ]; then
+                # Auto-register this session for the active project
+                mkdir -p "$CWD/claude_docs/session_notes"
+                TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+                "$JQ" -nc \
+                    --arg sid "$SESSION_ID" \
+                    --arg proj "$ACTIVE_PROJECT" \
+                    --arg ppath "$ACTIVE_PATH" \
+                    --arg ts "$TS" \
+                    --arg cwd "$CWD" \
+                    '{session_id:$sid, project:$proj, project_path:$ppath, started:$ts, cwd:$cwd}' \
+                    >> "$REGISTRY_FILE" 2>/dev/null || true
+
+                # Initialize session notes file if missing
+                NOTES_FILE="$NOTES_DIR/${ACTIVE_PROJECT}.md"
+                if [ ! -f "$NOTES_FILE" ]; then
+                    mkdir -p "$NOTES_DIR"
+                    printf '# Session Notes -- %s\n' "$ACTIVE_PROJECT" > "$NOTES_FILE"
+                fi
+
+                PROJECT="$ACTIVE_PROJECT"
+                PROJECT_PATH="$ACTIVE_PATH"
             fi
-
-            # Re-set variables and continue to full context injection
-            PROJECT="$ACTIVE_PROJECT"
-            PROJECT_PATH="$ACTIVE_PATH"
         else
-            "$JQ" -nc --arg ctx "SESSION_ID: ${SESSION_ID}. No active project in workspace. Use /rawgentic:switch to select one." \
+            # Multiple active projects — prompt user to bind
+            ACTIVE_NAMES=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | join(", ")' "$WORKSPACE_FILE" 2>/dev/null || true)
+            "$JQ" -nc --arg ctx "Multiple projects active: ${ACTIVE_NAMES}. Use /rawgentic:switch <name> to bind this session to a project." \
                 '{additionalContext: $ctx}'
             exit 0
         fi
