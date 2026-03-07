@@ -34,7 +34,10 @@ _do_stop() {
 
     # Fallback to active workspace project
     if [ -z "$PROJECT" ]; then
-        PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
+        # Multi-active fallback: with multiple active projects, pick the first one.
+        # The stop hook needs *some* project name for WAL entry. Best-effort is acceptable here
+        # because the session is ending — the WAL entry is informational, not authoritative.
+        PROJECT=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | first // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
     fi
 
     [ -z "$PROJECT" ] && exit 0
@@ -65,14 +68,15 @@ _do_stop() {
     printf '\n---\n# Session: %s | ID: %s | Status: COMPLETE\n## Project: %s\n' \
         "$TS" "$SESSION_ID" "$PROJECT" >> "$NOTES_FILE"
 
-    # Log to WAL
-    WAL_FILE="$CWD/claude_docs/wal.jsonl"
+    # Log to per-project WAL
+    WAL_DIR="$CWD/claude_docs/wal"
+    mkdir -p "$WAL_DIR" 2>/dev/null || true
     "$JQ" -nc \
         --arg ts "$TS" \
         --arg session "$SESSION_ID" \
         --arg project "$PROJECT" \
         '{ts:$ts, phase:"STOP", session:$session, project:$project, summary:"Session ended"}' \
-        >> "$WAL_FILE" 2>/dev/null || true
+        >> "$WAL_DIR/${PROJECT}.jsonl" 2>/dev/null || true
 }
 
 _do_stop 2>/dev/null || true
