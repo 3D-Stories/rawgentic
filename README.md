@@ -1,6 +1,6 @@
 # rawgentic
 
-**12 SDLC workflow skills for Claude Code**
+**13 SDLC workflow skills + security hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,11 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 12 workflow skills organized in two layers:
+**Rawgentic** provides 13 workflow skills organized in three layers:
 
-- **Workspace management** (3 skills) — Project registration, configuration, and switching
+- **Workspace management** (3 skills) — Project registration, configuration, and session binding
 - **SDLC workflows** (9 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment
+- **Security & infrastructure** (1 skill + hooks) — Dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
 
@@ -77,6 +78,7 @@ See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design
 | Claude Code CLI                  | `claude --version`           | [Install guide](https://docs.anthropic.com/en/docs/claude-code) |
 | GitHub CLI                       | `gh auth status`             | `brew install gh` / [gh install](https://cli.github.com/)       |
 | Git repository                   | `git status`                 | `git init`                                                      |
+| jq (JSON processor)              | `jq --version`               | `apt install jq` / `brew install jq`                           |
 | reflexion plugin                 | `/reflexion:reflect`         | `claude plugin add reflexion@context-engineering-kit`           |
 | superpowers plugin (recommended) | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official`         |
 
@@ -90,7 +92,8 @@ See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design
 | --------------------------- | ---------------------------------------------------- |
 | `/rawgentic:new-project`    | Register a new or existing project in the workspace  |
 | `/rawgentic:setup`          | Auto-detect tech stack and generate `.rawgentic.json` |
-| `/rawgentic:switch`         | Switch the active project                            |
+| `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate |
+| `/rawgentic:sync-security-patterns` | Merge upstream security patterns into local config |
 
 ### SDLC Workflows
 
@@ -224,6 +227,46 @@ See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design
 - SEV-1 through SEV-4 classification drives response urgency
 </details>
 
+### Hooks & Security
+
+Rawgentic includes hooks that run automatically on Claude Code events:
+
+| Hook | Event | Purpose |
+|------|-------|---------|
+| `wal-pre` | PreToolUse | Logs INTENT before mutation tools execute |
+| `wal-post` | PostToolUse | Logs DONE after successful execution |
+| `wal-post-fail` | PostToolUseFailure | Logs FAIL after failed execution |
+| `wal-stop` | Stop | Logs session end marker |
+| `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
+| `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
+| `wal-guard` | PreToolUse | Blocks dangerous bash commands (rm -rf, DROP TABLE, etc.) |
+| `session-start` | SessionStart | WAL recovery, session notes archival, project reconciliation, resume context |
+| `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
+| `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
+
+**Security Guard** blocks writes containing dangerous patterns (API keys, hardcoded credentials, eval/exec, SQL injection vectors). Patterns are defined in `hooks/security-patterns.json` with per-project exceptions in `.rawgentic.json`. Uses the Claude Code `permissionDecision: deny` protocol for hard blocking (not retried).
+
+**WAL (Write-Ahead Log)** records every mutation tool call to `claude_docs/wal/{project}.jsonl`. On session resume, incomplete operations are surfaced for recovery. WAL files are per-project — each active project gets its own log.
+
+### Multi-Project Concurrent Sessions
+
+Multiple Claude Code sessions can work on different projects simultaneously from the same workspace root.
+
+**How it works:**
+- Multiple projects can have `active: true` in `.rawgentic_workspace.json`
+- Each session is **bound** to a project via `claude_docs/session_registry.jsonl`
+- WAL logs are per-project: `claude_docs/wal/{project}.jsonl`
+- The `wal-bind-guard` hook enforces binding and prevents cross-project file writes
+
+**Session binding cascade:**
+1. Session already in registry → use that project
+2. Exactly one active project → auto-bind
+3. Multiple active projects → prompt user to run `/rawgentic:switch <name>`
+
+**Cross-project protection:** If session A is bound to `chorestory` and tries to write a file under `projects/rawgentic/`, the `wal-bind-guard` hook denies the operation.
+
+**Directory reconciliation:** On startup/resume, the `session-start` hook checks that all active projects' directories exist on disk. Missing directories are deactivated and the user is prompted to remove or re-setup.
+
 ---
 
 ## Configuration
@@ -284,11 +327,13 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 }
 ```
 
+**Multi-project:** Multiple projects can be `active: true` simultaneously. The `active` flag means the project is provisioned and available — it does not mean "this is the current session's project." Session-to-project binding is tracked in `claude_docs/session_registry.jsonl`.
+
 ### Config-Loading Protocol
 
 All 9 workflow skills share an identical config-loading block that runs before any workflow step:
 
-1. Read `.rawgentic_workspace.json` → find active project
+1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Read `<project-path>/.rawgentic.json` → validate version
 3. Build `capabilities` object (has_tests, has_ci, has_deploy, etc.)
 4. All subsequent steps use config and capabilities — never probe the filesystem
@@ -368,6 +413,10 @@ During workflow execution, skills may discover new information about the project
 | Workflow upgrades to WF2         | Bug fix classified as complex (10+ files)      | Expected — complex bugs get the full feature workflow         |
 | Context runs out mid-workflow    | Long workflow exceeded context window          | Skills document state before compaction — re-invoke to resume |
 | Stop hook blocks every response  | Session not registered with real session ID    | Fixed in v2.3.0 — `wal-context` auto-registers on first prompt |
+| "Multiple projects active"       | Multiple projects have `active: true`         | Run `/rawgentic:switch <name>` to bind this session            |
+| "Session isn't bound to a project" | Unbound session with multiple active projects | Run `/rawgentic:switch <name>` to bind                        |
+| Cross-project write denied       | File path is in a different project            | Switch first with `/rawgentic:switch <target>`, or ask user   |
+| Hook errors after plugin update  | Session still references old cache path        | Exit session, reinstall plugin, start new session              |
 
 ---
 
@@ -387,6 +436,8 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Security Audit (WF9)](docs/design/workflow-security-audit.md)
   - [Performance Optimization (WF10)](docs/design/workflow-performance-optimization.md)
   - [Incident Response (WF11)](docs/design/workflow-incident-response.md)
+  - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
+  - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
 - **Diagrams** (in `diagrams/`): Excalidraw visual diagrams for each workflow and the framework architecture
 
 ---
