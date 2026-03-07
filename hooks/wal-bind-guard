@@ -1,0 +1,92 @@
+#!/bin/bash
+# WAL Bind Guard — Enforces session binding and prevents cross-project file writes.
+# Hook: PreToolUse (matcher: Edit|Write|MultiEdit|NotebookEdit|Read)
+# Denies tool use if:
+#   1. Session is unbound and multiple projects are active
+#   2. File path belongs to a different project than the bound one
+# Fail-open: if jq is unavailable or any error occurs, allows the operation.
+# Design: docs/plans/2026-03-07-multi-project-sessions-design.md
+
+set -euo pipefail
+
+INPUT=$(cat)
+
+JQ="${HOME}/.local/bin/jq"
+[ -x "$JQ" ] || JQ="jq"
+command -v "$JQ" &>/dev/null || exit 0
+
+SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
+CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
+TOOL_NAME=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_name // ""')
+
+[ "$SESSION_ID" = "unknown" ] && exit 0
+
+# --- Find workspace ---
+WORKSPACE_FILE=""
+[ -f "$CWD/.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
+[ -z "$WORKSPACE_FILE" ] && [ -f "$CWD/../.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
+[ -z "$WORKSPACE_FILE" ] && exit 0
+
+# --- Resolve bound project from registry ---
+REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+BOUND_PROJECT=""
+if [ -f "$REGISTRY_FILE" ]; then
+    REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
+    if [ -n "$REG_LINE" ]; then
+        BOUND_PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""' 2>/dev/null || true)
+    fi
+fi
+
+# --- Gate 1: Unbound session check ---
+if [ -z "$BOUND_PROJECT" ]; then
+    ACTIVE_COUNT=$("$JQ" '[.projects[] | select(.active == true)] | length' "$WORKSPACE_FILE" 2>/dev/null || echo "0")
+    if [ "$ACTIVE_COUNT" -gt 1 ]; then
+        ACTIVE_NAMES=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | join(", ")' "$WORKSPACE_FILE" 2>/dev/null || true)
+        cat <<DENYEOF
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"This session isn't bound to a project yet. Multiple projects are active: ${ACTIVE_NAMES}. Ask the user which project they want to work on, then run /rawgentic:switch <name> to bind this session."}
+DENYEOF
+        exit 0
+    fi
+    # Single or zero active — allow (wal-context handles auto-bind)
+    exit 0
+fi
+
+# --- Gate 2: Cross-project file guard ---
+# Extract file path from tool input
+FILE_PATH=""
+if [ "$TOOL_NAME" = "NotebookEdit" ]; then
+    FILE_PATH=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.notebook_path // ""' 2>/dev/null || true)
+else
+    FILE_PATH=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.file_path // ""' 2>/dev/null || true)
+fi
+
+# No file path or not absolute — allow
+[ -z "$FILE_PATH" ] && exit 0
+[[ "$FILE_PATH" != /* ]] && exit 0
+
+# Resolve workspace root (directory containing .rawgentic_workspace.json)
+WORKSPACE_ROOT=$(cd "$(dirname "$WORKSPACE_FILE")" && pwd 2>/dev/null) || {
+    # Path resolution failed — fail-open, log to stderr for debugging
+    echo "wal-bind-guard: could not resolve workspace root from $WORKSPACE_FILE" >&2
+    exit 0
+}
+
+# Check if file is under a DIFFERENT project's directory
+VIOLATION=$("$JQ" -r --arg file "$FILE_PATH" --arg bound "$BOUND_PROJECT" --arg root "$WORKSPACE_ROOT" '
+  .projects[]
+  | select(.name != $bound and .active == true)
+  | .path as $p
+  | ($root + "/" + ($p | ltrimstr("./")) + "/") as $abs
+  | select($file | startswith($abs))
+  | .name
+' "$WORKSPACE_FILE" 2>/dev/null | head -1 || true)
+
+if [ -n "$VIOLATION" ]; then
+    cat <<DENYEOF
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"You're bound to **${BOUND_PROJECT}** but this file is in **${VIOLATION}**. Switch first with /rawgentic:switch ${VIOLATION}, or ask the user if this cross-project edit is intentional."}
+DENYEOF
+    exit 0
+fi
+
+# All checks passed — allow
+exit 0
