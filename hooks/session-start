@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# SessionStart hook for rawgentic plugin — workspace-aware context injection
-# Design: docs/plans/2026-03-06-plugin-overhaul-design.md
+# Unified SessionStart hook — WAL recovery + session notes archival + rawgentic context
+# Fires on: startup, resume, clear, compact
+# Design: docs/plans/2026-03-06-wal-session-notes-design.md
 
 set -euo pipefail
 
-# Escape string for JSON embedding using bash parameter substitution.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- Shared utilities ---
 escape_for_json() {
     local s="$1"
     s="${s//\\/\\\\}"
@@ -15,64 +18,213 @@ escape_for_json() {
     printf '%s' "$s"
 }
 
-# Emit hook output and exit.
-emit() {
-    local ctx="$1"
-    cat <<HOOKEOF
-{
-  "hookSpecificOutput": {
-    "hookEventName": "SessionStart",
-    "additionalContext": "${ctx}"
-  }
-}
-HOOKEOF
-    exit 0
-}
+# --- Read input ---
+INPUT=$(cat)
 
-# Find workspace file — check current dir, then parent (for subdirectory launches)
+# Try jq first, fall back to python3
+JQ="${HOME}/.local/bin/jq"
+[ -x "$JQ" ] || JQ="jq"
+
+if command -v "$JQ" &>/dev/null; then
+    CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
+    SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
+    EVENT_TYPE=$(printf '%s' "$INPUT" | "$JQ" -r '.hook_event_name // "startup"')
+else
+    CWD=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd','.'))" 2>/dev/null || echo ".")
+    SESSION_ID=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id','unknown'))" 2>/dev/null || echo "unknown")
+    EVENT_TYPE="startup"
+fi
+
+CONTEXT_PARTS=()
+
+# =========================================================================
+# SECTION 1: WAL Operations (always runs)
+# =========================================================================
+_do_wal_ops() {
+    if ! command -v "$JQ" &>/dev/null; then
+        return 0
+    fi
+
+    WAL_FILE="$CWD/claude_docs/wal.jsonl"
+    [ -f "$WAL_FILE" ] || return 0
+
+    # Sanitize malformed lines
+    CLEAN_FILE=$(mktemp)
+    "$JQ" -c '.' "$WAL_FILE" 2>/dev/null > "$CLEAN_FILE" || true
+    [ -s "$CLEAN_FILE" ] || { rm -f "$CLEAN_FILE"; return 0; }
+
+    # WAL Rotation (>5000 lines)
+    LINE_COUNT=$(wc -l < "$CLEAN_FILE")
+    if [ "$LINE_COUNT" -gt 5000 ]; then
+        CUTOFF=$(date -u -d '7 days ago' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-7d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || printf '')
+        if [ -n "$CUTOFF" ]; then
+            ROTATED=$("$JQ" -sc --arg cutoff "$CUTOFF" '
+                (group_by(.tool_use_id)
+                 | map(select(
+                     (map(.phase) | index("INTENT")) != null
+                     and (map(.phase) | index("DONE")) == null
+                     and (map(.phase) | index("FAIL")) == null
+                   ))
+                 | map(.[0].tool_use_id)
+                ) as $incomplete_ids
+                |
+                [.[] | select(.ts >= $cutoff or (.tool_use_id as $id | $incomplete_ids | index($id) != null))]
+                | .[]
+            ' "$CLEAN_FILE" 2>/dev/null) || true
+            if [ -n "$ROTATED" ]; then
+                printf '%s\n' "$ROTATED" > "$CLEAN_FILE"
+                cp "$CLEAN_FILE" "$WAL_FILE"
+            fi
+        fi
+    fi
+
+    # Find incomplete operations
+    INCOMPLETE=$("$JQ" -sc '
+        group_by(.tool_use_id)
+        | map(
+            select(
+              (map(.phase) | index("INTENT")) != null
+              and (map(.phase) | index("DONE")) == null
+              and (map(.phase) | index("FAIL")) == null
+            )
+            | map(select(.phase == "INTENT"))[0]
+          )
+        | .[]
+    ' "$CLEAN_FILE" 2>/dev/null) || true
+
+    rm -f "$CLEAN_FILE"
+
+    if [ -n "$INCOMPLETE" ]; then
+        COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
+        SUMMARY=$(printf '%s\n' "$INCOMPLETE" | "$JQ" -r '"  - [" + .ts + "] " + .tool + ": " + .summary' 2>/dev/null | head -20)
+        CONTEXT_PARTS+=("WAL RECOVERY: Found $COUNT incomplete operation(s) from previous session(s):
+$SUMMARY
+Review these and determine if any recovery action is needed.")
+    fi
+}
+_do_wal_ops 2>/dev/null || true
+
+# =========================================================================
+# SECTION 2: Session Notes Archival (startup event only)
+# =========================================================================
+_do_archival() {
+    [ "$EVENT_TYPE" = "startup" ] || return 0
+
+    NOTES_DIR="$CWD/claude_docs/session_notes"
+    [ -d "$NOTES_DIR" ] || return 0
+
+    ARCHIVE_DIR="$NOTES_DIR/archive"
+
+    for notes_file in "$NOTES_DIR"/*.md; do
+        [ -f "$notes_file" ] || continue
+        LINE_COUNT=$(wc -l < "$notes_file")
+        if [ "$LINE_COUNT" -gt 600 ]; then
+            mkdir -p "$ARCHIVE_DIR"
+            BASENAME=$(basename "$notes_file" .md)
+            DATE_STAMP=$(date -u +"%Y-%m-%d")
+            mv "$notes_file" "$ARCHIVE_DIR/${BASENAME}_${DATE_STAMP}.md"
+            printf '# Session Notes -- %s\n' "$BASENAME" > "$notes_file"
+            CONTEXT_PARTS+=("Session notes for '$BASENAME' archived ($LINE_COUNT lines) to session_notes/archive/.")
+        fi
+    done
+}
+_do_archival 2>/dev/null || true
+
+# =========================================================================
+# SECTION 3: Rawgentic Workspace Context (always runs)
+# =========================================================================
+
+# Check session registry first
+_registry_project=""
+REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+if [ -f "$REGISTRY_FILE" ] && [ "$SESSION_ID" != "unknown" ]; then
+    _registry_line=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
+    if [ -n "$_registry_line" ] && command -v "$JQ" &>/dev/null; then
+        _registry_project=$(printf '%s' "$_registry_line" | "$JQ" -r '.project // ""' 2>/dev/null || true)
+    fi
+fi
+
+# Find workspace file
 WORKSPACE_FILE=""
-if [ -f ".rawgentic_workspace.json" ]; then
-    WORKSPACE_FILE=".rawgentic_workspace.json"
-elif [ -f "../.rawgentic_workspace.json" ]; then
-    WORKSPACE_FILE="../.rawgentic_workspace.json"
+if [ -f "$CWD/.rawgentic_workspace.json" ]; then
+    WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
+elif [ -f "$CWD/../.rawgentic_workspace.json" ]; then
+    WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
 fi
 
-# State 1: No workspace file
 if [ -z "$WORKSPACE_FILE" ]; then
-    emit "$(escape_for_json "No rawgentic workspace found. Run /rawgentic:new-project to get started.")"
-fi
+    CONTEXT_PARTS+=("No rawgentic workspace found. Run /rawgentic:new-project to get started.")
+else
+    if ! python3 -c "import json; json.load(open('${WORKSPACE_FILE}'))" 2>/dev/null; then
+        CONTEXT_PARTS+=("Rawgentic workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix .rawgentic_workspace.json manually.")
+    else
+        PROJECTS_COUNT=$(python3 -c "import json; d=json.load(open('${WORKSPACE_FILE}')); print(len(d.get('projects',[])))")
+        if [ "$PROJECTS_COUNT" -eq 0 ]; then
+            CONTEXT_PARTS+=("Rawgentic workspace exists but no projects registered. Run /rawgentic:new-project.")
+        else
+            # If registry knows our project, report that; otherwise use active project
+            if [ -n "$_registry_project" ]; then
+                ACTIVE_INFO=$(python3 -c "
+import json
+d = json.load(open('${WORKSPACE_FILE}'))
+for p in d.get('projects', []):
+    if p['name'] == '${_registry_project}':
+        print(f\"{p['name']}|{p['path']}|{p.get('configured', False)}\")
+        break
+" 2>/dev/null || true)
+            fi
 
-# Validate JSON before parsing
-if ! python3 -c "import json; json.load(open('${WORKSPACE_FILE}'))" 2>/dev/null; then
-    emit "$(escape_for_json "Rawgentic workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix .rawgentic_workspace.json manually.")"
-fi
-
-# Parse workspace file
-PROJECTS_COUNT=$(python3 -c "import json; d=json.load(open('${WORKSPACE_FILE}')); print(len(d.get('projects',[])))")
-
-# State 2: No projects registered
-if [ "$PROJECTS_COUNT" -eq 0 ]; then
-    emit "$(escape_for_json "Rawgentic workspace exists but no projects registered. Run /rawgentic:new-project.")"
-fi
-
-# State 3: Active project found
-ACTIVE_INFO=$(python3 -c "
+            # Fall back to active project if registry didn't match
+            if [ -z "${ACTIVE_INFO:-}" ]; then
+                ACTIVE_INFO=$(python3 -c "
 import json
 d = json.load(open('${WORKSPACE_FILE}'))
 for p in d.get('projects', []):
     if p.get('active'):
         print(f\"{p['name']}|{p['path']}|{p.get('configured', False)}\")
         break
-")
+" 2>/dev/null || true)
+            fi
 
-if [ -n "$ACTIVE_INFO" ]; then
-    IFS='|' read -r ACTIVE_NAME ACTIVE_PATH CONFIGURED <<< "$ACTIVE_INFO"
-
-    if [ "$CONFIGURED" = "True" ]; then
-        emit "$(escape_for_json "Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")"
-    else
-        emit "$(escape_for_json "Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")"
+            if [ -n "${ACTIVE_INFO:-}" ]; then
+                IFS='|' read -r ACTIVE_NAME ACTIVE_PATH CONFIGURED <<< "$ACTIVE_INFO"
+                if [ "$CONFIGURED" = "True" ]; then
+                    CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
+                else
+                    CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
+                fi
+            else
+                CONTEXT_PARTS+=("Rawgentic workspace has projects but none is active. Run /rawgentic:switch to select one.")
+            fi
+        fi
     fi
-else
-    emit "$(escape_for_json "Rawgentic workspace has projects but none is active. Run /rawgentic:switch to select one.")"
 fi
+
+# =========================================================================
+# SECTION 4: Emit combined context
+# =========================================================================
+if [ ${#CONTEXT_PARTS[@]} -eq 0 ]; then
+    exit 0
+fi
+
+# Join all context parts with double newline
+COMBINED=""
+for part in "${CONTEXT_PARTS[@]}"; do
+    if [ -n "$COMBINED" ]; then
+        COMBINED="${COMBINED}
+
+${part}"
+    else
+        COMBINED="$part"
+    fi
+done
+
+ESCAPED=$(escape_for_json "$COMBINED")
+cat <<HOOKEOF
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "${ESCAPED}"
+  }
+}
+HOOKEOF
