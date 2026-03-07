@@ -10,7 +10,19 @@ You are the rawgentic project registration assistant. Your job is to add a proje
 
 # New Project — `/rawgentic:new-project`
 
-Run through all 6 steps below **sequentially**. Ask for user input where indicated.
+Run through all steps below **sequentially**. Ask for user input where indicated.
+
+---
+
+## Step 0: Determine Workspace Root
+
+The **workspace root** is the directory Claude Code was launched from (the primary working directory). All relative paths in this skill are resolved from this root.
+
+Determine the workspace root by checking (in order):
+1. If `.rawgentic_workspace.json` already exists somewhere above CWD, that directory is the root.
+2. Otherwise, use the **primary working directory** reported in your environment (the directory Claude was invoked in — NOT the plugin directory, NOT the rawgentic source repo).
+
+Store the absolute path as `WORKSPACE_ROOT` and use it for all subsequent file operations.
 
 ---
 
@@ -18,12 +30,13 @@ Run through all 6 steps below **sequentially**. Ask for user input where indicat
 
 The user provides either a **name** or a **path** as the argument.
 
-- **Bare name** (e.g., `my-app`) → Construct path as `./projects/<name>`. The name is the argument as-is.
-- **Path** (e.g., `./projects/my-app` or `./custom/location`) → The name is the last segment of the path (e.g., `my-app`).
+- **Bare name** (e.g., `my-app`) → Construct path as `{WORKSPACE_ROOT}/projects/<name>`. The name is the argument as-is.
+- **Absolute path** (e.g., `/home/user/repos/my-app`) → Use as-is. The name is the last segment.
+- **Relative path** (e.g., `./projects/my-app` or `./custom/location`) → Resolve relative to `{WORKSPACE_ROOT}`. The name is the last segment.
 - **No argument** → Ask the user: "What's the project name or path?"
 
 After parsing, confirm:
-> Registering project: **<name>** at `<path>`
+> Registering project: **<name>** at `<absolute-path>`
 
 ---
 
@@ -70,7 +83,7 @@ Check whether `<path>` exists on disk.
 
 ## Step 4: Create Workspace File If Missing
 
-If `.rawgentic_workspace.json` does **not** exist in the Claude root directory, create it:
+If `{WORKSPACE_ROOT}/.rawgentic_workspace.json` does **not** exist, create it:
 
 ```json
 {
@@ -79,6 +92,8 @@ If `.rawgentic_workspace.json` does **not** exist in the Claude root directory, 
   "projects": []
 }
 ```
+
+The file MUST be written to `{WORKSPACE_ROOT}/.rawgentic_workspace.json` — never to the plugin directory or CWD if CWD differs from the workspace root.
 
 This handles the cold-start case where a user runs `/rawgentic:new-project` for the very first time.
 
