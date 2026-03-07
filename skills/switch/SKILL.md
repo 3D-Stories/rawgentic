@@ -25,7 +25,7 @@ The user provides a **name** or **path**. They might also use natural language l
 
 ## Step 2: Find in Workspace
 
-Read `.rawgentic_workspace.json`.
+Read `.rawgentic_workspace.json` from the **primary working directory** (the directory Claude was launched from — NOT the plugin directory or current CWD if it has changed).
 
 - **File missing** → STOP. Tell the user: "No rawgentic workspace found. Run `/rawgentic:new-project` first."
 - **Malformed JSON** → STOP. Tell the user: "Workspace file is corrupted. Fix it manually or run `/rawgentic:new-project` to regenerate."
