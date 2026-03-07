@@ -24,7 +24,7 @@ _do_stop() {
     # If Claude is already continuing due to a previous stop hook, allow stop immediately
     STOP_ACTIVE=$(printf '%s' "$INPUT" | "$JQ" -r '.stop_hook_active // false')
     if [ "$STOP_ACTIVE" = "true" ]; then
-        printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"Stop","continue":true}}'
+        printf '%s\n' '{"continue":true}'
         exit 0
     fi
 
@@ -51,7 +51,7 @@ _do_stop() {
                 '{ts:$ts, phase:"WARN", session:$session, summary:"Stop hook: session notes not updated after 2 attempts"}' \
                 >> "$WAL_FILE" 2>/dev/null || true
         fi
-        printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"Stop","continue":true}}'
+        printf '%s\n' '{"continue":true}'
         exit 0
     fi
 
@@ -81,7 +81,7 @@ RULES:
 - Include: changes made, verification results, next steps.
 - If the file does not exist, create it with a header line first.
 Also append a registration line to claude_docs/session_registry.jsonl." \
-            '{hookSpecificOutput:{hookEventName:"Stop",continue:false,reason:$reason}}'
+            '{continue:false,reason:$reason}'
         exit 0
     fi
 
@@ -121,13 +121,13 @@ RULES:
   Then append your session block below.
 
 Also ensure you are registered in claude_docs/session_registry.jsonl." \
-            '{hookSpecificOutput:{hookEventName:"Stop",continue:false,reason:$reason}}'
+            '{continue:false,reason:$reason}'
         exit 0
     fi
 
     # Notes are fresh — allow stop
     rm -f "$ATTEMPT_FILE"
-    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"Stop","continue":true}}'
+    printf '%s\n' '{"continue":true}'
 }
 
 _do_stop 2>/dev/null || true
