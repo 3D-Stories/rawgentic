@@ -1,8 +1,9 @@
 #!/bin/bash
 # WAL Post-Failure Logger — Logs FAIL after tool execution failure.
 # Hook: PostToolUseFailure (matcher: Bash|Edit|Write|NotebookEdit|Task)
-# Appends to $CWD/claude_docs/wal.jsonl
+# Appends to $CWD/claude_docs/wal/{project}.jsonl
 # Error-tolerant: always exits 0 even if logging fails.
+# Skips WAL write if session is unbound (no project resolved).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -10,7 +11,9 @@ _do_log() {
   set -euo pipefail
   source "$SCRIPT_DIR/wal-lib.sh"
   wal_parse_input
+  wal_resolve_project
   wal_init_file
+  [ -z "$WAL_FILE" ] && return 0
   wal_append_phase "FAIL"
 }
 
