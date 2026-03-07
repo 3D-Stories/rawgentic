@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Stop hook — Forces session notes update before Claude stops.
+# Stop hook — Writes session end marker to session notes, never blocks.
 # Guard: exits immediately for non-rawgentic sessions.
-# Retry limit: max 2 attempts, then allows stop.
-# Freshness: checks timestamp in session notes header (5-minute threshold).
-# CRITICAL: checks stop_hook_active to prevent infinite loops.
 # Design: docs/plans/2026-03-06-wal-session-notes-design.md
 
 _do_stop() {
@@ -20,44 +17,12 @@ _do_stop() {
 
     [ "$SESSION_ID" = "unknown" ] && exit 0
 
-    # --- Infinite loop prevention ---
-    # If Claude is already continuing due to a previous stop hook, allow stop immediately
-    STOP_ACTIVE=$(printf '%s' "$INPUT" | "$JQ" -r '.stop_hook_active // false')
-    if [ "$STOP_ACTIVE" = "true" ]; then
-        printf '%s\n' '{"continue":true}'
-        exit 0
-    fi
-
     # --- Guard clause: not a rawgentic session ---
-    if [ ! -f "$CWD/.rawgentic_workspace.json" ] && [ ! -f "$CWD/../.rawgentic_workspace.json" ]; then
-        exit 0
-    fi
-
-    # --- Retry limit: max 2 attempts ---
-    ATTEMPT_FILE="/tmp/wal-stop-${SESSION_ID}"
-    ATTEMPT=0
-    if [ -f "$ATTEMPT_FILE" ]; then
-        ATTEMPT=$(cat "$ATTEMPT_FILE" 2>/dev/null || echo "0")
-    fi
-
-    if [ "$ATTEMPT" -ge 2 ]; then
-        # Max retries exceeded — allow stop, log warning
-        rm -f "$ATTEMPT_FILE"
-        WAL_FILE="$CWD/claude_docs/wal.jsonl"
-        if [ -f "$WAL_FILE" ]; then
-            "$JQ" -nc \
-                --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
-                --arg session "$SESSION_ID" \
-                '{ts:$ts, phase:"WARN", session:$session, summary:"Stop hook: session notes not updated after 2 attempts"}' \
-                >> "$WAL_FILE" 2>/dev/null || true
-        fi
-        printf '%s\n' '{"continue":true}'
-        exit 0
-    fi
-
-    # --- Lookup project from registry ---
     WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
     [ ! -f "$WORKSPACE_FILE" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
+    [ ! -f "$WORKSPACE_FILE" ] && exit 0
+
+    # --- Lookup project from registry ---
     REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
     PROJECT=""
     if [ -f "$REGISTRY_FILE" ]; then
@@ -67,61 +32,47 @@ _do_stop() {
         fi
     fi
 
-    # --- Gate 1: Registry fallback to active workspace project ---
-    if [ -z "$PROJECT" ] && [ -f "$WORKSPACE_FILE" ]; then
+    # Fallback to active workspace project
+    if [ -z "$PROJECT" ]; then
         PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
     fi
 
-    if [ -z "$PROJECT" ]; then
-        # No project found anywhere — allow stop (don't block on unresolvable state)
-        rm -f "$ATTEMPT_FILE"
-        printf '%s\n' '{"continue":true}'
-        exit 0
+    [ -z "$PROJECT" ] && exit 0
+
+    # --- Write session end marker to notes ---
+    NOTES_DIR="$CWD/claude_docs/session_notes"
+    NOTES_FILE="$NOTES_DIR/${PROJECT}.md"
+    TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+    mkdir -p "$NOTES_DIR"
+
+    # Create notes file if missing
+    if [ ! -f "$NOTES_FILE" ]; then
+        printf '# Session Notes -- %s\n' "$PROJECT" > "$NOTES_FILE"
     fi
 
-    # --- Gate 2: Notes timestamp check ---
-    NOTES_FILE="$CWD/claude_docs/session_notes/${PROJECT}.md"
-    NEEDS_UPDATE=true
-
-    if [ -f "$NOTES_FILE" ]; then
-        LAST_HEADER=$(grep "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
-        if [ -n "$LAST_HEADER" ]; then
-            HEADER_TS=$(printf '%s' "$LAST_HEADER" | sed -n 's/.*Session: \([^ ]*\).*/\1/p')
-            if [ -n "$HEADER_TS" ]; then
-                HEADER_EPOCH=$(date -d "$HEADER_TS" +%s 2>/dev/null || echo "0")
-                NOW_EPOCH=$(date +%s)
-                DIFF_SEC=$(( NOW_EPOCH - HEADER_EPOCH ))
-                # 5-minute threshold = 300 seconds
-                if [ "$DIFF_SEC" -lt 300 ]; then
-                    NEEDS_UPDATE=false
-                fi
-            fi
+    # Append session end marker (only if no recent marker for this session)
+    LAST_HEADER=$(grep "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
+    if [ -n "$LAST_HEADER" ]; then
+        # Session already has a header — check if it says COMPLETE
+        if printf '%s' "$LAST_HEADER" | grep -q "COMPLETE"; then
+            # Already marked complete, nothing to do
+            exit 0
         fi
     fi
 
-    if [ "$NEEDS_UPDATE" = true ]; then
-        echo "$(( ATTEMPT + 1 ))" > "$ATTEMPT_FILE"
-        "$JQ" -nc --arg reason "Before finishing, APPEND a new session summary to claude_docs/session_notes/${PROJECT}.md
+    # Append a session end marker
+    printf '\n---\n# Session: %s | ID: %s | Status: COMPLETE\n## Project: %s\n' \
+        "$TS" "$SESSION_ID" "$PROJECT" >> "$NOTES_FILE"
 
-RULES:
-- APPEND ONLY. Do NOT modify, rewrite, or remove any existing content in the file.
-- Start with a --- separator, then the structured header:
-  # Session: $(date -u +"%Y-%m-%dT%H:%M:%SZ") | ID: ${SESSION_ID} | Status: COMPLETE
-  ## Task: <what you worked on>
-  ## Project: ${PROJECT}
-- After the header, include: changes made, verification results, and next steps.
-- If the file does not exist, create it with:
-  # Session Notes -- ${PROJECT}
-  Then append your session block below.
-
-Also ensure you are registered in claude_docs/session_registry.jsonl." \
-            '{continue:false,reason:$reason}'
-        exit 0
-    fi
-
-    # Notes are fresh — allow stop
-    rm -f "$ATTEMPT_FILE"
-    printf '%s\n' '{"continue":true}'
+    # Log to WAL
+    WAL_FILE="$CWD/claude_docs/wal.jsonl"
+    "$JQ" -nc \
+        --arg ts "$TS" \
+        --arg session "$SESSION_ID" \
+        --arg project "$PROJECT" \
+        '{ts:$ts, phase:"STOP", session:$session, project:$project, summary:"Session ended"}' \
+        >> "$WAL_FILE" 2>/dev/null || true
 }
 
 _do_stop 2>/dev/null || true
