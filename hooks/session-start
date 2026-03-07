@@ -37,6 +37,75 @@ fi
 
 CONTEXT_PARTS=()
 
+# Check session registry first
+_registry_project=""
+REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+if [ -f "$REGISTRY_FILE" ] && [ "$SESSION_ID" != "unknown" ]; then
+    _registry_line=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
+    if [ -n "$_registry_line" ] && command -v "$JQ" &>/dev/null; then
+        _registry_project=$(printf '%s' "$_registry_line" | "$JQ" -r '.project // ""' 2>/dev/null || true)
+    fi
+fi
+
+# Find workspace file
+WORKSPACE_FILE=""
+if [ -f "$CWD/.rawgentic_workspace.json" ]; then
+    WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
+elif [ -f "$CWD/../.rawgentic_workspace.json" ]; then
+    WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
+fi
+
+# =========================================================================
+# SECTION 0: Project Directory Reconciliation (startup/resume only)
+# =========================================================================
+_do_reconciliation() {
+    [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "resume" ] || return 0
+    [ -z "$WORKSPACE_FILE" ] && return 0
+
+    if ! command -v python3 &>/dev/null; then
+        return 0
+    fi
+
+    # Check each active project's directory exists
+    MISSING_PROJECTS=$(python3 -c "
+import json, os
+ws = json.load(open('${WORKSPACE_FILE}'))
+ws_dir = os.path.dirname(os.path.abspath('${WORKSPACE_FILE}'))
+missing = []
+for p in ws.get('projects', []):
+    if p.get('active'):
+        abs_path = os.path.normpath(os.path.join(ws_dir, p['path']))
+        if not os.path.isdir(abs_path):
+            missing.append(f\"{p['name']}|{p['path']}\")
+for m in missing:
+    print(m)
+" 2>/dev/null || true)
+
+    if [ -n "$MISSING_PROJECTS" ]; then
+        # Deactivate missing projects in workspace config
+        # Pass missing names via env var to avoid shell injection
+        MISSING_NAMES=$(echo "$MISSING_PROJECTS" | cut -d'|' -f1 | paste -sd',' -)
+        MISSING_NAMES="$MISSING_NAMES" python3 -c "
+import json, os
+ws_path = os.environ.get('WORKSPACE_FILE', '${WORKSPACE_FILE}')
+missing_names = set(os.environ.get('MISSING_NAMES', '').split(','))
+with open(ws_path) as f:
+    ws = json.load(f)
+for p in ws.get('projects', []):
+    if p['name'] in missing_names:
+        p['active'] = False
+with open(ws_path, 'w') as f:
+    json.dump(ws, f, indent=2)
+" 2>/dev/null || true
+
+        # Build context message
+        while IFS='|' read -r name path; do
+            CONTEXT_PARTS+=("Project **${name}** is registered but directory \`${path}\` is missing. Was it removed, or did setup crash? Reply 'remove' to deregister, or 'setup' to re-run \`/rawgentic:new-project ${name}\`.")
+        done <<< "$MISSING_PROJECTS"
+    fi
+}
+_do_reconciliation 2>/dev/null || true
+
 # =========================================================================
 # SECTION 1: WAL Operations (always runs)
 # =========================================================================
@@ -45,7 +114,15 @@ _do_wal_ops() {
         return 0
     fi
 
-    WAL_FILE="$CWD/claude_docs/wal.jsonl"
+    # Determine WAL file: per-project if bound, fall back to legacy
+    WAL_FILE=""
+    if [ -n "$_registry_project" ]; then
+        WAL_FILE="$CWD/claude_docs/wal/${_registry_project}.jsonl"
+    fi
+    # Fall back to legacy WAL if per-project doesn't exist
+    if [ -z "$WAL_FILE" ] || [ ! -f "$WAL_FILE" ]; then
+        WAL_FILE="$CWD/claude_docs/wal.jsonl"
+    fi
     [ -f "$WAL_FILE" ] || return 0
 
     # Sanitize malformed lines
@@ -133,25 +210,6 @@ _do_archival 2>/dev/null || true
 # =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
 # =========================================================================
-
-# Check session registry first
-_registry_project=""
-REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
-if [ -f "$REGISTRY_FILE" ] && [ "$SESSION_ID" != "unknown" ]; then
-    _registry_line=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
-    if [ -n "$_registry_line" ] && command -v "$JQ" &>/dev/null; then
-        _registry_project=$(printf '%s' "$_registry_line" | "$JQ" -r '.project // ""' 2>/dev/null || true)
-    fi
-fi
-
-# Find workspace file
-WORKSPACE_FILE=""
-if [ -f "$CWD/.rawgentic_workspace.json" ]; then
-    WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
-elif [ -f "$CWD/../.rawgentic_workspace.json" ]; then
-    WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
-fi
-
 if [ -z "$WORKSPACE_FILE" ]; then
     CONTEXT_PARTS+=("No rawgentic workspace found. Run /rawgentic:new-project to get started.")
 else
@@ -162,39 +220,67 @@ else
         if [ "$PROJECTS_COUNT" -eq 0 ]; then
             CONTEXT_PARTS+=("Rawgentic workspace exists but no projects registered. Run /rawgentic:new-project.")
         else
-            # If registry knows our project, report that; otherwise use active project
+            # Determine project context
             if [ -n "$_registry_project" ]; then
+                # Session is bound — show bound project info
                 ACTIVE_INFO=$(python3 -c "
 import json
 d = json.load(open('${WORKSPACE_FILE}'))
 for p in d.get('projects', []):
     if p['name'] == '${_registry_project}':
-        print(f\"{p['name']}|{p['path']}|{p.get('configured', False)}\")
+        print(f\"{p['name']}|{p['path']}|{p.get('configured', False)}|{p.get('active', False)}\")
         break
 " 2>/dev/null || true)
-            fi
 
-            # Fall back to active project if registry didn't match
-            if [ -z "${ACTIVE_INFO:-}" ]; then
-                ACTIVE_INFO=$(python3 -c "
-import json
-d = json.load(open('${WORKSPACE_FILE}'))
-for p in d.get('projects', []):
-    if p.get('active'):
-        print(f\"{p['name']}|{p['path']}|{p.get('configured', False)}\")
-        break
-" 2>/dev/null || true)
-            fi
-
-            if [ -n "${ACTIVE_INFO:-}" ]; then
-                IFS='|' read -r ACTIVE_NAME ACTIVE_PATH CONFIGURED <<< "$ACTIVE_INFO"
-                if [ "$CONFIGURED" = "True" ]; then
-                    CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
-                else
-                    CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
+                if [ -n "${ACTIVE_INFO:-}" ]; then
+                    IFS='|' read -r ACTIVE_NAME ACTIVE_PATH CONFIGURED IS_ACTIVE <<< "$ACTIVE_INFO"
+                    if [ "$EVENT_TYPE" = "resume" ]; then
+                        if [ "$IS_ACTIVE" = "True" ]; then
+                            CONTEXT_PARTS+=("Resuming work on project: **${ACTIVE_NAME}** (${ACTIVE_PATH}).")
+                        else
+                            CONTEXT_PARTS+=("Your previous session was bound to **${ACTIVE_NAME}**, but that project is no longer active (directory may have been removed).")
+                        fi
+                    else
+                        if [ "$CONFIGURED" = "True" ]; then
+                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
+                        else
+                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
+                        fi
+                    fi
                 fi
             else
-                CONTEXT_PARTS+=("Rawgentic workspace has projects but none is active. Run /rawgentic:switch to select one.")
+                # No registry binding — show active project summary
+                ACTIVE_SUMMARY=$(python3 -c "
+import json
+d = json.load(open('${WORKSPACE_FILE}'))
+active = [p['name'] for p in d.get('projects', []) if p.get('active')]
+if len(active) == 0:
+    print('NONE')
+elif len(active) == 1:
+    p = [p for p in d['projects'] if p.get('active')][0]
+    conf = 'True' if p.get('configured') else 'False'
+    print(f\"SINGLE|{p['name']}|{p['path']}|{conf}\")
+else:
+    print(f\"MULTI|{', '.join(active)}\")
+" 2>/dev/null || true)
+
+                case "${ACTIVE_SUMMARY%%|*}" in
+                    NONE)
+                        CONTEXT_PARTS+=("Rawgentic workspace has projects but none is active. Run /rawgentic:switch to select one.")
+                        ;;
+                    SINGLE)
+                        IFS='|' read -r _ ACTIVE_NAME ACTIVE_PATH CONFIGURED <<< "$ACTIVE_SUMMARY"
+                        if [ "$CONFIGURED" = "True" ]; then
+                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
+                        else
+                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
+                        fi
+                        ;;
+                    MULTI)
+                        NAMES="${ACTIVE_SUMMARY#MULTI|}"
+                        CONTEXT_PARTS+=("Multiple projects active: ${NAMES}. Use /rawgentic:switch <name> to bind this session to a project.")
+                        ;;
+                esac
             fi
         fi
     fi
