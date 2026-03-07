@@ -90,6 +90,8 @@ Read `.rawgentic_workspace.json`, then:
    ```
    Create the file and `claude_docs/session_notes/` directory if they don't exist.
 
+   **How to get your session ID:** Read `claude_docs/session_registry.jsonl` and find the most recent entry matching this session (you can grep for entries written in the last few minutes). Copy the `session_id` value from that entry. Alternatively, if this is a new session with no registry entry yet, read the session ID from the session-start hook context that was provided at the start of this conversation. **Do NOT use `$CLAUDE_SESSION_ID`** — it is not available as an environment variable.
+
 Report:
 ```
 Bound to: <name> (<path>)
