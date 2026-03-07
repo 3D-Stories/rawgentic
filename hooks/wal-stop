@@ -56,6 +56,8 @@ _do_stop() {
     fi
 
     # --- Lookup project from registry ---
+    WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
+    [ ! -f "$WORKSPACE_FILE" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
     REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
     PROJECT=""
     if [ -f "$REGISTRY_FILE" ]; then
@@ -65,23 +67,15 @@ _do_stop() {
         fi
     fi
 
-    # --- Gate 1: Registry check ---
+    # --- Gate 1: Registry fallback to active workspace project ---
+    if [ -z "$PROJECT" ] && [ -f "$WORKSPACE_FILE" ]; then
+        PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
+    fi
+
     if [ -z "$PROJECT" ]; then
-        echo "$(( ATTEMPT + 1 ))" > "$ATTEMPT_FILE"
-        "$JQ" -nc --arg reason "Before finishing, register this session and update session notes.
-
-Use /rawgentic:switch <project> to register, then APPEND a session summary to claude_docs/session_notes/<project>.md.
-
-RULES:
-- APPEND ONLY. Do NOT modify, rewrite, or remove existing content.
-- Start with a --- separator, then:
-  # Session: $(date -u +"%Y-%m-%dT%H:%M:%SZ") | ID: ${SESSION_ID} | Status: COMPLETE
-  ## Task: <what you worked on>
-  ## Project: <project name>
-- Include: changes made, verification results, next steps.
-- If the file does not exist, create it with a header line first.
-Also append a registration line to claude_docs/session_registry.jsonl." \
-            '{continue:false,reason:$reason}'
+        # No project found anywhere — allow stop (don't block on unresolvable state)
+        rm -f "$ATTEMPT_FILE"
+        printf '%s\n' '{"continue":true}'
         exit 0
     fi
 

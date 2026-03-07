@@ -145,6 +145,11 @@ Read `.rawgentic_workspace.json`, then:
    ```json
    {"session_id":"<your session_id>","project":"<name>","project_path":"./<relative-path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
    ```
+5. **Initialize session notes file:** If `claude_docs/session_notes/<name>.md` does not exist, create it with:
+   ```markdown
+   # Session Notes -- <name>
+   ```
+   This ensures the `wal-stop` hook has a file to check for session freshness.
 
 Confirm to the user:
 > Registered **<name>** as the active project.
