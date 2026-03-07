@@ -12,6 +12,14 @@ from security_guard_lib import (
     normalize_path,
     extract_content,
 )
+from security_guard_lib import (
+    check_word_boundary,
+    sanitize_path_for_message,
+    suggest_glob,
+    match_patterns,
+    filter_exceptions,
+    format_deny,
+)
 
 
 class TestGlobMatch:
@@ -103,3 +111,81 @@ class TestExtractContent:
 
     def test_none_new_string_returns_empty(self):
         assert extract_content("Edit", {"file_path": "f.js", "new_string": None}) == ""
+
+
+class TestCheckWordBoundary:
+    """Test word boundary checking for substring matches.
+
+    The word boundary check ensures the character BEFORE the match
+    is not alphabetic. The substring itself should include a trailing
+    delimiter (like '(' or '.') to prevent after-boundary issues.
+    """
+
+    def test_eval_standalone(self):
+        assert check_word_boundary("x = eval(code)", "eval(") is True
+
+    def test_eval_at_start(self):
+        assert check_word_boundary("eval(code)", "eval(") is True
+
+    def test_medieval_false_positive(self):
+        assert check_word_boundary("medieval(castle)", "eval(") is False
+
+    def test_pickle_dot_standalone(self):
+        assert check_word_boundary("import pickle.", "pickle.") is True
+
+    def test_pickled_with_dot_pattern(self):
+        """pickled_data does not contain 'pickle.' (with dot)."""
+        assert check_word_boundary("pickled_data = 1", "pickle.") is False
+
+    def test_document_write_paren(self):
+        assert check_word_boundary("document.write(x)", "document.write(") is True
+
+    def test_document_writestream(self):
+        assert check_word_boundary("document.writeStream", "document.write(") is False
+
+    def test_space_before(self):
+        assert check_word_boundary("x = eval(y)", "eval(") is True
+
+    def test_dot_before(self):
+        assert check_word_boundary("obj.eval(y)", "eval(") is True
+
+    def test_newline_before(self):
+        assert check_word_boundary("\neval(y)", "eval(") is True
+
+    def test_substring_at_end_of_content(self):
+        assert check_word_boundary("use eval(", "eval(") is True
+
+    def test_import_pickle(self):
+        """import pickle matches 'import pickle' pattern."""
+        assert check_word_boundary("import pickle\nimport json", "import pickle") is True
+
+
+class TestSanitizePathForMessage:
+    def test_normal_path(self):
+        assert sanitize_path_for_message("src/foo.js") == "src/foo.js"
+
+    def test_strips_special_chars(self):
+        result = sanitize_path_for_message("src/foo;rm -rf/.js")
+        assert ";" not in result
+        assert " " not in result
+
+    def test_truncates_long_path(self):
+        long_path = "a/" * 200 + "foo.js"
+        assert len(sanitize_path_for_message(long_path)) <= 200
+
+
+class TestSuggestGlob:
+    def test_tests_dir(self):
+        assert suggest_glob("src/__tests__/unit/foo.test.js") == "**/__tests__/**"
+
+    def test_test_dir(self):
+        assert suggest_glob("src/test/foo.js") == "**/test/**"
+
+    def test_spec_dir(self):
+        assert suggest_glob("src/spec/foo.js") == "**/spec/**"
+
+    def test_github_workflows(self):
+        assert suggest_glob(".github/workflows/ci.yml") == ".github/workflows/**"
+
+    def test_fallback_to_file_path(self):
+        assert suggest_glob("src/utils/helper.js") == "src/utils/helper.js"
