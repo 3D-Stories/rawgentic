@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# Stop hook — Forces session notes update before Claude stops.
+# Guard: exits immediately for non-rawgentic sessions.
+# Retry limit: max 2 attempts, then allows stop.
+# Freshness: checks timestamp in session notes header (5-minute threshold).
+# CRITICAL: checks stop_hook_active to prevent infinite loops.
+# Design: docs/plans/2026-03-06-wal-session-notes-design.md
+
+_do_stop() {
+    set -euo pipefail
+
+    INPUT=$(cat)
+
+    JQ="${HOME}/.local/bin/jq"
+    [ -x "$JQ" ] || JQ="jq"
+    command -v "$JQ" &>/dev/null || exit 0
+
+    SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
+    CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
+
+    [ "$SESSION_ID" = "unknown" ] && exit 0
+
+    # --- Infinite loop prevention ---
+    # If Claude is already continuing due to a previous stop hook, allow stop immediately
+    STOP_ACTIVE=$(printf '%s' "$INPUT" | "$JQ" -r '.stop_hook_active // false')
+    if [ "$STOP_ACTIVE" = "true" ]; then
+        printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"Stop","continue":true}}'
+        exit 0
+    fi
+
+    # --- Guard clause: not a rawgentic session ---
+    if [ ! -f "$CWD/.rawgentic_workspace.json" ] && [ ! -f "$CWD/../.rawgentic_workspace.json" ]; then
+        exit 0
+    fi
+
+    # --- Retry limit: max 2 attempts ---
+    ATTEMPT_FILE="/tmp/wal-stop-${SESSION_ID}"
+    ATTEMPT=0
+    if [ -f "$ATTEMPT_FILE" ]; then
+        ATTEMPT=$(cat "$ATTEMPT_FILE" 2>/dev/null || echo "0")
+    fi
+
+    if [ "$ATTEMPT" -ge 2 ]; then
+        # Max retries exceeded — allow stop, log warning
+        rm -f "$ATTEMPT_FILE"
+        WAL_FILE="$CWD/claude_docs/wal.jsonl"
+        if [ -f "$WAL_FILE" ]; then
+            "$JQ" -nc \
+                --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+                --arg session "$SESSION_ID" \
+                '{ts:$ts, phase:"WARN", session:$session, summary:"Stop hook: session notes not updated after 2 attempts"}' \
+                >> "$WAL_FILE" 2>/dev/null || true
+        fi
+        printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"Stop","continue":true}}'
+        exit 0
+    fi
+
+    # --- Lookup project from registry ---
+    REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+    PROJECT=""
+    if [ -f "$REGISTRY_FILE" ]; then
+        REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
+        if [ -n "$REG_LINE" ]; then
+            PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""')
+        fi
+    fi
+
+    # --- Gate 1: Registry check ---
+    if [ -z "$PROJECT" ]; then
+        echo "$(( ATTEMPT + 1 ))" > "$ATTEMPT_FILE"
+        "$JQ" -nc --arg reason "Before finishing, register this session and update session notes.
+
+Use /rawgentic:switch <project> to register, then APPEND a session summary to claude_docs/session_notes/<project>.md.
+
+RULES:
+- APPEND ONLY. Do NOT modify, rewrite, or remove existing content.
+- Start with a --- separator, then:
+  # Session: $(date -u +"%Y-%m-%dT%H:%M:%SZ") | ID: ${SESSION_ID} | Status: COMPLETE
+  ## Task: <what you worked on>
+  ## Project: <project name>
+- Include: changes made, verification results, next steps.
+- If the file does not exist, create it with a header line first.
+Also append a registration line to claude_docs/session_registry.jsonl." \
+            '{hookSpecificOutput:{hookEventName:"Stop",continue:false,reason:$reason}}'
+        exit 0
+    fi
+
+    # --- Gate 2: Notes timestamp check ---
+    NOTES_FILE="$CWD/claude_docs/session_notes/${PROJECT}.md"
+    NEEDS_UPDATE=true
+
+    if [ -f "$NOTES_FILE" ]; then
+        LAST_HEADER=$(grep "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
+        if [ -n "$LAST_HEADER" ]; then
+            HEADER_TS=$(printf '%s' "$LAST_HEADER" | sed -n 's/.*Session: \([^ ]*\).*/\1/p')
+            if [ -n "$HEADER_TS" ]; then
+                HEADER_EPOCH=$(date -d "$HEADER_TS" +%s 2>/dev/null || echo "0")
+                NOW_EPOCH=$(date +%s)
+                DIFF_SEC=$(( NOW_EPOCH - HEADER_EPOCH ))
+                # 5-minute threshold = 300 seconds
+                if [ "$DIFF_SEC" -lt 300 ]; then
+                    NEEDS_UPDATE=false
+                fi
+            fi
+        fi
+    fi
+
+    if [ "$NEEDS_UPDATE" = true ]; then
+        echo "$(( ATTEMPT + 1 ))" > "$ATTEMPT_FILE"
+        "$JQ" -nc --arg reason "Before finishing, APPEND a new session summary to claude_docs/session_notes/${PROJECT}.md
+
+RULES:
+- APPEND ONLY. Do NOT modify, rewrite, or remove any existing content in the file.
+- Start with a --- separator, then the structured header:
+  # Session: $(date -u +"%Y-%m-%dT%H:%M:%SZ") | ID: ${SESSION_ID} | Status: COMPLETE
+  ## Task: <what you worked on>
+  ## Project: ${PROJECT}
+- After the header, include: changes made, verification results, and next steps.
+- If the file does not exist, create it with:
+  # Session Notes -- ${PROJECT}
+  Then append your session block below.
+
+Also ensure you are registered in claude_docs/session_registry.jsonl." \
+            '{hookSpecificOutput:{hookEventName:"Stop",continue:false,reason:$reason}}'
+        exit 0
+    fi
+
+    # Notes are fresh — allow stop
+    rm -f "$ATTEMPT_FILE"
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"Stop","continue":true}}'
+}
+
+_do_stop 2>/dev/null || true
+exit 0
