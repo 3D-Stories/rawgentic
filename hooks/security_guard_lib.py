@@ -169,7 +169,7 @@ def format_deny(matches, rel_path):
     for match in matches:
         rule = match.get("ruleName", "unknown")
         reminder = match.get("reminder", "")
-        suggested = suggest_glob(rel_path)
+        suggested = suggest_glob(safe_path)
         section = (
             f"SECURITY BLOCK: Rule '{rule}' triggered on file '{safe_path}'.\n\n"
             f"{reminder}\n\n"
