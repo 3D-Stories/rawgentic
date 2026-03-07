@@ -32,6 +32,47 @@ Extract the active project's `name` and `path`. Confirm to the user:
 
 > Setting up project: **<name>** at `<path>`
 
+### Step 1b: Ensure Layer 2 CLAUDE.md Exists
+
+Check if `{WORKSPACE_ROOT}/CLAUDE.md` exists (where WORKSPACE_ROOT is the directory containing `.rawgentic_workspace.json`).
+
+**If missing:** Scaffold it using the Layer 2 scaffolding flow:
+
+1. **Prompt for GitHub Org name.** Check `~/.claude/CLAUDE.md` — if org info is found there (look for patterns like `**Org:**` or `GitHub` section with org name), suggest it as the default. If not found, ask the user: "What GitHub org does this workspace belong to?"
+
+2. **Prompt for GitHub PAT.** Check `~/.claude/CLAUDE.md` — if a PAT is found there (look for `github_pat_` pattern), tell the user: "I found a GitHub PAT in your personal CLAUDE.md (`~/.claude/CLAUDE.md`). Since this workspace is org-scoped, would you like me to move it to the workspace CLAUDE.md instead?" If not found, ask: "Please provide your GitHub PAT for this org, or type 'placeholder' to add it later."
+
+3. **Write `{WORKSPACE_ROOT}/CLAUDE.md`** with this template:
+
+   ```markdown
+   # Workspace Instructions
+
+   ## GitHub
+   - **Org:** {org-name}
+
+   ### GitHub PAT (fine-grained)
+   - Token: `{pat-or-placeholder}`
+   - Scopes: Contents (r/w), Issues (r/w), Pull Requests (r/w), Workflows (r/w), Metadata (r)
+
+   ## Rawgentic
+   Workspace config: .rawgentic_workspace.json
+
+   ## Workspace Structure
+   - Projects live in `./projects/` as individual git repos
+   - Each project has its own CLAUDE.md with project-specific instructions
+   - Project configuration: `projects/{name}/.rawgentic.json`
+
+   ## Team Process
+   [Added as team conventions solidify]
+   ```
+
+4. **Ask about team process:** "Do you have any team-wide conventions to add? (You can add these later.)" If yes, add them. If no, leave the placeholder.
+
+Confirm to the user:
+> Created workspace CLAUDE.md at `{WORKSPACE_ROOT}/CLAUDE.md`
+
+**If exists:** Read it and verify it has the `## Rawgentic` section. If the section is missing, offer to add it. Continue to Step 2.
+
 ---
 
 ## Step 2: Migration Check
@@ -249,6 +290,30 @@ Workspace config: .rawgentic_workspace.json
 ```
 
 This pointer never changes — it tells Claude where to find the workspace config.
+
+**Layer 3 guardrail:** If the project's CLAUDE.md (`<activeProject.path>/CLAUDE.md`) contains a `## Rawgentic` section or `Workspace config:` pattern, remove it and tell the user: "Removed Rawgentic pointer from project CLAUDE.md — it belongs in the workspace CLAUDE.md, not in project files."
+
+---
+
+### Step 7b: Layer 1 Advisory
+
+Read `~/.claude/CLAUDE.md` and check for content that the three-layer architecture suggests moving. Present all suggestions as a single checklist — do not ask one at a time.
+
+**Check for these patterns:**
+
+- **GitHub PAT** (pattern: `github_pat_`): Suggest: "Your GitHub PAT is in `~/.claude/CLAUDE.md` (personal/machine scope). Since this workspace is org-scoped, it would be better placed in the workspace CLAUDE.md. Would you like me to move it?"
+
+- **GitHub Org** (pattern: `**Org:**` or similar): Same suggestion — offer to move to workspace CLAUDE.md.
+
+- **Team process sections** (patterns: `SDLC`, `Workflow Principles`, `Conventional Commit`, `TDD`): Suggest: "You have team process sections in your personal CLAUDE.md. These could be shared via the workspace CLAUDE.md's Team Process section. Would you like to keep them personal, or move them to the workspace level?"
+
+- **Empty placeholder sections** (sections with only `---` or whitespace as content): Suggest: "You have empty sections in `~/.claude/CLAUDE.md` (e.g., Infrastructure, Servers). Would you like me to remove them to reduce clutter?"
+
+All suggestions require explicit user approval. If the user declines, leave Layer 1 unchanged. If the user approves a move:
+1. Remove the content from `~/.claude/CLAUDE.md`
+2. Add it to `{WORKSPACE_ROOT}/CLAUDE.md` in the appropriate section
+
+**Interaction between Step 1b and Step 7b:** Step 1b may have already moved PAT/Org content during Layer 2 scaffolding. Step 7b should check what's actually present — if content was already moved, it won't be found and no suggestion is generated. This makes the two steps idempotent together.
 
 ---
 

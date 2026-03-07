@@ -34,7 +34,11 @@ All workflow skills share a **config-loading protocol** that reads project confi
 # Install the plugin
 claude plugin add github:3D-Stories/rawgentic
 
+# Create a workspace directory and cd into it
+mkdir my-org-workspace && cd my-org-workspace
+
 # Register and configure your first project
+# (setup runs automatically — scaffolds workspace CLAUDE.md on first run)
 /rawgentic:new-project my-app
 
 # Start using workflows
@@ -42,7 +46,27 @@ claude plugin add github:3D-Stories/rawgentic
 /rawgentic:fix-bug 42
 ```
 
-`/rawgentic:new-project` creates the workspace, clones or initializes a repo, and automatically runs `/rawgentic:setup` to detect your tech stack and generate `.rawgentic.json`.
+`/rawgentic:new-project` creates the workspace, clones or initializes a repo, scaffolds the workspace CLAUDE.md (Layer 2), and automatically runs `/rawgentic:setup` to detect your tech stack and generate `.rawgentic.json`.
+
+### Workspace Architecture
+
+Rawgentic uses a **three-layer CLAUDE.md hierarchy** to separate personal, workspace, and project concerns:
+
+| Layer | File | Scope | In Git? |
+|-------|------|-------|---------|
+| 1 — Personal | `~/.claude/CLAUDE.md` | Developer preferences, per machine | No |
+| 2 — Workspace | `{cwd-root}/CLAUDE.md` | GitHub org, PAT, team process | No |
+| 3 — Project | `projects/{name}/CLAUDE.md` | Project-specific instructions | Yes |
+
+**Key principles:**
+- **Projects are standalone** — Layer 3 works without rawgentic
+- **Rawgentic is additive** — removing it only affects Layer 2
+- **One workspace per org** — GitHub credentials scoped to workspace
+- **No absolute paths** — portable across machines
+
+The `setup` skill scaffolds Layer 2 on first run. The `new-project` skill audits Layer 3 for conformance.
+
+See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design.
 
 ---
 
