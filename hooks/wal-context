@@ -39,11 +39,39 @@ _do_context() {
         fi
     fi
 
-    # If not registered, inject reminder and exit
+    # If not registered, try to infer project from active workspace entry
     if [ -z "$PROJECT" ]; then
-        "$JQ" -nc --arg ctx "SESSION: Not registered. Use /rawgentic:switch or /rawgentic:new-project to register this session." \
-            '{additionalContext: $ctx}'
-        exit 0
+        ACTIVE_PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
+        ACTIVE_PATH=$("$JQ" -r '.projects[] | select(.active == true) | .path' "$WORKSPACE_FILE" 2>/dev/null || true)
+
+        if [ -n "$ACTIVE_PROJECT" ]; then
+            # Auto-register this session for the active project
+            mkdir -p "$CWD/claude_docs/session_notes"
+            TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+            "$JQ" -nc \
+                --arg sid "$SESSION_ID" \
+                --arg proj "$ACTIVE_PROJECT" \
+                --arg ppath "$ACTIVE_PATH" \
+                --arg ts "$TS" \
+                --arg cwd "$CWD" \
+                '{session_id:$sid, project:$proj, project_path:$ppath, started:$ts, cwd:$cwd}' \
+                >> "$REGISTRY_FILE" 2>/dev/null || true
+
+            # Initialize session notes file if missing
+            NOTES_FILE="$NOTES_DIR/${ACTIVE_PROJECT}.md"
+            if [ ! -f "$NOTES_FILE" ]; then
+                mkdir -p "$NOTES_DIR"
+                printf '# Session Notes -- %s\n' "$ACTIVE_PROJECT" > "$NOTES_FILE"
+            fi
+
+            # Re-set variables and continue to full context injection
+            PROJECT="$ACTIVE_PROJECT"
+            PROJECT_PATH="$ACTIVE_PATH"
+        else
+            "$JQ" -nc --arg ctx "SESSION_ID: ${SESSION_ID}. No active project in workspace. Use /rawgentic:switch to select one." \
+                '{additionalContext: $ctx}'
+            exit 0
+        fi
     fi
 
     CONTEXT="SESSION CONTEXT [${PROJECT} | ${SESSION_ID}]:"

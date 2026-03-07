@@ -346,7 +346,7 @@ During workflow execution, skills may discover new information about the project
 2. **Ambiguity Circuit Breaker** — STOP and ask user when findings conflict
 3. **Finding Auto-Application** — Apply ALL quality gate findings automatically
 4. **Workflow Resumption** — Checkpoint artifacts for mid-workflow recovery
-5. **Session Notes** — Continuous documentation in `claude_docs/session_notes.md`
+5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks)
 6. **Commit Convention** — `<type>(scope): <description>` matching branch prefix
 7. **Branch from default** — All branches from `origin/<defaultBranch>` (read from config)
 8. **Squash merge** — All PRs use `gh pr merge --squash`
@@ -367,6 +367,7 @@ During workflow execution, skills may discover new information about the project
 | Ambiguity circuit breaker fires  | Quality gate found conflicting findings        | Expected — review findings, tell Claude how to proceed        |
 | Workflow upgrades to WF2         | Bug fix classified as complex (10+ files)      | Expected — complex bugs get the full feature workflow         |
 | Context runs out mid-workflow    | Long workflow exceeded context window          | Skills document state before compaction — re-invoke to resume |
+| Stop hook blocks every response  | Session not registered with real session ID    | Fixed in v2.3.0 — `wal-context` auto-registers on first prompt |
 
 ---
 

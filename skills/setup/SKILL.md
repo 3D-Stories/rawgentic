@@ -325,6 +325,19 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Write the file back.
 
+### Step 8b: Ensure Session Notes Infrastructure
+
+The `wal-stop` hook requires `claude_docs/session_notes/<project>.md` to exist. Ensure this infrastructure is in place:
+
+1. Create `{WORKSPACE_ROOT}/claude_docs/session_notes/` directory if it doesn't exist.
+2. If `{WORKSPACE_ROOT}/claude_docs/session_notes/<project-name>.md` does not exist, create it with:
+   ```markdown
+   # Session Notes -- <project-name>
+   ```
+3. If `{WORKSPACE_ROOT}/claude_docs/session_registry.jsonl` does not exist, create it as an empty file.
+
+This is idempotent — if `/rawgentic:new-project` already created these, this step is a no-op.
+
 ---
 
 ## Step 9: Verify
