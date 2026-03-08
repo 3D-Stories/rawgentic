@@ -21,10 +21,20 @@ TOOL_NAME=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_name // ""')
 
 [ "$SESSION_ID" = "unknown" ] && exit 0
 
-# --- Find workspace ---
+# --- Find workspace (traverse up to 5 levels) ---
 WORKSPACE_FILE=""
-[ -f "$CWD/.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
-[ -z "$WORKSPACE_FILE" ] && [ -f "$CWD/../.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
+WORKSPACE_ROOT=""
+_d="$CWD"
+_i=0
+while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
+    if [ -f "$_d/.rawgentic_workspace.json" ]; then
+        WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
+        WORKSPACE_ROOT="$_d"
+        break
+    fi
+    _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
+    _i=$((_i + 1))
+done
 [ -z "$WORKSPACE_FILE" ] && exit 0
 
 # --- Helper: extract file path from tool input ---
@@ -54,7 +64,7 @@ _is_project_file() {
 }
 
 # --- Resolve bound project from registry ---
-REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+REGISTRY_FILE="$WORKSPACE_ROOT/claude_docs/session_registry.jsonl"
 BOUND_PROJECT=""
 if [ -f "$REGISTRY_FILE" ]; then
     REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)

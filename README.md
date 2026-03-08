@@ -416,6 +416,7 @@ During workflow execution, skills may discover new information about the project
 | "Multiple projects active"       | Multiple projects have `active: true`         | Run `/rawgentic:switch <name>` to bind this session            |
 | "Session isn't bound to a project" | Unbound session with multiple active projects | Run `/rawgentic:switch <name>` to bind                        |
 | Cross-project write denied       | File path is in a different project            | Switch first with `/rawgentic:switch <target>`, or ask user   |
+| Hooks fail after `cd` in Bash    | CWD drifted to project subdir, workspace file not found | Fixed in v2.5.3 — hooks now traverse up to 5 levels |
 | Hook errors after plugin update  | Session still references old cache path        | Exit session, reinstall plugin, start new session              |
 
 ---
