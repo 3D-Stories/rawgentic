@@ -1,0 +1,41 @@
+{
+  "skill_name": "rawgentic:sync-security-patterns",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Sync security patterns from the official security-guidance plugin. The official plugin is at ~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/security_reminder_hook.py. The rawgentic plugin root is at /tmp/rawgentic-sync-test/basic-sync. The upstream plugin has added a new pattern 'sql_injection' that does not exist in security-patterns.json. Run the sync and report what changed.",
+      "expected_output": "Agent reads the official plugin's SECURITY_PATTERNS list, compares with current security-patterns.json, adds the new sql_injection pattern with source upstream, and reports it as Added",
+      "files": [],
+      "expectations": [
+        "Reads SECURITY_PATTERNS from the official security_reminder_hook.py",
+        "Reads current hooks/security-patterns.json from the rawgentic plugin",
+        "New pattern added with source set to upstream",
+        "Report includes Added section listing the new pattern"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Sync security patterns from the official security-guidance plugin. The rawgentic plugin root is at /tmp/rawgentic-sync-test/custom-preserved. The security-patterns.json contains a custom pattern 'internal_api_key_check' with source 'custom'. The official plugin has an updated reminder for 'eval_injection' (source upstream) and does NOT contain 'internal_api_key_check'. Run the sync and report what changed.",
+      "expected_output": "Agent updates eval_injection reminder from upstream, preserves the custom internal_api_key_check pattern untouched, and reports both actions",
+      "files": [],
+      "expectations": [
+        "Custom-source pattern internal_api_key_check is NOT modified or deleted",
+        "Upstream-source pattern eval_injection is updated with new reminder text",
+        "Report includes Preserved section for the custom pattern",
+        "Report includes Updated section for eval_injection"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Sync security patterns from the official security-guidance plugin. The rawgentic plugin root is at /tmp/rawgentic-sync-test/stale-upstream. The security-patterns.json contains an upstream-source pattern 'deprecated_api_warning' that no longer exists in the official plugin's SECURITY_PATTERNS list. Run the sync and flag stale patterns for user review.",
+      "expected_output": "Agent detects that deprecated_api_warning is an upstream pattern no longer present in the official plugin, flags it for user review without auto-deleting, and asks user whether to keep or remove",
+      "files": [],
+      "expectations": [
+        "Detects deprecated_api_warning as a stale upstream pattern",
+        "Does NOT auto-delete the stale pattern",
+        "Report includes Flagged section for deprecated_api_warning",
+        "Asks the user whether to keep or remove the flagged pattern"
+      ]
+    }
+  ]
+}
