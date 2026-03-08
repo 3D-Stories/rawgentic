@@ -1,0 +1,25 @@
+# Eval output artifacts (bulky, generated)
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.pytest_tmp/
+**/outputs/**/*.py
+**/outputs/**/*.bats
+**/outputs/**/*.sh
+**/outputs/**/*.bash
+**/outputs/**/*.toml
+**/outputs/**/*.ini
+**/outputs/**/*.txt
+**/outputs/**/*.html
+**/outputs/**/*.json
+**/outputs/**/*.patch
+**/outputs/**/docs/
+**/outputs/**/tests/
+**/outputs/**/test_infrastructure/
+**/outputs/**/existing_tests/
+**/outputs/**/package.json
+**/outputs/**/package-lock.json
+**/outputs/**/verify.sh
+
+# Keep run summaries and key eval files
+!**/outputs/run_summary.md

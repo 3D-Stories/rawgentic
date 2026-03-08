@@ -1,0 +1,47 @@
+{
+  "skill_name": "create-tests",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I need to add tests to the gpu-fan-controller project. It's a Python script with no tests at all.",
+      "expected_output": "Detects greenfield mode, brainstorms testing strategy, uses context7 for pytest docs, generates test infrastructure and test files for gpu_fan_controller.py, runs tests, creates PR",
+      "files": [],
+      "assertions": [
+        {"id": "pytest-config-created", "text": "A pytest config file exists (pyproject.toml with pytest section, or pytest.ini, or conftest.py)"},
+        {"id": "test-files-created", "text": "At least one test file matching test_*.py or *_test.py was generated"},
+        {"id": "covers-main-module", "text": "Tests import or reference gpu_fan_controller module"},
+        {"id": "has-real-assertions", "text": "Test files contain actual assert statements, not just pass or empty functions"},
+        {"id": "testing-strategy-doc", "text": "A testing strategy document was created (any markdown file describing the test plan)"},
+        {"id": "context7-used", "text": "Context7 MCP was invoked to retrieve pytest documentation"}
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Add tests for the install.sh script in gpu-fan-controller. It's a bash installer script that checks dependencies, loads kernel modules, and copies files.",
+      "expected_output": "Detects shell/bash language, selects bats-core framework, generates targeted tests for install.sh covering dependency checks, module loading, file copying, and error paths",
+      "files": [],
+      "assertions": [
+        {"id": "bats-test-created", "text": "At least one .bats test file exists in the outputs"},
+        {"id": "targets-install-sh", "text": "Tests reference or source install.sh"},
+        {"id": "test-helper-created", "text": "A test helper file exists with setup/teardown functions"},
+        {"id": "covers-dep-checks", "text": "Tests cover dependency checking logic (e.g., testing what happens when a dependency is missing)"},
+        {"id": "covers-file-operations", "text": "Tests cover file copy/install operations"},
+        {"id": "mocks-external-commands", "text": "Tests mock or stub external commands (modprobe, cp, systemctl, etc.) rather than running them for real"}
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Review the test coverage on my project — it has some pytest tests but nothing for the shell scripts or the systemd service integration.",
+      "expected_output": "Detects coverage-gap mode with multi-language (Python + Shell), audits existing pytest tests, identifies missing shell script tests, generates bats tests and integration tests, presents coverage report",
+      "files": [],
+      "assertions": [
+        {"id": "gap-analysis-produced", "text": "A coverage gap analysis document or report exists identifying what's missing"},
+        {"id": "shell-tests-created", "text": "Bats tests (.bats files) were created for shell scripts"},
+        {"id": "systemd-tests-created", "text": "Tests for systemd service integration exist (testing .service file, ExecStart, ExecStop, etc.)"},
+        {"id": "multi-lang-runner", "text": "A top-level test runner (Makefile target, run_tests.sh, or equivalent) that runs all language test suites"},
+        {"id": "identifies-existing-gaps", "text": "Output explicitly identifies what areas are missing from the existing pytest tests"},
+        {"id": "coverage-mode-detected", "text": "The run correctly identified coverage-gap mode rather than greenfield mode"}
+      ]
+    }
+  ]
+}

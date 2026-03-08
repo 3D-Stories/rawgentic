@@ -1,0 +1,37 @@
+{
+  "expectations": [
+    {
+      "text": "A pytest config file exists (pyproject.toml with pytest section, or pytest.ini, or conftest.py)",
+      "passed": true,
+      "evidence": "pyproject.toml=True, pytest.ini=False, conftest.py=True"
+    },
+    {
+      "text": "At least one test file matching test_*.py or *_test.py was generated",
+      "passed": true,
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/with_skill/outputs/tests/test_calculate_duty.py"
+    },
+    {
+      "text": "Tests import or reference gpu_fan_controller module",
+      "passed": true,
+      "evidence": "Referenced in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/with_skill/outputs/run_summary.md"
+    },
+    {
+      "text": "Test files contain actual assert statements, not just pass or empty functions",
+      "passed": true,
+      "evidence": "Assert found in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/with_skill/outputs/tests/test_calculate_duty.py"
+    },
+    {
+      "text": "A testing strategy document was created (any markdown file describing the test plan)",
+      "passed": true,
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/with_skill/outputs/docs/plans/2026-03-07-testing-strategy.md"
+    },
+    {
+      "text": "Context7 MCP was invoked to retrieve pytest documentation",
+      "passed": true,
+      "evidence": "context7 mentioned in run_summary"
+    }
+  ],
+  "pass_count": 6,
+  "fail_count": 0,
+  "total": 6
+}

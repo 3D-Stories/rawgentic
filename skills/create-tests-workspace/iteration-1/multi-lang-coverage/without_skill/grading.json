@@ -1,0 +1,37 @@
+{
+  "expectations": [
+    {
+      "text": "A coverage gap analysis document or report exists identifying what's missing",
+      "passed": true,
+      "evidence": "Gap analysis in run_summary.md"
+    },
+    {
+      "text": "Bats tests (.bats files) were created for shell scripts",
+      "passed": true,
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/without_skill/outputs/tests_shell/test_install.bats"
+    },
+    {
+      "text": "Tests for systemd service integration exist",
+      "passed": true,
+      "evidence": "Systemd tests in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/without_skill/outputs/run_summary.md"
+    },
+    {
+      "text": "A top-level test runner that runs all language test suites",
+      "passed": false,
+      "evidence": "No multi-lang runner found"
+    },
+    {
+      "text": "Output explicitly identifies what areas are missing from the existing pytest tests",
+      "passed": true,
+      "evidence": "Gap identification found in summary"
+    },
+    {
+      "text": "The run correctly identified coverage-gap mode rather than greenfield mode",
+      "passed": true,
+      "evidence": "coverage-gap mode detected in summary"
+    }
+  ],
+  "pass_count": 5,
+  "fail_count": 1,
+  "total": 6
+}

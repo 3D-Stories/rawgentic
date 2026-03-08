@@ -1,0 +1,13 @@
+{
+  "eval_id": 1,
+  "eval_name": "python-greenfield",
+  "prompt": "I need to add tests to the gpu-fan-controller project. It's a Python script with no tests at all.",
+  "assertions": [
+    {"id": "pytest-config-created", "text": "A pytest config file exists (pyproject.toml with pytest section, or pytest.ini, or conftest.py)"},
+    {"id": "test-files-created", "text": "At least one test file matching test_*.py or *_test.py was generated"},
+    {"id": "covers-main-module", "text": "Tests import or reference gpu_fan_controller module"},
+    {"id": "has-real-assertions", "text": "Test files contain actual assert statements, not just pass or empty functions"},
+    {"id": "testing-strategy-doc", "text": "A testing strategy document was created (any markdown file describing the test plan)"},
+    {"id": "context7-used", "text": "Context7 MCP was invoked to retrieve pytest documentation"}
+  ]
+}
