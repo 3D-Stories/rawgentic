@@ -1,0 +1,13 @@
+{
+  "eval_id": 3,
+  "eval_name": "multi-lang-coverage",
+  "prompt": "Review the test coverage on my project — it has some pytest tests but nothing for the shell scripts or the systemd service integration.",
+  "assertions": [
+    {"id": "gap-analysis-produced", "text": "A coverage gap analysis document or report exists identifying what's missing"},
+    {"id": "shell-tests-created", "text": "Bats tests (.bats files) were created for shell scripts"},
+    {"id": "systemd-tests-created", "text": "Tests for systemd service integration exist (testing .service file, ExecStart, ExecStop, etc.)"},
+    {"id": "multi-lang-runner", "text": "A top-level test runner (Makefile target, run_tests.sh, or equivalent) that runs all language test suites"},
+    {"id": "identifies-existing-gaps", "text": "Output explicitly identifies what areas are missing from the existing pytest tests"},
+    {"id": "coverage-mode-detected", "text": "The run correctly identified coverage-gap mode rather than greenfield mode"}
+  ]
+}

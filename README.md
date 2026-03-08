@@ -1,6 +1,6 @@
 # rawgentic
 
-**9 SDLC workflow skills + 3 workspace management + 1 security skill + hooks for Claude Code**
+**10 SDLC workflow skills + 3 workspace management + 1 security skill + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 13 skills organized in three layers:
+**Rawgentic** provides 14 skills organized in three layers:
 
 - **Workspace management** (3 skills) — Project registration, configuration, and session binding
-- **SDLC workflows** (9 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment
+- **SDLC workflows** (10 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment
 - **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
@@ -107,6 +107,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | Security Audit           | `/rawgentic:security-audit`    | 14    | STRIDE threat modeling and vulnerability assessment |
 | Performance Optimization | `/rawgentic:optimize-perf`     | 15    | Benchmark-driven performance improvements           |
 | Incident Response        | `/rawgentic:incident`          | 14    | Production incident: stabilize first, then RCA      |
+| Test Suite Creation      | `/rawgentic:create-tests`      | 14    | Bootstrap tests or fill coverage gaps across any language |
 
 <details>
 <summary><strong>Issue Creation (WF1)</strong> — 9 steps</summary>
@@ -226,6 +227,23 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 - SEV-1 through SEV-4 classification drives response urgency
 </details>
 
+<details>
+<summary><strong>Test Suite Creation (WF12)</strong> — 14 steps</summary>
+
+**Purpose:** Bootstrap a test suite from scratch or audit existing tests and fill coverage gaps, for any language.
+
+**Invocation:** `/rawgentic:create-tests` or `/rawgentic:create-tests src/auth/`
+
+**Key Features:**
+- Two modes: greenfield (no tests — full bootstrap) and coverage-gap (audit + fill gaps)
+- Language-agnostic: supports Python, JS/TS, Go, Rust, C/C++, Shell/Bash, Ruby, PHP, Java, Kotlin, Swift
+- Uses `superpowers:brainstorming` to design testing strategy before writing any code
+- Uses context7 MCP for up-to-date framework documentation
+- Shell script testing via bats-core with PATH-based mocking
+- Multi-language projects get per-language test infrastructure + unified runner
+- Learning config: updates `.rawgentic.json` with discovered testing frameworks
+</details>
+
 ### Security & Infrastructure
 
 | Skill | Purpose |
@@ -336,7 +354,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 9 workflow skills share an identical config-loading block that runs before any workflow step:
+All 10 workflow skills share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Read `<project-path>/.rawgentic.json` → validate version
@@ -389,6 +407,7 @@ During workflow execution, skills may discover new information about the project
 | WF9 Security Audit         | Full (on audit)    | `/reflexion:critique` | Critique the findings        |
 | WF10 Performance           | Full critique      | `/reflexion:critique` | After optimization design    |
 | WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
+| WF12 Test Suite Creation   | Brainstorm-driven  | `/superpowers:brainstorming` | Before writing any tests |
 
 ### Shared Invariants
 
@@ -442,6 +461,7 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Security Audit (WF9)](docs/design/workflow-security-audit.md)
   - [Performance Optimization (WF10)](docs/design/workflow-performance-optimization.md)
   - [Incident Response (WF11)](docs/design/workflow-incident-response.md)
+  - [Test Suite Creation (WF12)](docs/design/workflow-test-suite-creation.md)
   - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
   - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
 - **Diagrams** (in `diagrams/`): Excalidraw visual diagrams for each workflow and the framework architecture

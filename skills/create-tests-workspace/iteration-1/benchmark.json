@@ -1,0 +1,189 @@
+{
+  "metadata": {
+    "skill_name": "create-tests",
+    "skill_path": "/home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests/SKILL.md",
+    "executor_model": "claude-opus-4-6",
+    "analyzer_model": "claude-opus-4-6",
+    "timestamp": "2026-03-08T06:20:00Z",
+    "evals_run": [1, 2, 3],
+    "runs_per_configuration": 1
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "eval_name": "python-greenfield",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 685.3,
+        "tokens": 110122,
+        "tool_calls": 70,
+        "errors": 0
+      },
+      "expectations": [
+        {"text": "A pytest config file exists (pyproject.toml with pytest section, or pytest.ini, or conftest.py)", "passed": true, "evidence": "pyproject.toml and conftest.py both present"},
+        {"text": "At least one test file matching test_*.py or *_test.py was generated", "passed": true, "evidence": "6 test files: test_calculate_duty.py, test_config.py, test_cpu_temps.py, test_fan_control.py, test_gpu_temp.py, test_main.py"},
+        {"text": "Tests import or reference gpu_fan_controller module", "passed": true, "evidence": "All test files import gpu_fan_controller"},
+        {"text": "Test files contain actual assert statements, not just pass or empty functions", "passed": true, "evidence": "100 test cases with real assertions, 95% coverage"},
+        {"text": "A testing strategy document was created (any markdown file describing the test plan)", "passed": true, "evidence": "docs/plans/2026-03-07-testing-strategy.md created"},
+        {"text": "Context7 MCP was invoked to retrieve pytest documentation", "passed": true, "evidence": "Context7 attempted but denied by permission hooks; fallback used (still attempted)"}
+      ],
+      "notes": ["Context7 was denied by permission hooks — fell back to training knowledge"]
+    },
+    {
+      "eval_id": 1,
+      "eval_name": "python-greenfield",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.6667,
+        "passed": 4,
+        "failed": 2,
+        "total": 6,
+        "time_seconds": 394.2,
+        "tokens": 56471,
+        "tool_calls": 36,
+        "errors": 0
+      },
+      "expectations": [
+        {"text": "A pytest config file exists (pyproject.toml with pytest section, or pytest.ini, or conftest.py)", "passed": true, "evidence": "pytest.ini and conftest.py present"},
+        {"text": "At least one test file matching test_*.py or *_test.py was generated", "passed": true, "evidence": "5 test files created"},
+        {"text": "Tests import or reference gpu_fan_controller module", "passed": true, "evidence": "All test files reference gpu_fan_controller"},
+        {"text": "Test files contain actual assert statements, not just pass or empty functions", "passed": true, "evidence": "88 tests with real assertions"},
+        {"text": "A testing strategy document was created (any markdown file describing the test plan)", "passed": false, "evidence": "No strategy document created — went straight to writing tests"},
+        {"text": "Context7 MCP was invoked to retrieve pytest documentation", "passed": false, "evidence": "No context7 usage — baseline has no skill guidance"}
+      ],
+      "notes": ["Found 2 real bugs in source code"]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "shell-targeted",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 508.1,
+        "tokens": 83351,
+        "tool_calls": 58,
+        "errors": 0
+      },
+      "expectations": [
+        {"text": "At least one .bats test file exists in the outputs", "passed": true, "evidence": "install.bats with 30 test cases"},
+        {"text": "Tests reference or source install.sh", "passed": true, "evidence": "install.bats sources and tests install.sh directly"},
+        {"text": "A test helper file exists with setup/teardown functions", "passed": true, "evidence": "test_helper.bash with comprehensive setup/teardown"},
+        {"text": "Tests cover dependency checking logic", "passed": true, "evidence": "Tests for missing dependencies with command -v interception"},
+        {"text": "Tests cover file copy/install operations", "passed": true, "evidence": "Tests verify file installation to sandboxed directories"},
+        {"text": "Tests mock or stub external commands", "passed": true, "evidence": "PATH-based stubs + script-patching for command -v interception"}
+      ],
+      "notes": ["Found real bug: IPMI connectivity test unreachable due to missing pipefail"]
+    },
+    {
+      "eval_id": 2,
+      "eval_name": "shell-targeted",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8333,
+        "passed": 5,
+        "failed": 1,
+        "total": 6,
+        "time_seconds": 261.1,
+        "tokens": 35974,
+        "tool_calls": 24,
+        "errors": 0
+      },
+      "expectations": [
+        {"text": "At least one .bats test file exists in the outputs", "passed": false, "evidence": "Used pure bash test framework (test_install.sh) instead of bats-core"},
+        {"text": "Tests reference or source install.sh", "passed": true, "evidence": "test_install.sh references and sandboxes install.sh"},
+        {"text": "A test helper file exists with setup/teardown functions", "passed": true, "evidence": "test_helpers.sh and test_framework.sh"},
+        {"text": "Tests cover dependency checking logic", "passed": true, "evidence": "Tests cover dependency detection with fail-fast behavior"},
+        {"text": "Tests cover file copy/install operations", "passed": true, "evidence": "Tests verify file copy with sandboxed directories"},
+        {"text": "Tests mock or stub external commands", "passed": true, "evidence": "PATH-isolated sandbox with stub scripts + call logging"}
+      ],
+      "notes": ["Used custom pure-bash test framework instead of bats-core; 37/37 passing"]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "multi-lang-coverage",
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 6,
+        "failed": 0,
+        "total": 6,
+        "time_seconds": 577.4,
+        "tokens": 87601,
+        "tool_calls": 58,
+        "errors": 0
+      },
+      "expectations": [
+        {"text": "A coverage gap analysis document or report exists identifying what's missing", "passed": true, "evidence": "Testing strategy doc + run_summary both analyze coverage gaps"},
+        {"text": "Bats tests (.bats files) were created for shell scripts", "passed": true, "evidence": "test_install.bats in tests/shell/"},
+        {"text": "Tests for systemd service integration exist", "passed": true, "evidence": "test_systemd_service.bats in tests/integration/"},
+        {"text": "A top-level test runner that runs all language test suites", "passed": true, "evidence": "run_tests.sh + Makefile.test-targets"},
+        {"text": "Output explicitly identifies what areas are missing from the existing pytest tests", "passed": true, "evidence": "Summary identifies missing temp parsing, fan control, signal handling tests"},
+        {"text": "The run correctly identified coverage-gap mode rather than greenfield mode", "passed": true, "evidence": "Correctly detected coverage-gap mode from existing pytest tests"}
+      ],
+      "notes": ["105 total tests across Python + Shell + systemd; 92% Python coverage"]
+    },
+    {
+      "eval_id": 3,
+      "eval_name": "multi-lang-coverage",
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8333,
+        "passed": 5,
+        "failed": 1,
+        "total": 6,
+        "time_seconds": 304.1,
+        "tokens": 44809,
+        "tool_calls": 33,
+        "errors": 0
+      },
+      "expectations": [
+        {"text": "A coverage gap analysis document or report exists identifying what's missing", "passed": true, "evidence": "run_summary.md contains coverage gap analysis"},
+        {"text": "Bats tests (.bats files) were created for shell scripts", "passed": true, "evidence": "test_install.bats and test_install_sandbox.bats"},
+        {"text": "Tests for systemd service integration exist", "passed": true, "evidence": "tests_systemd/ directory with 4 test files, 43 tests"},
+        {"text": "A top-level test runner that runs all language test suites", "passed": false, "evidence": "No unified test runner — each test suite run independently"},
+        {"text": "Output explicitly identifies what areas are missing from the existing pytest tests", "passed": true, "evidence": "Summary identifies shell scripts and systemd as uncovered areas"},
+        {"text": "The run correctly identified coverage-gap mode rather than greenfield mode", "passed": true, "evidence": "Correctly identified project has pytest but lacks shell/systemd tests"}
+      ],
+      "notes": ["76 total tests; 67 pytest + 19 bats; all pytest pass"]
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {"mean": 1.0, "stddev": 0.0, "min": 1.0, "max": 1.0},
+      "time_seconds": {"mean": 590.3, "stddev": 89.1, "min": 508.1, "max": 685.3},
+      "tokens": {"mean": 93691, "stddev": 14392, "min": 83351, "max": 110122}
+    },
+    "without_skill": {
+      "pass_rate": {"mean": 0.7778, "stddev": 0.0962, "min": 0.6667, "max": 0.8333},
+      "time_seconds": {"mean": 319.8, "stddev": 67.1, "min": 261.1, "max": 394.2},
+      "tokens": {"mean": 45751, "stddev": 10279, "min": 35974, "max": 56471}
+    },
+    "delta": {
+      "pass_rate": "+0.22",
+      "time_seconds": "+270.5",
+      "tokens": "+47940"
+    }
+  },
+  "notes": [
+    "With-skill achieves 100% assertion pass rate vs 78% baseline — a +22pp improvement",
+    "The skill adds ~4.5 minutes and ~48K tokens per run vs baseline",
+    "Key differentiators: testing strategy docs, context7 usage, bats-core selection for shell, unified test runner",
+    "Baseline is strong — competent test generation without workflow guidance, even finds real bugs",
+    "context7-used assertion may be non-discriminating: with-skill attempted but was denied by hooks; baseline naturally doesn't use it",
+    "testing-strategy-doc is the most discriminating assertion — with-skill always creates one, baseline never does",
+    "Shell-targeted baseline chose pure-bash framework over bats-core — valid but non-standard choice"
+  ]
+}
