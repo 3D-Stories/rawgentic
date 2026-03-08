@@ -18,10 +18,12 @@ The rawgentic docs/ directory has comprehensive coverage for workflows (9 design
 
 ## Corrections Already Applied
 
-- README.md headline: "13 SDLC workflow skills" → "9 SDLC workflow skills + 3 workspace management skills"
-- README.md layer breakdown: workspace "3 skills" → "3 skills", security "1 skill + hooks" → "1 skill + hooks" (sync-security-patterns stays in security layer)
-- plugin.json description: "12 SDLC workflow skills" → "9 SDLC workflow skills + 3 workspace management skills"
+- README.md headline: "13 SDLC workflow skills" → "9 SDLC workflow skills + 3 workspace management + 1 security skill + hooks"
+- README.md: moved sync-security-patterns from Workspace Management table to new "Security & Infrastructure" section
+- README.md: fixed broken link to `claude-md-architecture-design.md` → `plugin-overhaul-design.md`
+- plugin.json description: "12 SDLC workflow skills" → "9 SDLC workflow skills + 3 workspace management + 1 security skill + hooks"
 - .rawgentic.json description: same correction
+- Skill count verified: 9 SDLC + 3 workspace + 1 security = 13 total (consistent across all files)
 
 ## New Documents
 
