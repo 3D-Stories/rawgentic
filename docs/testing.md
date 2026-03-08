@@ -9,7 +9,7 @@ package installation is required. Run from the repository root.
 
 ## Running Tests
 
-Prerequisites: Python 3.10+, pytest.
+Prerequisites: Python 3.10+, pytest, jq.
 
 ```bash
 # Run all tests
@@ -18,6 +18,16 @@ pytest tests/ -v
 # Run a single file
 pytest tests/hooks/test_wal_guard.py -v
 ```
+
+## CI
+
+GitHub Actions runs `pytest tests/ -v` on all pull requests targeting `main`.
+The workflow is defined in `.github/workflows/ci.yml` and uses Python 3.12
+on `ubuntu-latest`.
+
+Additionally, rawgentic's `.rawgentic.json` includes a `testing` section,
+so all SDLC workflow skills (WF2-WF4, WF7-WF12) automatically run the test
+suite when working on rawgentic itself.
 
 ## Hook Tests
 
