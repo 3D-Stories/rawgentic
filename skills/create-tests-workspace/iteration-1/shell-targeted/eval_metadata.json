@@ -1,0 +1,13 @@
+{
+  "eval_id": 2,
+  "eval_name": "shell-targeted",
+  "prompt": "Add tests for the install.sh script in gpu-fan-controller. It's a bash installer script that checks dependencies, loads kernel modules, and copies files.",
+  "assertions": [
+    {"id": "bats-test-created", "text": "At least one .bats test file exists in the outputs"},
+    {"id": "targets-install-sh", "text": "Tests reference or source install.sh"},
+    {"id": "test-helper-created", "text": "A test helper file exists with setup/teardown functions"},
+    {"id": "covers-dep-checks", "text": "Tests cover dependency checking logic (e.g., testing what happens when a dependency is missing)"},
+    {"id": "covers-file-operations", "text": "Tests cover file copy/install operations"},
+    {"id": "mocks-external-commands", "text": "Tests mock or stub external commands (modprobe, cp, systemctl, etc.) rather than running them for real"}
+  ]
+}

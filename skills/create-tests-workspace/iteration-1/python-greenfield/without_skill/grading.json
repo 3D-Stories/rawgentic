@@ -1,0 +1,37 @@
+{
+  "expectations": [
+    {
+      "text": "A pytest config file exists (pyproject.toml with pytest section, or pytest.ini, or conftest.py)",
+      "passed": true,
+      "evidence": "pyproject.toml=False, pytest.ini=True, conftest.py=True"
+    },
+    {
+      "text": "At least one test file matching test_*.py or *_test.py was generated",
+      "passed": true,
+      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
+    },
+    {
+      "text": "Tests import or reference gpu_fan_controller module",
+      "passed": true,
+      "evidence": "Referenced in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
+    },
+    {
+      "text": "Test files contain actual assert statements, not just pass or empty functions",
+      "passed": true,
+      "evidence": "Assert found in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
+    },
+    {
+      "text": "A testing strategy document was created (any markdown file describing the test plan)",
+      "passed": false,
+      "evidence": "No strategy doc found"
+    },
+    {
+      "text": "Context7 MCP was invoked to retrieve pytest documentation",
+      "passed": false,
+      "evidence": "No context7 reference in summary"
+    }
+  ],
+  "pass_count": 4,
+  "fail_count": 2,
+  "total": 6
+}
