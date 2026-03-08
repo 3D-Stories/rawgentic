@@ -483,6 +483,8 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **163 tests** across 11 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
 
+**CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
+
 Skills are tested via the `/skill-creator` eval pipeline (14/14 skills have evals.json).
 
 ---
