@@ -1,4 +1,6 @@
 #!/bin/bash
+# DEPRECATED: Superseded by tests/hooks/test_wal_guard.py (pytest)
+# Remove this file once pytest version is validated in CI.
 # Test suite for wal-guard hook patterns
 set -euo pipefail
 
