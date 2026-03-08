@@ -46,7 +46,14 @@ declare -a PATTERN_KEYS=(
   'git\s+(checkout|restore)\s+\.'
   'git\s+clean\s+-[a-zA-Z]*f'
   'git\s+branch\s+-D\b'
-  '(deploy|push).*prod|prod.*(deploy|push)'
+  'ssh\s.*prod'
+  'scp\s.*prod'
+  'rsync\s.*prod'
+  'docker\s+(compose\s+)?.*prod.*(up|restart|start)'
+  'ansible.*prod'
+  'kubectl.*(--context|set-context|--namespace).*prod'
+  'helm.*(install|upgrade).*prod'
+  'terraform\s+apply.*prod'
   'git\s+commit\s+.*--no-verify\b'
 )
 
@@ -57,12 +64,19 @@ declare -a PATTERN_REASONS=(
   "BLOCKED: git checkout/restore . discards all working tree changes. Ask the user first."
   "BLOCKED: git clean -f deletes untracked files permanently. Ask the user first."
   "BLOCKED: git branch -D force-deletes a branch. Ask the user first."
-  "BLOCKED: Possible production deployment detected. Requires explicit user permission."
+  "BLOCKED: SSH to production host detected. Requires explicit user permission."
+  "BLOCKED: SCP to production host detected. Requires explicit user permission."
+  "BLOCKED: rsync to production host detected. Requires explicit user permission."
+  "BLOCKED: Docker operation targeting production detected. Requires explicit user permission."
+  "BLOCKED: Ansible targeting production detected. Requires explicit user permission."
+  "BLOCKED: kubectl targeting production context/namespace detected. Requires explicit user permission."
+  "BLOCKED: Helm operation targeting production detected. Requires explicit user permission."
+  "BLOCKED: Terraform apply targeting production detected. Requires explicit user permission."
   "BLOCKED: --no-verify skips pre-commit hooks. Ask the user first."
 )
 
-# Per-pattern case sensitivity: only deploy/prod needs case-insensitive
-declare -a PATTERN_FLAGS=("" "" "" "" "" "" "-i" "")
+# Case-insensitive for deployment tool patterns (indices 6-13)
+declare -a PATTERN_FLAGS=("" "" "" "" "" "" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "")
 
 for i in "${!PATTERN_KEYS[@]}"; do
   if printf '%s' "$COMMAND" | grep ${PATTERN_FLAGS[$i]} -qE "${PATTERN_KEYS[$i]}"; then
