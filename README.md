@@ -1,6 +1,6 @@
 # rawgentic
 
-**13 SDLC workflow skills + security hooks for Claude Code**
+**9 SDLC workflow skills + 3 workspace management + 1 security skill + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,11 +11,11 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 13 workflow skills organized in three layers:
+**Rawgentic** provides 13 skills organized in three layers:
 
 - **Workspace management** (3 skills) — Project registration, configuration, and session binding
 - **SDLC workflows** (9 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment
-- **Security & infrastructure** (1 skill + hooks) — Dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
+- **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
 
@@ -67,7 +67,7 @@ Rawgentic uses a **three-layer CLAUDE.md hierarchy** to separate personal, works
 
 The `setup` skill scaffolds Layer 2 on first run. The `new-project` skill audits Layer 3 for conformance.
 
-See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design.
+See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 
 ---
 
@@ -93,7 +93,6 @@ See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design
 | `/rawgentic:new-project`    | Register a new or existing project in the workspace  |
 | `/rawgentic:setup`          | Auto-detect tech stack and generate `.rawgentic.json` |
 | `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate |
-| `/rawgentic:sync-security-patterns` | Merge upstream security patterns into local config |
 
 ### SDLC Workflows
 
@@ -227,7 +226,13 @@ See `docs/plans/2026-03-06-claude-md-architecture-design.md` for the full design
 - SEV-1 through SEV-4 classification drives response urgency
 </details>
 
-### Hooks & Security
+### Security & Infrastructure
+
+| Skill | Purpose |
+|-------|---------|
+| `/rawgentic:sync-security-patterns` | Merge upstream security patterns from Anthropic's official plugin into local config |
+
+#### Hooks
 
 Rawgentic includes hooks that run automatically on Claude Code events:
 
