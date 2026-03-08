@@ -2,17 +2,21 @@
   "$comment": "Rawgentic project configuration schema v1. Used by /rawgentic:setup as reference when generating .rawgentic.json for a project.",
   "version": 1,
   "project": {
+    "$comment": "Project identity and type. Consumed by all skills for project-type-specific behavior (application, library, infrastructure, etc.).",
     "name": "my-app",
     "type": "application",
     "description": "Description of the project"
   },
   "repo": {
+    "$comment": "Repository metadata. Consumed by all skills for gh CLI commands, branch creation, and PR targeting.",
     "provider": "github",
     "fullName": "org/repo-name",
     "defaultBranch": "main"
   },
+  "$comment:techStack": "Languages, frameworks, and infrastructure technologies. Consumed by setup, create-issue, implement-feature, optimize-perf, and update-deps for tooling selection.",
   "techStack": ["typescript", "react", "postgres", "docker"],
   "testing": {
+    "$comment": "Test frameworks and commands. Consumed by implement-feature, fix-bug, refactor, optimize-perf, update-deps, update-docs, security-audit, and incident for test execution and CI verification.",
     "frameworks": [
       {
         "name": "vitest",
@@ -31,6 +35,7 @@
     ]
   },
   "database": {
+    "$comment": "Database connection and migration details. Consumed by implement-feature, fix-bug, optimize-perf, incident, and security-audit for queries, migrations, and health checks.",
     "type": "postgres",
     "cli": "psql",
     "name": "myapp_dev",
@@ -39,6 +44,7 @@
     "migrationsDir": "postgres-migrations",
     "migrationPattern": "0XX-name.sql"
   },
+  "$comment:services": "Service definitions (ports, health checks, entry points). Consumed by create-issue, implement-feature, fix-bug, incident, security-audit, optimize-perf, and update-docs.",
   "services": [
     {
       "name": "dashboard",
@@ -58,6 +64,7 @@
     }
   ],
   "infrastructure": {
+    "$comment": "SSH hosts and Docker compose files. Consumed by implement-feature, fix-bug, refactor, incident, optimize-perf, update-deps, and security-audit for deployment and container operations.",
     "hosts": [
       {
         "name": "dev",
@@ -74,11 +81,13 @@
     }
   },
   "deploy": {
+    "$comment": "Deployment method and command. Consumed by all SDLC skills (implement-feature, fix-bug, refactor, optimize-perf, update-deps, update-docs, security-audit) for merge-and-deploy steps.",
     "method": "compose",
     "command": "docker compose -f docker-compose.infra.yml up -d",
     "targetHost": "dev"
   },
   "security": {
+    "$comment": "Auth mechanisms, validation, and data channels. Primary consumer is security-audit; also used by create-issue and implement-feature for security-aware design.",
     "authMechanisms": [
       {
         "type": "JWT",
@@ -95,17 +104,21 @@
     "dataChannels": ["rest", "socketio", "redis-pubsub", "engine-http"]
   },
   "ci": {
+    "$comment": "CI provider and workflow directory. Consumed by all SDLC skills for the CI verification gate after PR creation.",
     "provider": "github-actions",
     "workflowDir": ".github/workflows"
   },
   "formatting": {
+    "$comment": "Code formatting tool and command. Consumed by implement-feature, fix-bug, and refactor for style compliance during code review.",
     "tool": "prettier",
     "configFile": ".prettierrc",
     "command": "npx prettier --write"
   },
   "documentation": {
+    "$comment": "Documentation file locations and format. Primary consumer is update-docs; also used by setup for initial doc detection.",
     "primaryFiles": ["README.md", "docs/"],
     "format": "markdown"
   },
+  "$comment:custom": "Free-form project-specific metadata (e.g., security debt, feature flags). Any skill may read; security-audit checks for known debt items.",
   "custom": {}
 }

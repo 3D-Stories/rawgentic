@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "project": {
+    "name": "rawgentic",
+    "type": "library",
+    "description": "9 SDLC workflow skills + 3 workspace management + 1 security skill + hooks for Claude Code with quality gates, code review, and deployment verification"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "3D-Stories/rawgentic",
+    "defaultBranch": "main"
+  },
+  "techStack": ["bash", "markdown"],
+  "documentation": {
+    "primaryFiles": ["README.md", "docs/", "LICENSE"],
+    "format": "markdown"
+  },
+  "custom": {}
+}
