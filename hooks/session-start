@@ -37,22 +37,35 @@ fi
 
 CONTEXT_PARTS=()
 
+# Find workspace file (traverse up from CWD)
+WORKSPACE_FILE=""
+WS_ROOT=""
+_d="$CWD"
+_i=0
+while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
+    if [ -f "$_d/.rawgentic_workspace.json" ]; then
+        WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
+        WS_ROOT="$_d"
+        break
+    fi
+    _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
+    _i=$((_i + 1))
+done
+
+# Write session ID to discoverable file for /rawgentic:switch skill
+if [ -n "$WS_ROOT" ]; then
+    mkdir -p "$WS_ROOT/claude_docs" 2>/dev/null || true
+    printf '%s' "$SESSION_ID" > "$WS_ROOT/claude_docs/.current_session_id" 2>/dev/null || true
+fi
+
 # Check session registry first
 _registry_project=""
-REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+REGISTRY_FILE="$WS_ROOT/claude_docs/session_registry.jsonl"
 if [ -f "$REGISTRY_FILE" ] && [ "$SESSION_ID" != "unknown" ]; then
     _registry_line=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
     if [ -n "$_registry_line" ] && command -v "$JQ" &>/dev/null; then
         _registry_project=$(printf '%s' "$_registry_line" | "$JQ" -r '.project // ""' 2>/dev/null || true)
     fi
-fi
-
-# Find workspace file
-WORKSPACE_FILE=""
-if [ -f "$CWD/.rawgentic_workspace.json" ]; then
-    WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
-elif [ -f "$CWD/../.rawgentic_workspace.json" ]; then
-    WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
 fi
 
 # =========================================================================
@@ -117,11 +130,11 @@ _do_wal_ops() {
     # Determine WAL file: per-project if bound, fall back to legacy
     WAL_FILE=""
     if [ -n "$_registry_project" ]; then
-        WAL_FILE="$CWD/claude_docs/wal/${_registry_project}.jsonl"
+        WAL_FILE="$WS_ROOT/claude_docs/wal/${_registry_project}.jsonl"
     fi
     # Fall back to legacy WAL if per-project doesn't exist
     if [ -z "$WAL_FILE" ] || [ ! -f "$WAL_FILE" ]; then
-        WAL_FILE="$CWD/claude_docs/wal.jsonl"
+        WAL_FILE="$WS_ROOT/claude_docs/wal.jsonl"
     fi
     [ -f "$WAL_FILE" ] || return 0
 
@@ -187,7 +200,7 @@ _do_wal_ops 2>/dev/null || true
 _do_archival() {
     [ "$EVENT_TYPE" = "startup" ] || return 0
 
-    NOTES_DIR="$CWD/claude_docs/session_notes"
+    NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
     [ -d "$NOTES_DIR" ] || return 0
 
     ARCHIVE_DIR="$NOTES_DIR/archive"

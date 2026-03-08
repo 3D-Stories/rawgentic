@@ -18,12 +18,23 @@ _do_stop() {
     [ "$SESSION_ID" = "unknown" ] && exit 0
 
     # --- Guard clause: not a rawgentic session ---
-    WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
-    [ ! -f "$WORKSPACE_FILE" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
-    [ ! -f "$WORKSPACE_FILE" ] && exit 0
+    WORKSPACE_FILE=""
+    WS_ROOT=""
+    _d="$CWD"
+    _i=0
+    while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
+        if [ -f "$_d/.rawgentic_workspace.json" ]; then
+            WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
+            WS_ROOT="$_d"
+            break
+        fi
+        _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
+        _i=$((_i + 1))
+    done
+    [ -z "$WORKSPACE_FILE" ] && exit 0
 
     # --- Lookup project from registry ---
-    REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
+    REGISTRY_FILE="$WS_ROOT/claude_docs/session_registry.jsonl"
     PROJECT=""
     if [ -f "$REGISTRY_FILE" ]; then
         REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
@@ -43,7 +54,7 @@ _do_stop() {
     [ -z "$PROJECT" ] && exit 0
 
     # --- Write session end marker to notes ---
-    NOTES_DIR="$CWD/claude_docs/session_notes"
+    NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
     NOTES_FILE="$NOTES_DIR/${PROJECT}.md"
     TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -69,7 +80,7 @@ _do_stop() {
         "$TS" "$SESSION_ID" "$PROJECT" >> "$NOTES_FILE"
 
     # Log to per-project WAL
-    WAL_DIR="$CWD/claude_docs/wal"
+    WAL_DIR="$WS_ROOT/claude_docs/wal"
     mkdir -p "$WAL_DIR" 2>/dev/null || true
     "$JQ" -nc \
         --arg ts "$TS" \

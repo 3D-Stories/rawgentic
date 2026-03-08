@@ -18,15 +18,29 @@ _do_context() {
 
     [ "$SESSION_ID" = "unknown" ] && exit 0
 
-    # Check for rawgentic workspace — skip if not a rawgentic project
+    # Find rawgentic workspace — traverse up from CWD
     WORKSPACE_FILE=""
-    [ -f "$CWD/.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/.rawgentic_workspace.json"
-    [ -z "$WORKSPACE_FILE" ] && [ -f "$CWD/../.rawgentic_workspace.json" ] && WORKSPACE_FILE="$CWD/../.rawgentic_workspace.json"
+    WS_ROOT=""
+    _d="$CWD"
+    _i=0
+    while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
+        if [ -f "$_d/.rawgentic_workspace.json" ]; then
+            WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
+            WS_ROOT="$_d"
+            break
+        fi
+        _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
+        _i=$((_i + 1))
+    done
     [ -z "$WORKSPACE_FILE" ] && exit 0
 
-    REGISTRY_FILE="$CWD/claude_docs/session_registry.jsonl"
-    WAL_FILE="$CWD/claude_docs/wal.jsonl"
-    NOTES_DIR="$CWD/claude_docs/session_notes"
+    # Write session ID to discoverable file for /rawgentic:switch skill
+    mkdir -p "$WS_ROOT/claude_docs" 2>/dev/null || true
+    printf '%s' "$SESSION_ID" > "$WS_ROOT/claude_docs/.current_session_id" 2>/dev/null || true
+
+    REGISTRY_FILE="$WS_ROOT/claude_docs/session_registry.jsonl"
+    WAL_FILE="$WS_ROOT/claude_docs/wal.jsonl"
+    NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
 
     # --- Lookup project from registry ---
     PROJECT=""
@@ -55,7 +69,7 @@ _do_context() {
 
             if [ -n "$ACTIVE_PROJECT" ]; then
                 # Auto-register this session for the active project
-                mkdir -p "$CWD/claude_docs/session_notes"
+                mkdir -p "$WS_ROOT/claude_docs/session_notes"
                 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
                 "$JQ" -nc \
                     --arg sid "$SESSION_ID" \

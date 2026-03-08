@@ -23,6 +23,28 @@ wal_parse_input() {
   WAL_CWD=$(printf '%s' "$WAL_INPUT" | "$WAL_JQ" -r '.cwd // "."')
 }
 
+# --- Workspace file resolution ---
+# Searches up the directory tree from WAL_CWD for .rawgentic_workspace.json.
+# Sets: WAL_WORKSPACE_FILE (path to workspace json, empty if not found)
+#       WAL_WORKSPACE_ROOT (directory containing workspace json)
+# Requires: WAL_CWD to be set.
+wal_find_workspace() {
+  WAL_WORKSPACE_FILE=""
+  WAL_WORKSPACE_ROOT=""
+  local dir="$WAL_CWD"
+  local i=0
+  while [ "$i" -lt 5 ] && [ "$dir" != "/" ]; do
+    if [ -f "$dir/.rawgentic_workspace.json" ]; then
+      WAL_WORKSPACE_FILE="$dir/.rawgentic_workspace.json"
+      WAL_WORKSPACE_ROOT="$dir"
+      return 0
+    fi
+    dir=$(cd "$dir/.." 2>/dev/null && pwd) || break
+    i=$((i + 1))
+  done
+  return 1
+}
+
 # --- WAL file setup ---
 # Creates claude_docs/wal directory and sets WAL_FILE path.
 # If WAL_PROJECT is set, uses per-project WAL file.
@@ -33,7 +55,8 @@ wal_init_file() {
   if [ -z "${WAL_PROJECT:-}" ]; then
     return 0
   fi
-  WAL_DIR="$WAL_CWD/claude_docs/wal"
+  local root="${WAL_WORKSPACE_ROOT:-$WAL_CWD}"
+  WAL_DIR="$root/claude_docs/wal"
   mkdir -p "$WAL_DIR"
   WAL_FILE="$WAL_DIR/${WAL_PROJECT}.jsonl"
 }
@@ -115,7 +138,8 @@ wal_append_phase() {
 # Requires: WAL_SESSION_ID, WAL_CWD to be set.
 wal_resolve_project() {
   WAL_PROJECT=""
-  local registry_file="$WAL_CWD/claude_docs/session_registry.jsonl"
+  local root="${WAL_WORKSPACE_ROOT:-$WAL_CWD}"
+  local registry_file="$root/claude_docs/session_registry.jsonl"
 
   # Check session registry first
   if [ -f "$registry_file" ] && [ "$WAL_SESSION_ID" != "unknown" ]; then
