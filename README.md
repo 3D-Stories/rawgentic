@@ -464,7 +464,26 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Test Suite Creation (WF12)](docs/design/workflow-test-suite-creation.md)
   - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
   - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
+- **[Testing](docs/testing.md)** — Test suite overview, hook test descriptions, skill evaluation methodology
 - **Diagrams** (in `diagrams/`): Excalidraw visual diagrams for each workflow and the framework architecture
+
+---
+
+## Testing
+
+All hooks are tested via subprocess black-box testing using pytest. Tests invoke hooks as subprocesses, piping JSON to stdin and asserting on stdout, exit code, and filesystem side effects.
+
+```bash
+# Run the full test suite
+pytest tests/ -v
+
+# Run a single test file
+pytest tests/hooks/test_wal_guard.py -v
+```
+
+**163 tests** across 11 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
+
+Skills are tested via the `/skill-creator` eval pipeline (14/14 skills have evals.json).
 
 ---
 
