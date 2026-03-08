@@ -1,78 +1,97 @@
 # Testing
 
+## Approach
+
+Tests use subprocess black-box testing: hooks are invoked via
+`subprocess.run` with JSON on stdin, exactly as Claude Code does at runtime.
+Python unit tests import directly from `hooks/` via `sys.path.insert`, so no
+package installation is required. Run from the repository root.
+
 ## Running Tests
 
 Prerequisites: Python 3.10+, pytest.
 
 ```bash
-pytest tests/
+# Run all tests
+pytest tests/ -v
+
+# Run a single file
+pytest tests/hooks/test_wal_guard.py -v
 ```
 
-Tests use `sys.path.insert` to import directly from `hooks/`, so no package
-installation is required. Run from the repository root.
+## Hook Tests
 
-## Security Guard Tests
+### Shared Fixtures (`tests/hooks/conftest.py`)
 
-The security guard is the only hook with tests so far. It has 78 tests split
-across unit and end-to-end suites.
+Shared pytest fixtures used across all hook test files: `make_workspace`
+(temporary workspace with `.rawgentic.json` and registry), `run_hook`
+(subprocess invocation helper), `parse_hook_output` (JSON result parser),
+and `no_jq_env` (PATH manipulation to simulate missing `jq`).
 
-### Unit Tests (`tests/hooks/test_security_guard.py`)
+### Security Guard — Unit Tests (`tests/hooks/test_security_guard.py`)
 
-These test pure functions exported from `hooks/security_guard_lib.py`:
+78 unit tests for the security-guard pattern-matching library. Tests cover
+`glob_match`, `normalize_path`, `extract_content`, `check_word_boundary`,
+`sanitize_path_for_message`, `suggest_glob`, `match_patterns`,
+`filter_exceptions`, and `format_deny`.
 
-| Class | What it tests |
-|---|---|
-| `TestGlobMatch` | `glob_match()` -- `**` patterns including root-level, nested, and non-matching paths |
-| `TestNormalizePath` | `normalize_path()` -- stripping project root prefix, handling trailing slashes, paths outside project |
-| `TestExtractContent` | `extract_content()` -- extracting writeable content from Write, Edit, MultiEdit, and NotebookEdit tool inputs |
-| `TestCheckWordBoundary` | `check_word_boundary()` -- ensuring substring matches respect word boundaries (e.g., `eval` matches standalone but not inside `medieval`) |
-| `TestSanitizePathForMessage` | `sanitize_path_for_message()` -- stripping shell-dangerous characters, truncating long paths |
-| `TestSuggestGlob` | `suggest_glob()` -- inferring exception glob patterns from file paths (test dirs, workflow files, fallback) |
-| `TestMatchPatterns` | `match_patterns()` -- full pattern-matching pipeline: substring rules, path rules, word boundaries, multiple matches, malformed patterns |
-| `TestFilterExceptions` | `filter_exceptions()` -- removing matches covered by `.rawgentic.json` exceptions, verifying rule+path specificity |
-| `TestFormatDeny` | `format_deny()` -- output structure (JSON shape, `permissionDecision`, aggregated messages, path sanitization) |
+### Security Guard — E2E Tests (`tests/hooks/test_security_guard_e2e.py`)
 
-### E2E Tests (`tests/hooks/test_security_guard_e2e.py`)
+End-to-end tests for the security-guard hook subprocess. Verifies safe
+content passes through, dangerous patterns are blocked, `.rawgentic.json`
+exceptions work correctly, and malformed/empty stdin does not crash the hook.
 
-These invoke `hooks/security-guard.py` as a subprocess with JSON on stdin,
-exactly as Claude Code does at runtime.
+### Security Guard Check (`tests/hooks/test_security_guard_check.py`)
 
-| Class | What it tests |
-|---|---|
-| `TestE2EAllow` | Safe content passes through; missing `file_path` and unknown tools are allowed |
-| `TestE2EDeny` | Dangerous patterns are blocked; word-boundary false positives are not; Edit checks only `new_string` |
-| `TestE2EExceptions` | `.rawgentic.json` exceptions allow otherwise-blocked patterns for matching paths, and do not apply to wrong paths or missing keys |
-| `TestE2EErrorHandling` | Malformed and empty stdin do not crash the hook (exit 0 in all cases) |
+4 tests for plugin conflict detection. Validates that the hook detects when
+the official Claude Code security-guard plugin is installed alongside
+rawgentic's version. Uses HOME env isolation to control the plugin
+discovery path.
 
-## Tests to Be Implemented
+### WAL Guard (`tests/hooks/test_wal_guard.py`)
 
-The following hooks have no automated tests yet.
+33 parametrized tests for dangerous command blocking. Covers destructive
+bash operations (forced pushes, recursive deletes, etc.), safe command
+passthrough, and a fail-closed test when `jq` is absent.
 
-### WAL Hooks
+### WAL Pre/Post (`tests/hooks/test_wal_pre_post.py`)
 
-`wal-pre`, `wal-post`, `wal-post-fail`, `wal-stop` -- Verify that each hook
-writes the correct JSONL entry (event type, timestamp, tool name, status) to
-the active WAL file.
+7 tests for WAL logging hooks. Validates correct INTENT/DONE/FAIL JSONL
+entries, summary extraction from tool output, unbound session skip
+behavior, and graceful handling when `jq` is absent.
 
-### Session Management
+### WAL Stop (`tests/hooks/test_wal_stop.py`)
 
-`wal-context` -- Test context injection for bound sessions, unbound sessions,
-and the multi-active-session conflict case.
+6 tests for the session end marker hook. Covers COMPLETE marker writing,
+STOP WAL entry, duplicate invocation skip, and registry fallback behavior.
 
-`wal-bind-guard` -- Test that file writes outside the bound project directory
-are blocked and that writes inside the directory are allowed.
+### WAL Bind Guard (`tests/hooks/test_wal_bind_guard.py`)
 
-`wal-guard` -- Test detection of dangerous bash commands (e.g., destructive
-operations like forced pushes or recursive deletes) and that safe commands
-pass through.
+8 tests for cross-project write blocking. Validates that file writes
+outside the bound project directory are blocked, writes inside the
+directory are allowed, workspace-level exceptions work, and `jq` absence
+triggers fail-open behavior.
 
-`session-start` -- Test WAL recovery from incomplete entries, log rotation
-when the WAL exceeds size thresholds, reconciliation of orphaned sessions,
-and archival of completed session logs.
+### WAL Context (`tests/hooks/test_wal_context.py`)
 
-### Security
+7 tests for UserPromptSubmit context injection. Covers bound sessions,
+unbound sessions, multi-active-session conflict case, no-active-session
+case, and auto-bind behavior.
 
-`security-guard-check` -- Test conflict detection when the official Claude
-Code security-guard plugin is installed alongside rawgentic's version.
+### WAL Lib (`tests/hooks/test_wal_lib.py`)
 
-See [issue #9](https://github.com/3D-Stories/rawgentic/issues/9) for the full test suite implementation plan.
+11 unit tests for the `wal-lib.sh` shared library. Tests `parse_input`,
+`extract_summary`, and `find_workspace` functions.
+
+### Session Start (`tests/hooks/test_session_start.py`)
+
+9 tests for the session-start hook. Covers session reconciliation, WAL
+recovery from incomplete entries, log archival, and context emission.
+
+## Skill Evaluation
+
+Skills are tested via the `/skill-creator` eval pipeline, which produces
+`evals.json`, `benchmark.json`, and `review.html` for each skill.
+
+- **Coverage:** 14/14 skills have `evals.json`.
+- **When to re-run:** after modifying a `SKILL.md`.
