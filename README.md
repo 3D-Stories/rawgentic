@@ -91,7 +91,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | Skill                       | Purpose                                              |
 | --------------------------- | ---------------------------------------------------- |
 | `/rawgentic:new-project`    | Register a new or existing project in the workspace  |
-| `/rawgentic:setup`          | Auto-detect tech stack and generate `.rawgentic.json` |
+| `/rawgentic:setup`          | Auto-detect tech stack, optional critique for complex projects, generate `.rawgentic.json` |
 | `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate |
 
 ### SDLC Workflows
@@ -398,6 +398,7 @@ During workflow execution, skills may discover new information about the project
 
 | Workflow                   | Critique Level     | Gate                  | When                         |
 | -------------------------- | ------------------ | --------------------- | ---------------------------- |
+| Setup (config detection)   | Optional critique  | `/reflexion:critique` | After detection, if complex  |
 | WF1 Issue Creation         | Full critique      | `/reflexion:critique` | After brainstorming          |
 | WF2 Feature Implementation | Full critique      | `/reflexion:critique` | After design                 |
 | WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
