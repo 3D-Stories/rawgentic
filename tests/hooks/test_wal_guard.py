@@ -60,11 +60,14 @@ CASES = [
     ("ansible prod", "ansible-playbook -i prod-inventory site.yml", "deny"),
     ("helm install prod", "helm install myapp ./chart --set env=prod", "deny"),
     ("ssh with compose prod up", 'ssh root@10.0.17.202 "docker compose -f /srv/app/docker-compose.sdlc.prod.yml up -d"', "deny"),
-    # Existing patterns still work
-    ("rm -rf", "rm -rf /tmp/test", "deny"),
-    ("git push --force", "git push --force origin main", "deny"),
-    ("git reset --hard", "git reset --hard HEAD~1", "deny"),
-    ("git commit --no-verify", 'git commit --no-verify -m "skip hooks"', "deny"),
+    # Destructive local commands — allowed (Claude asks user before running)
+    ("rm -rf", "rm -rf /tmp/test", "allow"),
+    ("git push --force", "git push --force origin main", "allow"),
+    ("git reset --hard", "git reset --hard HEAD~1", "allow"),
+    ("git commit --no-verify", 'git commit --no-verify -m "skip hooks"', "allow"),
+    ("git checkout .", "git checkout .", "allow"),
+    ("git clean -f", "git clean -fd", "allow"),
+    ("git branch -D", "git branch -D old-feature", "allow"),
     ("normal git push (safe)", "git push origin feature-branch", "allow"),
     ("normal rm (safe)", "rm file.txt", "allow"),
     # Edge cases

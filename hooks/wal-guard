@@ -39,13 +39,12 @@ deny() {
 # Each entry: regex -> human-readable reason -> grep flags
 # Uses \b word boundaries to avoid false positives at end-of-string.
 # PATTERN_FLAGS: empty = case-sensitive, "-i" = case-insensitive
+# Production deployment patterns only. Destructive local commands (rm -rf,
+# git reset --hard, etc.) are NOT blocked here — Claude's built-in safety
+# behavior already asks the user before running destructive operations, and
+# hard-blocking prevents the user from approving when they intentionally
+# want to proceed.
 declare -a PATTERN_KEYS=(
-  'rm\s+-(r|f|rf|fr)\b'
-  'git\s+push\s+.*(-f|--force)\b'
-  'git\s+reset\s+--hard\b'
-  'git\s+(checkout|restore)\s+\.'
-  'git\s+clean\s+-[a-zA-Z]*f'
-  'git\s+branch\s+-D\b'
   'ssh\s.*prod'
   'scp\s.*prod'
   'rsync\s.*prod'
@@ -54,16 +53,9 @@ declare -a PATTERN_KEYS=(
   'kubectl.*(--context|set-context|--namespace).*prod'
   'helm.*(install|upgrade).*prod'
   'terraform\s+apply.*prod'
-  'git\s+commit\s+.*--no-verify\b'
 )
 
 declare -a PATTERN_REASONS=(
-  "BLOCKED: Destructive rm command. Ask the user for explicit permission first."
-  "BLOCKED: git push --force. This can destroy remote history. Ask the user first."
-  "BLOCKED: git reset --hard. This discards all uncommitted changes. Ask the user first."
-  "BLOCKED: git checkout/restore . discards all working tree changes. Ask the user first."
-  "BLOCKED: git clean -f deletes untracked files permanently. Ask the user first."
-  "BLOCKED: git branch -D force-deletes a branch. Ask the user first."
   "BLOCKED: SSH to production host detected. Requires explicit user permission."
   "BLOCKED: SCP to production host detected. Requires explicit user permission."
   "BLOCKED: rsync to production host detected. Requires explicit user permission."
@@ -72,11 +64,9 @@ declare -a PATTERN_REASONS=(
   "BLOCKED: kubectl targeting production context/namespace detected. Requires explicit user permission."
   "BLOCKED: Helm operation targeting production detected. Requires explicit user permission."
   "BLOCKED: Terraform apply targeting production detected. Requires explicit user permission."
-  "BLOCKED: --no-verify skips pre-commit hooks. Ask the user first."
 )
 
-# Case-insensitive for deployment tool patterns (indices 6-13)
-declare -a PATTERN_FLAGS=("" "" "" "" "" "" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "")
+declare -a PATTERN_FLAGS=("-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i")
 
 for i in "${!PATTERN_KEYS[@]}"; do
   if printf '%s' "$COMMAND" | grep ${PATTERN_FLAGS[$i]} -qE "${PATTERN_KEYS[$i]}"; then
