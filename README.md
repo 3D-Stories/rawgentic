@@ -264,7 +264,7 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-stop` | Stop | Logs session end marker |
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
-| `wal-guard` | PreToolUse | Blocks dangerous bash commands (rm -rf, DROP TABLE, etc.) |
+| `wal-guard` | PreToolUse | Blocks production deployment commands (ssh/scp/docker to prod) |
 | `session-start` | SessionStart | WAL recovery, session notes archival, project reconciliation, resume context |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
