@@ -1,6 +1,6 @@
 {
   "name": "rawgentic",
-  "version": "2.8.0",
+  "version": "2.9.0",
   "description": "10 SDLC workflow skills + 3 workspace management + 1 security skill + hooks for Claude Code: project registration, setup, session binding, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, incident response, test suite creation, security pattern syncing, and dangerous pattern blocking with per-project exceptions.",
   "author": {
     "name": "3D-Stories",

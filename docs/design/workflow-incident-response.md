@@ -26,7 +26,7 @@
 - Post-incident action items (GitHub issues for improvements)
 - Updated CLAUDE.md with lessons learned
 
-**Tracking:** GitHub issue for the incident + follow-up issues for action items.
+**Tracking:** GitHub issue for the incident (auto-created in Step 1, closed in Step 14) + follow-up issues for action items.
 
 **Principles enforced:**
 
