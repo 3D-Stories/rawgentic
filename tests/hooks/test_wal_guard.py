@@ -1,7 +1,8 @@
 """Tests for hooks/wal-guard — PreToolUse guard that blocks dangerous Bash commands.
 
 Ported from tests/test_wal_guard.sh. Covers:
-- Parametrized allow/deny cases for all 30 original patterns
+- Parametrized allow/deny cases for production deployment denial and
+  destructive local command passthrough
 - Empty and missing command edge cases
 - Fail-closed behavior when jq is unavailable
 """

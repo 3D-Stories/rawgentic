@@ -90,6 +90,38 @@ runs WAL recovery:
 4. **Report** -- incomplete INTENT entries (no DONE/FAIL) are injected into the
    session context as a recovery notice (up to 20 shown).
 
+## WAL Guard (`hooks/wal-guard`)
+
+The WAL Guard is a separate PreToolUse hook (matcher: Bash) that blocks dangerous
+commands **before** execution. Unlike the WAL logging hooks above, wal-guard can
+**deny** tool use — it returns a JSON deny decision to prevent the command from
+running.
+
+### Blocked Patterns
+
+Wal-guard blocks **production deployment commands** only:
+- `ssh`/`scp`/`rsync` targeting prod hosts
+- `docker compose` targeting prod with `up`/`restart`/`start`
+- `ansible` targeting prod inventories
+- `kubectl` targeting prod contexts/namespaces
+- `helm install`/`upgrade` targeting prod
+- `terraform apply` targeting prod
+
+All patterns are case-insensitive and match anywhere in the command string.
+
+### What Is NOT Blocked
+
+Destructive local commands (`rm -rf`, `git push --force`, `git reset --hard`,
+`git clean -f`, etc.) are **not** blocked by wal-guard. Claude's built-in safety
+behavior already prompts the user before running these operations, and
+hard-blocking via hooks would prevent the user from approving when they
+intentionally want to proceed (hooks have no warn-and-confirm mechanism).
+
+### Fail-Closed Behavior
+
+If `jq` is unavailable, wal-guard denies **all** commands. This prevents
+unguarded execution when the pattern-matching infrastructure is broken.
+
 ## Troubleshooting
 
 **WAL_FILE is empty / no entries written** -- The project could not be resolved.

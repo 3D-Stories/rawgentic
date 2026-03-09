@@ -37,8 +37,8 @@ deny() {
 
 # --- Data-driven blocked patterns ---
 # Each entry: regex -> human-readable reason -> grep flags
-# Uses \b word boundaries to avoid false positives at end-of-string.
-# PATTERN_FLAGS: empty = case-sensitive, "-i" = case-insensitive
+# Patterns match anywhere in the command string (no word boundaries).
+# PATTERN_FLAGS: "-i" = case-insensitive (all production patterns use this)
 # Production deployment patterns only. Destructive local commands (rm -rf,
 # git reset --hard, etc.) are NOT blocked here — Claude's built-in safety
 # behavior already asks the user before running destructive operations, and
