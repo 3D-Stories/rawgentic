@@ -60,9 +60,11 @@ discovery path.
 
 ### WAL Guard (`tests/hooks/test_wal_guard.py`)
 
-33 parametrized tests for dangerous command blocking. Covers destructive
-bash operations (forced pushes, recursive deletes, etc.), safe command
-passthrough, and a fail-closed test when `jq` is absent.
+36 parametrized tests for production deployment blocking and destructive
+command passthrough. Covers production deployment denial (ssh, scp, rsync,
+docker, ansible, kubectl, helm, terraform targeting prod), destructive
+local command allowance (Claude's built-in safety handles these), safe
+command passthrough, and a fail-closed test when `jq` is absent.
 
 ### WAL Pre/Post (`tests/hooks/test_wal_pre_post.py`)
 
