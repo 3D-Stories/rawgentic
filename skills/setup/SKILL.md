@@ -12,7 +12,7 @@ You are technology-agnostic — you detect whatever stack the project uses rathe
 
 # Setup Wizard — `/rawgentic:setup`
 
-Run through all 9 steps below **sequentially**. Present results at each step and wait for user acknowledgment before proceeding.
+Run through all steps below **sequentially** (Steps 1–9, with optional Step 4b). Present results at each step and wait for user acknowledgment before proceeding.
 
 <schema-reference>
 The full annotated schema lives at `templates/rawgentic-json-schema.json` in the rawgentic plugin directory. Read it at the start of Step 3 to understand every field and section available. That file is the single source of truth for the `.rawgentic.json` structure.
@@ -245,6 +245,70 @@ Source: vitest.config.ts, playwright.config.ts
 
 [... only sections where something was detected ...]
 ```
+
+---
+
+## Step 4b: Critique Detected Config (Optional)
+
+After presenting the detected config in Step 4, compute a **complexity score** to determine whether to offer a multi-agent critique.
+
+### Complexity Heuristic
+
+Count these signals from the detected config:
+
+| Signal | Condition | +1 if |
+|--------|-----------|-------|
+| Compose files | `infrastructure.docker.composeFiles` | length ≥ 3 |
+| Infrastructure hosts | `infrastructure.hosts` | length ≥ 2 |
+| Test frameworks | `testing.frameworks` | length ≥ 2 |
+| Multi-env database | `database` exists AND multiple environments detected (e.g., dev/prod/test values in `.env*` files) | true |
+| Deploy complexity | Multiple deploy methods detected (e.g., script + CI/CD, or ssh + compose) | true |
+
+**Score interpretation:**
+- **Score 0:** Skip critique entirely — proceed directly to Step 5.
+- **Score 1:** Offer passively: *"Would you like me to run a critique on the detected config? (Optional — can catch missing capabilities)"*
+- **Score ≥ 2:** Auto-suggest: *"This is a complex project (N complexity signals detected). I recommend running a multi-agent critique to validate completeness before you review. Run critique?"*
+
+If the user declines (or score is 0), proceed to Step 5 with the config unchanged.
+
+### Critique Execution
+
+If the user accepts, invoke `/reflexion:critique` with the detected `.rawgentic.json` as the work product.
+
+**Three judges evaluate in parallel:**
+
+**Judge 1: Requirements Validator**
+- For each schema section, check whether the detected config missed capabilities that exist in the actual project files
+- Look for: test frameworks with config files but not detected, services with port mappings not captured, database references in `.env*` not reflected in config
+- Check: are all Docker Compose services represented? Are all CI workflows captured?
+
+**Judge 2: Solution Architect**
+- Evaluate structural decisions: should services be split (e.g., frontend + backend vs monolith)?
+- Check environment awareness: does the database config cover all environments?
+- Validate infrastructure topology: do host assignments match actual deployment targets?
+- Check service dependencies and port consistency across compose files
+
+**Judge 3: Code Quality Reviewer**
+- Verify every concrete value against source files: ports in config match ports in compose/code, paths exist on disk, container names match compose service names
+- Check test commands actually work (correct binary, correct config file reference)
+- Validate framework detection: does the detected framework version/type match the actual config file?
+
+Each judge produces findings:
+```
+Finding #N:
+- Severity: Critical | High | Medium | Low
+- Category: missing_capability | wrong_value | structural | environment | completeness
+- Description: [what was missed or incorrect]
+- Recommendation: [specific config change]
+- Ambiguity flag: clear | ambiguous
+```
+
+### Applying Findings
+
+1. **Auto-apply** all findings with `ambiguity_flag == "clear"` — amend the detected config in memory.
+2. **Present ambiguous findings** to the user for resolution before proceeding.
+3. **Re-present** the amended config with a summary of changes: *"Critique found N issues. Applied M automatically. K need your input:"*
+4. Proceed to Step 5 with the amended config.
 
 ---
 
