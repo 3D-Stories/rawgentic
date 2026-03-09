@@ -223,8 +223,10 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 
 **Key Features:**
 - Phase A (stabilize): speed over perfection, relaxed quality gates
-- Phase B (RCA): 5 Whys analysis, preventive measures, pattern memorization
+- Phase B (RCA): structured 5 Whys analysis (min 3 levels), preventive measures, pattern memorization
 - SEV-1 through SEV-4 classification drives response urgency
+- Incident tracking issue created at start, closed at completion
+- Step 5 verification mandatory with evidence for SEV-1/SEV-2
 </details>
 
 <details>

@@ -23,6 +23,17 @@ LOOPBACK_BUDGET:
   Phase_B: bounded by escalation to WF2/WF3
 </constants>
 
+<phase-step-mapping>
+Always reference steps by number AND name to avoid confusion:
+
+| Phase | Steps | Purpose |
+|-------|-------|---------|
+| Phase A (Stabilize) | Steps 1–6 | Rapid service restoration |
+| Phase B (Analyze & Prevent) | Steps 7–14 | Root cause analysis and permanent fix |
+
+If step numbering feels wrong during execution, re-check this table.
+</phase-step-mapping>
+
 <config-loading>
 Before executing any workflow steps, load the project configuration:
 
@@ -75,6 +86,11 @@ Environment is populated at workflow start (Step 1) from the config loaded in `<
 
 If any required config field is missing, STOP and ask the user. Do not assume values.
 </environment-setup>
+
+<step-marker-enforcement>
+Each step MUST begin with its marker logged in session notes. Skipping a marker = skipping the step — this is not allowed.
+Before transitioning between phases (Phase A → Phase B), list ALL completed step markers in session notes. Any missing markers must be either completed or explicitly justified with user approval.
+</step-marker-enforcement>
 
 <termination-rule>
 WF11 terminates ONLY after the completion-gate (after Step 14) passes. All 14 steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing. Permanent fix may be delegated to WF2/WF3, but Steps 11-14 are still mandatory.
@@ -138,10 +154,11 @@ For each service in `config.services[]`:
 2. Log incident start time (UTC).
 3. Classify severity (SEV-1 through SEV-4).
 4. Identify affected services and user impact.
-5. **SEV-1/SEV-2:** Skip confirmation, proceed immediately to diagnosis.
-6. **SEV-3/SEV-4:** Confirm priority with user.
-7. Update `claude_docs/session_notes.md` with: resolved config summary, incident description, severity classification, initial impact assessment.
-8. Log in session notes: `### WF11 Step 1: Receive Incident Report — DONE`
+5. **Create incident tracking issue:** `gh issue create --repo ${capabilities.repo} --title "incident(SEV-X): [brief description]" --body "[initial assessment]" --label incident`. This issue tracks the full incident lifecycle — timeline, root cause, fix, verification, and follow-up items.
+6. **SEV-1/SEV-2:** Skip confirmation, proceed immediately to diagnosis.
+7. **SEV-3/SEV-4:** Confirm priority with user.
+8. Update `claude_docs/session_notes.md` with: resolved config summary, incident description, severity classification, initial impact assessment, incident issue number.
+9. Log in session notes: `### WF11 Step 1: Receive Incident Report — DONE (issue: #N)`
 
 ### Failure Modes
 
@@ -221,14 +238,18 @@ Log in session notes: `### WF11 Step 3: Strategy — [chosen strategy] (temporar
 
 ### Step 5: Verify Service Restoration
 
+<mandatory-verification>
+**For SEV-1 and SEV-2: Step 5 is MANDATORY and non-skippable.** Must include evidence (screenshot, API response, or log excerpt) proving containment worked. Cannot proceed to Phase B without Step 5 sign-off from the user.
+</mandatory-verification>
+
 #### Instructions
 
 1. All health endpoints return healthy.
 2. Critical user paths work (dashboard loads, data appears).
 3. Core service processing verified (check each service in `config.services[]` as applicable).
 4. Monitor 5 minutes — no recurring errors.
-5. SEV-1/SEV-2: run abbreviated E2E smoke test.
-6. Log in session notes: `### WF11 Step 5: Verify Restoration — DONE (health: OK|FAIL, E2E: OK|SKIP)`
+5. SEV-1/SEV-2: run abbreviated E2E smoke test. **Include evidence** (API response, log excerpt, or screenshot) in session notes.
+6. Log in session notes: `### WF11 Step 5: Verify Restoration — DONE (health: OK|FAIL, E2E: OK|SKIP, evidence: <type>)`
 
 ### Failure Modes
 
@@ -281,12 +302,16 @@ You may NOT declare WF11 complete until the completion-gate (after Step 14) pass
 Update `claude_docs/session_notes.md` with: Phase A summary, stabilization actions taken, Phase B RCA plan.
 
 1. **Timeline reconstruction:** Map exact sequence from first symptom to resolution.
-2. **5 Whys analysis:** Starting from symptom, ask "why?" repeatedly:
-   - Why did the service go down? → OOM kill
-   - Why was it OOM? → Memory leak in long-running query
-   - Why was the query long-running? → Missing index
-   - Why was the index missing? → Migration didn't include it
-   - Why didn't tests catch it? → No performance test
+2. **5 Whys analysis:** Starting from symptom, ask "why?" repeatedly. Document each level — minimum 3 levels required:
+   ```
+   5 Whys:
+   1. Why did the incident happen? → [direct cause]
+   2. Why did [direct cause] exist? → [design/implementation gap]
+   3. Why did [design gap] exist? → [process gap]
+   4. Why did [process gap] exist? → [organizational/knowledge gap]
+   5. Why did [organizational gap] exist? → [root cause]
+   ```
+   Each level must be documented, not just the final answer. Stop when you reach a cause that is actionable (can be fixed by a process change, test, or code change).
 3. **Contributing factors:** What made it worse or delayed detection?
    - Missing monitoring/alerting
    - Missing tests
@@ -309,9 +334,10 @@ Log in session notes: `### WF11 Step 7: RCA (5 Whys) — DONE (root cause: <summ
 
 1. Design permanent fix (if stabilization was temporary).
 2. Design preventive measures: tests, monitoring, documentation.
-3. If complex (>10 files, architecture change): delegate to WF2.
-4. If simple: proceed within WF11.
-5. Log in session notes: `### WF11 Step 8: Design Fix — DONE (scope: WF11|WF2, complexity: simple|complex)`
+3. **Document the fix design** in a comment on the incident tracking issue (or in session notes) BEFORE writing code. The design must be reviewable independently of the implementation. Step 10 should reference this design.
+4. If complex (>10 files, architecture change): delegate to WF2.
+5. If simple: proceed within WF11.
+6. Log in session notes: `### WF11 Step 8: Design Fix — DONE (scope: WF11|WF2, complexity: simple|complex, design: documented)`
 
 ### Failure Modes
 
@@ -351,7 +377,7 @@ If fix is within WF11 scope:
 2. Write test reproducing the incident condition.
 3. Implement permanent fix.
 4. Run all tests.
-5. Commit: `hotfix(scope): <incident description> [incident-RCA]`
+5. Commit using `hotfix(scope):` prefix — NOT `fix(scope):`. The `hotfix()` prefix distinguishes emergency incident fixes from normal bug fixes in git history, which is important for post-incident analysis and release notes. Example: `hotfix(engine): prevent duplicate order execution [incident-RCA]`
 6. Abbreviated code review (manual, not full 4-agent).
 7. Create PR and merge (fast-track).
 8. Deploy.
@@ -376,9 +402,10 @@ Log in session notes: `### WF11 Step 10: Implement Fix — DONE (branch: <name>,
 2. **Same-class bug scan:** If the root cause is a missing parameter, wrong default, or interface mismatch — grep for ALL callers of the affected function and verify they don't have the same bug. Log findings in session notes.
 3. Update monitoring/alerting (if applicable).
 4. Add diagnostic commands to quick playbook (if new incident type).
-5. Update `.rawgentic.json` custom section or session notes with new pitfalls or patterns.
+5. **Update or create operational playbook entry** for this incident class. Include: detection signals, immediate containment actions, verification steps. Link from project docs or CLAUDE.md.
+6. Update `.rawgentic.json` custom section or session notes with new pitfalls or patterns.
 
-Log in session notes: `### WF11 Step 11: Preventive Measures — DONE (N items)`
+Log in session notes: `### WF11 Step 11: Preventive Measures — DONE (N items, playbook: updated|created|N/A)`
 
 ### Failure Modes
 
@@ -442,7 +469,7 @@ Log in session notes: `### WF11 Step 13: Memorize — DONE (N patterns saved)`
    - Preventive measures
    - Action items
 2. Update session notes.
-3. Close incident GitHub issue with report summary.
+3. **Close the incident tracking issue** (created in Step 1) with a final summary comment linking PR, post-mortem findings, and follow-up action item issues.
 4. Present to user:
 
 ```
@@ -483,14 +510,15 @@ Log in session notes: `### WF11 Step 14: Incident Closure — DONE`
 <completion-gate>
 Before declaring WF11 complete, verify ALL of the following. Print the checklist with pass/fail for each item:
 
-1. [ ] Step markers logged for ALL executed steps in session notes
-2. [ ] Service health verified (Step 5 marker present)
+1. [ ] Step markers logged for ALL 14 steps in session notes (list each marker and verify presence)
+2. [ ] Service health verified (Step 5 marker present with evidence)
 3. [ ] Step 6 gate: user asked about Phase B timing
 4. [ ] Step 11: Preventive measures implemented (test gaps, same-class scan, .rawgentic.json or session notes)
 5. [ ] Step 12: Action items created as GitHub issues
 6. [ ] Step 13: Patterns memorized via `/reflexion:memorize`
 7. [ ] Step 14: WF11 COMPLETE template printed to user
 8. [ ] Session notes updated with final incident report
+9. [ ] Incident tracking issue (created in Step 1) closed with final summary
 
 If ANY item fails, go back and complete it before declaring WF11 complete.
 You may NOT output "WF11 complete" until all items pass.
