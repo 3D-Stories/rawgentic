@@ -13,14 +13,28 @@ _resolve_jq() {
 _resolve_jq
 
 # --- Input parsing ---
-# Reads stdin and extracts common fields into variables.
+# wal_read_stdin: Reads stdin into WAL_RAW_INPUT. Safe to call before jq check.
+# Sets: WAL_RAW_INPUT
+wal_read_stdin() {
+  WAL_RAW_INPUT=$(cat)
+}
+
+# wal_parse_fields: Extracts common fields from WAL_RAW_INPUT using jq.
+# Requires: WAL_RAW_INPUT to be set (via wal_read_stdin).
 # Sets: WAL_INPUT, WAL_TOOL_NAME, WAL_SESSION_ID, WAL_TOOL_USE_ID, WAL_CWD
+wal_parse_fields() {
+  WAL_INPUT="$WAL_RAW_INPUT"
+  WAL_TOOL_NAME=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.tool_name // "unknown"')
+  WAL_SESSION_ID=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.session_id // "unknown"')
+  WAL_TOOL_USE_ID=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.tool_use_id // "unknown"')
+  WAL_CWD=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.cwd // "."')
+}
+
+# wal_parse_input: Backward-compatible wrapper that reads stdin and extracts fields.
+# Sets: WAL_RAW_INPUT, WAL_INPUT, WAL_TOOL_NAME, WAL_SESSION_ID, WAL_TOOL_USE_ID, WAL_CWD
 wal_parse_input() {
-  WAL_INPUT=$(cat)
-  WAL_TOOL_NAME=$(printf '%s' "$WAL_INPUT" | "$WAL_JQ" -r '.tool_name // "unknown"')
-  WAL_SESSION_ID=$(printf '%s' "$WAL_INPUT" | "$WAL_JQ" -r '.session_id // "unknown"')
-  WAL_TOOL_USE_ID=$(printf '%s' "$WAL_INPUT" | "$WAL_JQ" -r '.tool_use_id // "unknown"')
-  WAL_CWD=$(printf '%s' "$WAL_INPUT" | "$WAL_JQ" -r '.cwd // "."')
+  wal_read_stdin
+  wal_parse_fields
 }
 
 # --- Workspace file resolution ---
@@ -135,9 +149,11 @@ wal_append_phase() {
 # Resolves which project the current session is bound to.
 # Reads session registry and workspace config.
 # Sets: WAL_PROJECT (empty string if unresolvable)
+#       WAL_PROJECT_PATH (absolute path to project directory, empty if unresolvable)
 # Requires: WAL_SESSION_ID, WAL_CWD to be set.
 wal_resolve_project() {
   WAL_PROJECT=""
+  WAL_PROJECT_PATH=""
   local root="${WAL_WORKSPACE_ROOT:-$WAL_CWD}"
   local registry_file="$root/claude_docs/session_registry.jsonl"
 
@@ -147,6 +163,88 @@ wal_resolve_project() {
     reg_line=$(grep "$WAL_SESSION_ID" "$registry_file" 2>/dev/null | tail -1 || true)
     if [ -n "$reg_line" ]; then
       WAL_PROJECT=$(printf '%s' "$reg_line" | "$WAL_JQ" -r '.project // ""' 2>/dev/null || true)
+      WAL_PROJECT_PATH=$(printf '%s' "$reg_line" | "$WAL_JQ" -r '.project_path // ""' 2>/dev/null || true)
     fi
   fi
+
+  # If project_path is relative, resolve against workspace root
+  if [ -n "$WAL_PROJECT_PATH" ] && [ "${WAL_PROJECT_PATH#/}" = "$WAL_PROJECT_PATH" ]; then
+    WAL_PROJECT_PATH="$root/$WAL_PROJECT_PATH"
+  fi
+}
+
+# --- Protection level resolution ---
+# Resolves per-project WAL guard protection level.
+# Resolution order:
+#   1. guards.wal explicit array in project .rawgentic.json → use exactly those rules
+#   2. protectionLevel preset in project .rawgentic.json → expand to curated rule set
+#   3. defaultProtectionLevel in workspace .rawgentic_workspace.json
+#   4. Nothing found → strict (all patterns active)
+# Preset expansions:
+#   sandbox:  "" (empty = nothing active)
+#   standard: "scp-prod rsync-prod docker-prod-destroy ansible-prod-mutate kubectl-prod-destroy helm-prod-destroy terraform-prod-destroy"
+#   strict:   "ALL"
+# Sets: WAL_PROTECTION_LEVEL (sandbox|standard|strict)
+#       WAL_ACTIVE_WAL_GUARDS (space-delimited rule names, or "ALL" for strict)
+# Requires: WAL_PROJECT_PATH, WAL_WORKSPACE_ROOT to be set.
+wal_resolve_protection_level() {
+  WAL_PROTECTION_LEVEL="strict"
+  WAL_ACTIVE_WAL_GUARDS="ALL"
+
+  local project_config="${WAL_PROJECT_PATH:+$WAL_PROJECT_PATH/.rawgentic.json}"
+  local ws_config="${WAL_WORKSPACE_ROOT:+$WAL_WORKSPACE_ROOT/.rawgentic_workspace.json}"
+  local level=""
+
+  # 1. Check project .rawgentic.json for explicit guards.wal array
+  if [ -n "$project_config" ] && [ -f "$project_config" ]; then
+    local explicit_guards
+    explicit_guards=$("$WAL_JQ" -r '
+      if .guards and .guards.wal and (.guards.wal | type == "array") then
+        .guards.wal | join(" ")
+      else
+        ""
+      end
+    ' "$project_config" 2>/dev/null || true)
+
+    if [ -n "$explicit_guards" ]; then
+      WAL_PROTECTION_LEVEL="custom"
+      WAL_ACTIVE_WAL_GUARDS="$explicit_guards"
+      return 0
+    fi
+
+    # 2. Check project .rawgentic.json for protectionLevel preset
+    level=$("$WAL_JQ" -r '.protectionLevel // ""' "$project_config" 2>/dev/null || true)
+  fi
+
+  # 3. Check workspace .rawgentic_workspace.json for defaultProtectionLevel
+  if [ -z "$level" ] && [ -n "$ws_config" ] && [ -f "$ws_config" ]; then
+    level=$("$WAL_JQ" -r '.defaultProtectionLevel // ""' "$ws_config" 2>/dev/null || true)
+  fi
+
+  # 4. Nothing found → strict
+  if [ -z "$level" ]; then
+    level="strict"
+  fi
+
+  # Expand preset to rule set
+  case "$level" in
+    sandbox)
+      WAL_PROTECTION_LEVEL="sandbox"
+      WAL_ACTIVE_WAL_GUARDS=""
+      ;;
+    standard)
+      WAL_PROTECTION_LEVEL="standard"
+      WAL_ACTIVE_WAL_GUARDS="scp-prod rsync-prod docker-prod-destroy ansible-prod-mutate kubectl-prod-destroy helm-prod-destroy terraform-prod-destroy"
+      ;;
+    strict)
+      WAL_PROTECTION_LEVEL="strict"
+      WAL_ACTIVE_WAL_GUARDS="ALL"
+      ;;
+    *)
+      # Invalid level → strict + warning
+      echo "wal-lib: WARNING: invalid protectionLevel '$level', defaulting to strict" >&2
+      WAL_PROTECTION_LEVEL="strict"
+      WAL_ACTIVE_WAL_GUARDS="ALL"
+      ;;
+  esac
 }
