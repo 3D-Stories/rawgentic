@@ -98,9 +98,67 @@ Bound to: <name> (<path>)
 Configured: yes/no
 ```
 
-**If `configured` is `false`:** Suggest: "This project hasn't been configured yet. Run `/rawgentic:setup`."
+**If `configured` is `false`:** Suggest: "This project hasn't been configured yet. Run `/rawgentic:setup`." Then skip Step 5b entirely — there is no config to check for staleness.
 
-**If `configured` is `true`:** Confirm: "Ready. All rawgentic workflow skills will use `<path>/.rawgentic.json` for this session."
+**If `configured` is `true`:** Proceed to Step 5b before confirming "Ready."
+
+---
+
+## Step 5b: Config Staleness Check
+
+After binding and before the "Ready" confirmation, run these checks in order:
+
+### 1. Workspace-level: `defaultProtectionLevel`
+
+Read `.rawgentic_workspace.json`. If the top-level field `defaultProtectionLevel` is missing:
+
+1. Prompt the user:
+
+   ```
+   Your workspace is missing a default protection level.
+   Choose a workspace-wide default for new or unconfigured projects:
+
+   - sandbox  — No guards active. Good for POC / playground projects.
+   - standard — Blocks destroy + mutate ops on production, 6 common security patterns.
+   - strict   — All guards active. Full production projects.
+
+   Which level? (sandbox / standard / strict)
+   ```
+
+2. Wait for the user's choice. Validate it is one of `sandbox`, `standard`, `strict`.
+3. Read `.rawgentic_workspace.json`, add `"defaultProtectionLevel": "<choice>"` at the top level, and write it back (full read-modify-write).
+4. Confirm: "Set workspace `defaultProtectionLevel` to **<choice>**."
+
+This prompt runs once — subsequent binds see the field and skip.
+
+### 2. Project-level: universal field check
+
+Check the project's `.rawgentic.json` for the following **universal fields** (hardcoded list):
+
+- `version`
+- `project`
+- `repo`
+- `protectionLevel`
+- `custom`
+
+This list is intentionally small — it includes only fields that every project should have regardless of type. Optional sections (`testing`, `database`, `services`, `infrastructure`, `deploy`, `security`, `ci`, `formatting`, `documentation`) are NOT checked because projects may legitimately omit them.
+
+**Compare field presence only** — do not validate values or nested structure.
+
+**If any universal fields are missing:** Print an advisory warning:
+
+```
+Config advisory: your .rawgentic.json is missing: <comma-separated list of missing fields>
+Run `/rawgentic:setup` to update your config (existing values will be preserved).
+```
+
+**If no fields are missing:** Silent pass — print nothing.
+
+### 3. Confirm Ready
+
+After both checks complete, print the final confirmation:
+
+"Ready. All rawgentic workflow skills will use `<path>/.rawgentic.json` for this session."
 
 ---
 
