@@ -126,6 +126,7 @@ declare -a PATTERN_EXCLUDES=(
 #   ""      = sandbox, skip all patterns (nothing active)
 #   "a b c" = space-delimited list of active rule names
 # Default to ALL if variable was never set (no workspace found).
+# Uses = (not :=) so sandbox's intentional empty string is preserved.
 : "${WAL_ACTIVE_WAL_GUARDS=ALL}"
 
 _check_patterns() {
