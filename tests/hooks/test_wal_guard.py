@@ -5,13 +5,17 @@ Ported from tests/test_wal_guard.sh. Covers:
   destructive local command passthrough
 - Empty and missing command edge cases
 - Fail-closed behavior when jq is unavailable
+- Per-project protection level filtering (sandbox/standard/strict)
+- /tmp allowlist
+- Explicit guards.wal override
 """
+import json
 import os
 from pathlib import Path
 
 import pytest
 
-from tests.hooks.conftest import parse_hook_output, run_hook
+from tests.hooks.conftest import parse_hook_output, run_hook, Workspace
 
 HOOK = "wal-guard"
 
@@ -178,3 +182,227 @@ def test_missing_jq_denies_all() -> None:
         assert "jq" in reason.lower(), f"Reason should mention jq: {reason}"
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── Per-project protection level tests ────────────────────────────────────
+
+
+def _run_guard_with_level(
+    command: str,
+    level: str,
+    make_workspace,
+    *,
+    project_configs: dict | None = None,
+) -> tuple[str, dict | None]:
+    """Run wal-guard with a workspace configured at *level*.
+
+    Creates a workspace with a project bound to the session, runs the
+    guard, and returns (decision, parsed_output).
+    """
+    session_id = "guard-test-sess"
+    if project_configs is None:
+        project_configs = {"testproj": {"protectionLevel": level}}
+
+    ws: Workspace = make_workspace(
+        registry_entries=[{
+            "session_id": session_id,
+            "project": "testproj",
+            "project_path": "./projects/testproj",
+        }],
+        project_configs=project_configs,
+    )
+
+    payload = {
+        "tool_input": {"command": command},
+        "tool_name": "Bash",
+        "session_id": session_id,
+        "tool_use_id": "tu-1",
+        "cwd": str(ws.root),
+    }
+
+    stdout, _stderr, _rc = run_hook(HOOK, payload, cwd=ws.root)
+    parsed = parse_hook_output(stdout)
+    if parsed is None:
+        return "allow", None
+    decision = parsed.get("hookSpecificOutput", {}).get("permissionDecision", "")
+    if decision == "deny":
+        return "deny", parsed
+    return "allow", parsed
+
+
+class TestSandboxLevel:
+    """Sandbox protection level allows ALL commands."""
+
+    @pytest.mark.parametrize("command", [
+        "ssh user@prod-host",
+        "scp build.tar.gz prod-server:/opt/app/",
+        "docker compose -f docker-compose.prod.yml down",
+        "ansible-playbook -i prod-inventory site.yml",
+        "kubectl delete pod mypod --context prod",
+        "helm uninstall myapp --namespace prod",
+        "terraform destroy -var-file=prod.tfvars",
+        "rsync -avz ./dist/ prod-host:/var/www/",
+    ])
+    def test_sandbox_allows_all(self, command, make_workspace):
+        decision, _ = _run_guard_with_level(command, "sandbox", make_workspace)
+        assert decision == "allow", f"sandbox should allow: {command}"
+
+
+class TestStandardLevel:
+    """Standard level allows some ops and blocks others."""
+
+    @pytest.mark.parametrize("label,command", [
+        ("ssh prod", "ssh user@prod-host"),
+        ("docker restart prod", "docker compose -f docker-compose.prod.yml restart"),
+        ("kubectl get prod", "kubectl get pods --context prod"),
+        ("ansible --check prod", "ansible-playbook --check -i prod-inventory site.yml"),
+    ])
+    def test_standard_allows(self, label, command, make_workspace):
+        decision, _ = _run_guard_with_level(command, "standard", make_workspace)
+        assert decision == "allow", f"standard should allow: {label}"
+
+    @pytest.mark.parametrize("label,command", [
+        ("scp prod", "scp build.tar.gz prod-server:/opt/app/"),
+        ("docker rm prod", "docker compose -f docker-compose.prod.yml down"),
+        ("ansible-playbook prod (no check)", "ansible-playbook -i prod-inventory site.yml"),
+        ("kubectl delete prod", "kubectl delete pod mypod --context prod"),
+        ("rsync prod", "rsync -avz ./dist/ prod-host:/var/www/"),
+        ("helm uninstall prod", "helm uninstall myapp --namespace prod"),
+        ("terraform destroy prod", "terraform destroy -var-file=prod.tfvars"),
+    ])
+    def test_standard_blocks(self, label, command, make_workspace):
+        decision, _ = _run_guard_with_level(command, "standard", make_workspace)
+        assert decision == "deny", f"standard should block: {label}"
+
+
+class TestStrictLevel:
+    """Strict level blocks all 12 patterns."""
+
+    @pytest.mark.parametrize("label,command", [
+        ("ssh prod", "ssh user@prod-host"),
+        ("scp prod", "scp build.tar.gz prod-server:/opt/app/"),
+        ("rsync prod", "rsync -avz ./dist/ prod-host:/var/www/"),
+        ("docker up prod", "docker compose up -d --file prod.yml"),
+        ("docker down prod", "docker compose -f docker-compose.prod.yml down"),
+        ("ansible prod", "ansible-playbook -i prod-inventory site.yml"),
+        ("kubectl apply prod", "kubectl apply -f deploy.yml --context prod"),
+        ("kubectl delete prod", "kubectl delete pod mypod --context prod"),
+        ("helm install prod", "helm install myapp ./chart --set env=prod"),
+        ("helm uninstall prod", "helm uninstall myapp --namespace prod"),
+        ("terraform apply prod", "terraform apply -var-file=prod.tfvars"),
+        ("terraform destroy prod", "terraform destroy -var-file=prod.tfvars"),
+    ])
+    def test_strict_blocks_all(self, label, command, make_workspace):
+        decision, _ = _run_guard_with_level(command, "strict", make_workspace)
+        assert decision == "deny", f"strict should block: {label}"
+
+    @pytest.mark.parametrize("label,command", [
+        ("docker logs prod", "docker logs prod-container"),
+        ("kubectl get prod", "kubectl get pods --context prod"),
+    ])
+    def test_strict_allows_read_commands(self, label, command, make_workspace):
+        decision, _ = _run_guard_with_level(command, "strict", make_workspace)
+        assert decision == "allow", f"strict should allow read command: {label}"
+
+
+class TestTmpAllowlist:
+    """rm on /tmp is always allowed regardless of protection level."""
+
+    @pytest.mark.parametrize("level", ["sandbox", "standard", "strict"])
+    def test_rm_tmp_allowed(self, level, make_workspace):
+        decision, _ = _run_guard_with_level("rm -f /tmp/foo", level, make_workspace)
+        assert decision == "allow", f"rm /tmp should be allowed at {level}"
+
+    def test_rm_tmp_dir_allowed(self, make_workspace):
+        decision, _ = _run_guard_with_level("rm -rf /tmp", "strict", make_workspace)
+        assert decision == "allow"
+
+
+class TestNoWorkspaceBackwardCompat:
+    """Missing workspace config = strict behavior (backward compat)."""
+
+    def test_no_workspace_blocks_ssh_prod(self):
+        """Without a workspace, wal-guard still blocks prod commands (strict default)."""
+        actual = _run_guard("ssh user@prod-host")
+        assert actual == "deny"
+
+    def test_no_workspace_allows_safe_commands(self):
+        actual = _run_guard("echo hello")
+        assert actual == "allow"
+
+
+class TestDenyMessage:
+    """Deny output includes the original command text."""
+
+    def test_deny_contains_command(self, make_workspace):
+        command = "ssh user@prod-host"
+        decision, parsed = _run_guard_with_level(command, "strict", make_workspace)
+        assert decision == "deny"
+        assert parsed is not None
+        reason = parsed["hookSpecificOutput"]["permissionDecisionReason"]
+        assert command in reason, f"Deny reason should contain the command: {reason}"
+        assert "Run this command manually" in reason
+
+
+class TestExplicitGuardsWal:
+    """Explicit guards.wal array overrides protectionLevel."""
+
+    def test_only_blocks_specified_rules(self, make_workspace):
+        """guards.wal: ["ssh-prod"] should only block ssh, not scp."""
+        # ssh-prod should be blocked
+        decision, _ = _run_guard_with_level(
+            "ssh user@prod-host",
+            "sandbox",  # level is ignored when guards.wal is set
+            make_workspace,
+            project_configs={"testproj": {"guards": {"wal": ["ssh-prod"]}}},
+        )
+        assert decision == "deny", "ssh-prod should be blocked by explicit guard"
+
+        # scp-prod should be allowed (not in the explicit list)
+        decision, _ = _run_guard_with_level(
+            "scp build.tar.gz prod-server:/opt/app/",
+            "sandbox",
+            make_workspace,
+            project_configs={"testproj": {"guards": {"wal": ["ssh-prod"]}}},
+        )
+        assert decision == "allow", "scp-prod should be allowed when not in explicit guards"
+
+    def test_explicit_empty_is_not_triggered(self, make_workspace):
+        """guards.wal with only empty array should not override (treated as no config).
+
+        Note: An empty guards.wal array means the jq join produces empty string,
+        which the shell treats as unset, falling back to protectionLevel.
+        """
+        # Empty guards.wal array -- falls through to protectionLevel
+        decision, _ = _run_guard_with_level(
+            "ssh user@prod-host",
+            "strict",  # unused since project_configs overrides
+            make_workspace,
+            project_configs={"testproj": {
+                "protectionLevel": "sandbox",
+                "guards": {"wal": []},
+            }},
+        )
+        assert decision == "allow", "empty guards.wal falls through to protectionLevel sandbox"
+
+
+class TestAnsibleExcludePattern:
+    """Ansible --check/--diff/--syntax-check/--list-hosts/--list-tasks bypass."""
+
+    @pytest.mark.parametrize("flag", [
+        "--check",
+        "--diff",
+        "--syntax-check",
+        "--list-hosts",
+        "--list-tasks",
+    ])
+    def test_ansible_check_flags_allowed_strict(self, flag, make_workspace):
+        """ansible-playbook with safety flags should be allowed even at strict."""
+        command = f"ansible-playbook {flag} -i prod-inventory site.yml"
+        decision, _ = _run_guard_with_level(command, "strict", make_workspace)
+        assert decision == "allow", f"ansible {flag} should be allowed"
+
+    def test_ansible_without_check_denied_strict(self, make_workspace):
+        command = "ansible-playbook -i prod-inventory site.yml"
+        decision, _ = _run_guard_with_level(command, "strict", make_workspace)
+        assert decision == "deny"

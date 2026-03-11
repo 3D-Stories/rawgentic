@@ -2,6 +2,7 @@
 """Tests for security-guard hook pure functions."""
 import pytest
 import json
+import os
 from pathlib import Path
 
 import sys
@@ -18,8 +19,12 @@ from security_guard_lib import (
     suggest_glob,
     match_patterns,
     filter_exceptions,
+    filter_by_exclude_paths,
     format_deny,
+    load_protection_config,
+    SECURITY_PRESETS,
 )
+from tests.hooks.conftest import run_hook, parse_hook_output
 
 
 class TestGlobMatch:
@@ -322,3 +327,371 @@ class TestFormatDeny:
         json_str = json.dumps(result)
         parsed = json.loads(json_str)
         assert "line1" in parsed["systemMessage"]
+
+
+class TestLoadProtectionConfig:
+    """Tests for load_protection_config() resolution logic."""
+
+    def test_no_project_root_returns_strict(self):
+        """No project root -> strict, all rules active."""
+        level, rules, exclude, has_new = load_protection_config(None)
+        assert level == "strict"
+        assert rules is None
+        assert exclude is None
+        assert has_new is False
+
+    def test_missing_rawgentic_json(self, tmp_path):
+        """No .rawgentic.json file -> strict fallback."""
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "strict"
+        assert rules is None
+        assert exclude is None
+        assert has_new is False
+
+    def test_malformed_json(self, tmp_path):
+        """Malformed .rawgentic.json -> strict fallback."""
+        (tmp_path / ".rawgentic.json").write_text("{bad json")
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "strict"
+        assert rules is None
+        assert exclude is None
+        assert has_new is False
+
+    def test_protection_level_sandbox(self, tmp_path):
+        """protectionLevel: sandbox -> no rules active."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "sandbox"
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "sandbox"
+        assert rules == set()
+        assert exclude is None
+        assert has_new is True
+
+    def test_protection_level_standard(self, tmp_path):
+        """protectionLevel: standard -> curated 6-element set."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "standard"
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "standard"
+        assert isinstance(rules, set)
+        assert len(rules) == 6
+        assert "eval_injection" in rules
+        assert "innerHTML_xss" in rules
+        assert has_new is True
+
+    def test_protection_level_strict(self, tmp_path):
+        """protectionLevel: strict -> all rules active (None)."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "strict"
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "strict"
+        assert rules is None
+        assert exclude is None
+        assert has_new is True
+
+    def test_protection_level_invalid(self, tmp_path):
+        """Invalid protectionLevel -> strict fallback."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "turbo"
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "strict"
+        assert rules is None
+        assert has_new is True
+
+    def test_explicit_guards_security_list(self, tmp_path):
+        """Explicit guards.security list -> custom level with exact rules."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "guards": {"security": ["eval_injection", "innerHTML_xss"]}
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "custom"
+        assert rules == {"eval_injection", "innerHTML_xss"}
+        assert has_new is True
+
+    def test_guards_security_overrides_protection_level(self, tmp_path):
+        """guards.security takes precedence over protectionLevel."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "sandbox",
+            "guards": {"security": ["eval_injection"]}
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "custom"
+        assert rules == {"eval_injection"}
+
+    def test_exclude_paths_extracted(self, tmp_path):
+        """securityExcludePaths is extracted from guards."""
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "standard",
+            "guards": {"securityExcludePaths": ["tests/**", "**/*.test.js"]}
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "standard"
+        assert exclude == ["tests/**", "**/*.test.js"]
+        assert has_new is True
+
+    def test_workspace_default_protection_level_fallback(self, tmp_path):
+        """Workspace defaultProtectionLevel is used when project has no config."""
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        (proj_dir / ".rawgentic.json").write_text(json.dumps({}))
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        (ws_dir / ".rawgentic_workspace.json").write_text(json.dumps({
+            "defaultProtectionLevel": "standard"
+        }))
+
+        level, rules, exclude, has_new = load_protection_config(
+            str(proj_dir), str(ws_dir)
+        )
+        assert level == "standard"
+        assert isinstance(rules, set)
+        assert len(rules) == 6
+        assert has_new is False
+
+    def test_workspace_fallback_not_used_when_project_has_config(self, tmp_path):
+        """Workspace fallback is skipped when project has protectionLevel."""
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        (proj_dir / ".rawgentic.json").write_text(json.dumps({
+            "protectionLevel": "sandbox"
+        }))
+
+        ws_dir = tmp_path / "ws"
+        ws_dir.mkdir()
+        (ws_dir / ".rawgentic_workspace.json").write_text(json.dumps({
+            "defaultProtectionLevel": "strict"
+        }))
+
+        level, rules, exclude, has_new = load_protection_config(
+            str(proj_dir), str(ws_dir)
+        )
+        assert level == "sandbox"
+        assert rules == set()
+
+    def test_workspace_missing_file_falls_through(self, tmp_path):
+        """Missing workspace config file -> strict default."""
+        proj_dir = tmp_path / "proj"
+        proj_dir.mkdir()
+        (proj_dir / ".rawgentic.json").write_text(json.dumps({}))
+
+        level, rules, exclude, has_new = load_protection_config(
+            str(proj_dir), str(tmp_path / "nonexistent")
+        )
+        assert level == "strict"
+        assert rules is None
+        assert has_new is False
+
+    def test_empty_guards_dict_no_protection_level(self, tmp_path):
+        """Empty guards dict without protectionLevel -> strict default.
+
+        An empty guards dict is falsy so has_new_config is False.
+        """
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "guards": {}
+        }))
+        level, rules, exclude, has_new = load_protection_config(str(tmp_path))
+        assert level == "strict"
+        assert rules is None
+        assert has_new is False
+
+
+class TestFilterByExcludePaths:
+    """Tests for filter_by_exclude_paths()."""
+
+    SAMPLE_MATCHES = [
+        {"ruleName": "eval_injection", "reminder": "eval bad."},
+        {"ruleName": "innerHTML_xss", "reminder": "innerHTML bad."},
+    ]
+
+    def test_none_exclude_paths_returns_unchanged(self):
+        """None exclude_paths -> matches unchanged."""
+        result = filter_by_exclude_paths(self.SAMPLE_MATCHES, None, "src/app.js")
+        assert result == self.SAMPLE_MATCHES
+
+    def test_empty_list_returns_unchanged(self):
+        """Empty list -> matches unchanged."""
+        result = filter_by_exclude_paths(self.SAMPLE_MATCHES, [], "src/app.js")
+        assert result == self.SAMPLE_MATCHES
+
+    def test_matching_pattern_returns_empty(self):
+        """File matching an exclude pattern -> empty list."""
+        result = filter_by_exclude_paths(
+            self.SAMPLE_MATCHES, ["tests/**"], "tests/foo.js"
+        )
+        assert result == []
+
+    def test_non_matching_pattern_returns_unchanged(self):
+        """File not matching any exclude pattern -> matches unchanged."""
+        result = filter_by_exclude_paths(
+            self.SAMPLE_MATCHES, ["tests/**"], "src/app.js"
+        )
+        assert result == self.SAMPLE_MATCHES
+
+    def test_multiple_patterns_any_match_excludes(self):
+        """If any exclude pattern matches, file is excluded."""
+        result = filter_by_exclude_paths(
+            self.SAMPLE_MATCHES,
+            ["docs/**", "tests/**"],
+            "tests/unit/foo.test.js",
+        )
+        assert result == []
+
+    def test_doublestar_pattern(self):
+        """Double-star pattern matches nested files."""
+        result = filter_by_exclude_paths(
+            self.SAMPLE_MATCHES,
+            ["**/*.test.js"],
+            "src/utils/helper.test.js",
+        )
+        assert result == []
+
+
+class TestSecurityGuardIntegration:
+    """Integration tests running security-guard.py as a subprocess.
+
+    Uses run_hook() to test the full flow with different protection levels.
+    """
+
+    def _make_write_payload(self, file_path, content):
+        """Build a Write tool stdin payload."""
+        return {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": file_path,
+                "content": content,
+            },
+        }
+
+    def test_sandbox_allows_eval(self, make_workspace):
+        """Sandbox level: writing eval( is ALLOWED."""
+        ws = make_workspace(
+            project_configs={"testproj": {"protectionLevel": "sandbox"}}
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "src" / "app.js")
+        payload = self._make_write_payload(file_path, "x = eval(code)")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        # Sandbox allows everything -> no deny
+        assert output is None or "permissionDecision" not in output.get("hookSpecificOutput", {})
+
+    def test_standard_blocks_eval(self, make_workspace):
+        """Standard level: writing eval( is BLOCKED."""
+        ws = make_workspace(
+            project_configs={"testproj": {"protectionLevel": "standard"}}
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "src" / "app.js")
+        payload = self._make_write_payload(file_path, "x = eval(code)")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_standard_allows_child_process_exec(self, make_workspace):
+        """Standard level: child_process.exec is NOT in standard set -> ALLOWED."""
+        ws = make_workspace(
+            project_configs={"testproj": {"protectionLevel": "standard"}}
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "src" / "app.js")
+        payload = self._make_write_payload(file_path, "child_process.exec('ls')")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        assert output is None or "permissionDecision" not in output.get("hookSpecificOutput", {})
+
+    def test_strict_blocks_eval(self, make_workspace):
+        """Strict level: writing eval( is BLOCKED."""
+        ws = make_workspace(
+            project_configs={"testproj": {"protectionLevel": "strict"}}
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "src" / "app.js")
+        payload = self._make_write_payload(file_path, "x = eval(code)")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_strict_blocks_child_process_exec(self, make_workspace):
+        """Strict level: child_process.exec is BLOCKED."""
+        ws = make_workspace(
+            project_configs={"testproj": {"protectionLevel": "strict"}}
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "src" / "app.js")
+        payload = self._make_write_payload(file_path, "child_process.exec('ls')")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_exclude_paths_allows_test_file(self, make_workspace):
+        """securityExcludePaths: eval( in tests/foo.js with tests/** exclude -> ALLOWED."""
+        ws = make_workspace(
+            project_configs={
+                "testproj": {
+                    "protectionLevel": "strict",
+                    "guards": {"securityExcludePaths": ["tests/**"]},
+                }
+            }
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "tests" / "foo.js")
+        payload = self._make_write_payload(file_path, "x = eval(code)")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        assert output is None or "permissionDecision" not in output.get("hookSpecificOutput", {})
+
+    def test_backward_compat_security_exceptions(self, make_workspace):
+        """No protectionLevel: securityExceptions still works."""
+        ws = make_workspace(
+            project_configs={
+                "testproj": {
+                    "securityExceptions": [
+                        {"rule": "eval_injection", "pathPattern": "**/__tests__/**"}
+                    ]
+                }
+            }
+        )
+        proj_dir = ws.root / "projects" / "testproj"
+        file_path = str(proj_dir / "__tests__" / "foo.test.js")
+        payload = self._make_write_payload(file_path, "x = eval(code)")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        # Exception matches -> should allow
+        assert output is None or "permissionDecision" not in output.get("hookSpecificOutput", {})
+
+    def test_no_config_defaults_to_strict(self, make_workspace):
+        """No .rawgentic.json at all -> strict (all blocked)."""
+        ws = make_workspace()  # No project_configs -> no .rawgentic.json
+        proj_dir = ws.root / "projects" / "testproj"
+        # Remove .rawgentic.json if it exists
+        config = proj_dir / ".rawgentic.json"
+        if config.exists():
+            config.unlink()
+        # Create a file deep enough that find_project_root won't find config
+        src_dir = proj_dir / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        file_path = str(src_dir / "app.js")
+        payload = self._make_write_payload(file_path, "x = eval(code)")
+
+        stdout, stderr, rc = run_hook("security-guard.py", payload, cwd=ws.root)
+        output = parse_hook_output(stdout)
+        # No config -> strict -> blocks eval
+        # Note: find_project_root walks up looking for .rawgentic.json.
+        # Without it, project_root is None -> strict default.
+        assert output is not None
+        assert output["hookSpecificOutput"]["permissionDecision"] == "deny"

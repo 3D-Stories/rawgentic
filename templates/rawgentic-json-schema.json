@@ -119,6 +119,14 @@
     "primaryFiles": ["README.md", "docs/"],
     "format": "markdown"
   },
+  "$comment:protectionLevel": "Per-project guard protection level preset. Controls which WAL and security guards are active. Values: sandbox (nothing blocked), standard (production data-transfer + orchestration + common code patterns), strict (all guards active). Default when missing: strict. Consumed by wal-guard and security-guard hooks.",
+  "protectionLevel": "standard",
+  "guards": {
+    "$comment": "Explicit guard overrides. When present, overrides protectionLevel preset for the specified guard type. guards.wal lists active WAL guard rule names, guards.security lists active security guard rule names, guards.securityExcludePaths lists glob patterns for files excluded from security checks.",
+    "wal": ["scp-prod", "rsync-prod", "docker-prod-destroy", "ansible-prod-mutate"],
+    "security": ["eval_injection", "innerHTML_xss", "document_write_xss"],
+    "securityExcludePaths": ["tests/**", "**/*.test.*", "**/*.spec.*"]
+  },
   "$comment:custom": "Free-form project-specific metadata (e.g., security debt, feature flags). Any skill may read; security-audit checks for known debt items.",
   "custom": {}
 }
