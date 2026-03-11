@@ -180,7 +180,7 @@ MultiEdit, NotebookEdit tools). They use substring and regex matching.
 | `eval_injection` | Dynamic code execution via eval() |
 | `new_function_injection` | new Function() constructor abuse |
 | `child_process_exec` | child_process.exec (prefer execFile/spawn) |
-| `react_dangerouslysetinnerhtml` | dangerouslySetInnerHTML in React |
+| `react_dangerously_set_html` | dangerouslySetInnerHTML in React |
 | `document_write_xss` | document.write XSS vector |
 | `innerHTML_xss` | innerHTML assignment XSS vector |
 | `pickle_deserialization` | Python pickle.loads deserialization |
