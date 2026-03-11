@@ -155,7 +155,7 @@ read, operate, and destroy tiers so incident troubleshooting stays unblocked.
 | `helm-prod-operate` | Helm install/upgrade/rollback on production | operate |
 | `helm-prod-destroy` | Helm uninstall/delete on production | destroy |
 | `terraform-prod-operate` | Terraform apply/import/taint on production | operate |
-| `terraform-prod-destroy` | Terraform destroy on {P}uction | {des} |
+| `terraform-prod-destroy` | Terraform destroy on production | destroy |
 
 **Preset expansions:**
 
