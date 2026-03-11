@@ -105,3 +105,131 @@ Derive the boolean flags listed above from the parsed config.
 | `.rawgentic.json` missing | Stop. Tell user to run `/rawgentic:setup`. |
 | `.rawgentic.json` malformed JSON | Stop. Tell user config is corrupted; suggest `/rawgentic:setup`. |
 | `config.version` missing or `> 1` | Warn user about version mismatch but continue. |
+
+## Protection Levels
+
+The `protectionLevel` field controls which guard rules are active for a project.
+This lets you tune safety per project -- POC projects can run with minimal guards,
+while production projects get full protection.
+
+### Presets
+
+| Level | WAL Guards | Security Guards | Use case |
+|-------|-----------|-----------------|----------|
+| `sandbox` | None active | None active | POC / playground projects with no production exposure. |
+| `standard` | Destroy + mutate ops blocked | 6 common code patterns | Projects with some production exposure; read commands stay open for troubleshooting. |
+| `strict` | All 12 rules active | All rules active | Full production projects. Default when no level is configured. |
+
+### Configuration
+
+```json
+{
+  "protectionLevel": "standard"
+}
+```
+
+### Resolution Order
+
+Protection level is resolved in this order (first match wins):
+
+1. **`guards.wal` / `guards.security` explicit arrays** in `.rawgentic.json` -- use exactly those rule names.
+2. **`protectionLevel` preset** in `.rawgentic.json` -- expand to the curated rule set.
+3. **`defaultProtectionLevel`** in `.rawgentic_workspace.json` -- workspace-wide default.
+4. **No configuration found** -- defaults to `strict` (fail-closed).
+
+### WAL Guard Rules
+
+WAL guards block dangerous Bash commands before execution. Rules are split into
+read, operate, and destroy tiers so incident troubleshooting stays unblocked.
+
+| Rule Name | Blocked Pattern | Tier |
+|-----------|----------------|------|
+| `ssh-prod` | SSH to production hosts | operate |
+| `scp-prod` | SCP to/from production hosts | operate |
+| `rsync-prod` | rsync to/from production hosts | operate |
+| `docker-prod-operate` | Docker start/stop/restart/pull on production | operate |
+| `docker-prod-destroy` | Docker down/rm/rmi/prune/kill on production | destroy |
+| `ansible-prod-mutate` | Ansible playbooks targeting production (excludes --check/--diff/--list-*) | operate |
+| `kubectl-prod-operate` | kubectl apply/scale/rollout/set/patch/create/run on production | operate |
+| `kubectl-prod-destroy` | kubectl delete/drain/cordon/taint on production | destroy |
+| `helm-prod-operate` | Helm install/upgrade/rollback on production | operate |
+| `helm-prod-destroy` | Helm uninstall/delete on production | destroy |
+| `terraform-prod-operate` | Terraform apply/import/taint on production | operate |
+| `terraform-prod-destroy` | Terraform destroy on {P}uction | {des} |
+
+**Preset expansions:**
+
+- **sandbox:** No WAL rules active.
+- **standard:** `scp-prod`, `rsync-prod`, `docker-prod-destroy`, `ansible-prod-mutate`, `kubectl-prod-destroy`, `helm-prod-destroy`, `terraform-prod-destroy`.
+- **strict:** All 12 rules active.
+
+Read commands (docker logs, docker ps, kubectl get, kubectl describe, helm list,
+terraform plan, terraform show) are never blocked at any level, enabling incident
+troubleshooting even under strict protection.
+
+When a command is blocked, the deny message includes the original command so you
+can copy-paste it to run manually in your terminal.
+
+### Security Guard Rules
+
+Security guards block dangerous code patterns in file writes (Edit, Write,
+MultiEdit, NotebookEdit tools). They use substring and regex matching.
+
+| Rule Name | What It Catches |
+|-----------|----------------|
+| `eval_injection` | Dynamic code execution via eval() |
+| `new_function_injection` | new Function() constructor abuse |
+| `child_process_exec` | child_process.exec (prefer execFile/spawn) |
+| `react_dangerouslysetinnerhtml` | dangerouslySetInnerHTML in React |
+| `document_write_xss` | document.write XSS vector |
+| `innerHTML_xss` | innerHTML assignment XSS vector |
+| `pickle_deserialization` | Python pickle.loads deserialization |
+| `os_system_injection` | Python os.system command injection |
+| `github_actions_workflow` | Untrusted input in GH Actions expressions |
+| `github_actions_workflow_yaml` | Unsafe patterns in workflow YAML |
+
+**Preset expansions:**
+
+- **sandbox:** No security rules active.
+- **standard:** `eval_injection`, `new_function_injection`, `innerHTML_xss`, `document_write_xss`, `pickle_deserialization`, `os_system_injection`.
+- **strict:** All rules active.
+
+### Explicit Guard Overrides
+
+For fine-grained control, use the `guards` object to override the preset:
+
+```json
+{
+  "protectionLevel": "standard",
+  "guards": {
+    "wal": ["scp-prod", "rsync-prod", "docker-prod-destroy"],
+    "security": ["eval_injection", "innerHTML_xss"],
+    "securityExcludePaths": ["tests/**", "**/*.test.*", "**/*.spec.*"]
+  }
+}
+```
+
+When `guards.wal` or `guards.security` is present, it takes precedence over the
+`protectionLevel` preset for that guard type. This lets you start from a preset
+and selectively add or remove rules.
+
+### `securityExcludePaths`
+
+Glob patterns for files that should be excluded from all security checks.
+Typical use: test files that legitimately use patterns like eval() for testing.
+
+```json
+{
+  "guards": {
+    "securityExcludePaths": ["tests/**", "**/*.test.*", "**/*.spec.*"]
+  }
+}
+```
+
+Pattern matching uses fnmatch with `**` for recursive directory matching.
+
+### Deprecated: `securityExceptions`
+
+The older `security.exceptions` array (per-rule + per-path exceptions) is still
+supported for backward compatibility but deprecated. Migrate to
+`guards.securityExcludePaths` for simpler path-based exclusions.
