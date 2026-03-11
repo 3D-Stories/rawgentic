@@ -92,7 +92,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | --------------------------- | ---------------------------------------------------- |
 | `/rawgentic:new-project`    | Register a new or existing project in the workspace  |
 | `/rawgentic:setup`          | Auto-detect tech stack, optional critique for complex projects, generate `.rawgentic.json` |
-| `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate |
+| `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate. Checks for config staleness and prompts for missing `defaultProtectionLevel`. |
 
 ### SDLC Workflows
 
