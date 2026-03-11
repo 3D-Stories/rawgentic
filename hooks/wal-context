@@ -4,79 +4,56 @@
 # Error-tolerant: always exits 0.
 # Design: docs/plans/2026-03-06-wal-session-notes-design.md
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
 _do_context() {
     set -euo pipefail
 
-    INPUT=$(cat)
+    source "$SCRIPT_DIR/wal-lib.sh"
 
-    JQ="${HOME}/.local/bin/jq"
-    [ -x "$JQ" ] || JQ="jq"
-    command -v "$JQ" &>/dev/null || exit 0
+    wal_read_stdin
+    wal_parse_fields
 
-    SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
-    CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
+    [ "$WAL_SESSION_ID" = "unknown" ] && exit 0
 
-    [ "$SESSION_ID" = "unknown" ] && exit 0
-
-    # Find rawgentic workspace — traverse up from CWD
-    WORKSPACE_FILE=""
-    WS_ROOT=""
-    _d="$CWD"
-    _i=0
-    while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
-        if [ -f "$_d/.rawgentic_workspace.json" ]; then
-            WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
-            WS_ROOT="$_d"
-            break
-        fi
-        _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
-        _i=$((_i + 1))
-    done
-    [ -z "$WORKSPACE_FILE" ] && exit 0
+    # Find rawgentic workspace
+    wal_find_workspace || exit 0
 
     # Write session ID to discoverable file for /rawgentic:switch skill
-    mkdir -p "$WS_ROOT/claude_docs" 2>/dev/null || true
-    printf '%s' "$SESSION_ID" > "$WS_ROOT/claude_docs/.current_session_id" 2>/dev/null || true
+    mkdir -p "$WAL_WORKSPACE_ROOT/claude_docs" 2>/dev/null || true
+    printf '%s' "$WAL_SESSION_ID" > "$WAL_WORKSPACE_ROOT/claude_docs/.current_session_id" 2>/dev/null || true
 
-    REGISTRY_FILE="$WS_ROOT/claude_docs/session_registry.jsonl"
-    WAL_FILE="$WS_ROOT/claude_docs/wal.jsonl"
-    NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
+    REGISTRY_FILE="$WAL_WORKSPACE_ROOT/claude_docs/session_registry.jsonl"
+    WAL_FILE="$WAL_WORKSPACE_ROOT/claude_docs/wal.jsonl"
+    NOTES_DIR="$WAL_WORKSPACE_ROOT/claude_docs/session_notes"
 
     # --- Lookup project from registry ---
-    PROJECT=""
-    PROJECT_PATH=""
-    if [ -f "$REGISTRY_FILE" ]; then
-        REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
-        if [ -n "$REG_LINE" ]; then
-            PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""')
-            PROJECT_PATH=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project_path // ""')
-        fi
-    fi
+    wal_resolve_project
 
     # If not registered, use detection cascade
-    if [ -z "$PROJECT" ]; then
+    if [ -z "$WAL_PROJECT" ]; then
         # Count active projects
-        ACTIVE_COUNT=$("$JQ" '[.projects[] | select(.active == true)] | length' "$WORKSPACE_FILE" 2>/dev/null || echo "0")
+        ACTIVE_COUNT=$("$WAL_JQ" '[.projects[] | select(.active == true)] | length' "$WAL_WORKSPACE_FILE" 2>/dev/null || echo "0")
 
         if [ "$ACTIVE_COUNT" -eq 0 ]; then
-            "$JQ" -nc --arg ctx "No active projects in workspace. Use /rawgentic:new-project to set one up." \
+            "$WAL_JQ" -nc --arg ctx "No active projects in workspace. Use /rawgentic:new-project to set one up." \
                 '{additionalContext: $ctx}'
             exit 0
         elif [ "$ACTIVE_COUNT" -eq 1 ]; then
             # Single active project — auto-bind
-            ACTIVE_PROJECT=$("$JQ" -r '.projects[] | select(.active == true) | .name' "$WORKSPACE_FILE" 2>/dev/null || true)
-            ACTIVE_PATH=$("$JQ" -r '.projects[] | select(.active == true) | .path' "$WORKSPACE_FILE" 2>/dev/null || true)
+            ACTIVE_PROJECT=$("$WAL_JQ" -r '.projects[] | select(.active == true) | .name' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
+            ACTIVE_PATH=$("$WAL_JQ" -r '.projects[] | select(.active == true) | .path' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
 
             if [ -n "$ACTIVE_PROJECT" ]; then
                 # Auto-register this session for the active project
-                mkdir -p "$WS_ROOT/claude_docs/session_notes"
+                mkdir -p "$WAL_WORKSPACE_ROOT/claude_docs/session_notes"
                 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-                "$JQ" -nc \
-                    --arg sid "$SESSION_ID" \
+                "$WAL_JQ" -nc \
+                    --arg sid "$WAL_SESSION_ID" \
                     --arg proj "$ACTIVE_PROJECT" \
                     --arg ppath "$ACTIVE_PATH" \
                     --arg ts "$TS" \
-                    --arg cwd "$CWD" \
+                    --arg cwd "$WAL_CWD" \
                     '{session_id:$sid, project:$proj, project_path:$ppath, started:$ts, cwd:$cwd}' \
                     >> "$REGISTRY_FILE" 2>/dev/null || true
 
@@ -87,28 +64,31 @@ _do_context() {
                     printf '# Session Notes -- %s\n' "$ACTIVE_PROJECT" > "$NOTES_FILE"
                 fi
 
-                PROJECT="$ACTIVE_PROJECT"
-                PROJECT_PATH="$ACTIVE_PATH"
+                WAL_PROJECT="$ACTIVE_PROJECT"
+                WAL_PROJECT_PATH="$ACTIVE_PATH"
             fi
         else
             # Multiple active projects — prompt user to bind
-            ACTIVE_NAMES=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | join(", ")' "$WORKSPACE_FILE" 2>/dev/null || true)
-            "$JQ" -nc --arg ctx "Multiple projects active: ${ACTIVE_NAMES}. Use /rawgentic:switch <name> to bind this session to a project." \
+            ACTIVE_NAMES=$("$WAL_JQ" -r '[.projects[] | select(.active == true) | .name] | join(", ")' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
+            "$WAL_JQ" -nc --arg ctx "Multiple projects active: ${ACTIVE_NAMES}. Use /rawgentic:switch <name> to bind this session to a project." \
                 '{additionalContext: $ctx}'
             exit 0
         fi
     fi
 
-    CONTEXT="SESSION CONTEXT [${PROJECT} | ${SESSION_ID}]:"
+    # --- Resolve protection level ---
+    wal_resolve_protection_level
+
+    CONTEXT="SESSION CONTEXT [${WAL_PROJECT} | ${WAL_SESSION_ID} | ${WAL_PROTECTION_LEVEL}]:"
 
     # --- Session notes status ---
-    NOTES_FILE="$NOTES_DIR/${PROJECT}.md"
+    NOTES_FILE="$NOTES_DIR/${WAL_PROJECT}.md"
     if [ -f "$NOTES_FILE" ]; then
         # Find last session header for this session_id
-        LAST_HEADER=$(grep "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
+        LAST_HEADER=$(grep "ID: ${WAL_SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
         if [ -n "$LAST_HEADER" ]; then
             # Extract task from nearby lines
-            TASK_LINE=$(grep -A2 "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | grep "^## Task:" | tail -1 || true)
+            TASK_LINE=$(grep -A2 "ID: ${WAL_SESSION_ID}" "$NOTES_FILE" 2>/dev/null | grep "^## Task:" | tail -1 || true)
             TASK="${TASK_LINE#*## Task: }"
             [ -z "$TASK" ] && TASK="(unknown)"
 
@@ -141,12 +121,12 @@ _do_context() {
         fi
     else
         CONTEXT="${CONTEXT}
-  No session notes file found for project '${PROJECT}'."
+  No session notes file found for project '${WAL_PROJECT}'."
     fi
 
     # --- Recent WAL actions ---
     if [ -f "$WAL_FILE" ]; then
-        RECENT=$(grep "$SESSION_ID" "$WAL_FILE" 2>/dev/null | tail -10 | "$JQ" -r '"    [" + .ts[11:19] + "] " + .phase + ": " + (.summary // .tool)' 2>/dev/null || true)
+        RECENT=$(grep "$WAL_SESSION_ID" "$WAL_FILE" 2>/dev/null | tail -10 | "$WAL_JQ" -r '"    [" + .ts[11:19] + "] " + .phase + ": " + (.summary // .tool)' 2>/dev/null || true)
         if [ -n "$RECENT" ]; then
             CONTEXT="${CONTEXT}
 
@@ -157,9 +137,9 @@ ${RECENT}"
 
     CONTEXT="${CONTEXT}
 
-  Full session notes: claude_docs/session_notes/${PROJECT}.md"
+  Full session notes: claude_docs/session_notes/${WAL_PROJECT}.md"
 
-    "$JQ" -nc --arg ctx "$CONTEXT" '{additionalContext: $ctx}'
+    "$WAL_JQ" -nc --arg ctx "$CONTEXT" '{additionalContext: $ctx}'
 }
 
 _do_context 2>/dev/null || true

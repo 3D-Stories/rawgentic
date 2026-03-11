@@ -59,6 +59,55 @@ class TestUnboundSingleActive:
         assert "solo" in registry
 
 
+class TestProtectionLevelInContext:
+    def test_default_strict_in_header(self, make_workspace):
+        """No .rawgentic.json → strict default appears in context header."""
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        stdout, stderr, rc = run_hook(
+            "wal-context",
+            {"session_id": "s1", "cwd": str(ws.root)},
+            cwd=ws.root,
+        )
+        output = parse_hook_output(stdout)
+        ctx = output.get("additionalContext", "")
+        assert "strict" in ctx
+
+    def test_sandbox_level_in_header(self, make_workspace):
+        """protectionLevel: sandbox appears in context header."""
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+            project_configs={"testproj": {"protectionLevel": "sandbox"}},
+        )
+        stdout, stderr, rc = run_hook(
+            "wal-context",
+            {"session_id": "s1", "cwd": str(ws.root)},
+            cwd=ws.root,
+        )
+        output = parse_hook_output(stdout)
+        ctx = output.get("additionalContext", "")
+        assert "sandbox" in ctx
+
+    def test_standard_level_in_header(self, make_workspace):
+        """protectionLevel: standard appears in context header."""
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+            project_configs={"testproj": {"protectionLevel": "standard"}},
+        )
+        stdout, stderr, rc = run_hook(
+            "wal-context",
+            {"session_id": "s1", "cwd": str(ws.root)},
+            cwd=ws.root,
+        )
+        output = parse_hook_output(stdout)
+        ctx = output.get("additionalContext", "")
+        assert "standard" in ctx
+
+
 class TestUnboundMultiActive:
     def test_emits_switch_prompt(self, make_workspace):
         ws = make_workspace(
