@@ -16,7 +16,9 @@ if ! command -v "$WAL_JQ" &>/dev/null; then
   exit 0
 fi
 
-INPUT=$(cat)
+# Read stdin before any jq-dependent parsing
+wal_read_stdin
+INPUT="$WAL_RAW_INPUT"
 COMMAND=$(printf '%s' "$INPUT" | "$WAL_JQ" -r '.tool_input.command // empty')
 
 if [ -z "$COMMAND" ]; then
@@ -25,7 +27,14 @@ fi
 
 deny() {
   local reason="$1"
-  printf '%s' "$INPUT" | "$WAL_JQ" -c --arg reason "$reason" '{
+  local cmd="${2:-}"
+  local msg="$reason"
+  if [ -n "$cmd" ]; then
+    msg="${reason}
+Command: ${cmd}
+Run this command manually in your terminal if you need to proceed."
+  fi
+  printf '%s' "$INPUT" | "$WAL_JQ" -c --arg reason "$msg" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -34,6 +43,19 @@ deny() {
   }'
   exit 0
 }
+
+# --- Universal allowlist: rm on /tmp always allowed ---
+if printf '%s' "$COMMAND" | grep -qE '^rm\s+.*(/tmp/|/tmp$)'; then
+  exit 0
+fi
+
+# --- Resolve project and protection level ---
+wal_parse_fields
+if wal_find_workspace; then
+  wal_resolve_project
+  wal_resolve_protection_level
+fi
+# If resolution failed, WAL_ACTIVE_WAL_GUARDS defaults to "ALL" (strict)
 
 # --- Data-driven blocked patterns ---
 # Each entry: regex -> human-readable reason -> grep flags
@@ -44,35 +66,97 @@ deny() {
 # behavior already asks the user before running destructive operations, and
 # hard-blocking prevents the user from approving when they intentionally
 # want to proceed.
+declare -a PATTERN_NAMES=(
+  "ssh-prod"
+  "scp-prod"
+  "rsync-prod"
+  "docker-prod-operate"
+  "docker-prod-destroy"
+  "ansible-prod-mutate"
+  "kubectl-prod-operate"
+  "kubectl-prod-destroy"
+  "helm-prod-operate"
+  "helm-prod-destroy"
+  "terraform-prod-operate"
+  "terraform-prod-destroy"
+)
+
 declare -a PATTERN_KEYS=(
   'ssh\s.*prod'
   'scp\s.*prod'
   'rsync\s.*prod'
-  'docker\s+(compose\s+)?.*prod.*(up|restart|start)'
-  'ansible.*prod'
-  'kubectl.*(--context|set-context|--namespace).*prod'
-  'helm.*(install|upgrade).*prod'
-  'terraform\s+apply.*prod'
+  'docker\s+(compose\s+)?.*((up|restart|start|stop|pull).*prod|prod.*(up|restart|start|stop|pull))'
+  'docker\s+(compose\s+)?.*((down|rm|rmi|prune|kill).*prod|prod.*(down|rm|rmi|prune|kill))'
+  'ansible(-playbook)?.*prod'
+  'kubectl\s+.*((apply|scale|rollout|set|patch|create|run).*prod|prod.*(apply|scale|rollout|set|patch|create|run))'
+  'kubectl\s+.*((delete|drain|cordon|taint).*prod|prod.*(delete|drain|cordon|taint))'
+  'helm\s+(install|upgrade|rollback).*prod'
+  'helm\s+(uninstall|delete).*prod'
+  'terraform\s+(apply|import|taint).*prod'
+  'terraform\s+(destroy|apply\s+.*-destroy).*prod'
 )
 
 declare -a PATTERN_REASONS=(
-  "BLOCKED: SSH to production host detected. Requires explicit user permission."
-  "BLOCKED: SCP to production host detected. Requires explicit user permission."
-  "BLOCKED: rsync to production host detected. Requires explicit user permission."
-  "BLOCKED: Docker operation targeting production detected. Requires explicit user permission."
-  "BLOCKED: Ansible targeting production detected. Requires explicit user permission."
-  "BLOCKED: kubectl targeting production context/namespace detected. Requires explicit user permission."
-  "BLOCKED: Helm operation targeting production detected. Requires explicit user permission."
-  "BLOCKED: Terraform apply targeting production detected. Requires explicit user permission."
+  "BLOCKED: SSH to production host detected."
+  "BLOCKED: SCP to production host detected."
+  "BLOCKED: rsync to production host detected."
+  "BLOCKED: Docker operation on production detected."
+  "BLOCKED: Docker destroy operation on production detected."
+  "BLOCKED: Ansible targeting production detected."
+  "BLOCKED: kubectl state change on production detected."
+  "BLOCKED: kubectl destroy operation on production detected."
+  "BLOCKED: Helm deployment to production detected."
+  "BLOCKED: Helm uninstall from production detected."
+  "BLOCKED: Terraform apply on production detected."
+  "BLOCKED: Terraform destroy on production detected."
 )
 
-declare -a PATTERN_FLAGS=("-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i")
+declare -a PATTERN_FLAGS=("-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i" "-i")
 
-for i in "${!PATTERN_KEYS[@]}"; do
-  if printf '%s' "$COMMAND" | grep ${PATTERN_FLAGS[$i]} -qE "${PATTERN_KEYS[$i]}"; then
-    deny "${PATTERN_REASONS[$i]}"
+# Optional exclusion patterns (only ansible has one)
+declare -a PATTERN_EXCLUDES=(
+  "" "" "" "" ""
+  "--(check|diff|syntax-check|list-hosts|list-tasks)"
+  "" "" "" "" "" ""
+)
+
+# --- Pattern matching loop ---
+# WAL_ACTIVE_WAL_GUARDS can be:
+#   "ALL"   = strict, check every pattern
+#   ""      = sandbox, skip all patterns (nothing active)
+#   "a b c" = space-delimited list of active rule names
+# Default to ALL if variable was never set (no workspace found).
+: "${WAL_ACTIVE_WAL_GUARDS=ALL}"
+
+_check_patterns() {
+  # Sandbox: empty string means nothing is active, skip all checks
+  if [ -z "$WAL_ACTIVE_WAL_GUARDS" ]; then
+    return 0
   fi
-done
+
+  for i in "${!PATTERN_KEYS[@]}"; do
+    # Skip rules not in active set (unless ALL)
+    if [ "$WAL_ACTIVE_WAL_GUARDS" != "ALL" ]; then
+      local name="${PATTERN_NAMES[$i]}"
+      if [[ ! " $WAL_ACTIVE_WAL_GUARDS " =~ " $name " ]]; then
+        continue
+      fi
+    fi
+
+    if printf '%s' "$COMMAND" | grep ${PATTERN_FLAGS[$i]} -qE "${PATTERN_KEYS[$i]}"; then
+      # Check exclusion pattern (-- terminates grep options to avoid
+      # patterns starting with -- being parsed as flags)
+      if [ -n "${PATTERN_EXCLUDES[$i]:-}" ]; then
+        if printf '%s' "$COMMAND" | grep -qE -- "${PATTERN_EXCLUDES[$i]}"; then
+          continue
+        fi
+      fi
+      deny "${PATTERN_REASONS[$i]}" "$COMMAND"
+    fi
+  done
+}
+
+_check_patterns
 
 # If nothing matched, allow
 exit 0
