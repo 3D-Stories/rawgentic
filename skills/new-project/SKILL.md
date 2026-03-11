@@ -50,7 +50,25 @@ Read `.rawgentic_workspace.json` if it exists. Search the `projects` array for a
   1. **Switch to it** → Run `/rawgentic:switch <name>` and stop.
   2. **Re-run setup** → Switch to it, then run `/rawgentic:setup` and stop.
 
-**If not found (or no workspace file exists):** Continue to Step 3.
+**If not found (or no workspace file exists):** Continue to Step 2b.
+
+---
+
+## Step 2b: Create or Link?
+
+Ask the user:
+
+> This project isn't registered yet. Would you like to:
+> 1. **Create a new project** — set up a new folder at `<path>`
+> 2. **Link to an existing folder** — register a project that already lives somewhere else
+
+**If create (1):** Continue to Step 3 (uses `<path>` from Step 1 as-is).
+
+**If link (2):**
+1. Ask: "Enter the path to your existing project folder:"
+2. Validate the provided path exists on disk and is a directory.
+   - **If it does not exist or is not a directory:** Tell the user: "That path doesn't exist. Please check and try again." Re-prompt for the path (do NOT create the directory).
+   - **If it exists:** Override `<path>` with the user-provided path. Skip Step 3 and continue directly to Step 3b (conformance check), then Step 4.
 
 ---
 
@@ -83,7 +101,7 @@ Check whether `<path>` exists on disk.
 
 ## Step 3b: Conformance Check (existing projects only)
 
-If the project directory already existed (Path B from Step 3), audit its Claude configuration for conformance with the three-layer architecture:
+If the project directory already existed (Path B from Step 3, or linked via Step 2b), audit its Claude configuration for conformance with the three-layer architecture:
 
 1. **Check for rawgentic pointer in project CLAUDE.md.** Read `<path>/CLAUDE.md` if it exists. Search for `## Rawgentic` or `Workspace config:` patterns.
    - **If found:** Tell the user: "The project CLAUDE.md contains a Rawgentic section. This belongs in the workspace-level CLAUDE.md, not in the project. I'll remove it." Remove the section (from `## Rawgentic` to the next `##` heading or end of file).
@@ -130,19 +148,21 @@ Read `.rawgentic_workspace.json`, then:
 ```json
 {
   "name": "<name>",
-  "path": "./<relative-path-from-workspace-root>",
+  "path": "<path>",
   "active": true,
   "lastUsed": "<current ISO 8601 timestamp>",
   "configured": false
 }
 ```
 
-**Path conversion:** The `path` field MUST be a relative path from the workspace root (e.g., `./projects/my-app`), NOT an absolute path. This ensures portability across machines. To convert: take the absolute path from Step 1, strip the `WORKSPACE_ROOT` prefix, and prepend `./`. If the path is already relative, use it as-is.
+**Path conversion rules:**
+- **If `<path>` is inside the workspace root** (i.e., it starts with or is under `{WORKSPACE_ROOT}`): store as a relative path from the workspace root (e.g., `./projects/my-app`). To convert: strip the `WORKSPACE_ROOT` prefix and prepend `./`.
+- **If `<path>` is outside the workspace root** (e.g., linked via Step 2b to `/home/user/repos/my-app`): store as an absolute path. External projects are inherently location-specific, so portability does not apply.
 
 2. Write the updated workspace file back (full read-modify-write -- never patch in place).
 3. **Register in session registry:** Create `claude_docs/session_notes/` directory if it doesn't exist. Append a line to `claude_docs/session_registry.jsonl`:
    ```json
-   {"session_id":"<your session_id>","project":"<name>","project_path":"./<relative-path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
+   {"session_id":"<your session_id>","project":"<name>","project_path":"<path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
    ```
 4. **Initialize session notes file:** If `claude_docs/session_notes/<name>.md` does not exist, create it with:
    ```markdown
