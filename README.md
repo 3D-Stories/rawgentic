@@ -57,17 +57,13 @@ Then inside the Claude session:
 
 This creates the workspace structure, clones or initializes the repo, scaffolds the workspace CLAUDE.md, and runs `/rawgentic:setup` to auto-detect your tech stack.
 
-**Importing existing projects:** Copy or symlink your project folder into the workspace's `projects/` directory, then register it:
+**Importing existing projects:** Register a project that already exists elsewhere on disk:
 
-```bash
-# From your terminal (outside Claude)
-cp -r ~/code/my-existing-app my-org-workspace/projects/my-existing-app
-
-# Then inside Claude
+```
 /rawgentic:new-project my-existing-app
 ```
 
-`new-project` detects the existing directory and skips cloning — it registers the project and runs setup to generate `.rawgentic.json`.
+When the project isn't found in the workspace, `new-project` asks whether to create a new folder or link to an existing one. Choose "link" and provide the path — the project is registered in the workspace JSON without copying or moving files. External projects are stored with their absolute path.
 
 ### 3. Start using workflows
 
@@ -107,7 +103,7 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 
 | Skill                       | Purpose                                              |
 | --------------------------- | ---------------------------------------------------- |
-| `/rawgentic:new-project`    | Register a new or existing project in the workspace  |
+| `/rawgentic:new-project`    | Register a new or existing project in the workspace. Can link to external folders without copying. |
 | `/rawgentic:setup`          | Auto-detect tech stack, optional critique for complex projects, generate `.rawgentic.json` |
 | `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate. Checks for config staleness and prompts for missing `defaultProtectionLevel`. |
 
