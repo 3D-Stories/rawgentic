@@ -50,6 +50,10 @@ def make_workspace(tmp_path: Path):
         Written to claude_docs/session_notes/{name}.md.
     create_project_dirs : bool
         Whether to create the project directories on disk (default True).
+    project_configs : dict[str, dict]
+        Mapping of project name -> .rawgentic.json content.
+        Written to each project's directory as .rawgentic.json.
+        Example: {"testproj": {"protectionLevel": "standard"}}
 
     Returns
     -------
@@ -64,6 +68,7 @@ def make_workspace(tmp_path: Path):
         wal_entries: dict[str, list[dict[str, Any]]] | None = None,
         session_notes: dict[str, str] | None = None,
         create_project_dirs: bool = True,
+        project_configs: dict[str, dict[str, Any]] | None = None,
     ) -> Workspace:
         root = tmp_path
 
@@ -126,6 +131,18 @@ def make_workspace(tmp_path: Path):
             for proj in projects:
                 proj_path = root / proj["path"]
                 proj_path.mkdir(parents=True, exist_ok=True)
+
+        # -- Per-project .rawgentic.json configs --
+        if project_configs:
+            for proj_name, config in project_configs.items():
+                # Find the project path from the projects list
+                for proj in projects:
+                    if proj["name"] == proj_name:
+                        proj_dir = root / proj["path"]
+                        proj_dir.mkdir(parents=True, exist_ok=True)
+                        config_file = proj_dir / ".rawgentic.json"
+                        config_file.write_text(json.dumps(config, indent=2))
+                        break
 
         return Workspace(
             root=root,
