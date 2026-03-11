@@ -17,8 +17,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from security_guard_lib import (
     extract_content,
+    filter_by_exclude_paths,
     filter_exceptions,
     format_deny,
+    load_protection_config,
     match_patterns,
     normalize_path,
 )
@@ -58,6 +60,20 @@ def find_project_root(start_path):
         current = current.parent
     if (current / ".rawgentic.json").exists():
         return str(current)
+    return None
+
+
+def find_workspace_root(start_path):
+    """Walk up from start_path to find directory containing .rawgentic_workspace.json."""
+    current = Path(start_path)
+    if current.is_file():
+        current = current.parent
+    for _ in range(5):
+        if (current / ".rawgentic_workspace.json").exists():
+            return str(current)
+        if current == current.parent:
+            break
+        current = current.parent
     return None
 
 
@@ -114,16 +130,51 @@ def main():
         sys.exit(0)
 
     project_root = find_project_root(file_path)
-    rel_path = normalize_path(file_path, project_root)
 
+    # Load protection config
+    workspace_root = find_workspace_root(file_path) if project_root else None
+    level, active_rules, exclude_paths, has_new_config = load_protection_config(
+        project_root, workspace_root
+    )
+
+    # If no rules active (sandbox), skip all checks
+    if active_rules is not None and len(active_rules) == 0:
+        sys.exit(0)
+
+    # Filter patterns to active rules
+    if active_rules is not None:
+        patterns = [p for p in patterns if p.get("ruleName") in active_rules]
+        if not patterns:
+            sys.exit(0)
+
+    rel_path = normalize_path(file_path, project_root)
     content = extract_content(tool_name, tool_input)
 
     matches = match_patterns(rel_path, content, patterns)
     if not matches:
         sys.exit(0)
 
-    exceptions = load_exceptions(project_root)
-    remaining = filter_exceptions(matches, exceptions, rel_path)
+    # Apply exclude paths (new config model)
+    if has_new_config and exclude_paths:
+        matches = filter_by_exclude_paths(matches, exclude_paths, rel_path)
+        if not matches:
+            sys.exit(0)
+
+    # Backward compat: use securityExceptions if no new config
+    if not has_new_config:
+        exceptions = load_exceptions(project_root)
+        remaining = filter_exceptions(matches, exceptions, rel_path)
+    else:
+        remaining = matches
+        # Deprecation warning: securityExceptions with new config
+        exceptions = load_exceptions(project_root)
+        if exceptions and not os.environ.get("_RAWGENTIC_DEPRECATION_WARNED"):
+            _warn(
+                "DEPRECATION: securityExceptions is ignored when protectionLevel "
+                "or guards is set. Migrate exceptions to guards.securityExcludePaths. "
+                "See docs/config-reference.md."
+            )
+
     if not remaining:
         sys.exit(0)
 

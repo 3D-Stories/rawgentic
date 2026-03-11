@@ -325,6 +325,13 @@ Key behaviors:
 - After all detected sections, ask: "Any sections I missed? (database, deploy, services, security, etc.)"
 - Accept corrections inline — don't make the user rewrite JSON
 - For `project.type`, always ask for explicit confirmation since inference can be wrong
+- **Protection level prompt:** After confirming all sections, ask the user to choose a protection level:
+  > "What protection level should this project use?"
+  > - **sandbox** — No guards active. Good for POC / playground projects.
+  > - **standard** — Blocks destroy + mutate ops on production, 6 common security patterns. Read commands stay open for troubleshooting.
+  > - **strict** — All guards active. Full production projects. *(This is the default if not set.)*
+
+  Set `protectionLevel` in the config based on the user's choice. If the user wants fine-grained control, explain that `guards.wal` and `guards.security` arrays can override the preset (see `docs/config-reference.md`).
 
 ---
 
