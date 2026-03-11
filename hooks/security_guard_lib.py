@@ -12,7 +12,19 @@ boundaries, so this is Linux-only.
 """
 import fnmatch
 import json
+import os
 import re
+
+
+# Preset expansions for security guards
+SECURITY_PRESETS = {
+    "sandbox": set(),
+    "standard": {
+        "eval_injection", "new_function_injection", "innerHTML_xss",
+        "document_write_xss", "pickle_deserialization", "os_system_injection",
+    },
+    "strict": None,  # None means all active
+}
 
 
 def glob_match(path_str, pattern):
@@ -188,3 +200,80 @@ def format_deny(matches, rel_path):
         },
         "systemMessage": "\n\n---\n\n".join(sections),
     }
+
+
+def load_protection_config(project_root, workspace_root=None):
+    """Load protection configuration from .rawgentic.json.
+
+    Resolution order:
+    1. guards.security explicit list -> use exactly those rules
+    2. protectionLevel preset -> expand to curated rule set
+    3. No project config -> check workspace defaultProtectionLevel
+    4. Nothing found -> strict (all active)
+
+    Returns (level, active_rules, exclude_paths, has_new_config):
+    - level: str ("sandbox", "standard", "strict", "custom")
+    - active_rules: set|None (None = all active, set() = none active)
+    - exclude_paths: list[str]|None (glob patterns from guards.securityExcludePaths)
+    - has_new_config: bool (True if guards or protectionLevel key exists)
+    """
+    if project_root is None:
+        return ("strict", None, None, False)
+
+    config_path = os.path.join(project_root, ".rawgentic.json")
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, IOError):
+        return ("strict", None, None, False)
+
+    guards = config.get("guards", {})
+    protection_level = config.get("protectionLevel")
+    has_new_config = bool(guards) or protection_level is not None
+
+    # Extract exclude paths
+    exclude_paths = guards.get("securityExcludePaths") if isinstance(guards, dict) else None
+
+    # Resolution: explicit guards.security first
+    if isinstance(guards, dict) and "security" in guards:
+        rules = guards["security"]
+        if isinstance(rules, list):
+            return ("custom", set(rules), exclude_paths, True)
+
+    # Resolution: protectionLevel preset
+    if protection_level is not None:
+        level = str(protection_level).lower()
+        if level in SECURITY_PRESETS:
+            return (level, SECURITY_PRESETS[level], exclude_paths, True)
+        else:
+            # Invalid level -> strict + could warn
+            return ("strict", None, exclude_paths, True)
+
+    # Resolution: workspace defaultProtectionLevel
+    if workspace_root is not None:
+        ws_config_path = os.path.join(workspace_root, ".rawgentic_workspace.json")
+        try:
+            with open(ws_config_path) as f:
+                ws_config = json.load(f)
+            default_level = ws_config.get("defaultProtectionLevel", "").lower()
+            if default_level in SECURITY_PRESETS:
+                return (default_level, SECURITY_PRESETS[default_level], None, False)
+        except (FileNotFoundError, json.JSONDecodeError, IOError):
+            pass
+
+    # Default: strict
+    return ("strict", None, None, False)
+
+
+def filter_by_exclude_paths(matches, exclude_paths, rel_path):
+    """Remove matches for files that match any exclude path pattern.
+
+    If exclude_paths is None or empty, returns matches unchanged.
+    Uses glob_match() for pattern matching.
+    """
+    if not exclude_paths:
+        return matches
+    for pattern in exclude_paths:
+        if glob_match(rel_path, pattern):
+            return []  # File is excluded from all security checks
+    return matches
