@@ -81,7 +81,7 @@ WF3 accepts bug reports of any complexity. However:
 WF3 enforces a strict "reproduce first" TDD pattern in Step 7:
 
 1. **Write a failing test** that reproduces the exact bug behavior described in the issue
-2. **Run the test** — confirm it fails with the reported symptom
+2. **Run the test** — confirm it fails in a way that demonstrates the bug exists. In mocked environments, the specific symptom may differ from production — the key proof is that the broken behavior is demonstrated.
 3. **Fix the code** — make the test pass
 4. **Run full test suite** — confirm no regressions
 5. **Add edge case tests** — cover related scenarios the original bug report hints at
@@ -261,7 +261,7 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 **Input:** Fix plan from Step 5, codebase context
 **Action:** Execute the plan using strict reproduce-first TDD:
 
-1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail with the reported symptoms. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior.
+1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail in a way that demonstrates the bug exists. In mocked environments, the specific status code or error may differ from production — the key proof is that the broken behavior is demonstrated. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior.
 2. **GREEN — Minimal fix:** Make the reproduction test pass with the smallest possible code change. Resist the urge to refactor surrounding code.
 3. **REFACTOR (minimal):** Only refactor if the fix introduced obvious code smells. Bug fix PRs should be focused, not cleanup opportunities.
 4. **Regression tests:** Add 2-3 edge case tests around the fix boundary.
