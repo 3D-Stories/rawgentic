@@ -284,6 +284,13 @@ class TestErrorHandling:
         assert rc == 0
         assert json.loads(stdout) == []
 
+    def test_invalid_project_name_rejected(self, tmp_path):
+        archive_dir = _make_archive(tmp_path, entries=[UNENRICHED_ENTRY])
+        stdout, _, rc = _run_query(archive_dir, "--keyword", "x", "--project", "../../etc")
+        assert rc == 1
+        error = json.loads(stdout)
+        assert "error" in error
+
 
 class TestMultiProject:
     def test_searches_all_projects_without_filter(self, tmp_path):
