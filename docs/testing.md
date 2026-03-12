@@ -97,8 +97,17 @@ case, and auto-bind behavior.
 
 ### Session Start (`tests/hooks/test_session_start.py`)
 
-9 tests for the session-start hook. Covers session reconciliation, WAL
-recovery from incomplete entries, log archival, and context emission.
+10 tests for the session-start hook. Covers session reconciliation, WAL
+recovery from incomplete entries, JSONL archival, enrichment instruction
+injection, and context emission.
+
+### Archive Notes (`tests/hooks/test_archive_notes.py`)
+
+12 tests for the `archive-notes.py` standalone script. Covers JSONL creation,
+append to existing archives, blank line collapsing, trailing whitespace
+stripping, notes file reset, project name validation (invalid chars, dot-dot),
+nonexistent file handling, wrong argument count, unicode preservation, and
+stdout JSON format.
 
 ## Skill Evaluation
 

@@ -73,10 +73,71 @@ so `/rawgentic:switch` can read it (env vars are not available to skills).
 ## Archival
 
 On every `startup` event (not resume/compact/clear), `session-start` scans
-`claude_docs/session_notes/*.md`. Any file exceeding 600 lines is archived:
+`claude_docs/session_notes/*.md`. Any file exceeding 600 lines is archived to
+structured JSONL format.
 
-1. Moved to `claude_docs/session_notes/archive/<project>_<YYYY-MM-DD>.md`.
-2. Replaced with a fresh file containing only `# Session Notes -- <project>`.
-3. An `additionalContext` message notifies the session that archival occurred.
+### JSONL Archive Format
 
-The archive directory is created on demand.
+Each project has one JSONL file: `claude_docs/session_notes/archive/<project>.jsonl`.
+Each line is a self-contained JSON object representing one archival event:
+
+```json
+{"schema_version":1,"archived_at":"2026-03-11T19:30:00Z","source_file":"rawgentic.md","line_count":750,"note":"trimmed markdown text","insights":null}
+```
+
+**Fields:**
+- `schema_version` — Always `1`. Enables future migrations.
+- `archived_at` — UTC ISO 8601 timestamp of archival.
+- `source_file` — Original markdown filename.
+- `line_count` — Line count of the original file at archival time.
+- `note` — Trimmed note text (trailing whitespace stripped per line, 3+ blank
+  lines collapsed to 2).
+- `insights` — `null` initially, populated by Haiku enrichment (see below).
+
+### Archival Process
+
+1. `session-start` detects notes file >600 lines.
+2. Calls `hooks/archive-notes.py <notes_file> <archive_dir>`.
+3. The Python script reads the markdown, trims it, appends a JSONL entry to
+   `archive/<project>.jsonl` using `fcntl.flock()` for concurrent safety,
+   and resets the notes file to `# Session Notes -- <project>`.
+4. An `additionalContext` message notifies the session that archival occurred.
+
+**Validation:** Project names must match `^[a-zA-Z0-9_-]+$` (defense against
+path traversal). Invalid names are skipped.
+
+**Fallback:** If Python is unavailable, the archival step is skipped and the
+notes file stays in place until the next startup.
+
+### Haiku Enrichment
+
+After archival, the hook checks for entries with `insights: null` across all
+JSONL files. If unenriched entries exist, an `ARCHIVE_ENRICHMENT` instruction
+is injected into `additionalContext`, telling Claude to use Haiku subagents in
+the background to extract structured insights.
+
+**Enriched insights schema:**
+```json
+{
+  "summary": "one-line summary of the archival block",
+  "sessions": [
+    {
+      "task": "WF2: Issue #5",
+      "status": "COMPLETE",
+      "patterns": ["lesson learned 1"],
+      "decisions": ["chose X over Y because Z"],
+      "artifacts": ["hooks/archive-notes.py"],
+      "issues_encountered": ["problem and resolution"]
+    }
+  ]
+}
+```
+
+Enrichment is deferred and best-effort — the archive is useful even without
+enrichment (the `note` field contains the full trimmed text). A future
+`/rawgentic:query-archives` skill may be added for cross-project queries.
+
+### Backward Compatibility
+
+Existing `.md` archives in the archive directory are unaffected. New archival
+events produce `.jsonl` files. Both formats coexist in the archive directory.
