@@ -167,7 +167,7 @@ Wait for user confirmation before proceeding to Step 2.
 
 ### Instructions
 
-1. **Reproduce path tracing:** Starting from the reported symptoms (error messages, unexpected behavior), trace the code path using Serena MCP (`find_symbol`, `find_referencing_symbols`) and grep for error strings/log messages.
+1. **Reproduce path tracing:** Starting from the reported symptoms (error messages, unexpected behavior), trace the code path to the bug location. For simple traces (1-3 files, clear call chain), Grep and Read are sufficient and faster. Use Serena MCP (`find_symbol`, `find_referencing_symbols`) for complex call chains involving multiple services or deep symbol resolution where grep alone would miss indirect references.
 2. **Blast radius assessment:** Identify all files and functions in the call chain from entry point to bug location.
 3. **Test inventory:** Find existing tests covering the affected code paths.
 4. **Complexity classification:**
