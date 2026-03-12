@@ -124,9 +124,14 @@ This enables workflow resumption if context is lost.
 2. Parse the argument as a GitHub issue number or URL.
 3. Fetch the issue: `gh issue view <number> --repo capabilities.repo`
 4. Confirm the issue is open and labeled as bug (or has bug report template format).
-5. Display to the user: title, steps to reproduce, expected vs actual behavior, environment.
-6. Ask user to confirm this is the correct bug to fix.
-7. If the issue lacks reproduction steps or expected behavior, ask user to provide them before proceeding.
+5. **Detect issue format:** Check the issue's labels for `security`. If the `security` label is present, the issue likely uses STRIDE format (from WF9) instead of the standard bug report template. Adapt field mapping:
+   - STRIDE "Description" / "Affected Code" → treat as "Steps to Reproduce" (the vulnerable code path)
+   - STRIDE "Risk" / "Impact" → treat as "Expected vs Actual" (expected: blocked/mitigated, actual: exploitable)
+   - STRIDE "Recommended Remediation" → treat as acceptance criteria for the fix
+   - If the issue has the `security` label but no recognizable STRIDE fields, fall back to standard parsing and ask the user to clarify.
+6. Display to the user: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment.
+7. Ask user to confirm this is the correct bug to fix.
+8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding.
 
 ### Output Format
 
@@ -136,12 +141,13 @@ Present to user:
 Bug Report: #<number>
 Title: <title>
 Status: <open/closed>
+Format: [standard bug report | security finding (STRIDE)]
 
-Steps to Reproduce:
+Steps to Reproduce / Vulnerability Path:
 <from issue>
 
-Expected: <from issue>
-Actual: <from issue>
+Expected: <from issue or "blocked/mitigated">
+Actual: <from issue or "exploitable">
 Environment: <from issue>
 
 Confirm this is the bug to fix, or provide corrections.
@@ -153,7 +159,7 @@ Wait for user confirmation before proceeding to Step 2.
 
 - Issue not found → ask for correct number
 - Issue is not a bug → suggest WF2 (`/implement-feature`) instead
-- Missing reproduction steps → ask user to provide them before proceeding
+- Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding
 
 ---
 
