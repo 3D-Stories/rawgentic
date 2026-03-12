@@ -97,9 +97,10 @@ case, and auto-bind behavior.
 
 ### Session Start (`tests/hooks/test_session_start.py`)
 
-12 tests for the session-start hook. Covers session reconciliation, WAL
+16 tests for the session-start hook. Covers session reconciliation, WAL
 recovery from incomplete entries, JSONL archival, enrichment instruction
-injection, archive context injection for bound sessions, and context emission.
+injection, archive context injection for bound sessions, security pattern
+staleness detection, and context emission.
 
 ### Archive Notes (`tests/hooks/test_archive_notes.py`)
 

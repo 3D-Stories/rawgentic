@@ -279,6 +279,39 @@ if parts:
 _do_archive_context 2>/dev/null || true
 
 # =========================================================================
+# SECTION 2c: Security Pattern Staleness Check (startup/resume only)
+# =========================================================================
+_do_security_staleness_check() {
+    [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "resume" ] || return 0
+
+    # Allow env var override for testing; default to standard install path
+    local official_base="${OFFICIAL_SECURITY_PLUGIN_DIR:-${HOME}/.claude/plugins/marketplaces/claude-plugins-official}"
+    local pattern_file="$official_base/plugins/security-guidance/hooks/security_reminder_hook.py"
+
+    # If official plugin not installed, skip silently
+    [ -f "$pattern_file" ] || return 0
+
+    # Compute hash of official pattern file
+    local current_hash
+    current_hash=$(sha256sum "$pattern_file" 2>/dev/null | cut -d' ' -f1) || return 0
+    [ -n "$current_hash" ] || return 0
+
+    # Read stored hash from marker (allow env var override for testing)
+    local marker_dir="${SECURITY_SYNC_MARKER_DIR:-$SCRIPT_DIR}"
+    local marker_file="$marker_dir/.last-security-sync-hash"
+    local stored_hash=""
+    if [ -f "$marker_file" ]; then
+        stored_hash=$(cat "$marker_file" 2>/dev/null) || true
+    fi
+
+    # Compare — warn if stale or marker missing
+    if [ "$current_hash" != "$stored_hash" ]; then
+        CONTEXT_PARTS+=("⚠ Security patterns may be outdated. Run /rawgentic:sync-security-patterns")
+    fi
+}
+_do_security_staleness_check 2>/dev/null || true
+
+# =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
 # =========================================================================
 if [ -z "$WORKSPACE_FILE" ]; then

@@ -282,7 +282,7 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
 | `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
-| `session-start` | SessionStart | WAL recovery, JSONL archival + enrichment, archive context injection, project reconciliation, resume context |
+| `session-start` | SessionStart | WAL recovery, JSONL archival + enrichment, archive context injection, project reconciliation, security pattern staleness check, resume context |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
 
@@ -312,6 +312,8 @@ Multiple Claude Code sessions can work on different projects simultaneously from
 **Cross-project protection:** If session A is bound to `my-api` and tries to write a file under `projects/rawgentic/`, the `wal-bind-guard` hook denies the operation.
 
 **Directory reconciliation:** On startup/resume, the `session-start` hook checks that all active projects' directories exist on disk. Missing directories are deactivated and the user is prompted to remove or re-setup.
+
+**Security pattern staleness check:** On startup/resume, the `session-start` hook compares the sha256 hash of the official `security-guidance` plugin's pattern file against a stored marker (`hooks/.last-security-sync-hash`). If the hashes differ (or the marker is missing), a warning nudges the user to run `/rawgentic:sync-security-patterns`. Silently skips if the official plugin is not installed.
 
 ---
 

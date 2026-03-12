@@ -35,4 +35,10 @@ Merge the latest patterns from Anthropic's `security-guidance` plugin into rawge
    - **Preserved:** custom patterns that were not touched
    - **Flagged:** upstream patterns no longer in the official plugin (ask user whether to keep or remove)
 
-7. Commit the change with message: `chore(security-guard): sync patterns from security-guidance`
+7. **Update staleness marker:** Compute the sha256 hash of the official plugin's `security_reminder_hook.py` file and write it to `${CLAUDE_PLUGIN_ROOT}/hooks/.last-security-sync-hash`. This prevents the session-start hook from showing a stale-patterns warning until the official plugin changes again.
+
+   ```bash
+   sha256sum ~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/security_reminder_hook.py | cut -d' ' -f1 > ${CLAUDE_PLUGIN_ROOT}/hooks/.last-security-sync-hash
+   ```
+
+8. Commit the change with message: `chore(security-guard): sync patterns from security-guidance`
