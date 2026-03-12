@@ -1,4 +1,5 @@
-"""Tests for session-start hook — WAL recovery, rotation, archival, context."""
+"""Tests for session-start hook — WAL recovery, rotation, archival, context, staleness."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -223,3 +224,101 @@ class TestContextEmission:
         if output:
             ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
             assert "No rawgentic workspace" in ctx or "new-project" in ctx
+
+
+class TestSecurityStaleness:
+    """Tests for Section 2c: security pattern staleness check."""
+
+    @staticmethod
+    def _setup_official_plugin(tmp_path, content="SECURITY_PATTERNS = []"):
+        """Create a mock official security-guidance plugin directory."""
+        plugin_dir = tmp_path / "official-plugin" / "plugins" / "security-guidance"
+        hooks_dir = plugin_dir / "hooks"
+        hooks_dir.mkdir(parents=True)
+        pattern_file = hooks_dir / "security_reminder_hook.py"
+        pattern_file.write_text(content)
+        return plugin_dir.parent.parent  # returns the dir to set as OFFICIAL_SECURITY_PLUGIN_DIR
+
+    def test_warns_when_patterns_stale(self, make_workspace, tmp_path):
+        """When official plugin hash differs from stored marker, emit warning."""
+        ws = make_workspace()
+        official_dir = self._setup_official_plugin(tmp_path, content="PATTERNS_V2 = [1,2,3]")
+
+        # Write a marker with a different (outdated) hash
+        marker_dir = tmp_path / "marker"
+        marker_dir.mkdir()
+        (marker_dir / ".last-security-sync-hash").write_text("oldhash000")
+
+        env = {
+            "OFFICIAL_SECURITY_PLUGIN_DIR": str(official_dir),
+            "SECURITY_SYNC_MARKER_DIR": str(marker_dir),
+        }
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        assert output is not None
+        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "security patterns" in ctx.lower() or "sync-security-patterns" in ctx.lower()
+
+    def test_no_warning_when_up_to_date(self, make_workspace, tmp_path):
+        """When hash matches stored marker, no warning emitted."""
+        ws = make_workspace()
+        content = "SECURITY_PATTERNS = [{'rule': 'test'}]"
+        official_dir = self._setup_official_plugin(tmp_path, content=content)
+
+        # Compute the real hash and write it as the marker
+        pattern_file = (
+            official_dir / "plugins" / "security-guidance" / "hooks" / "security_reminder_hook.py"
+        )
+        real_hash = hashlib.sha256(pattern_file.read_bytes()).hexdigest()
+
+        marker_dir = tmp_path / "marker"
+        marker_dir.mkdir()
+        (marker_dir / ".last-security-sync-hash").write_text(real_hash)
+
+        env = {
+            "OFFICIAL_SECURITY_PLUGIN_DIR": str(official_dir),
+            "SECURITY_SYNC_MARKER_DIR": str(marker_dir),
+        }
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "security patterns" not in ctx.lower()
+            assert "sync-security-patterns" not in ctx.lower()
+
+    def test_no_warning_when_official_plugin_missing(self, make_workspace, tmp_path):
+        """When official plugin is not installed, no warning or error."""
+        ws = make_workspace()
+        env = {
+            "OFFICIAL_SECURITY_PLUGIN_DIR": str(tmp_path / "nonexistent"),
+            "SECURITY_SYNC_MARKER_DIR": str(tmp_path / "also-nonexistent"),
+        }
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "security patterns" not in ctx.lower()
+            assert "sync-security-patterns" not in ctx.lower()
+
+    def test_warns_when_marker_missing(self, make_workspace, tmp_path):
+        """When official plugin exists but no marker file, emit warning."""
+        ws = make_workspace()
+        official_dir = self._setup_official_plugin(tmp_path)
+
+        marker_dir = tmp_path / "marker-empty"
+        marker_dir.mkdir()
+        # No marker file written
+
+        env = {
+            "OFFICIAL_SECURITY_PLUGIN_DIR": str(official_dir),
+            "SECURITY_SYNC_MARKER_DIR": str(marker_dir),
+        }
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        assert output is not None
+        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "security patterns" in ctx.lower() or "sync-security-patterns" in ctx.lower()
