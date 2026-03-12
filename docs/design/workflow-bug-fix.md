@@ -1,4 +1,4 @@
-# Phase 3 Workflow: Bug Fix (v1.0)
+# Phase 3 Workflow: Bug Fix (v1.1)
 
 **Date:** 2026-03-02
 **Author:** Orchestrator (direct authoring)
