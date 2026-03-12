@@ -154,6 +154,15 @@ Wait for user confirmation before proceeding to Step 2.
 5. **Category classification:** Classify as Rename, Extract, Restructure, or Simplify.
 6. **Risk assessment:** Rate risk (low/medium/high) based on coupling and test coverage.
 
+<archive-query>
+**Archive Context (optional):** If `claude_docs/session_notes/archive/` exists for this project:
+1. Derive 2-3 keywords from the refactoring scope (component names, pattern names)
+2. Run: `python3 hooks/query-archive.py claude_docs/session_notes/archive/ --keyword "<term>" --project "<project>" --limit 5 --format brief`
+3. Check for: prior refactoring attempts in the same area, architectural decisions that constrain the refactoring, past issues encountered
+4. If results found, note relevant patterns in the scope analysis
+5. If no archive exists or query returns empty, skip silently — do not mention the absence
+</archive-query>
+
 ### Output
 
 Analysis (internal): { symbols, reference_graph, existing_tests, test_gaps, category, risk, coupling_score }

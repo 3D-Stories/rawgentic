@@ -235,6 +235,15 @@ This enables workflow resumption if context is lost.
    - If `standard_feature` AND `is_wf1_created`: `fast_path_eligible = true`
    - Otherwise: `fast_path_eligible = false`
 
+<archive-query>
+**Archive Context (optional):** If `claude_docs/session_notes/archive/` exists for this project:
+1. Derive 2-3 keywords from the issue's affected components and scope
+2. Run: `python3 hooks/query-archive.py claude_docs/session_notes/archive/ --keyword "<term>" --project "<project>" --limit 5 --format brief`
+3. Check for: prior design decisions about affected components, architectural patterns, lessons learned
+4. If results found, incorporate relevant context into the codebase analysis
+5. If no archive exists or query returns empty, skip silently — do not mention the absence
+</archive-query>
+
 ### Output
 Codebase analysis with complexity classification, fast path eligibility, and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3.
 

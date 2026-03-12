@@ -178,6 +178,15 @@ Wait for user confirmation before proceeding to Step 2.
    - `complex_bug`: 10+ files, cross-service, unclear root cause → **prompt upgrade to WF2**
 5. **Related issues check:** `gh issue list --repo capabilities.repo --search "<keywords>" --limit 10`
 
+<archive-query>
+**Archive Context (optional):** If `claude_docs/session_notes/archive/` exists for this project:
+1. Derive 2-3 keywords from the bug report (error messages, affected component names)
+2. Run: `python3 hooks/query-archive.py claude_docs/session_notes/archive/ --keyword "<term>" --project "<project>" --limit 5 --format brief`
+3. Check for: prior bugs in the same area, recurring error patterns, previous fixes that may have regressed
+4. If results found, note relevant patterns in the bug analysis
+5. If no archive exists or query returns empty, skip silently — do not mention the absence
+</archive-query>
+
 ### Output
 
 Bug analysis (internal working artifact):
