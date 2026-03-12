@@ -283,10 +283,11 @@ Fix plan with ordered tasks, file paths, and test expectations.
    git checkout -b fix/<issue-number>-<short-desc> origin/capabilities.default_branch
    ```
 3. Verify branch created successfully.
+4. **Pre-flight dependency check:** If the project's `config.techStack` includes npm/yarn/pnpm-based technologies (node, react, vue, angular, etc.) or a `package.json` exists in the project root, verify `node_modules` exists. If missing, run the appropriate install command (`npm install`, `yarn install`, or `pnpm install`) before proceeding to Step 7. Similarly, for Python projects with a `requirements.txt` or `pyproject.toml`, verify the virtual environment is active or dependencies are installed. This prevents test failures due to missing dependencies rather than actual bugs.
 
 ### Output
 
-Active fix branch.
+Active fix branch with dependencies installed.
 
 ### Failure Modes
 
