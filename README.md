@@ -282,13 +282,15 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
 | `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
-| `session-start` | SessionStart | WAL recovery, session notes archival, project reconciliation, resume context |
+| `session-start` | SessionStart | WAL recovery, session notes JSONL archival with Haiku enrichment, project reconciliation, resume context |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
 
 **Security Guard** blocks writes containing dangerous code patterns (eval, innerHTML, pickle, os.system, etc.). Patterns are defined in `hooks/security-patterns.json`. Protection level controls which rules are active (sandbox: none, standard: 6 common patterns, strict: all). Per-path exceptions via `guards.securityExcludePaths` in `.rawgentic.json`. Uses the Claude Code `permissionDecision: deny` protocol for hard blocking (not retried).
 
 **WAL (Write-Ahead Log)** records every mutation tool call to `claude_docs/wal/{project}.jsonl`. On session resume, incomplete operations are surfaced for recovery. WAL files are per-project — each active project gets its own log.
+
+**Session Notes JSONL Archival** — When session notes exceed 600 lines, the `session-start` hook archives them to structured JSONL format (`claude_docs/session_notes/archive/<project>.jsonl`). Each entry includes schema version, timestamp, line count, trimmed note text, and an `insights` field. The hook injects an enrichment instruction for Claude to use Haiku subagents to extract structured insights (summary, patterns, decisions, artifacts, issues encountered) from unenriched entries. The `archive-notes.py` script uses `fcntl.flock()` for concurrent safety and validates project names against path traversal.
 
 ### Multi-Project Concurrent Sessions
 
@@ -471,7 +473,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 2. **Ambiguity Circuit Breaker** — STOP and ask user when findings conflict
 3. **Finding Auto-Application** — Apply ALL quality gate findings automatically
 4. **Workflow Resumption** — Checkpoint artifacts for mid-workflow recovery
-5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks)
+5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks). Archived to JSONL with Haiku-extracted insights when >600 lines.
 6. **Commit Convention** — `<type>(scope): <description>` matching branch prefix
 7. **Branch from default** — All branches from `origin/<defaultBranch>` (read from config)
 8. **Squash merge** — All PRs use `gh pr merge --squash`
@@ -537,7 +539,7 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**265 tests** across 11 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
+**278 tests** across 12 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
