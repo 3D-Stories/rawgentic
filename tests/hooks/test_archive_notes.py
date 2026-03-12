@@ -8,7 +8,6 @@ import json
 import subprocess
 from pathlib import Path
 
-import pytest
 from tests.hooks.conftest import HOOKS_DIR
 
 
@@ -40,7 +39,7 @@ class TestArchiveCreation:
         entry = json.loads(jsonl_file.read_text().strip())
         assert entry["schema_version"] == 1
         assert entry["source_file"] == "testproj.md"
-        assert entry["line_count"] == 702  # header + 700 "x" lines + trailing newline split
+        assert entry["line_count"] == 701  # header + 700 "x" lines (wc -l semantics)
         assert entry["insights"] is None
         assert "archived_at" in entry
         assert "note" in entry
@@ -204,4 +203,4 @@ class TestOutputFormat:
         result = json.loads(stdout.strip())
         assert result["archived"] is True
         assert result["project"] == "testproj"
-        assert result["line_count"] == 702
+        assert result["line_count"] == 701

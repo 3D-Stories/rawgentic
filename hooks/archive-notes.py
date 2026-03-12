@@ -43,7 +43,7 @@ def archive_notes(notes_file: Path, archive_dir: Path) -> dict:
         raise ValueError(f"Invalid project name: {project_name!r}")
 
     content = notes_file.read_text(encoding="utf-8")
-    line_count = len(content.split("\n"))
+    line_count = content.count("\n")
     trimmed = trim_notes(content)
 
     entry = {
