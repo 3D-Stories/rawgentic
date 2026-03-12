@@ -249,8 +249,9 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 1. Ensure main is up to date: `git fetch origin main`
 2. Create branch from main: `git checkout -b fix/<issue-number>-<short-desc> origin/main`
 3. Verify branch created successfully
+4. **Pre-flight dependency check:** If the project uses npm/yarn/pnpm (detected from `config.techStack` or `package.json`), verify `node_modules` exists. If missing, run the install command. Similarly for Python projects with `requirements.txt` or `pyproject.toml`.
 
-**Output:** Active fix branch
+**Output:** Active fix branch with dependencies installed
 **Principle alignment:** P1 (Branch Isolation)
 
 ---
