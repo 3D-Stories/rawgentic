@@ -239,15 +239,6 @@ class TestSecurityStaleness:
         pattern_file.write_text(content)
         return plugin_dir.parent.parent  # returns the dir to set as OFFICIAL_SECURITY_PLUGIN_DIR
 
-    @staticmethod
-    def _write_marker(script_dir_or_ws, hash_value):
-        """Write a last-sync hash marker file in the hooks directory."""
-        # The hook reads from $SCRIPT_DIR/.last-security-sync-hash
-        # In tests, SCRIPT_DIR is the real hooks/ dir, so we use env var instead
-        # to point to a mock marker. But the hook stores marker at SCRIPT_DIR.
-        # We'll need to handle this via the env var approach.
-        pass
-
     def test_warns_when_patterns_stale(self, make_workspace, tmp_path):
         """When official plugin hash differs from stored marker, emit warning."""
         ws = make_workspace()
