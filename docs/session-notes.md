@@ -54,7 +54,8 @@ so `/rawgentic:switch` can read it (env vars are not available to skills).
 ## Session Lifecycle
 
 1. **Session starts.** `session-start` fires, archives oversized notes (see
-   below), runs WAL recovery, emits workspace context.
+   below), runs WAL recovery, checks security pattern staleness, emits
+   workspace context.
 2. **First prompt.** `wal-context` fires. If the session has no registry entry
    and exactly one project is active, it auto-binds: writes a registry entry
    and creates the notes file if missing.
