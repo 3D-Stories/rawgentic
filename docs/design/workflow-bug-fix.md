@@ -141,12 +141,13 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 
 1. Validate issue exists via `gh issue view <number>`
 2. Confirm issue is open and labeled as bug (or has bug report template format)
-3. Display: title, steps to reproduce, expected vs actual behavior, environment
-4. Ask user to confirm this is the correct bug to fix
-5. If the issue lacks reproduction steps or expected behavior, ask user to provide them before proceeding
+3. **Detect issue format:** Check labels for `security`. If present, map STRIDE fields (Description → Steps to Reproduce, Risk → Expected vs Actual, Remediation → acceptance criteria). Fall back to standard parsing if STRIDE fields are absent.
+4. Display: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment
+5. Ask user to confirm this is the correct bug to fix
+6. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding
 
-**Output:** Validated bug report: { issue_number, title, body, labels, reproduction_steps, expected_behavior, actual_behavior }
-**Failure mode:** (1) Issue not found → ask for correct number. (2) Issue is not a bug → suggest WF2 instead. (3) Missing reproduction steps → ask user to provide them.
+**Output:** Validated bug report: { issue_number, title, body, labels, format (standard/STRIDE), reproduction_steps, expected_behavior, actual_behavior }
+**Failure mode:** (1) Issue not found → ask for correct number. (2) Issue is not a bug → suggest WF2 instead. (3) Missing reproduction steps (and not a security finding) → ask user to provide them.
 **Principle alignment:** P11 (User-in-the-Loop)
 **User selection:** yes
 
@@ -359,9 +360,10 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 **Input:** CI-passing PR from Step 11
 **Action:**
 
-1. Squash-merge PR: `gh pr merge <number> --squash --delete-branch`
-2. Deploy to dev via deploy script (auto-triggered by push hook, or manual)
-3. Verify deployment health
+1. **Pre-merge check:** If the project's CLAUDE.md or development rules require explicit user approval for merge or deploy, ask the user before proceeding.
+2. Squash-merge PR: `gh pr merge <number> --squash --delete-branch`
+3. Deploy to dev via deploy script (auto-triggered by push hook, or manual)
+4. Verify deployment health
 
 **Output:** Merged PR + deployed dev environment
 **Failure mode:** (1) Merge conflicts → rebase on main, resolve, push. (2) Deploy fails → check docker logs, rollback if needed.
