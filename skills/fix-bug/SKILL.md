@@ -86,7 +86,7 @@ Per rawgentic workflow principle (context preservation): before context compacti
 <reproduce-first-principle>
 Bug fixes enforce a strict "reproduce first" TDD pattern:
 1. Write a failing test that reproduces the exact bug behavior described in the issue
-2. Run the test — confirm it fails with the reported symptom
+2. Run the test — confirm it fails in a way that demonstrates the bug exists. In mocked or test environments, the specific status code or error message may differ from production — the key proof is that the broken behavior (missing validation, unguarded code path, incorrect logic) is demonstrated, not that the exact production symptom is reproduced.
 3. Fix the code — make the test pass
 4. Run full test suite — confirm no regressions
 5. Add edge case tests — cover related scenarios the original bug report hints at
@@ -108,6 +108,8 @@ Inherited from WF2 (identical behavior): Apply ALL findings from quality gates a
 
 <mandatory-rule>
 Steps 12-14 (Merge and Deploy, Post-Deploy Verification, Completion Summary) are NEVER optional, even when the fix is confirmed working after merge. A bug fix without formal closure risks repeating the same class of bug. If the fix is permanent (no Phase B needed), you may execute these steps quickly, but you MUST execute them.
+
+If the project's CLAUDE.md or development rules require explicit approval for merge, deploy, or similar operations, ask the user before proceeding. The steps must still be executed — they just require user confirmation first.
 </mandatory-rule>
 
 <step-tracking>
@@ -124,9 +126,14 @@ This enables workflow resumption if context is lost.
 2. Parse the argument as a GitHub issue number or URL.
 3. Fetch the issue: `gh issue view <number> --repo capabilities.repo`
 4. Confirm the issue is open and labeled as bug (or has bug report template format).
-5. Display to the user: title, steps to reproduce, expected vs actual behavior, environment.
-6. Ask user to confirm this is the correct bug to fix.
-7. If the issue lacks reproduction steps or expected behavior, ask user to provide them before proceeding.
+5. **Detect issue format:** Check the issue's labels for `security`. If the `security` label is present, the issue likely uses STRIDE format (from WF9) instead of the standard bug report template. Adapt field mapping:
+   - STRIDE "Description" / "Affected Code" → treat as "Steps to Reproduce" (the vulnerable code path)
+   - STRIDE "Risk" / "Impact" → treat as "Expected vs Actual" (expected: blocked/mitigated, actual: exploitable)
+   - STRIDE "Recommended Remediation" → treat as acceptance criteria for the fix
+   - If the issue has the `security` label but no recognizable STRIDE fields, fall back to standard parsing and ask the user to clarify.
+6. Display to the user: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment.
+7. Ask user to confirm this is the correct bug to fix.
+8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding.
 
 ### Output Format
 
@@ -136,12 +143,13 @@ Present to user:
 Bug Report: #<number>
 Title: <title>
 Status: <open/closed>
+Format: [standard bug report | security finding (STRIDE)]
 
-Steps to Reproduce:
+Steps to Reproduce / Vulnerability Path:
 <from issue>
 
-Expected: <from issue>
-Actual: <from issue>
+Expected: <from issue or "blocked/mitigated">
+Actual: <from issue or "exploitable">
 Environment: <from issue>
 
 Confirm this is the bug to fix, or provide corrections.
@@ -153,7 +161,7 @@ Wait for user confirmation before proceeding to Step 2.
 
 - Issue not found → ask for correct number
 - Issue is not a bug → suggest WF2 (`/implement-feature`) instead
-- Missing reproduction steps → ask user to provide them before proceeding
+- Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding
 
 ---
 
@@ -161,7 +169,7 @@ Wait for user confirmation before proceeding to Step 2.
 
 ### Instructions
 
-1. **Reproduce path tracing:** Starting from the reported symptoms (error messages, unexpected behavior), trace the code path using Serena MCP (`find_symbol`, `find_referencing_symbols`) and grep for error strings/log messages.
+1. **Reproduce path tracing:** Starting from the reported symptoms (error messages, unexpected behavior), trace the code path to the bug location. For simple traces (1-3 files, clear call chain), Grep and Read are sufficient and faster. Use Serena MCP (`find_symbol`, `find_referencing_symbols`) for complex call chains involving multiple services or deep symbol resolution where grep alone would miss indirect references.
 2. **Blast radius assessment:** Identify all files and functions in the call chain from entry point to bug location.
 3. **Test inventory:** Find existing tests covering the affected code paths.
 4. **Complexity classification:**
@@ -275,10 +283,11 @@ Fix plan with ordered tasks, file paths, and test expectations.
    git checkout -b fix/<issue-number>-<short-desc> origin/capabilities.default_branch
    ```
 3. Verify branch created successfully.
+4. **Pre-flight dependency check:** If the project's `config.techStack` includes npm/yarn/pnpm-based technologies (node, react, vue, angular, etc.) or a `package.json` exists in the project root, verify `node_modules` exists. If missing, run the appropriate install command (`npm install`, `yarn install`, or `pnpm install`) before proceeding to Step 7. Similarly, for Python projects with a `requirements.txt` or `pyproject.toml`, verify the virtual environment is active or dependencies are installed. This prevents test failures due to missing dependencies rather than actual bugs.
 
 ### Output
 
-Active fix branch.
+Active fix branch with dependencies installed.
 
 ### Failure Modes
 
@@ -294,7 +303,7 @@ Active fix branch.
 
 Execute the plan from Step 5 using strict reproduce-first TDD:
 
-1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail with the reported symptoms. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior. Investigate before proceeding.
+1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail in a way that demonstrates the bug exists. In mocked environments, the specific status code or error message may differ from production — the key proof is that the broken behavior (missing validation, unguarded code path, incorrect logic) is demonstrated, not that the exact production symptom is reproduced. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior. Investigate before proceeding.
 2. **GREEN — Minimal fix:** Make the reproduction test pass with the smallest possible code change. Resist the urge to refactor surrounding code.
 3. **REFACTOR (minimal):** Only refactor if the fix introduced obvious code smells. Bug fix PRs should be focused, not cleanup opportunities.
 4. **Regression tests:** Add 2-3 edge case tests around the fix boundary.
@@ -325,7 +334,7 @@ Fixed code with passing tests on fix branch.
 
 Quick self-check (no sub-agent needed):
 
-1. Verify all acceptance criteria from the bug report are addressed.
+1. Verify all acceptance criteria from the bug report (or all risk mitigations from the security finding) are addressed.
 2. Verify the reproduction test genuinely captures the original bug.
 3. Verify no unrelated changes crept in: `git diff --stat` should show only planned files.
 4. Verify all tests pass.
@@ -456,6 +465,8 @@ CI pass/fail status.
 ## Step 12: Merge and Deploy
 
 ### Instructions
+
+**Pre-merge check:** If the project's CLAUDE.md or development rules require explicit user approval for merge or deploy operations, ask the user before proceeding. Do not auto-merge in projects with approval gates.
 
 1. Squash-merge PR:
    ```bash
