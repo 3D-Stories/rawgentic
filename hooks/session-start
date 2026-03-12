@@ -209,14 +209,34 @@ _do_archival() {
         [ -f "$notes_file" ] || continue
         LINE_COUNT=$(wc -l < "$notes_file")
         if [ "$LINE_COUNT" -gt 600 ]; then
-            mkdir -p "$ARCHIVE_DIR"
-            BASENAME=$(basename "$notes_file" .md)
-            DATE_STAMP=$(date -u +"%Y-%m-%d")
-            mv "$notes_file" "$ARCHIVE_DIR/${BASENAME}_${DATE_STAMP}.md"
-            printf '# Session Notes -- %s\n' "$BASENAME" > "$notes_file"
-            CONTEXT_PARTS+=("Session notes for '$BASENAME' archived ($LINE_COUNT lines) to session_notes/archive/.")
+            RESULT=$(python3 "$SCRIPT_DIR/archive-notes.py" "$notes_file" "$ARCHIVE_DIR" 2>/dev/null) || continue
+            PROJECT=$(printf '%s' "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('project','unknown'))" 2>/dev/null || echo "unknown")
+            CONTEXT_PARTS+=("Session notes for '$PROJECT' archived ($LINE_COUNT lines) to JSONL archive.")
         fi
     done
+
+    # Enrichment instruction: check for unenriched entries across archive JSONL files
+    if [ -d "$ARCHIVE_DIR" ]; then
+        UNENRICHED_COUNT=$(python3 -c "
+import json, glob
+count = 0
+for f in glob.glob('${ARCHIVE_DIR}/*.jsonl'):
+    with open(f) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                if json.loads(line).get('insights') is None:
+                    count += 1
+            except json.JSONDecodeError:
+                pass
+print(count)
+" 2>/dev/null || echo "0")
+        if [ "$UNENRICHED_COUNT" -gt 0 ]; then
+            CONTEXT_PARTS+=("ARCHIVE_ENRICHMENT: There are $UNENRICHED_COUNT unenriched session archive entries in claude_docs/session_notes/archive/. When convenient, in the background, use the Agent tool with model: \"haiku\" to read each *.jsonl file, extract structured insights for entries where insights is null, and update the entries. Insights schema: {\"summary\": \"one-line summary\", \"sessions\": [{\"task\": \"string\", \"status\": \"string\", \"patterns\": [\"string\"], \"decisions\": [\"string\"], \"artifacts\": [\"string\"], \"issues_encountered\": [\"string\"]}]}.")
+        fi
+    fi
 }
 _do_archival 2>/dev/null || true
 

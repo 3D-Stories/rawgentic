@@ -92,7 +92,7 @@ class TestWalRecovery:
 
 
 class TestArchival:
-    def test_archives_large_session_notes(self, make_workspace):
+    def test_archives_large_session_notes_to_jsonl(self, make_workspace):
         large_content = "# Notes\n" + ("x\n" * 700)
         ws = make_workspace(
             session_notes={"testproj": large_content},
@@ -104,9 +104,14 @@ class TestArchival:
 
         archive_dir = ws.notes_dir / "archive"
         assert archive_dir.exists()
-        archived = list(archive_dir.glob("testproj_*.md"))
-        assert len(archived) == 1
-        assert len(archived[0].read_text()) > 600
+        jsonl_file = archive_dir / "testproj.jsonl"
+        assert jsonl_file.exists()
+
+        entry = json.loads(jsonl_file.read_text().strip())
+        assert entry["schema_version"] == 1
+        assert entry["source_file"] == "testproj.md"
+        assert entry["insights"] is None
+        assert "note" in entry
 
         # Original file should be reset
         current = (ws.notes_dir / "testproj.md").read_text()
@@ -120,6 +125,22 @@ class TestArchival:
 
         archive_dir = ws.notes_dir / "archive"
         assert not archive_dir.exists()
+
+    def test_enrichment_instruction_emitted(self, make_workspace):
+        large_content = "# Notes\n" + ("x\n" * 700)
+        ws = make_workspace(
+            session_notes={"testproj": large_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        assert output is not None
+        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "ARCHIVE_ENRICHMENT" in ctx
+        assert "unenriched" in ctx.lower()
 
 
 class TestContextEmission:
