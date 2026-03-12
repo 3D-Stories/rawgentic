@@ -331,7 +331,7 @@ Fixed code with passing tests on fix branch.
 
 Quick self-check (no sub-agent needed):
 
-1. Verify all acceptance criteria from the bug report are addressed.
+1. Verify all acceptance criteria from the bug report (or all risk mitigations from the security finding) are addressed.
 2. Verify the reproduction test genuinely captures the original bug.
 3. Verify no unrelated changes crept in: `git diff --stat` should show only planned files.
 4. Verify all tests pass.
