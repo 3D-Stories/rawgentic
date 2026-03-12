@@ -434,7 +434,7 @@ WF9 complete.
 
 - Previously resolved items conflict with new findings → reconcile: update or re-classify in `config.security`
 - GitHub issues fail to create → verify PAT scopes (Issues r/w), retry
-- Session notes too long → archive to `session_notes_NNN.md` and start fresh
+- Session notes too long → archival to JSONL happens automatically on next session startup
 
 <completion-gate>
 Before declaring WF9 complete, verify ALL of the following. Print the checklist with pass/fail for each item.
