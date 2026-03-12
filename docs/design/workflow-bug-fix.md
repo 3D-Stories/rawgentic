@@ -297,11 +297,11 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 
 **Type:** automated
 **Actor:** sub-agent (code review) + conditional memorize
-**Command:** `/code-review:code-review` (4 specialized reviewers) + conditional `/reflexion:memorize`
+**Command:** 2-agent focused review + conditional `/reflexion:memorize`
 **Input:** All changes on fix branch
 **Action:**
 
-1. **Code review:** Launch the 4-agent review (type-design, silent-failure, simplifier, code-reviewer). For bug fixes, focus on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused.
+1. **Code review:** Launch a focused 2-agent review (`pr-review-toolkit:silent-failure-hunter` + `pr-review-toolkit:code-reviewer`). For bug fixes, focus on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused. Type design and code simplification are deferred — bug fixes should be minimal and targeted.
 2. **Conditional memorize:** If the bug fix reveals a pattern worth remembering (new pitfall, gotcha, or recurring issue), run `/reflexion:memorize` to curate insights into CLAUDE.md. Skip if the fix is routine.
 3. **Apply findings:** Auto-apply review findings. Circuit breaker on ambiguity.
 
