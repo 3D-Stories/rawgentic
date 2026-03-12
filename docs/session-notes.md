@@ -134,8 +134,37 @@ the background to extract structured insights.
 ```
 
 Enrichment is deferred and best-effort — the archive is useful even without
-enrichment (the `note` field contains the full trimmed text). A future
-`/rawgentic:query-archives` skill may be added for cross-project queries.
+enrichment (the `note` field contains the full trimmed text).
+
+### Archive Querying
+
+Archives are queryable via `hooks/query-archive.py`, a standalone Python script:
+
+```
+python3 hooks/query-archive.py <archive_dir> [options]
+```
+
+**Search modes:**
+- `--keyword <term>` — searches `note` text + enriched `insights.summary` and
+  `insights.sessions[].patterns[]`. Falls back to note-only for unenriched entries.
+- `--pattern <term>` — searches `insights.sessions[].patterns[]` only (enriched entries).
+- `--decision <term>` — searches `insights.sessions[].decisions[]` only (enriched entries).
+- `--artifact <path>` — searches `insights.sessions[].artifacts[]` + note text.
+
+**Filters:**
+- `--project <name>` — restrict to a single project's `.jsonl` file.
+- `--since <ISO-date>` — filter by `archived_at >= date`.
+- `--limit <N>` — max results (default: 10).
+- `--format brief|full` — brief omits note/insights, shows summary + match context.
+
+**Integration points:**
+- **Hook auto-injection:** `session-start` injects a brief archive summary (max 500
+  chars) into `additionalContext` on startup/resume for bound sessions.
+- **Skill protocol blocks:** `<archive-query>` blocks in fix-bug (WF3), incident
+  (WF11), implement-feature (WF2), and refactor (WF4) skills query archives at
+  Step 2 for relevant context (prior bugs, incidents, design decisions, patterns).
+- **Interactive querying:** See issue #36 for the planned `/rawgentic:query-archives`
+  skill.
 
 ### Backward Compatibility
 

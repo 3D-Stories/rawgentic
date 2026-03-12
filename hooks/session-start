@@ -241,6 +241,44 @@ print(count)
 _do_archival 2>/dev/null || true
 
 # =========================================================================
+# SECTION 2b: Archive Context Injection (startup/resume, bound sessions)
+# =========================================================================
+_do_archive_context() {
+    [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "resume" ] || return 0
+    [ -n "$_registry_project" ] || return 0
+
+    ARCHIVE_DIR="$WS_ROOT/claude_docs/session_notes/archive"
+    ARCHIVE_JSONL="$ARCHIVE_DIR/${_registry_project}.jsonl"
+    [ -f "$ARCHIVE_JSONL" ] || return 0
+
+    # Query recent archive entries for context (max 500 chars)
+    QUERY_RESULT=$(python3 "$SCRIPT_DIR/query-archive.py" "$ARCHIVE_DIR" \
+        --project "$_registry_project" --keyword "." --limit 3 --format brief 2>/dev/null) || return 0
+
+    # Parse summaries from JSON array
+    ARCHIVE_SUMMARY=$(python3 -c "
+import json, sys
+results = json.loads(sys.stdin.read())
+if not results:
+    sys.exit(0)
+parts = []
+for r in results[:3]:
+    s = r.get('summary', '')[:80]
+    if s:
+        parts.append(s)
+if parts:
+    print('ARCHIVE CONTEXT: Recent sessions for ${_registry_project}: ' + '; '.join(parts))
+" <<< "$QUERY_RESULT" 2>/dev/null) || return 0
+
+    if [ -n "$ARCHIVE_SUMMARY" ]; then
+        # Enforce 500 char budget
+        ARCHIVE_SUMMARY="${ARCHIVE_SUMMARY:0:500}"
+        CONTEXT_PARTS+=("$ARCHIVE_SUMMARY")
+    fi
+}
+_do_archive_context 2>/dev/null || true
+
+# =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
 # =========================================================================
 if [ -z "$WORKSPACE_FILE" ]; then
