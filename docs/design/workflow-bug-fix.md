@@ -265,7 +265,7 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 2. **GREEN — Minimal fix:** Make the reproduction test pass with the smallest possible code change. Resist the urge to refactor surrounding code.
 3. **REFACTOR (minimal):** Only refactor if the fix introduced obvious code smells. Bug fix PRs should be focused, not cleanup opportunities.
 4. **Regression tests:** Add 2-3 edge case tests around the fix boundary.
-5. **Full suite:** Run `pytest` (engine) and/or `vitest` (dashboard) to confirm no regressions.
+5. **Full suite:** Run test commands from `capabilities.test_commands` to confirm no regressions. Iterate over all configured test frameworks.
 6. **Commit frequently:** Follow P3 (every 5 min) and P12 (conventional commits): `fix(scope): brief description`
 
 **Output:** Fixed code with passing tests on fix branch
