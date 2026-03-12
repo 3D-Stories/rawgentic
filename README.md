@@ -282,7 +282,7 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
 | `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
-| `session-start` | SessionStart | WAL recovery, session notes JSONL archival with Haiku enrichment, project reconciliation, resume context |
+| `session-start` | SessionStart | WAL recovery, JSONL archival + enrichment, archive context injection, project reconciliation, resume context |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
 
@@ -291,6 +291,8 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 **WAL (Write-Ahead Log)** records every mutation tool call to `claude_docs/wal/{project}.jsonl`. On session resume, incomplete operations are surfaced for recovery. WAL files are per-project — each active project gets its own log.
 
 **Session Notes JSONL Archival** — When session notes exceed 600 lines, the `session-start` hook archives them to structured JSONL format (`claude_docs/session_notes/archive/<project>.jsonl`). Each entry includes schema version, timestamp, line count, trimmed note text, and an `insights` field. The hook injects an enrichment instruction for Claude to use Haiku subagents to extract structured insights (summary, patterns, decisions, artifacts, issues encountered) from unenriched entries. The `archive-notes.py` script uses `fcntl.flock()` for concurrent safety and validates project names against path traversal.
+
+**Archive Querying** — The `query-archive.py` utility searches JSONL archives with `--keyword` (note text + enriched fields), `--pattern`, `--decision`, and `--artifact` modes. On startup/resume, `session-start` auto-injects a brief archive summary for bound sessions. Four WF skills (fix-bug, incident, implement-feature, refactor) include `<archive-query>` protocol blocks that query archives for relevant context at Step 2.
 
 ### Multi-Project Concurrent Sessions
 
@@ -539,7 +541,7 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**278 tests** across 12 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
+**305 tests** across 13 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
