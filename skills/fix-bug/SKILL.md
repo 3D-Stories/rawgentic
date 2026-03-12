@@ -108,6 +108,8 @@ Inherited from WF2 (identical behavior): Apply ALL findings from quality gates a
 
 <mandatory-rule>
 Steps 12-14 (Merge and Deploy, Post-Deploy Verification, Completion Summary) are NEVER optional, even when the fix is confirmed working after merge. A bug fix without formal closure risks repeating the same class of bug. If the fix is permanent (no Phase B needed), you may execute these steps quickly, but you MUST execute them.
+
+If the project's CLAUDE.md or development rules require explicit approval for merge, deploy, or similar operations, ask the user before proceeding. The steps must still be executed — they just require user confirmation first.
 </mandatory-rule>
 
 <step-tracking>
@@ -462,6 +464,8 @@ CI pass/fail status.
 ## Step 12: Merge and Deploy
 
 ### Instructions
+
+**Pre-merge check:** If the project's CLAUDE.md or development rules require explicit user approval for merge or deploy operations, ask the user before proceeding. Do not auto-merge in projects with approval gates.
 
 1. Squash-merge PR:
    ```bash
