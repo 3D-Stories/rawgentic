@@ -1,4 +1,4 @@
-# Phase 3 Workflow: Bug Fix (v1.0)
+# Phase 3 Workflow: Bug Fix (v1.1)
 
 **Date:** 2026-03-02
 **Author:** Orchestrator (direct authoring)
@@ -81,7 +81,7 @@ WF3 accepts bug reports of any complexity. However:
 WF3 enforces a strict "reproduce first" TDD pattern in Step 7:
 
 1. **Write a failing test** that reproduces the exact bug behavior described in the issue
-2. **Run the test** — confirm it fails with the reported symptom
+2. **Run the test** — confirm it fails in a way that demonstrates the bug exists. In mocked environments, the specific symptom may differ from production — the key proof is that the broken behavior is demonstrated.
 3. **Fix the code** — make the test pass
 4. **Run full test suite** — confirm no regressions
 5. **Add edge case tests** — cover related scenarios the original bug report hints at
@@ -141,12 +141,13 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 
 1. Validate issue exists via `gh issue view <number>`
 2. Confirm issue is open and labeled as bug (or has bug report template format)
-3. Display: title, steps to reproduce, expected vs actual behavior, environment
-4. Ask user to confirm this is the correct bug to fix
-5. If the issue lacks reproduction steps or expected behavior, ask user to provide them before proceeding
+3. **Detect issue format:** Check labels for `security`. If present, map STRIDE fields (Description → Steps to Reproduce, Risk → Expected vs Actual, Remediation → acceptance criteria). Fall back to standard parsing if STRIDE fields are absent.
+4. Display: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment
+5. Ask user to confirm this is the correct bug to fix
+6. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding
 
-**Output:** Validated bug report: { issue_number, title, body, labels, reproduction_steps, expected_behavior, actual_behavior }
-**Failure mode:** (1) Issue not found → ask for correct number. (2) Issue is not a bug → suggest WF2 instead. (3) Missing reproduction steps → ask user to provide them.
+**Output:** Validated bug report: { issue_number, title, body, labels, format (standard/STRIDE), reproduction_steps, expected_behavior, actual_behavior }
+**Failure mode:** (1) Issue not found → ask for correct number. (2) Issue is not a bug → suggest WF2 instead. (3) Missing reproduction steps (and not a security finding) → ask user to provide them.
 **Principle alignment:** P11 (User-in-the-Loop)
 **User selection:** yes
 
@@ -248,8 +249,9 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 1. Ensure main is up to date: `git fetch origin main`
 2. Create branch from main: `git checkout -b fix/<issue-number>-<short-desc> origin/main`
 3. Verify branch created successfully
+4. **Pre-flight dependency check:** If the project uses npm/yarn/pnpm (detected from `config.techStack` or `package.json`), verify `node_modules` exists. If missing, run the install command. Similarly for Python projects with `requirements.txt` or `pyproject.toml`.
 
-**Output:** Active fix branch
+**Output:** Active fix branch with dependencies installed
 **Principle alignment:** P1 (Branch Isolation)
 
 ---
@@ -261,11 +263,11 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 **Input:** Fix plan from Step 5, codebase context
 **Action:** Execute the plan using strict reproduce-first TDD:
 
-1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail with the reported symptoms. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior.
+1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail in a way that demonstrates the bug exists. In mocked environments, the specific status code or error may differ from production — the key proof is that the broken behavior is demonstrated. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior.
 2. **GREEN — Minimal fix:** Make the reproduction test pass with the smallest possible code change. Resist the urge to refactor surrounding code.
 3. **REFACTOR (minimal):** Only refactor if the fix introduced obvious code smells. Bug fix PRs should be focused, not cleanup opportunities.
 4. **Regression tests:** Add 2-3 edge case tests around the fix boundary.
-5. **Full suite:** Run `pytest` (engine) and/or `vitest` (dashboard) to confirm no regressions.
+5. **Full suite:** Run test commands from `capabilities.test_commands` to confirm no regressions. Iterate over all configured test frameworks.
 6. **Commit frequently:** Follow P3 (every 5 min) and P12 (conventional commits): `fix(scope): brief description`
 
 **Output:** Fixed code with passing tests on fix branch
@@ -282,7 +284,7 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 **Input:** Code changes on fix branch, original bug report, fix plan
 **Action:**
 
-1. Verify all acceptance criteria from the bug report are addressed
+1. Verify all acceptance criteria from the bug report (or all risk mitigations from the security finding) are addressed
 2. Verify the reproduction test genuinely captures the original bug
 3. Verify no unrelated changes crept in (`git diff --stat` should show only planned files)
 4. Verify all tests pass
@@ -297,11 +299,11 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 
 **Type:** automated
 **Actor:** sub-agent (code review) + conditional memorize
-**Command:** `/code-review:code-review` (4 specialized reviewers) + conditional `/reflexion:memorize`
+**Command:** 2-agent focused review + conditional `/reflexion:memorize`
 **Input:** All changes on fix branch
 **Action:**
 
-1. **Code review:** Launch the 4-agent review (type-design, silent-failure, simplifier, code-reviewer). For bug fixes, focus on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused.
+1. **Code review:** Launch a focused 2-agent review (`pr-review-toolkit:silent-failure-hunter` + `pr-review-toolkit:code-reviewer`). For bug fixes, focus on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused. Type design and code simplification are deferred — bug fixes should be minimal and targeted.
 2. **Conditional memorize:** If the bug fix reveals a pattern worth remembering (new pitfall, gotcha, or recurring issue), run `/reflexion:memorize` to curate insights into CLAUDE.md. Skip if the fix is routine.
 3. **Apply findings:** Auto-apply review findings. Circuit breaker on ambiguity.
 
@@ -359,9 +361,10 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 **Input:** CI-passing PR from Step 11
 **Action:**
 
-1. Squash-merge PR: `gh pr merge <number> --squash --delete-branch`
-2. Deploy to dev via deploy script (auto-triggered by push hook, or manual)
-3. Verify deployment health
+1. **Pre-merge check:** If the project's CLAUDE.md or development rules require explicit user approval for merge or deploy, ask the user before proceeding.
+2. Squash-merge PR: `gh pr merge <number> --squash --delete-branch`
+3. Deploy to dev via deploy script (auto-triggered by push hook, or manual)
+4. Verify deployment health
 
 **Output:** Merged PR + deployed dev environment
 **Failure mode:** (1) Merge conflicts → rebase on main, resolve, push. (2) Deploy fails → check docker logs, rollback if needed.

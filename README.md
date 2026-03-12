@@ -161,6 +161,9 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 - Reproduce-first: failing test MUST exist before code changes
 - Complexity escalation: 10+ file fixes upgrade to WF2
 - Verify mode when no test framework configured
+- Security finding support: auto-detects STRIDE-format issues from WF9
+- Pre-flight dependency check before first test run
+- Respects project-level merge approval rules
 </details>
 
 <details>
