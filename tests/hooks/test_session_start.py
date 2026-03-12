@@ -143,6 +143,59 @@ class TestArchival:
         assert "unenriched" in ctx.lower()
 
 
+class TestArchiveContextInjection:
+    def test_injects_archive_summary_for_bound_session(self, make_workspace):
+        """Archive context is injected on startup when a bound session has archive data."""
+        ws = make_workspace(
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        # Create archive with enriched entry
+        archive_dir = ws.notes_dir / "archive"
+        archive_dir.mkdir(parents=True)
+        entry = {
+            "schema_version": 1,
+            "archived_at": "2026-03-10T18:00:00Z",
+            "source_file": "testproj.md",
+            "line_count": 800,
+            "note": "# Session\nSome work done.",
+            "insights": {
+                "summary": "Database migration and auth refactoring",
+                "sessions": [],
+            },
+        }
+        (archive_dir / "testproj.jsonl").write_text(json.dumps(entry) + "\n")
+
+        stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        assert output is not None
+        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "ARCHIVE CONTEXT" in ctx
+
+    def test_no_archive_context_without_registry(self, make_workspace):
+        """No archive context injected for unbound sessions."""
+        ws = make_workspace()
+        archive_dir = ws.notes_dir / "archive"
+        archive_dir.mkdir(parents=True)
+        entry = {
+            "schema_version": 1,
+            "archived_at": "2026-03-10T18:00:00Z",
+            "source_file": "testproj.md",
+            "line_count": 800,
+            "note": "# Session\nSome work.",
+            "insights": None,
+        }
+        (archive_dir / "testproj.jsonl").write_text(json.dumps(entry) + "\n")
+
+        stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "ARCHIVE CONTEXT" not in ctx
+
+
 class TestContextEmission:
     def test_emits_valid_json(self, make_workspace):
         ws = make_workspace(

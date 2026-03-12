@@ -186,6 +186,15 @@ For each service in `config.services[]`:
 
 Log in session notes: `### WF11 Step 2: Rapid Diagnosis — DONE (fast-path|full)`
 
+<archive-query>
+**Archive Context (optional):** If `claude_docs/session_notes/archive/` exists for this project:
+1. Derive 2-3 keywords from the incident symptoms (service names, error codes, affected endpoints)
+2. Run: `python3 hooks/query-archive.py claude_docs/session_notes/archive/ --keyword "<term>" --project "<project>" --limit 5 --format brief`
+3. Check for: prior incidents with same service/symptoms, known failure modes, previous mitigation steps
+4. If results found, note relevant patterns in the diagnosis
+5. If no archive exists or query returns empty, skip silently — do not mention the absence
+</archive-query>
+
 ### Failure Modes
 
 - Can't SSH to server → check if server is down entirely (ping hosts from `config.infrastructure.hosts[]`, then check hosting console)
@@ -270,7 +279,7 @@ Log in session notes: `### WF11 Step 3: Strategy — [chosen strategy] (temporar
 ### Failure Modes
 
 - User is unavailable for Phase B decision → default to separate session (Phase A is complete, service is restored)
-- Session notes too long to capture full timeline → archive to `session_notes_NNN.md` and start fresh for Phase B
+- Session notes too long to capture full timeline → archival to JSONL happens automatically on next session startup
 
 ---
 
@@ -503,7 +512,7 @@ Log in session notes: `### WF11 Step 14: Incident Closure — DONE`
 
 - GitHub issue doesn't exist yet → create one with the incident report as the body
 - Action items still open → note in closure summary that follow-up work remains
-- Session notes too long → archive to `session_notes_NNN.md` and start fresh
+- Session notes too long → archival to JSONL happens automatically on next session startup
 
 ---
 

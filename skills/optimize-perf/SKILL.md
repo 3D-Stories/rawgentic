@@ -448,7 +448,7 @@ WF10 complete.
 ### Failure Modes
 
 - GitHub issue doesn't exist -> create one with benchmark evidence as the body
-- Session notes too long -> archive to `session_notes_NNN.md` and start fresh
+- Session notes too long -> archival to JSONL happens automatically on next session startup
 - Success criteria not met -> document partial improvement and remaining gap in summary
 
 ---
