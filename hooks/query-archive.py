@@ -18,6 +18,8 @@ import re
 import sys
 from pathlib import Path
 
+PROJECT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
+
 
 def load_entries(archive_dir: Path, project: str | None = None) -> list[dict]:
     """Load JSONL entries from archive directory.
@@ -66,6 +68,10 @@ def search_entries(
     since: str | None = None,
 ) -> list[tuple[dict, str]]:
     """Search entries and return (entry, match_context) tuples."""
+    # Compile regex once outside the loop
+    search_term = keyword or pattern or decision or artifact
+    rx = re.compile(search_term, re.IGNORECASE) if search_term else None
+
     results = []
 
     for entry in entries:
@@ -77,8 +83,7 @@ def search_entries(
         note = entry.get("note", "")
         match_context = None
 
-        if keyword:
-            rx = re.compile(keyword, re.IGNORECASE)
+        if keyword and rx:
             # Search note text
             if rx.search(note):
                 for line in note.splitlines():
@@ -101,8 +106,7 @@ def search_entries(
                             match_context = f"decision: {found}"
                             break
 
-        elif pattern:
-            rx = re.compile(pattern, re.IGNORECASE)
+        elif pattern and rx:
             if insights:
                 for sess in insights.get("sessions", []):
                     found = _match_in_list(rx, sess.get("patterns", []))
@@ -110,8 +114,7 @@ def search_entries(
                         match_context = f"pattern: {found}"
                         break
 
-        elif decision:
-            rx = re.compile(decision, re.IGNORECASE)
+        elif decision and rx:
             if insights:
                 for sess in insights.get("sessions", []):
                     found = _match_in_list(rx, sess.get("decisions", []))
@@ -119,8 +122,7 @@ def search_entries(
                         match_context = f"decision: {found}"
                         break
 
-        elif artifact:
-            rx = re.compile(artifact, re.IGNORECASE)
+        elif artifact and rx:
             # Search enriched artifacts
             if insights:
                 for sess in insights.get("sessions", []):
@@ -196,6 +198,11 @@ def main():
     # Require at least one search flag
     if not any([args.keyword, args.pattern, args.decision, args.artifact]):
         print(json.dumps({"error": "At least one search flag required: --keyword, --pattern, --decision, or --artifact"}))
+        sys.exit(1)
+
+    # Validate project name (path traversal defense)
+    if args.project and not PROJECT_NAME_RE.match(args.project):
+        print(json.dumps({"error": f"Invalid project name: {args.project!r}"}))
         sys.exit(1)
 
     # Validate regex early

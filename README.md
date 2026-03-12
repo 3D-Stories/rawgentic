@@ -541,7 +541,7 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**305 tests** across 13 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
+**306 tests** across 13 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
