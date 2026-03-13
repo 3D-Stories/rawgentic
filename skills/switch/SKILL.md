@@ -35,8 +35,8 @@ Display all registered projects:
 ```
 Projects in workspace:
   ● my-api (./projects/my-api) — active, configured
-  ● rawgentic (./projects/rawgentic) — active, configured
-  ○ millions (./projects/millions) — inactive
+  ● my-frontend (./projects/my-frontend) — active, configured
+  ○ side-project (./projects/side-project) — inactive
 ```
 
 Use ● for active, ○ for inactive. Show configured status.
@@ -44,7 +44,7 @@ Use ● for active, ○ for inactive. Show configured status.
 Also check `claude_docs/session_registry.jsonl` for recent sessions (last 24h) bound to each project and show them:
 ```
   ● my-api — 1 recent session
-  ● rawgentic — 2 recent sessions
+  ● my-frontend — 2 recent sessions
 ```
 
 Then ask: "Which project do you want to bind this session to?"
