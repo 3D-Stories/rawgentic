@@ -8,17 +8,17 @@
     {
       "text": "At least one test file matching test_*.py or *_test.py was generated",
       "passed": true,
-      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
     },
     {
       "text": "Tests import or reference gpu_fan_controller module",
       "passed": true,
-      "evidence": "Referenced in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
+      "evidence": "Referenced in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
     },
     {
       "text": "Test files contain actual assert statements, not just pass or empty functions",
       "passed": true,
-      "evidence": "Assert found in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
+      "evidence": "Assert found in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs/test_calculate_duty.py"
     },
     {
       "text": "A testing strategy document was created (any markdown file describing the test plan)",

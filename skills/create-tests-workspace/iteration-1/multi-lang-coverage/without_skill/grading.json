@@ -8,12 +8,12 @@
     {
       "text": "Bats tests (.bats files) were created for shell scripts",
       "passed": true,
-      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/multi-lang-coverage/without_skill/outputs/tests_shell/test_install.bats"
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/without_skill/outputs/tests_shell/test_install.bats"
     },
     {
       "text": "Tests for systemd service integration exist",
       "passed": true,
-      "evidence": "Systemd tests in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/multi-lang-coverage/without_skill/outputs/run_summary.md"
+      "evidence": "Systemd tests in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/without_skill/outputs/run_summary.md"
     },
     {
       "text": "A top-level test runner that runs all language test suites",

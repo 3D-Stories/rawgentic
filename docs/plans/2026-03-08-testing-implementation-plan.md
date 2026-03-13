@@ -14,7 +14,7 @@
 
 **Step 1: Ensure clean working tree**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && git status --porcelain`
+Run: `cd $PROJECT_ROOT && git status --porcelain`
 Expected: Only untracked files (no staged/modified tracked files)
 
 **Step 2: Fetch and create branch**
@@ -221,7 +221,7 @@ def no_jq_env():
 
 **Step 2: Verify fixtures import correctly**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -c "import tests.hooks.conftest"`
+Run: `cd $PROJECT_ROOT && python3 -c "import tests.hooks.conftest"`
 Expected: No errors (may need `tests/__init__.py` and `tests/hooks/__init__.py`)
 
 **Step 3: Commit**
@@ -368,7 +368,7 @@ GUARD_CASES = [
     ("terraform apply prod", "terraform apply -var-file=prod.tfvars", "deny"),
     ("ansible prod", "ansible-playbook -i prod-inventory site.yml", "deny"),
     ("helm install prod", "helm install myapp ./chart --set env=prod", "deny"),
-    ("ssh with compose prod up", 'ssh root@10.0.17.202 "docker compose -f /srv/app/docker-compose.sdlc.prod.yml up -d"', "deny"),
+    ("ssh with compose prod up", 'ssh root@198.51.100.1 "docker compose -f /srv/app/docker-compose.sdlc.prod.yml up -d"', "deny"),
     # Existing destructive patterns
     ("rm -rf", "rm -rf /tmp/test", "deny"),
     ("git push --force", "git push --force origin main", "deny"),
@@ -1391,7 +1391,7 @@ Expected: All tests pass (existing 78 + new ~80 = ~158 total)
 **Step 3: Push and create PR**
 
 ```bash
-GH_TOKEN=$(cat ~/.secrets/github-pat) git push -u origin test/comprehensive-hook-suite
+GH_TOKEN=<your-github-token> git push -u origin test/comprehensive-hook-suite
 ```
 
 Then create PR via `gh pr create` with test results summary.

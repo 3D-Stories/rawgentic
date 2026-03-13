@@ -61,6 +61,6 @@ All tests pass when run as a non-root user.
 ## How to Run
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/without_skill/outputs
+cd $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/without_skill/outputs
 bash test_install.sh
 ```

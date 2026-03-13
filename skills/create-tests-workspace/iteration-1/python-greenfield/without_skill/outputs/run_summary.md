@@ -2,7 +2,7 @@
 
 ## Project Analyzed
 
-- **Location:** `/home/rocky00717/claude-personal/projects/gpu-fan-controller/`
+- **Location:** `$TARGET_PROJECT_ROOT/`
 - **Language:** Python 3 (single-file script: `gpu_fan_controller.py`)
 - **Purpose:** GPU-aware fan controller for Intel S2600WTTR + Tesla P40. Monitors NVIDIA GPU temperature via `nvidia-smi` and controls chassis fan speed through Intel BMC via `ipmitool`.
 
@@ -32,7 +32,7 @@
 
 2. **Filesystem access is mocked for sysfs.** The `get_cpu_temps()` fallback reads `/sys/class/thermal/thermal_zone*/` -- mocked via `unittest.mock.patch` on `Path`.
 
-3. **`conftest.py` uses an absolute path** (`/home/rocky00717/claude-personal/projects/gpu-fan-controller`) for `sys.path` insertion since the test files live in a different directory tree than the source.
+3. **`conftest.py` uses an absolute path** (`$TARGET_PROJECT_ROOT`) for `sys.path` insertion since the test files live in a different directory tree than the source.
 
 4. **Integration tests for `main()`** use `time.sleep` mocking to control loop iterations and verify the full startup-loop-shutdown lifecycle without blocking.
 
@@ -45,7 +45,7 @@
 ## How to Run
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs
+cd $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/python-greenfield/without_skill/outputs
 
 # If pytest's default tmpdir has ownership issues, use --basetemp:
 python3 -m pytest -v --basetemp=./.pytest_tmp

@@ -4,7 +4,7 @@ import json
 import os
 import re
 
-BASE = "/home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1"
+BASE = "$PLUGIN_ROOT/skills/create-tests-workspace/iteration-1"
 
 
 def files_in(path):

@@ -68,8 +68,8 @@ wal_init_file() {
 
 Run:
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
-  echo '{"session_id":"test-123","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js","command":""},"tool_use_id":"tu_1","cwd":"/home/rocky00717/claude-personal"}' | \
+cd $PROJECT_ROOT && \
+  echo '{"session_id":"test-123","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js","command":""},"tool_use_id":"tu_1","cwd":"$WORKSPACE_ROOT"}' | \
   bash -c '
     source hooks/wal-lib.sh
     wal_parse_input
@@ -84,8 +84,8 @@ Expected: `SESSION_ID=test-123`, `PROJECT=` (empty — no registry entry for tes
 
 Run with a real session ID from the registry:
 ```bash
-REAL_SID=$(tail -1 /home/rocky00717/claude-personal/claude_docs/session_registry.jsonl | jq -r '.session_id')
-echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/test.js\"},\"tool_use_id\":\"tu_1\",\"cwd\":\"/home/rocky00717/claude-personal\"}" | \
+REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id')
+echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/test.js\"},\"tool_use_id\":\"tu_1\",\"cwd\":\"$WORKSPACE_ROOT\"}" | \
   bash -c '
     source hooks/wal-lib.sh
     wal_parse_input
@@ -95,7 +95,7 @@ echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"fi
     echo "WAL_FILE=$WAL_FILE"
   '
 ```
-Expected: `PROJECT=chorestory` (or whatever the last registered project is), `WAL_FILE=.../claude_docs/wal/chorestory.jsonl`
+Expected: `PROJECT=my-api` (or whatever the last registered project is), `WAL_FILE=.../claude_docs/wal/my-api.jsonl`
 
 **Step 4: Commit**
 
@@ -205,14 +205,14 @@ exit 0
 **Step 4: Test — verify per-project WAL write**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
-  REAL_SID=$(tail -1 /home/rocky00717/claude-personal/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
-  echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/test.js\"},\"tool_use_id\":\"tu_test1\",\"cwd\":\"/home/rocky00717/claude-personal\"}" | \
+cd $PROJECT_ROOT && \
+  REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
+  echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/test.js\"},\"tool_use_id\":\"tu_test1\",\"cwd\":\"$WORKSPACE_ROOT\"}" | \
   bash hooks/wal-pre && \
   echo "--- WAL directory contents:" && \
-  ls -la /home/rocky00717/claude-personal/claude_docs/wal/ 2>/dev/null && \
+  ls -la $WORKSPACE_ROOT/claude_docs/wal/ 2>/dev/null && \
   echo "--- Last line:" && \
-  tail -1 /home/rocky00717/claude-personal/claude_docs/wal/*.jsonl 2>/dev/null
+  tail -1 $WORKSPACE_ROOT/claude_docs/wal/*.jsonl 2>/dev/null
 ```
 Expected: New `wal/` directory with per-project `.jsonl` file containing an INTENT entry
 
@@ -352,8 +352,8 @@ In `hooks/wal-context`, replace lines 42-75 (the entire "If not registered, try 
 Set up: ensure only one project is active in `.rawgentic_workspace.json`.
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
-  echo '{"session_id":"test-single-active","cwd":"/home/rocky00717/claude-personal","hook_event_name":"submit"}' | \
+cd $PROJECT_ROOT && \
+  echo '{"session_id":"test-single-active","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
   bash hooks/wal-context
 ```
 Expected: JSON with `additionalContext` containing session context for the single active project.
@@ -362,7 +362,7 @@ Expected: JSON with `additionalContext` containing session context for the singl
 
 Temporarily set two projects active:
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
   python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
@@ -391,16 +391,16 @@ print('Set rawgentic active=true')
 
 Then test:
 ```bash
-echo '{"session_id":"test-multi-active","cwd":"/home/rocky00717/claude-personal","hook_event_name":"submit"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-context
+echo '{"session_id":"test-multi-active","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
+  bash $PROJECT_ROOT/hooks/wal-context
 ```
-Expected: JSON with `additionalContext` containing "Multiple projects active: chorestory, rawgentic. Use /rawgentic:switch..."
+Expected: JSON with `additionalContext` containing "Multiple projects active: my-api, rawgentic. Use /rawgentic:switch..."
 
 **Step 4: Revert test data and commit**
 
-Revert the workspace back to its original state (only chorestory active), then commit:
+Revert the workspace back to its original state (only my-api active), then commit:
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
   python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
@@ -528,14 +528,14 @@ exit 0
 **Step 2: Make executable**
 
 ```bash
-chmod +x /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+chmod +x $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 
 **Step 3: Test — unbound session, multiple active**
 
 Temporarily set two projects active, then test:
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
   python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
@@ -546,33 +546,33 @@ for p in ws['projects']:
 with open('.rawgentic_workspace.json', 'w') as f:
     json.dump(ws, f, indent=2)
 " && \
-echo '{"session_id":"unbound-test","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"/home/rocky00717/claude-personal"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+echo '{"session_id":"unbound-test","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: JSON with `permissionDecision: deny` and message about binding
 
 **Step 4: Test — bound session, same project file**
 
 ```bash
-REAL_SID=$(tail -1 /home/rocky00717/claude-personal/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
-echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/home/rocky00717/claude-personal/projects/chorestory/src/app.js\"},\"cwd\":\"/home/rocky00717/claude-personal\"}" | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
+echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WORKSPACE_ROOT/projects/my-api/src/app.js\"},\"cwd\":\"$WORKSPACE_ROOT\"}" | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: No output (exit 0 — allowed, file is in bound project)
 
 **Step 5: Test — bound session, cross-project file**
 
 ```bash
-REAL_SID=$(tail -1 /home/rocky00717/claude-personal/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
-echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/home/rocky00717/claude-personal/projects/rawgentic/hooks/test.sh\"},\"cwd\":\"/home/rocky00717/claude-personal\"}" | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
+echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$PROJECT_ROOT/hooks/test.sh\"},\"cwd\":\"$WORKSPACE_ROOT\"}" | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
-Expected: JSON with `permissionDecision: deny` and message about cross-project write (session is bound to chorestory, file is in rawgentic)
+Expected: JSON with `permissionDecision: deny` and message about cross-project write (session is bound to my-api, file is in rawgentic)
 
 **Step 6: Revert test data and commit**
 
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
   python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
@@ -773,8 +773,8 @@ else:
 **Step 4: Test — startup with all projects active**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
-echo '{"session_id":"test-startup","cwd":"/home/rocky00717/claude-personal","hook_event_name":"startup"}' | \
+cd $PROJECT_ROOT && \
+echo '{"session_id":"test-startup","cwd":"$WORKSPACE_ROOT","hook_event_name":"startup"}' | \
   bash hooks/session-start
 ```
 Expected: JSON with `additionalContext` showing active project info
@@ -782,16 +782,16 @@ Expected: JSON with `additionalContext` showing active project info
 **Step 5: Test — resume with registry binding**
 
 ```bash
-REAL_SID=$(tail -1 /home/rocky00717/claude-personal/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
-echo "{\"session_id\":\"$REAL_SID\",\"cwd\":\"/home/rocky00717/claude-personal\",\"hook_event_name\":\"resume\"}" | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/session-start
+REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
+echo "{\"session_id\":\"$REAL_SID\",\"cwd\":\"$WORKSPACE_ROOT\",\"hook_event_name\":\"resume\"}" | \
+  bash $PROJECT_ROOT/hooks/session-start
 ```
-Expected: JSON with `additionalContext` containing "Resuming work on project: **chorestory**"
+Expected: JSON with `additionalContext` containing "Resuming work on project: **my-api**"
 
 **Step 6: Commit**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
+cd $PROJECT_ROOT && \
 git add hooks/session-start && \
 git commit -m "feat(session-start): add reconciliation, resume context, per-project WAL recovery
 
@@ -827,7 +827,7 @@ Add a new entry to the `PreToolUse` array, BEFORE the wal-pre entry (so binding 
 **Step 2: Validate JSON**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
+cd $PROJECT_ROOT && \
 python3 -c "import json; h=json.load(open('hooks/hooks.json')); print('PreToolUse entries:', len(h['hooks']['PreToolUse'])); [print(f'  {e[\"matcher\"]}') for e in h['hooks']['PreToolUse']]"
 ```
 Expected: 4 PreToolUse entries: `Bash`, `Edit|Write|MultiEdit|NotebookEdit|Read`, `Bash|Edit|Write|NotebookEdit|Task`, `Edit|Write|MultiEdit|NotebookEdit`
@@ -894,7 +894,7 @@ Display all registered projects:
 
 ```
 Projects in workspace:
-  ● chorestory (./projects/chorestory) — active, configured
+  ● my-api (./projects/my-api) — active, configured
   ● rawgentic (./projects/rawgentic) — active, configured
   ○ millions (./projects/millions) — inactive
 ```
@@ -903,7 +903,7 @@ Use ● for active, ○ for inactive. Show configured status.
 
 Also check `claude_docs/session_registry.jsonl` for recent sessions (last 24h) bound to each project and show them:
 ```
-  ● chorestory — 1 recent session
+  ● my-api — 1 recent session
   ● rawgentic — 2 recent sessions
 ```
 
@@ -977,7 +977,7 @@ Report: "Deactivated **<name>**. It won't appear as an option for new sessions u
 **Step 3: Commit**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
+cd $PROJECT_ROOT && \
 git add skills/switch/SKILL.md && \
 git commit -m "feat(switch): rewrite for multi-project concurrent sessions
 
@@ -1009,7 +1009,7 @@ Keep the instruction that sets the new project's `active: true`.
 **Step 3: Commit**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
+cd $PROJECT_ROOT && \
 git add skills/new-project/SKILL.md && \
 git commit -m "feat(new-project): remove single-active enforcement
 
@@ -1068,7 +1068,7 @@ The `setup` skill has a slightly different format but the same logic. Find its f
 **Step 4: Commit**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
+cd $PROJECT_ROOT && \
 git add skills/*/SKILL.md && \
 git commit -m "feat(skills): update config-loading for multi-active projects
 
@@ -1086,75 +1086,75 @@ plus setup skill."
 **Step 1: Set up multi-active state**
 
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
 python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
     ws = json.load(f)
 for p in ws['projects']:
-    if p['name'] in ('chorestory', 'rawgentic'):
+    if p['name'] in ('my-api', 'rawgentic'):
         p['active'] = True
 with open('.rawgentic_workspace.json', 'w') as f:
     json.dump(ws, f, indent=2)
-print('Both chorestory and rawgentic set active=true')
+print('Both my-api and rawgentic set active=true')
 "
 ```
 
 **Step 2: Test unbound session is blocked (wal-bind-guard)**
 
 ```bash
-echo '{"session_id":"e2e-unbound","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"/home/rocky00717/claude-personal"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+echo '{"session_id":"e2e-unbound","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: JSON with `permissionDecision: deny` mentioning "Multiple projects are active"
 
 **Step 3: Test wal-context cascade with multiple active**
 
 ```bash
-echo '{"session_id":"e2e-multi","cwd":"/home/rocky00717/claude-personal","hook_event_name":"submit"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-context
+echo '{"session_id":"e2e-multi","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
+  bash $PROJECT_ROOT/hooks/wal-context
 ```
 Expected: JSON with `additionalContext` containing "Multiple projects active"
 
 **Step 4: Test session-start with multiple active (startup)**
 
 ```bash
-echo '{"session_id":"e2e-startup","cwd":"/home/rocky00717/claude-personal","hook_event_name":"startup"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/session-start
+echo '{"session_id":"e2e-startup","cwd":"$WORKSPACE_ROOT","hook_event_name":"startup"}' | \
+  bash $PROJECT_ROOT/hooks/session-start
 ```
 Expected: JSON mentioning multiple active projects
 
 **Step 5: Test bound session allows same-project, denies cross-project**
 
 ```bash
-# Register a session to chorestory
-echo '{"session_id":"e2e-bound","project":"chorestory","project_path":"./projects/chorestory","started":"2026-03-07T22:00:00Z","cwd":"/home/rocky00717/claude-personal"}' \
-  >> /home/rocky00717/claude-personal/claude_docs/session_registry.jsonl
+# Register a session to my-api
+echo '{"session_id":"e2e-bound","project":"my-api","project_path":"./projects/my-api","started":"2026-03-07T22:00:00Z","cwd":"$WORKSPACE_ROOT"}' \
+  >> $WORKSPACE_ROOT/claude_docs/session_registry.jsonl
 
 # Same project — should ALLOW (no output)
-echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"/home/rocky00717/claude-personal/projects/chorestory/test.js"},"cwd":"/home/rocky00717/claude-personal"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$WORKSPACE_ROOT/projects/my-api/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 
 # Cross project — should DENY
-echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"/home/rocky00717/claude-personal/projects/rawgentic/test.js"},"cwd":"/home/rocky00717/claude-personal"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-bind-guard
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$PROJECT_ROOT/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: First command produces no output (allow). Second produces JSON with `permissionDecision: deny`.
 
 **Step 6: Test per-project WAL write**
 
 ```bash
-echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"/home/rocky00717/claude-personal/projects/chorestory/test.js"},"tool_use_id":"tu_e2e","cwd":"/home/rocky00717/claude-personal"}' | \
-  bash /home/rocky00717/claude-personal/projects/rawgentic/hooks/wal-pre && \
-ls -la /home/rocky00717/claude-personal/claude_docs/wal/ && \
-tail -1 /home/rocky00717/claude-personal/claude_docs/wal/chorestory.jsonl
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$WORKSPACE_ROOT/projects/my-api/test.js"},"tool_use_id":"tu_e2e","cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PROJECT_ROOT/hooks/wal-pre && \
+ls -la $WORKSPACE_ROOT/claude_docs/wal/ && \
+tail -1 $WORKSPACE_ROOT/claude_docs/wal/my-api.jsonl
 ```
-Expected: WAL entry written to `wal/chorestory.jsonl` (not `wal.jsonl`)
+Expected: WAL entry written to `wal/my-api.jsonl` (not `wal.jsonl`)
 
 **Step 7: Clean up test data**
 
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
 python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
@@ -1167,7 +1167,7 @@ with open('.rawgentic_workspace.json', 'w') as f:
 " && \
 # Remove test registry entry
 sed -i '/e2e-bound/d' claude_docs/session_registry.jsonl 2>/dev/null || true && \
-rm -f claude_docs/wal/chorestory.jsonl 2>/dev/null || true && \
+rm -f claude_docs/wal/my-api.jsonl 2>/dev/null || true && \
 echo "E2E cleanup complete"
 ```
 
@@ -1184,17 +1184,17 @@ Update `.claude-plugin/plugin.json` version from `2.4.0` to `2.5.0`.
 
 **Step 1b: Add .gitignore entry for wal directory (in workspace root)**
 
-Ensure `claude_docs/wal/` is gitignored in the workspace root. Check if `.gitignore` exists in `/home/rocky00717/claude-personal/` and add the entry if missing:
+Ensure `claude_docs/wal/` is gitignored in the workspace root. Check if `.gitignore` exists in `$WORKSPACE_ROOT/` and add the entry if missing:
 
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
 grep -q 'claude_docs/wal/' .gitignore 2>/dev/null || echo 'claude_docs/wal/' >> .gitignore
 ```
 
 **Step 2: Run full manual verification**
 
 ```bash
-cd /home/rocky00717/claude-personal/projects/rawgentic && \
+cd $PROJECT_ROOT && \
 echo "--- Hook files:" && \
 ls -la hooks/wal-bind-guard hooks/wal-context hooks/wal-lib.sh hooks/wal-pre hooks/wal-post hooks/wal-post-fail hooks/wal-stop hooks/session-start && \
 echo "--- hooks.json PreToolUse entries:" && \
@@ -1223,13 +1223,13 @@ claude plugin remove rawgentic@rawgentic 2>&1 && claude plugin install rawgentic
 **Step 5: Verify by enabling both projects**
 
 ```bash
-cd /home/rocky00717/claude-personal && \
+cd $WORKSPACE_ROOT && \
 python3 -c "
 import json
 with open('.rawgentic_workspace.json') as f:
     ws = json.load(f)
 for p in ws['projects']:
-    if p['name'] in ('chorestory', 'rawgentic'):
+    if p['name'] in ('my-api', 'rawgentic'):
         p['active'] = True
 with open('.rawgentic_workspace.json', 'w') as f:
     json.dump(ws, f, indent=2)

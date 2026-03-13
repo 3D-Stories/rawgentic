@@ -3,22 +3,22 @@
     {
       "text": "A coverage gap analysis document or report exists identifying what's missing",
       "passed": true,
-      "evidence": "Gap analysis in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/docs/plans/2026-03-07-testing-strategy.md"
+      "evidence": "Gap analysis in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/docs/plans/2026-03-07-testing-strategy.md"
     },
     {
       "text": "Bats tests (.bats files) were created for shell scripts",
       "passed": true,
-      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/tests/shell/test_install.bats"
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/tests/shell/test_install.bats"
     },
     {
       "text": "Tests for systemd service integration exist",
       "passed": true,
-      "evidence": "Systemd tests in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/run_summary.md"
+      "evidence": "Systemd tests in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/run_summary.md"
     },
     {
       "text": "A top-level test runner that runs all language test suites",
       "passed": true,
-      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/test_infrastructure/Makefile.test-targets"
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/multi-lang-coverage/with_skill/outputs/test_infrastructure/Makefile.test-targets"
     },
     {
       "text": "Output explicitly identifies what areas are missing from the existing pytest tests",

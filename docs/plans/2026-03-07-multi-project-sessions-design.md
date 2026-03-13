@@ -2,7 +2,7 @@
 
 ## Problem
 
-The rawgentic workspace uses a single `active` flag (mutex) — only one project can be active at a time. When running two Claude Code sessions simultaneously from the same workspace root (e.g., one on chorestory, one on rawgentic), the system breaks:
+The rawgentic workspace uses a single `active` flag (mutex) — only one project can be active at a time. When running two Claude Code sessions simultaneously from the same workspace root (e.g., one on my-api, one on rawgentic), the system breaks:
 
 1. **Session misattribution** — new sessions auto-register to whatever project is `active`, regardless of what they're actually working on
 2. **WAL pollution** — a single shared `wal.jsonl` mixes operations from all sessions/projects, producing noisy recovery on resume
@@ -78,7 +78,7 @@ The `wal-context` hook fires on every `UserPromptSubmit`. New cascade:
 
 1. **Registry hit** — `session_id` found in `session_registry.jsonl` → use that project. (No change from today.)
 2. **Single active** — only 1 project has `active: true` → auto-bind to it, write to registry. (Backward compat.)
-3. **Multiple active, no registry** → inject `additionalContext`: "Multiple projects active: chorestory, rawgentic. Use `/rawgentic:switch <name>` to bind this session."
+3. **Multiple active, no registry** → inject `additionalContext`: "Multiple projects active: my-api, rawgentic. Use `/rawgentic:switch <name>` to bind this session."
 
 **Changes to wal-context hook:**
 - Line 44: `select(.active == true)` returns multiple results — handle by counting
@@ -111,7 +111,7 @@ When a session is bound to project X, prevent file operations on project Y's dir
 1. Extract file path from tool_input (`file_path`, `notebook_path`)
 2. Resolve all project paths from workspace config
 3. If file path falls under a different project's directory → DENY:
-   > "You're bound to **rawgentic** but this file is in **chorestory**. Switch first with `/rawgentic:switch chorestory`, or ask the user if this cross-project edit is intentional."
+   > "You're bound to **rawgentic** but this file is in **my-api**. Switch first with `/rawgentic:switch my-api`, or ask the user if this cross-project edit is intentional."
 4. If file path is outside all project directories → allow (system files, temp files, etc.)
 
 **Applies to:** Edit, Write, MultiEdit, NotebookEdit, Read
@@ -124,10 +124,10 @@ When a session is bound to project X, prevent file operations on project Y's dir
 claude_docs/
 ├── session_registry.jsonl
 ├── session_notes/
-│   ├── chorestory.md
+│   ├── my-api.md
 │   └── rawgentic.md
 ├── wal/
-│   ├── chorestory.jsonl
+│   ├── my-api.jsonl
 │   └── rawgentic.jsonl
 └── wal.jsonl                  ← archived, no longer written to
 ```

@@ -64,7 +64,7 @@ CASES = [
     ("terraform apply prod", "terraform apply -var-file=prod.tfvars", "deny"),
     ("ansible prod", "ansible-playbook -i prod-inventory site.yml", "deny"),
     ("helm install prod", "helm install myapp ./chart --set env=prod", "deny"),
-    ("ssh with compose prod up", 'ssh root@10.0.17.202 "docker compose -f /srv/app/docker-compose.sdlc.prod.yml up -d"', "deny"),
+    ("ssh with compose prod up", 'ssh root@198.51.100.1 "docker compose -f /srv/app/docker-compose.sdlc.prod.yml up -d"', "deny"),
     # Destructive local commands — allowed (Claude asks user before running)
     ("rm -rf", "rm -rf /tmp/test", "allow"),
     ("git push --force", "git push --force origin main", "allow"),

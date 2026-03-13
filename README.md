@@ -309,7 +309,7 @@ Multiple Claude Code sessions can work on different projects simultaneously from
 2. Exactly one active project → auto-bind
 3. Multiple active projects → prompt user to run `/rawgentic:switch <name>`
 
-**Cross-project protection:** If session A is bound to `chorestory` and tries to write a file under `projects/rawgentic/`, the `wal-bind-guard` hook denies the operation.
+**Cross-project protection:** If session A is bound to `my-api` and tries to write a file under `projects/my-frontend/`, the `wal-bind-guard` hook denies the operation.
 
 **Directory reconciliation:** On startup/resume, the `session-start` hook checks that all active projects' directories exist on disk. Missing directories are deactivated and the user is prompted to remove or re-setup.
 

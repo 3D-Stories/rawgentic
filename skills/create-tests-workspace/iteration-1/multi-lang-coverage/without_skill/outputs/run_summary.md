@@ -2,7 +2,7 @@
 
 ## Project Analyzed
 
-`/home/rocky00717/claude-personal/projects/gpu-fan-controller/`
+`$TARGET_PROJECT_ROOT/`
 
 Components:
 - `gpu_fan_controller.py` -- Python daemon: reads GPU/CPU temps, calculates fan duty via a linear ramp, sends IPMI raw commands to the Intel BMC

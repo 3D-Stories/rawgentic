@@ -3,32 +3,32 @@
     {
       "text": "At least one .bats test file exists in the outputs",
       "passed": true,
-      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/install.bats"
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/install.bats"
     },
     {
       "text": "Tests reference or source install.sh",
       "passed": true,
-      "evidence": "Referenced in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/run_tests.sh"
+      "evidence": "Referenced in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/run_tests.sh"
     },
     {
       "text": "A test helper file exists with setup/teardown functions",
       "passed": true,
-      "evidence": "Found: /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/test_helper.bash"
+      "evidence": "Found: $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/test_helper.bash"
     },
     {
       "text": "Tests cover dependency checking logic",
       "passed": true,
-      "evidence": "Dependency test logic in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/run_tests.sh"
+      "evidence": "Dependency test logic in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/run_tests.sh"
     },
     {
       "text": "Tests cover file copy/install operations",
       "passed": true,
-      "evidence": "File operations tested in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/test_helper.bash"
+      "evidence": "File operations tested in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/test_helper.bash"
     },
     {
       "text": "Tests mock or stub external commands",
       "passed": true,
-      "evidence": "Mocking found in /home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/test_helper.bash"
+      "evidence": "Mocking found in $PLUGIN_ROOT/skills/create-tests-workspace/iteration-1/shell-targeted/with_skill/outputs/test_helper.bash"
     }
   ],
   "pass_count": 6,

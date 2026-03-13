@@ -24,7 +24,7 @@
 
 **Step 1: Create test directories**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && mkdir -p tests/hooks && touch tests/__init__.py tests/hooks/__init__.py`
+Run: `cd $PROJECT_ROOT && mkdir -p tests/hooks && touch tests/__init__.py tests/hooks/__init__.py`
 
 **Step 2: Create test file with tests for glob_match, normalize_path, extract_content**
 
@@ -140,7 +140,7 @@ class TestExtractContent:
 
 **Step 3: Run tests to verify they fail**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -20`
+Run: `cd $PROJECT_ROOT && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -20`
 Expected: FAIL with `ModuleNotFoundError: No module named 'security_guard_lib'`
 
 **Step 4: Implement part 1 of security_guard_lib.py**
@@ -211,7 +211,7 @@ def extract_content(tool_name, tool_input):
 
 **Step 5: Run tests to verify they pass**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -30`
+Run: `cd $PROJECT_ROOT && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -30`
 Expected: All tests PASS
 
 **Step 6: Commit**
@@ -471,7 +471,7 @@ def format_deny(matches, rel_path):
 
 **Step 4: Run tests to verify they pass**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -50`
+Run: `cd $PROJECT_ROOT && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -50`
 Expected: All tests PASS
 
 **Step 5: Commit**
@@ -633,7 +633,7 @@ class TestFormatDeny:
 
 **Step 2: Run tests to verify they pass**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -60`
+Run: `cd $PROJECT_ROOT && python3 -m pytest tests/hooks/test_security_guard.py -v 2>&1 | tail -60`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -752,7 +752,7 @@ Create `hooks/security-patterns.json`:
 
 **Step 2: Validate the JSON**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -c "import json; d=json.load(open('hooks/security-patterns.json')); print(f'{len(d)} patterns loaded'); [print(f'  {p[\"ruleName\"]} ({p[\"source\"]})') for p in d]"`
+Run: `cd $PROJECT_ROOT && python3 -c "import json; d=json.load(open('hooks/security-patterns.json')); print(f'{len(d)} patterns loaded'); [print(f'  {p[\"ruleName\"]} ({p[\"source\"]})') for p in d]"`
 Expected: `10 patterns loaded` with all rule names and `upstream` source
 
 **Step 3: Commit**
@@ -921,11 +921,11 @@ if __name__ == "__main__":
 
 **Step 2: Make it executable**
 
-Run: `chmod +x /home/rocky00717/claude-personal/projects/rawgentic/hooks/security-guard.py`
+Run: `chmod +x $PROJECT_ROOT/hooks/security-guard.py`
 
 **Step 3: Test manually -- blocked content**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && echo '{"tool_name":"Write","tool_input":{"file_path":"/tmp/test/src/app.js","content":"x = eval(code)"}}' | python3 hooks/security-guard.py`
+Run: `cd $PROJECT_ROOT && echo '{"tool_name":"Write","tool_input":{"file_path":"/tmp/test/src/app.js","content":"x = eval(code)"}}' | python3 hooks/security-guard.py`
 Expected: JSON with `permissionDecision: deny` and `eval_injection` in systemMessage
 
 **Step 4: Test manually -- safe content**
@@ -1002,11 +1002,11 @@ exit 0
 
 **Step 2: Make it executable**
 
-Run: `chmod +x /home/rocky00717/claude-personal/projects/rawgentic/hooks/security-guard-check.sh`
+Run: `chmod +x $PROJECT_ROOT/hooks/security-guard-check.sh`
 
 **Step 3: Test it -- conflict detected**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && bash hooks/security-guard-check.sh`
+Run: `cd $PROJECT_ROOT && bash hooks/security-guard-check.sh`
 Expected: JSON with `additionalContext` warning about disabling the official plugin
 
 **Step 4: Test it -- no conflict (simulate by checking output format)**
@@ -1068,7 +1068,7 @@ Add to the `SessionStart` array (after the existing session-start entry). Uses `
 
 **Step 3: Validate JSON**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -c "import json; json.load(open('hooks/hooks.json')); print('Valid JSON')"`
+Run: `cd $PROJECT_ROOT && python3 -c "import json; json.load(open('hooks/hooks.json')); print('Valid JSON')"`
 Expected: `Valid JSON`
 
 **Step 4: Verify all matchers**
@@ -1361,7 +1361,7 @@ class TestE2EErrorHandling:
 
 **Step 2: Run all tests**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -m pytest tests/hooks/ -v 2>&1 | tail -80`
+Run: `cd $PROJECT_ROOT && python3 -m pytest tests/hooks/ -v 2>&1 | tail -80`
 Expected: All tests PASS
 
 **Step 3: Commit**
@@ -1381,7 +1381,7 @@ temp .rawgentic.json, missing securityExceptions key, and error handling."
 
 **Step 1: Run full test suite**
 
-Run: `cd /home/rocky00717/claude-personal/projects/rawgentic && python3 -m pytest tests/hooks/ -v --tb=short`
+Run: `cd $PROJECT_ROOT && python3 -m pytest tests/hooks/ -v --tb=short`
 Expected: All PASS
 
 **Step 2: Verify hooks.json**

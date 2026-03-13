@@ -1,7 +1,7 @@
 {
   "metadata": {
     "skill_name": "create-tests",
-    "skill_path": "/home/rocky00717/claude-personal/projects/rawgentic/skills/create-tests/SKILL.md",
+    "skill_path": "$PLUGIN_ROOT/skills/create-tests/SKILL.md",
     "executor_model": "claude-opus-4-6",
     "analyzer_model": "claude-opus-4-6",
     "timestamp": "2026-03-08T06:20:00Z",
