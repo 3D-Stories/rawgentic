@@ -64,11 +64,11 @@ Created 6 test files with 100 test cases total:
 ### Step 8: First Test Run
 - Initial run: 84 passed, 2 failed, 13 errors
 - Failures: Fan RPM parsing test (expected 5400, got 7) -- identified as source code bug
-- Errors: 13 tests using `tmp_path` fixture failed due to `/tmp/pytest-of-rocky00717` owned by root
+- Errors: 13 tests using `tmp_path` fixture failed due to `/tmp/pytest-of-$USER` owned by root
 
 ### Step 9: Fix Failing Tests (Iteration 1)
 - **Fan RPM bug (source code issue -- NOT fixed):** `get_fan_rpms()` iterates all pipe-separated fields and takes the first float > 0. When IPMI output includes entity ID fields like "7.1", it picks up the entity ID instead of the actual RPM value (e.g., records 7 instead of 5400). Documented as a finding with a dedicated test (`test_entity_id_bug_parses_wrong_value`). Added alternative test data without entity IDs to verify correct behavior when the bug isn't triggered.
-- **tmp_path ownership:** Created a custom `work_dir` fixture using `tempfile.mkdtemp()` to avoid the root-owned `/tmp/pytest-of-rocky00717` directory.
+- **tmp_path ownership:** Created a custom `work_dir` fixture using `tempfile.mkdtemp()` to avoid the root-owned `/tmp/pytest-of-$USER` directory.
 - **Main loop exception test:** Fixed `test_exception_sets_fans_to_100` -- the `get_gpu_temp` mock needs to succeed on the first call (startup test in main()) and raise on the second call (inside the loop), because the safety `try/except` only wraps the loop body.
 
 Second run: 99 passed, 1 failed. Fixed the exception test. Third run: **100 passed, 0 failed.**
