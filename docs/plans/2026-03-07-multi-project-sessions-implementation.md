@@ -68,7 +68,7 @@ wal_init_file() {
 
 Run:
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
   echo '{"session_id":"test-123","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js","command":""},"tool_use_id":"tu_1","cwd":"$WORKSPACE_ROOT"}' | \
   bash -c '
     source hooks/wal-lib.sh
@@ -205,7 +205,7 @@ exit 0
 **Step 4: Test — verify per-project WAL write**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
   REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
   echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"/tmp/test.js\"},\"tool_use_id\":\"tu_test1\",\"cwd\":\"$WORKSPACE_ROOT\"}" | \
   bash hooks/wal-pre && \
@@ -352,7 +352,7 @@ In `hooks/wal-context`, replace lines 42-75 (the entire "If not registered, try 
 Set up: ensure only one project is active in `.rawgentic_workspace.json`.
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
   echo '{"session_id":"test-single-active","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
   bash hooks/wal-context
 ```
@@ -392,7 +392,7 @@ print('Set rawgentic active=true')
 Then test:
 ```bash
 echo '{"session_id":"test-multi-active","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-context
+  bash $PROJECT_ROOT/hooks/wal-context
 ```
 Expected: JSON with `additionalContext` containing "Multiple projects active: my-api, rawgentic. Use /rawgentic:switch..."
 
@@ -528,7 +528,7 @@ exit 0
 **Step 2: Make executable**
 
 ```bash
-chmod +x $PLUGIN_ROOT/hooks/wal-bind-guard
+chmod +x $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 
 **Step 3: Test — unbound session, multiple active**
@@ -547,7 +547,7 @@ with open('.rawgentic_workspace.json', 'w') as f:
     json.dump(ws, f, indent=2)
 " && \
 echo '{"session_id":"unbound-test","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: JSON with `permissionDecision: deny` and message about binding
 
@@ -556,7 +556,7 @@ Expected: JSON with `permissionDecision: deny` and message about binding
 ```bash
 REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
 echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WORKSPACE_ROOT/projects/my-api/src/app.js\"},\"cwd\":\"$WORKSPACE_ROOT\"}" | \
-  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: No output (exit 0 — allowed, file is in bound project)
 
@@ -564,8 +564,8 @@ Expected: No output (exit 0 — allowed, file is in bound project)
 
 ```bash
 REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
-echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$PLUGIN_ROOT/hooks/test.sh\"},\"cwd\":\"$WORKSPACE_ROOT\"}" | \
-  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+echo "{\"session_id\":\"$REAL_SID\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$PROJECT_ROOT/hooks/test.sh\"},\"cwd\":\"$WORKSPACE_ROOT\"}" | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: JSON with `permissionDecision: deny` and message about cross-project write (session is bound to my-api, file is in rawgentic)
 
@@ -773,7 +773,7 @@ else:
 **Step 4: Test — startup with all projects active**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 echo '{"session_id":"test-startup","cwd":"$WORKSPACE_ROOT","hook_event_name":"startup"}' | \
   bash hooks/session-start
 ```
@@ -784,14 +784,14 @@ Expected: JSON with `additionalContext` showing active project info
 ```bash
 REAL_SID=$(tail -1 $WORKSPACE_ROOT/claude_docs/session_registry.jsonl | jq -r '.session_id') && \
 echo "{\"session_id\":\"$REAL_SID\",\"cwd\":\"$WORKSPACE_ROOT\",\"hook_event_name\":\"resume\"}" | \
-  bash $PLUGIN_ROOT/hooks/session-start
+  bash $PROJECT_ROOT/hooks/session-start
 ```
 Expected: JSON with `additionalContext` containing "Resuming work on project: **my-api**"
 
 **Step 6: Commit**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 git add hooks/session-start && \
 git commit -m "feat(session-start): add reconciliation, resume context, per-project WAL recovery
 
@@ -827,7 +827,7 @@ Add a new entry to the `PreToolUse` array, BEFORE the wal-pre entry (so binding 
 **Step 2: Validate JSON**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 python3 -c "import json; h=json.load(open('hooks/hooks.json')); print('PreToolUse entries:', len(h['hooks']['PreToolUse'])); [print(f'  {e[\"matcher\"]}') for e in h['hooks']['PreToolUse']]"
 ```
 Expected: 4 PreToolUse entries: `Bash`, `Edit|Write|MultiEdit|NotebookEdit|Read`, `Bash|Edit|Write|NotebookEdit|Task`, `Edit|Write|MultiEdit|NotebookEdit`
@@ -977,7 +977,7 @@ Report: "Deactivated **<name>**. It won't appear as an option for new sessions u
 **Step 3: Commit**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 git add skills/switch/SKILL.md && \
 git commit -m "feat(switch): rewrite for multi-project concurrent sessions
 
@@ -1009,7 +1009,7 @@ Keep the instruction that sets the new project's `active: true`.
 **Step 3: Commit**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 git add skills/new-project/SKILL.md && \
 git commit -m "feat(new-project): remove single-active enforcement
 
@@ -1068,7 +1068,7 @@ The `setup` skill has a slightly different format but the same logic. Find its f
 **Step 4: Commit**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 git add skills/*/SKILL.md && \
 git commit -m "feat(skills): update config-loading for multi-active projects
 
@@ -1104,7 +1104,7 @@ print('Both my-api and rawgentic set active=true')
 
 ```bash
 echo '{"session_id":"e2e-unbound","tool_name":"Write","tool_input":{"file_path":"/tmp/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: JSON with `permissionDecision: deny` mentioning "Multiple projects are active"
 
@@ -1112,7 +1112,7 @@ Expected: JSON with `permissionDecision: deny` mentioning "Multiple projects are
 
 ```bash
 echo '{"session_id":"e2e-multi","cwd":"$WORKSPACE_ROOT","hook_event_name":"submit"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-context
+  bash $PROJECT_ROOT/hooks/wal-context
 ```
 Expected: JSON with `additionalContext` containing "Multiple projects active"
 
@@ -1120,7 +1120,7 @@ Expected: JSON with `additionalContext` containing "Multiple projects active"
 
 ```bash
 echo '{"session_id":"e2e-startup","cwd":"$WORKSPACE_ROOT","hook_event_name":"startup"}' | \
-  bash $PLUGIN_ROOT/hooks/session-start
+  bash $PROJECT_ROOT/hooks/session-start
 ```
 Expected: JSON mentioning multiple active projects
 
@@ -1133,11 +1133,11 @@ echo '{"session_id":"e2e-bound","project":"my-api","project_path":"./projects/my
 
 # Same project — should ALLOW (no output)
 echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$WORKSPACE_ROOT/projects/my-api/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 
 # Cross project — should DENY
-echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$PLUGIN_ROOT/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-bind-guard
+echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$PROJECT_ROOT/test.js"},"cwd":"$WORKSPACE_ROOT"}' | \
+  bash $PROJECT_ROOT/hooks/wal-bind-guard
 ```
 Expected: First command produces no output (allow). Second produces JSON with `permissionDecision: deny`.
 
@@ -1145,7 +1145,7 @@ Expected: First command produces no output (allow). Second produces JSON with `p
 
 ```bash
 echo '{"session_id":"e2e-bound","tool_name":"Write","tool_input":{"file_path":"$WORKSPACE_ROOT/projects/my-api/test.js"},"tool_use_id":"tu_e2e","cwd":"$WORKSPACE_ROOT"}' | \
-  bash $PLUGIN_ROOT/hooks/wal-pre && \
+  bash $PROJECT_ROOT/hooks/wal-pre && \
 ls -la $WORKSPACE_ROOT/claude_docs/wal/ && \
 tail -1 $WORKSPACE_ROOT/claude_docs/wal/my-api.jsonl
 ```
@@ -1194,7 +1194,7 @@ grep -q 'claude_docs/wal/' .gitignore 2>/dev/null || echo 'claude_docs/wal/' >> 
 **Step 2: Run full manual verification**
 
 ```bash
-cd $PLUGIN_ROOT && \
+cd $PROJECT_ROOT && \
 echo "--- Hook files:" && \
 ls -la hooks/wal-bind-guard hooks/wal-context hooks/wal-lib.sh hooks/wal-pre hooks/wal-post hooks/wal-post-fail hooks/wal-stop hooks/session-start && \
 echo "--- hooks.json PreToolUse entries:" && \
