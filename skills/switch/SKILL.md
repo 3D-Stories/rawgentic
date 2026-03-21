@@ -166,10 +166,14 @@ Check if `${WORKSPACE_ROOT}/_bmad/` directory exists (where WORKSPACE_ROOT is th
    BMAD detected but no skill preferences configured for [project-name].
    Running /rawgentic:setup to configure...
    ```
-   Invoke `/rawgentic:setup` for the active project. After setup completes, return here and continue to "Confirm Ready."
+   Invoke `/rawgentic:setup` for the active project. Note: full setup will run (including verification and migration checks), but only Step 2b will actively prompt for BMAD preferences. After setup completes, return here and continue to "Confirm Ready."
 4. **If `disabledSkills` exists** (already configured): silent pass. Proceed to "Confirm Ready."
 
-**If `_bmad/` does NOT exist:** Silent pass — proceed to "Confirm Ready."
+**If `_bmad/` does NOT exist AND `bmadDetected` is `true` in `.rawgentic_workspace.json`:** Warn the user:
+   "BMAD was previously detected but `_bmad/` no longer exists. Run `/rawgentic:setup` to update skill preferences."
+   Proceed to "Confirm Ready."
+
+**If `_bmad/` does NOT exist AND `bmadDetected` is not set or `false`:** Silent pass — proceed to "Confirm Ready."
 
 ### 4. Confirm Ready
 

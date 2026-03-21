@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "project": {
+    "name": "gpu-fan-controller",
+    "type": "scripts",
+    "description": "GPU-aware fan controller for Intel S2600WTTR + Tesla P40 via IPMI"
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "3D-Stories/gpu-fan-controller",
+    "defaultBranch": "main"
+  },
+  "techStack": ["python", "systemd", "ipmi"],
+  "testing": {
+    "frameworks": [
+      {
+        "name": "bats-core",
+        "type": "unit",
+        "command": "bats test/",
+        "configFile": null,
+        "testDir": "test"
+      }
+    ]
+  },
+  "deploy": {
+    "method": "script",
+    "command": "sudo bash install.sh"
+  },
+  "infrastructure": {
+    "hosts": [
+      {
+        "name": "charlie",
+        "address": "localhost",
+        "sshUser": "root",
+        "description": "Proxmox host (Intel S2600WTTR)"
+      }
+    ]
+  },
+  "documentation": {
+    "primaryFiles": ["README.md"],
+    "format": "markdown"
+  },
+  "custom": {}
+}

@@ -81,11 +81,19 @@ class TestDisabledSkillsPreamble:
 
     @pytest.mark.parametrize("skill_name", BMAD_OVERLAP_SKILLS)
     def test_bmad_overlap_skills_have_alternative_mapping(self, skill_name: str):
-        """BMAD-overlapping skills must include the alternative name."""
+        """BMAD-overlapping skills must include the alternative name in config-loading."""
         skill_path = SKILLS_DIR / skill_name / "SKILL.md"
         content = skill_path.read_text()
 
-        # Each overlapping skill should mention its BMAD alternative
+        # Find the config-loading block
+        start = content.find("<config-loading>")
+        end = content.find("</config-loading>")
+        assert start != -1 and end != -1, (
+            f"{skill_name}/SKILL.md is missing <config-loading> block"
+        )
+        config_block = content[start:end]
+
+        # Each overlapping skill should mention its BMAD alternative within config-loading
         alternatives = {
             "implement-feature": "bmad-dev-story",
             "fix-bug": "bmad-dev-story",
@@ -93,8 +101,9 @@ class TestDisabledSkillsPreamble:
             "update-docs": "tech-writer",
         }
         alt = alternatives[skill_name]
-        assert alt in content, (
-            f"{skill_name}/SKILL.md should reference BMAD alternative '{alt}'"
+        assert alt in config_block, (
+            f"{skill_name}/SKILL.md should reference BMAD alternative '{alt}' "
+            f"within the <config-loading> block"
         )
 
 

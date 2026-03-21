@@ -156,7 +156,7 @@ Current BMAD preferences for [project-name]:
 2. Bug fixing:              rawgentic:fix-bug            [DISABLED — using bmad-dev-story]
 3. Test creation:           rawgentic:create-tests       [ENABLED]
 4. Documentation:           rawgentic:update-docs        [DISABLED — using BMAD tech-writer]
-5. Critique method:         [current value]
+5. Critique method:         [show actual value from project entry's critiqueMethod field; default: reflexion]
 
 Change any? (enter numbers to toggle, or "keep" to keep current)
 ```
@@ -350,7 +350,7 @@ If the user declines (or score is 0), proceed to Step 5 with the config unchange
 
 ### Critique Execution
 
-**Critique method preference:** Before running the critique, check the active project entry'''s `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
 
 If the user accepts, invoke `/reflexion:critique` with the detected `.rawgentic.json` as the work product.
 
