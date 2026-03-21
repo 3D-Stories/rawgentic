@@ -551,6 +551,25 @@ Skills are tested via the `/skill-creator` eval pipeline (14/15 skills have eval
 
 ---
 
+## Using Rawgentic with BMAD
+
+If you also use the [BMAD Method](https://github.com/bmad-method/bmad-method), the two plugins overlap in implementation, code review, testing, and documentation. Without explicit routing, Claude may pick the wrong skill.
+
+**A ready-made CLAUDE.md routing snippet is included at [`templates/CLAUDE-bmad-routing.md`](templates/CLAUDE-bmad-routing.md).** Copy it into your `~/.claude/CLAUDE.md` (global) or project-level `CLAUDE.md`.
+
+**TL;DR of the division:**
+
+| BMAD handles | Rawgentic handles |
+|-------------|-------------------|
+| Full lifecycle (planning → stories → implementation → review) | Runtime safety (WAL guards, security guards — always active) |
+| UX design, game dev, creative intelligence | Security audits (STRIDE), incident response |
+| Sprint planning, retrospectives | Dependency updates, performance optimization |
+| Test strategy (TEA module) | Formal refactoring with behavioral preservation |
+
+The rawgentic safety hooks (WAL guard, security guard, WAL logging) remain active regardless of which implementation workflow you use — they fire on every Bash/Edit/Write call.
+
+---
+
 ## Contributing
 
 Contributions are welcome. To get started:

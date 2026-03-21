@@ -1,6 +1,6 @@
 ---
 name: rawgentic:implement-feature
-description: Implement a feature or bug fix from a GitHub issue through the WF2 16-step workflow with TDD, multi-agent code review, quality gates, and automated deployment. Invoke with /implement-feature followed by a GitHub issue number or URL.
+description: Implement a feature or bug fix from a GitHub issue through the WF2 16-step workflow with TDD, multi-agent code review, quality gates, and automated deployment. Invoke with /implement-feature followed by a GitHub issue number or URL. DO NOT use this skill if the user is working within a BMAD workflow, has BMAD story files, or is using bmad-dev-story. Only trigger when the user explicitly invokes /implement-feature or /rawgentic:implement-feature, or is working in a rawgentic-only project without BMAD.
 argument-hint: GitHub issue number (e.g., 155) or URL
 ---
 

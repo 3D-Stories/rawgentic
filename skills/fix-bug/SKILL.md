@@ -1,6 +1,6 @@
 ---
 name: rawgentic:fix-bug
-description: Fix a bug using the WF3 14-step workflow with reproduce-first TDD, root cause analysis, lightweight reflect, and conventional commit PR. Invoke with /fix-bug followed by an issue number.
+description: Fix a bug using the WF3 14-step workflow with reproduce-first TDD, root cause analysis, lightweight reflect, and conventional commit PR. Invoke with /fix-bug followed by an issue number. DO NOT use this skill if the user is working within a BMAD workflow or has BMAD story files — use bmad-dev-story instead. Only trigger when the user explicitly invokes /fix-bug or /rawgentic:fix-bug, or is working in a rawgentic-only project without BMAD.
 argument-hint: GitHub issue number (e.g., "42") or issue URL
 ---
 

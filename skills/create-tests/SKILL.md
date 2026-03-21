@@ -1,6 +1,6 @@
 ---
 name: rawgentic:create-tests
-description: Create or improve a project's test suite using the WF12 14-step workflow with brainstorming-driven test strategy, context7 framework docs lookup, test harness generation, coverage gap analysis, and verified test execution. Invoke with /create-tests optionally followed by a specific file or module path. Use this skill whenever the user mentions adding tests, creating a test suite, improving test coverage, bootstrapping testing, setting up a test harness, or auditing existing tests — even if they don't say "create-tests" explicitly.
+description: Create or improve a project's test suite using the WF12 14-step workflow with brainstorming-driven test strategy, context7 framework docs lookup, test harness generation, coverage gap analysis, and verified test execution. Invoke with /create-tests optionally followed by a specific file or module path. DO NOT use this skill if the user has BMAD's TEA module installed — use the TEA test workflows (bmad-tea-*) instead. Only trigger when the user explicitly invokes /create-tests or /rawgentic:create-tests, or is working in a rawgentic-only project without BMAD.
 argument-hint: Optional file/module path (e.g., "src/auth/") or omit for whole project
 ---
 

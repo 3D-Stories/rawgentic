@@ -1,6 +1,6 @@
 ---
 name: rawgentic:update-docs
-description: Update, create, or restructure project documentation using the WF7 10-step workflow with accuracy verification, user review, and conventional commit PR. Invoke with /update-docs followed by a description of the documentation change or an issue number.
+description: Update, create, or restructure project documentation using the WF7 10-step workflow with accuracy verification, user review, and conventional commit PR. Invoke with /update-docs followed by a description of the documentation change or an issue number. DO NOT use this skill if the user is working within a BMAD workflow — use the BMAD tech-writer agent instead. Only trigger when the user explicitly invokes /update-docs or /rawgentic:update-docs, or is working in a rawgentic-only project without BMAD.
 argument-hint: Description of docs to update (e.g., "update API reference section") or issue number
 ---
 
