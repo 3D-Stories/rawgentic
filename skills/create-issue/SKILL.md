@@ -187,6 +187,8 @@ The draft specification is an internal working artifact. Do NOT present it to th
 
 ### Instructions
 
+**Critique method preference:** Before running the critique, check the active project entry'''s `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the 3-judge critique below. If missing or `"reflexion"`, proceed as normal.
+
 1. Launch all three judges in a single message with three parallel Agent tool calls (subagent_type="general-purpose"), each operating independently:
 
    **Judge 1: Requirements Validator**

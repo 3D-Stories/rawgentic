@@ -317,6 +317,8 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Instructions
 
+**Critique method preference:** Before running the critique, check the active project entry'''s `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+
 **Determine gate type based on fast path eligibility:**
 - If `fast_path_eligible == true`: use `/reflexion:reflect` (lightweight)
 - If `fast_path_eligible == false`: use `/reflexion:critique` (full 3-judge)

@@ -211,6 +211,8 @@ All data channels from `config.security.dataChannels[]` must be audited independ
 
 ### Instructions
 
+**Critique method preference:** Before running the critique, check the active project entry'''s `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+
 Invoke `/reflexion:critique` — the **audit itself** is critiqued for completeness and accuracy.
 
 Three judges evaluate:

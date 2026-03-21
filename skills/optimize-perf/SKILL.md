@@ -206,6 +206,8 @@ If the optimization involves architectural changes (new caching layer, query res
 
 ### Instructions
 
+**Critique method preference:** Before running the critique, check the active project entry'''s `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+
 Invoke `/reflexion:critique` -- three judges evaluate:
 
 - **Effectiveness judge:** Will optimizations actually address measured bottlenecks? Expected improvements realistic?
