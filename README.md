@@ -555,7 +555,9 @@ Skills are tested via the `/skill-creator` eval pipeline (14/15 skills have eval
 
 If you also use the [BMAD Method](https://github.com/bmad-method/bmad-method), the two plugins overlap in implementation, code review, testing, and documentation. Without explicit routing, Claude may pick the wrong skill.
 
-**A ready-made CLAUDE.md routing snippet is included at [`templates/CLAUDE-bmad-routing.md`](templates/CLAUDE-bmad-routing.md).** Copy it into your `~/.claude/CLAUDE.md` (global) or project-level `CLAUDE.md`.
+**Automatic detection:** When you run `/rawgentic:setup` or `/rawgentic:switch`, rawgentic checks for a `_bmad/` directory in your workspace root. If found, it asks you to choose your preferred tool (rawgentic or BMAD) for each overlapping task — per project. Preferences are stored in `.rawgentic_workspace.json` and enforced automatically. See [`docs/config-reference.md`](docs/config-reference.md#bmad-integration) for details.
+
+**Manual routing (legacy):** A CLAUDE.md routing snippet is also available at [`templates/CLAUDE-bmad-routing.md`](templates/CLAUDE-bmad-routing.md). The automated detection above replaces this approach.
 
 **TL;DR of the division:**
 
