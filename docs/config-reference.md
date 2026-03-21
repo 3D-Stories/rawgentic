@@ -233,3 +233,84 @@ Pattern matching uses fnmatch with `**` for recursive directory matching.
 The older `security.exceptions` array (per-rule + per-path exceptions) is still
 supported for backward compatibility but deprecated. Migrate to
 `guards.securityExcludePaths` for simpler path-based exclusions.
+
+## BMAD Integration
+
+When BMAD is installed alongside rawgentic (detected by the presence of a `_bmad/`
+directory in the workspace root), rawgentic can disable overlapping workflow skills
+and defer to BMAD equivalents on a per-project basis.
+
+### Workspace-Level Fields (`.rawgentic_workspace.json`)
+
+| Field | Type | Location | Description |
+|-------|------|----------|-------------|
+| `bmadDetected` | boolean | Top-level | Whether `_bmad/` was found in the workspace root. Set by `/rawgentic:setup` or `/rawgentic:switch`. |
+
+### Per-Project Fields (in each `projects[]` entry)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `disabledSkills` | `string[]` | Bare skill names the user chose to replace with BMAD equivalents. |
+| `critiqueMethod` | `string` | `"reflexion"` (default) or `"bmad-party-mode"`. Controls which critique tool is used at quality gates. |
+
+### `disabledSkills` Semantics
+
+- **Missing field** = not yet configured. Triggers a redirect to `/rawgentic:setup` when the user runs `/rawgentic:switch`.
+- **Empty array `[]`** = user explicitly chose rawgentic for all overlapping tasks.
+- **Populated array** = user chose BMAD for those specific tasks. Only those rawgentic skills are blocked.
+
+### BMAD Overlap Table
+
+| Rawgentic Skill | BMAD Equivalent |
+|-----------------|-----------------|
+| `implement-feature` | `bmad-dev-story` |
+| `fix-bug` | `bmad-dev-story` |
+| `create-tests` | BMAD TEA module (`bmad-tea-*`) |
+| `update-docs` | BMAD tech-writer agent |
+
+Skills not in this table (create-issue, refactor, security-audit, incident, update-deps,
+optimize-perf) have no BMAD equivalent and are never candidates for BMAD-based disabling.
+
+### Enforcement
+
+All 10 workflow skills check `disabledSkills` in their config-loading preamble (Step 1b).
+If the current skill is listed, it stops and suggests the BMAD alternative. The check runs
+after active project resolution but before loading `.rawgentic.json`.
+
+### `critiqueMethod`
+
+Six skills that invoke `/reflexion:critique` (implement-feature, create-issue, refactor,
+security-audit, optimize-perf, setup) check the project's `critiqueMethod` field before
+running the critique. If set to `"bmad-party-mode"`, that is used instead.
+
+### Detection Flow
+
+1. `/rawgentic:switch` checks for `_bmad/` at session bind time. If found and the project
+   lacks `disabledSkills`, it redirects to `/rawgentic:setup`.
+2. `/rawgentic:setup` Step 2b presents the per-task choice UI and writes preferences.
+3. On re-run, if `_bmad/` is gone, setup offers to remove BMAD-related disabled skills.
+
+### Example Configuration
+
+```json
+{
+  "bmadDetected": true,
+  "projects": [
+    {
+      "name": "chorestory",
+      "path": "./projects/chorestory",
+      "active": true,
+      "configured": true,
+      "disabledSkills": ["implement-feature", "fix-bug", "create-tests", "update-docs"],
+      "critiqueMethod": "bmad-party-mode"
+    },
+    {
+      "name": "rawgentic",
+      "path": "./projects/rawgentic",
+      "active": true,
+      "configured": true,
+      "disabledSkills": []
+    }
+  ]
+}
+```
