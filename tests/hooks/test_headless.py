@@ -406,15 +406,15 @@ class TestWalStopSuspend:
         notes = (ws.notes_dir / "testproj.md").read_text()
         assert "COMPLETE" in notes
 
-    def test_normal_stop_without_headless(self, make_workspace):
-        """No headless env → normal COMPLETE regardless of suspend file."""
+    def test_normal_stop_no_suspend_file(self, make_workspace):
+        """No suspend file → normal COMPLETE regardless of env var."""
         ws = make_workspace(
             registry_entries=[
                 {"session_id": "test-sess", "project": "testproj",
                  "project_path": "./projects/testproj", "started": "2026-01-01T00:00:00Z"}
             ]
         )
-        self._write_suspend_file(ws, session_id="test-sess")
+        # No suspend file written
         stdout, stderr, rc = _run_hook(
             "wal-stop",
             {"session_id": "test-sess"},
