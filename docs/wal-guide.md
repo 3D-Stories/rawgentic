@@ -4,7 +4,8 @@
 
 The WAL logs every mutation tool use (Bash, Edit, Write, NotebookEdit, Task) for
 session recovery and audit. Each invocation produces an INTENT before execution
-and a DONE or FAIL after. Sessions end with a STOP marker.
+and a DONE or FAIL after. Sessions end with a STOP marker (or SUSPEND for
+headless sessions awaiting user input).
 
 WAL files live under `claude_docs/wal/` relative to the workspace root:
 - Per-project: `claude_docs/wal/<project>.jsonl`

@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# wal-suspend — Helper script for skills to write a SUSPEND WAL entry.
+#
+# NOT a hook (not registered in hooks.json). Invoked by skills via Bash tool.
+# Reads session_id from claude_docs/.current_session_id and project from
+# the session registry. Writes a SUSPEND phase entry to the per-project WAL.
+#
+# Usage (from skill via Bash tool):
+#   bash hooks/wal-suspend
+#
+# Prerequisites:
+#   - claude_docs/.current_session_id must exist (written by session-start hook)
+#   - claude_docs/session_registry.jsonl must have an entry for the session
+#   - .rawgentic_workspace.json must exist
+#
+# Design: issue #43 (headless mode infrastructure)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# --- Resolve jq ---
+JQ="${HOME}/.local/bin/jq"
+[ -x "$JQ" ] || JQ="jq"
+command -v "$JQ" &>/dev/null || { echo "jq not found" >&2; exit 1; }
+
+# --- Find workspace root ---
+CWD="${PWD}"
+WS_ROOT=""
+_d="$CWD"
+_i=0
+while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
+    if [ -f "$_d/.rawgentic_workspace.json" ]; then
+        WS_ROOT="$_d"
+        break
+    fi
+    _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
+    _i=$((_i + 1))
+done
+[ -z "$WS_ROOT" ] && { echo "No rawgentic workspace found" >&2; exit 1; }
+
+# --- Read session ID (with staleness check) ---
+SESSION_FILE="$WS_ROOT/claude_docs/.current_session_id"
+[ -f "$SESSION_FILE" ] || { echo "No .current_session_id file" >&2; exit 1; }
+SESSION_ID=$(cat "$SESSION_FILE" | tr -d '[:space:]')
+[ -z "$SESSION_ID" ] && { echo "Empty session ID" >&2; exit 1; }
+
+# Staleness guard: .current_session_id older than 24h is likely stale
+SESSION_FILE_MTIME=$(stat -c %Y "$SESSION_FILE" 2>/dev/null || date +%s)
+SESSION_FILE_AGE=$(( $(date +%s) - SESSION_FILE_MTIME ))
+if [ "$SESSION_FILE_AGE" -gt 86400 ]; then
+    echo "WARNING: .current_session_id is >24h old (may be stale)" >&2
+fi
+
+# --- Resolve project from registry ---
+REGISTRY="$WS_ROOT/claude_docs/session_registry.jsonl"
+PROJECT=""
+if [ -f "$REGISTRY" ]; then
+    REG_LINE=$(grep "$SESSION_ID" "$REGISTRY" 2>/dev/null | tail -1 || true)
+    if [ -n "$REG_LINE" ]; then
+        PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""')
+    fi
+fi
+
+# Fallback: first active project
+if [ -z "$PROJECT" ]; then
+    PROJECT=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | first // ""' \
+        "$WS_ROOT/.rawgentic_workspace.json" 2>/dev/null || true)
+fi
+[ -z "$PROJECT" ] && { echo "Cannot determine project" >&2; exit 1; }
+
+# --- Validate project name (path traversal prevention) ---
+case "$PROJECT" in
+    */*|*\\*|..*)
+        echo "Invalid project name: $PROJECT" >&2
+        exit 1
+        ;;
+esac
+
+# --- Write SUSPEND entry to per-project WAL ---
+WAL_DIR="$WS_ROOT/claude_docs/wal"
+mkdir -p "$WAL_DIR" 2>/dev/null || true
+
+TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+"$JQ" -nc \
+    --arg ts "$TS" \
+    --arg session "$SESSION_ID" \
+    --arg project "$PROJECT" \
+    '{ts:$ts, phase:"SUSPEND", session:$session, project:$project, summary:"Session suspended awaiting user input"}' \
+    >> "$WAL_DIR/${PROJECT}.jsonl"
+
+echo "SUSPEND entry written for project=$PROJECT session=$SESSION_ID"

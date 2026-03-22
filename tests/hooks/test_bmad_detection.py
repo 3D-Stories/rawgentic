@@ -107,6 +107,45 @@ class TestDisabledSkillsPreamble:
         )
 
 
+class TestMandatoryStepsEnforcement:
+    """Lint: workflow skills with code review steps must have <mandatory-steps> block."""
+
+    # Skills that have multi-step workflows with code review
+    ENFORCED_SKILLS = ["implement-feature", "fix-bug"]
+
+    @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
+    def test_skill_has_mandatory_steps_block(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<mandatory-steps>" in content and "</mandatory-steps>" in content, (
+            f"{skill_name}/SKILL.md is missing the <mandatory-steps> enforcement block"
+        )
+
+    @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
+    def test_mandatory_steps_marks_code_review_non_negotiable(self, skill_name: str):
+        """Code review must be explicitly marked NON-NEGOTIABLE."""
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<mandatory-steps>")
+        end = content.find("</mandatory-steps>")
+        block = content[start:end]
+        assert "NON-NEGOTIABLE" in block, (
+            f"{skill_name}/SKILL.md <mandatory-steps> must mark code review as NON-NEGOTIABLE"
+        )
+
+    @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
+    def test_mandatory_steps_lists_invalid_justifications(self, skill_name: str):
+        """Block must include common invalid justifications to counter-program the LLM."""
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<mandatory-steps>")
+        end = content.find("</mandatory-steps>")
+        block = content[start:end]
+        assert "session is" in block.lower() or "context window" in block.lower(), (
+            f"{skill_name}/SKILL.md <mandatory-steps> must address common skip justifications"
+        )
+
+
 class TestCritiqueMethodPreamble:
     """Lint: 6 critique-invoking skills contain the critiqueMethod check."""
 

@@ -53,6 +53,13 @@ _do_stop() {
 
     [ -z "$PROJECT" ] && exit 0
 
+    # Validate project name (path traversal prevention)
+    case "$PROJECT" in
+        */*|*\\*|..*)
+            exit 0
+            ;;
+    esac
+
     # --- Write session end marker to notes ---
     NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
     NOTES_FILE="$NOTES_DIR/${PROJECT}.md"
@@ -68,26 +75,47 @@ _do_stop() {
     # Append session end marker (only if no recent marker for this session)
     LAST_HEADER=$(grep "ID: ${SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
     if [ -n "$LAST_HEADER" ]; then
-        # Session already has a header — check if it says COMPLETE
-        if printf '%s' "$LAST_HEADER" | grep -q "COMPLETE"; then
-            # Already marked complete, nothing to do
+        # Session already has a header — check if it says COMPLETE or SUSPENDED
+        if printf '%s' "$LAST_HEADER" | grep -qE "COMPLETE|SUSPENDED"; then
+            # Already marked, nothing to do
             exit 0
         fi
     fi
 
-    # Append a session end marker
-    printf '\n---\n# Session: %s | ID: %s | Status: COMPLETE\n## Project: %s\n' \
-        "$TS" "$SESSION_ID" "$PROJECT" >> "$NOTES_FILE"
+    # --- SUSPEND guard: headless mode check ---
+    # If headless suspend file exists and session_id matches, write SUSPENDED instead of COMPLETE.
+    SUSPEND_FILE="$WS_ROOT/claude_docs/headless_suspend.json"
+    IS_SUSPENDED=false
+    if [ -f "$SUSPEND_FILE" ]; then
+        SUSPEND_SID=$("$JQ" -r '.session_id // ""' "$SUSPEND_FILE" 2>/dev/null || true)
+        if [ "$SUSPEND_SID" = "$SESSION_ID" ]; then
+            IS_SUSPENDED=true
+        fi
+    fi
 
-    # Log to per-project WAL
-    WAL_DIR="$WS_ROOT/claude_docs/wal"
-    mkdir -p "$WAL_DIR" 2>/dev/null || true
-    "$JQ" -nc \
-        --arg ts "$TS" \
-        --arg session "$SESSION_ID" \
-        --arg project "$PROJECT" \
-        '{ts:$ts, phase:"STOP", session:$session, project:$project, summary:"Session ended"}' \
-        >> "$WAL_DIR/${PROJECT}.jsonl" 2>/dev/null || true
+    # --- Write session marker and WAL entry (DRY helper) ---
+    _write_session_end() {
+        local status="$1" phase="$2" summary="$3"
+        printf '\n---\n# Session: %s | ID: %s | Status: %s\n## Project: %s\n' \
+            "$TS" "$SESSION_ID" "$status" "$PROJECT" >> "$NOTES_FILE"
+
+        WAL_DIR="$WS_ROOT/claude_docs/wal"
+        mkdir -p "$WAL_DIR" 2>/dev/null || true
+        "$JQ" -nc \
+            --arg ts "$TS" \
+            --arg session "$SESSION_ID" \
+            --arg project "$PROJECT" \
+            --arg phase "$phase" \
+            --arg summary "$summary" \
+            '{ts:$ts, phase:$phase, session:$session, project:$project, summary:$summary}' \
+            >> "$WAL_DIR/${PROJECT}.jsonl" 2>/dev/null || true
+    }
+
+    if [ "$IS_SUSPENDED" = true ]; then
+        _write_session_end "SUSPENDED" "SUSPEND" "Session suspended awaiting user input"
+    else
+        _write_session_end "COMPLETE" "STOP" "Session ended"
+    fi
 }
 
 _do_stop 2>/dev/null || true

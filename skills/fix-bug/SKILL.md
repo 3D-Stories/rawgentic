@@ -24,6 +24,35 @@ LOOPBACK_BUDGET:
   global_cap: 2
 </constants>
 
+<mandatory-steps>
+The following steps are MANDATORY and must NEVER be skipped, abbreviated, or combined — regardless of context window pressure, session length, perceived simplicity, or any other justification:
+
+| Step | Name | Why mandatory |
+|------|------|---------------|
+| 1 | Receive Bug Report | Foundation — wrong bug = wrong fix |
+| 2 | Analyze Bug Context | Complexity classification + reproduction context |
+| 3 | Root Cause Analysis | Fixing symptoms without RCA causes regressions |
+| 4 | Quality Gate (Reflect) | Validates the RCA before implementation |
+| 5 | Create Fix Plan | Task decomposition for TDD |
+| 6 | Create Branch | Git isolation is non-negotiable |
+| 7 | TDD Bug Fix | Reproduce-first is the core WF3 principle |
+| 8 | Verification | Confirms fix works and no regressions |
+| 9 | Code Review | **NON-NEGOTIABLE.** Catches security issues, logic errors, and regression risks in the fix. |
+| 10 | Create PR | Deliverable — no PR means no review trail |
+
+Conditional steps (skip ONLY when their condition is not met):
+- Step 11 (CI): skip only if has_ci == false
+- Step 12 (Merge/Deploy): skip only if user does not request merge
+- Step 13 (Post-Deploy): skip only if no deployment performed
+
+**ENFORCEMENT:** You MUST NOT rationalize skipping a mandatory step. Common invalid justifications:
+- "This is a simple one-line fix" — one-line fixes can introduce injection vulnerabilities
+- "The session is getting long" — checkpoint in session notes and resume, do not skip
+- "I already reviewed the code while writing it" — self-review is not code review
+
+If you catch yourself about to skip a mandatory step, STOP and acknowledge: "I was about to skip Step N which is mandatory. Proceeding with the full step."
+</mandatory-steps>
+
 <config-loading>
 Before executing any workflow steps, load the project configuration:
 

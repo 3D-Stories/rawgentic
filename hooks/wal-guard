@@ -34,6 +34,21 @@ deny() {
 Command: ${cmd}
 Run this command manually in your terminal if you need to proceed."
   fi
+
+  # Headless mode audit: log guard blocks to WAL for visibility
+  # In bypassPermissions mode, guards are the last defense — blocks MUST be auditable
+  if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ -n "${WAL_FILE:-}" ]; then
+    local ts
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    "$WAL_JQ" -nc \
+      --arg ts "$ts" \
+      --arg session "${WAL_SESSION_ID:-unknown}" \
+      --arg reason "$reason" \
+      --arg cmd "$cmd" \
+      '{ts:$ts, phase:"GUARD_BLOCK", session:$session, guard:"wal-guard", reason:$reason, command:$cmd}' \
+      >> "$WAL_FILE" 2>/dev/null || true
+  fi
+
   printf '%s' "$INPUT" | "$WAL_JQ" -c --arg reason "$msg" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",

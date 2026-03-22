@@ -175,7 +175,17 @@ Check if `${WORKSPACE_ROOT}/_bmad/` directory exists (where WORKSPACE_ROOT is th
 
 **If `_bmad/` does NOT exist AND `bmadDetected` is not set or `false`:** Silent pass — proceed to "Confirm Ready."
 
-### 4. Confirm Ready
+### 4. Headless Access Check
+
+If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the target project's `headlessEnabled` field in `.rawgentic_workspace.json`.
+
+- **If `headlessEnabled` is `true`:** Silent pass — headless mode allowed.
+- **If `headlessEnabled` is `false` or missing:** STOP and tell user:
+  "Headless mode is not enabled for **[project-name]**. Run `/rawgentic:setup` to enable it, or set `headlessEnabled: true` in the project's entry in `.rawgentic_workspace.json`."
+
+If not in headless mode: skip this check entirely.
+
+### 5. Confirm Ready
 
 After all checks complete, print the final confirmation:
 

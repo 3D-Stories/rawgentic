@@ -3,13 +3,14 @@
   "project": {
     "name": "rawgentic",
     "type": "library",
-    "description": "10 SDLC workflow skills + 3 workspace management + 1 security skill + hooks for Claude Code with quality gates, code review, and deployment verification"
+    "description": "10 SDLC workflow skills + 4 workspace management + 1 security skill + hooks for Claude Code with quality gates, code review, and deployment verification"
   },
   "repo": {
     "provider": "github",
     "fullName": "3D-Stories/rawgentic",
     "defaultBranch": "main"
   },
+  "protectionLevel": "sandbox",
   "techStack": ["bash", "markdown", "python"],
   "testing": {
     "frameworks": [
@@ -24,17 +25,11 @@
   },
   "ci": {
     "provider": "github-actions",
-    "configPath": ".github/workflows/ci.yml"
+    "workflowDir": ".github/workflows"
   },
   "documentation": {
     "primaryFiles": ["README.md", "docs/", "LICENSE"],
     "format": "markdown"
   },
-  "securityExceptions": [
-    {
-      "rule": "github_actions_workflow",
-      "pathPattern": ".github/workflows/ci.yml"
-    }
-  ],
   "custom": {}
 }
