@@ -572,6 +572,12 @@ The rawgentic safety hooks (WAL guard, security guard, WAL logging) remain activ
 
 ---
 
+## Headless Mode
+
+Workflow skills can run non-interactively for CI/orchestrator integration. Set `RAWGENTIC_HEADLESS=1` and use `claude --print` with `--permission-mode bypassPermissions`. When a skill needs user input, it posts a structured comment to the GitHub issue, adds the `rawgentic:ai-waiting` label, and exits cleanly. Resume with `claude --resume {session_id}` after the user replies. See [`docs/config-reference.md`](docs/config-reference.md#headless-mode) for the full orchestrator interface contract.
+
+---
+
 ## Contributing
 
 Contributions are welcome. To get started:

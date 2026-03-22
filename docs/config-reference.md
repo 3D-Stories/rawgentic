@@ -314,3 +314,92 @@ running the critique. If set to `"bmad-party-mode"`, that is used instead.
   ]
 }
 ```
+
+## Headless Mode
+
+Headless mode enables workflow skills to run non-interactively. When a skill
+hits a user interaction point, instead of blocking for terminal input it posts
+a structured comment to the GitHub issue and exits cleanly. An external
+orchestrator resumes the session after the user replies.
+
+### Environment Variable
+
+Set `RAWGENTIC_HEADLESS=1` before invoking Claude Code. The `session-start`
+hook detects this and injects headless context into `additionalContext`.
+
+### Suspend State File
+
+When a skill suspends, it writes `claude_docs/headless_suspend.json`:
+
+```json
+{
+  "session_id": "...",
+  "issue": 155,
+  "step": 4,
+  "question_id": "uuid",
+  "comment_url": "https://github.com/.../comments/...",
+  "clarification_round": 0,
+  "suspended_at": "2026-03-21T..."
+}
+```
+
+The orchestrator reads this file to get the `session_id` for `--resume`.
+
+### WAL SUSPEND Phase
+
+A new `SUSPEND` WAL phase indicates a session was intentionally paused (not
+crashed). The `wal-stop` hook writes `SUSPENDED` status to session notes and
+`SUSPEND` to the WAL when a valid suspend state file exists with a matching
+session_id. The `session-start` hook treats `SUSPEND` entries as "session in
+progress" and does not archive them.
+
+### Orchestrator Interface Contract
+
+```bash
+# Fresh invocation
+RAWGENTIC_HEADLESS=1 claude --print \
+  --permission-mode bypassPermissions --output-format json \
+  -p "/rawgentic:implement-feature <issue-url>"
+
+# Resume after user replies
+RAWGENTIC_HEADLESS=1 claude --resume {session_id} \
+  --permission-mode bypassPermissions --output-format json \
+  -p "User replied to headless question: <reply content>"
+```
+
+### Structured Comment Format
+
+Skills post comments with hidden JSON metadata:
+
+```markdown
+## [WF2 Step N] Question Title
+
+**Context:** [what the workflow is doing]
+**Question:** [the decision needed]
+
+**Options:**
+1. [option 1]
+2. [option 2]
+
+Reply to this comment with your choice.
+
+<!-- rawgentic-headless: {"question_id":"uuid","step":4,"type":"circuit_breaker"} -->
+```
+
+The `rawgentic:ai-waiting` label is added when a question is posted and
+removed when the session resumes.
+
+### Python Helper
+
+`hooks/headless_interaction.py` provides testable functions:
+- `format_comment()` — generates structured comments with sanitized content
+- `parse_metadata()` — extracts JSON from hidden comment blocks
+- `format_suspend_state()` / `write_suspend_state()` / `read_suspend_state()`
+
+### Security Notes
+
+- `session_id` is excluded from public GitHub comments (kept only in the
+  suspend state file)
+- Dynamic values in comments are sanitized against `-->` HTML comment injection
+- `bypassPermissions` mode removes human oversight — WAL guards and security
+  guards are the last line of defense in headless mode
