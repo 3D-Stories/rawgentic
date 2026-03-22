@@ -258,6 +258,8 @@ of 7, using approach B because of critique finding #3."
 On every fresh session start, BEFORE the normal resumption protocol, check for a
 pending headless interaction:
 
+0. **Load project configuration** per `<config-loading>` to populate `capabilities.repo`.
+   If config-loading fails, post error comment and exit.
 1. Check if `claude_docs/headless_suspend.json` exists.
 2. If missing → no pending question. Proceed with normal resumption protocol.
 3. If present → read the suspend state:
@@ -274,12 +276,14 @@ pending headless interaction:
    - Look for option letters/numbers ("a", "1", "option a", etc.)
    - Look for natural language ("proceed", "approved", "go with the first one")
    - If unparseable → increment `clarification_round`, post a clarification comment,
-     re-add `rawgentic:ai-waiting`, update suspend file, exit.
+     re-add `rawgentic:ai-waiting`, update suspend file (update ONLY `clarification_round` —
+     do NOT update `suspended_at`, as the next resume must still see comments posted after
+     the original question), exit.
 7. If reply parsed successfully:
    - Delete `claude_docs/headless_suspend.json`
-   - Remove `rawgentic:ai-waiting` label:
+   - Remove `rawgentic:ai-waiting` label (and `rawgentic:ai-error` if stale from prior run):
      ```bash
-     gh issue edit ISSUE --repo ${capabilities.repo} --remove-label "rawgentic:ai-waiting"
+     gh issue edit ISSUE --repo ${capabilities.repo} --remove-label "rawgentic:ai-waiting" --remove-label "rawgentic:ai-error" 2>/dev/null || true
      ```
    - Inject the user's choice into the workflow context
    - Continue with the normal resumption protocol (the session notes checkpoint
@@ -402,7 +406,7 @@ This enables workflow resumption if context is lost.
    Confirm this issue and capabilities are correct, or provide corrections.
    ```
 
-7. Update session notes. Wait for user confirmation. **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). CONFIRMATION for manual issues — post summary comment, suspend.]**
+7. Update session notes. Wait for user confirmation. **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
 
 ### Failure Modes
 - Issue does not exist -> ask for correct number
@@ -663,7 +667,7 @@ Plan drift check result.
    ```bash
    git status --porcelain
    ```
-   If dirty: stash, create branch, ask user about stash. **[Headless: AUTO-RESOLVE — always stash silently, log to session notes.]**
+   If dirty: stash, create branch, ask user about stash. **[Headless: AUTO-RESOLVE — always stash, log to session notes AND post a brief comment to the issue noting uncommitted changes were stashed (include `git stash list` output for the stash ref).]**
 
 2. Pull latest default branch and create feature branch:
    ```bash
@@ -836,7 +840,7 @@ Updated CLAUDE.md (if insights memorized) or no output.
 Code review result with filtered findings and fixes applied.
 
 ### Failure Modes
-- Fundamental design flaw -> loop back to Step 3 if budget allows
+- Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted: **[Headless: ERROR — post error comment with design flaw description + code review findings + loop-back history, add rawgentic:ai-error label, exit.]**
 - Excessive noise (>20 Low findings) -> filter at confidence >= 0.80
 
 ---

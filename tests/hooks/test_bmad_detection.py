@@ -131,14 +131,17 @@ class TestHeadlessInteractionBlock:
             "implement-feature/SKILL.md missing <headless-resume> block"
         )
 
+    EXPECTED_HEADLESS_ANNOTATION_COUNT = 17
+
     def test_implement_feature_has_headless_annotations(self):
-        """All headless annotations must be present in the SKILL.md."""
+        """Annotation count must match expected — catches missing annotations on new steps."""
         skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
         content = skill_path.read_text()
-        # Check for key annotation markers
-        assert content.count("[Headless:") >= 15, (
-            f"implement-feature/SKILL.md has {content.count('[Headless:')} headless annotations, "
-            f"expected at least 15 (17 interaction points minus some combined)"
+        count = content.count("[Headless:")
+        assert count == self.EXPECTED_HEADLESS_ANNOTATION_COUNT, (
+            f"implement-feature/SKILL.md has {count} [Headless:] annotations, "
+            f"expected {self.EXPECTED_HEADLESS_ANNOTATION_COUNT}. If you added a new "
+            f"interaction point, add a [Headless:] annotation and bump this count."
         )
 
     def test_headless_resume_in_resumption_protocol(self):
