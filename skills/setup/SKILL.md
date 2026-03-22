@@ -172,6 +172,37 @@ Update `disabledSkills` and `critiqueMethod` in the project entry based on user 
 
 ---
 
+## Step 2c: Headless Mode Access
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs).
+
+Check the active project's entry in `.rawgentic_workspace.json` for the `headlessEnabled` field.
+
+- **If `headlessEnabled` is not set** (first-time configuration): prompt the user:
+
+  ```
+  Allow autonomous AI agent (headless mode) to work on [project-name]?
+
+  When enabled, an external orchestrator can run rawgentic workflow skills
+  on this project without interactive terminal access. The agent posts
+  questions to GitHub issues and waits for replies.
+
+  Enable headless mode for [project-name]? (y/n) [default: n]
+  ```
+
+  Write `headlessEnabled: true` or `headlessEnabled: false` to the project's
+  entry in `.rawgentic_workspace.json` based on the user's choice.
+
+- **If `headlessEnabled` is already set** (re-configuration): show current
+  status and allow toggling:
+
+  ```
+  Headless mode: [ENABLED / DISABLED]
+  Change? (y/n) [default: keep current]
+  ```
+
+---
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to understand the full schema structure.

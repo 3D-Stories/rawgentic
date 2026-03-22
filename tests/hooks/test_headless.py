@@ -284,12 +284,24 @@ class TestSuspendState:
 # session-start hook — headless detection tests
 # =========================================================================
 
+def _headless_project(name="testproj", path="./projects/testproj", enabled=True):
+    """Build a project entry with headlessEnabled for testing."""
+    return {
+        "name": name,
+        "path": path,
+        "active": True,
+        "lastUsed": "2026-01-01T00:00:00Z",
+        "configured": True,
+        "headlessEnabled": enabled,
+    }
+
+
 class TestSessionStartHeadless:
     """session-start hook detects RAWGENTIC_HEADLESS=1."""
 
     def test_headless_env_var_set(self, make_workspace):
         """RAWGENTIC_HEADLESS=1 should inject headless context."""
-        ws = make_workspace()
+        ws = make_workspace(projects=[_headless_project()])
         stdout, stderr, rc = _run_hook(
             "session-start",
             {"session_id": "test-sess", "hook_event_name": "startup"},
@@ -333,7 +345,7 @@ class TestSessionStartHeadless:
 
     def test_headless_combined_with_other_context(self, make_workspace):
         """Headless context should coexist with workspace context."""
-        ws = make_workspace()
+        ws = make_workspace(projects=[_headless_project()])
         stdout, stderr, rc = _run_hook(
             "session-start",
             {"session_id": "test-sess", "hook_event_name": "startup"},
@@ -349,7 +361,7 @@ class TestSessionStartHeadless:
 
     def test_stale_suspend_file_warning(self, make_workspace):
         """If headless_suspend.json exists with different session_id, warn."""
-        ws = make_workspace()
+        ws = make_workspace(projects=[_headless_project()])
         suspend_file = ws.root / "claude_docs" / "headless_suspend.json"
         suspend_file.write_text(json.dumps({
             "session_id": "old-session",
@@ -369,10 +381,55 @@ class TestSessionStartHeadless:
         context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
         assert "stale" in context.lower() or "previous" in context.lower()
 
+    def test_headless_blocked_when_not_enabled(self, make_workspace):
+        """RAWGENTIC_HEADLESS=1 but headlessEnabled missing → BLOCKED message."""
+        ws = make_workspace()  # default project, no headlessEnabled
+        stdout, stderr, rc = _run_hook(
+            "session-start",
+            {"session_id": "test-sess", "hook_event_name": "startup"},
+            cwd=ws.root,
+            env_override={"RAWGENTIC_HEADLESS": "1"},
+        )
+        assert rc == 0
+        output = json.loads(stdout) if stdout.strip() else {}
+        context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "BLOCKED" in context.upper()
+        # Should NOT have the HEADLESS MODE active message
+        assert "headless mode active" not in context.lower()
+
+    def test_headless_blocked_when_explicitly_disabled(self, make_workspace):
+        """headlessEnabled: false → BLOCKED."""
+        ws = make_workspace(projects=[_headless_project(enabled=False)])
+        stdout, stderr, rc = _run_hook(
+            "session-start",
+            {"session_id": "test-sess", "hook_event_name": "startup"},
+            cwd=ws.root,
+            env_override={"RAWGENTIC_HEADLESS": "1"},
+        )
+        assert rc == 0
+        output = json.loads(stdout) if stdout.strip() else {}
+        context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "BLOCKED" in context.upper()
+
+    def test_headless_allowed_when_enabled(self, make_workspace):
+        """headlessEnabled: true → HEADLESS MODE active (not blocked)."""
+        ws = make_workspace(projects=[_headless_project(enabled=True)])
+        stdout, stderr, rc = _run_hook(
+            "session-start",
+            {"session_id": "test-sess", "hook_event_name": "startup"},
+            cwd=ws.root,
+            env_override={"RAWGENTIC_HEADLESS": "1"},
+        )
+        assert rc == 0
+        output = json.loads(stdout) if stdout.strip() else {}
+        context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "HEADLESS MODE" in context.upper()
+        assert "BLOCKED" not in context.upper()
+
     def test_matching_session_id_no_stale_warning(self, make_workspace):
         """Suspend file with MATCHING session_id should NOT trigger stale warning (CR#3)."""
         from datetime import datetime, timezone
-        ws = make_workspace()
+        ws = make_workspace(projects=[_headless_project()])
         suspend_file = ws.root / "claude_docs" / "headless_suspend.json"
         # Use a recent timestamp to avoid TTL-based cleanup
         recent_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -322,6 +322,27 @@ hits a user interaction point, instead of blocking for terminal input it posts
 a structured comment to the GitHub issue and exits cleanly. An external
 orchestrator resumes the session after the user replies.
 
+### Per-Project Access Control
+
+Each project must explicitly opt in to headless mode via `headlessEnabled` in
+its workspace entry. Default is `false` (safe — must opt in).
+
+```json
+{
+  "projects": [
+    {
+      "name": "my-app",
+      "headlessEnabled": true
+    }
+  ]
+}
+```
+
+Set during `/rawgentic:setup` (Step 2c) or manually in `.rawgentic_workspace.json`.
+When `RAWGENTIC_HEADLESS=1` is set but the project has `headlessEnabled: false`
+(or missing), the session-start hook blocks headless execution and the agent
+is instructed to exit immediately.
+
 ### Environment Variable
 
 Set `RAWGENTIC_HEADLESS=1` before invoking Claude Code. The `session-start`

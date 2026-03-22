@@ -394,11 +394,39 @@ fi
 # SECTION 3b: Headless mode detection
 # =========================================================================
 if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
-    CONTEXT_PARTS+=("HEADLESS MODE active. User interaction points must use the <headless-interaction> protocol: post structured comment to GitHub issue, add rawgentic:ai-waiting label, write suspend state, and exit cleanly.")
+    # Check if the active project allows headless mode
+    HEADLESS_ALLOWED=true
+    if [ -n "${WORKSPACE_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
+        # Resolve the active project name (from registry or single-active)
+        _HEADLESS_PROJECT=""
+        if [ -n "${SESSION_ID:-}" ] && [ -f "${WS_ROOT:-$CWD}/claude_docs/session_registry.jsonl" ]; then
+            _REG_LINE=$(grep "$SESSION_ID" "${WS_ROOT:-$CWD}/claude_docs/session_registry.jsonl" 2>/dev/null | tail -1 || true)
+            if [ -n "$_REG_LINE" ]; then
+                _HEADLESS_PROJECT=$(printf '%s' "$_REG_LINE" | "$JQ" -r '.project // ""' 2>/dev/null || true)
+            fi
+        fi
+        if [ -z "$_HEADLESS_PROJECT" ]; then
+            _HEADLESS_PROJECT=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | first // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
+        fi
 
-    # Check for stale suspend file — TTL-based cleanup (24h) or session_id mismatch
+        if [ -n "$_HEADLESS_PROJECT" ]; then
+            _HEADLESS_ENABLED=$("$JQ" -r --arg name "$_HEADLESS_PROJECT" \
+                '.projects[] | select(.name == $name) | .headlessEnabled // false' \
+                "$WORKSPACE_FILE" 2>/dev/null || echo "false")
+            if [ "$_HEADLESS_ENABLED" != "true" ]; then
+                HEADLESS_ALLOWED=false
+                CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' does not have headless mode enabled. Set headlessEnabled: true in .rawgentic_workspace.json for this project (via /rawgentic:setup) to allow autonomous agent execution. Refusing to execute workflow skills — exit immediately.")
+            fi
+        fi
+    fi
+
+    if [ "$HEADLESS_ALLOWED" = true ]; then
+        CONTEXT_PARTS+=("HEADLESS MODE active. User interaction points must use the <headless-interaction> protocol: post structured comment to GitHub issue, add rawgentic:ai-waiting label, write suspend state, and exit cleanly.")
+    fi
+
+    # Stale suspend file check — only when headless is allowed
     SUSPEND_FILE="${WS_ROOT:-$CWD}/claude_docs/headless_suspend.json"
-    if [ -f "$SUSPEND_FILE" ] && command -v "$JQ" &>/dev/null; then
+    if [ "$HEADLESS_ALLOWED" = true ] && [ -f "$SUSPEND_FILE" ] && command -v "$JQ" &>/dev/null; then
         SUSPEND_SESSION=$("$JQ" -r '.session_id // ""' "$SUSPEND_FILE" 2>/dev/null || true)
         SUSPEND_AT=$("$JQ" -r '.suspended_at // ""' "$SUSPEND_FILE" 2>/dev/null || true)
 
@@ -426,8 +454,8 @@ if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
     fi
 fi
 
-# Check for SUSPEND WAL entries and adjust recovery messaging
-if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ -n "${WAL_FILE:-}" ] && [ -f "${WAL_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
+# Check for SUSPEND WAL entries and adjust recovery messaging (only when headless allowed)
+if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ "${HEADLESS_ALLOWED:-true}" = true ] && [ -n "${WAL_FILE:-}" ] && [ -f "${WAL_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
     HAS_SUSPEND=$("$JQ" -r 'select(.phase == "SUSPEND")' "$WAL_FILE" 2>/dev/null | tail -1 || true)
     if [ -n "$HAS_SUSPEND" ]; then
         CONTEXT_PARTS+=("Previous session was SUSPENDED awaiting user input (not crashed). Resume normally — conversation context is preserved via --resume.")
