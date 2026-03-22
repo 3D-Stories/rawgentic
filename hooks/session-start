@@ -391,6 +391,32 @@ else:
 fi
 
 # =========================================================================
+# SECTION 3b: Headless mode detection
+# =========================================================================
+if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
+    CONTEXT_PARTS+=("HEADLESS MODE active. User interaction points must use the <headless-interaction> protocol: post structured comment to GitHub issue, add rawgentic:ai-waiting label, write suspend state, and exit cleanly.")
+
+    # Check for stale suspend file from a different session
+    SUSPEND_FILE="${WS_ROOT:-$CWD}/claude_docs/headless_suspend.json"
+    if [ -f "$SUSPEND_FILE" ] && command -v "$JQ" &>/dev/null; then
+        SUSPEND_SESSION=$("$JQ" -r '.session_id // ""' "$SUSPEND_FILE" 2>/dev/null || true)
+        if [ -n "$SUSPEND_SESSION" ] && [ "$SUSPEND_SESSION" != "$SESSION_ID" ]; then
+            SUSPEND_STEP=$("$JQ" -r '.step // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
+            SUSPEND_ISSUE=$("$JQ" -r '.issue // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
+            CONTEXT_PARTS+=("WARNING: Stale headless suspend file found from a previous session (issue #${SUSPEND_ISSUE}, step ${SUSPEND_STEP}). This file may need cleanup. Delete claude_docs/headless_suspend.json if the previous session is no longer active.")
+        fi
+    fi
+fi
+
+# Check for SUSPEND WAL entries and adjust recovery messaging
+if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ -n "${WAL_FILE:-}" ] && [ -f "${WAL_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
+    HAS_SUSPEND=$("$JQ" -r 'select(.phase == "SUSPEND")' "$WAL_FILE" 2>/dev/null | tail -1 || true)
+    if [ -n "$HAS_SUSPEND" ]; then
+        CONTEXT_PARTS+=("Previous session was SUSPENDED awaiting user input (not crashed). Resume normally — conversation context is preserved via --resume.")
+    fi
+fi
+
+# =========================================================================
 # SECTION 4: Emit combined context
 # =========================================================================
 if [ ${#CONTEXT_PARTS[@]} -eq 0 ]; then
