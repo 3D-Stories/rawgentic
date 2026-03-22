@@ -113,6 +113,179 @@ If this workflow discovers new project capabilities during execution (e.g., a ne
 - Always read full file, modify in memory, write full file back
 </learning-config>
 
+<headless-interaction>
+When the workflow hits a user interaction point, check whether headless mode is active
+(additionalContext contains "HEADLESS MODE active"). If NOT in headless mode, behave
+as normal (STOP and wait for terminal input). If in headless mode, follow this protocol:
+
+**Interaction types and headless behavior:**
+
+AUTO-RESOLVE interactions (no user input needed in headless mode):
+- Step 1: Accept auto-generated ACs for WF1-created issues
+- Step 1: Accept capabilities for WF1-created issues
+- Step 5: Remove excess tasks on scope creep (document in session notes)
+- Step 7: Always stash dirty directory
+- Step 7: Always resume existing branch
+- Step 8: Rewrite failing RED test (up to 2 attempts)
+- Step 13: Wait up to 2x CI_MAX_WAIT before erroring
+
+QUESTION interactions (post comment, suspend, exit):
+- Step 1: Confirm capabilities/ACs for manually-created issues
+- Step 2: Component discrepancy
+- Step 3: Design approach trade-offs
+- Step 3: Scope larger than estimated
+- Step 4: Ambiguity circuit breaker findings
+- Step 14: Manual deploy confirmation
+
+ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
+- Step 4: Design loop-back budget exhausted
+- Step 4: Global loop-back budget exhausted
+- Step 8: Design flaw + budget exhausted
+- Step 11: Design flaw in review + budget exhausted
+
+**QUESTION protocol (post → label → suspend → exit):**
+
+1. Generate a structured comment using `hooks/headless_interaction.py`:
+   ```bash
+   python3 -c "
+   import sys; sys.path.insert(0, 'hooks')
+   from headless_interaction import format_comment, format_suspend_state, write_suspend_state
+   comment = format_comment(
+       step=STEP_NUMBER,
+       title='QUESTION_TITLE',
+       context='WHAT_THE_WORKFLOW_IS_DOING',
+       question='THE_DECISION_NEEDED',
+       options=['(a) Option 1', '(b) Option 2'],
+       metadata={'question_id': 'GENERATED_UUID', 'step': STEP_NUMBER, 'type': 'INTERACTION_TYPE'}
+   )
+   print(comment)
+   "
+   ```
+
+2. Post the comment to the GitHub issue:
+   ```bash
+   gh issue comment ISSUE_NUMBER --repo ${capabilities.repo} --body "COMMENT_BODY"
+   ```
+
+3. Add the waiting label:
+   ```bash
+   gh issue edit ISSUE_NUMBER --repo ${capabilities.repo} --add-label "rawgentic:ai-waiting"
+   ```
+   Create the label first if it doesn't exist:
+   ```bash
+   gh label create "rawgentic:ai-waiting" --repo ${capabilities.repo} \
+     --description "Rawgentic headless: waiting for user reply" --color "FBCA04" 2>/dev/null || true
+   ```
+
+4. Write the suspend state file:
+   ```bash
+   python3 -c "
+   import sys; sys.path.insert(0, 'hooks')
+   from headless_interaction import format_suspend_state, write_suspend_state
+   state = format_suspend_state(
+       session_id='N/A',
+       issue=ISSUE_NUMBER,
+       step=STEP_NUMBER,
+       question_id='GENERATED_UUID',
+       comment_url='COMMENT_URL',
+       clarification_round=0
+   )
+   write_suspend_state('claude_docs/headless_suspend.json', state)
+   "
+   ```
+
+5. Write a SUSPEND WAL entry:
+   ```bash
+   bash hooks/wal-suspend
+   ```
+
+6. Write a rich checkpoint to session notes (see <headless-checkpoint>).
+
+7. **EXIT the workflow cleanly.** Do NOT continue to the next step. The orchestrator
+   will re-invoke the skill in a fresh session after the user replies.
+
+**ERROR protocol (post error → exit WITHOUT label):**
+
+1. Post an error comment to the issue describing what went wrong and what the
+   user needs to do to unblock.
+2. Do NOT add `rawgentic:ai-waiting` label (errors don't expect a reply).
+3. Add `rawgentic:ai-error` label instead (create if missing, color "D93F0B").
+4. Write session notes with the error state.
+5. EXIT the workflow.
+
+**Label management:**
+- `rawgentic:ai-waiting` — set by skill on QUESTION suspend, removed by skill on resume
+- `rawgentic:ai-error` — set by skill on terminal error
+- `rawgentic:ai-in-progress` — set/removed by orchestrator (NOT by the skill)
+</headless-interaction>
+
+<headless-checkpoint>
+Before exiting in headless mode (either QUESTION suspend or ERROR), write a rich
+checkpoint to session notes. This checkpoint must contain enough context for a
+FRESH session (no --resume, no conversation history) to reconstruct the workflow state.
+
+**Always include in the checkpoint:**
+- Current step number and sub-step
+- Feature branch name and last commit SHA
+- Loop-back budget state
+- The question that was posted (for QUESTION suspends)
+- The question_id (for reply correlation)
+
+**Include if available (from conversation context):**
+- Design approach selected and rationale (if past Step 3)
+- Key critique findings and how they were resolved (if past Step 4)
+- Implementation plan summary (if past Step 5)
+- Implementation progress: which tasks are done, current task index (if in Step 8)
+
+**Format in session notes:**
+```
+### WF2 Headless Checkpoint — Step N (SUSPENDED)
+- Branch: feature/43-foo
+- Last commit: abc123
+- Loop-back budget: 1/3 used
+- Pending question: [question_id] — [brief description]
+- Design: [approach name] — [1-line rationale]
+- Plan: [N tasks, M complete]
+- Key decisions: [bullet list of non-obvious choices made]
+```
+
+This checkpoint is what enables the fresh-session resumption pattern. Without it,
+a fresh session can only detect "Step 8 has code changes" but not "Step 8 task 5
+of 7, using approach B because of critique finding #3."
+</headless-checkpoint>
+
+<headless-resume>
+On every fresh session start, BEFORE the normal resumption protocol, check for a
+pending headless interaction:
+
+1. Check if `claude_docs/headless_suspend.json` exists.
+2. If missing → no pending question. Proceed with normal resumption protocol.
+3. If present → read the suspend state:
+   - Extract `question_id`, `comment_url`, `issue`, `step`, `clarification_round`
+4. Fetch the user's reply from GitHub issue comments:
+   ```bash
+   gh api repos/${capabilities.repo}/issues/ISSUE/comments \
+     --jq '[.[] | select(.created_at > "SUSPEND_TIMESTAMP")] | map(select(.user.login != "github-actions[bot]")) | last.body // empty'
+   ```
+   Use the `suspended_at` timestamp from the suspend file to find comments posted AFTER the bot's question.
+5. If no reply found → the user hasn't responded yet. Post a reminder comment if
+   `clarification_round < 2`, otherwise post an error. Exit.
+6. If reply found → parse the reply for the user's choice:
+   - Look for option letters/numbers ("a", "1", "option a", etc.)
+   - Look for natural language ("proceed", "approved", "go with the first one")
+   - If unparseable → increment `clarification_round`, post a clarification comment,
+     re-add `rawgentic:ai-waiting`, update suspend file, exit.
+7. If reply parsed successfully:
+   - Delete `claude_docs/headless_suspend.json`
+   - Remove `rawgentic:ai-waiting` label:
+     ```bash
+     gh issue edit ISSUE --repo ${capabilities.repo} --remove-label "rawgentic:ai-waiting"
+     ```
+   - Inject the user's choice into the workflow context
+   - Continue with the normal resumption protocol (the session notes checkpoint
+     tells us exactly where to resume and what the pending decision was)
+</headless-resume>
+
 <termination-rule>
 WF2 ALWAYS terminates after the completion summary. Do NOT suggest "shall I create another issue?" or restart WF2 for the same issue. WF2 terminates ONLY after the completion-gate passes. All steps must have markers in session notes.
 </termination-rule>
@@ -124,7 +297,7 @@ Track all design loop-backs across the workflow:
 - Step 11 -> Step 3: max 1 iteration (MAX_REVIEW_DESIGN_LOOPBACK)
 
 Global cap: GLOBAL_LOOPBACK_BUDGET = 3
-If global cap reached, STOP and escalate to user with full summary of all loop-back triggers.
+If global cap reached, STOP and escalate to user with full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
 
 Track loop-back state:
 design_loopback_count = 0
@@ -136,6 +309,7 @@ global_loopback_total = 0
 <resumption-protocol>
 WF2 may span multiple Claude Code sessions. On resumption, detect the current step:
 
+-1. **Headless resume check (FIRST):** If in headless mode, execute `<headless-resume>` before any other check. If a pending question was answered, inject the reply and resume at the step indicated in the session notes checkpoint. If no reply yet, exit cleanly.
 0. All step markers present but completion-gate not printed? -> Run completion-gate, then terminate.
 1. PR exists and is merged? -> Resume at Step 15 (post-deploy verification)
 2. PR exists and CI passed (or no CI)? -> Resume at Step 14 (merge + deploy)
@@ -173,7 +347,7 @@ Active at ALL quality gates (Steps 4, 6, 9, 11, 15). Triggers when:
 - Two or more findings conflict (contradictory recommendations)
 - A finding requires judgment not captured in the GitHub issue
 
-When triggered: STOP the workflow at the current step. Present ALL problematic findings to the user. Wait for resolution. Do NOT auto-apply unambiguous findings separately -- the full set is applied together after resolution.
+When triggered: STOP the workflow at the current step. Present ALL problematic findings to the user. Wait for resolution. Do NOT auto-apply unambiguous findings separately -- the full set is applied together after resolution. **[Headless: QUESTION — post comment with all ambiguous/conflicting findings and resolution options, suspend.]**
 </ambiguity-circuit-breaker>
 
 <step-tracking>
@@ -202,12 +376,12 @@ This enables workflow resumption if context is lost.
 
 4. Validate:
    - Issue exists and is open
-   - If closed: ask user if they want to reopen or use a different issue
+   - If closed: ask user if they want to reopen or use a different issue. **[Headless: ERROR — post error comment explaining issue is closed, add rawgentic:ai-error label, exit.]**
 
 5. Check for WF1 origin:
    - If labels include "wf1-created": set `is_wf1_created = true`
    - Extract acceptance criteria, affected components, complexity from the issue body
-   - If any are missing (manually created issue): generate them from the description and ask user to confirm
+   - If any are missing (manually created issue): generate them from the description and ask user to confirm. **[Headless: AUTO-RESOLVE for WF1-created issues (accept generated ACs). QUESTION for manual issues — post comment with generated ACs for confirmation, suspend.]**
 
 6. Display to user:
    ```
@@ -228,7 +402,7 @@ This enables workflow resumption if context is lost.
    Confirm this issue and capabilities are correct, or provide corrections.
    ```
 
-7. Update session notes. Wait for user confirmation.
+7. Update session notes. Wait for user confirmation. **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). CONFIRMATION for manual issues — post summary comment, suspend.]**
 
 ### Failure Modes
 - Issue does not exist -> ask for correct number
@@ -293,7 +467,7 @@ Codebase analysis with complexity classification, fast path eligibility, and (fo
 
 ### Failure Modes
 - Serena MCP unavailable: fall back to Grep/Glob
-- Issue references components that do not exist: flag discrepancy and ask user
+- Issue references components that do not exist: flag discrepancy and ask user. **[Headless: QUESTION — post comment listing missing components with options (skip, create, abort), suspend.]**
 - Complexity uncertain: default to `standard_feature`
 - SSH to target host fails: log the failure but do not halt — proceed with issue-stated values and flag that live verification was not possible
 
@@ -343,8 +517,8 @@ Codebase analysis with complexity classification, fast path eligibility, and (fo
 Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Failure Modes
-- All approaches have significant trade-offs: present to user and let them choose
-- Design reveals much larger scope than estimated: flag for user decision
+- All approaches have significant trade-offs: present to user and let them choose. **[Headless: QUESTION — post comment with all approaches, pros/cons, and recommendation, suspend.]**
+- Design reveals much larger scope than estimated: flag for user decision. **[Headless: QUESTION — post comment with scope assessment and options (proceed, narrow, abort), suspend.]**
 
 ---
 
@@ -397,7 +571,7 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 5. **If loop-back triggered:**
    - Check `design_loopback_count` and `global_loopback_total`
    - If within budget: increment counters, apply findings as constraints, return to Step 3
-   - If budget exhausted: STOP and escalate to user
+   - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with findings summary, add rawgentic:ai-error label, exit.]**
 
 6. **If thresholds pass:** Apply ambiguity circuit breaker.
 
@@ -477,7 +651,7 @@ Plan drift check result.
 
 ### Failure Modes
 - Significant drift detected -> add missing tasks
-- Scope creep detected -> remove excess tasks or flag for user decision
+- Scope creep detected -> remove excess tasks or flag for user decision. **[Headless: AUTO-RESOLVE — remove excess tasks, document removed items in session notes.]**
 
 ---
 
@@ -489,7 +663,7 @@ Plan drift check result.
    ```bash
    git status --porcelain
    ```
-   If dirty: stash, create branch, ask user about stash.
+   If dirty: stash, create branch, ask user about stash. **[Headless: AUTO-RESOLVE — always stash silently, log to session notes.]**
 
 2. Pull latest default branch and create feature branch:
    ```bash
@@ -510,7 +684,7 @@ Plan drift check result.
 Feature branch created and pushed, issue commented.
 
 ### Failure Modes
-- Branch already exists: ask user to resume or start fresh
+- Branch already exists: ask user to resume or start fresh. **[Headless: AUTO-RESOLVE — always resume existing branch.]**
 - Push fails: continue locally, push later
 
 ---
@@ -551,9 +725,9 @@ Execute the implementation plan task by task.
 **Design flaw discovery:** If implementation reveals a fundamental design flaw:
 - Check: `tdd_loopback_used == false` AND `global_loopback_total < GLOBAL_LOOPBACK_BUDGET`
 - If allowed: loop back to Step 3 with the flaw identified
-- If budget exhausted: STOP and escalate to user
+- If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with design flaw description + loop-back history, add rawgentic:ai-error label, exit.]**
 
-**Session checkpoint:** Update session notes with progress, verification results, deviations from plan.
+**Session checkpoint:** Update session notes with progress, verification results, deviations from plan. **[Headless: write a `<headless-checkpoint>` after every 2-3 tasks to enable fresh-session resumption.]**
 
 ### Output
 Implemented feature with passing tests/verifications on the feature branch, committed and pushed.
@@ -742,7 +916,7 @@ PR URL.
 
 3. If CI fails: diagnose with `gh run view <id> --log-failed`, fix, push, CI re-runs.
 
-4. If CI times out (> CI_MAX_WAIT_MINUTES): ask user for explicit approval.
+4. If CI times out (> CI_MAX_WAIT_MINUTES): ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If still not done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit.]**
 
 ### Output
 CI status or skip confirmation.
@@ -787,7 +961,7 @@ CI status or skip confirmation.
 
    Please deploy and confirm when complete.
    ```
-   Wait for user confirmation before proceeding to Step 15.
+   Wait for user confirmation before proceeding to Step 15. **[Headless: QUESTION — post comment with deployment instructions and ask for confirmation, suspend.]**
 
 ### Output
 Deployed (or manual deployment instructions provided and confirmed).

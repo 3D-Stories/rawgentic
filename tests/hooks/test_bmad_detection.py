@@ -107,6 +107,52 @@ class TestDisabledSkillsPreamble:
         )
 
 
+class TestHeadlessInteractionBlock:
+    """Lint: WF2 must have <headless-interaction>, <headless-checkpoint>, <headless-resume> blocks."""
+
+    def test_implement_feature_has_headless_interaction(self):
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<headless-interaction>" in content and "</headless-interaction>" in content, (
+            "implement-feature/SKILL.md missing <headless-interaction> block"
+        )
+
+    def test_implement_feature_has_headless_checkpoint(self):
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<headless-checkpoint>" in content and "</headless-checkpoint>" in content, (
+            "implement-feature/SKILL.md missing <headless-checkpoint> block"
+        )
+
+    def test_implement_feature_has_headless_resume(self):
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<headless-resume>" in content and "</headless-resume>" in content, (
+            "implement-feature/SKILL.md missing <headless-resume> block"
+        )
+
+    def test_implement_feature_has_headless_annotations(self):
+        """All headless annotations must be present in the SKILL.md."""
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        # Check for key annotation markers
+        assert content.count("[Headless:") >= 15, (
+            f"implement-feature/SKILL.md has {content.count('[Headless:')} headless annotations, "
+            f"expected at least 15 (17 interaction points minus some combined)"
+        )
+
+    def test_headless_resume_in_resumption_protocol(self):
+        """The resumption protocol must reference headless-resume as Step -1."""
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<resumption-protocol>")
+        end = content.find("</resumption-protocol>")
+        block = content[start:end]
+        assert "headless-resume" in block, (
+            "implement-feature/SKILL.md <resumption-protocol> must reference <headless-resume>"
+        )
+
+
 class TestMandatoryStepsEnforcement:
     """Lint: workflow skills with code review steps must have <mandatory-steps> block."""
 
