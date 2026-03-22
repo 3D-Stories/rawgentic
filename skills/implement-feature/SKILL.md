@@ -27,6 +27,39 @@ CI_MAX_WAIT_MINUTES = 10
 REVIEW_CONFIDENCE_THRESHOLD = 0.80
 </constants>
 
+<mandatory-steps>
+The following steps are MANDATORY and must NEVER be skipped, abbreviated, or combined — regardless of context window pressure, session length, perceived simplicity, or any other justification:
+
+| Step | Name | Why mandatory |
+|------|------|---------------|
+| 1 | Receive Issue | Foundation — wrong issue = wrong implementation |
+| 2 | Analyze Codebase | Complexity classification drives all downstream decisions |
+| 3 | Design Solution | Architecture before code — always |
+| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. Full critique for complex_feature, reflect for fast path. |
+| 5 | Implementation Plan | Task decomposition enables TDD and progress tracking |
+| 7 | Create Branch | Git isolation is non-negotiable |
+| 8 | Implementation | The actual work |
+| 9 | Quality Gate (Drift) | Verifies implementation matches design and all ACs covered |
+| 11 | Code Review | **NON-NEGOTIABLE.** Full 3-agent review for complex_feature. Minimum 1-agent for simple/standard. This step found 2 Critical security issues (HTML injection + path traversal) when the orchestrator attempted to skip it. |
+| 12 | Create PR | Deliverable — no PR means no review trail |
+
+Conditional steps (skip ONLY when their condition is not met):
+- Step 6 (Plan Drift): lightweight, fast — run it unless time-critical
+- Step 10 (Memorize): background, never blocks
+- Step 13 (CI): skip only if has_ci == false
+- Step 14 (Merge/Deploy): skip only if user does not request merge
+- Step 15 (Post-Deploy): skip only if no deployment performed
+
+**ENFORCEMENT:** You MUST NOT rationalize skipping a mandatory step. Common invalid justifications:
+- "This session is very long" — NOT a valid reason to skip code review
+- "The architecture was already critiqued in WF1" — WF1 critiqued the SPEC, not the CODE
+- "The changes are mechanical" — mechanical changes can still have injection vulnerabilities
+- "I'll do a quick check instead" — a "quick check" is not a substitute for the full step
+- "Context window is running low" — checkpoint in session notes and resume, do not skip
+
+If you catch yourself about to skip a mandatory step, STOP and acknowledge: "I was about to skip Step N which is mandatory. Proceeding with the full step."
+</mandatory-steps>
+
 <config-loading>
 Before executing any workflow steps, load the project configuration:
 
