@@ -107,6 +107,66 @@ class TestDisabledSkillsPreamble:
         )
 
 
+class TestHeadlessInteractionBlock:
+    """Lint: WF2 must have <headless-interaction>, <headless-checkpoint>, <headless-resume> blocks."""
+
+    HEADLESS_SKILLS = ["implement-feature", "fix-bug"]
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_headless_interaction(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<headless-interaction>" in content and "</headless-interaction>" in content, (
+            f"{skill_name}/SKILL.md missing <headless-interaction> block"
+        )
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_headless_checkpoint(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<headless-checkpoint>" in content and "</headless-checkpoint>" in content, (
+            f"{skill_name}/SKILL.md missing <headless-checkpoint> block"
+        )
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_headless_resume(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<headless-resume>" in content and "</headless-resume>" in content, (
+            f"{skill_name}/SKILL.md missing <headless-resume> block"
+        )
+
+    # Expected [Headless annotation counts per skill
+    EXPECTED_COUNTS = {
+        "implement-feature": 18,  # 17 interaction points + 1 disabled-skill cleanup
+        "fix-bug": 11,            # 10 interaction points + 1 disabled-skill cleanup
+    }
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_correct_headless_annotation_count(self, skill_name: str):
+        """Annotation count must match expected — catches missing annotations on new steps."""
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        count = content.count("[Headless")  # matches [Headless: and [Headless cleanup]
+        expected = self.EXPECTED_COUNTS[skill_name]
+        assert count == expected, (
+            f"{skill_name}/SKILL.md has {count} [Headless] annotations, "
+            f"expected {expected}. If you added a new interaction point, "
+            f"add a [Headless:] annotation and bump this count."
+        )
+
+    def test_headless_resume_in_resumption_protocol(self):
+        """The resumption protocol must reference headless-resume as Step -1."""
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<resumption-protocol>")
+        end = content.find("</resumption-protocol>")
+        block = content[start:end]
+        assert "headless-resume" in block, (
+            "implement-feature/SKILL.md <resumption-protocol> must reference <headless-resume>"
+        )
+
+
 class TestMandatoryStepsEnforcement:
     """Lint: workflow skills with code review steps must have <mandatory-steps> block."""
 
