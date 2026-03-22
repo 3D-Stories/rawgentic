@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Headless interaction helpers for rawgentic workflow skills.
 
 Provides testable functions for:
@@ -73,6 +74,12 @@ def format_comment(
     # Ensure no session_id leaks into public comment
     clean_metadata = {k: v for k, v in metadata.items() if k != "session_id"}
 
+    # Sanitize metadata string values against --> injection inside HTML comment
+    safe_metadata = {
+        k: (_sanitize_for_html_comment(v) if isinstance(v, str) else v)
+        for k, v in clean_metadata.items()
+    }
+
     # Build comment body
     parts = [
         f"## [WF2 Step {step}] {safe_title}",
@@ -92,7 +99,7 @@ def format_comment(
     parts.append("")
 
     # Hidden metadata block
-    meta_json = json.dumps(clean_metadata, separators=(",", ":"))
+    meta_json = json.dumps(safe_metadata, separators=(",", ":"))
     parts.append(f"<!-- rawgentic-headless: {meta_json} -->")
 
     return "\n".join(parts)

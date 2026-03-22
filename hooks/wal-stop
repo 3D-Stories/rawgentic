@@ -53,6 +53,13 @@ _do_stop() {
 
     [ -z "$PROJECT" ] && exit 0
 
+    # Validate project name (path traversal prevention)
+    case "$PROJECT" in
+        */*|*\\*|..*)
+            exit 0
+            ;;
+    esac
+
     # --- Write session end marker to notes ---
     NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
     NOTES_FILE="$NOTES_DIR/${PROJECT}.md"

@@ -62,6 +62,14 @@ if [ -z "$PROJECT" ]; then
 fi
 [ -z "$PROJECT" ] && { echo "Cannot determine project" >&2; exit 1; }
 
+# --- Validate project name (path traversal prevention) ---
+case "$PROJECT" in
+    */*|*\\*|..*)
+        echo "Invalid project name: $PROJECT" >&2
+        exit 1
+        ;;
+esac
+
 # --- Write SUSPEND entry to per-project WAL ---
 WAL_DIR="$WS_ROOT/claude_docs/wal"
 mkdir -p "$WAL_DIR" 2>/dev/null || true

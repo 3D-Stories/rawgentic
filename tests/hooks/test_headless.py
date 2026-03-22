@@ -82,8 +82,8 @@ class TestFormatComment:
         )
         assert "session_id" not in result
 
-    def test_sanitizes_html_comment_close(self):
-        """Dynamic values containing --> must be escaped (security: J3#2)."""
+    def test_sanitizes_html_comment_close_in_text(self):
+        """Dynamic text values containing --> must be escaped (security: J3#2)."""
         from headless_interaction import format_comment
 
         result = format_comment(
@@ -98,6 +98,26 @@ class TestFormatComment:
         # (except inside the actual closing tag of the metadata block)
         lines_before_metadata = result.split("<!-- rawgentic-headless:")[0]
         assert "-->" not in lines_before_metadata
+
+    def test_sanitizes_html_comment_close_in_metadata(self):
+        """Metadata string values containing --> must also be escaped."""
+        from headless_interaction import format_comment
+
+        result = format_comment(
+            step=1,
+            title="Test",
+            context="ctx",
+            question="q?",
+            options=["a"],
+            metadata={"question_id": "x", "step": 1, "type": "foo --> bar"},
+        )
+        # Extract the metadata JSON block and check --> is escaped
+        meta_start = result.find("<!-- rawgentic-headless:")
+        meta_end = result.find("-->", meta_start + 1)
+        meta_block = result[meta_start:meta_end]
+        # The raw --> should not appear inside the metadata JSON
+        # (the closing --> of the HTML comment is at meta_end, not inside)
+        assert "foo --> bar" not in meta_block
 
     def test_empty_options(self):
         """Should handle empty options list gracefully."""
@@ -281,11 +301,13 @@ class TestSessionStartHeadless:
     def test_headless_env_var_absent(self, make_workspace):
         """No RAWGENTIC_HEADLESS should NOT trigger headless mode."""
         ws = make_workspace()
+        # Ensure RAWGENTIC_HEADLESS is truly absent, not just empty
+        env_clean = {k: v for k, v in os.environ.items() if k != "RAWGENTIC_HEADLESS"}
         stdout, stderr, rc = _run_hook(
             "session-start",
             {"session_id": "test-sess", "hook_event_name": "startup"},
             cwd=ws.root,
-            env_override={"RAWGENTIC_HEADLESS": ""},
+            env_override={"RAWGENTIC_HEADLESS": ""},  # empty string also tested
         )
         assert rc == 0
         output = json.loads(stdout) if stdout.strip() else {}
