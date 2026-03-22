@@ -396,11 +396,29 @@ fi
 if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
     CONTEXT_PARTS+=("HEADLESS MODE active. User interaction points must use the <headless-interaction> protocol: post structured comment to GitHub issue, add rawgentic:ai-waiting label, write suspend state, and exit cleanly.")
 
-    # Check for stale suspend file from a different session
+    # Check for stale suspend file — TTL-based cleanup (24h) or session_id mismatch
     SUSPEND_FILE="${WS_ROOT:-$CWD}/claude_docs/headless_suspend.json"
     if [ -f "$SUSPEND_FILE" ] && command -v "$JQ" &>/dev/null; then
         SUSPEND_SESSION=$("$JQ" -r '.session_id // ""' "$SUSPEND_FILE" 2>/dev/null || true)
-        if [ -n "$SUSPEND_SESSION" ] && [ "$SUSPEND_SESSION" != "$SESSION_ID" ]; then
+        SUSPEND_AT=$("$JQ" -r '.suspended_at // ""' "$SUSPEND_FILE" 2>/dev/null || true)
+
+        # TTL check: auto-delete suspend files older than 24 hours
+        STALE_BY_TTL=false
+        if [ -n "$SUSPEND_AT" ]; then
+            SUSPEND_EPOCH=$(date -d "$SUSPEND_AT" +%s 2>/dev/null || echo 0)
+            NOW_EPOCH=$(date +%s)
+            AGE_HOURS=$(( (NOW_EPOCH - SUSPEND_EPOCH) / 3600 ))
+            if [ "$AGE_HOURS" -ge 24 ]; then
+                STALE_BY_TTL=true
+            fi
+        fi
+
+        if [ "$STALE_BY_TTL" = true ]; then
+            # Auto-delete: TTL expired (>24h)
+            rm -f "$SUSPEND_FILE" 2>/dev/null || true
+            CONTEXT_PARTS+=("Cleaned up stale headless suspend file (>24h old). Previous headless session is assumed abandoned.")
+        elif [ -n "$SUSPEND_SESSION" ] && [ "$SUSPEND_SESSION" != "$SESSION_ID" ]; then
+            # Warn: different session but not TTL-expired
             SUSPEND_STEP=$("$JQ" -r '.step // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
             SUSPEND_ISSUE=$("$JQ" -r '.issue // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
             CONTEXT_PARTS+=("WARNING: Stale headless suspend file found from a previous session (issue #${SUSPEND_ISSUE}, step ${SUSPEND_STEP}). This file may need cleanup. Delete claude_docs/headless_suspend.json if the previous session is no longer active.")

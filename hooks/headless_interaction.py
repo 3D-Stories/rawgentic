@@ -22,9 +22,12 @@ def _sanitize_for_html_comment(value: str) -> str:
 
 
 def _sanitize_markdown(value: str) -> str:
-    """Escape markdown special chars in user-sourced content."""
-    # Light sanitization: escape chars that could create links/images/HTML
-    for ch in ["<", ">"]:
+    """Escape markdown special chars in user-sourced content.
+
+    Prevents link injection ([text](url)), image injection (![alt](url)),
+    and HTML tag injection (<script>). Covers OWASP markdown injection vectors.
+    """
+    for ch in ["<", ">", "[", "]", "(", ")", "!"]:
         value = value.replace(ch, f"\\{ch}")
     return value
 

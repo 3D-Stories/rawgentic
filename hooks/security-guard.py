@@ -111,6 +111,54 @@ def _warn(message):
     print(json.dumps({"systemMessage": message}), file=sys.stdout)
 
 
+def _log_headless_guard_block(findings, rel_path, workspace_root):
+    """Log security guard blocks to WAL when in headless mode.
+
+    In bypassPermissions mode, guards are the last defense. Blocks MUST
+    be auditable via the WAL so the orchestrator can detect them.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        # Find the WAL file for the current project
+        ws_root = workspace_root or os.getcwd()
+        # Read session registry to find the project
+        registry_path = os.path.join(ws_root, "claude_docs", "session_registry.jsonl")
+        session_id_path = os.path.join(ws_root, "claude_docs", ".current_session_id")
+
+        session_id = "unknown"
+        if os.path.isfile(session_id_path):
+            with open(session_id_path) as f:
+                session_id = f.read().strip()
+
+        project = "unknown"
+        if os.path.isfile(registry_path):
+            with open(registry_path) as f:
+                for line in f:
+                    if session_id in line:
+                        entry = json.loads(line)
+                        project = entry.get("project", "unknown")
+
+        wal_dir = os.path.join(ws_root, "claude_docs", "wal")
+        os.makedirs(wal_dir, exist_ok=True)
+        wal_file = os.path.join(wal_dir, f"{project}.jsonl")
+
+        patterns_blocked = [f.get("name", "unknown") for f in findings]
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        entry = {
+            "ts": ts,
+            "phase": "GUARD_BLOCK",
+            "session": session_id,
+            "guard": "security-guard",
+            "file": rel_path,
+            "patterns": patterns_blocked,
+        }
+        with open(wal_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass  # Fail-open: logging failure must not block the deny response
+
+
 def main():
     try:
         raw = sys.stdin.read()
@@ -177,6 +225,11 @@ def main():
 
     if not remaining:
         sys.exit(0)
+
+    # Headless mode audit: log guard blocks to WAL for visibility
+    # In bypassPermissions mode, guards are the last defense — blocks MUST be auditable
+    if os.environ.get("RAWGENTIC_HEADLESS") == "1":
+        _log_headless_guard_block(remaining, rel_path, workspace_root)
 
     deny_output = format_deny(remaining, rel_path)
     print(json.dumps(deny_output), file=sys.stdout)

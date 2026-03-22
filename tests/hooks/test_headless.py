@@ -64,7 +64,7 @@ class TestFormatComment:
         assert "## [WF2 Step 4] Circuit Breaker Triggered" in result
         assert "**Context:**" in result
         assert "**Question:**" in result
-        assert "(a) Narrow scope" in result
+        assert "Narrow scope" in result
         assert "<!-- rawgentic-headless:" in result
         assert '"question_id"' in result
 
@@ -118,6 +118,23 @@ class TestFormatComment:
         # The raw --> should not appear inside the metadata JSON
         # (the closing --> of the HTML comment is at meta_end, not inside)
         assert "foo --> bar" not in meta_block
+
+    def test_sanitizes_markdown_link_injection(self):
+        """Markdown link syntax must be escaped to prevent injection (J3#6)."""
+        from headless_interaction import format_comment
+
+        result = format_comment(
+            step=1,
+            title="Test",
+            context="Click [here](https://evil.com) for details",
+            question="See ![img](https://evil.com/img.png)?",
+            options=["[option](https://evil.com)"],
+            metadata={"question_id": "x", "step": 1, "type": "test"},
+        )
+        # Raw markdown links should be escaped
+        assert "[here]" not in result
+        assert "![img]" not in result
+        assert "(https://evil.com)" not in result
 
     def test_empty_options(self):
         """Should handle empty options list gracefully."""
@@ -351,6 +368,34 @@ class TestSessionStartHeadless:
         output = json.loads(stdout) if stdout.strip() else {}
         context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
         assert "stale" in context.lower() or "previous" in context.lower()
+
+    def test_matching_session_id_no_stale_warning(self, make_workspace):
+        """Suspend file with MATCHING session_id should NOT trigger stale warning (CR#3)."""
+        from datetime import datetime, timezone
+        ws = make_workspace()
+        suspend_file = ws.root / "claude_docs" / "headless_suspend.json"
+        # Use a recent timestamp to avoid TTL-based cleanup
+        recent_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        suspend_file.write_text(json.dumps({
+            "session_id": "same-session",
+            "issue": 43,
+            "step": 4,
+            "question_id": "q-test",
+            "suspended_at": recent_ts,
+        }))
+        stdout, stderr, rc = _run_hook(
+            "session-start",
+            {"session_id": "same-session", "hook_event_name": "startup"},
+            cwd=ws.root,
+            env_override={"RAWGENTIC_HEADLESS": "1"},
+        )
+        assert rc == 0
+        output = json.loads(stdout) if stdout.strip() else {}
+        context = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        # Should have HEADLESS context but NOT stale warning
+        assert "HEADLESS" in context.upper()
+        assert "stale" not in context.lower()
+        assert "previous session" not in context.lower()
 
 
 # =========================================================================
