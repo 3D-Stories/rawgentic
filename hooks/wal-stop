@@ -93,34 +93,28 @@ _do_stop() {
         fi
     fi
 
+    # --- Write session marker and WAL entry (DRY helper) ---
+    _write_session_end() {
+        local status="$1" phase="$2" summary="$3"
+        printf '\n---\n# Session: %s | ID: %s | Status: %s\n## Project: %s\n' \
+            "$TS" "$SESSION_ID" "$status" "$PROJECT" >> "$NOTES_FILE"
+
+        WAL_DIR="$WS_ROOT/claude_docs/wal"
+        mkdir -p "$WAL_DIR" 2>/dev/null || true
+        "$JQ" -nc \
+            --arg ts "$TS" \
+            --arg session "$SESSION_ID" \
+            --arg project "$PROJECT" \
+            --arg phase "$phase" \
+            --arg summary "$summary" \
+            '{ts:$ts, phase:$phase, session:$session, project:$project, summary:$summary}' \
+            >> "$WAL_DIR/${PROJECT}.jsonl" 2>/dev/null || true
+    }
+
     if [ "$IS_SUSPENDED" = true ]; then
-        # Headless suspend — write SUSPENDED marker
-        printf '\n---\n# Session: %s | ID: %s | Status: SUSPENDED\n## Project: %s\n' \
-            "$TS" "$SESSION_ID" "$PROJECT" >> "$NOTES_FILE"
-
-        # Log SUSPEND phase to WAL
-        WAL_DIR="$WS_ROOT/claude_docs/wal"
-        mkdir -p "$WAL_DIR" 2>/dev/null || true
-        "$JQ" -nc \
-            --arg ts "$TS" \
-            --arg session "$SESSION_ID" \
-            --arg project "$PROJECT" \
-            '{ts:$ts, phase:"SUSPEND", session:$session, project:$project, summary:"Session suspended awaiting user input"}' \
-            >> "$WAL_DIR/${PROJECT}.jsonl" 2>/dev/null || true
+        _write_session_end "SUSPENDED" "SUSPEND" "Session suspended awaiting user input"
     else
-        # Normal stop — write COMPLETE marker
-        printf '\n---\n# Session: %s | ID: %s | Status: COMPLETE\n## Project: %s\n' \
-            "$TS" "$SESSION_ID" "$PROJECT" >> "$NOTES_FILE"
-
-        # Log STOP phase to WAL
-        WAL_DIR="$WS_ROOT/claude_docs/wal"
-        mkdir -p "$WAL_DIR" 2>/dev/null || true
-        "$JQ" -nc \
-            --arg ts "$TS" \
-            --arg session "$SESSION_ID" \
-            --arg project "$PROJECT" \
-            '{ts:$ts, phase:"STOP", session:$session, project:$project, summary:"Session ended"}' \
-            >> "$WAL_DIR/${PROJECT}.jsonl" 2>/dev/null || true
+        _write_session_end "COMPLETE" "STOP" "Session ended"
     fi
 }
 

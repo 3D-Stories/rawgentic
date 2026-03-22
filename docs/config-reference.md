@@ -367,6 +367,11 @@ RAWGENTIC_HEADLESS=1 claude --resume {session_id} \
   -p "User replied to headless question: <reply content>"
 ```
 
+`bypassPermissions` is required because workflow skills invoke Bash commands
+(git, gh, pytest) that would otherwise prompt for interactive confirmation.
+`acceptEdits` only auto-approves file edits — Bash commands still block.
+WAL guards and security guards remain active as the last line of defense.
+
 ### Structured Comment Format
 
 Skills post comments with hidden JSON metadata:
@@ -401,5 +406,11 @@ removed when the session resumes.
 - `session_id` is excluded from public GitHub comments (kept only in the
   suspend state file)
 - Dynamic values in comments are sanitized against `-->` HTML comment injection
+  and markdown link/image injection (`[`, `]`, `(`, `)`, `!` escaped)
 - `bypassPermissions` mode removes human oversight — WAL guards and security
-  guards are the last line of defense in headless mode
+  guards are the last line of defense in headless mode. Guard blocks are
+  logged to the WAL as `GUARD_BLOCK` entries for audit visibility.
+- The `suspended_at` timestamp uses UTC wall-clock time. The orchestrator host
+  and Claude host must have synchronized clocks (NTP) for the 24h TTL-based
+  stale file cleanup to work correctly. Clock skew may cause premature or
+  delayed cleanup.

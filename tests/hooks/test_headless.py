@@ -512,3 +512,124 @@ class TestWalStopSuspend:
             last_line = wal_file.read_text().strip().split("\n")[-1]
             entry = json.loads(last_line)
             assert entry["phase"] == "SUSPEND"
+
+    def test_double_fire_on_suspended_session(self, make_workspace):
+        """wal-stop firing twice on a suspended session should be idempotent."""
+        ws = make_workspace(
+            registry_entries=[
+                {"session_id": "test-sess", "project": "testproj",
+                 "project_path": "./projects/testproj", "started": "2026-01-01T00:00:00Z"}
+            ]
+        )
+        self._write_suspend_file(ws, session_id="test-sess")
+
+        # First fire — writes SUSPENDED
+        _run_hook("wal-stop", {"session_id": "test-sess"}, cwd=ws.root,
+                  env_override={"RAWGENTIC_HEADLESS": "1"})
+
+        # Second fire — should be idempotent (SUSPENDED already present)
+        stdout, stderr, rc = _run_hook(
+            "wal-stop", {"session_id": "test-sess"}, cwd=ws.root,
+            env_override={"RAWGENTIC_HEADLESS": "1"},
+        )
+        assert rc == 0
+        notes = (ws.notes_dir / "testproj.md").read_text()
+        # Should have exactly one SUSPENDED marker, not two
+        assert notes.count("SUSPENDED") == 1
+
+
+# =========================================================================
+# wal-suspend — direct tests
+# =========================================================================
+
+class TestWalSuspend:
+    """Direct tests for the wal-suspend helper script."""
+
+    def test_writes_suspend_wal_entry(self, make_workspace):
+        """wal-suspend should write a SUSPEND entry to the project WAL."""
+        ws = make_workspace(
+            registry_entries=[
+                {"session_id": "test-sess", "project": "testproj",
+                 "project_path": "./projects/testproj", "started": "2026-01-01T00:00:00Z"}
+            ]
+        )
+        # Write .current_session_id (expected by wal-suspend)
+        session_id_file = ws.root / "claude_docs" / ".current_session_id"
+        session_id_file.write_text("test-sess")
+
+        stdout, stderr, rc = _run_hook(
+            "wal-suspend", {},
+            cwd=ws.root,
+        )
+        assert rc == 0
+        assert "SUSPEND" in stdout
+
+        # Verify WAL entry was written
+        wal_file = ws.root / "claude_docs" / "wal" / "testproj.jsonl"
+        assert wal_file.exists()
+        last_line = wal_file.read_text().strip().split("\n")[-1]
+        entry = json.loads(last_line)
+        assert entry["phase"] == "SUSPEND"
+        assert entry["session"] == "test-sess"
+        assert entry["project"] == "testproj"
+
+    def test_fails_without_session_id_file(self, make_workspace):
+        """wal-suspend should fail if .current_session_id is missing."""
+        ws = make_workspace()
+        # Don't create .current_session_id
+        stdout, stderr, rc = _run_hook(
+            "wal-suspend", {},
+            cwd=ws.root,
+        )
+        assert rc != 0
+
+    def test_fails_without_workspace(self, tmp_path):
+        """wal-suspend should fail outside a rawgentic workspace."""
+        stdout, stderr, rc = _run_hook(
+            "wal-suspend", {},
+            cwd=tmp_path,
+        )
+        assert rc != 0
+
+    def test_idempotent_multiple_calls(self, make_workspace):
+        """Calling wal-suspend twice should append two entries (no corruption)."""
+        ws = make_workspace(
+            registry_entries=[
+                {"session_id": "test-sess", "project": "testproj",
+                 "project_path": "./projects/testproj", "started": "2026-01-01T00:00:00Z"}
+            ]
+        )
+        session_id_file = ws.root / "claude_docs" / ".current_session_id"
+        session_id_file.write_text("test-sess")
+
+        _run_hook("wal-suspend", {}, cwd=ws.root)
+        _run_hook("wal-suspend", {}, cwd=ws.root)
+
+        wal_file = ws.root / "claude_docs" / "wal" / "testproj.jsonl"
+        lines = wal_file.read_text().strip().split("\n")
+        suspend_lines = [l for l in lines if '"SUSPEND"' in l]
+        assert len(suspend_lines) == 2  # Two entries, both valid
+
+
+# =========================================================================
+# Canary test — SKILL.md count with <config-loading>
+# =========================================================================
+
+class TestSkillCountCanary:
+    """Canary: assert the number of SKILL.md files with <config-loading> matches expected."""
+
+    SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
+    EXPECTED_CONFIG_LOADING_COUNT = 10
+
+    def test_config_loading_skill_count(self):
+        """If a new workflow skill is added, this test reminds you to add the disabledSkills check."""
+        count = 0
+        for skill_dir in self.SKILLS_DIR.iterdir():
+            skill_file = skill_dir / "SKILL.md"
+            if skill_file.exists() and "<config-loading>" in skill_file.read_text():
+                count += 1
+        assert count == self.EXPECTED_CONFIG_LOADING_COUNT, (
+            f"Expected {self.EXPECTED_CONFIG_LOADING_COUNT} skills with <config-loading>, "
+            f"found {count}. If you added a new workflow skill, update the disabledSkills "
+            f"check and bump this count."
+        )
