@@ -395,7 +395,8 @@ fi
 # =========================================================================
 if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
     # Check if the active project allows headless mode
-    HEADLESS_ALLOWED=true
+    # Default to false (deny) — must be explicitly set to true by the jq check below
+    HEADLESS_ALLOWED=false
     if [ -n "${WORKSPACE_FILE:-}" ] && command -v "$JQ" &>/dev/null; then
         # Resolve the active project name (from registry or single-active)
         _HEADLESS_PROJECT=""
@@ -411,12 +412,28 @@ if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
 
         if [ -n "$_HEADLESS_PROJECT" ]; then
             _HEADLESS_ENABLED=$("$JQ" -r --arg name "$_HEADLESS_PROJECT" \
-                '.projects[] | select(.name == $name) | .headlessEnabled // false' \
+                '[.projects[] | select(.name == $name)][0].headlessEnabled // false' \
                 "$WORKSPACE_FILE" 2>/dev/null || echo "false")
-            if [ "$_HEADLESS_ENABLED" != "true" ]; then
-                HEADLESS_ALLOWED=false
+            if [ "$_HEADLESS_ENABLED" = "true" ]; then
+                HEADLESS_ALLOWED=true
+            else
                 CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' does not have headless mode enabled. Set headlessEnabled: true in .rawgentic_workspace.json for this project (via /rawgentic:setup) to allow autonomous agent execution. Refusing to execute workflow skills — exit immediately.")
             fi
+        fi
+    fi
+
+    # If jq was absent and we couldn't check headlessEnabled, add a BLOCKED message
+    if [ "$HEADLESS_ALLOWED" = false ] && [ ${#CONTEXT_PARTS[@]} -gt 0 ]; then
+        # Check if a BLOCKED message was already added by the jq-present path
+        _HAS_BLOCKED=false
+        for _part in "${CONTEXT_PARTS[@]}"; do
+            if printf '%s' "$_part" | grep -q "HEADLESS MODE BLOCKED"; then
+                _HAS_BLOCKED=true
+                break
+            fi
+        done
+        if [ "$_HAS_BLOCKED" = false ]; then
+            CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Cannot verify headlessEnabled for this project (jq not available or project not found). Refusing to execute workflow skills in headless mode — exit immediately.")
         fi
     fi
 

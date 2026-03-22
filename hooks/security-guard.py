@@ -121,7 +121,14 @@ def _log_headless_guard_block(findings, rel_path, workspace_root):
         from datetime import datetime, timezone
 
         # Find the WAL file for the current project
-        ws_root = workspace_root or os.getcwd()
+        # Try workspace_root first, then cwd (headless mode sets cwd to workspace root)
+        ws_root = workspace_root
+        if not ws_root or not os.path.isfile(os.path.join(ws_root, ".rawgentic_workspace.json")):
+            cwd = os.getcwd()
+            if os.path.isfile(os.path.join(cwd, ".rawgentic_workspace.json")):
+                ws_root = cwd
+            else:
+                return  # Cannot find workspace — skip audit logging
         # Read session registry to find the project
         registry_path = os.path.join(ws_root, "claude_docs", "session_registry.jsonl")
         session_id_path = os.path.join(ws_root, "claude_docs", ".current_session_id")

@@ -46,7 +46,8 @@ SESSION_ID=$(cat "$SESSION_FILE" | tr -d '[:space:]')
 [ -z "$SESSION_ID" ] && { echo "Empty session ID" >&2; exit 1; }
 
 # Staleness guard: .current_session_id older than 24h is likely stale
-SESSION_FILE_AGE=$(( $(date +%s) - $(date -r "$SESSION_FILE" +%s 2>/dev/null || echo 0) ))
+SESSION_FILE_MTIME=$(stat -c %Y "$SESSION_FILE" 2>/dev/null || date +%s)
+SESSION_FILE_AGE=$(( $(date +%s) - SESSION_FILE_MTIME ))
 if [ "$SESSION_FILE_AGE" -gt 86400 ]; then
     echo "WARNING: .current_session_id is >24h old (may be stale)" >&2
 fi
