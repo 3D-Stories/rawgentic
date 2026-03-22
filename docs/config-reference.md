@@ -376,22 +376,68 @@ progress" and does not archive them.
 
 ### Orchestrator Interface Contract
 
+Every orchestrator cycle is a **fresh `claude` invocation** — no `--resume`, no
+session_id tracking. The skill reconstructs its own state from git artifacts,
+session notes, and the suspend file.
+
 ```bash
-# Fresh invocation
+# Every cycle — same command, no session tracking
+cd /sandbox/<repo>
 RAWGENTIC_HEADLESS=1 claude --print \
   --permission-mode bypassPermissions --output-format json \
   -p "/rawgentic:implement-feature <issue-url>"
-
-# Resume after user replies
-RAWGENTIC_HEADLESS=1 claude --resume {session_id} \
-  --permission-mode bypassPermissions --output-format json \
-  -p "User replied to headless question: <reply content>"
 ```
 
 `bypassPermissions` is required because workflow skills invoke Bash commands
 (git, gh, pytest) that would otherwise prompt for interactive confirmation.
 `acceptEdits` only auto-approves file edits — Bash commands still block.
 WAL guards and security guards remain active as the last line of defense.
+
+The skill handles everything on each invocation:
+1. Resumption protocol detects progress from git + session notes
+2. If `headless_suspend.json` exists, reads it and fetches user's reply from
+   GitHub issue comments via `gh api`
+3. Removes `rawgentic:ai-waiting` label, deletes suspend file
+4. Continues workflow from where it left off
+5. May hit another interaction point → posts new comment, re-adds label, exits
+6. Or completes the workflow → creates PR, exits
+
+### Label Lifecycle
+
+| Label | Set By | Meaning |
+|-------|--------|---------|
+| `rawgentic:ai-ready` | Human | "Bot, pick this up" — explicit opt-in per issue |
+| `rawgentic:ai-in-progress` | Orchestrator | Claude is actively working on this issue |
+| `rawgentic:ai-waiting` | Skill | Posted a question, waiting for human reply |
+| `rawgentic:ai-error` | Skill | Terminal failure, needs human triage |
+
+The orchestrator polls for two signals: `rawgentic:ai-ready` (new work) and
+`rawgentic:ai-waiting` with a new reply (continuation). One headless workflow
+per project at a time — the orchestrator enforces this via `ai-in-progress`.
+
+### Interaction Inventory (WF2)
+
+| Step | Interaction | Headless Behavior |
+|------|-------------|-------------------|
+| Step 1 | Issue closed | ERROR |
+| Step 1 | Confirm ACs (WF1-created) | AUTO-RESOLVE |
+| Step 1 | Confirm ACs (manual issue) | QUESTION |
+| Step 1 | Confirm capabilities (WF1-created) | AUTO-RESOLVE |
+| Step 1 | Confirm capabilities (manual issue) | QUESTION |
+| Step 2 | Components don't exist | QUESTION |
+| Step 3 | Design approach trade-offs | QUESTION |
+| Step 3 | Scope larger than estimated | QUESTION |
+| Step 4 | Ambiguity circuit breaker | QUESTION |
+| Step 4 | Design loop-back budget exhausted | ERROR |
+| Step 4 | Global loop-back budget exhausted | ERROR |
+| Step 5 | Scope creep detected | AUTO-RESOLVE |
+| Step 7 | Dirty directory | AUTO-RESOLVE (stash + comment) |
+| Step 7 | Branch exists | AUTO-RESOLVE (resume) |
+| Step 8 | Design flaw + budget exhausted | ERROR |
+| Step 8 | Periodic checkpoint | Checkpoint to session notes |
+| Step 11 | Design flaw + budget exhausted | ERROR |
+| Step 13 | CI timeout | AUTO-RESOLVE (2x wait, then ERROR) |
+| Step 14 | Manual deploy confirmation | QUESTION |
 
 ### Structured Comment Format
 

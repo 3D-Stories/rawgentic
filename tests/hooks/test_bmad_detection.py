@@ -110,38 +110,49 @@ class TestDisabledSkillsPreamble:
 class TestHeadlessInteractionBlock:
     """Lint: WF2 must have <headless-interaction>, <headless-checkpoint>, <headless-resume> blocks."""
 
-    def test_implement_feature_has_headless_interaction(self):
-        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+    HEADLESS_SKILLS = ["implement-feature", "fix-bug"]
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_headless_interaction(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
         content = skill_path.read_text()
         assert "<headless-interaction>" in content and "</headless-interaction>" in content, (
-            "implement-feature/SKILL.md missing <headless-interaction> block"
+            f"{skill_name}/SKILL.md missing <headless-interaction> block"
         )
 
-    def test_implement_feature_has_headless_checkpoint(self):
-        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_headless_checkpoint(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
         content = skill_path.read_text()
         assert "<headless-checkpoint>" in content and "</headless-checkpoint>" in content, (
-            "implement-feature/SKILL.md missing <headless-checkpoint> block"
+            f"{skill_name}/SKILL.md missing <headless-checkpoint> block"
         )
 
-    def test_implement_feature_has_headless_resume(self):
-        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_headless_resume(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
         content = skill_path.read_text()
         assert "<headless-resume>" in content and "</headless-resume>" in content, (
-            "implement-feature/SKILL.md missing <headless-resume> block"
+            f"{skill_name}/SKILL.md missing <headless-resume> block"
         )
 
-    EXPECTED_HEADLESS_ANNOTATION_COUNT = 17
+    # Expected [Headless annotation counts per skill
+    EXPECTED_COUNTS = {
+        "implement-feature": 18,  # 17 interaction points + 1 disabled-skill cleanup
+        "fix-bug": 11,            # 10 interaction points + 1 disabled-skill cleanup
+    }
 
-    def test_implement_feature_has_headless_annotations(self):
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_correct_headless_annotation_count(self, skill_name: str):
         """Annotation count must match expected — catches missing annotations on new steps."""
-        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
         content = skill_path.read_text()
-        count = content.count("[Headless:")
-        assert count == self.EXPECTED_HEADLESS_ANNOTATION_COUNT, (
-            f"implement-feature/SKILL.md has {count} [Headless:] annotations, "
-            f"expected {self.EXPECTED_HEADLESS_ANNOTATION_COUNT}. If you added a new "
-            f"interaction point, add a [Headless:] annotation and bump this count."
+        count = content.count("[Headless")  # matches [Headless: and [Headless cleanup]
+        expected = self.EXPECTED_COUNTS[skill_name]
+        assert count == expected, (
+            f"{skill_name}/SKILL.md has {count} [Headless] annotations, "
+            f"expected {expected}. If you added a new interaction point, "
+            f"add a [Headless:] annotation and bump this count."
         )
 
     def test_headless_resume_in_resumption_protocol(self):

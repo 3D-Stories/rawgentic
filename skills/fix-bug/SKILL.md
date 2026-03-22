@@ -68,7 +68,8 @@ Before executing any workflow steps, load the project configuration:
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 1b. **Disabled skill check:** After resolving the active project, read `.rawgentic_workspace.json` (if not already read in step 1) and find the active project's entry.
-   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it: **STOP.**
+   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it:
+     **[Headless cleanup]:** Before stopping, check if `claude_docs/headless_suspend.json` exists. If it does, delete it, remove `rawgentic:ai-waiting` label from the issue (read issue number from suspend file), and add `rawgentic:ai-error` with a comment: "This skill was disabled after a headless session was suspended. The pending question can no longer be processed." Then **STOP.**
      - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
        "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
        Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea-*, update-docs -> BMAD tech-writer.
@@ -105,6 +106,81 @@ If this workflow discovers new project capabilities during execution (e.g., a ne
 - Do NOT overwrite existing non-null values without asking the user
 - Always read full file, modify in memory, write full file back
 </learning-config>
+
+<headless-interaction>
+When the workflow hits a user interaction point, check whether headless mode is active
+(additionalContext contains "HEADLESS MODE active"). If NOT in headless mode, behave
+as normal (STOP and wait for terminal input). If in headless mode, follow this protocol:
+
+**Interaction types and headless behavior:**
+
+AUTO-RESOLVE interactions (no user input needed in headless mode):
+- Step 1: Accept bug confirmation for WF1-created issues
+- Step 6: Always stash dirty directory (post brief issue comment with stash ref)
+- Step 6: Always resume existing branch
+
+QUESTION interactions (post comment, suspend, exit):
+- Step 1: Confirm bug for manually-created issues
+- Step 1: Missing reproduction steps (not security/STRIDE)
+- Step 2: Cannot reproduce — ask for more details
+- Step 2: Complex bug upgrade to WF2
+- Step 3: Multiple root causes — ask for guidance
+- Step 4: Ambiguity circuit breaker findings
+- Step 7: Reproduction test passes immediately — ask user to verify
+- Step 12: Manual deploy confirmation
+- Step 14: Merge approval (if project requires explicit approval)
+
+ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
+- Step 1: Issue closed or not found
+- Step 4: Loop-back budget exhausted
+- Step 11: CI timeout (after 2x wait)
+- Step 9: Design flaw + budget exhausted
+
+**Protocol details are identical to WF2's `<headless-interaction>` block.**
+See implement-feature SKILL.md for the full QUESTION protocol (post → label →
+suspend file → WAL entry → checkpoint → exit), ERROR protocol, and label
+management details.
+</headless-interaction>
+
+<headless-checkpoint>
+Before exiting in headless mode, write a rich checkpoint to session notes.
+Must contain enough context for a FRESH session to reconstruct workflow state.
+
+**Always include:** Current step, branch name, last commit SHA, loop-back budget,
+pending question + question_id, bug classification, RCA findings.
+
+**Include if available:** Root cause analysis, fix approach, reproduction test
+file + test name, implementation progress.
+
+**Format:**
+```
+### WF3 Headless Checkpoint — Step N (SUSPENDED)
+- Branch: fix/42-foo
+- Last commit: abc123
+- Loop-back budget: 0/2 used
+- Bug classification: [simple/moderate/complex]
+- RCA: [1-line root cause summary]
+- Pending question: [question_id] — [brief description]
+```
+</headless-checkpoint>
+
+<headless-resume>
+On every fresh session start, BEFORE the normal resumption protocol:
+
+0. **Load project configuration** per `<config-loading>` to populate `capabilities.repo`.
+1. Check if `claude_docs/headless_suspend.json` exists.
+2. If missing → no pending question. Proceed with normal resumption protocol.
+3. If present → read suspend state, fetch user's reply from GitHub:
+   ```bash
+   gh api repos/${capabilities.repo}/issues/ISSUE/comments \
+     --jq '[.[] | select(.created_at > "SUSPEND_TIMESTAMP")] | map(select(.user.login != "github-actions[bot]")) | last.body // empty'
+   ```
+4. If no reply → user hasn't responded. Exit cleanly.
+5. If reply unparseable → increment clarification_round (update ONLY clarification_round
+   in suspend file, NOT suspended_at), post clarification comment, re-add ai-waiting, exit.
+6. If reply valid → delete suspend file, remove ai-waiting + ai-error labels, inject
+   choice, continue with normal resumption protocol.
+</headless-resume>
 
 <environment-setup>
 PROJECT_ROOT is populated at workflow start (Step 1) by running:
@@ -143,7 +219,7 @@ WF3 accepts bug reports of any complexity. However:
 </complexity-override>
 
 <ambiguity-circuit-breaker>
-Inherited from WF2 (identical behavior): Apply ALL findings from quality gates automatically. If any finding is ambiguous, conflicting, or requires judgment — STOP and present to user for resolution before proceeding. User has final authority (P11).
+Inherited from WF2 (identical behavior): Apply ALL findings from quality gates automatically. If any finding is ambiguous, conflicting, or requires judgment — STOP and present to user for resolution before proceeding. User has final authority (P11). **[Headless: QUESTION — post comment with all ambiguous/conflicting findings and resolution options, suspend.]**
 </ambiguity-circuit-breaker>
 
 <mandatory-rule>
@@ -172,8 +248,8 @@ This enables workflow resumption if context is lost.
    - STRIDE "Recommended Remediation" → treat as acceptance criteria for the fix
    - If the issue has the `security` label but no recognizable STRIDE fields, fall back to standard parsing and ask the user to clarify.
 6. Display to the user: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment.
-7. Ask user to confirm this is the correct bug to fix.
-8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding.
+7. Ask user to confirm this is the correct bug to fix. **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary for confirmation, suspend.]**
+8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding. **[Headless: QUESTION — post comment requesting reproduction steps, suspend.]**
 
 ### Output Format
 
@@ -195,13 +271,13 @@ Environment: <from issue>
 Confirm this is the bug to fix, or provide corrections.
 ```
 
-Wait for user confirmation before proceeding to Step 2.
+Wait for user confirmation before proceeding to Step 2. **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary, suspend.]**
 
 ### Failure Modes
 
 - Issue not found → ask for correct number
 - Issue is not a bug → suggest WF2 (`/implement-feature`) instead
-- Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding
+- Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding. **[Headless: QUESTION — post comment requesting details, suspend.]**
 
 ---
 
@@ -239,7 +315,7 @@ Bug analysis (internal working artifact):
 
 ### Failure Modes
 
-- Cannot reproduce from description → ask user for more details
+- Cannot reproduce from description → ask user for more details. **[Headless: QUESTION — post comment with reproduction attempt details, suspend.]**
 - Bug is in a dependency, not our code → document and suggest upstream report
 - Classified as `complex_bug` → prompt upgrade to WF2 (user can override)
 
@@ -340,8 +416,8 @@ Active fix branch with dependencies installed.
 
 ### Failure Modes
 
-- Working directory is dirty → stash changes first (`git stash`), create branch, then ask user if stash should be applied
-- Branch name already exists → ask user if they want to resume (checkout existing branch) or start fresh (delete and recreate)
+- Working directory is dirty → stash changes first (`git stash`), create branch, then ask user if stash should be applied. **[Headless: AUTO-RESOLVE — always stash, post brief issue comment with stash ref.]**
+- Branch name already exists → ask user if they want to resume (checkout existing branch) or start fresh (delete and recreate). **[Headless: AUTO-RESOLVE — always resume existing branch.]**
 - Push fails (network) → continue locally, push will be retried by P4 remote sync
 
 ---
@@ -371,7 +447,7 @@ Fixed code with passing tests on fix branch.
 
 ### Failure Modes
 
-- Reproduction test passes immediately → bug may not be reproducible in current code. Ask user to verify.
+- Reproduction test passes immediately → bug may not be reproducible in current code. Ask user to verify. **[Headless: QUESTION — post comment explaining bug may already be fixed, suspend.]**
 - Fix breaks other tests → investigate shared state or wrong approach
 - Fix requires changes beyond plan scope → flag and decide: expand plan or split into multiple fixes
 
@@ -507,7 +583,7 @@ CI pass/fail status.
 
 - CI flaky failure → retry once
 - Genuine test failure → fix and push
-- CI timeout → wait and check again; if persistent, ask user for explicit approval before proceeding with local test results only
+- CI timeout → wait and check again; if persistent, ask user for explicit approval before proceeding with local test results only. **[Headless: AUTO-RESOLVE — wait up to 2x timeout. If still not done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit.]**
 
 ---
 

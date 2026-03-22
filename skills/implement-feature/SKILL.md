@@ -75,7 +75,8 @@ Before executing any workflow steps, load the project configuration:
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 1b. **Disabled skill check:** After resolving the active project, read `.rawgentic_workspace.json` (if not already read in step 1) and find the active project's entry.
-   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it: **STOP.**
+   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it:
+     **[Headless cleanup]:** Before stopping, check if `claude_docs/headless_suspend.json` exists. If it does, delete it, remove `rawgentic:ai-waiting` label from the issue (read issue number from suspend file), and add `rawgentic:ai-error` with a comment: "This skill was disabled after a headless session was suspended. The pending question can no longer be processed." Then **STOP.**
      - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
        "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
        Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea-*, update-docs -> BMAD tech-writer.
@@ -231,7 +232,7 @@ FRESH session (no --resume, no conversation history) to reconstruct the workflow
 - The question that was posted (for QUESTION suspends)
 - The question_id (for reply correlation)
 
-**Include if available (from conversation context):**
+**Include if available (from prior session notes or current conversation):**
 - Design approach selected and rationale (if past Step 3)
 - Key critique findings and how they were resolved (if past Step 4)
 - Implementation plan summary (if past Step 5)
