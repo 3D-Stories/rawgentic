@@ -53,7 +53,8 @@ while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
 done
 
 # --- Resolve claude_docs path ---
-CLAUDE_DOCS="$WS_ROOT/claude_docs"
+CLAUDE_DOCS=""
+[ -n "$WS_ROOT" ] && CLAUDE_DOCS="$WS_ROOT/claude_docs"
 if [ -n "$WORKSPACE_FILE" ] && command -v "$JQ" &>/dev/null; then
     _cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
     if [ -n "$_cdp" ]; then
@@ -127,9 +128,16 @@ for path in sys.argv[1:]:
                     pass
     except FileNotFoundError:
         pass
-with open(sys.argv[2], 'w') as f:
-    for line, _ in seen.values():
-        f.write(line + '\n')
+import os, tempfile
+tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(sys.argv[2]))
+try:
+    with os.fdopen(tmp_fd, 'w') as f:
+        for line, _ in seen.values():
+            f.write(line + '\n')
+    os.replace(tmp_path, sys.argv[2])
+except Exception:
+    os.unlink(tmp_path)
+    raise
 " "$source/session_registry.jsonl" "$target/session_registry.jsonl" 2>/dev/null || true
         else
             cp "$source/session_registry.jsonl" "$target/session_registry.jsonl" 2>/dev/null || true
@@ -216,7 +224,7 @@ with open(sys.argv[2], 'w') as f:
     "$JQ" '. + {"claudeDocsPath": "~/claude_docs"}' "$WORKSPACE_FILE" > "$tmp_ws" 2>/dev/null && \
         mv "$tmp_ws" "$WORKSPACE_FILE" 2>/dev/null || {
         rm -f "$tmp_ws" 2>/dev/null || true
-        CONTEXT_PARTS+=("WARNING: claude_docs migrated but failed to update workspace config")
+        CONTEXT_PARTS+=("WARNING: claude_docs migrated to ~/claude_docs/ but failed to write claudeDocsPath to .rawgentic_workspace.json. Manually add '\"claudeDocsPath\": \"~/claude_docs\"' to the workspace config to complete migration.")
         return 0
     }
 
@@ -240,8 +248,8 @@ _do_bak_cleanup() {
             fname=$(basename "$f")
             local target_f="$CLAUDE_DOCS/wal/$fname"
             if [ -f "$target_f" ]; then
-                # Append any new lines (lines in .bak not in target)
-                comm -23 <(sort "$f" 2>/dev/null) <(sort "$target_f" 2>/dev/null) >> "$target_f" 2>/dev/null || true
+                # Append orphaned writes — WAL readers tolerate duplicates
+                cat "$f" >> "$target_f" 2>/dev/null || true
             else
                 cp "$f" "$target_f" 2>/dev/null || true
             fi
@@ -666,7 +674,7 @@ if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
             # Warn: different session but not TTL-expired
             SUSPEND_STEP=$("$JQ" -r '.step // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
             SUSPEND_ISSUE=$("$JQ" -r '.issue // "unknown"' "$SUSPEND_FILE" 2>/dev/null || true)
-            CONTEXT_PARTS+=("WARNING: Stale headless suspend file found from a previous session (issue #${SUSPEND_ISSUE}, step ${SUSPEND_STEP}). This file may need cleanup. Delete claude_docs/headless_suspend.json if the previous session is no longer active.")
+            CONTEXT_PARTS+=("WARNING: Stale headless suspend file found from a previous session (issue #${SUSPEND_ISSUE}, step ${SUSPEND_STEP}). This file may need cleanup. Delete ${SUSPEND_FILE} if the previous session is no longer active.")
         fi
     fi
 fi

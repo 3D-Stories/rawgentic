@@ -42,7 +42,13 @@ done
 # --- Resolve claude_docs path ---
 CLAUDE_DOCS="$WS_ROOT/claude_docs"
 _cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WS_ROOT/.rawgentic_workspace.json" 2>/dev/null || true)
-if [ -n "$_cdp" ]; then CLAUDE_DOCS="${_cdp/#\~/$HOME}"; fi
+if [ -n "$_cdp" ]; then
+    _cdp="${_cdp/#\~/$HOME}"
+    _resolved=$(realpath -m "$_cdp" 2>/dev/null || echo "$_cdp")
+    if [ "${_resolved#$HOME/}" != "$_resolved" ] || [ "$_resolved" = "$HOME" ]; then
+        CLAUDE_DOCS="$_resolved"
+    fi
+fi
 
 # --- Read session ID (with staleness check) ---
 SESSION_FILE="$CLAUDE_DOCS/.current_session_id"
