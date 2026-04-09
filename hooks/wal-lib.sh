@@ -59,6 +59,42 @@ wal_find_workspace() {
   return 1
 }
 
+# --- claude_docs path resolution ---
+# Resolves the claude_docs directory from workspace config.
+# If claudeDocsPath is set, uses that (with ~ expansion and path validation).
+# Otherwise falls back to workspace-relative claude_docs/.
+# Requires: WAL_WORKSPACE_FILE, WAL_WORKSPACE_ROOT (or WAL_CWD) to be set.
+# Sets: WAL_CLAUDE_DOCS
+wal_resolve_claude_docs() {
+  local root="${WAL_WORKSPACE_ROOT:-$WAL_CWD}"
+  WAL_CLAUDE_DOCS="$root/claude_docs"
+
+  if [ -n "${WAL_WORKSPACE_FILE:-}" ] && [ -f "$WAL_WORKSPACE_FILE" ]; then
+    local cdp
+    cdp=$("$WAL_JQ" -r '.claudeDocsPath // ""' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
+    if [ -n "$cdp" ]; then
+      local had_tilde=false
+      if [ "${cdp#\~}" != "$cdp" ]; then
+        had_tilde=true
+        cdp="${cdp/#\~/$HOME}"
+      fi
+      local resolved
+      resolved=$(realpath -m "$cdp" 2>/dev/null || echo "$cdp")
+      if [ "$had_tilde" = true ]; then
+        # Tilde-expanded paths must stay under $HOME (path traversal guard)
+        if [ "${resolved#$HOME/}" != "$resolved" ] || [ "$resolved" = "$HOME" ]; then
+          WAL_CLAUDE_DOCS="$resolved"
+        else
+          echo "wal-lib: WARNING: claudeDocsPath traversal rejected: $cdp" >&2
+        fi
+      else
+        # Explicit absolute paths are trusted
+        WAL_CLAUDE_DOCS="$resolved"
+      fi
+    fi
+  fi
+}
+
 # --- WAL file setup ---
 # Creates claude_docs/wal directory and sets WAL_FILE path.
 # If WAL_PROJECT is set, uses per-project WAL file.
@@ -69,8 +105,11 @@ wal_init_file() {
   if [ -z "${WAL_PROJECT:-}" ]; then
     return 0
   fi
-  local root="${WAL_WORKSPACE_ROOT:-$WAL_CWD}"
-  WAL_DIR="$root/claude_docs/wal"
+  # Resolve claude_docs path if not already done
+  if [ -z "${WAL_CLAUDE_DOCS:-}" ]; then
+    wal_resolve_claude_docs
+  fi
+  WAL_DIR="$WAL_CLAUDE_DOCS/wal"
   mkdir -p "$WAL_DIR"
   WAL_FILE="$WAL_DIR/${WAL_PROJECT}.jsonl"
 }
@@ -154,8 +193,12 @@ wal_append_phase() {
 wal_resolve_project() {
   WAL_PROJECT=""
   WAL_PROJECT_PATH=""
+  # Resolve claude_docs path if not already done
+  if [ -z "${WAL_CLAUDE_DOCS:-}" ]; then
+    wal_resolve_claude_docs
+  fi
   local root="${WAL_WORKSPACE_ROOT:-$WAL_CWD}"
-  local registry_file="$root/claude_docs/session_registry.jsonl"
+  local registry_file="$WAL_CLAUDE_DOCS/session_registry.jsonl"
 
   # Check session registry first
   if [ -f "$registry_file" ] && [ "$WAL_SESSION_ID" != "unknown" ]; then

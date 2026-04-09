@@ -39,8 +39,19 @@ while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
 done
 [ -z "$WS_ROOT" ] && { echo "No rawgentic workspace found" >&2; exit 1; }
 
+# --- Resolve claude_docs path ---
+CLAUDE_DOCS="$WS_ROOT/claude_docs"
+_cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WS_ROOT/.rawgentic_workspace.json" 2>/dev/null || true)
+if [ -n "$_cdp" ]; then
+    _cdp="${_cdp/#\~/$HOME}"
+    _resolved=$(realpath -m "$_cdp" 2>/dev/null || echo "$_cdp")
+    if [ "${_resolved#$HOME/}" != "$_resolved" ] || [ "$_resolved" = "$HOME" ]; then
+        CLAUDE_DOCS="$_resolved"
+    fi
+fi
+
 # --- Read session ID (with staleness check) ---
-SESSION_FILE="$WS_ROOT/claude_docs/.current_session_id"
+SESSION_FILE="$CLAUDE_DOCS/.current_session_id"
 [ -f "$SESSION_FILE" ] || { echo "No .current_session_id file" >&2; exit 1; }
 SESSION_ID=$(cat "$SESSION_FILE" | tr -d '[:space:]')
 [ -z "$SESSION_ID" ] && { echo "Empty session ID" >&2; exit 1; }
@@ -53,7 +64,7 @@ if [ "$SESSION_FILE_AGE" -gt 86400 ]; then
 fi
 
 # --- Resolve project from registry ---
-REGISTRY="$WS_ROOT/claude_docs/session_registry.jsonl"
+REGISTRY="$CLAUDE_DOCS/session_registry.jsonl"
 PROJECT=""
 if [ -f "$REGISTRY" ]; then
     REG_LINE=$(grep "$SESSION_ID" "$REGISTRY" 2>/dev/null | tail -1 || true)
@@ -78,7 +89,7 @@ case "$PROJECT" in
 esac
 
 # --- Write SUSPEND entry to per-project WAL ---
-WAL_DIR="$WS_ROOT/claude_docs/wal"
+WAL_DIR="$CLAUDE_DOCS/wal"
 mkdir -p "$WAL_DIR" 2>/dev/null || true
 
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

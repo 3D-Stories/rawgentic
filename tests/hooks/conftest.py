@@ -29,6 +29,18 @@ class Workspace:
     registry: Path
     wal_dir: Path
     notes_dir: Path
+    claude_docs: Path = None  # type: ignore[assignment]
+
+    def home_env(self, home_dir: Path | None = None) -> dict[str, str]:
+        """Return env dict with HOME overridden for safe migration testing.
+
+        When hooks expand ~ to $HOME, this ensures they write to a temp dir
+        instead of the real ~/claude_docs/.
+        """
+        env = dict(os.environ)
+        if home_dir is not None:
+            env["HOME"] = str(home_dir)
+        return env
 
 
 @pytest.fixture()
@@ -69,6 +81,7 @@ def make_workspace(tmp_path: Path):
         session_notes: dict[str, str] | None = None,
         create_project_dirs: bool = True,
         project_configs: dict[str, dict[str, Any]] | None = None,
+        claude_docs_path: Path | str | None = None,
     ) -> Workspace:
         root = tmp_path
 
@@ -86,16 +99,27 @@ def make_workspace(tmp_path: Path):
 
         # -- .rawgentic_workspace.json --
         workspace_json = root / ".rawgentic_workspace.json"
-        workspace_json.write_text(
-            json.dumps(
-                {"version": 1, "projectsDir": "./projects", "projects": projects},
-                indent=2,
-            )
-        )
+        ws_data: dict[str, Any] = {
+            "version": 1,
+            "projectsDir": "./projects",
+            "projects": projects,
+        }
+        if claude_docs_path is not None:
+            ws_data["claudeDocsPath"] = str(claude_docs_path)
+        workspace_json.write_text(json.dumps(ws_data, indent=2))
 
         # -- claude_docs directory tree --
-        claude_docs = root / "claude_docs"
-        claude_docs.mkdir(parents=True, exist_ok=True)
+        if claude_docs_path is not None:
+            # External path: create there and symlink from workspace root
+            ext_path = Path(claude_docs_path)
+            ext_path.mkdir(parents=True, exist_ok=True)
+            claude_docs = ext_path
+            symlink = root / "claude_docs"
+            if not symlink.exists():
+                symlink.symlink_to(ext_path)
+        else:
+            claude_docs = root / "claude_docs"
+            claude_docs.mkdir(parents=True, exist_ok=True)
 
         # session_registry.jsonl
         registry = claude_docs / "session_registry.jsonl"
@@ -150,6 +174,7 @@ def make_workspace(tmp_path: Path):
             registry=registry,
             wal_dir=wal_dir,
             notes_dir=notes_dir,
+            claude_docs=claude_docs,
         )
 
     return _factory

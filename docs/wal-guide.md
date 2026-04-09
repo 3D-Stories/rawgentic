@@ -7,9 +7,19 @@ session recovery and audit. Each invocation produces an INTENT before execution
 and a DONE or FAIL after. Sessions end with a STOP marker (or SUSPEND for
 headless sessions awaiting user input).
 
-WAL files live under `claude_docs/wal/` relative to the workspace root:
+WAL files live under the `claude_docs/` directory:
 - Per-project: `claude_docs/wal/<project>.jsonl`
 - Legacy fallback: `claude_docs/wal.jsonl` (when no project is resolved)
+
+### Path Resolution
+
+The `claude_docs/` directory is resolved from the `claudeDocsPath` field in
+`.rawgentic_workspace.json`. If the field is absent, hooks fall back to
+`<workspace_root>/claude_docs/` for backward compatibility.
+
+After migration (automatic on first startup with v2.20.0+), session data lives
+at `~/claude_docs/` and a symlink at the old workspace-relative location
+preserves backward compatibility.
 
 ## WAL Entry Format
 

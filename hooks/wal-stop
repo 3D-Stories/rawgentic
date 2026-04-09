@@ -33,8 +33,19 @@ _do_stop() {
     done
     [ -z "$WORKSPACE_FILE" ] && exit 0
 
+    # --- Resolve claude_docs path ---
+    CLAUDE_DOCS="$WS_ROOT/claude_docs"
+    _cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
+    if [ -n "$_cdp" ]; then
+        _cdp="${_cdp/#\~/$HOME}"
+        _resolved=$(realpath -m "$_cdp" 2>/dev/null || echo "$_cdp")
+        if [ "${_resolved#$HOME/}" != "$_resolved" ] || [ "$_resolved" = "$HOME" ]; then
+            CLAUDE_DOCS="$_resolved"
+        fi
+    fi
+
     # --- Lookup project from registry ---
-    REGISTRY_FILE="$WS_ROOT/claude_docs/session_registry.jsonl"
+    REGISTRY_FILE="$CLAUDE_DOCS/session_registry.jsonl"
     PROJECT=""
     if [ -f "$REGISTRY_FILE" ]; then
         REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
@@ -61,7 +72,7 @@ _do_stop() {
     esac
 
     # --- Write session end marker to notes ---
-    NOTES_DIR="$WS_ROOT/claude_docs/session_notes"
+    NOTES_DIR="$CLAUDE_DOCS/session_notes"
     NOTES_FILE="$NOTES_DIR/${PROJECT}.md"
     TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -84,7 +95,7 @@ _do_stop() {
 
     # --- SUSPEND guard: headless mode check ---
     # If headless suspend file exists and session_id matches, write SUSPENDED instead of COMPLETE.
-    SUSPEND_FILE="$WS_ROOT/claude_docs/headless_suspend.json"
+    SUSPEND_FILE="$CLAUDE_DOCS/headless_suspend.json"
     IS_SUSPENDED=false
     if [ -f "$SUSPEND_FILE" ]; then
         SUSPEND_SID=$("$JQ" -r '.session_id // ""' "$SUSPEND_FILE" 2>/dev/null || true)
@@ -99,7 +110,7 @@ _do_stop() {
         printf '\n---\n# Session: %s | ID: %s | Status: %s\n## Project: %s\n' \
             "$TS" "$SESSION_ID" "$status" "$PROJECT" >> "$NOTES_FILE"
 
-        WAL_DIR="$WS_ROOT/claude_docs/wal"
+        WAL_DIR="$CLAUDE_DOCS/wal"
         mkdir -p "$WAL_DIR" 2>/dev/null || true
         "$JQ" -nc \
             --arg ts "$TS" \

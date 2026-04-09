@@ -63,8 +63,19 @@ _is_project_file() {
     return 1
 }
 
+# --- Resolve claude_docs path ---
+CLAUDE_DOCS="$WORKSPACE_ROOT/claude_docs"
+_cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
+if [ -n "$_cdp" ]; then
+    _cdp="${_cdp/#\~/$HOME}"
+    _resolved=$(realpath -m "$_cdp" 2>/dev/null || echo "$_cdp")
+    if [ "${_resolved#$HOME/}" != "$_resolved" ] || [ "$_resolved" = "$HOME" ]; then
+        CLAUDE_DOCS="$_resolved"
+    fi
+fi
+
 # --- Resolve bound project from registry ---
-REGISTRY_FILE="$WORKSPACE_ROOT/claude_docs/session_registry.jsonl"
+REGISTRY_FILE="$CLAUDE_DOCS/session_registry.jsonl"
 BOUND_PROJECT=""
 if [ -f "$REGISTRY_FILE" ]; then
     REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
