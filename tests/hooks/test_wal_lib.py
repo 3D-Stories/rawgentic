@@ -421,3 +421,113 @@ echo "guards:$WAL_ACTIVE_WAL_GUARDS"
         )
         assert level == "custom"
         assert guards == "ssh-prod"
+
+
+class TestWalResolveClaudeDocs:
+    """Tests for wal_resolve_claude_docs()."""
+
+    def _resolve(self, ws, *, home_dir=None):
+        """Run wal_resolve_claude_docs and return WAL_CLAUDE_DOCS."""
+        env = None
+        if home_dir:
+            env = {"HOME": str(home_dir)}
+        script = f"""
+source "{WAL_LIB}"
+WAL_WORKSPACE_FILE="{ws.workspace_json}"
+WAL_WORKSPACE_ROOT="{ws.root}"
+WAL_CWD="{ws.root}"
+wal_resolve_claude_docs
+echo "$WAL_CLAUDE_DOCS"
+"""
+        stdout, stderr, rc = _run_bash(script, env_override=env)
+        assert rc == 0
+        return stdout, stderr
+
+    def test_reads_claude_docs_path_from_config(self, make_workspace, tmp_path):
+        """When claudeDocsPath is set, resolves to the expanded path."""
+        target = tmp_path / "fakehome" / "claude_docs"
+        target.mkdir(parents=True)
+        ws = make_workspace(claude_docs_path=str(target))
+        result, _ = self._resolve(ws)
+        assert result == str(target)
+
+    def test_tilde_expansion(self, make_workspace, tmp_path):
+        """Tilde in claudeDocsPath is expanded to $HOME."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        ws = make_workspace()
+        # Manually set claudeDocsPath with tilde
+        import json as _json
+        ws_data = _json.loads(ws.workspace_json.read_text())
+        ws_data["claudeDocsPath"] = "~/claude_docs"
+        ws.workspace_json.write_text(_json.dumps(ws_data))
+        result, _ = self._resolve(ws, home_dir=fake_home)
+        assert result == str(fake_home / "claude_docs")
+
+    def test_falls_back_to_workspace_relative(self, make_workspace):
+        """When claudeDocsPath is missing, falls back to workspace-relative."""
+        ws = make_workspace()
+        result, _ = self._resolve(ws)
+        assert result == f"{ws.root}/claude_docs"
+
+    def test_rejects_path_traversal(self, make_workspace, tmp_path):
+        """Paths that resolve outside $HOME are rejected; falls back."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        ws = make_workspace()
+        import json as _json
+        ws_data = _json.loads(ws.workspace_json.read_text())
+        ws_data["claudeDocsPath"] = "~/../../etc/evil"
+        ws.workspace_json.write_text(_json.dumps(ws_data))
+        result, stderr = self._resolve(ws, home_dir=fake_home)
+        # Should fall back to workspace-relative, not resolve to /etc/evil
+        assert result == f"{ws.root}/claude_docs"
+        assert "traversal" in stderr.lower() or "rejected" in stderr.lower()
+
+    def test_init_file_uses_resolved_path(self, make_workspace, tmp_path):
+        """wal_init_file() uses WAL_CLAUDE_DOCS for the WAL directory."""
+        target = tmp_path / "fakehome" / "claude_docs"
+        target.mkdir(parents=True)
+        ws = make_workspace(claude_docs_path=str(target))
+        script = f"""
+source "{WAL_LIB}"
+WAL_WORKSPACE_FILE="{ws.workspace_json}"
+WAL_WORKSPACE_ROOT="{ws.root}"
+WAL_CWD="{ws.root}"
+WAL_PROJECT="testproj"
+wal_resolve_claude_docs
+wal_init_file
+echo "$WAL_DIR"
+echo "$WAL_FILE"
+"""
+        stdout, _, rc = _run_bash(script)
+        assert rc == 0
+        lines = stdout.strip().split("\n")
+        assert lines[0] == str(target / "wal")
+        assert lines[1] == str(target / "wal" / "testproj.jsonl")
+
+    def test_resolve_project_uses_resolved_path(self, make_workspace, tmp_path):
+        """wal_resolve_project() reads registry from WAL_CLAUDE_DOCS."""
+        target = tmp_path / "fakehome" / "claude_docs"
+        target.mkdir(parents=True)
+        ws = make_workspace(
+            claude_docs_path=str(target),
+            registry_entries=[{
+                "session_id": "s1",
+                "project": "testproj",
+                "project_path": "./projects/testproj",
+            }],
+        )
+        script = f"""
+source "{WAL_LIB}"
+WAL_WORKSPACE_FILE="{ws.workspace_json}"
+WAL_WORKSPACE_ROOT="{ws.root}"
+WAL_CWD="{ws.root}"
+WAL_SESSION_ID="s1"
+wal_resolve_claude_docs
+wal_resolve_project
+echo "$WAL_PROJECT"
+"""
+        stdout, _, rc = _run_bash(script)
+        assert rc == 0
+        assert stdout == "testproj"
