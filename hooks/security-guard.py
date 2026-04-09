@@ -129,9 +129,22 @@ def _log_headless_guard_block(findings, rel_path, workspace_root):
                 ws_root = cwd
             else:
                 return  # Cannot find workspace — skip audit logging
+        # Resolve claude_docs path from workspace config
+        claude_docs = os.path.join(ws_root, "claude_docs")
+        ws_config_path = os.path.join(ws_root, ".rawgentic_workspace.json")
+        if os.path.isfile(ws_config_path):
+            try:
+                with open(ws_config_path) as f:
+                    ws_config = json.load(f)
+                cdp = ws_config.get("claudeDocsPath", "")
+                if cdp:
+                    claude_docs = os.path.expanduser(cdp)
+            except (json.JSONDecodeError, OSError):
+                pass
+
         # Read session registry to find the project
-        registry_path = os.path.join(ws_root, "claude_docs", "session_registry.jsonl")
-        session_id_path = os.path.join(ws_root, "claude_docs", ".current_session_id")
+        registry_path = os.path.join(claude_docs, "session_registry.jsonl")
+        session_id_path = os.path.join(claude_docs, ".current_session_id")
 
         session_id = "unknown"
         if os.path.isfile(session_id_path):
@@ -146,7 +159,7 @@ def _log_headless_guard_block(findings, rel_path, workspace_root):
                         entry = json.loads(line)
                         project = entry.get("project", "unknown")
 
-        wal_dir = os.path.join(ws_root, "claude_docs", "wal")
+        wal_dir = os.path.join(claude_docs, "wal")
         os.makedirs(wal_dir, exist_ok=True)
         wal_file = os.path.join(wal_dir, f"{project}.jsonl")
 
