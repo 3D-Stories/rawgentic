@@ -425,10 +425,8 @@ class TestSizeHandler:
         notes_file = ws.notes_dir / "testproj.md"
         content = notes_file.read_text()
         lines = content.strip().split("\n")
-        # After archival resets + size handler: archival fires first at 600+,
-        # resetting to ~1 line, so size handler won't trigger.
-        # But if archival fails or is bypassed, size handler catches it.
-        # For this test, notes are 850 lines > 600, archival runs first.
+        # Size handler trims notes > 800 lines to last 200 on startup.
+        # For this test, notes are 850 lines > 800, so handler trims.
         # After archival: file is reset to 1-line header.
         assert len(lines) < 600
 
