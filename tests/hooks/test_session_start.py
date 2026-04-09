@@ -1,4 +1,4 @@
-"""Tests for session-start hook — WAL recovery, rotation, archival, context, staleness."""
+"""Tests for session-start hook — WAL recovery, rotation, size handler, context, staleness."""
 import hashlib
 import json
 import os
@@ -99,8 +99,16 @@ class TestWalRecovery:
             assert "WAL RECOVERY" not in ctx
 
 
-class TestArchival:
-    def test_archives_large_session_notes_to_jsonl(self, make_workspace):
+class TestLegacyArchivalRemoved:
+    """Tests that legacy archival and enrichment code is removed.
+
+    These tests verify post-removal behavior: no archival, no enrichment
+    dispatch, and graceful handling when archive data exists but
+    query-archive.py is absent.
+    """
+
+    def test_no_archival_on_startup_large_notes(self, make_workspace):
+        """Large session notes (>600 lines) should NOT be archived to JSONL."""
         large_content = "# Notes\n" + ("x\n" * 700)
         ws = make_workspace(
             session_notes={"testproj": large_content},
@@ -110,31 +118,12 @@ class TestArchival:
 
         _run_session_start(ws.root, event_type="startup")
 
+        # Archive directory should NOT be created by archival
         archive_dir = ws.notes_dir / "archive"
-        assert archive_dir.exists()
-        jsonl_file = archive_dir / "testproj.jsonl"
-        assert jsonl_file.exists()
+        assert not archive_dir.exists(), "Archival should not create archive directory"
 
-        entry = json.loads(jsonl_file.read_text().strip())
-        assert entry["schema_version"] == 1
-        assert entry["source_file"] == "testproj.md"
-        assert entry["insights"] is None
-        assert "note" in entry
-
-        # Original file should be reset
-        current = (ws.notes_dir / "testproj.md").read_text()
-        assert len(current.splitlines()) < 5
-
-    def test_no_archival_on_compact_event(self, make_workspace):
-        large_content = "# Notes\n" + ("x\n" * 700)
-        ws = make_workspace(session_notes={"testproj": large_content})
-
-        _run_session_start(ws.root, event_type="compact")
-
-        archive_dir = ws.notes_dir / "archive"
-        assert not archive_dir.exists()
-
-    def test_enrichment_instruction_emitted(self, make_workspace):
+    def test_no_enrichment_instruction_on_startup(self, make_workspace):
+        """No ARCHIVE_ENRICHMENT instruction should be emitted."""
         large_content = "# Notes\n" + ("x\n" * 700)
         ws = make_workspace(
             session_notes={"testproj": large_content},
@@ -145,20 +134,17 @@ class TestArchival:
         stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
         assert rc == 0
         output = parse_hook_output(stdout)
-        assert output is not None
-        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
-        assert "ARCHIVE_ENRICHMENT" in ctx
-        assert "unenriched" in ctx.lower()
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "ARCHIVE_ENRICHMENT" not in ctx
 
-
-class TestArchiveContextInjection:
-    def test_injects_archive_summary_for_bound_session(self, make_workspace):
-        """Archive context is injected on startup when a bound session has archive data."""
+    def test_section_2b_graceful_fail_with_archive_data(self, make_workspace):
+        """Section 2b completes without error even when query-archive.py is absent."""
         ws = make_workspace(
             registry_entries=[{"session_id": "test-sess", "project": "testproj",
                                "project_path": "./projects/testproj"}],
         )
-        # Create archive with enriched entry
+        # Create archive data that Section 2b would try to query
         archive_dir = ws.notes_dir / "archive"
         archive_dir.mkdir(parents=True)
         entry = {
@@ -176,28 +162,7 @@ class TestArchiveContextInjection:
 
         stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
         assert rc == 0
-        output = parse_hook_output(stdout)
-        assert output is not None
-        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
-        assert "ARCHIVE CONTEXT" in ctx
-
-    def test_no_archive_context_without_registry(self, make_workspace):
-        """No archive context injected for unbound sessions."""
-        ws = make_workspace()
-        archive_dir = ws.notes_dir / "archive"
-        archive_dir.mkdir(parents=True)
-        entry = {
-            "schema_version": 1,
-            "archived_at": "2026-03-10T18:00:00Z",
-            "source_file": "testproj.md",
-            "line_count": 800,
-            "note": "# Session\nSome work.",
-            "insights": None,
-        }
-        (archive_dir / "testproj.jsonl").write_text(json.dumps(entry) + "\n")
-
-        stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
-        assert rc == 0
+        # Should not inject archive context (query-archive.py is absent)
         output = parse_hook_output(stdout)
         if output:
             ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
@@ -460,10 +425,8 @@ class TestSizeHandler:
         notes_file = ws.notes_dir / "testproj.md"
         content = notes_file.read_text()
         lines = content.strip().split("\n")
-        # After archival resets + size handler: archival fires first at 600+,
-        # resetting to ~1 line, so size handler won't trigger.
-        # But if archival fails or is bypassed, size handler catches it.
-        # For this test, notes are 850 lines > 600, archival runs first.
+        # Size handler trims notes > 800 lines to last 200 on startup.
+        # For this test, notes are 850 lines > 800, so handler trims.
         # After archival: file is reset to 1-line header.
         assert len(lines) < 600
 

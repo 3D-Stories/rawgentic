@@ -103,14 +103,11 @@ runs WAL recovery:
 
 ## Session Notes Size Handler (`hooks/notes-size-handler.py`)
 
-During long-running sessions, session notes files can grow unbounded because the
-JSONL archival (600-line threshold) only runs on startup. The size handler
-provides a mid-session safety net:
+The size handler is the primary growth control for session notes files:
 
 - **Threshold:** 800 lines
 - **Action:** Trim to the most recent 200 lines
-- **Triggers:** session-start on startup events (fallback after archival) and on
-  compact events (primary mid-session path)
+- **Triggers:** session-start on startup and compact events
 - **Optional ingestion:** Before trimming, the handler attempts to POST the full
   notes content to the memorypalace server at `localhost:PORT/ingest` (default
   port 9077, 2s timeout). If the server is unreachable, trimming proceeds

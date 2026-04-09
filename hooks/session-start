@@ -403,62 +403,11 @@ Review these and determine if any recovery action is needed.")
 _do_wal_ops 2>/dev/null || true
 
 # =========================================================================
-# SECTION 2: Session Notes Archival (startup event only)
-# =========================================================================
-_do_archival() {
-    [ "$EVENT_TYPE" = "startup" ] || return 0
-
-    NOTES_DIR="$CLAUDE_DOCS/session_notes"
-    [ -d "$NOTES_DIR" ] || return 0
-
-    ARCHIVE_DIR="$NOTES_DIR/archive"
-
-    for notes_file in "$NOTES_DIR"/*.md; do
-        [ -f "$notes_file" ] || continue
-        LINE_COUNT=$(wc -l < "$notes_file")
-        if [ "$LINE_COUNT" -gt 600 ]; then
-            RESULT=$(python3 "$SCRIPT_DIR/archive-notes.py" "$notes_file" "$ARCHIVE_DIR" 2>/dev/null) || continue
-            PROJECT=$(printf '%s' "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('project','unknown'))" 2>/dev/null || echo "unknown")
-            CONTEXT_PARTS+=("Session notes for '$PROJECT' archived ($LINE_COUNT lines) to JSONL archive.")
-        fi
-    done
-
-    # Enrichment instruction: check for unenriched entries across archive JSONL files
-    if [ -d "$ARCHIVE_DIR" ]; then
-        UNENRICHED_COUNT=$(python3 -c "
-import json, glob
-count = 0
-for f in glob.glob('${ARCHIVE_DIR}/*.jsonl'):
-    with open(f) as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                if json.loads(line).get('insights') is None:
-                    count += 1
-            except json.JSONDecodeError:
-                pass
-print(count)
-" 2>/dev/null || echo "0")
-        if [ "$UNENRICHED_COUNT" -gt 0 ]; then
-            CONTEXT_PARTS+=("ARCHIVE_ENRICHMENT: There are $UNENRICHED_COUNT unenriched session archive entries in claude_docs/session_notes/archive/. When convenient, in the background after the user's first prompt, use the Agent tool with model: \"haiku\" to read each *.jsonl file and extract structured insights for entries where insights is null. IMPORTANT: To update the JSONL file safely, write the modified content to a .tmp file first, then use mv to atomically replace the original (this prevents data loss if archival appends concurrently). Insights schema: {\"summary\": \"one-line summary\", \"sessions\": [{\"task\": \"string\", \"status\": \"string\", \"patterns\": [\"string\"], \"decisions\": [\"string\"], \"artifacts\": [\"string\"], \"issues_encountered\": [\"string\"]}]}.")
-        fi
-    fi
-}
-_do_archival 2>/dev/null || true
-
-# =========================================================================
-# SECTION 2a: Notes Size Handler (startup + compact events)
+# SECTION 2: Notes Size Handler (startup + compact events)
 # =========================================================================
 # Trims session notes exceeding 800 lines to keep the most recent 200.
-# Runs on compact (mid-session) as the primary safety net, and on startup
-# as a fallback after archival. On startup, Section 2 archival (600-line
-# threshold) typically resets files first, so this rarely triggers.
-#
-# DESIGN ASSUMPTION: Section 2 and 2a run sequentially in single-threaded
-# bash. Do NOT parallelize these sections without adding file locking
-# coordination between archive-notes.py and notes-size-handler.py.
+# This is the primary growth control for session notes files.
+# Runs on compact (mid-session safety net) and on startup (fallback).
 _do_size_handler() {
     [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "compact" ] || return 0
 
@@ -476,6 +425,10 @@ _do_size_handler 2>/dev/null || true
 # =========================================================================
 # SECTION 2b: Archive Context Injection (startup/resume, bound sessions)
 # =========================================================================
+# NOTE: This section calls query-archive.py which was removed in #57.
+# It silently fails (|| return 0) and produces no output.
+# Kept as a placeholder — memorypalace plugin will replace this with
+# its own context injection hook. Remove in cleanup phase.
 _do_archive_context() {
     [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "resume" ] || return 0
     [ -n "$_registry_project" ] || return 0

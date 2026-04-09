@@ -14,7 +14,7 @@ with a single header line:
 ```
 # Session Notes -- <project>
 ```
-The `session-start` hook uses the same format when re-creating after archival.
+The `session-start` hook uses the same format when re-creating after trimming.
 
 **Context injection.** On every prompt, `wal-context` reads the notes file and
 extracts status. It looks for a header matching `ID: <session_id>`, parses the
@@ -53,7 +53,7 @@ so `/rawgentic:switch` can read it (env vars are not available to skills).
 
 ## Session Lifecycle
 
-1. **Session starts.** `session-start` fires, archives oversized notes (see
+1. **Session starts.** `session-start` fires, trims oversized notes (see
    below), runs WAL recovery, checks security pattern staleness, emits
    workspace context.
 2. **First prompt.** `wal-context` fires. If the session has no registry entry
@@ -68,106 +68,40 @@ so `/rawgentic:switch` can read it (env vars are not available to skills).
    bound project, reads its notes file, injects task/status context.
 6. **Workflow execution.** Skills append step markers and compaction recovery
    info to the notes file as they progress.
-7. **Next session startup.** `session-start` checks all notes files for
-   archival before the new session begins.
+7. **Next session startup.** `session-start` trims oversized notes files
+   before the new session begins.
 
-## Archival
+## Size Handler
 
-On every `startup` event (not resume/compact/clear), `session-start` scans
-`claude_docs/session_notes/*.md`. Any file exceeding 600 lines is archived to
-structured JSONL format.
+On `startup` and `compact` events, `session-start` runs `notes-size-handler.py`
+on every `*.md` file in `claude_docs/session_notes/`.
 
-### JSONL Archive Format
+### Behavior
 
-Each project has one JSONL file: `claude_docs/session_notes/archive/<project>.jsonl`.
-Each line is a self-contained JSON object representing one archival event:
+- **Threshold:** 800 lines
+- **Action:** Trim to the most recent 200 lines
+- **Header:** Adds `# Session Notes -- <project>` and a
+  `<!-- Trimmed from N lines at TIMESTAMP -->` comment
 
-```json
-{"schema_version":1,"archived_at":"2026-03-11T19:30:00Z","source_file":"rawgentic.md","line_count":750,"note":"trimmed markdown text","insights":null}
-```
+### Process
 
-**Fields:**
-- `schema_version` — Always `1`. Enables future migrations.
-- `archived_at` — UTC ISO 8601 timestamp of archival.
-- `source_file` — Original markdown filename.
-- `line_count` — Line count of the original file at archival time.
-- `note` — Trimmed note text (trailing whitespace stripped per line, 3+ blank
-  lines collapsed to 2).
-- `insights` — `null` initially, populated by Haiku enrichment (see below).
+1. `session-start` iterates all `*.md` files in the session notes directory.
+2. For each file, calls `hooks/notes-size-handler.py <notes_file> --session-id <id>`.
+3. The Python script checks line count; if ≤800, exits with no action.
+4. If >800 lines: optionally POSTs full content to the memorypalace server at
+   `localhost:PORT/ingest` (best-effort, 2s timeout), then trims to last 200 lines.
+5. Uses `fcntl.flock()` for exclusive access and atomic writes via
+   `tempfile.mkstemp()` + `os.replace()`.
 
-### Archival Process
+**Validation:** Project names (derived from filename stem) must match
+`^[a-zA-Z0-9_-]+$`. Invalid names are skipped.
 
-1. `session-start` detects notes file >600 lines.
-2. Calls `hooks/archive-notes.py <notes_file> <archive_dir>`.
-3. The Python script reads the markdown, trims it, appends a JSONL entry to
-   `archive/<project>.jsonl` using `fcntl.flock()` for concurrent safety,
-   and resets the notes file to `# Session Notes -- <project>`.
-4. An `additionalContext` message notifies the session that archival occurred.
+**Stdout isolation:** The size handler's stdout is redirected to `/dev/null` in
+session-start to prevent JSON output from polluting the hook's own JSON response.
 
-**Validation:** Project names must match `^[a-zA-Z0-9_-]+$` (defense against
-path traversal). Invalid names are skipped.
+## Historical Archives (Inert)
 
-**Fallback:** If Python is unavailable, the archival step is skipped and the
-notes file stays in place until the next startup.
-
-### Haiku Enrichment
-
-After archival, the hook checks for entries with `insights: null` across all
-JSONL files. If unenriched entries exist, an `ARCHIVE_ENRICHMENT` instruction
-is injected into `additionalContext`, telling Claude to use Haiku subagents in
-the background to extract structured insights.
-
-**Enriched insights schema:**
-```json
-{
-  "summary": "one-line summary of the archival block",
-  "sessions": [
-    {
-      "task": "WF2: Issue #5",
-      "status": "COMPLETE",
-      "patterns": ["lesson learned 1"],
-      "decisions": ["chose X over Y because Z"],
-      "artifacts": ["hooks/archive-notes.py"],
-      "issues_encountered": ["problem and resolution"]
-    }
-  ]
-}
-```
-
-Enrichment is deferred and best-effort — the archive is useful even without
-enrichment (the `note` field contains the full trimmed text).
-
-### Archive Querying
-
-Archives are queryable via `hooks/query-archive.py`, a standalone Python script:
-
-```
-python3 hooks/query-archive.py <archive_dir> [options]
-```
-
-**Search modes:**
-- `--keyword <term>` — searches `note` text + enriched `insights.summary` and
-  `insights.sessions[].patterns[]`. Falls back to note-only for unenriched entries.
-- `--pattern <term>` — searches `insights.sessions[].patterns[]` only (enriched entries).
-- `--decision <term>` — searches `insights.sessions[].decisions[]` only (enriched entries).
-- `--artifact <path>` — searches `insights.sessions[].artifacts[]` + note text.
-
-**Filters:**
-- `--project <name>` — restrict to a single project's `.jsonl` file.
-- `--since <ISO-date>` — filter by `archived_at >= date`.
-- `--limit <N>` — max results (default: 10).
-- `--format brief|full` — brief omits note/insights, shows summary + match context.
-
-**Integration points:**
-- **Hook auto-injection:** `session-start` injects a brief archive summary (max 500
-  chars) into `additionalContext` on startup/resume for bound sessions.
-- **Skill protocol blocks:** `<archive-query>` blocks in fix-bug (WF3), incident
-  (WF11), implement-feature (WF2), and refactor (WF4) skills query archives at
-  Step 2 for relevant context (prior bugs, incidents, design decisions, patterns).
-- **Interactive querying:** See issue #36 for the planned `/rawgentic:query-archives`
-  skill.
-
-### Backward Compatibility
-
-Existing `.md` archives in the archive directory are unaffected. New archival
-events produce `.jsonl` files. Both formats coexist in the archive directory.
+The directory `claude_docs/session_notes/archive/` may contain JSONL files from
+the legacy archival system (removed in v2.22.0). These files are **not deleted**
+and may be used for backfill by the memorypalace plugin in the future. Nothing
+currently reads from or writes to this directory.
