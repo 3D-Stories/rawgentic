@@ -55,7 +55,7 @@ def try_ingest(content: str, project: str, session_id: str, port: int) -> bool:
         )
         urlopen(req, timeout=2)
         return True
-    except (URLError, OSError, ValueError):
+    except Exception:
         return False
 
 
@@ -85,13 +85,13 @@ def trim_notes(
     fd = os.open(str(path), os.O_RDWR)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        # dup() so the with-block close doesn't release the original fd's lock
         with os.fdopen(os.dup(fd), "r") as f:
             content = f.read()
 
-        lines = content.split("\n")
+        lines = content.splitlines()
         # Re-check line count under lock (may have changed)
-        # Use count("\n") for consistency with count_lines() / wc -l
-        line_count = content.count("\n")
+        line_count = len(lines)
         if line_count <= THRESHOLD:
             return {"trimmed": False, "line_count": line_count}
 
