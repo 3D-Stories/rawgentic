@@ -99,6 +99,76 @@ class TestWalRecovery:
             assert "WAL RECOVERY" not in ctx
 
 
+class TestLegacyArchivalRemoved:
+    """Tests that legacy archival and enrichment code is removed.
+
+    These tests verify post-removal behavior: no archival, no enrichment
+    dispatch, and graceful handling when archive data exists but
+    query-archive.py is absent.
+    """
+
+    def test_no_archival_on_startup_large_notes(self, make_workspace):
+        """Large session notes (>600 lines) should NOT be archived to JSONL."""
+        large_content = "# Notes\n" + ("x\n" * 700)
+        ws = make_workspace(
+            session_notes={"testproj": large_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        _run_session_start(ws.root, event_type="startup")
+
+        # Archive directory should NOT be created by archival
+        archive_dir = ws.notes_dir / "archive"
+        assert not archive_dir.exists(), "Archival should not create archive directory"
+
+    def test_no_enrichment_instruction_on_startup(self, make_workspace):
+        """No ARCHIVE_ENRICHMENT instruction should be emitted."""
+        large_content = "# Notes\n" + ("x\n" * 700)
+        ws = make_workspace(
+            session_notes={"testproj": large_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "ARCHIVE_ENRICHMENT" not in ctx
+
+    def test_section_2b_graceful_fail_with_archive_data(self, make_workspace):
+        """Section 2b completes without error even when query-archive.py is absent."""
+        ws = make_workspace(
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        # Create archive data that Section 2b would try to query
+        archive_dir = ws.notes_dir / "archive"
+        archive_dir.mkdir(parents=True)
+        entry = {
+            "schema_version": 1,
+            "archived_at": "2026-03-10T18:00:00Z",
+            "source_file": "testproj.md",
+            "line_count": 800,
+            "note": "# Session\nSome work done.",
+            "insights": {
+                "summary": "Database migration and auth refactoring",
+                "sessions": [],
+            },
+        }
+        (archive_dir / "testproj.jsonl").write_text(json.dumps(entry) + "\n")
+
+        stdout, stderr, rc = _run_session_start(ws.root, event_type="startup")
+        assert rc == 0
+        # Should not inject archive context (query-archive.py is absent)
+        output = parse_hook_output(stdout)
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "ARCHIVE CONTEXT" not in ctx
+
+
 class TestArchival:
     def test_archives_large_session_notes_to_jsonl(self, make_workspace):
         large_content = "# Notes\n" + ("x\n" * 700)
