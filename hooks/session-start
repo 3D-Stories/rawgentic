@@ -468,7 +468,7 @@ _do_size_handler() {
     for notes_file in "$NOTES_DIR"/*.md; do
         [ -f "$notes_file" ] || continue
         python3 "$SCRIPT_DIR/notes-size-handler.py" "$notes_file" \
-            --session-id "$SESSION_ID" 2>/dev/null || continue
+            --session-id "$SESSION_ID" >/dev/null 2>&1 || continue
     done
 }
 _do_size_handler 2>/dev/null || true
