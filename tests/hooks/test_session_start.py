@@ -9,6 +9,13 @@ from tests.hooks.conftest import run_hook, parse_hook_output
 
 
 def _run_session_start(cwd, session_id="test-sess", event_type="startup", env_override=None):
+    if env_override is None:
+        env_override = {}
+    # Always isolate HOME to prevent migration from writing to real ~/claude_docs/
+    if "HOME" not in env_override:
+        fake_home = Path(str(cwd)) / ".test_home"
+        fake_home.mkdir(exist_ok=True)
+        env_override["HOME"] = str(fake_home)
     stdin = {
         "session_id": session_id,
         "cwd": str(cwd),
@@ -322,3 +329,115 @@ class TestSecurityStaleness:
         assert output is not None
         ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
         assert "security patterns" in ctx.lower() or "sync-security-patterns" in ctx.lower()
+
+
+class TestClaudeDocsMigration:
+    """Tests for Section 0.5: one-time migration to ~/claude_docs/."""
+
+    def test_fresh_migration(self, make_workspace, tmp_path):
+        """Migrate workspace claude_docs/ to ~/claude_docs/ on first startup."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj",
+                               "started": "2026-01-01T00:00:00Z"}],
+            wal_entries={"testproj": [
+                {"ts": "2026-01-01T00:00:00Z", "phase": "INTENT",
+                 "session": "s1", "tool": "Bash", "tool_use_id": "t1",
+                 "summary": "ls", "cwd": "."},
+            ]},
+            session_notes={"testproj": "# Session Notes -- testproj\n"},
+        )
+
+        env = {"HOME": str(fake_home)}
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+
+        # Target should exist with migrated files
+        target = fake_home / "claude_docs"
+        assert target.is_dir()
+        assert (target / "session_registry.jsonl").is_file()
+        assert (target / "wal" / "testproj.jsonl").is_file()
+        assert (target / "session_notes" / "testproj.md").is_file()
+
+        # Source should be a symlink or .bak should exist
+        source = ws.root / "claude_docs"
+        assert source.is_symlink() or (ws.root / "claude_docs.bak").exists()
+
+        # Workspace config should have claudeDocsPath
+        ws_data = json.loads(ws.workspace_json.read_text())
+        assert ws_data.get("claudeDocsPath") == "~/claude_docs"
+
+    def test_skip_when_already_migrated(self, make_workspace, tmp_path):
+        """Skip migration when claudeDocsPath already set in config."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        target = fake_home / "claude_docs"
+        target.mkdir(parents=True)
+
+        ws = make_workspace(claude_docs_path=str(target))
+
+        env = {"HOME": str(fake_home)}
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        # Source should still be a symlink (unchanged)
+        assert (ws.root / "claude_docs").is_symlink()
+
+    def test_merge_with_existing_target(self, make_workspace, tmp_path):
+        """Merge workspace data with existing ~/claude_docs/ from another workspace."""
+        fake_home = tmp_path / "fakehome"
+        target = fake_home / "claude_docs"
+        target.mkdir(parents=True)
+        (target / "wal").mkdir()
+        (target / "session_notes").mkdir()
+
+        # Pre-existing data at target (from another workspace)
+        (target / "wal" / "other_proj.jsonl").write_text(
+            '{"ts":"2026-01-01","phase":"INTENT","session":"x1","tool":"Bash","tool_use_id":"ox1","summary":"echo","cwd":"."}\n'
+        )
+        (target / "session_notes" / "other_proj.md").write_text("# Other project\n")
+        (target / "session_registry.jsonl").write_text(
+            '{"session_id":"x1","project":"other_proj","project_path":"./projects/other_proj","started":"2026-01-01T00:00:00Z"}\n'
+        )
+
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj",
+                               "started": "2026-02-01T00:00:00Z"}],
+            wal_entries={"testproj": [
+                {"ts": "2026-02-01T00:00:00Z", "phase": "INTENT",
+                 "session": "s1", "tool": "Edit", "tool_use_id": "t1",
+                 "summary": "edit foo", "cwd": "."},
+            ]},
+            session_notes={"testproj": "# Session Notes -- testproj\n"},
+        )
+
+        env = {"HOME": str(fake_home)}
+        _run_session_start(ws.root, env_override=env)
+
+        # Both projects' data should exist at target
+        assert (target / "wal" / "other_proj.jsonl").is_file()
+        assert (target / "wal" / "testproj.jsonl").is_file()
+        assert (target / "session_notes" / "other_proj.md").is_file()
+        assert (target / "session_notes" / "testproj.md").is_file()
+
+        # Registry should have entries from both
+        registry = (target / "session_registry.jsonl").read_text()
+        assert "x1" in registry
+        assert "s1" in registry
+
+    def test_only_runs_on_startup(self, make_workspace, tmp_path):
+        """Migration should only run on startup event, not compact/resume."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+
+        ws = make_workspace()
+        env = {"HOME": str(fake_home)}
+        _run_session_start(ws.root, event_type="compact", env_override=env)
+
+        # Should NOT have migrated
+        assert not (fake_home / "claude_docs").exists()
+        ws_data = json.loads(ws.workspace_json.read_text())
+        assert "claudeDocsPath" not in ws_data
