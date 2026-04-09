@@ -457,7 +457,7 @@ Completion summary. WF7 terminates.
 ### Failure Modes
 
 - GitHub issue close fails → verify issue number and repo; may already be closed
-- Session notes file missing or archived → create new file or check for archived versions
+- Session notes file missing → create new file
 
 ---
 

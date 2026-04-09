@@ -405,7 +405,7 @@ WF8 complete.
 ### Failure Modes
 
 - GitHub issue close fails -> verify issue number and repo; may already be closed
-- Session notes file missing or archived -> create new file (archives are in JSONL format at claude_docs/session_notes/archive/)
+- Session notes file missing -> create new file
 
 ---
 
