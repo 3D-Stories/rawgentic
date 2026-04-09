@@ -197,15 +197,6 @@ For each service in `config.services[]`:
 
 Log in session notes: `### WF11 Step 2: Rapid Diagnosis — DONE (fast-path|full)`
 
-<archive-query>
-**Archive Context (optional):** If `claude_docs/session_notes/archive/` exists for this project:
-1. Derive 2-3 keywords from the incident symptoms (service names, error codes, affected endpoints)
-2. Run: `python3 hooks/query-archive.py claude_docs/session_notes/archive/ --keyword "<term>" --project "<project>" --limit 5 --format brief`
-3. Check for: prior incidents with same service/symptoms, known failure modes, previous mitigation steps
-4. If results found, note relevant patterns in the diagnosis
-5. If no archive exists or query returns empty, skip silently — do not mention the absence
-</archive-query>
-
 ### Failure Modes
 
 - Can't SSH to server → check if server is down entirely (ping hosts from `config.infrastructure.hosts[]`, then check hosting console)
