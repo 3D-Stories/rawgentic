@@ -282,7 +282,8 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
 | `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
-| `session-start` | SessionStart | WAL recovery, JSONL archival + enrichment, archive context injection, project reconciliation, security pattern staleness check, resume context |
+| `session-start` | SessionStart | WAL recovery, JSONL archival + enrichment, **notes size handler**, archive context injection, project reconciliation, security pattern staleness check, resume context |
+| `notes-size-handler` | (called by session-start) | Trims session notes exceeding 800 lines to keep last 200; optionally ingests to memorypalace before trimming |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
 
@@ -477,7 +478,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 2. **Ambiguity Circuit Breaker** — STOP and ask user when findings conflict
 3. **Finding Auto-Application** — Apply ALL quality gate findings automatically
 4. **Workflow Resumption** — Checkpoint artifacts for mid-workflow recovery
-5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks). Archived to JSONL with Haiku-extracted insights when >600 lines.
+5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks). Archived to JSONL with Haiku-extracted insights when >600 lines on startup. During active sessions, the size handler trims notes exceeding 800 lines to the most recent 200 on each context compaction.
 6. **Commit Convention** — `<type>(scope): <description>` matching branch prefix
 7. **Branch from default** — All branches from `origin/<defaultBranch>` (read from config)
 8. **Squash merge** — All PRs use `gh pr merge --squash`

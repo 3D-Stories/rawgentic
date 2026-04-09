@@ -101,6 +101,25 @@ runs WAL recovery:
 4. **Report** -- incomplete INTENT entries (no DONE/FAIL) are injected into the
    session context as a recovery notice (up to 20 shown).
 
+## Session Notes Size Handler (`hooks/notes-size-handler.py`)
+
+During long-running sessions, session notes files can grow unbounded because the
+JSONL archival (600-line threshold) only runs on startup. The size handler
+provides a mid-session safety net:
+
+- **Threshold:** 800 lines
+- **Action:** Trim to the most recent 200 lines
+- **Triggers:** session-start on startup events (fallback after archival) and on
+  compact events (primary mid-session path)
+- **Optional ingestion:** Before trimming, the handler attempts to POST the full
+  notes content to the memorypalace server at `localhost:PORT/ingest` (default
+  port 9077, 2s timeout). If the server is unreachable, trimming proceeds
+  without error.
+
+The handler uses `fcntl.flock()` for concurrent safety, atomic writes via
+`tempfile` + `os.replace()`, and validates project names against
+`^[a-zA-Z0-9_-]+$`.
+
 ## WAL Guard (`hooks/wal-guard`)
 
 The WAL Guard is a separate PreToolUse hook (matcher: Bash) that blocks dangerous
