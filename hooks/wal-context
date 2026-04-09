@@ -19,13 +19,16 @@ _do_context() {
     # Find rawgentic workspace
     wal_find_workspace || exit 0
 
-    # Write session ID to discoverable file for /rawgentic:switch skill
-    mkdir -p "$WAL_WORKSPACE_ROOT/claude_docs" 2>/dev/null || true
-    printf '%s' "$WAL_SESSION_ID" > "$WAL_WORKSPACE_ROOT/claude_docs/.current_session_id" 2>/dev/null || true
+    # Resolve claude_docs path from workspace config
+    wal_resolve_claude_docs
 
-    REGISTRY_FILE="$WAL_WORKSPACE_ROOT/claude_docs/session_registry.jsonl"
-    WAL_FILE="$WAL_WORKSPACE_ROOT/claude_docs/wal.jsonl"
-    NOTES_DIR="$WAL_WORKSPACE_ROOT/claude_docs/session_notes"
+    # Write session ID to discoverable file for /rawgentic:switch skill
+    mkdir -p "$WAL_CLAUDE_DOCS" 2>/dev/null || true
+    printf '%s' "$WAL_SESSION_ID" > "$WAL_CLAUDE_DOCS/.current_session_id" 2>/dev/null || true
+
+    REGISTRY_FILE="$WAL_CLAUDE_DOCS/session_registry.jsonl"
+    WAL_FILE="$WAL_CLAUDE_DOCS/wal.jsonl"
+    NOTES_DIR="$WAL_CLAUDE_DOCS/session_notes"
 
     # --- Lookup project from registry ---
     wal_resolve_project
@@ -46,7 +49,7 @@ _do_context() {
 
             if [ -n "$ACTIVE_PROJECT" ]; then
                 # Auto-register this session for the active project
-                mkdir -p "$WAL_WORKSPACE_ROOT/claude_docs/session_notes"
+                mkdir -p "$WAL_CLAUDE_DOCS/session_notes"
                 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
                 "$WAL_JQ" -nc \
                     --arg sid "$WAL_SESSION_ID" \
