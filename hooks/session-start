@@ -449,6 +449,31 @@ print(count)
 _do_archival 2>/dev/null || true
 
 # =========================================================================
+# SECTION 2a: Notes Size Handler (startup + compact events)
+# =========================================================================
+# Trims session notes exceeding 800 lines to keep the most recent 200.
+# Runs on compact (mid-session) as the primary safety net, and on startup
+# as a fallback after archival. On startup, Section 2 archival (600-line
+# threshold) typically resets files first, so this rarely triggers.
+#
+# DESIGN ASSUMPTION: Section 2 and 2a run sequentially in single-threaded
+# bash. Do NOT parallelize these sections without adding file locking
+# coordination between archive-notes.py and notes-size-handler.py.
+_do_size_handler() {
+    [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "compact" ] || return 0
+
+    NOTES_DIR="$CLAUDE_DOCS/session_notes"
+    [ -d "$NOTES_DIR" ] || return 0
+
+    for notes_file in "$NOTES_DIR"/*.md; do
+        [ -f "$notes_file" ] || continue
+        python3 "$SCRIPT_DIR/notes-size-handler.py" "$notes_file" \
+            --session-id "$SESSION_ID" 2>/dev/null || continue
+    done
+}
+_do_size_handler 2>/dev/null || true
+
+# =========================================================================
 # SECTION 2b: Archive Context Injection (startup/resume, bound sessions)
 # =========================================================================
 _do_archive_context() {

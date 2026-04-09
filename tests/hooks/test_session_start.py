@@ -441,3 +441,82 @@ class TestClaudeDocsMigration:
         assert not (fake_home / "claude_docs").exists()
         ws_data = json.loads(ws.workspace_json.read_text())
         assert "claudeDocsPath" not in ws_data
+
+
+class TestSizeHandler:
+    """Tests for Section 2a: session notes size handler integration."""
+
+    def test_trims_oversized_notes_on_startup(self, make_workspace):
+        """Notes exceeding 800 lines should be trimmed on startup."""
+        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 850))
+        ws = make_workspace(
+            session_notes={"testproj": large_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        _run_session_start(ws.root, event_type="startup")
+
+        notes_file = ws.notes_dir / "testproj.md"
+        content = notes_file.read_text()
+        lines = content.strip().split("\n")
+        # After archival resets + size handler: archival fires first at 600+,
+        # resetting to ~1 line, so size handler won't trigger.
+        # But if archival fails or is bypassed, size handler catches it.
+        # For this test, notes are 850 lines > 600, archival runs first.
+        # After archival: file is reset to 1-line header.
+        assert len(lines) < 600
+
+    def test_trims_oversized_notes_on_compact(self, make_workspace):
+        """Notes exceeding 800 lines should be trimmed on compact events."""
+        # 850 lines — above the 800-line threshold
+        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 900))
+        ws = make_workspace(
+            session_notes={"testproj": large_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        _run_session_start(ws.root, event_type="compact")
+
+        notes_file = ws.notes_dir / "testproj.md"
+        content = notes_file.read_text()
+        # On compact: archival does NOT run, so size handler handles it
+        # Should be trimmed to ~200 lines + header
+        lines = content.strip().split("\n")
+        assert len(lines) <= 210  # 200 kept + header + trim marker
+        assert "Trimmed from" in content
+        assert "line 899" in content  # last line preserved
+        assert "line 1\n" not in content  # early lines removed
+
+    def test_no_trim_on_compact_under_threshold(self, make_workspace):
+        """Notes under 800 lines should not be trimmed on compact."""
+        small_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 500))
+        ws = make_workspace(
+            session_notes={"testproj": small_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        _run_session_start(ws.root, event_type="compact")
+
+        notes_file = ws.notes_dir / "testproj.md"
+        content = notes_file.read_text()
+        # Unchanged
+        assert content == small_content
+
+    def test_no_trim_on_resume(self, make_workspace):
+        """Size handler should NOT run on resume events."""
+        large_content = "# Notes\n" + "".join(f"line {i}\n" for i in range(1, 900))
+        ws = make_workspace(
+            session_notes={"testproj": large_content},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+
+        _run_session_start(ws.root, event_type="resume")
+
+        notes_file = ws.notes_dir / "testproj.md"
+        content = notes_file.read_text()
+        # Should be untrimmed (resume doesn't trigger size handler)
+        assert content == large_content
