@@ -97,26 +97,10 @@ case, and auto-bind behavior.
 
 ### Session Start (`tests/hooks/test_session_start.py`)
 
-16 tests for the session-start hook. Covers session reconciliation, WAL
-recovery from incomplete entries, JSONL archival, enrichment instruction
-injection, archive context injection for bound sessions, security pattern
-staleness detection, and context emission.
-
-### Archive Notes (`tests/hooks/test_archive_notes.py`)
-
-12 tests for the `archive-notes.py` standalone script. Covers JSONL creation,
-append to existing archives, blank line collapsing, trailing whitespace
-stripping, notes file reset, project name validation (invalid chars, dot-dot),
-nonexistent file handling, wrong argument count, unicode preservation, and
-stdout JSON format.
-
-### Query Archive (`tests/hooks/test_query_archive.py`)
-
-25 tests for the `query-archive.py` standalone script. Covers keyword search
-(note text + enriched fields), structured search (patterns, decisions, artifacts),
-project filtering, date filtering, limit, brief/full output formats, invalid
-regex handling, empty archives, malformed JSONL lines, missing search flags,
-nonexistent directories, and multi-project search.
+22 tests for the session-start hook. Covers session reconciliation, WAL
+recovery, legacy archival removal verification, notes size handler
+integration, security pattern staleness detection, context emission,
+and claude_docs migration.
 
 ## Skill Evaluation
 

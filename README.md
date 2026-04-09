@@ -282,7 +282,7 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
 | `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
-| `session-start` | SessionStart | WAL recovery, JSONL archival + enrichment, **notes size handler**, archive context injection, project reconciliation, security pattern staleness check, resume context |
+| `session-start` | SessionStart | WAL recovery, **notes size handler**, project reconciliation, security pattern staleness check, resume context |
 | `notes-size-handler` | (called by session-start) | Trims session notes exceeding 800 lines to keep last 200; optionally ingests to memorypalace before trimming |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
@@ -291,9 +291,7 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 
 **WAL (Write-Ahead Log)** records every mutation tool call to `claude_docs/wal/{project}.jsonl`. On session resume, incomplete operations are surfaced for recovery. WAL files are per-project — each active project gets its own log. As of v2.20.0, session data is migrated to `~/claude_docs/` on first startup, with a symlink left at the old workspace-relative location for backward compatibility. The path is configurable via `claudeDocsPath` in `.rawgentic_workspace.json`.
 
-**Session Notes JSONL Archival** — When session notes exceed 600 lines, the `session-start` hook archives them to structured JSONL format (`claude_docs/session_notes/archive/<project>.jsonl`). Each entry includes schema version, timestamp, line count, trimmed note text, and an `insights` field. The hook injects an enrichment instruction for Claude to use Haiku subagents to extract structured insights (summary, patterns, decisions, artifacts, issues encountered) from unenriched entries. The `archive-notes.py` script uses `fcntl.flock()` for concurrent safety and validates project names against path traversal.
-
-**Archive Querying** — The `query-archive.py` utility searches JSONL archives with `--keyword` (note text + enriched fields), `--pattern`, `--decision`, and `--artifact` modes. On startup/resume, `session-start` auto-injects a brief archive summary for bound sessions. Four WF skills (fix-bug, incident, implement-feature, refactor) include `<archive-query>` protocol blocks that query archives for relevant context at Step 2.
+**Session Notes Size Handler** — When session notes exceed 800 lines, the `notes-size-handler.py` script trims to the most recent 200 lines. Runs on both startup and compact events (mid-session safety net). Before trimming, optionally POSTs full content to a memorypalace server for ingestion (best-effort, 2s timeout). Uses `fcntl.flock()` for concurrent safety and atomic writes via `tempfile` + `os.replace()`.
 
 ### Multi-Project Concurrent Sessions
 
