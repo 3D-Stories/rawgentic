@@ -1,20 +1,19 @@
 {
   "name": "rawgentic",
-  "description": "12 SDLC workflow skills for Claude Code: workspace management, project setup, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, and incident response.",
   "owner": {
     "name": "3D-Stories",
     "url": "https://github.com/3D-Stories"
   },
+  "metadata": {
+    "description": "3D-Stories Claude Code plugins",
+    "version": "1.0.0"
+  },
   "plugins": [
     {
       "name": "rawgentic",
-      "description": "12 SDLC workflow skills for Claude Code: workspace management, project setup, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, and incident response.",
-      "version": "2.3.1",
+      "description": "10 SDLC workflow skills + 4 workspace management + 1 security skill + hooks for Claude Code: project registration, setup, session binding, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, incident response, test suite creation, security pattern syncing, and dangerous pattern blocking with per-project exceptions.",
       "source": "./",
-      "author": {
-        "name": "3D-Stories",
-        "url": "https://github.com/3D-Stories"
-      }
+      "strict": true
     }
   ]
 }
