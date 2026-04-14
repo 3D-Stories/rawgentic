@@ -1,0 +1,21 @@
+name: Mirror to STARS
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Push to STARS private mirror
+        env:
+          STARS_PAT: ${{ secrets.STARS_PAT }}
+        run: |
+          PAT=$(echo "$STARS_PAT" | tr -d '[:space:]')
+          git push "https://x-access-token:${PAT}@github.com/STARSAirAmbulance/rawgentic-private.git" HEAD:main
