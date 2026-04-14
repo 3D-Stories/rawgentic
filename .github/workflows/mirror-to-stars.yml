@@ -6,6 +6,7 @@ on:
 
 jobs:
   mirror:
+    if: github.repository == '3D-Stories/rawgentic'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
