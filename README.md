@@ -503,6 +503,9 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | Cross-project write denied       | File path is in a different project            | Switch first with `/rawgentic:switch <target>`, or ask user   |
 | Hooks fail after `cd` in Bash    | CWD drifted to project subdir, workspace file not found | Fixed in v2.5.3 — hooks now traverse up to 5 levels |
 | Hook errors after plugin update  | Session still references old cache path        | Exit session, reinstall plugin, start new session              |
+| Marketplace "Sync Failed" (no detail) | Stale server cache or rate limit            | Remove plugin from org marketplace, wait 60s, re-add          |
+| Marketplace `failed_content` with "Duplicate skill name" | Two `SKILL.md` files under `skills/` declare the same `name:` | Rename dev snapshots to `SKILL.snapshot.md` (validator only finds `SKILL.md`) |
+| Marketplace version conflict     | `marketplace.json` plugin entry has a `version` field that differs from `plugin.json` | Remove `version` from plugin entry; use `metadata.version` at top level instead |
 
 ---
 
@@ -542,11 +545,13 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**306 tests** across 13 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
+**385 tests** across 13 test modules covering all hooks. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
 Skills are tested via the `/skill-creator` eval pipeline (14/15 skills have evals.json).
+
+**Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
 ---
 

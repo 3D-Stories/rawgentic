@@ -81,9 +81,12 @@ pass rate vs 72% without (+28% delta).
    frontmatter fields (`name`, `description`, `argument-hint`) and the full
    prompt body. The `name` field must use the `rawgentic:<name>` prefix.
 
-2. **Registration is automatic.** Claude Code discovers `SKILL.md` files under
-   `skills/` at plugin install time. No edits to `plugin.json` or any
-   registry file are needed.
+2. **Add to the marketplace skills whitelist.** Edit
+   `.claude-plugin/marketplace.json` and add `"./skills/<name>"` to the
+   `skills` array in the plugin entry. The marketplace uses this list to
+   control which skills are available for org installs. **Skills not in this
+   list are invisible to the marketplace but still discoverable by local
+   installs.**
 
 3. **Reinstall the plugin** after adding the file (see the update workflow in
    the workspace `CLAUDE.md`). Existing sessions will not pick up new skills
@@ -95,3 +98,28 @@ pass rate vs 72% without (+28% delta).
    evaluation harness will populate `with_skill/` and `without_skill/`
    subdirectories. This is recommended for SDLC workflow skills but not
    required for workspace-management skills like `setup` or `switch`.
+
+## Marketplace Manifest Validation
+
+When the plugin is installed via a Claude org marketplace (syncing from a
+private GitHub repo), the marketplace validator applies strict rules:
+
+1. **No duplicate skill names.** The validator walks ALL `skills/**/SKILL.md`
+   files recursively, regardless of the `skills` whitelist. Two files declaring
+   the same `name:` in frontmatter cause `sync_status: failed_content`. Names
+   are compared after normalization (stripping colons and hyphens), so
+   `rawgentic:setup` and `rawgentic-setup` would collide.
+
+2. **Workspace directories must not contain `SKILL.md`.** Dev snapshots in
+   `*-workspace/skill-snapshot/` should use a different filename like
+   `SKILL.snapshot.md`. The validator only searches for files named exactly
+   `SKILL.md`.
+
+3. **No version field on plugin entries.** If `marketplace.json` includes a
+   `version` on the plugin entry and it differs from `plugin.json`, the
+   validator rejects the install. Keep version only in `plugin.json` (the
+   single source-of-truth) and optionally in `metadata.version` at the
+   marketplace top level.
+
+4. **Use `strict: true`.** Required for org marketplace installs. Without it,
+   validation errors may be silently swallowed, producing confusing failures.
