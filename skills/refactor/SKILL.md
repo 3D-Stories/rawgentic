@@ -164,6 +164,7 @@ Wait for user confirmation before proceeding to Step 2.
 4. **Coupling analysis:** Count cross-module references — high coupling = higher risk.
 5. **Category classification:** Classify as Rename, Extract, Restructure, or Simplify.
 6. **Risk assessment:** Rate risk (low/medium/high) based on coupling and test coverage.
+7. **Memory search for prior decisions (Layer 3 — proactive recall).** If a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), call `mempalace_search` and `mempalace_kg_query` for the affected area. Past architectural choices (especially DECISION-flagged drawers) often explain why code looks the way it does. Avoid undoing decisions that have documented reasoning — surface them before proposing changes. If no mempalace MCP server is configured, skip silently.
 
 ### Output
 

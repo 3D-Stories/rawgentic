@@ -250,6 +250,7 @@ This enables workflow resumption if context is lost.
 6. Display to the user: title, steps to reproduce (or vulnerability path), expected vs actual behavior (or risk assessment), environment.
 7. Ask user to confirm this is the correct bug to fix. **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary for confirmation, suspend.]**
 8. If the issue lacks reproduction steps or expected behavior (and is not a security finding with STRIDE fields), ask user to provide them before proceeding. **[Headless: QUESTION — post comment requesting reproduction steps, suspend.]**
+9. **Memory search for bug history (Layer 3 — proactive recall).** If a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), call `mempalace_search` with the symptom and any error messages from the issue. Past similar bugs often have documented root causes and fixes. Surface any matches explicitly before moving to Step 2. If no mempalace MCP server is configured, skip silently.
 
 ### Output Format
 
