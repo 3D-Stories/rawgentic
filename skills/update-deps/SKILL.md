@@ -44,7 +44,7 @@ Before executing any workflow steps, load the project configuration:
    - If the project entry has a `disabledSkills` array and this skill's bare name appears in it: **STOP.**
      - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
        "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea-*, update-docs -> BMAD tech-writer.
+       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
      - Otherwise, tell user:
        "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
    - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:
