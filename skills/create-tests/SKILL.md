@@ -1,6 +1,6 @@
 ---
 name: rawgentic:create-tests
-description: Create or improve a project's test suite using the WF12 14-step workflow with brainstorming-driven test strategy, context7 framework docs lookup, test harness generation, coverage gap analysis, and verified test execution. Invoke with /create-tests optionally followed by a specific file or module path. DO NOT use this skill if the user has BMAD's TEA module installed — use the TEA test workflows (bmad-tea-*) instead. Only trigger when the user explicitly invokes /create-tests or /rawgentic:create-tests, or is working in a rawgentic-only project without BMAD.
+description: Create or improve a project's test suite using the WF12 14-step workflow with brainstorming-driven test strategy, context7 framework docs lookup, test harness generation, coverage gap analysis, and verified test execution. Invoke with /create-tests optionally followed by a specific file or module path. DO NOT use this skill if the user has BMAD's TEA module installed — use the TEA test workflows (bmad-testarch-*) instead. Only trigger when the user explicitly invokes /create-tests or /rawgentic:create-tests, or is working in a rawgentic-only project without BMAD.
 argument-hint: Optional file/module path (e.g., "src/auth/") or omit for whole project
 ---
 
@@ -41,7 +41,7 @@ Before executing any workflow steps, load the project configuration:
    - If the project entry has a `disabledSkills` array and this skill's bare name appears in it: **STOP.**
      - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
        "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea-*, update-docs -> BMAD tech-writer.
+       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
      - Otherwise, tell user:
        "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
    - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:

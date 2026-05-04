@@ -25,9 +25,16 @@ def _make_input(command: str) -> dict:
     return {"tool_input": {"command": command}}
 
 
-def _run_guard(command: str) -> str:
-    """Run wal-guard with *command* and return 'allow' or 'deny'."""
-    stdout, _stderr, _rc = run_hook(HOOK, _make_input(command))
+def _run_guard(command: str, cwd: Path | None = None) -> str:
+    """Run wal-guard with *command* and return 'allow' or 'deny'.
+
+    Pass *cwd* to isolate the subprocess from any ambient
+    .rawgentic_workspace.json above the test runner's working directory.
+    Without it, the hook's wal_find_workspace walks up from pytest's CWD
+    and may pick up an active project whose protectionLevel changes the
+    expected guard behavior.
+    """
+    stdout, _stderr, _rc = run_hook(HOOK, _make_input(command), cwd=cwd)
     parsed = parse_hook_output(stdout)
     if parsed is None:
         return "allow"
@@ -88,9 +95,11 @@ CASES = [
     CASES,
     ids=[c[0] for c in CASES],
 )
-def test_wal_guard_pattern(label: str, command: str, expected: str) -> None:
+def test_wal_guard_pattern(
+    label: str, command: str, expected: str, tmp_path: Path
+) -> None:
     """Wal-guard correctly allows or denies *command*."""
-    actual = _run_guard(command)
+    actual = _run_guard(command, cwd=tmp_path)
     assert actual == expected, f"[{label}] expected {expected}, got {actual}"
 
 
@@ -321,13 +330,13 @@ class TestTmpAllowlist:
 class TestNoWorkspaceBackwardCompat:
     """Missing workspace config = strict behavior (backward compat)."""
 
-    def test_no_workspace_blocks_ssh_prod(self):
+    def test_no_workspace_blocks_ssh_prod(self, tmp_path):
         """Without a workspace, wal-guard still blocks prod commands (strict default)."""
-        actual = _run_guard("ssh user@prod-host")
+        actual = _run_guard("ssh user@prod-host", cwd=tmp_path)
         assert actual == "deny"
 
-    def test_no_workspace_allows_safe_commands(self):
-        actual = _run_guard("echo hello")
+    def test_no_workspace_allows_safe_commands(self, tmp_path):
+        actual = _run_guard("echo hello", cwd=tmp_path)
         assert actual == "allow"
 
 

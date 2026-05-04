@@ -265,7 +265,7 @@ and defer to BMAD equivalents on a per-project basis.
 |-----------------|-----------------|
 | `implement-feature` | `bmad-dev-story` |
 | `fix-bug` | `bmad-dev-story` |
-| `create-tests` | BMAD TEA module (`bmad-tea-*`) |
+| `create-tests` | BMAD TEA module (`bmad-tea` agent / `bmad-testarch-*` workflows) |
 | `update-docs` | BMAD tech-writer agent |
 
 Skills not in this table (create-issue, refactor, security-audit, incident, update-deps,

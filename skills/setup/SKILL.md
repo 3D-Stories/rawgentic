@@ -122,7 +122,7 @@ BMAD detected (_bmad/ found). For [project-name], choose your preferred tool:
 
 1. Feature implementation:  (a) rawgentic:implement-feature  (b) bmad-dev-story      [default: b]
 2. Bug fixing:              (a) rawgentic:fix-bug            (b) bmad-dev-story      [default: b]
-3. Test creation:           (a) rawgentic:create-tests       (b) bmad-tea-*          [default: b]
+3. Test creation:           (a) rawgentic:create-tests       (b) bmad-testarch-*     [default: b]
 4. Documentation:           (a) rawgentic:update-docs        (b) BMAD tech-writer    [default: b]
 
 Accept all defaults? (y) Or enter numbers to change (e.g., "1,3" to pick rawgentic for those)

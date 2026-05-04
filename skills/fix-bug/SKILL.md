@@ -72,7 +72,7 @@ Before executing any workflow steps, load the project configuration:
      **[Headless cleanup]:** Before stopping, check if `claude_docs/headless_suspend.json` exists. If it does, delete it, remove `rawgentic:ai-waiting` label from the issue (read issue number from suspend file), and add `rawgentic:ai-error` with a comment: "This skill was disabled after a headless session was suspended. The pending question can no longer be processed." Then **STOP.**
      - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
        "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea-*, update-docs -> BMAD tech-writer.
+       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
      - Otherwise, tell user:
        "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
    - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:
