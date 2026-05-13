@@ -1042,7 +1042,7 @@ Add to the `PreToolUse` array (after the wal-pre entry):
   "hooks": [
     {
       "type": "command",
-      "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/security-guard.py'",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/security-guard.py",
       "timeout": 5
     }
   ]
@@ -1059,7 +1059,7 @@ Add to the `SessionStart` array (after the existing session-start entry). Uses `
   "hooks": [
     {
       "type": "command",
-      "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/security-guard-check.sh'",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/security-guard-check.sh",
       "timeout": 3
     }
   ]

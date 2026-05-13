@@ -54,7 +54,7 @@ Update `hooks/hooks.json` to add UserPromptSubmit and Stop entries pointing to t
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/session-start'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start",
             "async": false
           }
         ]
@@ -65,7 +65,7 @@ Update `hooks/hooks.json` to add UserPromptSubmit and Stop entries pointing to t
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/test-payload-dump'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/test-payload-dump",
             "timeout": 5
           }
         ]
@@ -76,7 +76,7 @@ Update `hooks/hooks.json` to add UserPromptSubmit and Stop entries pointing to t
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/test-payload-dump'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/test-payload-dump",
             "timeout": 5
           }
         ]
@@ -859,7 +859,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/session-start'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start",
             "timeout": 10
           }
         ]
@@ -871,7 +871,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-guard'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-guard",
             "timeout": 5
           }
         ]
@@ -881,7 +881,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-pre'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-pre",
             "timeout": 5
           }
         ]
@@ -893,7 +893,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-post'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-post",
             "timeout": 5
           }
         ]
@@ -905,7 +905,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-post-fail'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-post-fail",
             "timeout": 5
           }
         ]
@@ -916,7 +916,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-context'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-context",
             "timeout": 3
           }
         ]
@@ -927,7 +927,7 @@ Replace `hooks/hooks.json` with the full registration:
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-stop'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-stop",
             "timeout": 10
           }
         ]

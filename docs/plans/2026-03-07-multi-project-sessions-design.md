@@ -205,7 +205,7 @@ New entry for `wal-bind-guard`:
   "hooks": [
     {
       "type": "command",
-      "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-bind-guard'",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-bind-guard",
       "timeout": 3
     }
   ]
