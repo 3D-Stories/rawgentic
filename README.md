@@ -597,6 +597,18 @@ For major changes, please open an issue first to discuss the approach.
 
 ---
 
+## Changelog
+
+### v2.22.7 (2026-05-13)
+
+- **Hook commands use exec form.** `hooks/hooks.json` now declares `args: []` on every entry so Claude Code invokes hooks directly via `execv` instead of `/bin/sh -c "string"`. Permanently eliminates the shell-quoting class of bugs (per [Claude Code v2.1.139 hooks reference](https://code.claude.com/docs/en/hooks.md)). Backward compatible — `args` is ignored on older Claude Code versions.
+
+### v2.22.6 (2026-05-13)
+
+- **Fix `${CLAUDE_PLUGIN_ROOT}` not expanding in hook commands.** Each command in `hooks/hooks.json` was wrapped in literal single quotes (`"'${CLAUDE_PLUGIN_ROOT}/hooks/...'"`); a recent Claude Code update changed env-var expansion behavior, and `/bin/sh -c` then tried to exec a file literally named `${CLAUDE_PLUGIN_ROOT}/hooks/...`. Removed the wrapping quotes so the variable expands correctly. Also cleaned up the same pattern in 6 historical `docs/plans/` design documents.
+
+---
+
 ## License
 
 [MIT](LICENSE)
