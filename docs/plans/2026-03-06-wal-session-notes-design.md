@@ -226,7 +226,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/session-start'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start",
             "timeout": 10
           }
         ]
@@ -238,7 +238,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-guard'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-guard",
             "timeout": 5
           }
         ]
@@ -248,7 +248,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-pre'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-pre",
             "timeout": 5
           }
         ]
@@ -260,7 +260,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-post'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-post",
             "timeout": 5
           }
         ]
@@ -272,7 +272,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-post-fail'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-post-fail",
             "timeout": 5
           }
         ]
@@ -283,7 +283,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-context'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-context",
             "timeout": 5
           }
         ]
@@ -294,7 +294,7 @@ All common functions: jq resolution, input parsing, WAL path setup, phase append
         "hooks": [
           {
             "type": "command",
-            "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-stop'",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-stop",
             "timeout": 10
           }
         ]

@@ -817,7 +817,7 @@ Add a new entry to the `PreToolUse` array, BEFORE the wal-pre entry (so binding 
   "hooks": [
     {
       "type": "command",
-      "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/wal-bind-guard'",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/wal-bind-guard",
       "timeout": 3
     }
   ]

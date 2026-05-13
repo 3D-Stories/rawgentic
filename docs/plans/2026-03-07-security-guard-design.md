@@ -252,7 +252,7 @@ Add to rawgentic's existing PreToolUse hooks:
   "hooks": [
     {
       "type": "command",
-      "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/security-guard.py'",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/security-guard.py",
       "timeout": 5
     }
   ]
@@ -267,7 +267,7 @@ Add to SessionStart hooks:
   "hooks": [
     {
       "type": "command",
-      "command": "'${CLAUDE_PLUGIN_ROOT}/hooks/security-guard-check.sh'",
+      "command": "${CLAUDE_PLUGIN_ROOT}/hooks/security-guard-check.sh",
       "timeout": 3
     }
   ]
