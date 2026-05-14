@@ -14,8 +14,22 @@ Provides testable helpers for:
 Used by skills/implement-feature/SKILL.md via `python3 -c` invocations.
 """
 import os
+import re
 import sys
-from typing import Final
+from dataclasses import dataclass
+from typing import Final, Literal
+
+
+class PlanFormatError(ValueError):
+    """Raised when the plan markdown does not conform to the WF2 contract."""
+
+
+@dataclass(frozen=True)
+class Task:
+    id: str
+    title: str
+    risk_level: Literal["high", "standard"]
+    reason: str | None  # parenthesized reason for high-risk; None for standard
 
 
 # --- Env-var loading with clamping and freeze-at-import ---
@@ -74,3 +88,55 @@ WF2_HIGH_RISK_RATIO_WARN_PCT: Final[int] = _warn
 WF2_HIGH_RISK_RATIO_HALT_PCT: Final[int] = _halt
 PER_TASK_REVIEW_CONFIDENCE_THRESHOLD: Final[float] = _CONFIDENCE_DEFAULT
 PER_TASK_REVIEW_AGENT_COUNT: Final[int] = 2
+
+
+# --- parse_tasks: plan markdown -> [Task] ---
+
+_TASK_HEADER_RE = re.compile(r"^###\s+Task\s+([0-9.]+)\s*:\s*(.+?)\s*$")
+_RISKLEVEL_RE = re.compile(
+    r"^\s*[-*]\s*riskLevel\s*:\s*(high|standard)(?:\s*\(([^)]+)\))?\s*$",
+    re.IGNORECASE,
+)
+_ANY_HEADING_RE = re.compile(r"^#{1,6}\s+")
+
+
+def parse_tasks(plan_markdown: str) -> list[Task]:
+    """Extract Task objects from a WF2 plan markdown.
+
+    Contract:
+    - Each task starts with `### Task <id>: <title>` heading.
+    - Each task MUST include a `- riskLevel: high|standard` line within its body
+      (before the next ### heading); high-risk tasks may include a parenthesized
+      reason: `- riskLevel: high (security surface)`.
+    - Tasks without a riskLevel line raise PlanFormatError (fail-closed).
+    - Non-task `###` headings (anything not starting with `Task `) are ignored.
+    """
+    lines = plan_markdown.splitlines()
+    tasks: list[Task] = []
+    i = 0
+    while i < len(lines):
+        m = _TASK_HEADER_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        task_id, title = m.group(1), m.group(2)
+        # Scan body until next ### heading or EOF
+        risk_level = None
+        reason = None
+        body_start = i + 1
+        j = body_start
+        while j < len(lines):
+            if _ANY_HEADING_RE.match(lines[j]) and lines[j].startswith("### "):
+                break
+            mm = _RISKLEVEL_RE.match(lines[j])
+            if mm:
+                risk_level = mm.group(1).lower()
+                reason = mm.group(2).strip() if mm.group(2) else None
+            j += 1
+        if risk_level is None:
+            raise PlanFormatError(
+                f"Task {task_id} ({title!r}) is missing required `riskLevel` line"
+            )
+        tasks.append(Task(id=task_id, title=title, risk_level=risk_level, reason=reason))
+        i = j
+    return tasks

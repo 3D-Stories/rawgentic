@@ -143,3 +143,88 @@ class TestEnvVars:
         # halt=-100 -> clamp to 10 -> halt>=warn(30)+10=40 -> 40
         mod = _reload_plan_lib({"WF2_HIGH_RISK_RATIO_HALT_PCT": "-100"})
         assert mod.WF2_HIGH_RISK_RATIO_HALT_PCT == 40
+
+
+# --- parse_tasks: format contract + fail-closed ---
+
+class TestParseTasks:
+    def test_wellformed_single_task(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: implement foo
+- riskLevel: standard
+- some content
+
+### Other heading
+not a task
+"""
+        tasks = mod.parse_tasks(plan)
+        assert len(tasks) == 1
+        assert tasks[0].id == "1"
+        assert tasks[0].title == "implement foo"
+        assert tasks[0].risk_level == "standard"
+        assert tasks[0].reason is None
+
+    def test_high_with_reason(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 2: refactor auth
+- riskLevel: high (security surface)
+- some content
+"""
+        tasks = mod.parse_tasks(plan)
+        assert len(tasks) == 1
+        assert tasks[0].risk_level == "high"
+        assert tasks[0].reason == "security surface"
+
+    def test_multiple_tasks(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: foo
+- riskLevel: standard
+
+### Task 2: bar
+- riskLevel: high (module boundary)
+
+### Task 3.5: baz
+- riskLevel: standard
+"""
+        tasks = mod.parse_tasks(plan)
+        assert [t.id for t in tasks] == ["1", "2", "3.5"]
+        assert [t.risk_level for t in tasks] == ["standard", "high", "standard"]
+
+    def test_missing_risklevel_raises(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: forgot to tag
+- some content but no risk level
+"""
+        with pytest.raises(mod.PlanFormatError, match="riskLevel"):
+            mod.parse_tasks(plan)
+
+    def test_invalid_risklevel_value_raises(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: bad level
+- riskLevel: super-high
+"""
+        with pytest.raises(mod.PlanFormatError, match="riskLevel"):
+            mod.parse_tasks(plan)
+
+    def test_empty_plan_returns_empty(self):
+        mod = _reload_plan_lib()
+        assert mod.parse_tasks("") == []
+        assert mod.parse_tasks("# Some doc\n\nNo tasks here.\n") == []
+
+    def test_partial_missing_one_raises(self):
+        """If ANY task lacks riskLevel, parse fails — fail-closed."""
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: tagged
+- riskLevel: standard
+
+### Task 2: untagged
+- forgot the tag
+"""
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
