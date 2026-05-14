@@ -633,3 +633,74 @@ class TestConsumeLoopback:
         path = tmp_path / "counters.json"
         with pytest.raises(ValueError):
             mod.consume_loopback(str(path), "bogus")
+
+
+# --- scan_prior_commits_for_trigger ---
+
+def _init_repo(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=tmp_path, check=True)
+    return tmp_path
+
+
+def _make_commit(repo, files: dict[str, str], msg: str) -> str:
+    for path, content in files.items():
+        full = repo / path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", msg], cwd=repo, check=True)
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return sha
+
+
+class TestScanPriorCommits:
+    def test_finds_security_path_in_prior_commit(self, tmp_path):
+        mod = _reload_plan_lib()
+        repo = _init_repo(tmp_path)
+        # 3 commits: neutral, security-relevant, neutral (current)
+        sha1 = _make_commit(repo, {"src/widgets.ts": "// a"}, "T1")
+        sha2 = _make_commit(repo, {"src/auth/login.ts": "// b"}, "T2 (would-trigger)")
+        sha3 = _make_commit(repo, {"src/widgets.ts": "// c\n// d"}, "T3")
+        # Scanning back from HEAD (excluding the current commit itself) finds T2
+        flagged = mod.scan_prior_commits_for_trigger(str(repo), since_sha=None, exclude_sha=sha3)
+        assert sha2 in flagged
+        assert sha1 not in flagged
+        assert sha3 not in flagged  # excluded
+
+    def test_neutral_repo_returns_empty(self, tmp_path):
+        mod = _reload_plan_lib()
+        repo = _init_repo(tmp_path)
+        sha1 = _make_commit(repo, {"docs/foo.md": "x"}, "doc1")
+        sha2 = _make_commit(repo, {"docs/bar.md": "y"}, "doc2")
+        flagged = mod.scan_prior_commits_for_trigger(str(repo), since_sha=None, exclude_sha=sha2)
+        assert flagged == []
+
+    def test_since_sha_limits_window(self, tmp_path):
+        mod = _reload_plan_lib()
+        repo = _init_repo(tmp_path)
+        sha1 = _make_commit(repo, {"src/auth/old.ts": "old"}, "old security")
+        sha2 = _make_commit(repo, {"src/widgets.ts": "neutral"}, "neutral")
+        sha3 = _make_commit(repo, {"src/auth/new.ts": "new"}, "new security")
+        # Restrict to commits after sha1
+        flagged = mod.scan_prior_commits_for_trigger(
+            str(repo), since_sha=sha1, exclude_sha=sha3
+        )
+        assert sha1 not in flagged  # before window
+        assert sha3 not in flagged  # excluded
+        # sha2 is neutral path, should not be flagged either
+        assert sha2 not in flagged
+
+    def test_large_loc_delta_flags_neutral_paths(self, tmp_path):
+        mod = _reload_plan_lib()
+        repo = _init_repo(tmp_path)
+        # Commit with neutral path but >=200 LOC delta
+        big_file = "\n".join(f"line {i}" for i in range(250))
+        sha1 = _make_commit(repo, {"src/big.ts": big_file}, "big neutral")
+        sha2 = _make_commit(repo, {"src/widgets.ts": "small"}, "small")
+        flagged = mod.scan_prior_commits_for_trigger(str(repo), exclude_sha=sha2)
+        assert sha1 in flagged

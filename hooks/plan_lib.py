@@ -435,6 +435,85 @@ def _write_loopback_state(path: str, state: dict) -> None:
         _json.dump(state, f, separators=(",", ":"), sort_keys=True)
 
 
+def _git_run(repo: str, args: list[str]) -> str:
+    """Run a git command in `repo` and return stdout. Raises on non-zero exit."""
+    import subprocess
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout
+
+
+def _parse_numstat(numstat_output: str) -> tuple[list[str], int]:
+    """Parse `git show --numstat --format=` output.
+
+    Format per file: `<additions>\\t<deletions>\\t<path>` (tab-separated).
+    Binary files use `-\\t-\\t<path>` (count as 0 LOC).
+
+    Returns (file_paths, total_loc_delta).
+    """
+    paths: list[str] = []
+    total = 0
+    for raw_line in numstat_output.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        add_s, del_s, path = parts[0], parts[1], "\t".join(parts[2:])
+        try:
+            additions = int(add_s) if add_s != "-" else 0
+            deletions = int(del_s) if del_s != "-" else 0
+        except ValueError:
+            continue
+        paths.append(path)
+        total += additions + deletions
+    return paths, total
+
+
+def scan_prior_commits_for_trigger(
+    repo: str,
+    since_sha: str | None = None,
+    exclude_sha: str | None = None,
+    extra_high_risk_patterns: tuple[str, ...] = (),
+) -> list[str]:
+    """Scan prior commits in the current branch for any matching the
+    high-risk path allowlist or LOC threshold.
+
+    Returns a list of commit SHAs that WOULD have triggered should_promote().
+    Used by retroactive scan after a mid-flight promotion fires.
+
+    - since_sha: if provided, only scan commits AFTER this SHA (exclusive)
+    - exclude_sha: if provided, exclude this SHA from results (typically
+      the commit that triggered the current promotion)
+    """
+    # Build the rev range
+    if since_sha:
+        range_arg = f"{since_sha}..HEAD"
+    else:
+        range_arg = "HEAD"
+    log_out = _git_run(repo, ["rev-list", range_arg])
+    shas = [s.strip() for s in log_out.splitlines() if s.strip()]
+    flagged: list[str] = []
+    for sha in shas:
+        if exclude_sha and sha == exclude_sha:
+            continue
+        try:
+            stat = _git_run(repo, ["show", "--numstat", "--format=", sha])
+        except Exception:
+            continue
+        paths, loc_delta = _parse_numstat(stat)
+        promote, _ = should_promote(sha, paths, loc_delta, extra_high_risk_patterns)
+        if promote:
+            flagged.append(sha)
+    return flagged
+
+
 def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
     """Attempt to consume one loop-back from the named source.
 
