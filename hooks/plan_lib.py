@@ -113,9 +113,15 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
       reason: `- riskLevel: high (security surface)`.
     - Tasks without a riskLevel line raise PlanFormatError (fail-closed).
     - Non-task `###` headings (anything not starting with `Task `) are ignored.
+
+    Backward compatibility: if NO task in the plan has a riskLevel line, the
+    plan is treated as pre-P15 (created before this feature shipped) and every
+    task is defaulted to `riskLevel: standard` with a stderr warning. Partial
+    annotation (some tasks tagged, some not) still fail-closes — that's a real
+    bug, not a migration.
     """
     lines = plan_markdown.splitlines()
-    tasks: list[Task] = []
+    raw_tasks: list[tuple[str, str, str | None, str | None]] = []
     i = 0
     while i < len(lines):
         m = _TASK_HEADER_RE.match(lines[i])
@@ -124,8 +130,8 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
             continue
         task_id, title = m.group(1), m.group(2)
         # Scan body until next ### heading or EOF
-        risk_level = None
-        reason = None
+        risk_level: str | None = None
+        reason: str | None = None
         body_start = i + 1
         j = body_start
         while j < len(lines):
@@ -136,13 +142,31 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
                 risk_level = mm.group(1).lower()
                 reason = mm.group(2).strip() if mm.group(2) else None
             j += 1
-        if risk_level is None:
-            raise PlanFormatError(
-                f"Task {task_id} ({title!r}) is missing required `riskLevel` line"
-            )
-        tasks.append(Task(id=task_id, title=title, risk_level=risk_level, reason=reason))
+        raw_tasks.append((task_id, title, risk_level, reason))
         i = j
-    return tasks
+
+    tagged_count = sum(1 for _, _, rl, _ in raw_tasks if rl is not None)
+    if raw_tasks and tagged_count == 0:
+        # Pre-P15 plan: default every task to standard and warn once.
+        print(
+            "plan_lib: pre-P15 plan detected (no tasks have riskLevel). "
+            "Defaulting all tasks to riskLevel: standard. "
+            "Re-run /rawgentic:setup or update the plan to opt into P15 tiered review.",
+            file=sys.stderr,
+        )
+        return [
+            Task(id=tid, title=t, risk_level="standard", reason=None)
+            for tid, t, _, _ in raw_tasks
+        ]
+
+    out: list[Task] = []
+    for tid, t, rl, r in raw_tasks:
+        if rl is None:
+            raise PlanFormatError(
+                f"Task {tid} ({t!r}) is missing required `riskLevel` line"
+            )
+        out.append(Task(id=tid, title=t, risk_level=rl, reason=r))
+    return out
 
 
 # --- Risk-ratio calibration ---
@@ -161,10 +185,14 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
 #   7. Subprocess construction — shells out to external commands with dynamic
 #      args
 #   8. Regex on untrusted input — ReDoS risk, lookahead in user-controlled input
+# The canonical phrasings below MUST appear contiguously (case-insensitive)
+# in both skills/implement-feature/SKILL.md and docs/principles.md.
+# tests/test_skill_helpers.py::test_risk_criteria_canonical_strings_appear_in_docs
+# enforces this drift guard.
 RISK_CRITERIA: Final[tuple[str, ...]] = (
     "security surface",
     "module boundary",
-    "non-trivial error flow",
+    "non-trivial error/exception flow",
     "infra/persistence",
     "security middleware",
     "deserialization of external data",
@@ -548,6 +576,89 @@ def scan_prior_commits_for_trigger(
         if promote:
             flagged.append(sha)
     return flagged
+
+
+# --- Committed per-branch review-state pointer (.rawgentic/review-state/) ---
+
+_REVIEW_STATE_DIR = ".rawgentic/review-state"
+_VALID_STATUSES = ("applied", "suspended", "dispatch_failed")
+
+
+def _sanitize_branch(branch: str) -> str:
+    """Convert a git branch name to a path-safe filename component.
+
+    Replaces /, \\, :, ?, *, <, >, |, " with -.  Preserves dashes, dots, and
+    alphanumerics. Mirrors the documented convention in
+    .rawgentic/review-state/README.md.
+    """
+    return re.sub(r"[/\\:?*<>|\"]", "-", branch)
+
+
+def review_state_path(repo_root: str, branch: str) -> str:
+    """Return the path to the per-branch review-state JSON file."""
+    return os.path.join(repo_root, _REVIEW_STATE_DIR, _sanitize_branch(branch) + ".json")
+
+
+def read_review_state(repo_root: str, branch: str) -> dict | None:
+    """Read the per-branch review-state pointer. Returns None if missing.
+
+    Performs a branch-match safety check: if the file's `branch` field does
+    NOT equal the requested branch (file from a different branch with the
+    same sanitized name, or someone edited the file by hand), returns None
+    and logs a stderr warning. Callers should treat None as "no trusted
+    state" and behave conservatively (e.g., Step 12 refusing to ship).
+    """
+    path = review_state_path(repo_root, branch)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            state = _json.load(f)
+    except (_json.JSONDecodeError, OSError) as exc:
+        print(
+            f"plan_lib: review-state at {path} unreadable: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    if state.get("branch") != branch:
+        print(
+            f"plan_lib: review-state at {path} has branch={state.get('branch')!r} "
+            f"but requested {branch!r}; ignoring file",
+            file=sys.stderr,
+        )
+        return None
+    return state
+
+
+def write_review_state(
+    repo_root: str,
+    branch: str,
+    last_review_log_status: str,
+) -> str:
+    """Write the per-branch review-state pointer atomically. Returns the path.
+
+    Raises ValueError on invalid status.
+    """
+    if last_review_log_status not in _VALID_STATUSES:
+        raise ValueError(
+            f"invalid last_review_log_status {last_review_log_status!r}; "
+            f"must be one of {_VALID_STATUSES}"
+        )
+    path = review_state_path(repo_root, branch)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "branch": branch,
+        "last_review_log_status": last_review_log_status,
+        "ts": _now_iso(),
+    }
+    # Atomic write: temp file + rename
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        _json.dump(payload, f, indent=2, sort_keys=True)
+        f.write("\n")
+    os.replace(tmp, path)
+    return path
 
 
 def consume_loopback(path: str, source: str) -> tuple[bool, dict]:

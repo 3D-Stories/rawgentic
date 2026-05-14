@@ -824,13 +824,15 @@ When multiple tools from different repositories serve the same purpose, prioriti
 ## Principle 15: Risk-stratified Review (P15)
 
 **Statement:** Code review intensity scales with task risk. Tasks tagged
-`riskLevel: high` (security surface, module boundary, non-trivial error
-flow, infra/persistence/migration, security middleware, deserialization
-of external data, subprocess construction, regex on untrusted input)
-receive a focused per-task review at commit time (WF2 Step 8a); remaining
+`riskLevel: high` (any of: security surface, module boundary,
+non-trivial error/exception flow, infra/persistence, security middleware,
+deserialization of external data, subprocess construction,
+regex on untrusted input) receive a focused per-task review at commit
+time (WF2 Step 8a); remaining
 tasks flow only to the PR-wide review (Step 11). Both tiers feed into the
-final review barrier — per-task reviews are advisory inputs to the
-PR-wide review, not a replacement.
+final review barrier — per-task reviews surface findings INTO the PR-wide
+review, and deferred-High findings persist to a deferrals file that the
+PR-wide review (Step 11) MUST resolve before completing.
 
 ### Why
 

@@ -193,23 +193,35 @@ not a task
         assert [t.id for t in tasks] == ["1", "2", "3.5"]
         assert [t.risk_level for t in tasks] == ["standard", "high", "standard"]
 
-    def test_missing_risklevel_raises(self):
+    def test_missing_risklevel_raises_on_mixed_plan(self):
+        """A plan with SOME tasks tagged and one missing fails closed.
+        (A plan with ALL tasks missing is the pre-P15 backward-compat path
+        and defaults to standard — see test_pre_p15_plan_defaults_all_to_standard.)"""
         mod = _reload_plan_lib()
         plan = """
-### Task 1: forgot to tag
+### Task 1: tagged
+- riskLevel: standard
+
+### Task 2: forgot to tag
 - some content but no risk level
 """
         with pytest.raises(mod.PlanFormatError, match="riskLevel"):
             mod.parse_tasks(plan)
 
-    def test_invalid_risklevel_value_raises(self):
+    def test_invalid_risklevel_value_treated_as_missing(self):
+        """A `riskLevel: super-high` line doesn't match the regex (high|standard
+        only), so the task is considered untagged. If it's the only task, the
+        pre-P15 path applies; if mixed with a tagged task, fail-closed."""
         mod = _reload_plan_lib()
-        plan = """
-### Task 1: bad level
+        plan_mixed = """
+### Task 1: ok
+- riskLevel: standard
+
+### Task 2: bad level
 - riskLevel: super-high
 """
-        with pytest.raises(mod.PlanFormatError, match="riskLevel"):
-            mod.parse_tasks(plan)
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan_mixed)
 
     def test_empty_plan_returns_empty(self):
         mod = _reload_plan_lib()
@@ -217,7 +229,8 @@ not a task
         assert mod.parse_tasks("# Some doc\n\nNo tasks here.\n") == []
 
     def test_partial_missing_one_raises(self):
-        """If ANY task lacks riskLevel, parse fails — fail-closed."""
+        """If ANY task lacks riskLevel but SOME have it, parse fails — fail-closed.
+        Mixed state means a real bug, not a pre-P15 migration."""
         mod = _reload_plan_lib()
         plan = """
 ### Task 1: tagged
@@ -228,6 +241,25 @@ not a task
 """
         with pytest.raises(mod.PlanFormatError):
             mod.parse_tasks(plan)
+
+    def test_pre_p15_plan_defaults_all_to_standard(self, capsys):
+        """A plan with ZERO tasks tagged is treated as pre-P15 (backward compat).
+        All tasks default to riskLevel: standard with a stderr warning.
+        This avoids hard-breaking in-flight PRs that started before #73."""
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: implement foo
+- some content but no risk level
+
+### Task 2: implement bar
+- still no risk level
+"""
+        tasks = mod.parse_tasks(plan)
+        assert len(tasks) == 2
+        assert all(t.risk_level == "standard" for t in tasks)
+        # Warning surfaced via stderr
+        captured = capsys.readouterr()
+        assert "pre-p15" in captured.err.lower()
 
 
 # --- compute_risk_ratio + check_ratio_band ---
@@ -652,6 +684,75 @@ class TestConsumeLoopback:
         path = tmp_path / "counters.json"
         with pytest.raises(ValueError):
             mod.consume_loopback(str(path), "bogus")
+
+
+class TestReviewState:
+    """Per-branch committed review-state pointer (.rawgentic/review-state/)."""
+
+    def test_sanitize_branch_replaces_slash(self):
+        mod = _reload_plan_lib()
+        assert mod._sanitize_branch("feature/73-foo") == "feature-73-foo"
+        assert mod._sanitize_branch("fix/abc") == "fix-abc"
+
+    def test_write_and_read_roundtrip(self, tmp_path):
+        mod = _reload_plan_lib()
+        mod.write_review_state(str(tmp_path), "feature/x", "applied")
+        state = mod.read_review_state(str(tmp_path), "feature/x")
+        assert state is not None
+        assert state["last_review_log_status"] == "applied"
+        assert state["branch"] == "feature/x"
+        assert state["schema_version"] == 1
+        assert "ts" in state
+
+    def test_read_missing_returns_none(self, tmp_path):
+        mod = _reload_plan_lib()
+        assert mod.read_review_state(str(tmp_path), "feature/x") is None
+
+    def test_read_wrong_branch_returns_none(self, tmp_path, capsys):
+        """If the file's branch field doesn't match the requested branch,
+        treat as no-trusted-state and warn (defense against misnamed files)."""
+        mod = _reload_plan_lib()
+        mod.write_review_state(str(tmp_path), "feature/x", "applied")
+        # Manually corrupt: rename branch inside file
+        path = mod.review_state_path(str(tmp_path), "feature/x")
+        import json
+        data = json.loads(open(path).read())
+        data["branch"] = "feature/y"
+        open(path, "w").write(json.dumps(data))
+        result = mod.read_review_state(str(tmp_path), "feature/x")
+        assert result is None
+        captured = capsys.readouterr()
+        assert "branch" in captured.err.lower()
+
+    def test_read_malformed_returns_none(self, tmp_path, capsys):
+        mod = _reload_plan_lib()
+        path = mod.review_state_path(str(tmp_path), "feature/x")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w").write("{not json")
+        assert mod.read_review_state(str(tmp_path), "feature/x") is None
+        assert "unreadable" in capsys.readouterr().err.lower()
+
+    @pytest.mark.parametrize("status", ["applied", "suspended", "dispatch_failed"])
+    def test_write_accepts_valid_statuses(self, tmp_path, status):
+        mod = _reload_plan_lib()
+        mod.write_review_state(str(tmp_path), "feature/x", status)
+        state = mod.read_review_state(str(tmp_path), "feature/x")
+        assert state["last_review_log_status"] == status
+
+    def test_write_rejects_invalid_status(self, tmp_path):
+        mod = _reload_plan_lib()
+        with pytest.raises(ValueError):
+            mod.write_review_state(str(tmp_path), "feature/x", "applied; rm -rf")
+
+    def test_per_branch_files_isolated(self, tmp_path):
+        """Two branches write independent files; neither sees the other."""
+        mod = _reload_plan_lib()
+        mod.write_review_state(str(tmp_path), "feature/a", "applied")
+        mod.write_review_state(str(tmp_path), "feature/b", "suspended")
+        sa = mod.read_review_state(str(tmp_path), "feature/a")
+        sb = mod.read_review_state(str(tmp_path), "feature/b")
+        assert sa["last_review_log_status"] == "applied"
+        assert sb["last_review_log_status"] == "suspended"
 
 
 # --- scan_prior_commits_for_trigger ---

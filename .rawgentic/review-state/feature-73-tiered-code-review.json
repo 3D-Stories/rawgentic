@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "branch": "feature/73-tiered-code-review",
+  "last_review_log_status": "applied",
+  "ts": null,
+  "note": "Bootstrap pointer for this PR. Step 8a did not run during this PR (the mechanism is shipping in this same PR — bootstrap gap acknowledged in PR description). Future PRs on rawgentic that fire Step 8a will update this file via plan_lib.update_review_state(branch)."
+}

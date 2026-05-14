@@ -56,10 +56,13 @@ P15 (tiered review) introduces session-scoped state files under
   `plan_lib.consume_loopback`.
 
 In addition, a small COMMITTED status pointer lives at
-`.rawgentic/review-state.json` (single object: `{branch, last_review_log_status,
-ts}`). Step 12 and Step 14 read this file and refuse to ship if the last
-status is not `"applied"`. The committed pointer survives across sessions and
-worktrees; the session-scoped files do not.
+`.rawgentic/review-state/<branch-sanitized>.json` (single object: `{schema_version,
+branch, last_review_log_status, ts}`). Per-branch path so concurrent PRs do
+not conflict. Read via `plan_lib.read_review_state(repo_root, branch)` which
+also verifies `state.branch == current_branch` before trusting the file.
+Step 12 and Step 14 read this file and refuse to ship if the last status is
+not `"applied"`. The committed pointer survives across sessions and worktrees;
+the session-scoped files do not.
 
 The session-scoped directory is cleaned up on Step 14 merge success.
 </state-files>
@@ -837,7 +840,7 @@ Promotion at the last task still triggers Step 8a (and any retroactive scan) bef
     "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
     "findings": {"crit": N, "high": N, "med": N, "low": N, "dropped": N}}
    ```
-9. **Update the committed status pointer** at `.rawgentic/review-state.json` with `{branch, last_review_log_status: "applied"|"suspended"|"dispatch_failed", ts}`. Commit this update along with any fix commits.
+9. **Update the committed status pointer** via `plan_lib.write_review_state(repo_root, branch, last_review_log_status)` (path resolved by `plan_lib.review_state_path(repo_root, branch)`). Valid statuses: `"applied"|"suspended"|"dispatch_failed"`. Commit this update along with any fix commits.
 10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<summary>)`.
 11. **Headless suspend protection:** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
 
@@ -964,10 +967,10 @@ Updated CLAUDE.md (if insights memorized) or no output.
 
 8. **Deferred-resolution exit gate (P15):** before declaring Step 11 complete, call `plan_lib.assert_no_unresolved_high_deferrals(<deferrals_path>)`. If any deferred Critical/High remains unresolved (not `applied` and lacking independent concurrence from a different reviewer slot), Step 11 cannot complete. A finding with `defer_count >= 2` additionally requires `user_ack: true`.
 
-9. **Update committed status pointer:** after Step 11 passes, write `.rawgentic/review-state.json` with `last_review_log_status: "applied"`. Stage and commit it.
+9. **Update committed status pointer:** after Step 11 passes, call `plan_lib.write_review_state(repo_root, branch, "applied")` (file path resolved via `plan_lib.review_state_path`). Stage and commit it.
 
 ### Output
-Code review result with filtered findings and fixes applied. Committed `.rawgentic/review-state.json` reflects "applied".
+Code review result with filtered findings and fixes applied. Committed `.rawgentic/review-state/<branch-sanitized>.json` reflects "applied".
 
 ### Failure Modes
 - Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted: **[Headless: ERROR — post error comment with design flaw description + code review findings + loop-back history, add rawgentic:ai-error label, exit.]**
@@ -995,7 +998,7 @@ Code review result with filtered findings and fixes applied. Committed `.rawgent
    - If `capabilities.has_tests`: run full suite, block PR if tests fail
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
 
-4a. **P15 review-state gate:** read `.rawgentic/review-state.json`. If `last_review_log_status != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.
+4a. **P15 review-state gate:** read via `plan_lib.read_review_state(repo_root, branch)`. If the returned state is `None` (missing or branch mismatch) OR `state["last_review_log_status"] != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.
 
 5. **Create PR:**
    ```bash
@@ -1063,7 +1066,7 @@ CI status or skip confirmation.
 
 ### Instructions
 
-**P15 pre-merge gate:** re-read `.rawgentic/review-state.json`. If `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` happens on merge success.
+**P15 pre-merge gate:** re-read via `plan_lib.read_review_state(repo_root, branch)`. If None or `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` AND the branch's `.rawgentic/review-state/<branch-sanitized>.json` happens on merge success.
 
 1. **Merge PR (squash merge):**
    ```bash

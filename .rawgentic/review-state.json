@@ -1,7 +1,0 @@
-{
-  "schema_version": 1,
-  "branch": null,
-  "last_review_log_status": "applied",
-  "ts": null,
-  "note": "P15 tiered-review committed status pointer. Updated by WF2 Step 8a and Step 11 in hooks/plan_lib.py-driven workflows. Step 12/14 refuse to ship if last_review_log_status != 'applied'. Initial state is 'applied' so the gate is a no-op on branches that never fire Step 8a."
-}

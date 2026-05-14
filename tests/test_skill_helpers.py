@@ -54,6 +54,9 @@ EXPECTED_REFERENCES = {
     "get_deferred_findings": ["11"],
     "assert_no_unresolved_high_deferrals": ["11"],
     "consume_loopback": ["8"],
+    "write_review_state": ["8", "11"],   # written at Step 8a (suspend states) and Step 11 ("applied")
+    "read_review_state": ["12", "14"],   # read by the PR-creation and merge gates
+    "review_state_path": ["8", "11"],    # path resolver for the state file
 }
 
 
@@ -81,6 +84,37 @@ def _public_plan_lib_symbols() -> list[str]:
             continue
         names.append(name)
     return names
+
+
+def test_risk_criteria_canonical_strings_appear_in_docs():
+    """The 8 P15 risk criteria strings live in hooks/plan_lib.py::RISK_CRITERIA.
+    SKILL.md and docs/principles.md restate them in prose. This test asserts
+    each canonical string appears (case-insensitive substring) in both docs,
+    catching wording drift.
+
+    The match is intentionally loose (substring, case-insensitive) so prose
+    can use natural language ("**Security surface** — auth, secrets, ...")
+    around the canonical phrase. Reviewer 3 F1.
+    """
+    import sys
+    HOOKS_DIR = REPO_ROOT / "hooks"
+    sys.path.insert(0, str(HOOKS_DIR))
+    if "plan_lib" in sys.modules:
+        import importlib
+        plan_lib = importlib.reload(sys.modules["plan_lib"])
+    else:
+        import plan_lib
+
+    skill = _read_skill().lower()
+    principles = (REPO_ROOT / "docs" / "principles.md").read_text(encoding="utf-8").lower()
+    missing = []
+    for criterion in plan_lib.RISK_CRITERIA:
+        c = criterion.lower()
+        if c not in skill:
+            missing.append(f"SKILL.md missing canonical criterion: {criterion!r}")
+        if c not in principles:
+            missing.append(f"docs/principles.md missing canonical criterion: {criterion!r}")
+    assert missing == [], "\n".join(missing)
 
 
 def test_every_public_helper_is_referenced_in_skill():
