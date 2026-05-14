@@ -528,6 +528,7 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Test Suite Creation (WF12)](docs/design/workflow-test-suite-creation.md)
   - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
   - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
+  - [Dual Memory Backend (draft)](docs/superpowers/specs/2026-04-08-dual-memory-backend-design.md)
 - **[Testing](docs/testing.md)** — Test suite overview, hook test descriptions, skill evaluation methodology
 - **Diagrams** (in `diagrams/`): Excalidraw visual diagrams for each workflow and the framework architecture
 
