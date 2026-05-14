@@ -785,6 +785,15 @@ Execute the implementation plan task by task.
 
 **Parallel task execution:** For independent tasks (same `parallel_group`), dispatch via parallel Agent tool calls.
 
+**Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
+
+1. **Mechanical** — call `plan_lib.should_promote(task_id, file_paths, loc_delta)`. It returns `(True, reason)` if any file path matches the high-risk regex allowlist OR `loc_delta >= 200`.
+2. **Agent-flagged** — if your implementation work surfaced subjective criteria (e.g., the new error path is non-trivial in a way the path-allowlist couldn't catch), emit a `PROMOTE: <task_id> <reason>` directive in session notes.
+
+Either trigger fires Step 8a on the just-committed commit AND triggers a **retroactive scan** of all prior commits in this branch via `plan_lib.scan_prior_commits_for_trigger(repo, since_sha=<branch_base>, exclude_sha=<current_sha>)`. Any prior SHAs returned by the scan must also receive a Step 8a review **before Step 9**. Log the promotion using `plan_lib.format_promotion_note(task_id, criterion, rationale)`.
+
+Promotion at the last task still triggers Step 8a (and any retroactive scan) before Step 9.
+
 **Debugging:** If stuck after 3 manual fix attempts, escalate to systematic debugging.
 
 **Design flaw discovery:** If implementation reveals a fundamental design flaw:
@@ -794,8 +803,47 @@ Execute the implementation plan task by task.
 
 **Session checkpoint:** Update session notes with progress, verification results, deviations from plan. **[Headless: write a `<headless-checkpoint>` after every 2-3 tasks to enable fresh-session resumption.]**
 
+---
+
+### Step 8a sub-step: Per-task Review (P15)
+
+**Fires when:** the just-completed task has `riskLevel: high` (either as tagged in Step 5 OR promoted mid-flight in Step 8).
+
+1. **Capture the commit's diff:**
+   ```bash
+   git show --no-color --format= <sha>
+   ```
+2. **Dispatch 2 reviewers in parallel** via the Agent tool (inline-defined prompt roles, same pattern as Step 11 — NOT registered subagents):
+   - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
+   - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
+3. **Filter findings using `SEVERITY_BANDED_CONFIDENCE`** (Critical ≥0.50, High ≥0.65, Medium ≥0.80, Low ≥0.90). Count dropped findings.
+4. **Triage:**
+   - **Critical:** must fix before next task (block).
+   - **High:** fix before next task unless deferred-with-rationale. A deferral is persisted to `claude_docs/.wf2-state/<issue>/deferrals.json` and **must be re-presented to Step 11** for resolution.
+   - **Medium/Low:** advisory; log to review log only.
+5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
+6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
+7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**.
+8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` where entry is:
+   ```json
+   {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
+    "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
+    "findings": {"crit": N, "high": N, "med": N, "low": N, "dropped": N}}
+   ```
+9. **Update the committed status pointer** at `.rawgentic/review-state.json` with `{branch, last_review_log_status: "applied"|"suspended"|"dispatch_failed", ts}`. Commit this update along with any fix commits.
+10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<summary>)`.
+11. **Headless suspend protection:** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
+
 ### Output
-Implemented feature with passing tests/verifications on the feature branch, committed and pushed.
+For each high-risk task: an applied|deferred review log entry, committed status pointer updated, optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
+
+### Failure Modes
+- Reviewer cost spike on a plan with many high-risk tasks: confirmed expected behavior (P15 trades cost for early signal).
+- A Step 8a-deferred High finding is never re-presented at Step 11: this is what `plan_lib.assert_no_unresolved_high_deferrals` defends against in Step 11's exit check.
+
+---
+
+### Continuing Step 8 (after the per-task review block above)
 
 ### Failure Modes
 - Verification fails and cannot be fixed -> flag blocker to user
@@ -813,6 +861,8 @@ Implemented feature with passing tests/verifications on the feature branch, comm
 - Design-implementation alignment: does implementation follow the critiqued design?
 - Acceptance criteria verification: for each criterion, identify the test/verification that covers it
 - Documentation check: are required docs updated?
+- **P15 review coverage (NEW):** invoke `plan_lib.assert_review_coverage(<log_path>, plan_tasks, task_to_sha)`. Every high-risk task (including mid-flight-promoted) must have an `applied` or `deferred` entry in the review log. `REVIEW_DISPATCH_FAILED` entries DO NOT count as coverage.
+- **Implausibility check (NEW):** if the plan was tagged `implausible_zero` in Step 5 and the diff touches paths matching `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS`, fail Part A with an explicit message: features touching security-relevant paths must have at least one high-risk task.
 
 **Part B: Evidence enforcement:**
 
@@ -865,6 +915,14 @@ Updated CLAUDE.md (if insights memorized) or no output.
    git diff ${capabilities.default_branch}..HEAD
    ```
 
+   **P15 pre-flight (when Step 8a fired any reviews):** read the review log via `plan_lib.append_review_log`'s companion reader and read deferrals via `plan_lib.get_deferred_findings(<deferrals_path>)`. Build:
+   - `reviewed_shas` — SHAs that already went through Step 8a
+   - `deferred_findings` — the verbatim list of deferred-High findings to re-present
+
+   Pass both to each reviewer as context:
+   - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
+   - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator."
+
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
 
    **Agent 1: Style & Convention Compliance**
@@ -885,7 +943,7 @@ Updated CLAUDE.md (if insights memorized) or no output.
    - Are there security implications?
    - Is the change backward-compatible?
 
-3. **Filter by confidence:** Only surface findings with confidence >= 0.80.
+3. **Filter by confidence:** Apply the severity-banded thresholds from `SEVERITY_BANDED_CONFIDENCE` (Critical ≥0.50, High ≥0.65, Medium ≥0.80, Low ≥0.90). The flat 0.80 in `REVIEW_CONFIDENCE_THRESHOLD` is a legacy fallback; the banded values are authoritative. Log dropped-finding counts.
 
 4. **Severity-based fix workflow:**
    - Critical/High: fix before PR
@@ -895,10 +953,14 @@ Updated CLAUDE.md (if insights memorized) or no output.
 
 6. Apply ambiguity circuit breaker.
 
-7. **Design flaw detection:** If review finds fundamental flaw, loop back to Step 3 if budget allows.
+7. **Design flaw detection:** If review finds fundamental flaw, consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review")`. On success, return to Step 3. On exhaustion, escalate.
+
+8. **Deferred-resolution exit gate (P15):** before declaring Step 11 complete, call `plan_lib.assert_no_unresolved_high_deferrals(<deferrals_path>)`. If any deferred Critical/High remains unresolved (not `applied` and lacking independent concurrence from a different reviewer slot), Step 11 cannot complete. A finding with `defer_count >= 2` additionally requires `user_ack: true`.
+
+9. **Update committed status pointer:** after Step 11 passes, write `.rawgentic/review-state.json` with `last_review_log_status: "applied"`. Stage and commit it.
 
 ### Output
-Code review result with filtered findings and fixes applied.
+Code review result with filtered findings and fixes applied. Committed `.rawgentic/review-state.json` reflects "applied".
 
 ### Failure Modes
 - Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted: **[Headless: ERROR — post error comment with design flaw description + code review findings + loop-back history, add rawgentic:ai-error label, exit.]**
@@ -925,6 +987,8 @@ Code review result with filtered findings and fixes applied.
 4. **Pre-PR test gate** (conditional):
    - If `capabilities.has_tests`: run full suite, block PR if tests fail
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
+
+4a. **P15 review-state gate:** read `.rawgentic/review-state.json`. If `last_review_log_status != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.
 
 5. **Create PR:**
    ```bash
@@ -991,6 +1055,8 @@ CI status or skip confirmation.
 ## Step 14: Merge PR and Deploy (Adaptive)
 
 ### Instructions
+
+**P15 pre-merge gate:** re-read `.rawgentic/review-state.json`. If `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` happens on merge success.
 
 1. **Merge PR (squash merge):**
    ```bash
