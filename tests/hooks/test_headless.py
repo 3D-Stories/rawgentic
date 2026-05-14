@@ -136,6 +136,23 @@ class TestFormatComment:
         assert "![img]" not in result
         assert "(https://evil.com)" not in result
 
+    def test_step_8a_string_id_renders(self):
+        """P15: Step 8a per-task review uses a string step id."""
+        from headless_interaction import format_comment
+
+        result = format_comment(
+            step="8a",
+            title="Per-task review ambiguity",
+            context="Task T2.3 review surfaced ambiguous findings",
+            question="How to triage finding #2?",
+            options=["(a) Apply", "(b) Defer with rationale"],
+            metadata={"question_id": "f-456", "step": "8a", "type": "per_task_review"},
+        )
+        assert "## [WF2 Step 8a] Per-task review ambiguity" in result
+        assert "T2.3" in result
+        # Metadata block carries the string step id intact
+        assert '"step":"8a"' in result.replace(" ", "") or '"step": "8a"' in result
+
     def test_empty_options(self):
         """Should handle empty options list gracefully."""
         from headless_interaction import format_comment

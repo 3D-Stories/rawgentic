@@ -14,6 +14,7 @@ You are the WF2 orchestrator implementing a 16-step feature implementation workf
 MAX_DESIGN_LOOPBACK_ITERATIONS = 2
 MAX_TDD_DESIGN_LOOPBACK = 1
 MAX_REVIEW_DESIGN_LOOPBACK = 1
+MAX_REVIEW_DESIGN_LOOPBACK_STEP_8A = 1   # P15: Step 8a per-task review loopback (separate from tdd)
 GLOBAL_LOOPBACK_BUDGET = 3
 VOLUME_THRESHOLDS:
   Critical: 5
@@ -24,8 +25,47 @@ BRANCH_PREFIX_FEATURE = "feature"
 BRANCH_PREFIX_FIX = "fix"
 CI_POLL_INTERVAL_SECONDS = 30
 CI_MAX_WAIT_MINUTES = 10
-REVIEW_CONFIDENCE_THRESHOLD = 0.80
+REVIEW_CONFIDENCE_THRESHOLD = 0.80                    # Flat fallback (legacy, retained)
+# P15 — Risk-stratified Review (tiered code review):
+PER_TASK_REVIEW_AGENT_COUNT = 2                        # Step 8a uses 2 inline reviewer roles
+# Severity-banded confidence applied to Step 8a AND Step 11 reviewer findings.
+# Critical and High get a lower bar because hiding them is more dangerous than
+# flagging false-positives. Banded values are documented in hooks/plan_lib.py.
+SEVERITY_BANDED_CONFIDENCE:
+  Critical: 0.50
+  High:     0.65
+  Medium:   0.80
+  Low:      0.90
+WF2_HIGH_RISK_RATIO_WARN_PCT = ${WF2_HIGH_RISK_RATIO_WARN_PCT:-30}   # warn band; clamped [5,95]
+WF2_HIGH_RISK_RATIO_HALT_PCT = ${WF2_HIGH_RISK_RATIO_HALT_PCT:-50}   # halt band; clamped [10,95]; halt>=warn+10
+# Source of truth for these constants is hooks/plan_lib.py (env-var freeze at import).
 </constants>
+
+<state-files>
+P15 (tiered review) introduces session-scoped state files under
+`claude_docs/.wf2-state/<issue-number>/`:
+
+- `review_log.jsonl` — append-only Step 8a review entries (`task_id`, `sha`,
+  `reviewers`, `verdicts`, `findings_count`, `dropped_count`, `ts`). Read by
+  Step 9 (coverage assertion) and Step 11 (already-reviewed SHA list).
+- `deferrals.json` — finding-level deferrals re-presented at Step 11. Each
+  entry: `finding_id`, `severity`, `status`, `defer_count`,
+  `originator_reviewer_slot`, `concurrences`, `user_ack`.
+- `loopback_counters.json` — per-source loop-back counters (`design`, `tdd`,
+  `review_design`, `review`) plus `total`. Persisted across sessions via
+  `plan_lib.consume_loopback`.
+
+In addition, a small COMMITTED status pointer lives at
+`.rawgentic/review-state/<branch-sanitized>.json` (single object: `{schema_version,
+branch, last_review_log_status, ts}`). Per-branch path so concurrent PRs do
+not conflict. Read via `plan_lib.read_review_state(repo_root, branch)` which
+also verifies `state.branch == current_branch` before trusting the file.
+Step 12 and Step 14 read this file and refuse to ship if the last status is
+not `"applied"`. The committed pointer survives across sessions and worktrees;
+the session-scoped files do not.
+
+The session-scoped directory is cleaned up on Step 14 merge success.
+</state-files>
 
 <mandatory-steps>
 The following steps are MANDATORY and must NEVER be skipped, abbreviated, or combined — regardless of context window pressure, session length, perceived simplicity, or any other justification:
@@ -45,6 +85,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 
 Conditional steps (skip ONLY when their condition is not met):
 - Step 6 (Plan Drift): lightweight, fast — run it unless time-critical
+- **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
 - Step 14 (Merge/Deploy): skip only if user does not request merge
@@ -125,6 +166,7 @@ AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept auto-generated ACs for WF1-created issues
 - Step 1: Accept capabilities for WF1-created issues
 - Step 5: Remove excess tasks on scope creep (document in session notes)
+- Step 5: Risk ratio `warn` band — log to session notes, continue
 - Step 7: Always stash dirty directory
 - Step 7: Always resume existing branch
 - Step 8: Rewrite failing RED test (up to 2 attempts)
@@ -136,12 +178,18 @@ QUESTION interactions (post comment, suspend, exit):
 - Step 3: Design approach trade-offs
 - Step 3: Scope larger than estimated
 - Step 4: Ambiguity circuit breaker findings
+- Step 5: Risk ratio `halt` band (>50%) or `decompose` (≥80%) — risk-ratio breakdown with options
+- Step 8a: Ambiguity circuit breaker on per-task review findings
+- Step 8a: Reviewer dispatch failure after retry (REVIEW_DISPATCH_FAILED)
+- Step 11: Unresolved deferred-High findings at exit gate
 - Step 14: Manual deploy confirmation
 
 ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 - Step 4: Design loop-back budget exhausted
 - Step 4: Global loop-back budget exhausted
+- Step 5: Plan format contract violation (missing riskLevel; fail-closed)
 - Step 8: Design flaw + budget exhausted
+- Step 8a: Design flaw + review_design loop-back budget exhausted
 - Step 11: Design flaw in review + budget exhausted
 
 **QUESTION protocol (post → label → suspend → exit):**
@@ -607,6 +655,35 @@ Amended design document.
 
 3. **Task ordering:** Make dependencies explicit. Mark parallel-eligible tasks with the same `parallel_group`.
 
+3a. **Risk stratification (P15):** Tag every task with a `riskLevel: high|standard` field. Use **`high`** if ANY of the 8 criteria apply; otherwise `standard`. The 8 criteria (canonical list lives in `hooks/plan_lib.py::RISK_CRITERIA`):
+
+   1. **Security surface** — auth, secrets, sanitization, input validation, crypto, access control
+   2. **Module boundary** — introduces or changes a service/module API that other code will import
+   3. **Non-trivial error/exception flow** — state machines, retry, fallback branches, discriminated outcomes
+   4. **Infra/persistence** — infrastructure, deployment, migrations, schema
+   5. **Security middleware** — rate limiting, circuit breakers, request validation
+   6. **Deserialization of external data** — JSON/YAML/TOML/binary formats from untrusted sources
+   7. **Subprocess construction** — shells out to external commands with dynamic args
+   8. **Regex on untrusted input** — ReDoS risk, lookahead in user-controlled input
+
+   **Plan format contract** (enforced by `plan_lib.parse_tasks`):
+   - Each task begins with `### Task <id>: <title>` heading.
+   - Each task body MUST contain a line `- riskLevel: high|standard`; high-risk tasks include a parenthesized reason: `- riskLevel: high (security surface)`.
+   - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP). **[Headless: ERROR — add `rawgentic:ai-error` label, post comment explaining the plan format contract.]**
+
+   **Calibration check** — after task decomposition, compute the high-risk ratio via `plan_lib.compute_risk_ratio(tasks)` and classify via `plan_lib.check_ratio_band(ratio, len(tasks))`. Handle the result:
+
+   - `skip` (N<3): silent.
+   - `pass` (ratio ≤ WARN_PCT/100, default 30%): silent.
+   - `implausible_zero` (ratio == 0 AND N≥5): log an info note: "0% high-risk on a complex feature is implausible — confirm." Continue.
+   - `warn` (WARN_PCT/100 < ratio ≤ HALT_PCT/100): log warning to session notes. Continue. **[Headless: AUTO-RESOLVE — log to session notes.]**
+   - `halt` (HALT_PCT/100 < ratio < 80%): STOP and ask user. **[Headless: QUESTION — post comment with risk-ratio breakdown + options (proceed-anyway, re-plan, abort), suspend.]**
+   - `decompose` (ratio ≥ 80%): STOP and recommend plan decomposition. Treat as halt with a different framing. **[Headless: QUESTION — post comment recommending multi-PR split, suspend.]**
+
+   The 15–30% high-risk ratio is the documented calibration target. Anything above the WARN band signals that the criteria are being over-applied (dilution returns).
+
+   **High-risk path allowlist:** A task touching any file whose path matches the regex allowlist in `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS` (auth, secret, .env, migration, crypto, jwt, session, oauth, csrf, token, credential, passport, middleware, lib/server/auth, security-, hooks/security) is auto-tagged `high` regardless of the agent's manual classification.
+
 4. **Verification strategy per task:** Specify how each task is verified:
    - Test file + test cases (if test framework exists)
    - Shell command that confirms correct behavior
@@ -718,6 +795,15 @@ Execute the implementation plan task by task.
 
 **Parallel task execution:** For independent tasks (same `parallel_group`), dispatch via parallel Agent tool calls.
 
+**Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
+
+1. **Mechanical** — call `plan_lib.should_promote(task_id, file_paths, loc_delta)`. It returns `(True, reason)` if any file path matches the high-risk regex allowlist OR `loc_delta >= 200`.
+2. **Agent-flagged** — if your implementation work surfaced subjective criteria (e.g., the new error path is non-trivial in a way the path-allowlist couldn't catch), emit a `PROMOTE: <task_id> <reason>` directive in session notes.
+
+Either trigger fires Step 8a on the just-committed commit AND triggers a **retroactive scan** of all prior commits in this branch via `plan_lib.scan_prior_commits_for_trigger(repo, since_sha=<branch_base>, exclude_sha=<current_sha>)`. Any prior SHAs returned by the scan must also receive a Step 8a review **before Step 9**. Log the promotion using `plan_lib.format_promotion_note(task_id, criterion, rationale)`.
+
+Promotion at the last task still triggers Step 8a (and any retroactive scan) before Step 9.
+
 **Debugging:** If stuck after 3 manual fix attempts, escalate to systematic debugging.
 
 **Design flaw discovery:** If implementation reveals a fundamental design flaw:
@@ -727,8 +813,47 @@ Execute the implementation plan task by task.
 
 **Session checkpoint:** Update session notes with progress, verification results, deviations from plan. **[Headless: write a `<headless-checkpoint>` after every 2-3 tasks to enable fresh-session resumption.]**
 
+---
+
+### Step 8a sub-step: Per-task Review (P15)
+
+**Fires when:** the just-completed task has `riskLevel: high` (either as tagged in Step 5 OR promoted mid-flight in Step 8).
+
+1. **Capture the commit's diff:**
+   ```bash
+   git show --no-color --format= <sha>
+   ```
+2. **Dispatch 2 reviewers in parallel** via the Agent tool (inline-defined prompt roles, same pattern as Step 11 — NOT registered subagents):
+   - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
+   - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
+3. **Filter findings using `SEVERITY_BANDED_CONFIDENCE`** (Critical ≥0.50, High ≥0.65, Medium ≥0.80, Low ≥0.90). Count dropped findings.
+4. **Triage:**
+   - **Critical:** must fix before next task (block).
+   - **High:** fix before next task unless deferred-with-rationale. A deferral is persisted to `claude_docs/.wf2-state/<issue>/deferrals.json` and **must be re-presented to Step 11** for resolution.
+   - **Medium/Low:** advisory; log to review log only.
+5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
+6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
+7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**.
+8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` where entry is:
+   ```json
+   {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
+    "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
+    "findings": {"crit": N, "high": N, "med": N, "low": N, "dropped": N}}
+   ```
+9. **Update the committed status pointer** via `plan_lib.write_review_state(repo_root, branch, last_review_log_status)` (path resolved by `plan_lib.review_state_path(repo_root, branch)`). Valid statuses: `"applied"|"suspended"|"dispatch_failed"`. Commit this update along with any fix commits.
+10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<summary>)`.
+11. **Headless suspend protection:** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
+
 ### Output
-Implemented feature with passing tests/verifications on the feature branch, committed and pushed.
+For each high-risk task: an applied|deferred review log entry, committed status pointer updated, optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
+
+### Failure Modes
+- Reviewer cost spike on a plan with many high-risk tasks: confirmed expected behavior (P15 trades cost for early signal).
+- A Step 8a-deferred High finding is never re-presented at Step 11: this is what `plan_lib.assert_no_unresolved_high_deferrals` defends against in Step 11's exit check.
+
+---
+
+### Continuing Step 8 (after the per-task review block above)
 
 ### Failure Modes
 - Verification fails and cannot be fixed -> flag blocker to user
@@ -746,6 +871,8 @@ Implemented feature with passing tests/verifications on the feature branch, comm
 - Design-implementation alignment: does implementation follow the critiqued design?
 - Acceptance criteria verification: for each criterion, identify the test/verification that covers it
 - Documentation check: are required docs updated?
+- **P15 review coverage (NEW):** invoke `plan_lib.assert_review_coverage(<log_path>, plan_tasks, task_to_sha)`. Every high-risk task (including mid-flight-promoted) must have an `applied` or `deferred` entry in the review log. `REVIEW_DISPATCH_FAILED` entries DO NOT count as coverage.
+- **Implausibility check (NEW):** if the plan was tagged `implausible_zero` in Step 5 and the diff touches paths matching `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS`, fail Part A with an explicit message: features touching security-relevant paths must have at least one high-risk task.
 
 **Part B: Evidence enforcement:**
 
@@ -798,6 +925,14 @@ Updated CLAUDE.md (if insights memorized) or no output.
    git diff ${capabilities.default_branch}..HEAD
    ```
 
+   **P15 pre-flight (when Step 8a fired any reviews):** read the review log via `plan_lib.append_review_log`'s companion reader and read deferrals via `plan_lib.get_deferred_findings(<deferrals_path>)`. Build:
+   - `reviewed_shas` — SHAs that already went through Step 8a
+   - `deferred_findings` — the verbatim list of deferred-High findings to re-present
+
+   Pass both to each reviewer as context:
+   - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
+   - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator."
+
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
 
    **Agent 1: Style & Convention Compliance**
@@ -818,7 +953,7 @@ Updated CLAUDE.md (if insights memorized) or no output.
    - Are there security implications?
    - Is the change backward-compatible?
 
-3. **Filter by confidence:** Only surface findings with confidence >= 0.80.
+3. **Filter by confidence:** Apply the severity-banded thresholds from `SEVERITY_BANDED_CONFIDENCE` (Critical ≥0.50, High ≥0.65, Medium ≥0.80, Low ≥0.90). The flat 0.80 in `REVIEW_CONFIDENCE_THRESHOLD` is a legacy fallback; the banded values are authoritative. Log dropped-finding counts.
 
 4. **Severity-based fix workflow:**
    - Critical/High: fix before PR
@@ -828,10 +963,14 @@ Updated CLAUDE.md (if insights memorized) or no output.
 
 6. Apply ambiguity circuit breaker.
 
-7. **Design flaw detection:** If review finds fundamental flaw, loop back to Step 3 if budget allows.
+7. **Design flaw detection:** If review finds fundamental flaw, consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review")`. On success, return to Step 3. On exhaustion, escalate.
+
+8. **Deferred-resolution exit gate (P15):** before declaring Step 11 complete, call `plan_lib.assert_no_unresolved_high_deferrals(<deferrals_path>)`. If any deferred Critical/High remains unresolved (not `applied` and lacking independent concurrence from a different reviewer slot), Step 11 cannot complete. A finding with `defer_count >= 2` additionally requires `user_ack: true`.
+
+9. **Update committed status pointer:** after Step 11 passes, call `plan_lib.write_review_state(repo_root, branch, "applied")` (file path resolved via `plan_lib.review_state_path`). Stage and commit it.
 
 ### Output
-Code review result with filtered findings and fixes applied.
+Code review result with filtered findings and fixes applied. Committed `.rawgentic/review-state/<branch-sanitized>.json` reflects "applied".
 
 ### Failure Modes
 - Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted: **[Headless: ERROR — post error comment with design flaw description + code review findings + loop-back history, add rawgentic:ai-error label, exit.]**
@@ -858,6 +997,8 @@ Code review result with filtered findings and fixes applied.
 4. **Pre-PR test gate** (conditional):
    - If `capabilities.has_tests`: run full suite, block PR if tests fail
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
+
+4a. **P15 review-state gate:** read via `plan_lib.read_review_state(repo_root, branch)`. If the returned state is `None` (missing or branch mismatch) OR `state["last_review_log_status"] != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.
 
 5. **Create PR:**
    ```bash
@@ -924,6 +1065,8 @@ CI status or skip confirmation.
 ## Step 14: Merge PR and Deploy (Adaptive)
 
 ### Instructions
+
+**P15 pre-merge gate:** re-read via `plan_lib.read_review_state(repo_root, branch)`. If None or `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` AND the branch's `.rawgentic/review-state/<branch-sanitized>.json` happens on merge success.
 
 1. **Merge PR (squash merge):**
    ```bash

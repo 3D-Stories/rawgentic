@@ -435,7 +435,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 
 ## How It Works
 
-### 14 Principles (P1-P14)
+### 15 Principles (P1-P15)
 
 | ID  | Name                    | Summary                                                                  |
 | --- | ----------------------- | ------------------------------------------------------------------------ |
@@ -453,6 +453,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | P12 | Conventional Commit     | `<type>(scope): <desc>` — type matches branch prefix                     |
 | P13 | Pre-PR Code Review      | Code review BEFORE creating PR, not after                                |
 | P14 | Documentation-Gated PRs | PR must document what changed, why, and how to test                      |
+| P15 | Risk-stratified Review  | High-risk tasks get per-task review at commit time (WF2 Step 8a) in addition to the PR-wide review |
 
 ### Quality Gate Strategy
 
@@ -513,7 +514,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 
 The `docs/` directory contains detailed design documentation for contributors:
 
-- **[Principles](docs/principles.md)** — P1-P14 definitions with rationale and enforcement mechanisms
+- **[Principles](docs/principles.md)** — P1-P15 definitions with rationale and enforcement mechanisms
 - **[Consolidation](docs/consolidation.md)** — Step archetype mappings, shared protocol, principle coverage matrix
 - **Design documents** (in `docs/design/`):
   - [Issue Creation (WF1)](docs/design/workflow-issue-creation.md)

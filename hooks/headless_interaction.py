@@ -35,7 +35,7 @@ def _sanitize_markdown(value: str) -> str:
 # --- Comment formatting ---
 
 def format_comment(
-    step: int,
+    step: int | str,
     title: str,
     context: str,
     question: str,
@@ -49,8 +49,9 @@ def format_comment(
 
     Parameters
     ----------
-    step : int
-        The WF step number that triggered the interaction.
+    step : int | str
+        The WF step number that triggered the interaction. Strings allowed for
+        sub-steps like "8a" (P15 tiered review).
     title : str
         Short title for the question (e.g., "Circuit Breaker Triggered").
     context : str
@@ -144,7 +145,7 @@ def parse_metadata(comment_body: str | None) -> dict | None:
 def format_suspend_state(
     session_id: str,
     issue: int,
-    step: int,
+    step: int | str,
     question_id: str,
     comment_url: str,
     clarification_round: int = 0,
