@@ -645,6 +645,35 @@ Amended design document.
 
 3. **Task ordering:** Make dependencies explicit. Mark parallel-eligible tasks with the same `parallel_group`.
 
+3a. **Risk stratification (P15):** Tag every task with a `riskLevel: high|standard` field. Use **`high`** if ANY of the 8 criteria apply; otherwise `standard`. The 8 criteria (canonical list lives in `hooks/plan_lib.py::RISK_CRITERIA`):
+
+   1. **Security surface** — auth, secrets, sanitization, input validation, crypto, access control
+   2. **Module boundary** — introduces or changes a service/module API that other code will import
+   3. **Non-trivial error/exception flow** — state machines, retry, fallback branches, discriminated outcomes
+   4. **Infra/persistence** — infrastructure, deployment, migrations, schema
+   5. **Security middleware** — rate limiting, circuit breakers, request validation
+   6. **Deserialization of external data** — JSON/YAML/TOML/binary formats from untrusted sources
+   7. **Subprocess construction** — shells out to external commands with dynamic args
+   8. **Regex on untrusted input** — ReDoS risk, lookahead in user-controlled input
+
+   **Plan format contract** (enforced by `plan_lib.parse_tasks`):
+   - Each task begins with `### Task <id>: <title>` heading.
+   - Each task body MUST contain a line `- riskLevel: high|standard`; high-risk tasks include a parenthesized reason: `- riskLevel: high (security surface)`.
+   - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP). **[Headless: ERROR — add `rawgentic:ai-error` label, post comment explaining the plan format contract.]**
+
+   **Calibration check** — after task decomposition, compute the high-risk ratio via `plan_lib.compute_risk_ratio(tasks)` and classify via `plan_lib.check_ratio_band(ratio, len(tasks))`. Handle the result:
+
+   - `skip` (N<3): silent.
+   - `pass` (ratio ≤ WARN_PCT/100, default 30%): silent.
+   - `implausible_zero` (ratio == 0 AND N≥5): log an info note: "0% high-risk on a complex feature is implausible — confirm." Continue.
+   - `warn` (WARN_PCT/100 < ratio ≤ HALT_PCT/100): log warning to session notes. Continue. **[Headless: AUTO-RESOLVE — log to session notes.]**
+   - `halt` (HALT_PCT/100 < ratio < 80%): STOP and ask user. **[Headless: QUESTION — post comment with risk-ratio breakdown + options (proceed-anyway, re-plan, abort), suspend.]**
+   - `decompose` (ratio ≥ 80%): STOP and recommend plan decomposition. Treat as halt with a different framing. **[Headless: QUESTION — post comment recommending multi-PR split, suspend.]**
+
+   The 15–30% high-risk ratio is the documented calibration target. Anything above the WARN band signals that the criteria are being over-applied (dilution returns).
+
+   **High-risk path allowlist:** A task touching any file whose path matches the regex allowlist in `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS` (auth, secret, .env, migration, crypto, jwt, session, oauth, csrf, token, credential, passport, middleware, lib/server/auth, security-, hooks/security) is auto-tagged `high` regardless of the agent's manual classification.
+
 4. **Verification strategy per task:** Specify how each task is verified:
    - Test file + test cases (if test framework exists)
    - Shell command that confirms correct behavior
