@@ -375,6 +375,25 @@ class TestShouldPromote:
         assert promote is False
         assert reason is None
 
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "src/secretary/index.ts",          # `secretary` shares prefix with `secret`
+            "src/tokenizer.ts",                # `tokenizer` shares prefix with `token`
+            "src/cryptocurrency-display.ts",   # `crypto` is inside `cryptocurrency`
+            "docs/sessionalization.md",        # `session` inside `sessionalization`
+            "README.environment.md",           # `.env` inside `environment`
+            "docs/passportphoto.md",           # `passport` inside `passportphoto`
+            "lib/authority/x.ts",              # `auth` shares prefix with `authority`
+        ],
+    )
+    def test_no_promote_on_lookalike_paths(self, path):
+        """Regression for review finding: anchor the regex to path-segment
+        boundaries so prefix-sharing names don't false-positive."""
+        mod = _reload_plan_lib()
+        promote, _ = mod.should_promote("T1", [path], 5)
+        assert promote is False, f"{path} unexpectedly triggered promotion"
+
     def test_promote_on_large_loc_delta(self):
         mod = _reload_plan_lib()
         promote, reason = mod.should_promote("T1", ["src/widgets.ts"], 250)

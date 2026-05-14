@@ -35,7 +35,7 @@ def _sanitize_markdown(value: str) -> str:
 # --- Comment formatting ---
 
 def format_comment(
-    step: "int | str",
+    step: int | str,
     title: str,
     context: str,
     question: str,
@@ -145,7 +145,7 @@ def parse_metadata(comment_body: str | None) -> dict | None:
 def format_suspend_state(
     session_id: str,
     issue: int,
-    step: int,
+    step: int | str,
     question_id: str,
     comment_url: str,
     clarification_round: int = 0,

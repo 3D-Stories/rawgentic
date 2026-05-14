@@ -13,10 +13,13 @@ Provides testable helpers for:
 
 Used by skills/implement-feature/SKILL.md via `python3 -c` invocations.
 """
+import json as _json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Final, Literal
 
 
@@ -234,9 +237,26 @@ DEFAULT_HIGH_RISK_PATH_PATTERNS: Final[tuple[str, ...]] = (
     r"hooks/security",
 )
 
-# Compile once. Case-insensitive substring match anywhere in the path.
+# Anchor each pattern to path-segment boundaries to reduce false positives.
+# A pattern "auth" should match `src/auth/login.ts` and `AUTH/handler.py` but
+# NOT `src/author.ts` or `lib/authority/x.ts`. Boundary chars: start/end,
+# slash, underscore, dot, hyphen. Trailing `s` is allowed for natural plurals
+# (`secret` matches `secrets.yaml`, `migration` matches `migrations/`).
+# `\.env` already starts with a dot so we don't double-anchor on its left side.
+_BOUNDARY = r"(?:^|[/_.\-])"
+_BOUNDARY_END = r"s?(?:$|[/_.\-])"
+
+
+def _anchor(pattern: str) -> str:
+    # `\.env` already has a leading `\.` which IS a boundary char; don't
+    # double-anchor or we'd require two dots. Other patterns get full anchoring.
+    if pattern.startswith(r"\."):
+        return pattern + _BOUNDARY_END
+    return _BOUNDARY + pattern + _BOUNDARY_END
+
+
 _HIGH_RISK_PATH_RE = re.compile(
-    "(" + "|".join(DEFAULT_HIGH_RISK_PATH_PATTERNS) + ")",
+    "(" + "|".join(_anchor(p) for p in DEFAULT_HIGH_RISK_PATH_PATTERNS) + ")",
     re.IGNORECASE,
 )
 
@@ -256,12 +276,15 @@ def _path_matches_high_risk(path: str, extra_patterns: tuple[str, ...] = ()) -> 
 
 
 def should_promote(
-    task_id: str,
+    _task_id: str,
     file_paths: list[str],
     loc_delta: int,
     extra_high_risk_patterns: tuple[str, ...] = (),
 ) -> tuple[bool, str | None]:
     """Mechanical heuristic for mid-flight task promotion (standard -> high).
+
+    `_task_id` is reserved for future logging/telemetry; the heuristic itself
+    decides solely on `file_paths` and `loc_delta`.
 
     Triggers (any of):
     - Any file path matches the high-risk allowlist regex
@@ -288,9 +311,6 @@ def format_promotion_note(task_id: str, criterion: str, rationale: str) -> str:
 
 # --- review log (jsonl) ---
 
-import json as _json  # noqa: E402  (intentional; kept distinct from top-level imports)
-from datetime import datetime, timezone  # noqa: E402
-
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -315,13 +335,20 @@ def _read_review_log(log_path: str) -> list[dict]:
         return []
     out = []
     with open(log_path, "r", encoding="utf-8") as f:
-        for raw in f:
+        for lineno, raw in enumerate(f, start=1):
             raw = raw.strip()
             if not raw:
                 continue
             try:
                 out.append(_json.loads(raw))
             except _json.JSONDecodeError:
+                # Surface corruption to operator; do not raise — the
+                # assert_review_coverage gate will fail cleanly.
+                print(
+                    f"plan_lib: skipping malformed review log line "
+                    f"{lineno} in {log_path}: {raw[:80]!r}",
+                    file=sys.stderr,
+                )
                 continue
     return out
 
@@ -422,10 +449,15 @@ def _read_loopback_state(path: str) -> dict:
         return {src: 0 for src in _LOOPBACK_SOURCES} | {"total": 0}
     with open(path, "r", encoding="utf-8") as f:
         state = _json.load(f)
-    # Backfill missing keys
+    # Backfill missing per-source keys (treat absent as 0)
     for src in _LOOPBACK_SOURCES:
-        state.setdefault(src, 0)
-    state.setdefault("total", sum(state.get(s, 0) for s in _LOOPBACK_SOURCES))
+        v = state.get(src, 0)
+        if not isinstance(v, int) or v < 0:
+            v = 0  # corruption / version skew — reset
+        state[src] = v
+    # ALWAYS recompute total from per-source values (do not trust on-disk total)
+    # to defeat the corruption case where total and per-source disagree.
+    state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
     return state
 
 
@@ -437,7 +469,6 @@ def _write_loopback_state(path: str, state: dict) -> None:
 
 def _git_run(repo: str, args: list[str]) -> str:
     """Run a git command in `repo` and return stdout. Raises on non-zero exit."""
-    import subprocess
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
@@ -505,7 +536,12 @@ def scan_prior_commits_for_trigger(
             continue
         try:
             stat = _git_run(repo, ["show", "--numstat", "--format=", sha])
-        except Exception:
+        except subprocess.CalledProcessError as exc:
+            print(
+                f"plan_lib: scan_prior_commits_for_trigger skipping {sha}: "
+                f"git show exited {exc.returncode}",
+                file=sys.stderr,
+            )
             continue
         paths, loc_delta = _parse_numstat(stat)
         promote, _ = should_promote(sha, paths, loc_delta, extra_high_risk_patterns)
