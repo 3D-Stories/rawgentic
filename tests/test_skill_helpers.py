@@ -60,17 +60,34 @@ EXPECTED_REFERENCES = {
 }
 
 
+# Match `helper_name`, `plan_lib.helper_name`, or `something.helper_name` inside
+# backticks. The backtick requirement (vs plain substring) filters out prose
+# mentions like "we call parse_tasks later" and forces actual invocation syntax.
+def _backticked_reference_re(helper: str) -> re.Pattern:
+    return re.compile(r"`[A-Za-z0-9_.]*\b" + re.escape(helper) + r"\b[^`]*`")
+
+
 @pytest.mark.parametrize("helper,steps", list(EXPECTED_REFERENCES.items()))
 def test_helper_referenced_in_expected_step(helper, steps):
-    """Each helper must appear in the section of one of its expected steps."""
+    """Each helper must appear in a backticked code reference in the section
+    of one of its expected steps.
+
+    The backtick requirement is the tightening from review finding R3 F4:
+    plain substring matching would accept prose mentions ("we call parse_tasks
+    later"), but the helper is only actually wired in if it appears as
+    invocation syntax (`plan_lib.parse_tasks(...)`)."""
     skill = _read_skill()
+    pattern = _backticked_reference_re(helper)
     for step in steps:
         section = _step_section(skill, step)
-        if helper in section:
+        if pattern.search(section):
             return
     pytest.fail(
-        f"Helper {helper!r} expected in Step section(s) {steps} of SKILL.md but not found. "
-        f"This is the WF2/plan_lib drift guard — either rename in SKILL.md or update this test."
+        f"Helper {helper!r} expected in Step section(s) {steps} of SKILL.md "
+        f"as a backticked code reference (e.g., `plan_lib.{helper}` or "
+        f"`{helper}(...)`) but not found. "
+        f"This is the WF2/plan_lib drift guard — either rename in SKILL.md, "
+        f"add the actual invocation, or update this test."
     )
 
 

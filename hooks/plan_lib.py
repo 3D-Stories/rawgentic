@@ -13,11 +13,13 @@ Provides testable helpers for:
 
 Used by skills/implement-feature/SKILL.md via `python3 -c` invocations.
 """
+import fcntl
 import json as _json
 import os
 import re
 import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Literal
@@ -329,10 +331,20 @@ def should_promote(
     return False, None
 
 
-def format_promotion_note(task_id: str, criterion: str, rationale: str) -> str:
-    """Format a session-notes line documenting a mid-flight promotion."""
+def format_promotion_note(
+    task_id: str,
+    criterion: str,
+    rationale: str,
+    step: str = "8",
+) -> str:
+    """Format a session-notes line documenting a mid-flight promotion.
+
+    `step` defaults to "8" (the WF2 step where promotion fires today). If
+    P15 ever sprouts a Step 8b promotion or a different workflow reuses
+    the helper, callers can override.
+    """
     return (
-        f"### WF2 Step 8 — Promoted {task_id}: standard -> high "
+        f"### WF2 Step {step} — Promoted {task_id}: standard -> high "
         f"(criterion: {criterion}; rationale: {rationale})"
     )
 
@@ -661,8 +673,36 @@ def write_review_state(
     return path
 
 
+@contextmanager
+def _file_lock(path: str):
+    """Context manager: hold an exclusive flock on `path` (created if absent).
+
+    WF2 is single-writer-per-branch by design (one orchestrator session
+    drives a feature branch at a time), so this lock is a defense-in-depth
+    measure against accidental concurrent invocations rather than a
+    primary correctness mechanism.
+    """
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    # Open in append mode so the file is created if missing without
+    # truncating existing content; the lock is on the file descriptor.
+    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
     """Attempt to consume one loop-back from the named source.
+
+    Atomically (under a file lock): reads the current per-source counters,
+    checks per-source and global caps, and writes back the incremented
+    state. Two concurrent invocations cannot both see the same pre-state
+    and over-spend the budget.
 
     Returns (ok, state). Fails if:
     - Source exceeds its per-source cap
@@ -672,12 +712,13 @@ def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
     """
     if source not in _LOOPBACK_SOURCES:
         raise ValueError(f"unknown loopback source: {source!r}")
-    state = _read_loopback_state(path)
-    if state[source] >= _LOOPBACK_SOURCE_MAX[source]:
-        return False, state
-    if state["total"] >= GLOBAL_LOOPBACK_BUDGET:
-        return False, state
-    state[source] += 1
-    state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
-    _write_loopback_state(path, state)
+    with _file_lock(path):
+        state = _read_loopback_state(path)
+        if state[source] >= _LOOPBACK_SOURCE_MAX[source]:
+            return False, state
+        if state["total"] >= GLOBAL_LOOPBACK_BUDGET:
+            return False, state
+        state[source] += 1
+        state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
+        _write_loopback_state(path, state)
     return True, state

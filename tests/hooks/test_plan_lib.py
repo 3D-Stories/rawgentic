@@ -265,9 +265,12 @@ not a task
 # --- compute_risk_ratio + check_ratio_band ---
 
 def _t(id_, lvl, reason=None):
-    """Shortcut for Task fixtures."""
-    from plan_lib import Task
-    return Task(id=id_, title=f"task {id_}", risk_level=lvl, reason=reason)
+    """Shortcut for Task fixtures. Uses the currently-loaded plan_lib.Task
+    (rather than a top-level `from plan_lib import Task`) because individual
+    tests may reload the module via `_reload_plan_lib` and the Task class
+    identity changes across reloads."""
+    mod = sys.modules.get("plan_lib") or _reload_plan_lib()
+    return mod.Task(id=id_, title=f"task {id_}", risk_level=lvl, reason=reason)
 
 
 class TestRiskRatio:
@@ -454,6 +457,16 @@ class TestFormatPromotionNote:
         assert "security surface" in note
         assert "touches auth/" in note
         assert "standard" in note.lower() and "high" in note.lower()
+        # Default step is "8"
+        assert "Step 8" in note
+
+    def test_step_override(self):
+        mod = _reload_plan_lib()
+        note = mod.format_promotion_note(
+            "T2.3", "security surface", "touches auth/", step="8b"
+        )
+        assert "Step 8b" in note
+        assert "Step 8 " not in note  # not the default
 
 
 # --- review log + deferrals + assertions ---
@@ -684,6 +697,50 @@ class TestConsumeLoopback:
         path = tmp_path / "counters.json"
         with pytest.raises(ValueError):
             mod.consume_loopback(str(path), "bogus")
+
+    def test_concurrent_consume_does_not_overspend(self, tmp_path):
+        """Two processes attempting to consume from the same source at the
+        same time must not both succeed past the budget. Uses a real
+        multiprocessing pair to exercise the flock."""
+        import multiprocessing
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        # Pre-spend design once (budget allows 2)
+        mod.consume_loopback(str(path), "design")
+
+        def _worker(q, p):
+            # Re-import in child process
+            import importlib
+            import sys as _sys
+            _sys.path.insert(0, str(HOOKS_DIR))
+            if "plan_lib" in _sys.modules:
+                child_mod = importlib.reload(_sys.modules["plan_lib"])
+            else:
+                import plan_lib as child_mod
+            ok, state = child_mod.consume_loopback(p, "design")
+            q.put((ok, state["design"]))
+
+        # Spawn 5 concurrent attempts; only ONE more should succeed
+        # (design cap is 2, we've already used 1).
+        q = multiprocessing.Queue()
+        procs = [
+            multiprocessing.Process(target=_worker, args=(q, str(path)))
+            for _ in range(5)
+        ]
+        for p in procs:
+            p.start()
+        for p in procs:
+            p.join(timeout=10)
+            assert not p.is_alive(), "worker hung — flock deadlock?"
+        results = [q.get_nowait() for _ in range(5)]
+        successes = [r for r in results if r[0]]
+        assert len(successes) == 1, (
+            f"expected exactly 1 successful consume past pre-spent budget, got "
+            f"{len(successes)}: {results}"
+        )
+        # Final state on disk
+        final = mod._read_loopback_state(str(path))
+        assert final["design"] == 2  # cap reached, no over-spend
 
 
 class TestReviewState:
