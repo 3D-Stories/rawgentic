@@ -228,3 +228,107 @@ not a task
 """
         with pytest.raises(mod.PlanFormatError):
             mod.parse_tasks(plan)
+
+
+# --- compute_risk_ratio + check_ratio_band ---
+
+def _t(id_, lvl, reason=None):
+    """Shortcut for Task fixtures."""
+    from plan_lib import Task
+    return Task(id=id_, title=f"task {id_}", risk_level=lvl, reason=reason)
+
+
+class TestRiskRatio:
+    def test_all_standard(self):
+        mod = _reload_plan_lib()
+        tasks = [_t(str(i), "standard") for i in range(1, 6)]
+        ratio, high, total = mod.compute_risk_ratio(tasks)
+        assert (ratio, high, total) == (0.0, 0, 5)
+
+    def test_all_high(self):
+        mod = _reload_plan_lib()
+        tasks = [_t(str(i), "high", "x") for i in range(1, 4)]
+        ratio, high, total = mod.compute_risk_ratio(tasks)
+        assert ratio == pytest.approx(1.0)
+        assert (high, total) == (3, 3)
+
+    def test_mixed(self):
+        mod = _reload_plan_lib()
+        tasks = [_t("1", "high", "x"), _t("2", "standard"), _t("3", "high", "y"), _t("4", "standard")]
+        ratio, high, total = mod.compute_risk_ratio(tasks)
+        assert ratio == 0.5
+        assert (high, total) == (2, 4)
+
+    def test_empty(self):
+        mod = _reload_plan_lib()
+        ratio, high, total = mod.compute_risk_ratio([])
+        assert (ratio, high, total) == (0.0, 0, 0)
+
+
+class TestCheckRatioBand:
+    def test_skip_for_small_plans(self):
+        mod = _reload_plan_lib()
+        assert mod.check_ratio_band(0.5, 2) == "skip"
+        assert mod.check_ratio_band(1.0, 1) == "skip"
+        assert mod.check_ratio_band(0.0, 0) == "skip"
+
+    def test_pass(self):
+        mod = _reload_plan_lib()
+        # default warn=30, halt=50
+        assert mod.check_ratio_band(0.0, 10) == "implausible_zero"  # 0% with N>=5
+        assert mod.check_ratio_band(0.15, 10) == "pass"
+        assert mod.check_ratio_band(0.30, 10) == "pass"  # at warn boundary
+        assert mod.check_ratio_band(0.2999, 10) == "pass"
+
+    def test_warn(self):
+        mod = _reload_plan_lib()
+        assert mod.check_ratio_band(0.31, 10) == "warn"
+        assert mod.check_ratio_band(0.49, 10) == "warn"
+
+    def test_halt(self):
+        mod = _reload_plan_lib()
+        assert mod.check_ratio_band(0.51, 10) == "halt"
+        assert mod.check_ratio_band(0.79, 10) == "halt"
+
+    def test_decompose_at_80(self):
+        mod = _reload_plan_lib()
+        assert mod.check_ratio_band(0.80, 10) == "decompose"
+        assert mod.check_ratio_band(1.0, 10) == "decompose"
+
+    def test_zero_below_implausibility_floor(self):
+        mod = _reload_plan_lib()
+        # N<3: skip. 3 <= N < 5 with 0%: pass (small plan). N>=5: implausible_zero.
+        assert mod.check_ratio_band(0.0, 2) == "skip"
+        assert mod.check_ratio_band(0.0, 3) == "pass"
+        assert mod.check_ratio_band(0.0, 4) == "pass"
+        assert mod.check_ratio_band(0.0, 5) == "implausible_zero"
+        assert mod.check_ratio_band(0.0, 100) == "implausible_zero"
+
+
+class TestRiskCriteria:
+    """Each of the 8 documented criteria, when present in a parenthesized
+    reason, should yield a valid high-risk task via parse_tasks."""
+
+    @pytest.mark.parametrize(
+        "criterion",
+        [
+            "security surface",
+            "module boundary",
+            "non-trivial error flow",
+            "infra/persistence",
+            "security middleware",
+            "deserialization of external data",
+            "subprocess construction",
+            "regex on untrusted input",
+        ],
+    )
+    def test_criterion_parses_as_high(self, criterion):
+        mod = _reload_plan_lib()
+        plan = f"""
+### Task 1: foo
+- riskLevel: high ({criterion})
+"""
+        tasks = mod.parse_tasks(plan)
+        assert len(tasks) == 1
+        assert tasks[0].risk_level == "high"
+        assert tasks[0].reason == criterion

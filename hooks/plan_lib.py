@@ -140,3 +140,73 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
         tasks.append(Task(id=task_id, title=title, risk_level=risk_level, reason=reason))
         i = j
     return tasks
+
+
+# --- Risk-ratio calibration ---
+
+# The 8 risk criteria. Tag a task `riskLevel: high (<criterion>)` when any of:
+#   1. Security surface — auth, secrets, sanitization, input validation, crypto,
+#      access control
+#   2. Module boundary — introduces/changes a service or module API that other
+#      code will import
+#   3. Non-trivial error/exception flow — state machines, retry, fallback
+#      branches, discriminated outcomes
+#   4. Infra/persistence — infrastructure, deployment, migrations, schema
+#   5. Security middleware — rate limiting, circuit breakers, request validation
+#   6. Deserialization of external data — JSON/YAML/TOML/binary formats from
+#      untrusted sources
+#   7. Subprocess construction — shells out to external commands with dynamic
+#      args
+#   8. Regex on untrusted input — ReDoS risk, lookahead in user-controlled input
+RISK_CRITERIA: Final[tuple[str, ...]] = (
+    "security surface",
+    "module boundary",
+    "non-trivial error flow",
+    "infra/persistence",
+    "security middleware",
+    "deserialization of external data",
+    "subprocess construction",
+    "regex on untrusted input",
+)
+
+# Minimum task count below which calibration is meaningless.
+_RATIO_SKIP_MIN = 3
+# Threshold above which a 0% high-risk classification is implausible.
+_IMPLAUSIBLE_ZERO_MIN = 5
+# Threshold above which the plan should be decomposed rather than just halted.
+_DECOMPOSE_PCT = 80
+
+
+def compute_risk_ratio(tasks: list[Task]) -> tuple[float, int, int]:
+    """Return (ratio, high_count, total_count). 0/0 returns (0.0, 0, 0)."""
+    total = len(tasks)
+    high = sum(1 for t in tasks if t.risk_level == "high")
+    ratio = (high / total) if total > 0 else 0.0
+    return ratio, high, total
+
+
+def check_ratio_band(ratio: float, n_tasks: int) -> Literal[
+    "skip", "implausible_zero", "pass", "warn", "halt", "decompose"
+]:
+    """Classify the high-risk ratio band.
+
+    - skip: N<3 (calibration is meaningless on tiny plans)
+    - implausible_zero: ratio == 0 AND N>=5 (zero high-risk on a meaningful
+      plan is implausible — emit info note, not halt)
+    - pass: ratio <= WARN_PCT/100
+    - warn: WARN_PCT/100 < ratio <= HALT_PCT/100
+    - halt: HALT_PCT/100 < ratio < DECOMPOSE/100
+    - decompose: ratio >= DECOMPOSE/100 (plan likely needs subdivision)
+    """
+    if n_tasks < _RATIO_SKIP_MIN:
+        return "skip"
+    pct = ratio * 100
+    if ratio == 0.0 and n_tasks >= _IMPLAUSIBLE_ZERO_MIN:
+        return "implausible_zero"
+    if pct >= _DECOMPOSE_PCT:
+        return "decompose"
+    if pct > WF2_HIGH_RISK_RATIO_HALT_PCT:
+        return "halt"
+    if pct > WF2_HIGH_RISK_RATIO_WARN_PCT:
+        return "warn"
+    return "pass"
