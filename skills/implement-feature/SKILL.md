@@ -163,6 +163,7 @@ AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept auto-generated ACs for WF1-created issues
 - Step 1: Accept capabilities for WF1-created issues
 - Step 5: Remove excess tasks on scope creep (document in session notes)
+- Step 5: Risk ratio `warn` band — log to session notes, continue
 - Step 7: Always stash dirty directory
 - Step 7: Always resume existing branch
 - Step 8: Rewrite failing RED test (up to 2 attempts)
@@ -174,12 +175,18 @@ QUESTION interactions (post comment, suspend, exit):
 - Step 3: Design approach trade-offs
 - Step 3: Scope larger than estimated
 - Step 4: Ambiguity circuit breaker findings
+- Step 5: Risk ratio `halt` band (>50%) or `decompose` (≥80%) — risk-ratio breakdown with options
+- Step 8a: Ambiguity circuit breaker on per-task review findings
+- Step 8a: Reviewer dispatch failure after retry (REVIEW_DISPATCH_FAILED)
+- Step 11: Unresolved deferred-High findings at exit gate
 - Step 14: Manual deploy confirmation
 
 ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 - Step 4: Design loop-back budget exhausted
 - Step 4: Global loop-back budget exhausted
+- Step 5: Plan format contract violation (missing riskLevel; fail-closed)
 - Step 8: Design flaw + budget exhausted
+- Step 8a: Design flaw + review_design loop-back budget exhausted
 - Step 11: Design flaw in review + budget exhausted
 
 **QUESTION protocol (post → label → suspend → exit):**
