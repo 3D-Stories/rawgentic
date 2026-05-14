@@ -275,8 +275,16 @@ User wants to do something
 | P12       | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓    | ✓    |
 | P13       | —   | ✓   | ✓   | ✓   | —   | ✓   | ✓   | ✓    | ~    |
 | P14       | —   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓    | ✓    |
+| P15       | —   | ✓   | C   | C   | —   | —   | —   | —    | —    |
 
 **Legend:** ✓ = Fully enforced | C = Conditional | ~ = Relaxed during active phase | — = N/A (justified)
+
+**P15 (Risk-stratified Review)** is fully enforced in WF2 (where it
+originated), conditional in WF3 (bug-fix tasks rarely cross the high-risk
+threshold but Step 8a applies if they do), conditional in WF4 (refactoring
+that touches security surface gets per-task review). N/A in workflows
+without per-task implementation (issue creation, docs, deps, security
+audit, performance, incident response).
 
 ### 9.2 Justified Relaxations
 

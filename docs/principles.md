@@ -818,3 +818,86 @@ When multiple tools from different repositories serve the same purpose, prioriti
 3. **wshobson/agents** -- large catalog but requires new plugin installation; use for capabilities not in context-engineering-kit
 4. **VoltAgent/awesome-claude-code-subagents** -- prompt-only definitions, easy to install as agents but no runtime framework
 5. **ruvnet/ruflo** -- NOT recommended for production use (alpha quality, stub implementations, aspirational docs)
+
+---
+
+## Principle 15: Risk-stratified Review (P15)
+
+**Statement:** Code review intensity scales with task risk. Tasks tagged
+`riskLevel: high` (security surface, module boundary, non-trivial error
+flow, infra/persistence/migration, security middleware, deserialization
+of external data, subprocess construction, regex on untrusted input)
+receive a focused per-task review at commit time (WF2 Step 8a); remaining
+tasks flow only to the PR-wide review (Step 11). Both tiers feed into the
+final review barrier — per-task reviews are advisory inputs to the
+PR-wide review, not a replacement.
+
+### Why
+
+Single-pass end-of-PR review degrades on large multi-task PRs in two
+specific ways: (a) when a structural flaw lands in task `T_n`, later
+tasks import/extend that flawed pattern, and the fix has to ripple
+back through multiple commits; (b) reviewer attention dilutes on
+1,500-line, 10-commit diffs — architectural concerns surface but
+subtle correctness/security details inside any one file get missed.
+Tiered review concentrates attention on risky tasks at commit time
+while keeping the cross-cutting PR-wide review intact.
+
+### Enforcement
+
+- **WF2 Step 5:** every task in the plan carries
+  `riskLevel: high|standard` per the format contract enforced by
+  `hooks/plan_lib.parse_tasks` (fail-closed on missing field).
+- **WF2 Step 8a:** for each high-risk task's commit, dispatch 2 inline
+  reviewer roles (code-level + silent-failure hunt) via the Agent tool.
+  Severity-banded confidence filter (Critical ≥0.50, High ≥0.65,
+  Medium ≥0.80, Low ≥0.90) applies to both Step 8a and Step 11.
+- **WF2 Step 9:** `plan_lib.assert_review_coverage` asserts every
+  high-risk task SHA appears in the review log.
+- **WF2 Step 11:** receives the reviewed-SHA list and the verbatim
+  list of deferred-High findings. `plan_lib.assert_no_unresolved_high_deferrals`
+  guards the exit gate.
+- **WF2 Step 12/14:** read `.rawgentic/review-state.json` (committed) and
+  refuse PR creation / merge if `last_review_log_status != "applied"`.
+
+### Calibration
+
+The target high-risk ratio is **15–30%** of tasks. Below 15% may
+indicate under-flagging (silent-OK by default). Above 30% triggers a
+`warn` (log to session notes) per `WF2_HIGH_RISK_RATIO_WARN_PCT`.
+Above 50% triggers a `halt` per `WF2_HIGH_RISK_RATIO_HALT_PCT` (asks
+the user). Above 80% recommends plan decomposition.
+
+A high-risk path allowlist (regex patterns over file paths matching
+auth, secret, .env, migration, crypto, jwt, session, oauth, csrf,
+token, credential, passport, middleware, lib/server/auth, security-,
+hooks/security) auto-tags matching tasks `high` regardless of agent
+classification — defense against under-flagging on security-relevant
+work.
+
+### Loop-back accounting
+
+Step 8a design-flaw escapes use a SEPARATE counter
+`review_design_loopback_used` (max 1), independent of the existing
+`tdd_loopback_used`. Sharing a counter created a starvation hazard:
+a per-task-review-triggered loopback would silently consume the
+budget Step 8's TDD path needed (or vice versa). The global cap
+`GLOBAL_LOOPBACK_BUDGET = 3` arbitrates across all four counters
+(design, tdd, review_design, review).
+
+### Defer-chain integrity
+
+A Step 8a "deferred-with-rationale" High finding is persisted to
+`claude_docs/.wf2-state/<issue>/deferrals.json` and re-presented to
+Step 11 verbatim. Step 11 cannot complete unless every deferred-High
+is either `applied` or has independent concurrence from a reviewer
+slot different from the originator. Deferrals with `defer_count >= 2`
+additionally require explicit `user_ack: true`.
+
+### Source of truth
+
+The numerical thresholds, agent counts, severity bands, and regex
+allowlist live in `hooks/plan_lib.py` and are referenced (not
+restated) by SKILL.md and this principle. The drift guard at
+`tests/test_skill_helpers.py` enforces the wiring between SKILL.md
+and `plan_lib.py`.

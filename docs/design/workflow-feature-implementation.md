@@ -872,3 +872,38 @@ Single PR per issue is the default. If the plan (Step 5) identifies more than 50
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | v1.0    | 2026-03-01 | Initial workflow design with 16 steps, 5 quality gates, fast path for simple bug fixes, multi-PR strategy, design decisions documented                                                                                                                                                                                                                                                                                                                                                     |
 | v1.1    | 2026-03-02 | Critique fixes (1C, 4H, 8M, 7L): workflow resumption section, global loop-back budget, structured rollback plan, WF1-validated fast path, brainstorm→brainstorming rename, remove git rebase -i, CI timeout requires user approval, P6 header corrected, P11 deviation documented, Step 5/7 branch overlap resolved, parallel execution mechanism specified, multi-PR execution subsection, Step 10 reclassified, Step 3 color corrected, diagram arrows added, fast path criteria aligned |
+| v1.2    | 2026-05-14 | P15 (Risk-stratified Review) tiered code review added: Step 8a per-task review for high-risk tasks (2 inline reviewers — code-level + silent-failure-hunt), 8-criterion classification with regex path allowlist, mid-flight promotion with retroactive scan, severity-banded confidence filter (Crit ≥0.50 / High ≥0.65 / Med ≥0.80 / Low ≥0.90) applied to Step 8a AND Step 11, persistent state under claude_docs/.wf2-state/<issue>/ (review_log.jsonl, deferrals.json, loopback_counters.json) plus committed status pointer .rawgentic/review-state.json, separate `review_design_loopback_used` counter (not shared with tdd), defer-chain integrity with independent-concurrence requirement, drift guard between SKILL.md and hooks/plan_lib.py. See Principle 15 in docs/principles.md.                                                                                                                                                                                                                       |
+
+---
+
+## P15 — Tiered Review Architecture
+
+The Step 8a per-task review is a **sub-step of Step 8**, not a top-level numbered step. It fires only when a task has `riskLevel: high` (or is mid-flight-promoted to high). The mechanism splits review into two tiers:
+
+- **Tier 1 — Per-task review (Step 8a):** runs on each high-risk task's commit while implementation context is still cached. 2 inline reviewer roles (code-level + silent-failure-hunt) dispatched via the Agent tool. Severity-banded confidence filter surfaces Critical at 0.50, High at 0.65 (silent-failure-hunter often flags lower-confidence catches by design). Findings triaged: Critical→block, High→fix-or-defer-with-rationale, Medium/Low→advisory to Step 11.
+- **Tier 2 — PR-wide review (Step 11, mostly unchanged):** the existing 3-reviewer panel runs on the full diff. Per-task reviews are passed as context: "already reviewed at task boundary — focus on cross-cutting concerns; re-evaluate the verbatim deferred-High list."
+
+### Why not bootstrap retroactive review on misclassified tasks?
+Two reasons:
+1. **Cost.** Re-reviewing every commit on promotion would defeat the per-task model's efficiency.
+2. **Step 11 backstop.** The PR-wide review still runs over the entire diff. Material issues in mis-classified tasks will be caught there.
+
+The defense against misclassification is preventative: the regex path allowlist auto-tags any task touching auth/secrets/etc. paths as high regardless of agent judgment.
+
+### State files
+
+Workflow state lives under `claude_docs/.wf2-state/<issue-number>/`:
+
+- `review_log.jsonl` — append-only Step 8a entries with task_id, sha, reviewers, verdict, findings counts.
+- `deferrals.json` — finding-level deferrals re-presented at Step 11.
+- `loopback_counters.json` — per-source loop-back state.
+
+These are cleaned up on Step 14 merge success. A small COMMITTED status pointer at `.rawgentic/review-state.json` survives across worktrees so Step 12/14 can refuse to ship if `last_review_log_status != "applied"`.
+
+### Test boundary
+
+The Python helper `hooks/plan_lib.py` carries all testable logic (parsing, ratio calibration, promotion heuristics, log persistence, deferral resolution, loop-back counters, retroactive scan). The SKILL.md markdown _instructs_ the agent to call those helpers at the right step; the drift guard `tests/test_skill_helpers.py` asserts that each helper is referenced in its expected step section. The instruction-following property of the agent itself is not unit-testable — that's an LLM behavior, not a code path.
+
+### Pre-PR checklist (AC9)
+
+Pre-PR ordering is a manual gate in SKILL.md prose, not code-enforced: version bump, README, design doc, principles.md, consolidation.md, tests, drift guard. The drift guard catches helper-vs-SKILL.md mismatches; the rest are reviewer-checked.
