@@ -403,3 +403,233 @@ class TestFormatPromotionNote:
         assert "security surface" in note
         assert "touches auth/" in note
         assert "standard" in note.lower() and "high" in note.lower()
+
+
+# --- review log + deferrals + assertions ---
+
+class TestReviewLog:
+    def test_append_creates_file(self, tmp_path):
+        mod = _reload_plan_lib()
+        log = tmp_path / "review_log.jsonl"
+        entry = {"task_id": "T1", "sha": "abc123", "verdict": "applied",
+                 "findings": {"crit": 0, "high": 1, "med": 2, "low": 0, "dropped": 0}}
+        mod.append_review_log(str(log), entry)
+        assert log.exists()
+        lines = log.read_text().splitlines()
+        assert len(lines) == 1
+        loaded = json.loads(lines[0])
+        assert loaded["task_id"] == "T1"
+        assert "ts" in loaded  # timestamp auto-added
+
+    def test_append_multiple_preserves_order(self, tmp_path):
+        mod = _reload_plan_lib()
+        log = tmp_path / "review_log.jsonl"
+        for i in range(3):
+            mod.append_review_log(str(log), {"task_id": f"T{i}", "sha": f"sha{i}", "verdict": "applied"})
+        lines = log.read_text().splitlines()
+        assert [json.loads(l)["task_id"] for l in lines] == ["T0", "T1", "T2"]
+
+    def test_assert_coverage_complete(self, tmp_path):
+        mod = _reload_plan_lib()
+        log = tmp_path / "review_log.jsonl"
+        # Two high-risk tasks, both reviewed
+        for sha, tid in [("a1", "T1"), ("b2", "T3")]:
+            mod.append_review_log(str(log), {"task_id": tid, "sha": sha, "verdict": "applied"})
+        plan_tasks = [
+            _t("1", "high", "x"),
+            _t("2", "standard"),
+            _t("3", "high", "y"),
+        ]
+        # Caller provides mapping task_id -> sha
+        task_to_sha = {"1": "a1", "2": None, "3": "b2"}
+        ok, missing = mod.assert_review_coverage(str(log), plan_tasks, task_to_sha)
+        assert ok is True
+        assert missing == []
+
+    def test_assert_coverage_missing(self, tmp_path):
+        mod = _reload_plan_lib()
+        log = tmp_path / "review_log.jsonl"
+        mod.append_review_log(str(log), {"task_id": "T1", "sha": "a1", "verdict": "applied"})
+        plan_tasks = [_t("1", "high", "x"), _t("3", "high", "y")]
+        task_to_sha = {"1": "a1", "3": "b2"}
+        ok, missing = mod.assert_review_coverage(str(log), plan_tasks, task_to_sha)
+        assert ok is False
+        assert "b2" in missing[0] or "3" in missing[0]
+
+    def test_assert_coverage_with_dispatch_failure(self, tmp_path):
+        """A REVIEW_DISPATCH_FAILED entry does NOT count as coverage."""
+        mod = _reload_plan_lib()
+        log = tmp_path / "review_log.jsonl"
+        mod.append_review_log(
+            str(log),
+            {"task_id": "T1", "sha": "a1", "verdict": "REVIEW_DISPATCH_FAILED"},
+        )
+        plan_tasks = [_t("1", "high", "x")]
+        task_to_sha = {"1": "a1"}
+        ok, missing = mod.assert_review_coverage(str(log), plan_tasks, task_to_sha)
+        assert ok is False
+
+    def test_assert_coverage_missing_log_file(self, tmp_path):
+        mod = _reload_plan_lib()
+        log = tmp_path / "noexist.jsonl"
+        plan_tasks = [_t("1", "high", "x")]
+        ok, missing = mod.assert_review_coverage(str(log), plan_tasks, {"1": "a1"})
+        assert ok is False
+        assert len(missing) == 1
+
+
+class TestDeferrals:
+    def test_empty_deferrals_pass(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text("[]")
+        ok, unresolved = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is True
+        assert unresolved == []
+
+    def test_missing_file_pass(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "noexist.json"
+        ok, unresolved = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is True
+
+    def test_high_deferred_unresolved_fails(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "High", "status": "deferred",
+             "defer_count": 1, "originator_reviewer_slot": "R1", "concurrences": []},
+        ]))
+        ok, unresolved = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is False
+        assert len(unresolved) == 1
+
+    def test_high_applied_passes(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "High", "status": "applied",
+             "defer_count": 1, "originator_reviewer_slot": "R1", "concurrences": []},
+        ]))
+        ok, _ = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is True
+
+    def test_high_with_independent_concurrence_passes(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "High", "status": "deferred",
+             "defer_count": 1, "originator_reviewer_slot": "R1",
+             "concurrences": ["R2"]},  # different reviewer slot
+        ]))
+        ok, _ = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is True
+
+    def test_self_concurrence_rejected(self, tmp_path):
+        """Concurrence from the originator's own slot does not count."""
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "High", "status": "deferred",
+             "defer_count": 1, "originator_reviewer_slot": "R1",
+             "concurrences": ["R1"]},
+        ]))
+        ok, unresolved = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is False
+
+    def test_defer_count_2_requires_user_ack(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        # defer_count >= 2 means it has been deferred more than once;
+        # must have user_ack: true OR independent concurrence to pass.
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "High", "status": "deferred",
+             "defer_count": 2, "originator_reviewer_slot": "R1",
+             "concurrences": [], "user_ack": False},
+        ]))
+        ok, _ = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is False
+
+    def test_defer_count_2_with_user_ack_passes(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "High", "status": "deferred",
+             "defer_count": 2, "originator_reviewer_slot": "R1",
+             "concurrences": [], "user_ack": True},
+        ]))
+        ok, _ = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is True
+
+    def test_critical_treated_like_high(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "Critical", "status": "deferred",
+             "defer_count": 1, "originator_reviewer_slot": "R1", "concurrences": []},
+        ]))
+        ok, _ = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is False
+
+    def test_medium_low_ignored(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "deferrals.json"
+        path.write_text(json.dumps([
+            {"finding_id": "F1", "severity": "Medium", "status": "deferred",
+             "defer_count": 1, "originator_reviewer_slot": "R1", "concurrences": []},
+            {"finding_id": "F2", "severity": "Low", "status": "deferred",
+             "defer_count": 1, "originator_reviewer_slot": "R1", "concurrences": []},
+        ]))
+        ok, _ = mod.assert_no_unresolved_high_deferrals(str(path))
+        assert ok is True
+
+
+class TestConsumeLoopback:
+    def test_first_consume_succeeds(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        ok, state = mod.consume_loopback(str(path), "tdd")
+        assert ok is True
+        assert state["tdd"] == 1
+        assert state["total"] == 1
+
+    def test_per_source_max_1(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        mod.consume_loopback(str(path), "tdd")
+        ok, _ = mod.consume_loopback(str(path), "tdd")
+        assert ok is False  # tdd is exhausted
+
+    def test_separate_sources_independent(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        ok1, _ = mod.consume_loopback(str(path), "tdd")
+        ok2, _ = mod.consume_loopback(str(path), "review")
+        ok3, _ = mod.consume_loopback(str(path), "review_design")
+        assert (ok1, ok2, ok3) == (True, True, True)
+
+    def test_global_cap_3(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        # design loopback can go up to 2; combined with one more source = 3 total
+        ok1, _ = mod.consume_loopback(str(path), "design")
+        ok2, _ = mod.consume_loopback(str(path), "design")
+        ok3, _ = mod.consume_loopback(str(path), "tdd")
+        # total = 3 == GLOBAL_LOOPBACK_BUDGET
+        ok4, state = mod.consume_loopback(str(path), "review")
+        assert ok4 is False  # global cap reached
+        assert state["total"] == 3
+
+    def test_design_max_2(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        mod.consume_loopback(str(path), "design")
+        mod.consume_loopback(str(path), "design")
+        ok, _ = mod.consume_loopback(str(path), "design")
+        assert ok is False  # design max is 2
+
+    def test_unknown_source_rejected(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        with pytest.raises(ValueError):
+            mod.consume_loopback(str(path), "bogus")

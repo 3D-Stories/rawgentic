@@ -284,3 +284,174 @@ def format_promotion_note(task_id: str, criterion: str, rationale: str) -> str:
         f"### WF2 Step 8 — Promoted {task_id}: standard -> high "
         f"(criterion: {criterion}; rationale: {rationale})"
     )
+
+
+# --- review log (jsonl) ---
+
+import json as _json  # noqa: E402  (intentional; kept distinct from top-level imports)
+from datetime import datetime, timezone  # noqa: E402
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def append_review_log(log_path: str, entry: dict) -> None:
+    """Append a JSON entry to the review log (one entry per line).
+
+    Auto-adds `ts` (ISO 8601 UTC) if not present.
+    """
+    enriched = dict(entry)
+    enriched.setdefault("ts", _now_iso())
+    line = _json.dumps(enriched, separators=(",", ":")) + "\n"
+    # Append-only; create if missing
+    os.makedirs(os.path.dirname(log_path) or ".", exist_ok=True)
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def _read_review_log(log_path: str) -> list[dict]:
+    if not os.path.exists(log_path):
+        return []
+    out = []
+    with open(log_path, "r", encoding="utf-8") as f:
+        for raw in f:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                out.append(_json.loads(raw))
+            except _json.JSONDecodeError:
+                continue
+    return out
+
+
+def assert_review_coverage(
+    log_path: str,
+    plan_tasks: list[Task],
+    task_to_sha: dict[str, str | None],
+) -> tuple[bool, list[str]]:
+    """Verify every high-risk task has a matching applied review log entry.
+
+    Returns (ok, missing) where `missing` is a list of human-readable
+    descriptions of the gaps. REVIEW_DISPATCH_FAILED entries do NOT count
+    as coverage.
+    """
+    entries = _read_review_log(log_path)
+    applied_shas = {
+        e.get("sha")
+        for e in entries
+        if e.get("verdict") in ("applied", "deferred")
+    }
+    missing = []
+    for task in plan_tasks:
+        if task.risk_level != "high":
+            continue
+        sha = task_to_sha.get(task.id)
+        if sha is None:
+            missing.append(f"task {task.id} ({task.title!r}) has no recorded commit SHA")
+            continue
+        if sha not in applied_shas:
+            missing.append(
+                f"task {task.id} (sha {sha}) has no applied/deferred review log entry"
+            )
+    return (len(missing) == 0, missing)
+
+
+def get_deferred_findings(deferrals_path: str) -> list[dict]:
+    """Read the deferrals file. Missing file returns []."""
+    if not os.path.exists(deferrals_path):
+        return []
+    with open(deferrals_path, "r", encoding="utf-8") as f:
+        data = _json.load(f)
+    return data if isinstance(data, list) else []
+
+
+_HIGH_SEVERITIES = ("High", "Critical")
+
+
+def _deferral_is_resolved(deferral: dict) -> bool:
+    """A deferred-High|Critical is resolved if any of:
+    - status == 'applied'
+    - has independent concurrence (from a different reviewer slot than originator)
+    - defer_count >= 2 AND user_ack is True
+    """
+    if deferral.get("status") == "applied":
+        return True
+    originator = deferral.get("originator_reviewer_slot")
+    concurrences = deferral.get("concurrences") or []
+    independent = [c for c in concurrences if c != originator]
+    if independent:
+        # Independent concurrence: resolved IF defer_count < 2 OR user_ack True.
+        # Without user_ack on chains of 2+, we still demand explicit ack.
+        if deferral.get("defer_count", 1) >= 2 and not deferral.get("user_ack", False):
+            return False
+        return True
+    if deferral.get("defer_count", 1) >= 2 and deferral.get("user_ack", False):
+        return True
+    return False
+
+
+def assert_no_unresolved_high_deferrals(deferrals_path: str) -> tuple[bool, list[dict]]:
+    """Return (ok, unresolved) over Critical/High deferrals.
+
+    Used by Step 11 exit check.
+    """
+    deferrals = get_deferred_findings(deferrals_path)
+    unresolved = [
+        d for d in deferrals
+        if d.get("severity") in _HIGH_SEVERITIES and not _deferral_is_resolved(d)
+    ]
+    return (len(unresolved) == 0, unresolved)
+
+
+# --- loop-back budget persistence ---
+
+_LOOPBACK_SOURCES: Final[tuple[str, ...]] = ("design", "tdd", "review", "review_design")
+_LOOPBACK_SOURCE_MAX = {
+    "design": 2,
+    "tdd": 1,
+    "review": 1,
+    "review_design": 1,
+}
+GLOBAL_LOOPBACK_BUDGET: Final[int] = 3
+
+
+def _read_loopback_state(path: str) -> dict:
+    if not os.path.exists(path):
+        return {src: 0 for src in _LOOPBACK_SOURCES} | {"total": 0}
+    with open(path, "r", encoding="utf-8") as f:
+        state = _json.load(f)
+    # Backfill missing keys
+    for src in _LOOPBACK_SOURCES:
+        state.setdefault(src, 0)
+    state.setdefault("total", sum(state.get(s, 0) for s in _LOOPBACK_SOURCES))
+    return state
+
+
+def _write_loopback_state(path: str, state: dict) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(state, f, separators=(",", ":"), sort_keys=True)
+
+
+def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
+    """Attempt to consume one loop-back from the named source.
+
+    Returns (ok, state). Fails if:
+    - Source exceeds its per-source cap
+    - Global total would exceed GLOBAL_LOOPBACK_BUDGET
+
+    Raises ValueError on unknown source.
+    """
+    if source not in _LOOPBACK_SOURCES:
+        raise ValueError(f"unknown loopback source: {source!r}")
+    state = _read_loopback_state(path)
+    if state[source] >= _LOOPBACK_SOURCE_MAX[source]:
+        return False, state
+    if state["total"] >= GLOBAL_LOOPBACK_BUDGET:
+        return False, state
+    state[source] += 1
+    state["total"] = sum(state[s] for s in _LOOPBACK_SOURCES)
+    _write_loopback_state(path, state)
+    return True, state
