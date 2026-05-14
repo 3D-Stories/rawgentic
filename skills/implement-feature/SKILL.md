@@ -14,6 +14,7 @@ You are the WF2 orchestrator implementing a 16-step feature implementation workf
 MAX_DESIGN_LOOPBACK_ITERATIONS = 2
 MAX_TDD_DESIGN_LOOPBACK = 1
 MAX_REVIEW_DESIGN_LOOPBACK = 1
+MAX_REVIEW_DESIGN_LOOPBACK_STEP_8A = 1   # P15: Step 8a per-task review loopback (separate from tdd)
 GLOBAL_LOOPBACK_BUDGET = 3
 VOLUME_THRESHOLDS:
   Critical: 5
@@ -24,8 +25,44 @@ BRANCH_PREFIX_FEATURE = "feature"
 BRANCH_PREFIX_FIX = "fix"
 CI_POLL_INTERVAL_SECONDS = 30
 CI_MAX_WAIT_MINUTES = 10
-REVIEW_CONFIDENCE_THRESHOLD = 0.80
+REVIEW_CONFIDENCE_THRESHOLD = 0.80                    # Flat fallback (legacy, retained)
+# P15 — Risk-stratified Review (tiered code review):
+PER_TASK_REVIEW_AGENT_COUNT = 2                        # Step 8a uses 2 inline reviewer roles
+# Severity-banded confidence applied to Step 8a AND Step 11 reviewer findings.
+# Critical and High get a lower bar because hiding them is more dangerous than
+# flagging false-positives. Banded values are documented in hooks/plan_lib.py.
+SEVERITY_BANDED_CONFIDENCE:
+  Critical: 0.50
+  High:     0.65
+  Medium:   0.80
+  Low:      0.90
+WF2_HIGH_RISK_RATIO_WARN_PCT = ${WF2_HIGH_RISK_RATIO_WARN_PCT:-30}   # warn band; clamped [5,95]
+WF2_HIGH_RISK_RATIO_HALT_PCT = ${WF2_HIGH_RISK_RATIO_HALT_PCT:-50}   # halt band; clamped [10,95]; halt>=warn+10
+# Source of truth for these constants is hooks/plan_lib.py (env-var freeze at import).
 </constants>
+
+<state-files>
+P15 (tiered review) introduces session-scoped state files under
+`claude_docs/.wf2-state/<issue-number>/`:
+
+- `review_log.jsonl` — append-only Step 8a review entries (`task_id`, `sha`,
+  `reviewers`, `verdicts`, `findings_count`, `dropped_count`, `ts`). Read by
+  Step 9 (coverage assertion) and Step 11 (already-reviewed SHA list).
+- `deferrals.json` — finding-level deferrals re-presented at Step 11. Each
+  entry: `finding_id`, `severity`, `status`, `defer_count`,
+  `originator_reviewer_slot`, `concurrences`, `user_ack`.
+- `loopback_counters.json` — per-source loop-back counters (`design`, `tdd`,
+  `review_design`, `review`) plus `total`. Persisted across sessions via
+  `plan_lib.consume_loopback`.
+
+In addition, a small COMMITTED status pointer lives at
+`.rawgentic/review-state.json` (single object: `{branch, last_review_log_status,
+ts}`). Step 12 and Step 14 read this file and refuse to ship if the last
+status is not `"applied"`. The committed pointer survives across sessions and
+worktrees; the session-scoped files do not.
+
+The session-scoped directory is cleaned up on Step 14 merge success.
+</state-files>
 
 <mandatory-steps>
 The following steps are MANDATORY and must NEVER be skipped, abbreviated, or combined — regardless of context window pressure, session length, perceived simplicity, or any other justification:
@@ -45,6 +82,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 
 Conditional steps (skip ONLY when their condition is not met):
 - Step 6 (Plan Drift): lightweight, fast — run it unless time-critical
+- **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
 - Step 14 (Merge/Deploy): skip only if user does not request merge
