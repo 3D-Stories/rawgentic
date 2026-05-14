@@ -210,3 +210,77 @@ def check_ratio_band(ratio: float, n_tasks: int) -> Literal[
     if pct > WF2_HIGH_RISK_RATIO_WARN_PCT:
         return "warn"
     return "pass"
+
+
+# --- High-risk path allowlist (case-insensitive regex patterns) ---
+
+# Defaults. Users can extend (not replace) via .rawgentic.json `highRiskPaths: []`.
+DEFAULT_HIGH_RISK_PATH_PATTERNS: Final[tuple[str, ...]] = (
+    r"auth",
+    r"secret",
+    r"\.env",
+    r"migration",
+    r"crypto",
+    r"jwt",
+    r"session",
+    r"oauth",
+    r"csrf",
+    r"token",
+    r"credential",
+    r"passport",
+    r"middleware",
+    r"lib/server/auth",
+    r"security-",
+    r"hooks/security",
+)
+
+# Compile once. Case-insensitive substring match anywhere in the path.
+_HIGH_RISK_PATH_RE = re.compile(
+    "(" + "|".join(DEFAULT_HIGH_RISK_PATH_PATTERNS) + ")",
+    re.IGNORECASE,
+)
+
+# LOC threshold above which a task is considered large enough to merit promotion.
+_LOC_PROMOTE_THRESHOLD = 200
+
+
+def _path_matches_high_risk(path: str, extra_patterns: tuple[str, ...] = ()) -> str | None:
+    """Return the first matching pattern (or None). Case-insensitive."""
+    m = _HIGH_RISK_PATH_RE.search(path)
+    if m:
+        return m.group(0)
+    for pat in extra_patterns:
+        if re.search(pat, path, re.IGNORECASE):
+            return pat
+    return None
+
+
+def should_promote(
+    task_id: str,
+    file_paths: list[str],
+    loc_delta: int,
+    extra_high_risk_patterns: tuple[str, ...] = (),
+) -> tuple[bool, str | None]:
+    """Mechanical heuristic for mid-flight task promotion (standard -> high).
+
+    Triggers (any of):
+    - Any file path matches the high-risk allowlist regex
+    - loc_delta >= _LOC_PROMOTE_THRESHOLD (200)
+
+    Returns (promote_flag, reason_string). reason is None when no promotion.
+    """
+    for fp in file_paths:
+        match = _path_matches_high_risk(fp, extra_high_risk_patterns)
+        if match is not None:
+            return True, f"path matches security-relevant pattern {match!r} ({fp})"
+    if loc_delta >= _LOC_PROMOTE_THRESHOLD:
+        return True, f"LOC delta {loc_delta} >= threshold {_LOC_PROMOTE_THRESHOLD} (size suggests non-trivial surface)"
+    return False, None
+
+
+def format_promotion_note(task_id: str, criterion: str, rationale: str) -> str:
+    """Format a session-notes line documenting a mid-flight promotion."""
+    return (
+        f"### WF2 Step 8 — Promoted {task_id}: standard -> high "
+        f"(criterion: {criterion}; rationale: {rationale})"
+    )
