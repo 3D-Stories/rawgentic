@@ -124,3 +124,57 @@ def test_schema_rejects_bad_severity_with_jsonschema():
     doc = {"findings": [_finding(severity="Nope")]}
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(doc, arl.FINDINGS_SCHEMA)
+
+
+# --- #80: OpenAI strict structured-output compliance ---
+
+def _assert_strict(node, path="root"):
+    """Recursively assert every object's `properties` keys all appear in `required`
+    and additionalProperties is False (OpenAI strict structured-output rule)."""
+    if isinstance(node, dict):
+        if node.get("type") == "object" and "properties" in node:
+            props = set(node["properties"].keys())
+            required = set(node.get("required", []))
+            missing = props - required
+            assert not missing, f"{path}: properties not in required: {missing}"
+            assert node.get("additionalProperties") is False, \
+                f"{path}: additionalProperties must be False for strict mode"
+        for k, v in node.items():
+            _assert_strict(v, f"{path}.{k}")
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            _assert_strict(v, f"{path}[{i}]")
+
+
+def test_findings_schema_is_openai_strict_compliant():
+    # Every key in properties must be in required, recursively (OpenAI strict mode).
+    _assert_strict(arl.FINDINGS_SCHEMA)
+
+
+def test_optional_finding_fields_are_nullable_in_schema():
+    item_props = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]["properties"]
+    for field in ("ambiguity_flag", "ambiguity_reason", "location"):
+        t = item_props[field]["type"]
+        assert "null" in t, f"{field} must allow null (strict mode requires it in `required`)"
+
+
+def test_validate_finding_accepts_null_optionals():
+    # Codex now returns ALL fields (optionals as null) under strict mode.
+    f = _finding(ambiguity_flag=None, ambiguity_reason=None, location=None)
+    ok, errs = arl.validate_finding(f)
+    assert ok, errs
+
+
+def test_normalize_handles_null_location():
+    f = _finding(location=None, ambiguity_flag=None)
+    out = arl.normalize_findings([f])
+    assert len(out) == 1
+
+
+def test_strict_schema_validates_full_findings_with_jsonschema():
+    jsonschema = pytest.importorskip("jsonschema")
+    doc = {"summary": "s", "findings": [
+        {"severity": "High", "category": "security", "description": "d",
+         "recommendation": "r", "ambiguity_flag": None, "ambiguity_reason": None, "location": None},
+    ]}
+    jsonschema.validate(doc, arl.FINDINGS_SCHEMA)  # must not raise

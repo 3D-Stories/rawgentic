@@ -268,6 +268,16 @@ Prioritized findings list with severity tiers and ambiguity flags. This is NOT p
 
 This step implements the circuit breaker logic. It is prompt-level logic, not a separate tool.
 
+0. **Adversarial review sub-step (opt-in, cross-model — runs FIRST).** Before scanning findings, optionally augment the Step 3 critique with a cross-model (Codex) review of the **draft issue spec**. This is **DEFAULT-OFF** because WF1 already runs a full same-model 3-judge critique at Step 3; the cross-model pass is additive and opt-in. Gate it on project opt-in (check FIRST so a disabled project is a true no-op — no temp file, no subprocess):
+   ```bash
+   python3 hooks/adversarial_review_lib.py is-enabled \
+     --workspace .rawgentic_workspace.json --project <name> --skill create-issue
+   ```
+   The command exits `0` when enabled for `create-issue` and non-zero otherwise. If non-zero, **skip silently** — behavior is byte-for-byte unchanged. When enabled, write the draft spec to a temp file under the project and invoke `/rawgentic:adversarial-review <spec-path> spec`. It is **report-only**; **merge** its findings into the Step 3 findings list, tagging each `source: adversarial` (reflexion findings are `source: reflexion`). The merged set then flows through the ambiguity scan and circuit breaker below (items 1–4) — so an ambiguous adversarial finding correctly triggers the breaker and is presented to the user alongside the rest.
+   - **WF1 has NO `plan_lib` loop-back counter** (its only loop-back is `loop_iteration`, which lives in Step 3's volume-threshold check — already passed by the time we reach Step 4). Therefore the adversarial sub-step does **NOT** call `plan_lib.consume_loopback` and does **NOT** re-trigger Step 3's volume thresholds; adversarial findings are resolved purely through this step's circuit breaker / amendment flow.
+   - **Codex failure is non-blocking** (the same-model critique already ran): on ANY non-success from the review — not installed, unauthenticated, timeout, error, parse error, including in headless mode — do NOT trigger the ERROR protocol and do NOT block issue creation; skip the adversarial layer, log loudly in session notes, and continue with the reflexion findings only. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite.)
+   - Log a marker: `### WF1 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
+
 1. **Scan all findings for ambiguity:**
 
    ```

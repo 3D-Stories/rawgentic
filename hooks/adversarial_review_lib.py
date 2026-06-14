@@ -309,11 +309,17 @@ def prereq_status(headless: bool = False) -> tuple[bool, str]:
 # Findings schema + validation + normalization
 # ============================================================================
 
+# OpenAI strict structured-output (used by `codex exec --output-schema`) requires
+# that EVERY key in `properties` also appear in `required`, recursively, with
+# additionalProperties:false. Optional fields are therefore declared required but
+# NULLABLE. (#80: the prior schema omitted summary/ambiguity_flag/ambiguity_reason/
+# location from `required`, which OpenAI rejects with HTTP 400, silently breaking
+# every cross-model review.)
 FINDINGS_SCHEMA: Final[dict] = {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "additionalProperties": False,
-    "required": ["findings"],
+    "required": ["summary", "findings"],
     "properties": {
         "summary": {"type": "string"},
         "findings": {
@@ -321,15 +327,19 @@ FINDINGS_SCHEMA: Final[dict] = {
             "items": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["severity", "category", "description", "recommendation"],
+                "required": [
+                    "severity", "category", "description", "recommendation",
+                    "ambiguity_flag", "ambiguity_reason", "location",
+                ],
                 "properties": {
                     "severity": {"enum": list(SEVERITIES)},
                     "category": {"type": "string"},
                     "description": {"type": "string"},
                     "recommendation": {"type": "string"},
-                    "ambiguity_flag": {"type": "boolean"},
-                    "ambiguity_reason": {"type": "string"},
-                    "location": {"type": "string"},
+                    # Optional in spirit → required-but-nullable for strict mode.
+                    "ambiguity_flag": {"type": ["boolean", "null"]},
+                    "ambiguity_reason": {"type": ["string", "null"]},
+                    "location": {"type": ["string", "null"]},
                 },
             },
         },
@@ -355,8 +365,10 @@ def validate_finding(d: object) -> tuple[bool, list[str]]:
         val = d.get(field)
         if not isinstance(val, str) or not val.strip():
             errors.append(f"missing/empty {field}")
-    if "ambiguity_flag" in d and not isinstance(d["ambiguity_flag"], bool):
-        errors.append("ambiguity_flag must be boolean")
+    # Optional fields may be absent OR null (strict-mode schema sends them as null).
+    af = d.get("ambiguity_flag")
+    if af is not None and not isinstance(af, bool):
+        errors.append("ambiguity_flag must be boolean or null")
     return (not errors), errors
 
 
@@ -392,7 +404,8 @@ def normalize_findings(raw: object) -> list[dict]:
             continue
         # Dedupe on the FULL description — truncating the key would silently
         # collapse distinct findings that share an opening clause (#77 Step 8a F2).
-        key = (f["severity"], f.get("location", ""), f["description"])
+        # location may be null under the strict-mode schema (#80) — coerce to "".
+        key = (f["severity"], f.get("location") or "", f["description"])
         if key in seen:
             continue
         seen.add(key)
@@ -638,7 +651,7 @@ def render_report_md(findings: list[dict], meta: dict) -> str:
         lines.append("_No findings returned._")
     for i, f in enumerate(findings, 1):
         lines += [
-            f"### {i}. [{f['severity']}] {f['category']} — {f.get('location', 'n/a')}",
+            f"### {i}. [{f['severity']}] {f['category']} — {f.get('location') or 'n/a'}",
             "",
             f["description"],
             "",

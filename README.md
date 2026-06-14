@@ -190,7 +190,7 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 **Key Features:**
 - Different-model second opinion (complements same-model reflexion critique)
 - Report-only — writes `docs/reviews/<slug>-<date>.md`, never edits the artifact
-- Optionally wired into WF2 (design/plan gates) and WF3 (default-off) per-project
+- Optionally wired into WF2 (design/plan gates), WF3, WF1 (issue spec), and WF4 (refactor design) per-project (all opt-in; WF3/WF1/WF4 default-off)
 - Warn-only egress with secret scanning; fail-closed on any Codex error
 - Requires the Codex CLI installed + authenticated. See [Data Handling](#cross-model-review-data-handling-codex).
 </details>
@@ -480,7 +480,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | WF2 Feature Implementation | Full critique      | `/reflexion:critique` | After design                 |
 | WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
 | WF4 Refactoring            | Category-based     | Full or Reflect       | Full for extract/restructure |
-| WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF2/WF3 |
+| WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF1–WF4 |
 | WF7 Documentation          | Reflect only       | `/reflexion:reflect`  | After draft                  |
 | WF8 Dependency Update      | None (audit-based) | `npm audit` + tests   | Automated                    |
 | WF9 Security Audit         | Full (on audit)    | `/reflexion:critique` | Critique the findings        |
@@ -490,14 +490,14 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 
 ### Cross-Model Review Data Handling (Codex)
 
-WF5 Adversarial Review (`/rawgentic:adversarial-review`) and its opt-in WF2/WF3
+WF5 Adversarial Review (`/rawgentic:adversarial-review`) and its opt-in WF1/WF2/WF3/WF4
 hooks send the **text of the reviewed artifact to OpenAI** via the Codex CLI for an
 independent, different-model critique. This is **warn-only**: a one-time egress
 notice is printed before each invocation, and the engine scans the artifact for
 obvious secrets (API keys, passwords, tokens, private keys), naming any detected
 categories. Set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` to block egress when secrets
 are found. Findings reports are written locally to `<project>/docs/reviews/` and are
-never uploaded. The feature is **default-disabled** per project; existing WF2/WF3
+never uploaded. The feature is **default-disabled** per project; existing WF1/WF2/WF3/WF4
 runs are unchanged unless explicitly opted in via `adversarialReview` in
 `.rawgentic_workspace.json`. Requires the Codex CLI installed
 (`curl -fsSL https://codex.openai.com/install.sh | bash`) and authenticated
@@ -584,7 +584,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
-Skills are tested via the `/skill-creator` eval pipeline (14/16 skills have evals.json).
+Skills are tested via the `/skill-creator` eval pipeline (15/16 skills have evals.json).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 

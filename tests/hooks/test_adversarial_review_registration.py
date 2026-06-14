@@ -36,7 +36,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "2.24.0"
+    assert plugin["version"] == "2.25.0"
 
 
 def test_descriptions_consistent_count():
@@ -54,7 +54,7 @@ def test_readme_count_strings_updated():
     assert "10 SDLC workflow skills" not in readme
     assert "provides 16 skills" in readme
     assert "All 11 workflow skills share" in readme
-    assert "14/16 skills have evals.json" in readme
+    assert "15/16 skills have evals.json" in readme
 
 
 def test_marketplace_skill_dirs_all_exist():
@@ -129,3 +129,75 @@ def test_setup_has_step_2d():
     text = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
     assert "Step 2d" in text
     assert "adversarialReview" in text
+
+
+# --- WF1 / WF4 integration (issue #79) ---
+
+def test_wf1_invokes_in_step4_default_off():
+    text = (SKILLS_DIR / "create-issue" / "SKILL.md").read_text()
+    step4 = _section(text, "## Step 4:", "## Step 5:")
+    assert "adversarial-review" in step4.lower(), "WF1 Step 4 missing adversarial-review invocation"
+    assert "is-enabled" in step4, "WF1 Step 4 missing config gate (is-enabled)"
+    assert "create-issue" in step4, "WF1 hook must gate on the 'create-issue' skill name"
+    assert "default-off" in step4.lower() or "DEFAULT-OFF" in step4
+
+
+def test_wf1_uses_no_plan_lib_loopback():
+    """WF1 has no plan_lib loopback — its hook must NOT *invoke* consume_loopback.
+
+    (The prose may mention `consume_loopback` to say it is NOT used; we assert there
+    is no actual call, i.e. no `consume_loopback(` invocation.)
+    """
+    text = (SKILLS_DIR / "create-issue" / "SKILL.md").read_text()
+    step4 = _section(text, "## Step 4:", "## Step 5:")
+    assert "consume_loopback(" not in step4
+
+
+def test_wf4_invokes_in_step4_extract_restructure_only():
+    text = (SKILLS_DIR / "refactor" / "SKILL.md").read_text()
+    step4 = _section(text, "## Step 4:", "## Step 5:")
+    assert "adversarial-review" in step4.lower(), "WF4 Step 4 missing adversarial-review invocation"
+    assert "is-enabled" in step4, "WF4 Step 4 missing config gate (is-enabled)"
+    assert "refactor" in step4
+    # gated to the full-critique path only (extract/restructure), not rename/simplify
+    low = step4.lower()
+    assert "extract" in low and "restructure" in low
+
+
+def test_wf4_uses_textual_budget_not_plan_lib():
+    """WF4 manages loop-back via its own textual LOOPBACK_BUDGET, not plan_lib.
+
+    Assert no actual `consume_loopback(` invocation, and that the textual budget
+    is referenced.
+    """
+    text = (SKILLS_DIR / "refactor" / "SKILL.md").read_text()
+    step4 = _section(text, "## Step 4:", "## Step 5:")
+    assert "consume_loopback(" not in step4  # WF4 does not use plan_lib counters
+    assert "LOOPBACK_BUDGET" in step4
+
+
+def test_setup_offers_all_four_workflows():
+    text = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+    step2d = _section(text, "## Step 2d:", "## Step 3:")
+    for name in ("implement-feature", "fix-bug", "create-issue", "refactor"):
+        assert name in step2d, f"setup Step 2d must offer {name}"
+
+
+# --- adversarial-review evals workspace (issue #79) ---
+
+def test_adversarial_review_evals_exist_and_valid():
+    evals_path = SKILLS_DIR / "adversarial-review-workspace" / "evals" / "evals.json"
+    assert evals_path.exists(), "missing skills/adversarial-review-workspace/evals/evals.json"
+    data = json.loads(evals_path.read_text())
+    assert data["skill_name"] == "rawgentic:adversarial-review"
+    assert isinstance(data["evals"], list) and len(data["evals"]) >= 3
+    for ev in data["evals"]:
+        assert isinstance(ev.get("id"), int)
+        assert ev.get("prompt") and isinstance(ev["prompt"], str)
+        assert ev.get("expected_output") and isinstance(ev["expected_output"], str)
+
+
+def test_adversarial_review_workspace_has_no_skill_md():
+    """Workspace dirs are eval artifacts — must NOT contain a SKILL.md (validator rejects)."""
+    ws = SKILLS_DIR / "adversarial-review-workspace"
+    assert not (ws / "SKILL.md").exists()

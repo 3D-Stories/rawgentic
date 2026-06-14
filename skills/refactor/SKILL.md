@@ -225,6 +225,16 @@ Refactoring design (internal): { approach, target_structure, migration_steps, be
 - Are all references updated? (Serena `find_referencing_symbols` cross-check)
 - Any behavioral side effects?
 
+**Adversarial review sub-step (opt-in, cross-model — Extract/Restructure only).** After the critique above, optionally run a cross-model (Codex) review of the refactoring design. **Default-off**; opt-in if you want an independent second opinion on the refactoring. Gate on BOTH:
+- the refactoring `category` (recorded in Step 2's Analysis) is `extract` or `restructure` — **skip silently for Rename/Simplify** (those use the lightweight path; cross-model review is not worth the latency there, mirroring how the cheap path is skipped), AND
+- the project opts in (check FIRST so a disabled project is a true no-op):
+  ```bash
+  python3 hooks/adversarial_review_lib.py is-enabled \
+    --workspace .rawgentic_workspace.json --project <name> --skill refactor
+  ```
+  exits `0` when enabled for `refactor`, non-zero otherwise. If non-zero (or category is rename/simplify), **skip silently** — behavior is byte-for-byte unchanged.
+When enabled, write the refactoring design to a temp file under the project and invoke `/rawgentic:adversarial-review <design-path> design`. It is **report-only**; **merge** its findings (tagged `source: adversarial`) with the reflexion critique findings and apply the circuit breaker over the **merged** set. If a Critical/High finding indicates the refactoring would change external behavior or is otherwise a genuine design flaw, loop back to Step 3 using WF4's **own textual `LOOPBACK_BUDGET`** (`Step_4_to_3`, max 2 for extract/restructure, within `global_cap` 3) — the same budget the reflexion critique loop-back already uses. **WF4 does NOT use `plan_lib` loop-back counters**, so do NOT call `plan_lib.consume_loopback`; just track the textual budget as Step 4 already does. **Codex failure is non-blocking**: on ANY non-success (incl. headless unmet-prerequisite) skip the adversarial layer, log loudly, and continue with the reflexion result; never ERROR or block WF4 (only the standalone `/rawgentic:adversarial-review` skill ERRORs on prereq). Log: `### WF4 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
+
 ### Output
 
 Amended design OR blocked state (circuit breaker).
