@@ -252,6 +252,7 @@ and defer to BMAD equivalents on a per-project basis.
 |-------|------|-------------|
 | `disabledSkills` | `string[]` | Bare skill names the user chose to replace with BMAD equivalents. |
 | `critiqueMethod` | `string` | `"reflexion"` (default) or `"bmad-party-mode"`. Controls which critique tool is used at quality gates. |
+| `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 
 ### `disabledSkills` Semantics
 
@@ -282,6 +283,46 @@ after active project resolution but before loading `.rawgentic.json`.
 Six skills that invoke `/reflexion:critique` (implement-feature, create-issue, refactor,
 security-audit, optimize-perf, setup) check the project's `critiqueMethod` field before
 running the critique. If set to `"bmad-party-mode"`, that is used instead.
+
+### `adversarialReview`
+
+Opt-in cross-model review (WF5, `/rawgentic:adversarial-review`). The field is a
+**per-project entry in `.rawgentic_workspace.json`** (sibling to `critiqueMethod` /
+`headlessEnabled`), NOT in `.rawgentic.json` — it is workspace-scoped, not committed to
+the project repo. Shape:
+
+```json
+"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }
+```
+
+`workflows` uses bare skill names. When enabled and the running skill is listed:
+
+- **WF2** (`implement-feature`): after the normal design critique (Step 4) and plan
+  reflect (Step 6), if `fast_path_eligible == false`, it additionally invokes
+  `/rawgentic:adversarial-review`. Findings merge with the in-process critique (tagged
+  by source); a Critical/High design flaw consumes the existing `design` loop-back
+  counter (no new budget).
+- **WF3** (`fix-bug`): default-OFF even when WF2 is on (must be explicitly listed).
+  When enabled, Step 4 adds a cross-model review on top of the lightweight reflect,
+  accepting the documented latency tradeoff.
+
+Loading is **fail-closed**: a missing file, malformed JSON, missing field, or bad value
+resolves to disabled — a workflow never crashes and never silently enables. Bool shorthand
+(`"adversarialReview": true`) enables the standalone-skill intent but lists no workflows,
+so the embedded gates stay off.
+
+### Adversarial Review Data Handling
+
+When the adversarial review runs (standalone or embedded), the **text of the reviewed
+artifact is sent to OpenAI via the Codex CLI** — it leaves the machine. This is
+**warn-only**: the skill prints a one-time egress notice before invoking Codex and
+proceeds. The engine also scans the artifact for obvious secrets (API keys, passwords,
+tokens, private keys) and names any detected categories in the notice. Set
+`RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` to make detection blocking instead of advisory.
+Findings reports are written locally to `<project>/docs/reviews/` and are never uploaded.
+The Codex CLI must be installed (`curl -fsSL https://codex.openai.com/install.sh | bash`)
+and authenticated (`codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
+for headless/CI). Tunable via `RAWGENTIC_ADV_REVIEW_MAX_BYTES`, `_TIMEOUT`, `_MAX_RETRIES`.
 
 ### Detection Flow
 

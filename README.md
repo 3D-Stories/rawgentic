@@ -1,6 +1,6 @@
 # rawgentic
 
-**10 SDLC workflow skills + 4 workspace management + 1 security skill + hooks for Claude Code**
+**11 SDLC workflow skills + 4 workspace management + 1 security skill + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,7 +11,7 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 15 skills organized in three layers:
+**Rawgentic** provides 16 skills organized in three layers:
 
 - **Workspace management** (4 skills) — Project registration, configuration, session binding, and guard exception management
 - **SDLC workflows** (10 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment
@@ -116,6 +116,7 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 | Feature Implementation   | `/rawgentic:implement-feature` | 16    | Building a new feature from a GitHub issue          |
 | Bug Fix                  | `/rawgentic:fix-bug`           | 14    | Fixing a bug with reproduce-first TDD               |
 | Refactoring              | `/rawgentic:refactor`          | 14    | Restructuring code while preserving behavior        |
+| Adversarial Review       | `/rawgentic:adversarial-review`| 5     | Cross-model critique of a design/spec/plan/PRD/ADR/RFC/README artifact |
 | Documentation            | `/rawgentic:update-docs`       | 10    | Creating or updating project documentation          |
 | Dependency Update        | `/rawgentic:update-deps`       | 12    | Updating npm/pip/Docker dependencies                |
 | Security Audit           | `/rawgentic:security-audit`    | 14    | STRIDE threat modeling and vulnerability assessment |
@@ -177,6 +178,21 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 - Characterization tests written before refactoring
 - Category-based critique (full for extract/restructure, reflect for rename/move)
 - Behavioral preservation as primary constraint
+</details>
+
+<details>
+<summary><strong>Adversarial Review (WF5)</strong> — 5 steps</summary>
+
+**Purpose:** Cross-model adversarial critique of a TEXT artifact (design, spec, plan, PRD, ADR, RFC, README) using an independent reviewer via the Codex CLI. Report-only.
+
+**Invocation:** `/rawgentic:adversarial-review docs/design/feature.md`
+
+**Key Features:**
+- Different-model second opinion (complements same-model reflexion critique)
+- Report-only — writes `docs/reviews/<slug>-<date>.md`, never edits the artifact
+- Optionally wired into WF2 (design/plan gates) and WF3 (default-off) per-project
+- Warn-only egress with secret scanning; fail-closed on any Codex error
+- Requires the Codex CLI installed + authenticated. See [Data Handling](#cross-model-review-data-handling-codex).
 </details>
 
 <details>
@@ -390,7 +406,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 10 workflow skills share an identical config-loading block that runs before any workflow step:
+All 11 workflow skills share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Read `<project-path>/.rawgentic.json` → validate version
@@ -464,12 +480,28 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | WF2 Feature Implementation | Full critique      | `/reflexion:critique` | After design                 |
 | WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
 | WF4 Refactoring            | Category-based     | Full or Reflect       | Full for extract/restructure |
+| WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF2/WF3 |
 | WF7 Documentation          | Reflect only       | `/reflexion:reflect`  | After draft                  |
 | WF8 Dependency Update      | None (audit-based) | `npm audit` + tests   | Automated                    |
 | WF9 Security Audit         | Full (on audit)    | `/reflexion:critique` | Critique the findings        |
 | WF10 Performance           | Full critique      | `/reflexion:critique` | After optimization design    |
 | WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
 | WF12 Test Suite Creation   | Brainstorm-driven  | `/superpowers:brainstorming` | Before writing any tests |
+
+### Cross-Model Review Data Handling (Codex)
+
+WF5 Adversarial Review (`/rawgentic:adversarial-review`) and its opt-in WF2/WF3
+hooks send the **text of the reviewed artifact to OpenAI** via the Codex CLI for an
+independent, different-model critique. This is **warn-only**: a one-time egress
+notice is printed before each invocation, and the engine scans the artifact for
+obvious secrets (API keys, passwords, tokens, private keys), naming any detected
+categories. Set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` to block egress when secrets
+are found. Findings reports are written locally to `<project>/docs/reviews/` and are
+never uploaded. The feature is **default-disabled** per project; existing WF2/WF3
+runs are unchanged unless explicitly opted in via `adversarialReview` in
+`.rawgentic_workspace.json`. Requires the Codex CLI installed
+(`curl -fsSL https://codex.openai.com/install.sh | bash`) and authenticated
+(`codex login`). See [config-reference.md](docs/config-reference.md#adversarial-review-data-handling).
 
 ### Shared Invariants
 
@@ -521,6 +553,7 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Feature Implementation (WF2)](docs/design/workflow-feature-implementation.md)
   - [Bug Fix (WF3)](docs/design/workflow-bug-fix.md)
   - [Refactoring (WF4)](docs/design/workflow-refactoring.md)
+  - [Adversarial Review (WF5)](docs/design/workflow-adversarial-review.md)
   - [Documentation (WF7)](docs/design/workflow-documentation.md)
   - [Dependency Update (WF8)](docs/design/workflow-dependency-update.md)
   - [Security Audit (WF9)](docs/design/workflow-security-audit.md)
@@ -551,7 +584,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
-Skills are tested via the `/skill-creator` eval pipeline (14/15 skills have evals.json).
+Skills are tested via the `/skill-creator` eval pipeline (14/16 skills have evals.json).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
