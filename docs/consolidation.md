@@ -17,6 +17,7 @@
 | WF2  | Feature Implementation | `/implement-feature` | 16    | feature/ fix/ | Full critique   |
 | WF3  | Bug Fix                | `/fix-bug`           | 14    | fix/          | Reflect only    |
 | WF4  | Refactoring            | `/refactor`          | 14    | refactor/     | Category-based  |
+| WF5  | Adversarial Review     | `/adversarial-review`| 5     | —             | Cross-model     |
 | WF7  | Documentation          | `/update-docs`       | 10    | docs/         | Reflect + user  |
 | WF8  | Dependency Update      | `/update-deps`       | 12    | deps/         | Audit-based     |
 | WF9  | Security Audit         | `/security-audit`    | 14    | security/     | Full (on audit) |
@@ -25,7 +26,9 @@
 
 ### 1.2 Numbering Gaps
 
-WF5 (Code Review) and WF6 (Testing) are intentionally absent — their functionality is embedded as quality gates inside other workflows (Step 11 in WF2, Step 9 in WF3, etc.) rather than standalone workflows. This avoids artificial workflow boundaries for activities that are always part of a larger pipeline.
+WF5 is **Adversarial Review** (`/adversarial-review`) — a standalone, report-only skill that runs a cross-model critique (via the Codex CLI) of a text artifact (design/spec/plan/PRD/ADR/RFC/README). It is also optionally wired into the WF2 (design Step 4, plan Step 6) and WF3 (Step 4) quality gates, per-project opt-in via the `adversarialReview` field. It was previously a reserved slot for "Code Review"; that functionality remains embedded as quality gates inside other workflows (Step 11 in WF2, Step 9 in WF3, etc.) rather than as a standalone numbered workflow.
+
+WF6 (Testing) is intentionally absent — its functionality is embedded as quality gates inside other workflows. This avoids artificial workflow boundaries for activities that are always part of a larger pipeline.
 
 ---
 

@@ -693,7 +693,7 @@ class TestSkillCountCanary:
     """Canary: assert the number of SKILL.md files with <config-loading> matches expected."""
 
     SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
-    EXPECTED_CONFIG_LOADING_COUNT = 10
+    EXPECTED_CONFIG_LOADING_COUNT = 11  # +adversarial-review (WF5, #77)
 
     def test_config_loading_skill_count(self):
         """If a new workflow skill is added, this test reminds you to add the disabledSkills check."""
