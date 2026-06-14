@@ -621,8 +621,22 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 6. **If thresholds pass:** Apply ambiguity circuit breaker.
 
+7. **Adversarial review sub-step (opt-in, cross-model).** AFTER the critique above completes and its circuit breaker is resolved, optionally run a cross-model adversarial review of the design document. Gate it on BOTH conditions:
+   - `fast_path_eligible == false` (skip cheap-path designs — this is additive to the full critique, never a replacement), AND
+   - the active project opts in:
+     ```bash
+     python3 hooks/adversarial_review_lib.py is-enabled \
+       --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
+     ```
+     (exit 0 = enabled). If disabled or fast-path-eligible, **skip silently** — behavior is byte-for-byte unchanged.
+   When enabled, invoke `/rawgentic:adversarial-review <design-doc-path>` (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate:
+   - Merge adversarial findings with the reflexion findings into ONE list, tagging each with `source: reflexion | adversarial`. Apply the ambiguity circuit breaker over the **merged** list (do not run two separate breakers).
+   - If a merged Critical/High finding indicates a genuine design flaw, treat it exactly like a reflexion design loop-back: it consumes the **existing `design` loop-back counter** via `plan_lib.consume_loopback(<counters>, "design")` (NOT a new source) and returns to Step 3 with the unified constraint set. Do not double-count.
+   - If Codex fails (any non-zero exit from the review CLI), **fail-closed**: log the failure loudly in session notes and continue with the reflexion result only — never treat a failed external review as "passed". In headless mode with an unmet Codex prerequisite, follow the ERROR protocol.
+   - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked): <report path or failure>`.
+
 **For fast path (`/reflexion:reflect`):**
-Single-pass checking: does the solution address the issue, are there unintended side effects, is it in the right layer? For WF1-validated issues: does design align with WF1-critiqued spec?
+Single-pass checking: does the solution address the issue, are there unintended side effects, is it in the right layer? For WF1-validated issues: does design align with WF1-critiqued spec? (The adversarial review sub-step above does NOT run on the fast path.)
 
 ### Output
 Amended design document.
@@ -720,6 +734,13 @@ Invoke `/reflexion:reflect` with check dimensions:
 - **Commit checkpoint adequacy:** Are checkpoints at logical boundaries?
 
 Apply ambiguity circuit breaker on findings. If clear: apply automatically.
+
+**Adversarial review sub-step (opt-in, cross-model).** After the reflect above, optionally run a cross-model adversarial review of the **implementation plan**. Gate on project opt-in only (Step 6 has no fast-path branch):
+```bash
+python3 hooks/adversarial_review_lib.py is-enabled \
+  --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
+```
+If enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings, apply the circuit breaker over the merged list, and if a Critical/High indicates a design-level flaw, consume the existing `design` loop-back counter and return to Step 3. Fail-closed on any Codex error (continue with the reflect result, log the failure). Log: `### WF2 Step 6 — Adversarial Review (invoked): <report path or failure>`. If disabled, skip silently.
 
 ### Output
 Plan drift check result.

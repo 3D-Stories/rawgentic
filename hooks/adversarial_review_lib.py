@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import uuid
 from dataclasses import dataclass
 from typing import Final
 
@@ -388,7 +389,9 @@ def normalize_findings(raw: object) -> list[dict]:
         ok, _ = validate_finding(f)
         if not ok:
             continue
-        key = (f["severity"], f.get("location", ""), f["description"][:80])
+        # Dedupe on the FULL description — truncating the key would silently
+        # collapse distinct findings that share an opening clause (#77 Step 8a F2).
+        key = (f["severity"], f.get("location", ""), f["description"])
         if key in seen:
             continue
         seen.add(key)
@@ -483,8 +486,11 @@ def run_codex_review(
     prompt = build_prompt(artifact_text, artifact_type)
     eff_timeout = TIMEOUT_SECONDS if timeout is None else timeout
 
-    schema_path = os.path.join(project_root, ".rawgentic-adv-review-schema.json")
-    out_path = os.path.join(project_root, ".rawgentic-adv-review-out.json")
+    # Per-invocation unique temp names so concurrent reviews in the same
+    # project_root cannot collide / read each other's output (#77 Step 8a F4).
+    token = uuid.uuid4().hex[:12]
+    schema_path = os.path.join(project_root, f".rawgentic-adv-review-schema-{token}.json")
+    out_path = os.path.join(project_root, f".rawgentic-adv-review-out-{token}.json")
     last_error = ""
     try:
         write_schema(schema_path)
@@ -570,10 +576,22 @@ def slugify(name: str) -> str:
     return (slug or "artifact")[:50]
 
 
+def _safe_date(date_str: str) -> str:
+    """Sanitize a date string for use in a filename (no path separators / traversal)."""
+    cleaned = re.sub(r"[^0-9A-Za-z-]", "-", date_str).strip("-")
+    cleaned = re.sub(r"-+", "-", cleaned)
+    return cleaned[:32] or "undated"
+
+
 def review_report_path(project_root: str, artifact_name: str, date_str: str) -> str:
-    """Return <project_root>/docs/reviews/<slug>-<YYYY-MM-DD>.md."""
+    """Return <project_root>/docs/reviews/<slug>-<date>.md.
+
+    BOTH the artifact name and the date are sanitized — neither may introduce
+    path separators or traversal (#77 Step 8a F1).
+    """
     return os.path.join(
-        project_root, "docs", "reviews", f"{slugify(artifact_name)}-{date_str}.md"
+        project_root, "docs", "reviews",
+        f"{slugify(artifact_name)}-{_safe_date(date_str)}.md",
     )
 
 
@@ -695,9 +713,15 @@ def main(argv: list[str] | None = None) -> int:
              "truncated": result.truncated, "secrets": list(result.secrets)},
         )
         path = review_report_path(args.project_root, args.artifact, date_str)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(report)
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(report)
+        except OSError as exc:
+            # Fail-closed: a write failure must surface as a non-zero exit, not a
+            # traceback that a caller could misread as success (#77 Step 8a F3).
+            print(f"failed to write report: {exc}", file=sys.stderr)
+            return 3
         print(path)
         return 0
 

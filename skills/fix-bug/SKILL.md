@@ -354,6 +354,16 @@ Invoke `/reflexion:reflect` with focus on root cause correctness. Single-pass re
 
 **Critique level:** Lightweight reflect ONLY. RATIONALE: Bug fixes have lower reversal cost than new features. A full 3-judge critique adds 2-3 minutes of latency for diminishing returns on small-scope changes.
 
+**Adversarial review sub-step (opt-in, DEFAULT-OFF, cross-model).** WF3 is deliberately lightweight; an external cross-model review is therefore **off by default** and must be explicitly opted in per project. After the lightweight reflect above, check:
+```bash
+python3 hooks/adversarial_review_lib.py is-enabled \
+  --workspace .rawgentic_workspace.json --project <name> --skill fix-bug
+```
+- If **disabled** (the default — `fix-bug` not listed in the project's `adversarialReview.workflows`), **skip silently**. The fast path is preserved exactly; this adds zero overhead to a normal bug fix.
+- If **enabled** (the user knowingly accepts the latency tradeoff — an external review adds ~1-3 min on top of the 2-3 min reflect, the very cost this step was designed to avoid), write the RCA + fix approach to a temp file under the project and invoke `/rawgentic:adversarial-review <rca-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the merged list. If a Critical/High indicates the root cause itself is wrong, loop back to Step 3 (max 1 per loop-back budget, same as the reflect loop-back — it does NOT add a second budget). Fail-closed on any Codex error: log loudly and continue with the reflect result. In headless mode with an unmet Codex prerequisite, follow the ERROR protocol. Log: `### WF3 Step 4 — Adversarial Review (invoked): <report path or failure>`.
+
+Note: the `is-enabled` check reads `.rawgentic_workspace.json`; if that file is missing or corrupt the engine returns disabled (fail-safe), so WF3 continues unchanged.
+
 ### Output
 
 Amended RCA (findings applied) OR blocked state (circuit breaker triggered).

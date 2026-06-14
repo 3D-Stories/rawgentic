@@ -144,3 +144,16 @@ def test_cli_review_does_not_edit_artifact(tmp_path):
 def test_cli_no_subcommand_errors():
     r = _run([])
     assert r.returncode != 0
+
+
+def test_cli_review_write_failure_is_fail_closed(tmp_path):
+    # F3 regression: if the report dir can't be created, exit 3 (not a traceback).
+    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
+    root = tmp_path / "proj"; root.mkdir()
+    art = root / "d.md"; art.write_text("x")
+    # Make 'docs' a FILE so os.makedirs(docs/reviews) fails with OSError.
+    (root / "docs").write_text("not a dir")
+    r = _run(["review", "--artifact", str(art), "--project-root", str(root),
+              "--date", "2026-06-14"], extra_path=tmp_path / "bin")
+    assert r.returncode == 3
+    assert "Traceback" not in r.stderr

@@ -40,6 +40,21 @@ def test_review_report_path_sanitizes_traversal(tmp_path):
     assert ".." not in Path(p).name
 
 
+def test_review_report_path_sanitizes_malicious_date(tmp_path):
+    # F1 regression: a traversal payload in date_str must not escape docs/reviews/
+    p = arl.review_report_path(str(tmp_path), "design.md", "2026/../../../etc/passwd")
+    reviews = str(tmp_path / "docs" / "reviews") + "/"
+    assert p.startswith(reviews)
+    assert ".." not in p[len(reviews):]
+    assert "/" not in Path(p).name
+
+
+def test_review_report_path_empty_date(tmp_path):
+    p = arl.review_report_path(str(tmp_path), "design.md", "")
+    assert "/docs/reviews/" in p
+    assert Path(p).name.endswith(".md")
+
+
 # --- egress_warning ---
 
 def test_egress_warning_base_mentions_openai():

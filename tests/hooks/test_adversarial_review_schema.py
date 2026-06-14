@@ -73,6 +73,18 @@ def test_normalize_dedupes_identical():
     assert len(out) == 1
 
 
+def test_normalize_keeps_findings_sharing_80char_prefix():
+    # F2 regression: same first 80 chars, different tails -> must NOT collapse
+    prefix = "Parameter validation missing at the request boundary in handler number forty-two zone "
+    assert len(prefix) >= 80
+    raw = [
+        _finding(description=prefix + "(SQL injection vector)"),
+        _finding(description=prefix + "(XSS injection vector)"),
+    ]
+    out = arl.normalize_findings(raw)
+    assert len(out) == 2
+
+
 def test_normalize_drops_invalid():
     raw = [_finding(), {"severity": "Bogus", "category": "x",
                         "description": "y", "recommendation": "z"}]

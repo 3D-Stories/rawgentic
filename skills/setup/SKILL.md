@@ -203,6 +203,55 @@ Check the active project's entry in `.rawgentic_workspace.json` for the `headles
 
 ---
 
+## Step 2d: Adversarial Review (WF5) Integration
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs).
+
+The `/rawgentic:adversarial-review` skill (WF5) runs a cross-model review of a
+text artifact via the Codex CLI. It can also be wired into the WF2 and WF3
+quality gates so they automatically run a cross-model second opinion on the
+design / implementation plan (WF2) or root-cause analysis (WF3). This is
+**opt-in and default-off** because it adds latency and sends artifact text to
+OpenAI (Codex). The setting lives in the active project's entry in
+`.rawgentic_workspace.json` (sibling to `headlessEnabled` / `critiqueMethod`),
+NOT in `.rawgentic.json` — it is workspace-scoped, not committed to the project repo.
+
+Check the active project's entry for the `adversarialReview` field.
+
+- **If `adversarialReview` is not set** (first-time configuration): prompt the user:
+
+  ```
+  Wire cross-model adversarial review (WF5, via Codex CLI) into workflow quality gates for [project-name]?
+
+  When enabled for a workflow, that workflow invokes /rawgentic:adversarial-review
+  to get an independent (different-model) critique at its quality gate. The
+  artifact text is sent to OpenAI (Codex). The standalone /rawgentic:adversarial-review
+  skill works regardless of this setting; this only controls the WF2/WF3 hooks.
+
+  Enable for which workflows? (none / wf2 / wf2+wf3) [default: none]
+    - wf2  = implement-feature: review the design (Step 4) and plan (Step 6)
+    - wf3  = fix-bug: review the root-cause analysis (Step 4)  [extra latency on bug fixes]
+  ```
+
+  Write the result to the project's entry. Use bare skill names in `workflows`:
+  - none      → `"adversarialReview": { "enabled": false, "workflows": [] }`
+  - wf2       → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature"] }`
+  - wf2+wf3   → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }`
+
+  Requires the Codex CLI to be installed and authenticated to actually run
+  (`curl -fsSL https://codex.openai.com/install.sh | bash` then `codex login`);
+  enabling the config without Codex present means the gate fails closed and is skipped.
+
+- **If `adversarialReview` is already set** (re-configuration): show current
+  status and allow changing:
+
+  ```
+  Adversarial review (WF5): [DISABLED / enabled for: implement-feature, fix-bug]
+  Change? (none / wf2 / wf2+wf3) [default: keep current]
+  ```
+
+---
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to understand the full schema structure.
@@ -506,7 +555,7 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 ## Step 8: Update Workspace
 
-Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Write the file back.
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `disabledSkills` and `critiqueMethod` (Step 2b), `headlessEnabled` (Step 2c), and `adversarialReview` (Step 2d) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
 
 ### Step 8b: Ensure Session Notes Infrastructure
 
