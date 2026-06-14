@@ -628,12 +628,12 @@ Design document. NOT presented to user — goes to Step 4 for critique.
      python3 hooks/adversarial_review_lib.py is-enabled \
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
-     (exit 0 = enabled). If disabled or fast-path-eligible, **skip silently** — behavior is byte-for-byte unchanged.
+     The command exits `0` when the review is enabled for this skill and `1` (or any non-zero) otherwise. If it exits non-zero, or `fast_path_eligible == true`, **skip silently** — behavior is byte-for-byte unchanged.
    When enabled, invoke `/rawgentic:adversarial-review <design-doc-path>` (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate:
    - Merge adversarial findings with the reflexion findings into ONE list, tagging each with `source: reflexion | adversarial`. Apply the ambiguity circuit breaker over the **merged** list (do not run two separate breakers).
-   - If a merged Critical/High finding indicates a genuine design flaw, treat it exactly like a reflexion design loop-back: it consumes the **existing `design` loop-back counter** via `plan_lib.consume_loopback(<counters>, "design")` (NOT a new source) and returns to Step 3 with the unified constraint set. Do not double-count.
-   - If Codex fails (any non-zero exit from the review CLI), **fail-closed**: log the failure loudly in session notes and continue with the reflexion result only — never treat a failed external review as "passed". In headless mode with an unmet Codex prerequisite, follow the ERROR protocol.
-   - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked): <report path or failure>`.
+   - If the merged list contains one or more Critical/High design flaws, consume **exactly one** `design` loop-back via `plan_lib.consume_loopback(<counters>, "design")` (the existing counter, NOT a new source) regardless of how many such findings there are, and return to Step 3 once with the unified constraint set. Do not consume per-finding and do not double-count against the reflexion loop-back.
+   - **Codex failure is non-blocking (the review is additive — the reflexion gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the reflexion result. Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
+   - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
 
 **For fast path (`/reflexion:reflect`):**
 Single-pass checking: does the solution address the issue, are there unintended side effects, is it in the right layer? For WF1-validated issues: does design align with WF1-critiqued spec? (The adversarial review sub-step above does NOT run on the fast path.)
@@ -740,7 +740,7 @@ Apply ambiguity circuit breaker on findings. If clear: apply automatically.
 python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
 ```
-If enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings, apply the circuit breaker over the merged list, and if a Critical/High indicates a design-level flaw, consume the existing `design` loop-back counter and return to Step 3. Fail-closed on any Codex error (continue with the reflect result, log the failure). Log: `### WF2 Step 6 — Adversarial Review (invoked): <report path or failure>`. If disabled, skip silently.
+The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the reflect result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
 
 ### Output
 Plan drift check result.

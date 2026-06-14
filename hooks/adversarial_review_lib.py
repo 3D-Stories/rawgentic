@@ -378,7 +378,8 @@ def normalize_findings(raw: object) -> list[dict]:
     - Drops entries that fail validation.
     - Default category 'completeness' is NOT applied — invalid findings are
       dropped (fail-closed), keeping the schema honest.
-    - Dedupe key: (severity, location, description[:80]).
+    - Dedupe key: (severity, location, full description) — the FULL description,
+      so findings that share an opening clause are not silently collapsed.
     - Sort by severity rank (Critical first) then category.
     """
     if not isinstance(raw, list):
@@ -598,12 +599,12 @@ def review_report_path(project_root: str, artifact_name: str, date_str: str) -> 
 def egress_warning(secrets: list[str] | tuple[str, ...] | None = None) -> str:
     """Return the warn-only egress notice; names detected secret categories."""
     base = (
-        "⚠️  Adversarial review sends the artifact text to OpenAI (Codex) for "
+        "[WARNING] Adversarial review sends the artifact text to OpenAI (Codex) for "
         "an independent model review. The artifact is transmitted off-box."
     )
     if secrets:
         base += (
-            "\n⚠️  Possible secrets detected in the artifact "
+            "\n[WARNING] Possible secrets detected in the artifact "
             f"({', '.join(secrets)}). Review before proceeding; set "
             "RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1 to block egress when secrets are found."
         )
@@ -627,9 +628,9 @@ def render_report_md(findings: list[dict], meta: dict) -> str:
         f"Medium {counts['Medium']}, Low {counts['Low']})",
     ]
     if meta.get("truncated"):
-        lines.append(f"- ⚠️ Artifact truncated to {MAX_BYTES} bytes before review.")
+        lines.append(f"- **[WARNING]** Artifact truncated to {MAX_BYTES} bytes before review.")
     if meta.get("secrets"):
-        lines.append(f"- ⚠️ Possible secrets detected: {', '.join(meta['secrets'])}.")
+        lines.append(f"- **[WARNING]** Possible secrets detected: {', '.join(meta['secrets'])}.")
     if meta.get("summary"):
         lines += ["", "## Summary", "", str(meta["summary"])]
     lines += ["", "## Findings", ""]
@@ -659,7 +660,13 @@ def render_report_md(findings: list[dict], meta: dict) -> str:
 # ============================================================================
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: prereq | is-enabled | review. Exit codes: 0 ok, 2 prereq, 3 codex, 4 parse."""
+    """CLI: prereq | is-enabled | review.
+
+    Exit codes:
+      prereq:     0 ok, 2 prerequisite failure
+      is-enabled: 0 enabled, 1 disabled
+      review:     0 ok, 2 prereq-fail, 3 codex-error/timeout, 4 parse-error
+    """
     parser = argparse.ArgumentParser(prog="adversarial_review_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
 

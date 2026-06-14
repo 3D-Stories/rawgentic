@@ -137,7 +137,7 @@ Size:     <bytes> (cap <MAX_BYTES>)
 
 ### Output
 ```
-Codex CLI: installed and authenticated ✓
+Codex CLI: installed and authenticated [OK]
 ```
 or the verbatim install/login instructions on failure.
 
