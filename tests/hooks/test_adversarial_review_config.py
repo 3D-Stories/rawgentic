@@ -139,3 +139,15 @@ def test_is_enabled_for_bool_shorthand_has_no_workflows(tmp_path):
 
 def test_is_enabled_for_missing_file_false(tmp_path):
     assert arl.is_enabled_for(str(tmp_path / "nope.json"), "p", "implement-feature") is False
+
+
+@pytest.mark.parametrize("skill", ["create-issue", "refactor", "implement-feature", "fix-bug"])
+def test_is_enabled_for_accepts_all_workflow_skill_names(tmp_path, skill):
+    """#79: is_enabled_for is skill-name-generic — WF1/WF4 need no engine change."""
+    ws = _write_ws(tmp_path, [{
+        "name": "p", "path": "./projects/p",
+        "adversarialReview": {"enabled": True, "workflows": [skill]},
+    }])
+    assert arl.is_enabled_for(str(ws), "p", skill) is True
+    # a different skill not in the list stays off
+    assert arl.is_enabled_for(str(ws), "p", "some-other-skill") is False

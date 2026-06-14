@@ -208,13 +208,14 @@ Check the active project's entry in `.rawgentic_workspace.json` for the `headles
 This step runs on **every** setup invocation (including Sub-flow A re-runs).
 
 The `/rawgentic:adversarial-review` skill (WF5) runs a cross-model review of a
-text artifact via the Codex CLI. It can also be wired into the WF2 and WF3
-quality gates so they automatically run a cross-model second opinion on the
-design / implementation plan (WF2) or root-cause analysis (WF3). This is
-**opt-in and default-off** because it adds latency and sends artifact text to
-OpenAI (Codex). The setting lives in the active project's entry in
-`.rawgentic_workspace.json` (sibling to `headlessEnabled` / `critiqueMethod`),
-NOT in `.rawgentic.json` — it is workspace-scoped, not committed to the project repo.
+text artifact via the Codex CLI. It can also be wired into the WF1, WF2, WF3, and
+WF4 quality gates so they automatically run a cross-model second opinion on the
+issue spec (WF1), design / implementation plan (WF2), root-cause analysis (WF3),
+or refactoring design (WF4). This is **opt-in and default-off** because it adds
+latency and sends artifact text to OpenAI (Codex). The setting lives in the active
+project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled` /
+`critiqueMethod`), NOT in `.rawgentic.json` — it is workspace-scoped, not committed
+to the project repo.
 
 Check the active project's entry for the `adversarialReview` field.
 
@@ -226,28 +227,37 @@ Check the active project's entry for the `adversarialReview` field.
   When enabled for a workflow, that workflow invokes /rawgentic:adversarial-review
   to get an independent (different-model) critique at its quality gate. The
   artifact text is sent to OpenAI (Codex). The standalone /rawgentic:adversarial-review
-  skill works regardless of this setting; this only controls the WF2/WF3 hooks.
+  skill works regardless of this setting; this only controls the embedded hooks.
 
-  Enable for which workflows? (none / wf2 / wf2+wf3) [default: none]
-    - wf2  = implement-feature: review the design (Step 4) and plan (Step 6)
-    - wf3  = fix-bug: review the root-cause analysis (Step 4)  [extra latency on bug fixes]
+  Enable for which workflows? Enter any combination of numbers (e.g. "1,2"),
+  "none", or "all" [default: none]:
+    1. implement-feature (WF2) — review the design (Step 4) and plan (Step 6)
+    2. fix-bug (WF3)          — review the root-cause analysis (Step 4)   [extra latency on bug fixes]
+    3. create-issue (WF1)     — review the issue spec (Step 4)            [redundant with WF1's own same-model critique]
+    4. refactor (WF4)         — review the refactoring design (Step 4, Extract/Restructure only)
   ```
 
-  Write the result to the project's entry. Use bare skill names in `workflows`:
-  - none      → `"adversarialReview": { "enabled": false, "workflows": [] }`
-  - wf2       → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature"] }`
-  - wf2+wf3   → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }`
+  Write the result to the project's entry using **bare skill names** in `workflows`
+  (map: 1→implement-feature, 2→fix-bug, 3→create-issue, 4→refactor). Examples:
+  - none        → `"adversarialReview": { "enabled": false, "workflows": [] }`
+  - "1"         → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature"] }`
+  - "1,2"       → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }`
+  - "all"       → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug", "create-issue", "refactor"] }`
 
-  Requires the Codex CLI to be installed and authenticated to actually run
+  Notes: WF1 (create-issue) is listed but expected to stay off for most projects —
+  it already runs a full same-model 3-judge critique, so the cross-model pass is
+  additive/redundant. WF4 (refactor) only fires on the Extract/Restructure path
+  (Rename/Simplify skips it). Requires the Codex CLI installed and authenticated
   (`curl -fsSL https://codex.openai.com/install.sh | bash` then `codex login`);
-  enabling the config without Codex present means the gate fails closed and is skipped.
+  enabling without Codex present means the gate fails closed and is skipped.
 
 - **If `adversarialReview` is already set** (re-configuration): show current
   status and allow changing:
 
   ```
-  Adversarial review (WF5): [DISABLED / enabled for: implement-feature, fix-bug]
-  Change? (none / wf2 / wf2+wf3) [default: keep current]
+  Adversarial review (WF5): [DISABLED / enabled for: <bare skill names>]
+  Change? Enter numbers (1=implement-feature, 2=fix-bug, 3=create-issue, 4=refactor),
+  "none", or "all" [default: keep current]
   ```
 
 ---

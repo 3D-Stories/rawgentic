@@ -295,7 +295,8 @@ the project repo. Shape:
 "adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }
 ```
 
-`workflows` uses bare skill names. When enabled and the running skill is listed:
+`workflows` uses bare skill names (`implement-feature`, `fix-bug`, `create-issue`,
+`refactor`). When enabled and the running skill is listed:
 
 - **WF2** (`implement-feature`): after the normal design critique (Step 4) and plan
   reflect (Step 6), if `fast_path_eligible == false`, it additionally invokes
@@ -305,6 +306,19 @@ the project repo. Shape:
 - **WF3** (`fix-bug`): default-OFF even when WF2 is on (must be explicitly listed).
   When enabled, Step 4 adds a cross-model review on top of the lightweight reflect,
   accepting the documented latency tradeoff.
+- **WF1** (`create-issue`): runs at Step 4 over the draft issue spec, merging into the
+  existing ambiguity circuit breaker. Expected to stay OFF for most projects — WF1
+  already runs a full same-model 3-judge critique at Step 3, so the cross-model pass is
+  additive/redundant. WF1 has no `plan_lib` loop-back; findings flow through the Step 4
+  circuit breaker only.
+- **WF4** (`refactor`): runs at Step 4 over the refactoring design, **only on the
+  Extract/Restructure full-critique path** (Rename/Simplify skips it). Loop-back uses
+  WF4's own textual `LOOPBACK_BUDGET`, not `plan_lib`.
+
+In every embedded workflow the review is **non-blocking / fail-closed**: any Codex
+failure (including a missing/unauthenticated CLI, even in headless mode) is logged and
+skipped, never blocking the host workflow. Only the standalone WF5 skill ERRORs on an
+unmet prerequisite.
 
 Loading is **fail-closed**: a missing file, malformed JSON, missing field, or bad value
 resolves to disabled — a workflow never crashes and never silently enables. Bool shorthand
