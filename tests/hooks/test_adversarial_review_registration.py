@@ -36,7 +36,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "2.25.0"
+    assert plugin["version"] == "2.26.0"
 
 
 def test_descriptions_consistent_count():
@@ -52,9 +52,9 @@ def test_readme_count_strings_updated():
     readme = (REPO_ROOT / "README.md").read_text()
     assert "11 SDLC workflow skills" in readme
     assert "10 SDLC workflow skills" not in readme
-    assert "provides 16 skills" in readme
+    assert "provides 17 skills" in readme
     assert "All 11 workflow skills share" in readme
-    assert "15/16 skills have evals.json" in readme
+    assert "15/17 skills have evals.json" in readme
 
 
 def test_marketplace_skill_dirs_all_exist():

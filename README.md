@@ -1,6 +1,6 @@
 # rawgentic
 
-**11 SDLC workflow skills + 4 workspace management + 1 security skill + hooks for Claude Code**
+**11 SDLC workflow skills + 4 workspace management + 1 planning skill + 1 security skill + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 16 skills organized in three layers:
+**Rawgentic** provides 17 skills organized in three layers:
 
 - **Workspace management** (4 skills) — Project registration, configuration, session binding, and guard exception management
-- **SDLC workflows** (10 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment
+- **SDLC workflows** (11 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
@@ -107,6 +107,12 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 | `/rawgentic:setup`          | Auto-detect tech stack, optional critique for complex projects, generate `.rawgentic.json` |
 | `/rawgentic:switch`         | Bind this session to a project, list projects, or deactivate. Checks for config staleness and prompts for missing `defaultProtectionLevel`. |
 | `/rawgentic:add-exception`  | Interactively add guard exceptions to `.rawgentic.json` when a WAL or security guard blocks a legitimate operation. |
+
+### Planning
+
+| Skill                  | Purpose                                              |
+| ---------------------- | ---------------------------------------------------- |
+| `/rawgentic:interview` | Interview-style requirements discovery **before** building. Identifies the core problem, who it is and isn't for, and key implementation decisions, then summarizes an implementation spec for confirmation (and offers to save it). Lightweight — no config-loading or quality gates; complements deeper design exploration. |
 
 ### SDLC Workflows
 
@@ -584,7 +590,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
-Skills are tested via the `/skill-creator` eval pipeline (15/16 skills have evals.json).
+Skills are tested via the `/skill-creator` eval pipeline (15/17 skills have evals.json; the lightweight `add-exception` and `interview` skills have none).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
