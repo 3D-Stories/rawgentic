@@ -365,10 +365,17 @@ def validate_finding(d: object) -> tuple[bool, list[str]]:
         val = d.get(field)
         if not isinstance(val, str) or not val.strip():
             errors.append(f"missing/empty {field}")
-    # Optional fields may be absent OR null (strict-mode schema sends them as null).
+    # Optional fields are required-but-nullable in the strict-mode schema (#80):
+    # they may be null, but a non-null value must match the declared type.
     af = d.get("ambiguity_flag")
     if af is not None and not isinstance(af, bool):
         errors.append("ambiguity_flag must be boolean or null")
+    ar = d.get("ambiguity_reason")
+    if ar is not None and not isinstance(ar, str):
+        errors.append("ambiguity_reason must be string or null")
+    loc = d.get("location")
+    if loc is not None and not isinstance(loc, str):
+        errors.append("location must be string or null")
     return (not errors), errors
 
 
@@ -404,7 +411,8 @@ def normalize_findings(raw: object) -> list[dict]:
             continue
         # Dedupe on the FULL description — truncating the key would silently
         # collapse distinct findings that share an opening clause (#77 Step 8a F2).
-        # location may be null under the strict-mode schema (#80) — coerce to "".
+        # location may be null OR missing under the strict-mode schema (#80) —
+        # coerce both to "" so dedupe keys stay comparable strings.
         key = (f["severity"], f.get("location") or "", f["description"])
         if key in seen:
             continue

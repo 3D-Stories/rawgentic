@@ -165,6 +165,20 @@ def test_validate_finding_accepts_null_optionals():
     assert ok, errs
 
 
+@pytest.mark.parametrize("field,bad", [
+    ("location", 123),
+    ("location", []),
+    ("ambiguity_reason", 42),
+    ("ambiguity_reason", {"x": "y"}),
+])
+def test_validate_finding_rejects_wrong_type_optionals(field, bad):
+    # Step 11 High: optionals are required-but-nullable in the schema, so a
+    # non-null wrong TYPE must be rejected (not just null accepted).
+    f = _finding(**{field: bad})
+    ok, errs = arl.validate_finding(f)
+    assert not ok and any(field in e for e in errs)
+
+
 def test_normalize_handles_null_location():
     f = _finding(location=None, ambiguity_flag=None)
     out = arl.normalize_findings([f])
