@@ -357,6 +357,8 @@ design_loopback_count = 0
 tdd_loopback_used = false
 review_loopback_used = false
 global_loopback_total = 0
+
+**Source of truth:** once it exists, `claude_docs/.wf2-state/<issue>/loopback_counters.json` (written via `plan_lib.consume_loopback`) is canonical for all *successfully persisted* counts — it survives context compaction, fresh headless sessions, and worktrees. The in-context variables above are a convenience mirror: on resume, initialize them from the file when it is present, otherwise from the defaults above (a missing file means "no loop-backs consumed yet," not an error). Do not write the in-context values back over a more-advanced file. If a `consume_loopback` call increments the in-context counter but fails to persist, treat that as a blocker — reconcile or STOP rather than blindly trusting either side, since a stale file would silently restore spent budget.
 </loop-back-budget>
 
 <resumption-protocol>
@@ -492,18 +494,18 @@ This enables workflow resumption if context is lost.
 
 4. **Memory search (Layer 3 — proactive recall).** If a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), call `mempalace_search` with the feature topic and `mempalace_kg_query` for entity-specific facts. Surface prior architectural decisions, known gotchas, and related implementations in this area. Reference findings explicitly when designing the implementation. If no mempalace MCP server is configured, skip silently.
 
-4. **Existing test/verification inventory:** Identify any existing tests, verification scripts, or validation mechanisms that cover the affected code. Note gaps.
+5. **Existing test/verification inventory:** Identify any existing tests, verification scripts, or validation mechanisms that cover the affected code. Note gaps.
 
-5. **Library and image research:** If the feature uses libraries in new ways, use Context7 MCP to fetch current documentation. For infrastructure projects, inspect Docker images that will be used — check for built-in migration files, supported database drivers, pre-installed packages (e.g., `psycopg2` in a Python image), and default configurations. This prevents designing around incorrect assumptions about image capabilities.
+6. **Library and image research:** If the feature uses libraries in new ways, use Context7 MCP to fetch current documentation. For infrastructure projects, inspect Docker images that will be used — check for built-in migration files, supported database drivers, pre-installed packages (e.g., `psycopg2` in a Python image), and default configurations. This prevents designing around incorrect assumptions about image capabilities.
 
-6. **Complexity classification:**
+7. **Complexity classification:**
    - `simple_change`: 1-3 files, no architecture change, no migration, no new deps
    - `standard_feature`: 4-15 files, contained scope, may need configuration changes
    - `complex_feature`: 15+ files, cross-service changes, multiple configuration changes, new deps
 
    This classification is AUTHORITATIVE — it overrides any complexity label from the GitHub issue.
 
-7. **Fast path eligibility:**
+8. **Fast path eligibility:**
    - If `simple_change`: `fast_path_eligible = true`
    - If `standard_feature` AND `is_wf1_created`: `fast_path_eligible = true`
    - Otherwise: `fast_path_eligible = false`
@@ -868,15 +870,16 @@ Promotion at the last task still triggers Step 8a (and any retroactive scan) bef
 ### Output
 For each high-risk task: an applied|deferred review log entry, committed status pointer updated, optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
 
-### Failure Modes
+### Step 8a Failure Modes
 - Reviewer cost spike on a plan with many high-risk tasks: confirmed expected behavior (P15 trades cost for early signal).
 - A Step 8a-deferred High finding is never re-presented at Step 11: this is what `plan_lib.assert_no_unresolved_high_deferrals` defends against in Step 11's exit check.
 
 ---
 
-### Continuing Step 8 (after the per-task review block above)
+### Step 8 Failure Modes (main task loop)
 
-### Failure Modes
+These apply to the main Step 8 implementation loop above (Step 8a, the per-task review sub-step, has its own failure modes listed under it).
+
 - Verification fails and cannot be fixed -> flag blocker to user
 - Design flaw discovered -> loop back to Step 3 if budget allows
 - For TDD: test passes before implementation (test not testing right thing) -> rewrite test
