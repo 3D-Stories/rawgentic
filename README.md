@@ -513,6 +513,20 @@ runs are unchanged unless explicitly opted in via `adversarialReview` in
 (`curl -fsSL https://codex.openai.com/install.sh | bash`) and authenticated
 (`codex login`). See [config-reference.md](docs/config-reference.md#adversarial-review-data-handling).
 
+### Run-Record Telemetry (Tier-2 substrate)
+
+WF2 Step 16 no longer hand-types its completion summary. Instead it assembles a
+structured **run-record** — issue/type, change volume, tests, each quality gate's
+*findings caught vs resolved*, the Step 11.5 security-scan status, loop-backs, and
+the PR/CI/deploy outcome — and drives `hooks/work_summary.py`, which renders the
+standardized "WF2 COMPLETE" block **and** appends the record as one JSON line to
+`<project>/docs/measurements/run_records.jsonl` (override via `--store` or
+`RAWGENTIC_RUN_RECORD_STORE`). Accumulated across runs the store is the telemetry
+substrate the Tier-2 A/B measurement harness aggregates. The store is
+**fail-closed** (a record failing validation is never persisted) while the human
+summary renders best-effort (a schema nit never costs the user their Step 16
+output). See [run-records.md](docs/run-records.md).
+
 ### Shared Invariants
 
 1. **Config-loading protocol** — All workflow skills read `.rawgentic.json` before executing
@@ -573,6 +587,7 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
   - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
   - [Dual Memory Backend (draft)](docs/superpowers/specs/2026-04-08-dual-memory-backend-design.md)
+- **[Run-Records](docs/run-records.md)** — Per-run structured run-record schema + store + the `work_summary.py` CLI (WF2 Step 16; Tier-2 telemetry substrate)
 - **[Testing](docs/testing.md)** — Test suite overview, hook test descriptions, skill evaluation methodology
 - **Diagrams** (in `diagrams/`): Excalidraw visual diagrams for each workflow and the framework architecture
 
