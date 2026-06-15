@@ -42,8 +42,8 @@ All workflow skills share a **config-loading protocol** that reads project confi
 
 ## Quick Start
 
-> **Prerequisites:** Ensure you have Claude Code CLI, GitHub CLI (`gh`), Git, and jq installed.
-> See the [Prerequisites](#prerequisites) table below for details.
+> **Prerequisites:** Ensure you have Claude Code CLI, **Python 3.10+**, GitHub CLI (`gh`), Git, and jq installed.
+> Optional add-ons (reflexion, superpowers, Codex CLI, security scanners) unlock specific features — see [Prerequisites](#prerequisites) for the required/optional split and what each one gets you.
 
 ### 1. Install
 
@@ -97,14 +97,32 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 
 ## Prerequisites
 
-| Requirement                      | Check                        | Install                                                         |
-| -------------------------------- | ---------------------------- | --------------------------------------------------------------- |
-| Claude Code CLI                  | `claude --version`           | [Install guide](https://docs.anthropic.com/en/docs/claude-code) |
-| GitHub CLI                       | `gh auth status`             | `brew install gh` / [gh install](https://cli.github.com/)       |
-| Git repository                   | `git status`                 | `git init`                                                      |
-| jq (JSON processor)              | `jq --version`               | `apt install jq` / `brew install jq`                           |
-| reflexion plugin                 | `/reflexion:reflect`         | `claude plugin add reflexion@context-engineering-kit`           |
-| superpowers plugin (recommended) | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official`         |
+### Required
+
+Rawgentic won't function without these — the workflow skills and hooks depend on them directly.
+
+| Requirement      | Check               | Install                                                         |
+| ---------------- | ------------------- | --------------------------------------------------------------- |
+| Claude Code CLI  | `claude --version`  | [Install guide](https://docs.anthropic.com/en/docs/claude-code) |
+| Python 3.10+     | `python3 --version` | `apt install python3` / `brew install python`                   |
+| GitHub CLI       | `gh auth status`    | `brew install gh` / [gh install](https://cli.github.com/)       |
+| Git              | `git --version`     | [git-scm.com/downloads](https://git-scm.com/downloads)          |
+| jq (JSON processor) | `jq --version`   | `apt install jq` / `brew install jq`                            |
+
+**Python** runs every hook and the per-skill config engine (`hooks/capabilities_lib.py`, which all 11 workflows shell out to) — 3.10+ is required (the hooks use `X | None` type syntax); CI runs on 3.12. **`gh`** drives all issue/PR operations. **`jq`** is used throughout the shell hooks. (The run-record / completion summary uses Python's built-in `json` — no separate JSON formatter to install.)
+
+### Optional
+
+Each add-on unlocks a specific capability. Rawgentic runs without them — you just lose (or degrade) the feature noted.
+
+| Add-on | Check | Install | What it unlocks — and what you lose without it |
+| ------ | ----- | ------- | ---------------------------------------------- |
+| **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF1/WF2/WF4/WF9/WF10 (`/reflexion:critique`) and the lightweight reflect in WF3. **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
+| **superpowers** plugin | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official` | Structured **brainstorming / design exploration** (WF12 test-strategy design; complex-feature design). **Without it:** rawgentic falls back to lighter inline brainstorming — still works, less rigorous. |
+| **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review** — an independent, *different-model* second opinion on a design/spec/plan/PRD via OpenAI: the WF5 `/rawgentic:adversarial-review` skill plus the opt-in cross-model gates in WF1–WF4. **Without it:** WF5 errors out and any opt-in cross-model gate is skipped; you still get the same-model reflexion critique. |
+| **Security scanners** (gitleaks, semgrep, osv-scanner, trivy) | `bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner trivy` | Auto-provisioned by `/rawgentic:setup` and once in the background on first plugin use (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1`) | The **tool-based security scan** in WF2 Step 11.5 and WF9 (secrets / dependency-CVE / SAST / IaC misconfig). **Without them:** each missing scanner is a *visible skip* (never a silent pass) — the LLM security review still runs, but concrete known-pattern issues (leaked tokens, CVE'd deps) aren't caught. |
+
+> **Contributing / running the tests** also needs `pip install pytest` (plus `jsonschema` for the adversarial-review schema tests, which otherwise skip). These are dev-only — not needed to *use* the plugin. See [Testing](#testing).
 
 ---
 
@@ -678,6 +696,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v2.35.1 (2026-06-15)
+- **README Prerequisites overhaul.** Split into **Required** (added the missing **Python 3.10+** + Git/jq checks) and **Optional** (reflexion, superpowers, Codex CLI, security scanners) — each optional add-on now states the capability it unlocks and what you lose without it. (#97)
 
 ### v2.35.0 (2026-06-15)
 - **Per-project handoff.** Each bound project gets its own `claude_docs/session_notes/<project>.handoff.md`, injected by `session-start` on startup/resume/clear and surfaced as the write target — handoffs are scoped per project instead of sharing the workspace-level remember-plugin handoff. Persistent and size-capped (`RAWGENTIC_HANDOFF_MAX_CHARS`). (#95)
