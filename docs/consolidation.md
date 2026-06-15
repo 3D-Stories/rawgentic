@@ -474,6 +474,6 @@ The architecture diagram shows:
 
 1. **Skill file format:** Should all 9 workflow skills use the same skill file template (header, instructions, step loop), or should each be fully custom?
 2. **Shared step functions:** Should common operations (branch creation, PR creation, deploy) be extracted into a shared utility skill that other skills call?
-3. **Workflow telemetry:** Should workflow runs be logged to a structured file (JSON) for later analysis of time-per-step, token cost, escalation frequency?
+3. **Workflow telemetry:** Should workflow runs be logged to a structured file (JSON) for later analysis of time-per-step, token cost, escalation frequency? — **Answered (v2.33.0):** WF2 Step 16 now emits a structured per-run **run-record** (issue/type, change volume, tests, per-gate findings caught vs resolved, Step 11.5 security status, loop-backs, PR/CI/deploy outcome) appended to `<project>/docs/measurements/run_records.jsonl` via `hooks/work_summary.py` — the Tier-2 measurement telemetry substrate. See [run-records.md](run-records.md).
 4. **CI integration:** Should the GitHub Actions workflow (`test.yml`) be extended with workflow-specific test suites (e.g., security-specific tests for WF9)?
 5. **Tooling audits:** Should WF3-WF11 get individual tooling audits (like WF1/WF2), or is the consolidated tooling summary (Section 12) sufficient for implementation specs?

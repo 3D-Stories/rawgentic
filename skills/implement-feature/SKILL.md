@@ -1307,42 +1307,83 @@ Post-deploy verification result (or skip confirmation).
 
 ### Instructions
 
+The completion summary is no longer hand-typed — its shape used to drift run to
+run, and nothing about the run was captured for later analysis. Instead, assemble
+a structured **run-record** from the data gathered across this workflow and drive
+the summary through `hooks/work_summary.py`, which renders the standardized "WF2
+COMPLETE" block AND appends the record to a JSONL store. Accumulated across runs
+the store is the Tier-2 measurement telemetry substrate (per
+`docs/measurements/`), so every gate's findings-caught-vs-resolved becomes a
+measurable signal — not just a sentence the user reads once.
+
 1. Update session notes with WF2 results.
 
-2. Present completion summary (adapted to capabilities):
+2. **Assemble the run-record** from the workflow so far and write it to
+   `/tmp/wf2-run-record.json` (use the Write tool, or a `cat > … <<'JSON'`
+   heredoc). Every key below must be **present**; "nullable" means `null` is an
+   allowed value, NOT that the key may be omitted (a dropped field is a telemetry
+   gap, not a null). Counts are non-negative integers and `resolved` may not
+   exceed `findings`:
 
-```
-WF2 COMPLETE
-=============
+   ```json
+   {
+     "workflow": "implement-feature",
+     "workflow_version": "<.claude-plugin/plugin.json version>",
+     "issue": {"number": <issue # | null>, "type": "feature|bug|chore|other",
+               "complexity": "trivial|standard|complex|null"},
+     "changes": {"files_changed": N, "insertions": N|null, "deletions": N|null,
+                 "commits": N},
+     "tests": {"added": N, "passing": N|null, "total": N|null},
+     "gates": [
+       {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path"},
+       {"step": "6",  "name": "Plan Drift",            "findings": N, "resolved": N, "status": "..."},
+       {"step": "9",  "name": "Implementation Drift",  "findings": N, "resolved": N, "status": "..."},
+       {"step": "11", "name": "Code Review",           "findings": N, "resolved": N, "status": "..."},
+       {"step": "15", "name": "Post-Deploy",           "findings": N, "resolved": N, "status": "..."}
+     ],
+     "security_scan": {"ran": true|false, "blocking_resolved": N, "advisory": N,
+                       "skipped": ["<kind>", ...]},
+     "loop_backs": {"used": N, "budget": 3},
+     "outcome": {"pr_number": N|null, "pr_url": "<url>"|null, "merged": true|false|null,
+                 "ci": "passed|failed|not_configured|skipped",
+                 "deploy": "success|manual|failed|not_applicable"},
+     "follow_ups": ["<any item requiring future attention>", ...]
+   }
+   ```
+   The `gates` array carries whichever gates actually ran (Step 11.5 is captured
+   in `security_scan`, not as a gate row). Use `status: "fast_path"` for a gate
+   the fast path replaced, `"skipped"` for one that didn't apply.
 
-GitHub PR: [URL] (PR #NNN)
-GitHub Issue: [URL] (Issue #NNN — Closes #NNN)
+3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
+   do not persist across Bash tool calls):
+   ```bash
+   python3 hooks/work_summary.py summarize \
+     --record-file /tmp/wf2-run-record.json \
+     --project-root <activeProject.path>
+   rc=$?
+   ```
+   The tool's stdout **is** the completion summary — present it to the user as-is
+   (do not re-type it). It also appends the record to
+   `<activeProject.path>/docs/measurements/run_records.jsonl` (override with
+   `--store` or `$RAWGENTIC_RUN_RECORD_STORE`).
 
-Quality Gates:
-- Step 4 (Design): [full critique / fast path reflect] — N findings
-- Step 6 (Plan Drift): N findings
-- Step 9 (Implementation Drift): N findings
-- Step 10 (Memorize): [N insights saved / skipped]
-- Step 11 (Code Review): N findings (all Critical/High resolved)
-- Step 11.5 (Security Scan): [N blocking resolved / N advisory / skipped: <kinds or "none">]
-- Step 15 (Post-Deploy): [pass / skipped / deferred]
+4. **Handle the exit code:**
+   - `rc == 0`: record valid and persisted. Done.
+   - `rc == 1`: the summary still rendered (the user keeps Step 16 output) but the
+     record FAILED validation and was **not** persisted — a telemetry gap. The
+     stderr lists exactly which fields are wrong; fix `/tmp/wf2-run-record.json`
+     and re-run so the substrate stays complete. If it genuinely can't be fixed,
+     record the gap in session notes rather than ignoring it.
+   - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
-Verification:                              # Adapt based on capabilities
-- Tests: [N passed / not applicable]
-- Verifications: [N passed / details]
-- CI: [passed / not configured]
-- Deploy: [success / manual / not applicable]
-
-Loop-backs used: N / 3 (global budget)
-
-Follow-up items:
-- [any items requiring future attention]
-```
+Log a marker in `claude_docs/session_notes.md`:
+`### WF2 Step 16: Completion summary + run-record — DONE (persisted: yes/no)`
 
 Do NOT suggest auto-transitioning to WF1 or restarting WF2.
 
 ### Output
-Completion summary. WF2 terminates.
+Standardized completion summary (rendered by `work_summary.py`) + a persisted
+run-record. WF2 terminates.
 
 ---
 
@@ -1359,6 +1400,7 @@ Before declaring WF2 complete, verify the following. Items marked (conditional) 
 8. [ ] (conditional: architecture changed) CLAUDE.md updated
 9. [ ] All Critical/High code review findings resolved
 10. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
+11. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
 
 If ANY applicable item fails, complete it before declaring "WF2 complete."
 </completion-gate>

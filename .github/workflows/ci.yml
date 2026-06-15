@@ -9,6 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history so the Tier-1 metrics smoke test
+          # (tests/test_wf2_impact_metrics.py::TestCollectSmoke) can resolve the
+          # historic effort commit range; a shallow checkout makes it skip.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
