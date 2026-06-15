@@ -90,7 +90,20 @@ Read `.rawgentic_workspace.json`, then:
    ```
    Create the file and `claude_docs/session_notes/` directory if they don't exist.
 
-   **How to get your session ID:** Read the file `claude_docs/.current_session_id` using Bash (`cat claude_docs/.current_session_id`). This file is written by the session-start and wal-context hooks on every prompt. **Do NOT use `$CLAUDE_SESSION_ID`** — it is not available as an environment variable. **Do NOT invent a session ID** — always read it from this file.
+   **How to get your session ID — use the per-session env var, NOT the shared file:**
+
+   Read it from `$CLAUDE_CODE_SESSION_ID`, which is set per Claude Code process (so it is unique and correct even when multiple sessions run **concurrently**). Always read and write the registry line in a **single Bash call** so the id is captured atomically:
+
+   ```bash
+   SID="${CLAUDE_CODE_SESSION_ID}"
+   # Fallback only for older Claude Code that doesn't set the env var:
+   [ -n "$SID" ] || SID="$(cat claude_docs/.current_session_id 2>/dev/null)"
+   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' \
+     "$SID" "<target project name>" "<target project path>" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "<workspace root>" \
+     >> claude_docs/session_registry.jsonl
+   ```
+
+   **Do NOT** read `claude_docs/.current_session_id` as the primary source: that file is **shared across all sessions** and is overwritten by every session on every prompt, so under concurrent sessions it can return *another* session's id and bind the wrong session. (Note: the legacy name `$CLAUDE_SESSION_ID` is **not** set — the correct variable is `$CLAUDE_CODE_SESSION_ID`.) **Do NOT invent a session ID.**
 
 Report:
 ```

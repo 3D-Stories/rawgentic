@@ -636,7 +636,7 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**~1,125 tests** across the hook + skill-helper modules. See [docs/testing.md](docs/testing.md) for full details.
+**~1,140 tests** across the hook + skill-helper modules. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
@@ -696,6 +696,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v2.35.2 (2026-06-15)
+- **Fix concurrent-session binding race.** `/rawgentic:switch`, `/rawgentic:new-project`, and the security-guard WAL logger now identify the session from the per-process env var `$CLAUDE_CODE_SESSION_ID` instead of the **shared** `claude_docs/.current_session_id` file (which every session overwrites on every prompt). Previously, with two concurrent sessions, a switch in one could write a registry line tagged with the *other* session's id and bind the wrong project — and `tail -1` resolution made it stick. The shared file is now a last-resort fallback only. (#98)
 
 ### v2.35.1 (2026-06-15)
 - **README Prerequisites overhaul.** Split into **Required** (added the missing **Python 3.10+** + Git/jq checks) and **Optional** (reflexion, superpowers, Codex CLI, security scanners) — each optional add-on now states the capability it unlocks and what you lose without it. (#97)

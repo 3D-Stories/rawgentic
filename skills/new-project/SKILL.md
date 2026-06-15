@@ -164,6 +164,14 @@ Read `.rawgentic_workspace.json`, then:
    ```json
    {"session_id":"<your session_id>","project":"<name>","project_path":"<path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
    ```
+   **For `<your session_id>` use the per-session env var `$CLAUDE_CODE_SESSION_ID`** (correct and unique even with concurrent sessions) — do this in a single Bash call so the id is captured atomically:
+   ```bash
+   SID="${CLAUDE_CODE_SESSION_ID:-$(cat claude_docs/.current_session_id 2>/dev/null)}"
+   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' \
+     "$SID" "<name>" "<path>" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "<WORKSPACE_ROOT>" \
+     >> claude_docs/session_registry.jsonl
+   ```
+   **Do NOT** read `claude_docs/.current_session_id` as the primary source — it is shared across all sessions and overwritten on every prompt, so under concurrent sessions it can name the wrong session. (The legacy name `$CLAUDE_SESSION_ID` is not set; use `$CLAUDE_CODE_SESSION_ID`.)
 4. **Initialize session notes file:** If `claude_docs/session_notes/<name>.md` does not exist, create it with:
    ```markdown
    # Session Notes -- <name>

@@ -111,11 +111,13 @@ def _warn(message):
     print(json.dumps({"systemMessage": message}), file=sys.stdout)
 
 
-def _log_headless_guard_block(findings, rel_path, workspace_root):
+def _log_headless_guard_block(findings, rel_path, workspace_root, session_id=None):
     """Log security guard blocks to WAL when in headless mode.
 
     In bypassPermissions mode, guards are the last defense. Blocks MUST
     be auditable via the WAL so the orchestrator can detect them.
+
+    ``session_id`` should be the authoritative id from the hook's stdin payload.
     """
     try:
         from datetime import datetime, timezone
@@ -142,14 +144,24 @@ def _log_headless_guard_block(findings, rel_path, workspace_root):
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Read session registry to find the project
+        # Read session registry to find the project.
+        # Session-id source precedence (most → least authoritative):
+        #   1. explicit stdin session_id (passed by main from the hook payload)
+        #   2. $CLAUDE_CODE_SESSION_ID — per-process env var, concurrency-safe
+        #   3. .current_session_id file — SHARED across sessions; last resort only.
+        #      That file is overwritten by every session on every prompt, so under
+        #      concurrent sessions it can name the wrong session.
         registry_path = os.path.join(claude_docs, "session_registry.jsonl")
-        session_id_path = os.path.join(claude_docs, ".current_session_id")
 
-        session_id = "unknown"
-        if os.path.isfile(session_id_path):
-            with open(session_id_path) as f:
-                session_id = f.read().strip()
+        sid = (session_id or "").strip()
+        if not sid:
+            sid = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+        if not sid:
+            session_id_path = os.path.join(claude_docs, ".current_session_id")
+            if os.path.isfile(session_id_path):
+                with open(session_id_path) as f:
+                    sid = f.read().strip()
+        session_id = sid or "unknown"
 
         project = "unknown"
         if os.path.isfile(registry_path):
@@ -249,7 +261,9 @@ def main():
     # Headless mode audit: log guard blocks to WAL for visibility
     # In bypassPermissions mode, guards are the last defense — blocks MUST be auditable
     if os.environ.get("RAWGENTIC_HEADLESS") == "1":
-        _log_headless_guard_block(remaining, rel_path, workspace_root)
+        _log_headless_guard_block(
+            remaining, rel_path, workspace_root, input_data.get("session_id")
+        )
 
     deny_output = format_deny(remaining, rel_path)
     print(json.dumps(deny_output), file=sys.stdout)
