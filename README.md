@@ -416,11 +416,10 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 All 11 workflow skills share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
-2. Read `<project-path>/.rawgentic.json` → validate version
-3. Build `capabilities` object (has_tests, has_ci, has_deploy, etc.)
-4. All subsequent steps use config and capabilities — never probe the filesystem
+2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`
+3. All subsequent steps use config and capabilities — never probe the filesystem
 
-This means skills adapt automatically: TDD mode when tests are configured, Implement-Verify mode when they're not. No capability detection, no guessing.
+The config→`capabilities` derivation lives in **one tested place** (`hooks/capabilities_lib.py`) instead of an identical prose block duplicated across all 11 skills + the docs table. It is fail-closed: a missing/corrupt config or a present-but-malformed optional section exits non-zero (rather than silently yielding a feature-less object), while an absent optional section yields its documented default. This means skills adapt automatically: TDD mode when tests are configured, Implement-Verify mode when they're not. No capability detection, no guessing.
 
 ### Learning Config
 

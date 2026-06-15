@@ -48,22 +48,15 @@ Before executing any workflow steps, load the project configuration:
      "BMAD detected but no skill preferences configured for [project]. Run `/rawgentic:switch` or `/rawgentic:setup` to configure."
    - Otherwise: proceed to step 2.
 
-2. Read `<activeProject.path>/.rawgentic.json`.
-   - Missing -> STOP. Tell user: "Active project <name> has no config. Run /rawgentic:setup."
-   - Malformed JSON -> STOP. Tell user: "Project config is corrupted. Run /rawgentic:setup to regenerate."
-   - Check `config.version`. If version > 1 (or missing), warn user about version mismatch.
-   - Parse full JSON into `config` object.
-
-3. Build the `capabilities` object from config:
-   - has_tests: config.testing exists AND config.testing.frameworks.length > 0
-   - test_commands: config.testing.frameworks[].command
-   - has_ci: config.ci exists AND config.ci.provider exists
-   - has_deploy: config.deploy exists AND config.deploy.method exists and != "manual"
-   - has_database: config.database exists AND config.database.type exists
-   - has_docker: config.infrastructure exists AND config.infrastructure.docker.composeFiles.length > 0
-   - project_type: config.project.type
-   - repo: config.repo.fullName
-   - default_branch: config.repo.defaultBranch
+2. Load the config and derive capabilities with the helper CLI (one tested
+   source of truth — never hand-derive the `capabilities` object, so all 11
+   workflow skills and the docs table cannot drift apart):
+   ```bash
+   python3 hooks/capabilities_lib.py derive \
+     --config <activeProject.path>/.rawgentic.json
+   ```
+   - **Non-zero exit** -> the config is missing, corrupt, or invalid. **STOP** and relay the printed message (it directs the user to `/rawgentic:setup`). A `config.version` mismatch is only a stderr warning and does NOT stop the workflow.
+   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>

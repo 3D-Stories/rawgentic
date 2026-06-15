@@ -21,24 +21,31 @@ should be in the config. If it is detectable at setup time, it belongs in
 **Single source of truth.** No duplication between `.rawgentic.json` and CLAUDE.md.
 Config holds structured data; CLAUDE.md holds prose conventions and instructions.
 
-**Capabilities object.** Every workflow skill derives a boolean `capabilities` object
-from the config at startup. The exact flags are:
+**Capabilities object.** Every workflow skill derives a `capabilities` object from
+the config at startup via `hooks/capabilities_lib.py derive` — the single source of
+truth (skills no longer hand-derive it in prose). The fields are:
 
-| Flag | Derivation |
+| Field | Derivation |
 |------|-----------|
-| `has_tests` | `config.testing` exists AND `config.testing.frameworks.length > 0` |
-| `test_commands` | `config.testing.frameworks[].command` |
-| `has_ci` | `config.ci` exists AND `config.ci.provider` exists |
-| `has_deploy` | `config.deploy` exists AND `config.deploy.method` exists and != `"manual"` |
-| `has_database` | `config.database` exists AND `config.database.type` exists |
-| `has_docker` | `config.infrastructure` exists AND `config.infrastructure.docker.composeFiles.length > 0` |
-| `project_type` | `config.project.type` |
-| `repo` | `config.repo.fullName` |
-| `default_branch` | `config.repo.defaultBranch` |
+| `repo` | `config.repo.fullName` (required — derive errors if missing) |
+| `default_branch` | `config.repo.defaultBranch` (required — derive errors if missing) |
+| `project_type` | `config.project.type` (required — derive errors if missing) |
+| `has_tests` | `config.testing.frameworks` is a non-empty array |
+| `test_commands` | `config.testing.frameworks[].command` (one per framework) |
+| `has_ci` | `config.ci.provider` exists |
+| `has_deploy` | `config.deploy.method` exists and != `"manual"` |
+| `deploy_method` | `config.deploy.method` (one of `compose`/`ssh`/`script`/`manual`; `null` when absent, error if outside the enum) |
+| `has_database` | `config.database.type` exists |
+| `has_docker` | `config.infrastructure.docker.composeFiles` is a non-empty array |
+| `migration_dir` | `config.database.migrationsDir` (else `null`) |
 
 Skills adapt their behavior based on these flags -- for example, a project without
 tests uses implement-verify mode instead of TDD, and a project without CI skips the
-CI verification step.
+CI verification step. The derivation is fail-closed: a missing/corrupt config, or a
+present-but-malformed optional section, exits non-zero (rather than silently yielding
+a feature-less object), while an *absent* optional section yields its documented
+default (`false`/`[]`/`null`). The required `repo` and `project` sections must be
+present and well-typed or `derive` stops before any `git`/`gh` side effects.
 
 **Learning config.** Skills can update `.rawgentic.json` when they discover new
 project information during execution:
@@ -93,7 +100,11 @@ is relative (e.g., `./projects/my-app`), resolve it against the Claude root dire
 
 ### 3. Build the capabilities object
 
-Derive the boolean flags listed above from the parsed config.
+Run `python3 hooks/capabilities_lib.py derive --config <activeProject.path>/.rawgentic.json`.
+It loads + validates the config and emits `{"config": {...}, "capabilities": {...}}` —
+the deterministic load+derive (steps 2–3) in one fail-closed call, so the mapping
+above can't drift across the 11 skills. A non-zero exit means stop and run
+`/rawgentic:setup`; a `config.version` mismatch is a stderr warning only.
 
 ### Error behavior
 
