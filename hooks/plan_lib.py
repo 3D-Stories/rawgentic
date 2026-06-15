@@ -35,6 +35,12 @@ class Task:
     title: str
     risk_level: Literal["high", "standard"]
     reason: str | None  # parenthesized reason for high-risk; None for standard
+    # Optional, purely additive (PR 3a / optimization C). A task may declare a
+    # `parallel_group` and the `files` it touches so validate_parallel_groups can
+    # prove same-group tasks are file-disjoint. Absent -> not parallel-eligible.
+    # tuple (not list) to stay hashable under frozen=True.
+    parallel_group: str | None = None
+    files: tuple[str, ...] = ()
 
 
 # --- Env-var loading with clamping and freeze-at-import ---
@@ -102,7 +108,17 @@ _RISKLEVEL_RE = re.compile(
     r"^\s*[-*]\s*riskLevel\s*:\s*(high|standard)(?:\s*\(([^)]+)\))?\s*$",
     re.IGNORECASE,
 )
+# Optional parallel-execution annotations (PR 3a). Both purely additive — their
+# absence never changes the riskLevel fail-closed contract or the pre-P15 migration.
+_PARALLEL_GROUP_RE = re.compile(r"^\s*[-*]\s*parallel_group\s*:\s*(\S+)\s*$", re.IGNORECASE)
+_FILES_RE = re.compile(r"^\s*[-*]\s*files\s*:\s*(.+?)\s*$", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^#{1,6}\s+")
+
+
+def _split_files(raw: str) -> tuple[str, ...]:
+    """Split a `- files:` line value on commas/whitespace into a tuple."""
+    parts = [p.strip() for p in re.split(r"[,\s]+", raw) if p.strip()]
+    return tuple(parts)
 
 
 def parse_tasks(plan_markdown: str) -> list[Task]:
@@ -123,7 +139,7 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
     bug, not a migration.
     """
     lines = plan_markdown.splitlines()
-    raw_tasks: list[tuple[str, str, str | None, str | None]] = []
+    raw_tasks: list[tuple[str, str, str | None, str | None, str | None, tuple[str, ...]]] = []
     i = 0
     while i < len(lines):
         m = _TASK_HEADER_RE.match(lines[i])
@@ -134,6 +150,8 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
         # Scan body until next ### heading or EOF
         risk_level: str | None = None
         reason: str | None = None
+        parallel_group: str | None = None
+        files: tuple[str, ...] = ()
         body_start = i + 1
         j = body_start
         while j < len(lines):
@@ -143,11 +161,17 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
             if mm:
                 risk_level = mm.group(1).lower()
                 reason = mm.group(2).strip() if mm.group(2) else None
+            pg = _PARALLEL_GROUP_RE.match(lines[j])
+            if pg:
+                parallel_group = pg.group(1)
+            fm = _FILES_RE.match(lines[j])
+            if fm:
+                files = _split_files(fm.group(1))
             j += 1
-        raw_tasks.append((task_id, title, risk_level, reason))
+        raw_tasks.append((task_id, title, risk_level, reason, parallel_group, files))
         i = j
 
-    tagged_count = sum(1 for _, _, rl, _ in raw_tasks if rl is not None)
+    tagged_count = sum(1 for _, _, rl, _, _, _ in raw_tasks if rl is not None)
     if raw_tasks and tagged_count == 0:
         # Pre-P15 plan: default every task to standard and warn once.
         print(
@@ -157,18 +181,129 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
             file=sys.stderr,
         )
         return [
-            Task(id=tid, title=t, risk_level="standard", reason=None)
-            for tid, t, _, _ in raw_tasks
+            Task(id=tid, title=t, risk_level="standard", reason=None,
+                 parallel_group=pg, files=fs)
+            for tid, t, _, _, pg, fs in raw_tasks
         ]
 
     out: list[Task] = []
-    for tid, t, rl, r in raw_tasks:
+    for tid, t, rl, r, pg, fs in raw_tasks:
         if rl is None:
             raise PlanFormatError(
                 f"Task {tid} ({t!r}) is missing required `riskLevel` line"
             )
-        out.append(Task(id=tid, title=t, risk_level=rl, reason=r))
+        out.append(Task(id=tid, title=t, risk_level=rl, reason=r,
+                        parallel_group=pg, files=fs))
     return out
+
+
+_GLOB_CHARS = frozenset("*?[]")
+
+
+def _classify_decl(path: str) -> tuple[str, str]:
+    """Classify a declared file path for disjointness proof.
+
+    Returns ``(kind, value)``. ``kind`` is ``"ok"`` with ``value`` set to a
+    canonical comparison key (normalized + case-folded), or one of
+    ``"glob"``/``"directory"``/``"absolute"`` (value = the raw path) when the
+    declaration cannot be statically proven disjoint. We case-fold so that on a
+    case-insensitive filesystem ``A.py`` and ``a.py`` are treated as the same
+    file — this can only ADD conflicts (lose the optimization), never miss a
+    real collision. Symlink/hardlink aliasing is out of scope for a pure static
+    check; the runtime touched-file gate (issue #85, PR 3b) is the real backstop.
+    """
+    if any(c in _GLOB_CHARS for c in path):
+        return ("glob", path)
+    if path.endswith("/"):
+        return ("directory", path)
+    if os.path.isabs(path):
+        return ("absolute", path)
+    norm = os.path.normpath(path)
+    # Reject anything that escapes the repo or denotes the root: `..`, `../x`
+    # (can re-enter and alias another declared file), and `.` (the root, an
+    # ancestor of every path — the prefix-based overlap check would miss it).
+    if norm == "." or norm == ".." or norm.startswith(".." + os.sep) or norm.startswith("../"):
+        return ("non-repo-relative", path)
+    return ("ok", norm.casefold())
+
+
+def validate_parallel_groups(tasks: list[Task]) -> tuple[bool, list[str]]:
+    """Prove that same-`parallel_group` tasks are statically file-disjoint.
+
+    Returns ``(all_eligible, conflicts)``. ``all_eligible`` is True iff every
+    parallel_group with >=2 members has every member declaring concrete,
+    repo-relative, non-glob, non-directory ``files`` AND no two members'
+    declared paths are equal or nested (one an ancestor directory of the
+    other). Ungrouped tasks (parallel_group is None) and singleton groups are
+    never flagged.
+
+    A conflict (overlap, missing files, glob, directory, or absolute path)
+    means the group is NOT parallel-eligible. The caller MUST run such a group
+    sequentially — so an un-provable group degrades to serial execution, never
+    to a concurrent collision. This is a STATIC pre-dispatch heuristic only;
+    the runtime touched-file gate (issue #85, PR 3b) is the real backstop once
+    isolated parallel execution exists.
+    """
+    groups: dict[str, list[Task]] = {}
+    for t in tasks:
+        if t.parallel_group is not None:
+            groups.setdefault(t.parallel_group, []).append(t)
+
+    conflicts: list[str] = []
+    for gid, members in groups.items():
+        if len(members) < 2:
+            continue  # nothing to parallelize / no overlap possible
+
+        # Phase 1 — every member must declare only provable concrete files.
+        # If ANY member's declaration is unprovable, the whole group is not
+        # eligible and we skip the overlap proof (avoids under-reporting).
+        group_valid = True
+        norm_sets: dict[str, set[str]] = {}
+        for t in members:
+            if not t.files:
+                conflicts.append(
+                    f"parallel_group {gid!r}: task {t.id} declares no files "
+                    f"-> cannot prove disjointness, not parallel-eligible"
+                )
+                group_valid = False
+                continue
+            normed: set[str] = set()
+            for f in t.files:
+                kind, value = _classify_decl(f)
+                if kind != "ok":
+                    label = {"absolute": "absolute path",
+                             "non-repo-relative": "non-repo-relative path"}.get(kind, kind)
+                    conflicts.append(
+                        f"parallel_group {gid!r}: task {t.id} declares {label} {f!r} "
+                        f"-> cannot prove disjointness, not parallel-eligible"
+                    )
+                    group_valid = False
+                else:
+                    normed.add(value)
+            norm_sets[t.id] = normed
+        if not group_valid:
+            continue
+
+        # Phase 2 — pairwise overlap among fully-valid members. Two paths
+        # collide if equal OR one is an ancestor directory of the other.
+        ids = list(norm_sets.keys())
+        for a in range(len(ids)):
+            for b in range(a + 1, len(ids)):
+                for fa in sorted(norm_sets[ids[a]]):
+                    for fb in sorted(norm_sets[ids[b]]):
+                        if fa == fb:
+                            conflicts.append(
+                                f"parallel_group {gid!r}: tasks {ids[a]} and {ids[b]} both "
+                                f"touch {fa} -> overlap, not parallel-eligible"
+                            )
+                        elif fb.startswith(fa + "/") or fa.startswith(fb + "/"):
+                            conflicts.append(
+                                f"parallel_group {gid!r}: tasks {ids[a]} and {ids[b]} declare "
+                                f"nested paths {fa} / {fb} -> cannot prove disjointness, "
+                                f"not parallel-eligible"
+                            )
+
+    return (len(conflicts) == 0, conflicts)
 
 
 # --- Risk-ratio calibration ---

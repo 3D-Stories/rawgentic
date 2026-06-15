@@ -849,7 +849,12 @@ while keeping the cross-cutting PR-wide review intact.
 
 - **WF2 Step 5:** every task in the plan carries
   `riskLevel: high|standard` per the format contract enforced by
-  `hooks/plan_lib.parse_tasks` (fail-closed on missing field).
+  `hooks/plan_lib.parse_tasks` (fail-closed on missing field). Tasks may
+  also carry optional `parallel_group` + `files`; `validate_parallel_groups`
+  proves same-group tasks are file-disjoint so an un-provable group degrades
+  to sequential execution (never a collision). Isolated *concurrent* execution
+  of eligible groups via detached worktrees is tracked separately (the
+  worktree statement in Principle 1 remains aspirational until then).
 - **WF2 Step 8a:** for each high-risk task's commit, dispatch 2 inline
   reviewer roles (code-level + silent-failure hunt) via the Agent tool.
   Severity-banded confidence filter (Critical ≥0.50, High ≥0.65,

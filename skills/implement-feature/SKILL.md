@@ -673,7 +673,11 @@ Amended design document.
    - VERIFY: Run a verification command (health check, syntax check, dry-run, or manual inspection)
    - Document what "verified" means for this task
 
-3. **Task ordering:** Make dependencies explicit. Mark parallel-eligible tasks with the same `parallel_group`.
+3. **Task ordering:** Make dependencies explicit. Parallel-eligible tasks share a `parallel_group` AND each declares the files it touches via a `- files: <comma-separated paths>` line, so disjointness can be proven mechanically:
+   - `- parallel_group: <group-id>` — tasks with the same id are candidates to run concurrently.
+   - `- files: <comma-separated paths>` — the exact files the task creates/modifies (concrete paths only; globs and directories cannot be proven disjoint).
+
+   After decomposition, call `plan_lib.validate_parallel_groups(tasks)`; it returns `(all_eligible, conflicts)`. A group is parallel-eligible ONLY when every member declares concrete `files` and the members' file sets are pairwise disjoint. Any conflict (overlap, missing files, glob, or directory) means that group is **not** parallel-eligible and **runs sequentially** — an un-provable group degrades to serial execution, never to a concurrent collision. Log conflicts to session notes. (Isolated *concurrent* execution of eligible groups is added in a follow-up; today eligible groups still execute sequentially but are validated so the contract is ready.)
 
 3a. **Risk stratification (P15):** Tag every task with a `riskLevel: high|standard` field. Use **`high`** if ANY of the 8 criteria apply; otherwise `standard`. The 8 criteria (canonical list lives in `hooks/plan_lib.py::RISK_CRITERIA`):
 
@@ -690,6 +694,7 @@ Amended design document.
    - Each task begins with `### Task <id>: <title>` heading.
    - Each task body MUST contain a line `- riskLevel: high|standard`; high-risk tasks include a parenthesized reason: `- riskLevel: high (security surface)`.
    - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP). **[Headless: ERROR — add `rawgentic:ai-error` label, post comment explaining the plan format contract.]**
+   - OPTIONAL: `- parallel_group: <id>` and `- files: <comma-separated paths>` (see Task ordering above). These are purely additive — absent fields just mean the task is not parallel-eligible; they never affect the `riskLevel` fail-closed contract or the pre-P15 migration.
 
    **Calibration check** — after task decomposition, compute the high-risk ratio via `plan_lib.compute_risk_ratio(tasks)` and classify via `plan_lib.check_ratio_band(ratio, len(tasks))`. Handle the result:
 
@@ -820,7 +825,7 @@ Execute the implementation plan task by task.
    git push origin <branch_name>
    ```
 
-**Parallel task execution:** For independent tasks (same `parallel_group`), dispatch via parallel Agent tool calls.
+**Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently. **Until isolated concurrent execution lands (issue #85), execute ALL tasks sequentially in plan order**, including parallel-eligible groups. Do NOT dispatch concurrent Agent calls that write to the working tree: with no worktree isolation, concurrent edits to the shared tree can collide and corrupt commits — sequential execution is the safe floor. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
 
 **Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
 
