@@ -89,6 +89,43 @@ class TestValidateHappyPath:
         del rec["follow_ups"]
         assert validate_record(rec) == []
 
+    def test_extra_optional_and_valid(self):
+        """`extra` carries ordered workflow-specific labeled lines (e.g. WF3's
+        Root Cause / Fix) — optional, defaults to absent."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        assert validate_record(rec) == []          # absent is fine
+        rec["extra"] = [{"label": "Root Cause", "value": "off-by-one in retry"},
+                        {"label": "Fix", "value": "clamp index"}]
+        assert validate_record(rec) == []
+
+
+class TestValidateExtra:
+    def test_extra_must_be_list(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["extra"] = {"label": "x", "value": "y"}   # object, not a list
+        assert validate_record(rec) != []
+
+    def test_extra_item_must_be_object(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["extra"] = ["Root Cause: foo"]            # bare string, not {label,value}
+        assert validate_record(rec) != []
+
+    @pytest.mark.parametrize("item", [
+        {"value": "no label"},                        # missing label
+        {"label": "", "value": "empty label"},        # empty label
+        {"label": "ok"},                              # missing value
+        {"label": "ok", "value": 5},                  # non-string value
+        {"label": 5, "value": "x"},                   # non-string label
+    ])
+    def test_extra_item_field_violations(self, item):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["extra"] = [item]
+        assert validate_record(rec) != []
+
     def test_empty_gates_list_is_valid(self):
         from work_summary import validate_record
         rec = _valid_record()
@@ -262,6 +299,34 @@ class TestValidateNumericIntegrity:
         rec["security_scan"]["ran"] = "yes"
         assert validate_record(rec) != []
 
+    @pytest.mark.parametrize("sec", [
+        {"ran": False, "blocking_resolved": 3, "advisory": 0, "skipped": []},
+        {"ran": False, "blocking_resolved": 0, "advisory": 2, "skipped": []},
+        {"ran": False, "blocking_resolved": 0, "advisory": 0, "skipped": ["x"]},
+    ])
+    def test_security_not_run_must_be_all_zero(self, sec):
+        """A scan that did not run (ran=false) cannot have resolved findings or
+        skipped scanners — the render would hide them ('not run') AND the
+        telemetry would be self-contradictory. The clean not-run shape is valid."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["security_scan"] = sec
+        assert validate_record(rec) != []
+        rec["security_scan"] = {"ran": False, "blocking_resolved": 0,
+                                "advisory": 0, "skipped": []}
+        assert validate_record(rec) == []
+
+    def test_duplicate_gate_step_is_error(self):
+        """Two gates sharing a step id would conflate in Tier-2 gate aggregation
+        (the WF3 footgun: a 'Memorize' row reusing Code Review's step 9)."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"] = [
+            {"step": "9", "name": "Code Review", "findings": 0, "resolved": 0, "status": "pass"},
+            {"step": "9", "name": "Memorize", "findings": 0, "resolved": 0, "status": "pass"},
+        ]
+        assert validate_record(rec) != []
+
     def test_gate_missing_subfield_is_error(self):
         from work_summary import validate_record
         rec = _valid_record()
@@ -310,6 +375,11 @@ class TestNormalize:
         out = normalize_record(_valid_record(), now=NOW, schema_version=99)
         assert out["schema_version"] == 99
 
+    def test_fills_extra_default(self):
+        from work_summary import normalize_record
+        out = normalize_record(_valid_record(), now=NOW)
+        assert out["extra"] == []
+
 
 # --- render_summary --------------------------------------------------------
 
@@ -345,6 +415,44 @@ class TestRenderSummary:
         rec["security_scan"]["skipped"] = []
         text = render_summary(rec)
         assert "none" in text.lower()
+
+    def test_security_not_run_renders_cleanly(self):
+        """A workflow with no security scan (e.g. WF3) sets ran=false; the render
+        must not reference a Step 11.5 that didn't happen — it says 'not run'."""
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["workflow"] = "fix-bug"
+        rec["security_scan"] = {"ran": False, "blocking_resolved": 0,
+                                "advisory": 0, "skipped": []}
+        text = render_summary(rec)
+        assert "WF3 COMPLETE" in text
+        assert "not run" in text.lower()
+
+    def test_extra_lines_rendered(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["extra"] = [{"label": "Root Cause", "value": "stale cache key"},
+                        {"label": "Fix", "value": "include tenant in key"}]
+        text = render_summary(rec)
+        assert "Root Cause: stale cache key" in text
+        assert "Fix: include tenant in key" in text
+
+    def test_extra_absent_renders_without_extra_lines(self):
+        from work_summary import render_summary
+        text = render_summary(_valid_record())
+        assert "Root Cause" not in text
+
+    def test_extra_nonstring_fields_skipped_in_render(self):
+        """Best-effort render runs on UNVALIDATED records: a malformed extra item
+        (null label / dict value) must not leak 'None:' or a dict repr."""
+        from work_summary import render_summary
+        rec = {"workflow": "fix-bug",
+               "extra": [{"label": None, "value": {"x": 1}},
+                         {"label": "Fix", "value": "ok"}]}
+        text = render_summary(rec)
+        assert "Fix: ok" in text
+        assert "None:" not in text
+        assert "{'x'" not in text
 
     def test_loop_backs_rendered(self):
         from work_summary import render_summary
@@ -578,13 +686,14 @@ class TestCLISubprocessSmoke:
 # --- Step 16 skill-wiring drift guard --------------------------------------
 
 class TestWorkSummarySkillWiring:
-    """Drift guard: WF2's Step 16 must drive the completion summary through this
-    CLI, not hand-type the block (which is exactly the inconsistency the
-    run-record removes). If the subcommand is renamed, update skill + guard."""
+    """Drift guard: every workflow with a completion step must drive its summary
+    through this CLI, not hand-type the block (the inconsistency the run-record
+    removes). If the subcommand is renamed, update the skills + this guard."""
 
-    def test_implement_feature_invokes_work_summary_cli(self):
-        content = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    @pytest.mark.parametrize("skill", ["implement-feature", "fix-bug"])
+    def test_skill_invokes_work_summary_cli(self, skill):
+        content = (SKILLS_DIR / skill / "SKILL.md").read_text()
         assert "work_summary.py summarize" in content, (
-            "implement-feature/SKILL.md Step 16 must invoke "
-            "`work_summary.py summarize`; if you renamed it, update this guard."
+            f"{skill}/SKILL.md completion step must invoke "
+            f"`work_summary.py summarize`; if you renamed it, update this guard."
         )

@@ -515,16 +515,18 @@ runs are unchanged unless explicitly opted in via `adversarialReview` in
 
 ### Run-Record Telemetry (Tier-2 substrate)
 
-WF2 Step 16 no longer hand-types its completion summary. Instead it assembles a
-structured **run-record** — issue/type, change volume, tests, each quality gate's
-*findings caught vs resolved*, the Step 11.5 security-scan status, loop-backs, and
-the PR/CI/deploy outcome — and drives `hooks/work_summary.py`, which renders the
-standardized "WF2 COMPLETE" block **and** appends the record as one JSON line to
+WF2 Step 16 and WF3 (fix-bug) Step 14 no longer hand-type their completion
+summaries. Instead each assembles a structured **run-record** — issue/type, change
+volume, tests, each quality gate's *findings caught vs resolved*, security-scan
+status, loop-backs, and the PR/CI/deploy outcome — and drives
+`hooks/work_summary.py`, which renders the standardized "WF*N* COMPLETE" block
+**and** appends the record as one JSON line to
 `<project>/docs/measurements/run_records.jsonl` (override via `--store` or
-`RAWGENTIC_RUN_RECORD_STORE`). Accumulated across runs the store is the telemetry
-substrate the Tier-2 A/B measurement harness aggregates. The store is
+`RAWGENTIC_RUN_RECORD_STORE`). The fields are a **uniform core** so the Tier-2 A/B
+measurement harness can aggregate across workflows, plus an optional `extra` list
+for workflow-specific lines (e.g. WF3's Root Cause / Fix). The store is
 **fail-closed** (a record failing validation is never persisted) while the human
-summary renders best-effort (a schema nit never costs the user their Step 16
+summary renders best-effort (a schema nit never costs the user their completion
 output). See [run-records.md](docs/run-records.md).
 
 ### Shared Invariants

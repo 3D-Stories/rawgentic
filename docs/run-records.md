@@ -1,7 +1,7 @@
 # Run-Records & Completion Summary (`hooks/work_summary.py`)
 
-The shared lib used by **WF2 Step 16** (Workflow Completion Summary) to do two
-jobs from one validated record:
+The shared lib used by **WF2 Step 16** and **WF3 (fix-bug) Step 14** (Workflow
+Completion Summary) to do two jobs from one validated record:
 
 1. **Render the completion summary** — the standardized "WF2 COMPLETE" block the
    skill used to hand-type. Rendering it from a structured record means its shape
@@ -38,6 +38,18 @@ exceed `findings`, `passing` may not exceed `total`, `used` may not exceed
 | `loop_backs` | object | `used`, `budget` (ints). |
 | `outcome` | object | `pr_number` (int\|null), `pr_url` (string\|null), `merged` (bool\|null), `ci` (`passed`/`failed`/`not_configured`/`skipped`), `deploy` (`success`/`manual`/`failed`/`not_applicable`). |
 | `follow_ups` | array | Optional list of strings; defaults to `[]`. |
+| `extra` | array | Optional ordered `{label, value}` (both strings) pairs for **workflow-specific** human lines that ride along in the render without bloating the uniform core (e.g. WF3's `Root Cause` / `Fix`). Defaults to `[]`. |
+
+The fields above the line are the **uniform core** every workflow emits, so
+Tier-2 can aggregate across workflows; `extra` is the escape hatch for
+workflow-specific context that doesn't need to be an aggregation column.
+
+**Cross-workflow:** WF2 (`workflow: "implement-feature"` → renders `WF2`) runs a
+Step 11.5 security scan, so `security_scan.ran` is `true` and the scan line shows
+the blocking/advisory/skipped breakdown. WF3 (`workflow: "fix-bug"` → `WF3`) has
+no security scan, so it sets `security_scan.ran: false` and the render shows
+`Security Scan: not run` rather than referencing a Step 11.5 that never ran. WF3
+carries `Root Cause` / `Fix` in `extra` and uses a loop-back budget of 2.
 
 Every documented key must be **present**; "nullable" means `null` is an allowed
 *value*, not that the key may be omitted — a dropped field is a telemetry gap (the
@@ -88,11 +100,14 @@ Exit codes:
 | `1` | Record invalid: summary still rendered, errors on stderr, record **not** persisted. The skill records the telemetry gap. |
 | `2` | Usage error or unreadable/non-JSON record file. |
 
-## How WF2 wires it (Step 16)
+## How the workflows wire it in
 
-The skill assembles the run-record from the data gathered across the workflow,
-writes it to `/tmp/wf2-run-record.json`, and shells out to the CLI. The tool's
-stdout **is** the completion summary, so the skill presents it as-is rather than
-re-typing it. A drift-guard test
-(`tests/hooks/test_work_summary.py::TestWorkSummarySkillWiring`) asserts the skill
-keeps invoking `work_summary.py summarize`, so the wiring can't silently rot.
+Each completion step (WF2 Step 16 → `/tmp/wf2-run-record.json`; WF3 Step 14 →
+`/tmp/wf3-run-record.json`) assembles the run-record from the data gathered across
+the workflow and shells out to the CLI. The tool's stdout **is** the completion
+summary, so the skill presents it as-is rather than re-typing it. A drift-guard
+test (`tests/hooks/test_work_summary.py::TestWorkSummarySkillWiring`,
+parametrized over `implement-feature` and `fix-bug`) asserts each skill keeps
+invoking `work_summary.py summarize`, so the wiring can't silently rot. Adding a
+new workflow to the substrate is just: emit the uniform core (+ any `extra`
+lines), call the CLI, and add the skill to that parametrized guard.
