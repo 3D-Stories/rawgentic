@@ -29,6 +29,17 @@ All workflow skills share a **config-loading protocol** that reads project confi
 
 ---
 
+## Contents
+
+- [Quick Start](#quick-start) · [Prerequisites](#prerequisites)
+- [Skills](#skills) — [Workspace Management](#workspace-management) · [Planning](#planning) · [SDLC Workflows](#sdlc-workflows) · [Security & Infrastructure](#security--infrastructure) · [Multi-Project Concurrent Sessions](#multi-project-concurrent-sessions)
+- [Configuration](#configuration) — [`.rawgentic.json`](#project-config-rawgenticjson) · [Protection Levels](#protection-levels) · [Workspace File](#workspace-file-rawgentic_workspacejson) · [Config-Loading Protocol](#config-loading-protocol)
+- [Architecture](#architecture) · [How It Works](#how-it-works) (Principles · Quality Gates · Run-Record Telemetry · Invariants)
+- [Troubleshooting](#troubleshooting) · [Design Documentation](#design-documentation) · [Testing](#testing)
+- [Using Rawgentic with BMAD](#using-rawgentic-with-bmad) · [Headless Mode](#headless-mode) · [Contributing](#contributing) · [Changelog](#changelog) · [License](#license)
+
+---
+
 ## Quick Start
 
 > **Prerequisites:** Ensure you have Claude Code CLI, GitHub CLI (`gh`), Git, and jq installed.
@@ -607,13 +618,13 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**~990 tests** across the hook + skill-helper modules. See [docs/testing.md](docs/testing.md) for full details.
+**~1,125 tests** across the hook + skill-helper modules. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (15/17 skills have evals.json; the lightweight `add-exception` and `interview` skills have none).
+Skills are tested via the `/skill-creator` eval pipeline (15/17 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception` and `interview` skills have none).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -665,13 +676,166 @@ For major changes, please open an issue first to discuss the approach.
 
 ## Changelog
 
-### v2.22.7 (2026-05-13)
+Entries are one line per released version (most recent first), derived from the
+merged PR. Dates are the merge dates; `#N` links the PR.
 
-- **Hook commands use exec form.** `hooks/hooks.json` now declares `args: []` on every entry so Claude Code invokes hooks directly via `execv` instead of `/bin/sh -c "string"`. Permanently eliminates the shell-quoting class of bugs (per [Claude Code v2.1.139 hooks reference](https://code.claude.com/docs/en/hooks.md)). Backward compatible — `args` is ignored on older Claude Code versions.
+### v2.35.0 (2026-06-15)
+- **Per-project handoff.** Each bound project gets its own `claude_docs/session_notes/<project>.handoff.md`, injected by `session-start` on startup/resume/clear and surfaced as the write target — handoffs are scoped per project instead of sharing the workspace-level remember-plugin handoff. Persistent and size-capped (`RAWGENTIC_HANDOFF_MAX_CHARS`). (#95)
 
-### v2.22.6 (2026-05-13)
+### v2.34.0 (2026-06-15)
+- WF3 (fix-bug) Step 14 wired into the run-record telemetry; added the optional `extra` field for workflow-specific summary lines (e.g. Root Cause / Fix). (#93)
 
-- **Fix `${CLAUDE_PLUGIN_ROOT}` not expanding in hook commands.** Each command in `hooks/hooks.json` was wrapped in literal single quotes (`"'${CLAUDE_PLUGIN_ROOT}/hooks/...'"`); a recent Claude Code update changed env-var expansion behavior, and `/bin/sh -c` then tried to exec a file literally named `${CLAUDE_PLUGIN_ROOT}/hooks/...`. Removed the wrapping quotes so the variable expands correctly. Also cleaned up the same pattern in 6 historical `docs/plans/` design documents.
+### v2.33.0 (2026-06-15)
+- **Run-record telemetry.** `hooks/work_summary.py` + WF2 Step 16 emit a structured per-run run-record (the Tier-2 measurement substrate) and render the standardized completion summary. (#92)
+
+### v2.32.0 (2026-06-15)
+- **WF2 Step 11.5 tool-based security scan** (gitleaks / SCA / SAST / IaC), shared with WF9 via `hooks/security_scan.py`. (#91)
+
+### v2.31.1 (2026-06-15)
+- WF2 extraction impact report + reproducible Tier-1 metrics script (`scripts/wf2_impact_metrics.py`). (#90)
+
+### v2.31.0 (2026-06-15)
+- Extract the config→`capabilities` derivation into one tested CLI (`hooks/capabilities_lib.py`), eliminating 11 duplicated prose blocks. (#89)
+
+### v2.30.0 (2026-06-15)
+- Resume-side CLIs (`hooks/resume_lib.py`) replace fragile resumption prose in WF2. (#88)
+
+### v2.29.0 (2026-06-15)
+- Headless-interaction CLI (`hooks/headless_interaction.py`) replaces inline `python3 -c` snippets in WF2. (#87)
+
+### v2.28.0 (2026-06-14)
+- Validated `parallel_group` / `files` with a disjointness validator (WF2 parallel execution). (#86)
+
+### v2.27.0 (2026-06-14)
+- Parallelize WF2 Step 2 analysis fan-out and Step 4 adversarial review for lower latency. (#84)
+
+### v2.26.1 (2026-06-14)
+- WF2 doc fixes: Step 2 numbering, loop-back source-of-truth, Step 8 failure-mode headers. (#83)
+
+### v2.26.0 (2026-06-14)
+- Add the **`interview`** skill for pre-build requirements discovery. (#82)
+
+### v2.25.0 (2026-06-14)
+- Adversarial-review wired into WF1/WF4 + evals + OpenAI strict-output-schema fix. (#81)
+
+### v2.24.0 (2026-06-13)
+- **Add WF5 adversarial-review** skill (cross-model critique via the Codex CLI) + opt-in WF2/WF3 integration. (#78)
+
+<details>
+<summary><strong>Earlier (v2.5.0 – v2.23.1)</strong></summary>
+
+### v2.23.1 (2026-05-14)
+- Address 4 deferred Low findings from the P15 review (`plan_lib`). (#76)
+
+### v2.23.0 (2026-05-14)
+- **P15 tiered code review** (WF2 Step 8a) for high-risk tasks. (#75)
+
+### v2.22.8 (2026-05-14)
+- Park the 2026-03-22 audit + dual-memory-backend design docs. (#74)
+
+### v2.22.7 (2026-05-12)
+- Hook commands use exec form (`args: []`) — eliminates the shell-quoting bug class. (#72)
+
+### v2.22.6 (2026-05-12)
+- Fix `${CLAUDE_PLUGIN_ROOT}` not expanding in hook commands. (#71)
+
+### v2.22.5 (2026-05-04)
+- Refresh BMAD references for v6.6.0 + fix `wal_guard` test isolation. (#70)
+
+### v2.22.4 (2026-04-16)
+- Add mempalace memory-search steps to 3 workflow skills. (#69)
+
+### v2.22.3 (2026-04-13)
+- Add marketplace validation rules; update test count. (#66)
+
+### v2.22.2 (2026-04-13)
+- Marketplace: explicit `skills` whitelist (fix duplicate-name validation error). (#64)
+
+### v2.22.1 (2026-04-13)
+- Marketplace: restructure the manifest to resolve the "Sync Failed" install error. (#62)
+
+### v2.22.0 (2026-04-09)
+- Remove legacy archive + enrichment code. (#60)
+
+### v2.21.0 (2026-04-09)
+- Session-notes **size handler** (`notes-size-handler.py`). (#59)
+
+### v2.20.0 (2026-04-09)
+- Migrate session infrastructure to `~/claude_docs/` (with backward-compat symlink). (#58)
+
+### v2.19.0 (2026-03-21)
+- Headless interaction protocol with full interaction-point triage (WF2/WF3). (#46)
+
+### v2.18.0 (2026-03-21)
+- Headless mode infrastructure with per-project access control. (#45)
+
+### v2.17.0 (2026-03-21)
+- `setup` detects BMAD and configures per-project skill preferences. (#42)
+
+### v2.16.1 (2026-03-20)
+- BMAD coexistence routing + narrowed overlapping skill triggers.
+
+### v2.16.0 (2026-03-11)
+- `session-start` security-pattern staleness check. (#38)
+
+### v2.15.0 (2026-03-11)
+- Archive query utility + skill integration for session JSONL archives. (#37)
+
+### v2.14.0 (2026-03-11)
+- JSON archive format for session notes. (#34)
+
+### v2.13.0 (2026-03-11)
+- Apply WF3 skill feedback from first real-world use. (#33)
+
+### v2.12.0 (2026-03-11)
+- Add `/rawgentic:add-exception` for guard exceptions. (#32)
+
+### v2.11.0 (2026-03-11)
+- `new-project` existing-folder linking option. (#31)
+
+### v2.10.1 (2026-03-11)
+- `switch`: config staleness check on project bind. (#28)
+
+### v2.10.0 (2026-03-11)
+- Per-project protection levels with preset configuration. (#26)
+
+### v2.9.1 (2026-03-08)
+- `wal-guard`: remove destructive local-command patterns. (#21)
+
+### v2.9.0 (2026-03-08)
+- Incident (WF11) execution critique findings. (#20)
+
+### v2.8.0 (2026-03-08)
+- `setup`: critique gate Step 4b with a complexity heuristic. (#19)
+
+### v2.7.0 (2026-03-08)
+- Wire the test suite into the SDLC workflows + GitHub Actions CI. (#16)
+
+### v2.6.2 (2026-03-08)
+- Comprehensive hook test suite. (#14)
+
+### v2.6.1 (2026-03-07)
+- `wal-guard`: narrow an overly broad pattern. (#13)
+
+### v2.6.0 (2026-03-07)
+- Add the **WF12 create-tests** workflow with eval results. (#12)
+
+### v2.5.4 (2026-03-07)
+- `wal`: allow Edit/Write on workspace-level files in unbound sessions.
+
+### v2.5.3 (2026-03-07)
+- `wal`: traverse up the directory tree to find the workspace file.
+
+### v2.5.2 (2026-03-07)
+- `wal`: allow workspace-level reads when the session is unbound.
+
+### v2.5.1 (2026-03-07)
+- `switch`: document how to get the session ID for the registry write.
+
+### v2.5.0 (2026-03-07)
+- Earliest version recorded in this changelog.
+
+</details>
 
 ---
 
