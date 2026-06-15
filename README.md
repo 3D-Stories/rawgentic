@@ -153,6 +153,7 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 **Key Features:**
 - Config-driven: TDD mode when tests configured, Implement-Verify mode when not
 - 4-agent code review (general, security, performance, test coverage)
+- **Step 11.5 tool-based security scan** (pre-PR gate): runs gitleaks (secrets, diff-scoped), an SCA dependency-CVE scan (osv-scanner → npm/pip-audit fallback), semgrep SAST, and trivy IaC (Docker projects) via the shared `hooks/security_scan.py` lib — fail-closed on a real finding, visible-skip when a tool is absent
 - Parallelized analysis (Step 2) and review (Step 4) phases for lower latency
 - Global loopback budget of 3 across all retry loops
 - Learning config: updates `.rawgentic.json` when new patterns discovered
@@ -238,6 +239,7 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 **Key Features:**
 - STRIDE model (Spoofing, Tampering, Repudiation, Info Disclosure, DoS, Elevation)
 - Enumerates data channels from config (REST, WebSocket, gRPC, etc.)
+- **Tool-based scan** (Step 2/8): runs the same `hooks/security_scan.py` lib as WF2 Step 11.5, in `--full` (whole-tree) mode — so the secret/CVE/SAST/IaC tooling never drifts between the two workflows; tool findings feed STRIDE, they don't replace it
 - Learning config: adds discovered auth mechanisms to config
 </details>
 
@@ -305,12 +307,14 @@ Rawgentic includes hooks that run automatically on Claude Code events:
 | `wal-context` | UserPromptSubmit | Injects session context (project, recent WAL activity) |
 | `wal-bind-guard` | PreToolUse | Blocks tool use if session unbound with multiple active projects; blocks cross-project file writes |
 | `wal-guard` | PreToolUse | Blocks dangerous production commands with per-project protection levels (sandbox/standard/strict) |
-| `session-start` | SessionStart | WAL recovery, **notes size handler**, project reconciliation, security pattern staleness check, resume context |
+| `session-start` | SessionStart | WAL recovery, **notes size handler**, project reconciliation, security pattern staleness check, **security scanner bootstrap** (once, background, opt-out), resume context |
 | `notes-size-handler` | (called by session-start) | Trims session notes exceeding 800 lines to keep last 200; optionally ingests to memorypalace before trimming |
 | `security-guard` | PreToolUse | Blocks writing dangerous patterns (credentials, secrets, eval) to files |
 | `security-guard-check` | SessionStart | Warns if the official security-guidance plugin conflicts |
 
 **Security Guard** blocks writes containing dangerous code patterns (eval, innerHTML, pickle, os.system, etc.). Patterns are defined in `hooks/security-patterns.json`. Protection level controls which rules are active (sandbox: none, standard: 6 common patterns, strict: all). Per-path exceptions via `guards.securityExcludePaths` in `.rawgentic.json`. Uses the Claude Code `permissionDecision: deny` protocol for hard blocking (not retried).
+
+**Security Scan** (`hooks/security_scan.py`) is the tool-based scanner shared by WF2 Step 11.5 (diff-scoped, pre-PR) and WF9 (`--full`, whole-tree audit): gitleaks (secrets), an SCA dependency-CVE scan (osv-scanner, falling back to `npm audit`/`pip-audit`), semgrep SAST, and trivy IaC for Docker projects. It is **fail-closed** — a leaked secret, a Critical/High CVE, or an installed-but-broken scanner blocks; blocking severities are tunable via `RAWGENTIC_SECURITY_BLOCK_SEVERITIES`. A scanner whose tool isn't installed is a **visible skip**, never a silent pass. `scripts/install-scanners.sh` provisions the tools (idempotent, best-effort); the session-start hook runs it once in the background on first plugin use, and `/rawgentic:setup` runs it explicitly. Installs are **opt-out** (`RAWGENTIC_SKIP_SCANNER_INSTALL=1` or `"installScanners": false`), never opt-in. See `docs/security-scan.md`.
 
 **WAL (Write-Ahead Log)** records every mutation tool call to `claude_docs/wal/{project}.jsonl`. On session resume, incomplete operations are surfaced for recovery. WAL files are per-project — each active project gets its own log. As of v2.20.0, session data is migrated to `~/claude_docs/` on first startup, with a symlink left at the old workspace-relative location for backward compatibility. The path is configurable via `claudeDocsPath` in `.rawgentic_workspace.json`.
 
@@ -586,7 +590,7 @@ pytest tests/ -v
 pytest tests/hooks/test_wal_guard.py -v
 ```
 
-**~895 tests** across the hook + skill-helper modules. See [docs/testing.md](docs/testing.md) for full details.
+**~990 tests** across the hook + skill-helper modules. See [docs/testing.md](docs/testing.md) for full details.
 
 **CI:** GitHub Actions runs `pytest tests/ -v` on all PRs to `main` (`.github/workflows/ci.yml`). SDLC workflows also run tests automatically when `.rawgentic.json` has a `testing` section configured.
 

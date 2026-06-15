@@ -138,7 +138,7 @@ class TestHeadlessInteractionBlock:
 
     # Expected [Headless annotation counts per skill
     EXPECTED_COUNTS = {
-        "implement-feature": 25,  # 17 base + 1 disabled-skill cleanup + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High
+        "implement-feature": 26,  # 17 base + 1 disabled-skill cleanup + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block
         "fix-bug": 11,            # 10 interaction points + 1 disabled-skill cleanup
     }
 

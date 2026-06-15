@@ -17,8 +17,27 @@ jobs:
       - name: Verify jq available
         run: jq --version
 
-      - name: Install pytest
-        run: pip install pytest
+      - name: Install security scanners
+        # Only the scanners the real-tool smoke test actually exercises
+        # (project_type=python, has_docker=False): gitleaks + semgrep +
+        # osv-scanner. trivy (~167MB, IaC-only) and pip-audit (osv fallback) are
+        # deliberately omitted — the smoke never invokes them, and their parsers
+        # are covered by injected-runner unit tests. Dogfoods the installer on a
+        # clean box (installer regressions surface here) and lets the smoke run
+        # instead of skipping. Best-effort: a scanner that fails to install just
+        # makes its test skip, never fails CI. GITHUB_TOKEN avoids the
+        # unauthenticated release-API rate limit on shared runner IPs.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/install-scanners.sh gitleaks semgrep osv-scanner
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Report scanner presence
+        run: bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner || true
+
+      - name: Install test deps
+        run: pip install pytest jsonschema
 
       - name: Run tests
         run: pytest tests/ -v

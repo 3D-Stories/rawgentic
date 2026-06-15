@@ -148,16 +148,23 @@ Proceeding to enumerate attack surface. Confirm scope.
 2. **Authentication mapping:** For each endpoint, verify auth middleware is applied per `config.security.authMechanisms[]`.
 3. **Data channel mapping:** Enumerate all data channels from `config.security.dataChannels[]` and verify their auth mechanisms.
 4. **Input boundary mapping:** All points where external data enters the system (request bodies, parameters, queries, WebSocket messages, message queues, etc.).
-5. **Secret inventory:** Scan for hardcoded secrets, .env patterns, credential storage.
-6. **Dependency inventory:** List packages with known CVEs.
+5. **Tool-based scan (shared lib):** Run the same scanner WF2 Step 11.5 uses, so the secret / dependency-CVE / SAST / IaC findings come from one tested place and can never drift between the two workflows. Use `--full` (audit the whole tree, not a branch diff):
+   ```bash
+   python3 hooks/security_scan.py scan \
+     --project-root <PROJECT_ROOT> \
+     --project-type <capabilities.project_type> \
+     --full --json
+   ```
+   Append `--has-docker` when `capabilities.has_docker` is true. Feed every `findings[]` entry into the STRIDE analysis (Step 3) and the report (Step 4) — tool findings are **inputs** to the audit, not a substitute for it (scanners find known patterns; STRIDE finds the logic/authz/abuse flaws they can't). A `skipped` scanner is a **coverage gap**: record it in the report and recommend `/rawgentic:setup` to install the missing tool. A `gate.errors` entry is an installed-but-broken scanner — investigate, do not treat as clean.
+6. **Manual augmentation:** beyond the tool scan, note credential-storage patterns, `.env` handling, and any inputs the scanners could not assess (vendored code, lockfile-less ecosystems, dynamic config).
 
 ### Output
 
-Attack surface map (internal working artifact).
+Attack surface map (internal working artifact), including the `security_scan.py --full` findings, skips, and any scanner errors.
 
 ### Failure Modes
 
-- Serena MCP unavailable → fall back to Grep for endpoint/symbol discovery
+- Symbol/endpoint discovery tooling unavailable → fall back to Grep for endpoint/symbol discovery
 - Endpoint list incomplete → grep for route definitions across all files using patterns appropriate to the project's framework
 - Data channel missed → cross-check against `config.security.dataChannels[]` to ensure all channels are covered
 
@@ -279,7 +286,15 @@ For each finding (Critical first, then High, Medium, Low):
 3. **Implement fix:** Minimum change to close the vulnerability.
 4. **Verify test passes.**
 5. **Run full suite:** No regressions.
-6. **Commit:** `security(scope): fix <finding-summary>`
+6. **Re-scan to confirm closure:** for findings the tools can verify (secrets, dependency CVEs, SAST/IaC patterns), re-run the shared scanner and confirm the finding is gone:
+   ```bash
+   python3 hooks/security_scan.py scan \
+     --project-root <PROJECT_ROOT> \
+     --project-type <capabilities.project_type> \
+     --full --json
+   ```
+   A remediated finding that still appears means the fix is incomplete. (A removed-but-already-committed secret still shows in history until rotated — rotation, not deletion, closes a real credential leak.)
+7. **Commit:** `security(scope): fix <finding-summary>`
 
 **Security-specific considerations:**
 

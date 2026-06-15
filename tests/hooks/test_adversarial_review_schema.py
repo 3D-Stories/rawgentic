@@ -12,8 +12,14 @@ import adversarial_review_lib as arl  # noqa: E402
 
 
 def _finding(**over):
+    # ambiguity_flag/ambiguity_reason are "required-but-nullable" in
+    # FINDINGS_SCHEMA (OpenAI strict structured-output requires every property in
+    # `required`, recursively — see #80). A realistic finding always carries them
+    # (null when not flagged), so the helper must too, or it diverges from the
+    # schema the strict jsonschema test enforces.
     base = {"severity": "High", "category": "security",
-            "description": "d", "recommendation": "r", "location": "S1"}
+            "description": "d", "recommendation": "r", "location": "S1",
+            "ambiguity_flag": False, "ambiguity_reason": None}
     base.update(over)
     return base
 
