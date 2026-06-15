@@ -535,7 +535,7 @@ output). See [run-records.md](docs/run-records.md).
 2. **Ambiguity Circuit Breaker** — STOP and ask user when findings conflict
 3. **Finding Auto-Application** — Apply ALL quality gate findings automatically
 4. **Workflow Resumption** — Checkpoint artifacts for mid-workflow recovery
-5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks). The size handler trims notes exceeding 800 lines to the most recent 200 on startup and each context compaction.
+5. **Session Notes** — Continuous documentation in `claude_docs/session_notes/<project>.md` (auto-created by setup/new-project, auto-registered by WAL hooks). The size handler trims notes exceeding 800 lines to the most recent 200 on startup and each context compaction. A per-project **handoff** (`claude_docs/session_notes/<project>.handoff.md`) is injected by `session-start` for the bound project on startup/resume/clear and surfaced as the write target — so handoffs stay scoped per project instead of sharing the workspace-level remember-plugin handoff (see [session-notes.md](docs/session-notes.md#per-project-handoff)).
 6. **Commit Convention** — `<type>(scope): <description>` matching branch prefix
 7. **Branch from default** — All branches from `origin/<defaultBranch>` (read from config)
 8. **Squash merge** — All PRs use `gh pr merge --squash`

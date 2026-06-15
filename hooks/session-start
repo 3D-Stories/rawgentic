@@ -465,6 +465,54 @@ if parts:
 _do_archive_context 2>/dev/null || true
 
 # =========================================================================
+# SECTION 2e: Per-Project Handoff (startup/resume/clear, bound sessions)
+# =========================================================================
+# rawgentic-workspace projects all share one CLAUDE_PROJECT_DIR (the workspace
+# root), so the generic remember plugin's workspace-level handoff
+# (.remember/remember.md) cannot separate them. Give each BOUND project its own
+# handoff at claude_docs/session_notes/<project>.handoff.md: inject it as a
+# briefing on the fresh-context events (startup/resume/clear, NOT compact —
+# compact preserves context) and surface it as the write target. It is
+# PERSISTENT (not consumed-on-read like the remember plugin), so a crash before
+# the next handoff is written never loses it; it is overwritten on next write.
+# Size is capped (RAWGENTIC_HANDOFF_MAX_CHARS, default 8000) to bound injection.
+_do_project_handoff() {
+    case "$EVENT_TYPE" in startup|resume|clear) ;; *) return 0 ;; esac
+    [ -n "$_registry_project" ] || return 0
+    [ -n "$CLAUDE_DOCS" ] || return 0
+
+    # Path-safety: the project name comes from the (locally-written) session
+    # registry and is used as a file-path component. Reject anything that isn't a
+    # plain project name — no path separators, no traversal, no leading dot/dash —
+    # so a corrupt/tampered registry can never read outside session_notes/.
+    case "$_registry_project" in
+        .*|-*|*..*|*[!A-Za-z0-9._-]*) return 0 ;;
+    esac
+
+    local handoff_file="$CLAUDE_DOCS/session_notes/${_registry_project}.handoff.md"
+    local note="this per-project handoff supersedes the workspace-level remember-plugin handoff"
+
+    # Fold the read into the guard so an existing-but-unreadable file falls
+    # through to the write-target hint rather than silently emitting nothing.
+    local content
+    if [ -f "$handoff_file" ] && [ -s "$handoff_file" ] && content=$(cat "$handoff_file" 2>/dev/null); then
+        local max="${RAWGENTIC_HANDOFF_MAX_CHARS:-8000}"
+        case "$max" in ''|*[!0-9]*) max=8000 ;; esac
+        if [ "${#content}" -gt "$max" ]; then
+            content="${content:0:$max}
+
+[handoff truncated to ${max} chars — full text in ${handoff_file}]"
+        fi
+        CONTEXT_PARTS+=("RAWGENTIC HANDOFF — ${_registry_project} (from ${handoff_file}; ${note} — overwrite this file with the next handoff):
+
+${content}")
+    else
+        CONTEXT_PARTS+=("RAWGENTIC HANDOFF — ${_registry_project}: no readable handoff yet. Write the next handoff for this project to \`${handoff_file}\` (per-project; ${note}).")
+    fi
+}
+_do_project_handoff 2>/dev/null || true
+
+# =========================================================================
 # SECTION 2c: Security Pattern Staleness Check (startup/resume only)
 # =========================================================================
 _do_security_staleness_check() {

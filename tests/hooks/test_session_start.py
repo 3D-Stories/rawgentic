@@ -483,3 +483,109 @@ class TestSizeHandler:
         content = notes_file.read_text()
         # Should be untrimmed (resume doesn't trigger size handler)
         assert content == large_content
+
+
+class TestPerProjectHandoff:
+    """Per-project handoff: rawgentic-workspace projects share one
+    CLAUDE_PROJECT_DIR, so the generic remember plugin can't separate their
+    handoffs. The session-start hook gives each BOUND project its own handoff at
+    claude_docs/session_notes/<project>.handoff.md — injected as a briefing and
+    surfaced as the write target. Persistent (not consumed-on-read)."""
+
+    def _bound(self):
+        return [{"session_id": "test-sess", "project": "testproj",
+                 "project_path": "./projects/testproj"}]
+
+    def _ctx(self, stdout):
+        out = parse_hook_output(stdout)
+        return out.get("hookSpecificOutput", {}).get("additionalContext", "") if out else ""
+
+    def test_injects_handoff_content_for_bound_project(self, make_workspace):
+        ws = make_workspace(registry_entries=self._bound())
+        (ws.notes_dir / "testproj.handoff.md").write_text("# Handoff\nNEXT: ship the thing")
+        stdout, _, rc = _run_session_start(ws.root)
+        assert rc == 0
+        assert "NEXT: ship the thing" in self._ctx(stdout)
+
+    def test_surfaces_write_target_even_with_no_handoff_yet(self, make_workspace):
+        ws = make_workspace(registry_entries=self._bound())
+        stdout, _, rc = _run_session_start(ws.root)
+        assert rc == 0
+        assert "testproj.handoff.md" in self._ctx(stdout)
+
+    def test_no_handoff_when_session_not_bound(self, make_workspace):
+        # registry binds a DIFFERENT session id → our session is unbound
+        ws = make_workspace(registry_entries=[
+            {"session_id": "someone-else", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        (ws.notes_dir / "testproj.handoff.md").write_text("SHOULD NOT APPEAR")
+        stdout, _, rc = _run_session_start(ws.root, session_id="test-sess")
+        ctx = self._ctx(stdout)
+        assert "SHOULD NOT APPEAR" not in ctx
+        assert "handoff.md" not in ctx
+
+    def test_not_injected_on_compact(self, make_workspace):
+        ws = make_workspace(registry_entries=self._bound())
+        (ws.notes_dir / "testproj.handoff.md").write_text("COMPACT-BODY-XYZ")
+        stdout, _, rc = _run_session_start(ws.root, event_type="compact")
+        assert "COMPACT-BODY-XYZ" not in self._ctx(stdout)
+
+    @pytest.mark.parametrize("event", ["startup", "resume", "clear"])
+    def test_injected_on_fresh_context_events(self, make_workspace, event):
+        ws = make_workspace(registry_entries=self._bound())
+        (ws.notes_dir / "testproj.handoff.md").write_text(f"BRIEF-{event}")
+        stdout, _, rc = _run_session_start(ws.root, event_type=event)
+        assert f"BRIEF-{event}" in self._ctx(stdout)
+
+    def test_handoff_is_persistent_not_consumed(self, make_workspace):
+        ws = make_workspace(registry_entries=self._bound())
+        f = ws.notes_dir / "testproj.handoff.md"
+        f.write_text("PERSIST ME")
+        _run_session_start(ws.root)
+        assert f.read_text() == "PERSIST ME"  # not cleared on read
+
+    def test_oversized_handoff_is_truncated(self, make_workspace):
+        ws = make_workspace(registry_entries=self._bound())
+        (ws.notes_dir / "testproj.handoff.md").write_text("X" * 5000)
+        stdout, _, rc = _run_session_start(
+            ws.root, env_override={"RAWGENTIC_HANDOFF_MAX_CHARS": "100"})
+        ctx = self._ctx(stdout)
+        assert "truncated" in ctx.lower()
+        assert "X" * 5000 not in ctx
+
+    def test_missing_handoff_file_no_crash(self, make_workspace):
+        ws = make_workspace(registry_entries=self._bound())
+        stdout, stderr, rc = _run_session_start(ws.root)
+        assert rc == 0
+        assert "testproj.handoff.md" in self._ctx(stdout)
+
+    def test_rejects_unsafe_project_name(self, make_workspace):
+        """A corrupt/tampered registry binding a path-traversal project name must
+        not become a file-path component — the handoff section is skipped, no
+        crash, nothing injected."""
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "../../etc",
+             "project_path": "x"}])
+        stdout, stderr, rc = _run_session_start(ws.root)
+        assert rc == 0
+        assert "RAWGENTIC HANDOFF" not in self._ctx(stdout)
+
+    def test_unreadable_handoff_falls_back_to_write_target(self, make_workspace):
+        """An existing-but-unreadable handoff must still surface the write target
+        (not silently emit nothing) and never leak/crash."""
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses file permissions")
+        ws = make_workspace(registry_entries=self._bound())
+        f = ws.notes_dir / "testproj.handoff.md"
+        f.write_text("SECRET UNREADABLE BODY")
+        f.chmod(0o000)
+        try:
+            # resume (not startup) → skips the startup-only claude_docs
+            # migration, isolating this to SECTION 2e's read path.
+            stdout, stderr, rc = _run_session_start(ws.root, event_type="resume")
+        finally:
+            f.chmod(0o644)
+        ctx = self._ctx(stdout)
+        assert rc == 0
+        assert "SECRET UNREADABLE BODY" not in ctx
+        assert "testproj.handoff.md" in ctx
