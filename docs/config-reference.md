@@ -523,19 +523,54 @@ removed when the session resumes.
 - `parse_metadata()` — extracts JSON from hidden comment blocks
 - `format_suspend_state()` / `write_suspend_state()` / `read_suspend_state()`
 
-It also exposes a CLI so workflow skills drive the QUESTION-suspend protocol
-from Bash without reconstructing fragile inline `python3 -c` snippets:
+It also exposes a CLI so workflow skills drive the headless protocol from Bash
+without reconstructing fragile inline `python3 -c` snippets.
+
+QUESTION-suspend side:
 - `new-id` — print a fresh question_id (uuid4)
 - `format-comment` — render the structured comment body to stdout
 - `write-suspend` — write the suspend state file (atomic, fail-closed on empty
   `--question-id`/`--comment-url`, non-positive `--issue`, or an out-of-range
   `--step`)
 
-The skill runs these as one atomic `set -euo pipefail` block so the generated
-`$QID` and captured `$COMMENT_URL` flow consistently into the comment and the
-suspend file. (The resume side keeps using `read_suspend_state()` /
-`parse_metadata()` directly; those gain CLI subcommands when the resume protocol
-is wired to use them.)
+Resume side:
+- `read-suspend` — read AND validate the suspend file in one step. Exit `0` with
+  the validated state JSON on stdout; exit `3` when the file is absent (benign
+  "no pending question"); exit `1` when the file parses but is unusable (empty
+  identifier, non-positive `issue`, missing `suspended_at`, bad `step`). The
+  distinct `3` vs `1` lets the caller proceed normally vs escalate.
+- `parse-reply` — extract an unambiguous option choice (e.g. `a`, `2`) from a
+  user's free-text reply. Exit `0` + the token when the whole reply IS a literal
+  option; exit `1` otherwise, so natural-language replies fall back to the
+  skill's own judgement / a clarification round rather than a wrong guess.
+
+The QUESTION-suspend commands run as one atomic `set -euo pipefail` block so the
+generated `$QID` and captured `$COMMENT_URL` flow consistently into the comment
+and the suspend file.
+
+### Resume Step Detection
+
+`hooks/resume_lib.py` encodes the WF2 resumption cascade — the priority-ordered
+rules that decide which of the 16 steps a fresh session resumes at. Applying that
+order by hand in prose is how a resume silently lands on the wrong step (redoing
+finished work, or skipping a quality gate), so the ordering lives in one tested
+function exposed as a CLI:
+
+- `detect-step` — print the step to resume at given the gathered facts. Takes
+  three composite-enum flags and two optional markers:
+  - `--pr-state {none,open,ready-to-merge,merged}` (`ready-to-merge` = CI green
+    OR project has no CI — the orchestrator collapses the "or no CI" rule while
+    gathering facts)
+  - `--branch-state {none,empty,changes,verified}`
+  - `--notes-state {none,issue-validated,design-doc}`
+  - `--markers-complete` / `--completion-gate-printed` (for the "all markers
+    present but the gate was never printed" case → prints `completion-gate`)
+
+  The orchestrator still *gathers* the facts (git/gh for the PR and branch,
+  session notes for design/issue/test status); `detect-step` just applies the
+  canonical precedence. An unrecognized state value exits non-zero (fail-closed)
+  rather than defaulting to Step 1, so a mistyped fact fails loudly instead of
+  restarting an in-flight workflow.
 
 ### Security Notes
 

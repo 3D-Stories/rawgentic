@@ -143,6 +143,35 @@ def parse_metadata(comment_body: str | None) -> dict | None:
         return None
 
 
+# --- User reply parsing (headless resume) ---
+
+# A confident, unambiguous option token: an optional "option" prefix, an optional
+# wrapping paren, a single letter OR a 1-99 number (NO leading zero, NO bare "0" —
+# options are 1-based, so "0"/"00"/"012" are not valid choices), and an optional
+# trailing ")" or ".". Used with ``fullmatch`` on the trimmed/lowercased reply so
+# the WHOLE reply must be just this token — a sentence ("go with the first one",
+# "I'll take a, thanks") does NOT match and is deferred to the skill's
+# natural-language judgement. No ``$`` anchor (it matches before a trailing
+# newline); the strip() handles surrounding whitespace/newlines instead.
+_REPLY_CHOICE_RE = re.compile(r"(?:option\s*:?\s*)?\(?([a-z]|[1-9][0-9]?)\)?[.)]?")
+
+
+def parse_reply_choice(reply: str | None) -> str | None:
+    """Extract an unambiguous option choice from a user's free-text reply.
+
+    Returns the normalized token (a lowercase letter like ``"a"`` or a number
+    like ``"2"``) only when the entire reply IS that token. Returns None for
+    empty input, natural language, or anything with more than one candidate — the
+    caller then falls back to prose interpretation / a clarification round.
+    Conservative by design: a wrong guess here would silently apply the wrong
+    decision, so "not sure" must mean "re-ask," never "pick something."
+    """
+    if not reply:
+        return None
+    m = _REPLY_CHOICE_RE.fullmatch(reply.strip().lower())
+    return m.group(1) if m else None
+
+
 # --- Suspend state management ---
 
 def format_suspend_state(
@@ -234,23 +263,64 @@ def _parse_step(step: str) -> int | str:
     return int(m.group(1)) if not m.group(2) else step
 
 
+def _validate_suspend_state(state) -> tuple[bool, str | None]:
+    """Check a loaded suspend state is not just JSON-valid but USABLE for resume.
+
+    Returns ``(True, None)`` or ``(False, reason)``. A file that parses but is
+    missing or has an empty/ill-typed identifier can never be matched to the
+    user's reply, so the resume path must treat it as a hard error rather than
+    silently behaving as "no pending question" (which would drop the user's
+    decision). This is the validation the original deferred CLI lacked.
+    """
+    if not isinstance(state, dict):
+        return False, "suspend state must be a JSON object"
+    for key in ("question_id", "comment_url", "suspended_at"):
+        val = state.get(key)
+        if not isinstance(val, str) or not val.strip():
+            return False, f"suspend state field {key!r} must be a non-empty string"
+    issue = state.get("issue")
+    # bool is an int subclass — exclude it explicitly so True/False can't pass.
+    if isinstance(issue, bool) or not isinstance(issue, int) or issue <= 0:
+        return False, "suspend state field 'issue' must be a positive integer"
+    if "step" not in state:
+        return False, "suspend state is missing 'step'"
+    try:
+        _parse_step(str(state["step"]))
+    except ValueError:
+        return False, f"suspend state field 'step' is invalid: {state['step']!r}"
+    # clarification_round may be absent in an old/hand-written file — that's not
+    # corruption, it defaults to 0; but if present it must be a sane count.
+    cr = state.get("clarification_round", 0)
+    if isinstance(cr, bool) or not isinstance(cr, int) or cr < 0:
+        return False, (
+            "suspend state field 'clarification_round' must be a "
+            "non-negative integer"
+        )
+    return True, None
+
+
 def main(argv=None) -> int:
     """CLI entry point for headless interaction helpers.
 
-    Subcommands (the QUESTION-suspend path the workflow skill drives from Bash):
-      new-id          print a fresh question_id (uuid4)
-      format-comment  render the structured GitHub comment body to stdout
-      write-suspend   write the suspend state file (atomic)
-
-    (The resume side — reading suspend state and parsing a reply — is handled by
-    the read_suspend_state / parse_metadata library functions; those gain CLI
-    subcommands when the resume protocol is wired to use them.)
+    Subcommands:
+      QUESTION-suspend path (drives the suspend side from Bash):
+        new-id          print a fresh question_id (uuid4)
+        format-comment  render the structured GitHub comment body to stdout
+        write-suspend   write the suspend state file (atomic)
+      Resume path (drives the resume side from Bash):
+        read-suspend    read + validate the suspend state file
+        parse-reply     extract an unambiguous option choice from a reply on stdin
+                        (optionally validated against --options)
 
     Exit codes:
       0  success
-      1  invalid input (empty/malformed identifier or step) OR a fail-closed
-         write error — surfaced as non-zero so a caller never mistakes a failed
-         or unmatchable write for success
+      1  invalid input (empty/malformed identifier or step), a fail-closed write
+         error, a suspend file that parses but is unusable, or a reply with no
+         unambiguous choice — surfaced as non-zero so a caller never mistakes a
+         failed/unmatchable result for success
+      3  read-suspend only: no suspend file present (benign "no pending question"
+         signal, kept distinct from the corrupt-file error so the caller can
+         proceed with normal resumption instead of escalating)
     """
     parser = argparse.ArgumentParser(prog="headless_interaction")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -275,6 +345,22 @@ def main(argv=None) -> int:
     p_sus.add_argument("--session-id", default="N/A", dest="session_id")
     p_sus.add_argument("--clarification-round", default=0, type=int,
                        dest="clarification_round")
+
+    p_read = sub.add_parser("read-suspend",
+                            help="read + validate the suspend state file")
+    p_read.add_argument("--path", required=True)
+
+    p_reply = sub.add_parser(
+        "parse-reply",
+        help="extract an unambiguous option choice from a user reply (read on "
+             "stdin so an arbitrary reply is never spliced into a command)",
+    )
+    p_reply.add_argument(
+        "--options", default=None,
+        help="comma-separated valid option tokens (e.g. 'a,b,c'); when given, the "
+             "matched choice MUST be one of them or the command fails closed, so "
+             "an out-of-range answer routes to clarification instead of resuming",
+    )
 
     args = parser.parse_args(argv)
 
@@ -334,6 +420,48 @@ def main(argv=None) -> int:
             print(f"failed to write suspend state: {exc}", file=sys.stderr)
             return 1
         print(args.path)
+        return 0
+
+    if args.cmd == "read-suspend":
+        if not os.path.exists(args.path):
+            # Missing file is benign — no pending question. A DISTINCT exit code
+            # (3) lets the caller proceed to normal resumption rather than
+            # escalating, while a parse/validation failure below stays exit 1.
+            print("no suspend file", file=sys.stderr)
+            return 3
+        state = read_suspend_state(args.path)
+        if state is None:
+            print("suspend file is unreadable or not valid JSON", file=sys.stderr)
+            return 1
+        ok, reason = _validate_suspend_state(state)
+        if not ok:
+            print(reason, file=sys.stderr)
+            return 1
+        # Materialize the clarification_round default so the printed JSON always
+        # carries it — a caller running `jq -r .clarification_round` must get 0,
+        # not the JSON null an absent key would yield.
+        state.setdefault("clarification_round", 0)
+        print(json.dumps(state, separators=(",", ":")))
+        return 0
+
+    if args.cmd == "parse-reply":
+        # Read the reply from stdin: an arbitrary GitHub comment (which may
+        # contain quotes, newlines, shell metacharacters) is never passed as a
+        # command-line literal the caller would have to escape.
+        choice = parse_reply_choice(sys.stdin.read())
+        if choice is None:
+            print("no unambiguous option choice in reply", file=sys.stderr)
+            return 1
+        if args.options is not None:
+            valid = {t.strip().lower() for t in args.options.split(",") if t.strip()}
+            if choice not in valid:
+                print(
+                    f"choice {choice!r} is not one of the offered options "
+                    f"{sorted(valid)}",
+                    file=sys.stderr,
+                )
+                return 1
+        print(choice)
         return 0
 
     return 1

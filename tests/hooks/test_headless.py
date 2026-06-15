@@ -917,7 +917,8 @@ class TestHeadlessCLISkillWiring:
     """
 
     SKILL_MD = Path(__file__).resolve().parent.parent.parent / "skills" / "implement-feature" / "SKILL.md"
-    WIRED_SUBCOMMANDS = ["new-id", "format-comment", "write-suspend"]
+    WIRED_SUBCOMMANDS = ["new-id", "format-comment", "write-suspend",
+                         "read-suspend", "parse-reply"]
 
     @pytest.mark.parametrize("subcommand", WIRED_SUBCOMMANDS)
     def test_skill_invokes_cli_subcommand(self, subcommand):
@@ -1004,6 +1005,179 @@ class TestHeadlessCLISkillWiring:
         assert '--comment-url "$COMMENT_URL"' in sus[0], (
             "the write-suspend command must reuse the captured $COMMENT_URL"
         )
+
+
+class TestParseReplyChoice:
+    """parse_reply_choice extracts an option choice from a user's free-text reply
+    on the headless resume path. It is deliberately conservative: it accepts only
+    an UNAMBIGUOUS literal option token (the common case, e.g. "a" or "(2)") and
+    defers everything else (natural language, multiple tokens, garbage) to the
+    skill's prose judgement / clarification round. Fail-closed: when in doubt,
+    return None so the orchestrator re-asks rather than guessing."""
+
+    @pytest.mark.parametrize("reply,expected", [
+        ("a", "a"),
+        ("A", "a"),
+        ("(a)", "a"),
+        ("a)", "a"),
+        ("a.", "a"),
+        (" a ", "a"),
+        ("option a", "a"),
+        ("Option B", "b"),
+        ("Option (b).", "b"),
+        ("1", "1"),
+        ("(2)", "2"),
+        ("option 3", "3"),
+        ("b\n", "b"),
+        ("99", "99"),     # syntactically valid; range is the CLI's job via --options
+    ])
+    def test_accepts_unambiguous_literal_choice(self, reply, expected):
+        from headless_interaction import parse_reply_choice
+        assert parse_reply_choice(reply) == expected
+
+    @pytest.mark.parametrize("reply", [
+        "",
+        "   ",
+        "go with the first one",
+        "proceed",
+        "approved",
+        "yes",
+        "I'll take a, thanks",
+        "a and b",
+        "ab",
+        "12a",
+        "123",
+        "option",
+        "0",       # 1-based options: a bare 0 is never a valid choice
+        "00",      # leading zero
+        "012",     # leading zero
+        None,
+    ])
+    def test_defers_ambiguous_or_natural_language(self, reply):
+        from headless_interaction import parse_reply_choice
+        assert parse_reply_choice(reply) is None
+
+
+def _valid_suspend(tmp_path, **overrides):
+    """Write a valid suspend file and return its path; overrides patch fields."""
+    from headless_interaction import format_suspend_state, write_suspend_state
+    state = format_suspend_state(
+        session_id="sess-1", issue=42, step=5,
+        question_id="abc-123", comment_url="https://example.com/c/1",
+    )
+    state.update(overrides)
+    path = tmp_path / "headless_suspend.json"
+    write_suspend_state(str(path), state)
+    return path
+
+
+class TestReadSuspendCLI:
+    """read-suspend reads + VALIDATES the suspend file in one step. A schema-valid
+    but unusable file (empty question_id, non-positive issue, missing timestamp)
+    must fail closed: a corrupt suspend file means a pending question was lost, so
+    resuming as if nothing were pending would silently drop the user's decision."""
+
+    def test_valid_file_prints_json(self, tmp_path):
+        path = _valid_suspend(tmp_path)
+        out, err, rc = _run_cli("read-suspend", "--path", str(path))
+        assert rc == 0, err
+        state = json.loads(out)
+        assert state["question_id"] == "abc-123"
+        assert state["issue"] == 42
+        assert state["comment_url"] == "https://example.com/c/1"
+        assert "suspended_at" in state
+
+    def test_missing_file_is_distinct_exit_3(self, tmp_path):
+        """Missing file = no pending question (benign): a distinct exit code lets
+        the orchestrator proceed to normal resumption, separate from a corrupt
+        file (exit 1) which must escalate."""
+        out, err, rc = _run_cli("read-suspend",
+                                "--path", str(tmp_path / "nope.json"))
+        assert rc == 3
+
+    def test_malformed_json_fails_closed(self, tmp_path):
+        path = tmp_path / "headless_suspend.json"
+        path.write_text("{not valid json")
+        _, _, rc = _run_cli("read-suspend", "--path", str(path))
+        assert rc == 1
+
+    @pytest.mark.parametrize("overrides", [
+        {"question_id": ""},
+        {"question_id": "   "},
+        {"comment_url": ""},
+        {"suspended_at": ""},
+        {"issue": 0},
+        {"issue": -1},
+        {"issue": "42"},      # wrong type (string, not int)
+        {"step": "0"},        # invalid step
+        {"step": "17"},       # out of range
+        {"clarification_round": -1},
+    ])
+    def test_schema_valid_but_unusable_fails_closed(self, tmp_path, overrides):
+        path = _valid_suspend(tmp_path, **overrides)
+        _, _, rc = _run_cli("read-suspend", "--path", str(path))
+        assert rc == 1
+
+    def test_missing_clarification_round_defaults_ok(self, tmp_path):
+        """clarification_round may be absent in an old/hand-written file; that is
+        not a corruption — it defaults to 0 and the read succeeds."""
+        from headless_interaction import write_suspend_state
+        state = {
+            "session_id": "s", "issue": 1, "step": 5,
+            "question_id": "q", "comment_url": "u",
+            "suspended_at": "2026-01-01T00:00:00Z",
+        }
+        path = tmp_path / "headless_suspend.json"
+        write_suspend_state(str(path), state)
+        out, err, rc = _run_cli("read-suspend", "--path", str(path))
+        assert rc == 0, err
+        # The default must be MATERIALIZED in the output JSON so a caller running
+        # `jq -r .clarification_round` gets 0, not the null an absent key yields.
+        assert json.loads(out)["clarification_round"] == 0
+
+
+class TestParseReplyCLI:
+    """parse-reply wraps parse_reply_choice for the skill's Bash resume block. The
+    reply is read on STDIN (not a CLI arg) so an arbitrary GitHub comment — which
+    may contain quotes/newlines/shell metacharacters — is never spliced into a
+    command the caller would have to escape."""
+
+    def test_literal_choice_on_stdin_prints_and_exits_zero(self):
+        out, err, rc = _run_cli("parse-reply", stdin="(a)")
+        assert rc == 0, err
+        assert out.strip() == "a"
+
+    def test_reply_with_single_quote_is_safe(self):
+        """The injection case from review: a reply containing a quote must not
+        break anything — it just doesn't match a literal token, so it defers."""
+        _, _, rc = _run_cli("parse-reply", stdin="I'll take a, thanks")
+        assert rc == 1
+
+    def test_ambiguous_reply_fails_so_prose_handles_it(self):
+        _, _, rc = _run_cli("parse-reply", stdin="go with the first one")
+        assert rc == 1
+
+    def test_empty_reply_fails(self):
+        _, _, rc = _run_cli("parse-reply", stdin="")
+        assert rc == 1
+
+    # --- --options membership (fail-closed against out-of-range answers) ---
+
+    def test_in_range_choice_passes_options_check(self):
+        out, err, rc = _run_cli("parse-reply", "--options", "a,b,c", stdin="b")
+        assert rc == 0, err
+        assert out.strip() == "b"
+
+    def test_out_of_range_choice_fails_closed(self):
+        """A syntactically-valid but un-offered choice (e.g. '99' when only a/b
+        were offered) must route to clarification, not resume."""
+        _, _, rc = _run_cli("parse-reply", "--options", "a,b", stdin="99")
+        assert rc == 1
+
+    def test_options_membership_is_case_insensitive(self):
+        out, _, rc = _run_cli("parse-reply", "--options", "A,B", stdin="a")
+        assert rc == 0
+        assert out.strip() == "a"
 
 
 class TestSkillCountCanary:
