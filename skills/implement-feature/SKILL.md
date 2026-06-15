@@ -302,34 +302,67 @@ pending headless interaction:
 
 0. **Load project configuration** per `<config-loading>` to populate `capabilities.repo`.
    If config-loading fails, post error comment and exit.
-1. Check if `claude_docs/headless_suspend.json` exists.
-2. If missing → no pending question. Proceed with normal resumption protocol.
-3. If present → read the suspend state:
-   - Extract `question_id`, `comment_url`, `issue`, `step`, `clarification_round`
-4. Fetch the user's reply from GitHub issue comments:
+   Each numbered step below runs as its own Bash call with your judgement in
+   between, so shell variables do NOT persist across them. Read the values once
+   from `read-suspend` (step 1) and substitute them as **literals** into the
+   later commands (the `ISSUE`, `SUSPENDED_AT`, `OPTION_TOKENS` placeholders).
+   The user's reply itself is never substituted — it stays inside a quoted shell
+   variable within step 2's single block.
+
+1. Read and validate the suspend state in one fail-closed step with `read-suspend`
+   (it handles existence, JSON parse, AND field validation — a file that parses
+   but is unusable must not be mistaken for "no pending question"). On success it
+   prints the validated state JSON to stdout:
    ```bash
-   gh api repos/${capabilities.repo}/issues/ISSUE/comments \
-     --jq '[.[] | select(.created_at > "SUSPEND_TIMESTAMP")] | map(select(.user.login != "github-actions[bot]")) | last.body // empty'
+   python3 hooks/headless_interaction.py read-suspend \
+     --path claude_docs/headless_suspend.json
+   rc=$?; echo "read-suspend exit: $rc"; exit "$rc"
    ```
-   Use the `suspended_at` timestamp from the suspend file to find comments posted AFTER the bot's question.
-5. If no reply found → the user hasn't responded yet. Post a reminder comment if
-   `clarification_round < 2`, otherwise post an error. Exit.
-6. If reply found → parse the reply for the user's choice:
-   - Look for option letters/numbers ("a", "1", "option a", etc.)
-   - Look for natural language ("proceed", "approved", "go with the first one")
-   - If unparseable → increment `clarification_round`, post a clarification comment,
-     re-add `rawgentic:ai-waiting`, update suspend file (update ONLY `clarification_round` —
-     do NOT update `suspended_at`, as the next resume must still see comments posted after
-     the original question), exit.
-7. If reply parsed successfully:
+   (the block re-exits with read-suspend's code so the exit status — not just text — carries the result.)
+   - exit `3` → no suspend file: no pending question. Proceed with the normal `<resumption-protocol>`.
+   - exit `1` (or any non-zero other than 3) → the suspend file exists but is corrupt/unusable; a pending question was lost. STOP and escalate (post an error comment, add `rawgentic:ai-error`, exit). Do NOT silently restart as if nothing were pending.
+   - exit `0` → read these fields from the printed JSON and carry them as literals into the steps below: `question_id`, `comment_url`, `issue`, `step`, `suspended_at`, `clarification_round` (always present — defaults to 0).
+2. Fetch the user's reply AND attempt a deterministic literal parse in ONE block,
+   keeping the reply in a quoted shell variable so an arbitrary comment (quotes,
+   newlines, shell metacharacters) is never spliced into a command. Substitute
+   the literal `issue` and `suspended_at` from step 1 for `ISSUE`/`SUSPENDED_AT`,
+   and `OPTION_TOKENS` with the comma-separated letters/numbers you offered (e.g.
+   `a,b`) so an out-of-range answer fails closed to clarification:
+   ```bash
+   set -uo pipefail   # NOT -e: we branch on the parse outcome below
+   # Check the fetch itself: an auth/network/rate-limit failure returns non-zero
+   # with empty output, which must NOT be mistaken for "the user hasn't replied".
+   if ! REPLY=$(gh api repos/${capabilities.repo}/issues/ISSUE/comments \
+     --jq '[.[] | select(.created_at > "SUSPENDED_AT")] | map(select(.user.login != "github-actions[bot]")) | last.body // empty'); then
+     echo "FETCH_FAILED"
+   elif [[ -z "$REPLY" ]]; then
+     echo "NO_REPLY"
+   else
+     printf 'REPLY: %s\n' "$REPLY"
+     printf '%s' "$REPLY" \
+       | python3 hooks/headless_interaction.py parse-reply --options "OPTION_TOKENS" \
+       && echo "CHOICE_OK" || echo "CHOICE_DEFERRED"
+   fi
+   ```
+3. Act on the block's output:
+   - `FETCH_FAILED` → could not read the issue comments (auth/network/rate-limit). This is a transient infrastructure failure, NOT a missing reply: do not post a no-response reminder. STOP and escalate (or retry) so the pending question is preserved.
+   - `NO_REPLY` → the user hasn't responded yet. Post a reminder comment if `clarification_round < 2`, otherwise post an error. Exit.
+   - `CHOICE_OK` → the token printed on the line just above it is an unambiguous, in-range option (e.g. `a`, `2`). Use it.
+   - `CHOICE_DEFERRED` → no in-range literal choice. Interpret the `REPLY:` text
+     yourself ("proceed"/"approved"/"go with the first one" → the obvious option).
+     If you still cannot resolve it confidently → increment `clarification_round`,
+     post a clarification comment, re-add `rawgentic:ai-waiting`, update the suspend
+     file (update ONLY `clarification_round` — do NOT update `suspended_at`, as the
+     next resume must still see comments posted after the original question), exit.
+4. Once the choice is resolved:
    - Delete `claude_docs/headless_suspend.json`
-   - Remove `rawgentic:ai-waiting` label (and `rawgentic:ai-error` if stale from prior run):
+   - Remove `rawgentic:ai-waiting` label (and `rawgentic:ai-error` if stale from prior run), substituting the literal `issue`:
      ```bash
      gh issue edit ISSUE --repo ${capabilities.repo} --remove-label "rawgentic:ai-waiting" --remove-label "rawgentic:ai-error" 2>/dev/null || true
      ```
-   - Inject the user's choice into the workflow context
-   - Continue with the normal resumption protocol (the session notes checkpoint
-     tells us exactly where to resume and what the pending decision was)
+   - Inject the user's choice into the workflow context and resume at the `step`
+     read from the suspend state (the session notes checkpoint provides the rest
+     of the context for that step).
 </headless-resume>
 
 <termination-rule>
@@ -355,19 +388,38 @@ global_loopback_total = 0
 </loop-back-budget>
 
 <resumption-protocol>
-WF2 may span multiple Claude Code sessions. On resumption, detect the current step:
+WF2 may span multiple Claude Code sessions. On resumption, detect the current step.
 
--1. **Headless resume check (FIRST):** If in headless mode, execute `<headless-resume>` before any other check. If a pending question was answered, inject the reply and resume at the step indicated in the session notes checkpoint. If no reply yet, exit cleanly.
-0. All step markers present but completion-gate not printed? -> Run completion-gate, then terminate.
-1. PR exists and is merged? -> Resume at Step 15 (post-deploy verification)
-2. PR exists and CI passed (or no CI)? -> Resume at Step 14 (merge + deploy)
-3. PR exists? -> Resume at Step 13 (CI verification)
-4. Feature branch has code changes with passing tests (or verified)? -> Resume at Step 11 (code review)
-5. Feature branch has code changes? -> Resume at Step 9 (implementation drift check)
-6. Feature branch exists but is empty? -> Resume at Step 8 (implementation)
-7. Design document exists in session notes? -> Resume at Step 5 (create plan)
-8. Issue is validated in session notes? -> Resume at Step 2 (analyze codebase)
-9. None of the above? -> Start from Step 1
+**Headless resume check (FIRST):** If in headless mode, execute `<headless-resume>` before anything below. If a pending question was answered, inject the reply and resume at the step indicated in the session notes checkpoint. If no reply yet, exit cleanly.
+
+**Otherwise, do NOT hand-apply the priority cascade.** The resume target is a strict ordered precedence (a merged PR resumes at post-deploy even if a stale design doc also exists), and applying that order by hand is how a resume silently lands on the wrong step. Gather the facts below — git/gh for the PR and branch, session notes for the design/issue/test status — then let `hooks/resume_lib.py detect-step` apply the canonical order. The ordering lives in one tested place so it can't drift from this prose:
+
+```bash
+set -euo pipefail
+# Map your gathered facts to these three states (the value names ARE the rules):
+#   --pr-state     none | open | ready-to-merge | merged
+#     merged         = PR is merged
+#     ready-to-merge = PR open AND (CI green OR project has no CI)   [-> Step 14]
+#     open           = PR open AND CI not yet green                  [-> Step 13]
+#     none           = no PR for this branch
+#   --branch-state none | empty | changes | verified
+#     verified = branch has commits AND tests pass/verified in notes [-> Step 11]
+#     changes  = branch has commits, tests not yet verified          [-> Step 9]
+#     empty    = branch exists with no commits                       [-> Step 8]
+#     none     = no feature branch
+#   --notes-state none | issue-validated | design-doc
+#     design-doc      = a design document is recorded in notes       [-> Step 5]
+#     issue-validated = issue validated in notes, no design yet       [-> Step 2]
+#     none            = neither                                       [-> Step 1]
+# MARKERS_COMPLETE = true|false  (true iff ALL step markers are present in notes)
+# GATE_PRINTED     = true|false  (true iff the completion gate was already printed)
+STEP=$(python3 hooks/resume_lib.py detect-step \
+  --pr-state PR_STATE --branch-state BRANCH_STATE --notes-state NOTES_STATE \
+  --markers-complete MARKERS_COMPLETE --completion-gate-printed GATE_PRINTED)
+echo "Resuming at: $STEP"
+```
+
+Pass the marker booleans on every call (don't leave the completion-gate rule to prose) — `detect-step` prints either a step number (1, 2, 5, 8, 9, 11, 13, 14, 15) or `completion-gate` (all markers present but the gate was never printed — run the completion gate, then terminate). Resume at the printed step. An unrecognized `--*-state` or non-`true`/`false` marker value exits non-zero rather than defaulting to Step 1, so a mistyped fact fails loudly instead of restarting in-flight work.
 
 Before context compacts, document in session notes:
 - Current step number and sub-step
