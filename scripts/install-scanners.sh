@@ -20,7 +20,7 @@
 set -u
 
 BIN_DIR="${RAWGENTIC_SCANNER_BIN:-$HOME/.local/bin}"
-TOOLS="gitleaks semgrep osv-scanner trivy pip-audit"
+ALL_TOOLS="gitleaks semgrep osv-scanner trivy pip-audit"
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -33,8 +33,18 @@ _arch() {
   esac
 }
 
-# --- check mode ------------------------------------------------------------
-if [ "${1:-}" = "--check" ]; then
+# --- arg parsing -----------------------------------------------------------
+# Usage: install-scanners.sh [--check] [tool ...]
+#   --check       report presence only (exit 1 if any in scope is missing)
+#   tool ...      restrict to these tools (default: all). Lets a caller (e.g. CI)
+#                 install only the scanners it actually exercises — trivy is a
+#                 ~167MB binary only needed for IaC/Docker scans, so a smoke run
+#                 that never touches IaC has no reason to pull it.
+CHECK=0
+if [ "${1:-}" = "--check" ]; then CHECK=1; shift; fi
+if [ "$#" -gt 0 ]; then TOOLS="$*"; else TOOLS="$ALL_TOOLS"; fi
+
+if [ "$CHECK" = "1" ]; then
   missing=0
   for t in $TOOLS; do
     if have "$t"; then echo "present: $t"; else echo "MISSING: $t"; missing=1; fi
