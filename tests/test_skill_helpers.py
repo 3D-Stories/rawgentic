@@ -46,6 +46,7 @@ EXPECTED_REFERENCES = {
     "parse_tasks": ["5"],
     "compute_risk_ratio": ["5"],
     "check_ratio_band": ["5"],
+    "validate_parallel_groups": ["5"],  # PR 3a: parallel_group disjointness validator
     "should_promote": ["8"],
     "format_promotion_note": ["8"],
     "scan_prior_commits_for_trigger": ["8"],
