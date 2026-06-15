@@ -262,6 +262,51 @@ Check the active project's entry for the `adversarialReview` field.
 
 ---
 
+## Step 2e: Security Scan Tooling
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs).
+
+WF2 Step 11.5 (pre-PR gate) and WF9 (`/rawgentic:security-audit`) both run
+`hooks/security_scan.py`, which shells out to real scanners (gitleaks, semgrep,
+osv-scanner, and — for Docker projects — trivy). The scanner degrades gracefully
+(a tool that isn't installed is a *visible skip*, never a silent "clean"), but a
+skipped scanner is a real coverage gap, so setup installs whatever is missing.
+
+**Installs are opt-OUT, not opt-in** — install by default; let the user decline.
+
+1. **Check the workspace opt-out.** Read `installScanners` from
+   `.rawgentic_workspace.json`. If it is `false`, the user previously opted out:
+   print "Security scanner install is opted out (`installScanners: false`)." and
+   skip the rest of this step.
+
+2. **Install missing scanners (default).** Unless opted out, run the idempotent
+   installer (best-effort; a tool already present is left alone, and one that
+   can't be auto-installed is reported, never fatal):
+   ```bash
+   bash <plugin-root>/scripts/install-scanners.sh
+   ```
+   In an interactive setup, tell the user this is happening and that they can
+   decline. If they decline, persist it: read `.rawgentic_workspace.json`, set
+   top-level `"installScanners": false`, write it back (and skip the install).
+   In **headless** mode do NOT install — just record the gap.
+
+3. **Report** which scanners are now present and which remain missing (so the
+   user knows the WF2/WF9 scan will skip those). The installer's `--check` mode
+   prints this:
+   ```bash
+   bash <plugin-root>/scripts/install-scanners.sh --check
+   ```
+   No `.rawgentic.json` field is written for *presence* — the scanner probes tool
+   presence at run time (exactly like WF5 probes for the Codex CLI). Only the
+   opt-out decision is persisted, and only to the workspace file.
+
+Note: the session-start hook also runs this installer once in the background the
+first time the plugin is added, honoring the same `RAWGENTIC_SKIP_SCANNER_INSTALL=1`
+/ `installScanners: false` opt-outs — so most projects already have the scanners
+by the time setup runs; this step is the explicit, user-visible confirmation.
+
+---
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to understand the full schema structure.

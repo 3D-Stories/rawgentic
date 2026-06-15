@@ -498,6 +498,53 @@ _do_security_staleness_check() {
 _do_security_staleness_check 2>/dev/null || true
 
 # =========================================================================
+# SECTION 2d: Security Scanner Bootstrap (startup only, opt-out, run-once)
+# =========================================================================
+# WF2 Step 11.5 + WF9 shell out to real scanners (gitleaks/semgrep/osv-scanner/
+# trivy). On the first startup after the plugin is added, install any that are
+# missing — in the BACKGROUND (this hook has a 10s budget, so it must
+# fire-and-forget) and exactly ONCE (marker-guarded). Installs are opt-OUT, never
+# opt-in: a user declines with RAWGENTIC_SKIP_SCANNER_INSTALL=1 or
+# "installScanners": false in .rawgentic_workspace.json. Skipped in headless/CI.
+_do_scanner_bootstrap() {
+    [ "$EVENT_TYPE" = "startup" ] || return 0
+    if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then return 0; fi
+    if [ "${RAWGENTIC_SKIP_SCANNER_INSTALL:-}" = "1" ]; then return 0; fi
+
+    # Workspace-level opt-out (lets /rawgentic:setup persist the choice).
+    if [ -n "$WORKSPACE_FILE" ] && command -v "$JQ" &>/dev/null; then
+        local _optout
+        _optout=$("$JQ" -r '.installScanners // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
+        if [ "$_optout" = "false" ]; then return 0; fi
+    fi
+
+    local installer="$SCRIPT_DIR/../scripts/install-scanners.sh"
+    [ -f "$installer" ] || return 0
+
+    local marker_dir="$HOME/.rawgentic"
+    local marker="$marker_dir/scanners-bootstrapped"
+    if [ -f "$marker" ]; then return 0; fi
+
+    # Marker is machine-global because the scanners are; write it FIRST so a slow
+    # or failed install never re-fires on every subsequent startup.
+    mkdir -p "$marker_dir" 2>/dev/null || true
+
+    # Nothing missing? Record and stay quiet.
+    if bash "$installer" --check >/dev/null 2>&1; then
+        : > "$marker" 2>/dev/null || true
+        return 0
+    fi
+
+    : > "$marker" 2>/dev/null || true
+    local logf="$marker_dir/scanner-install.log"
+    nohup bash "$installer" >"$logf" 2>&1 &
+    disown 2>/dev/null || true
+
+    CONTEXT_PARTS+=("rawgentic is installing the WF2/WF9 security scanners (gitleaks/semgrep/osv-scanner/trivy) in the background — log at ~/.rawgentic/scanner-install.log. This runs once. Opt out anytime with RAWGENTIC_SKIP_SCANNER_INSTALL=1 or \"installScanners\": false in .rawgentic_workspace.json.")
+}
+_do_scanner_bootstrap 2>/dev/null || true
+
+# =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
 # =========================================================================
 if [ -z "$WORKSPACE_FILE" ]; then
