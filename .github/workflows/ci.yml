@@ -17,8 +17,8 @@ jobs:
       - name: Verify jq available
         run: jq --version
 
-      - name: Install pytest
-        run: pip install pytest
+      - name: Install test deps
+        run: pip install pytest jsonschema
 
       - name: Run tests
         run: pytest tests/ -v
