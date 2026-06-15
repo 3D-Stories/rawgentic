@@ -153,6 +153,7 @@ Multiple projects can be active simultaneously. Use `/rawgentic:switch` to bind 
 **Key Features:**
 - Config-driven: TDD mode when tests configured, Implement-Verify mode when not
 - 4-agent code review (general, security, performance, test coverage)
+- Parallelized analysis (Step 2) and review (Step 4) phases for lower latency
 - Global loopback budget of 3 across all retry loops
 - Learning config: updates `.rawgentic.json` when new patterns discovered
 </details>

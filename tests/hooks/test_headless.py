@@ -8,6 +8,7 @@ Covers:
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -688,6 +689,322 @@ class TestWalSuspend:
 # =========================================================================
 # Canary test — SKILL.md count with <config-loading>
 # =========================================================================
+
+HEADLESS_CLI = HOOKS_DIR / "headless_interaction.py"
+
+
+def _run_cli(*args, stdin=None, timeout=10):
+    """Invoke headless_interaction.py as a CLI subprocess.
+
+    Exercises the real `__main__` path (argparse, exit codes, stdout/stderr)
+    exactly as the SKILL.md Bash blocks invoke it — calling main() in-process
+    would skip the integration seam we're trying to de-risk.
+    """
+    import subprocess
+    result = subprocess.run(
+        ["python3", str(HEADLESS_CLI), *args],
+        input=stdin, capture_output=True, text=True, timeout=timeout,
+    )
+    return result.stdout, result.stderr, result.returncode
+
+
+class TestHeadlessCLI:
+    """The CLI wrapper that replaces the fragile inline `python3 -c` blocks in
+    SKILL.md (PR 4). Each subcommand maps to an existing tested function; these
+    tests pin the command-line contract the workflow depends on."""
+
+    # --- new-id ---
+
+    def test_new_id_prints_uuid(self):
+        import uuid
+        out, err, rc = _run_cli("new-id")
+        assert rc == 0
+        # Must be a parseable UUID (round-trips through uuid.UUID)
+        parsed = uuid.UUID(out.strip())
+        assert str(parsed) == out.strip()
+
+    def test_new_id_is_unique_across_calls(self):
+        out1, _, _ = _run_cli("new-id")
+        out2, _, _ = _run_cli("new-id")
+        assert out1.strip() != out2.strip()
+
+    # --- format-comment ---
+
+    def test_format_comment_renders_and_roundtrips_metadata(self):
+        from headless_interaction import parse_metadata
+        out, err, rc = _run_cli(
+            "format-comment",
+            "--step", "5",
+            "--title", "Risk ratio halt",
+            "--context", "ratio exceeded threshold",
+            "--question", "How to proceed?",
+            "--option", "(a) decompose",
+            "--option", "(b) override",
+            "--type", "risk_ratio",
+            "--question-id", "abc-123",
+        )
+        assert rc == 0, err
+        assert "Risk ratio halt" in out
+        # parens are markdown-escaped by format_comment; assert on word portions
+        assert "decompose" in out
+        assert "override" in out
+        meta = parse_metadata(out)
+        assert meta == {"question_id": "abc-123", "step": 5, "type": "risk_ratio"}
+
+    def test_format_comment_numeric_step_is_int_in_metadata(self):
+        """A numeric --step must land in metadata as an int (resume routing
+        compares step values); only non-numeric sub-steps stay strings."""
+        from headless_interaction import parse_metadata
+        out, _, rc = _run_cli(
+            "format-comment", "--step", "5", "--title", "t",
+            "--context", "c", "--question", "q",
+            "--type", "x", "--question-id", "id1",
+        )
+        assert rc == 0
+        assert parse_metadata(out)["step"] == 5
+
+    def test_format_comment_substep_8a_stays_string(self):
+        from headless_interaction import parse_metadata
+        out, _, rc = _run_cli(
+            "format-comment", "--step", "8a", "--title", "t",
+            "--context", "c", "--question", "q",
+            "--type", "x", "--question-id", "id1",
+        )
+        assert rc == 0
+        assert "Step 8a" in out
+        assert parse_metadata(out)["step"] == "8a"
+
+    def test_format_comment_no_options_ok(self):
+        out, _, rc = _run_cli(
+            "format-comment", "--step", "14", "--title", "Deploy",
+            "--context", "c", "--question", "Confirm?",
+            "--type", "deploy_confirm", "--question-id", "id1",
+        )
+        assert rc == 0
+        assert "Deploy" in out
+
+    # --- write-suspend ---
+
+    def test_write_suspend_creates_file_with_fields(self, tmp_path):
+        from headless_interaction import read_suspend_state
+        path = tmp_path / "headless_suspend.json"
+        out, err, rc = _run_cli(
+            "write-suspend",
+            "--path", str(path),
+            "--issue", "42",
+            "--step", "5",
+            "--question-id", "abc-123",
+            "--comment-url", "https://example.com/c/1",
+        )
+        assert rc == 0, err
+        state = read_suspend_state(str(path))
+        assert state["issue"] == 42
+        assert state["step"] == 5
+        assert state["question_id"] == "abc-123"
+        assert state["comment_url"] == "https://example.com/c/1"
+        # defaults
+        assert state["session_id"] == "N/A"
+        assert state["clarification_round"] == 0
+        assert "suspended_at" in state
+
+    def test_write_suspend_honors_optional_flags(self, tmp_path):
+        from headless_interaction import read_suspend_state
+        path = tmp_path / "s.json"
+        _, err, rc = _run_cli(
+            "write-suspend", "--path", str(path), "--issue", "7",
+            "--step", "8a", "--question-id", "q", "--comment-url", "u",
+            "--session-id", "sess-1", "--clarification-round", "2",
+        )
+        assert rc == 0, err
+        state = read_suspend_state(str(path))
+        assert state["session_id"] == "sess-1"
+        assert state["clarification_round"] == 2
+        assert state["step"] == "8a"
+
+    def test_write_suspend_unwritable_path_fails_closed(self, tmp_path):
+        """A write failure must exit non-zero, not print a traceback a caller
+        could misread as success (mirrors adversarial_review_lib fail-closed)."""
+        bad = tmp_path / "no_such_dir" / "s.json"
+        _, _, rc = _run_cli(
+            "write-suspend", "--path", str(bad), "--issue", "1",
+            "--step", "5", "--question-id", "q", "--comment-url", "u",
+        )
+        assert rc != 0
+
+    def test_write_suspend_rejects_empty_question_id(self, tmp_path):
+        """argparse required=True only proves presence; an empty value (lost
+        shell var upstream) must fail closed, not write an unmatchable file."""
+        path = tmp_path / "s.json"
+        _, _, rc = _run_cli("write-suspend", "--path", str(path), "--issue", "1",
+                            "--step", "5", "--question-id", "", "--comment-url", "u")
+        assert rc != 0
+        assert not path.exists()
+
+    def test_write_suspend_rejects_blank_comment_url(self, tmp_path):
+        path = tmp_path / "s.json"
+        _, _, rc = _run_cli("write-suspend", "--path", str(path), "--issue", "1",
+                            "--step", "5", "--question-id", "q", "--comment-url", "   ")
+        assert rc != 0
+        assert not path.exists()
+
+    def test_write_suspend_rejects_nonpositive_issue(self, tmp_path):
+        path = tmp_path / "s.json"
+        _, _, rc = _run_cli("write-suspend", "--path", str(path), "--issue", "0",
+                            "--step", "5", "--question-id", "q", "--comment-url", "u")
+        assert rc != 0
+        assert not path.exists()
+
+    def test_format_comment_rejects_empty_question_id(self):
+        _, _, rc = _run_cli("format-comment", "--step", "5", "--title", "t",
+                            "--context", "c", "--question", "q", "--type", "x",
+                            "--question-id", "")
+        assert rc != 0
+
+    def test_question_id_invariant_comment_matches_suspend(self, tmp_path):
+        """The comment metadata and the suspend state must carry the SAME
+        question_id — the resume path matches the user's reply to the suspend by
+        this id, so a mismatch silently loses the reply."""
+        from headless_interaction import parse_metadata, read_suspend_state
+        qid = _run_cli("new-id")[0].strip()
+        comment = _run_cli("format-comment", "--step", "5", "--title", "t",
+                           "--context", "c", "--question", "q", "--type", "x",
+                           "--question-id", qid)[0]
+        path = tmp_path / "s.json"
+        _run_cli("write-suspend", "--path", str(path), "--issue", "5",
+                 "--step", "5", "--question-id", qid,
+                 "--comment-url", "https://example.com/c/1")
+        meta_qid = parse_metadata(comment)["question_id"]
+        state_qid = read_suspend_state(str(path))["question_id"]
+        assert meta_qid == state_qid == qid
+
+    # --- step validation (rejects malformed steps that would be unroutable) ---
+
+    @pytest.mark.parametrize("bad_step",
+                             ["", "0", "-1", " ", "5 ", "abc", "17", "99", "08",
+                              "16aa", "8ab", "5\n", "8a\n"])
+    def test_format_comment_rejects_invalid_step(self, bad_step):
+        """Rejects malformed steps AND well-formed-but-unroutable ones (>16,
+        leading zeros, multi-letter sub-steps, trailing-newline via $ anchor)."""
+        _, _, rc = _run_cli("format-comment", "--step", bad_step, "--title", "t",
+                            "--context", "c", "--question", "q", "--type", "x",
+                            "--question-id", "id1")
+        assert rc != 0
+
+    @pytest.mark.parametrize("bad_step", ["", "0", "-1", " ", "abc"])
+    def test_write_suspend_rejects_invalid_step(self, tmp_path, bad_step):
+        path = tmp_path / "s.json"
+        _, _, rc = _run_cli("write-suspend", "--path", str(path), "--issue", "1",
+                            "--step", bad_step, "--question-id", "q",
+                            "--comment-url", "u")
+        assert rc != 0
+        assert not path.exists()
+
+    @pytest.mark.parametrize("ok_step", ["5", "16", "8a", "11"])
+    def test_format_comment_accepts_valid_step(self, ok_step):
+        _, _, rc = _run_cli("format-comment", "--step", ok_step, "--title", "t",
+                            "--context", "c", "--question", "q", "--type", "x",
+                            "--question-id", "id1")
+        assert rc == 0
+
+
+class TestHeadlessCLISkillWiring:
+    """Drift guard (PR 4): the WF2 skill must drive the headless QUESTION-suspend
+    protocol through the CLI subcommands, not a reconstructed `python3 -c` block.
+
+    Catches two regressions:
+    - a subcommand is renamed in the CLI but the SKILL.md still calls the old name
+    - someone re-introduces the fragile inline-Python pattern this PR removed
+    """
+
+    SKILL_MD = Path(__file__).resolve().parent.parent.parent / "skills" / "implement-feature" / "SKILL.md"
+    WIRED_SUBCOMMANDS = ["new-id", "format-comment", "write-suspend"]
+
+    @pytest.mark.parametrize("subcommand", WIRED_SUBCOMMANDS)
+    def test_skill_invokes_cli_subcommand(self, subcommand):
+        content = self.SKILL_MD.read_text()
+        needle = f"headless_interaction.py {subcommand}"
+        assert needle in content, (
+            f"SKILL.md should invoke `{needle}` but doesn't. If you renamed the "
+            f"subcommand, update SKILL.md and this guard."
+        )
+
+    def test_skill_has_no_inline_python_headless_block(self):
+        """The inline `from headless_interaction import ...` (python3 -c) pattern
+        is the fragile footgun PR 4 replaced — it must not creep back."""
+        content = self.SKILL_MD.read_text()
+        assert "from headless_interaction import" not in content, (
+            "SKILL.md re-introduced the inline-Python headless block; use the "
+            "headless_interaction.py CLI subcommands instead."
+        )
+
+    def _headless_block(self):
+        content = self.SKILL_MD.read_text()
+        start = content.index("<headless-interaction>")
+        end = content.index("</headless-interaction>")
+        return content[start:end]
+
+    def _question_protocol_commands(self):
+        """Return the QUESTION-protocol bash block as logical command lines:
+        comment lines dropped, backslash-continuations joined. This lets a guard
+        assert against the ACTUAL command invocations rather than raw substring
+        counts that prose/comments could satisfy spuriously."""
+        block = self._headless_block()
+        fences = re.findall(r"```bash\n(.*?)```", block, re.DOTALL)
+        candidates = [f for f in fences if "format-comment" in f]
+        assert len(candidates) == 1, (
+            "expected exactly one QUESTION-protocol bash block containing format-comment"
+        )
+        raw = candidates[0]
+        lines = [ln for ln in raw.splitlines() if not ln.lstrip().startswith("#")]
+        logical, buf = [], ""
+        for ln in lines:
+            if ln.rstrip().endswith("\\"):
+                buf += ln.rstrip()[:-1] + " "
+            else:
+                buf += ln
+                logical.append(buf)
+                buf = ""
+        if buf:
+            logical.append(buf)
+        return logical
+
+    def test_question_protocol_is_atomic_and_fail_closed(self):
+        """PR4 review finding: the post/label/suspend sequence must be ONE atomic
+        bash block — shell variables ($QID/$COMMENT_BODY/$COMMENT_URL) do not
+        persist across separate Bash tool calls, so splitting them would post an
+        empty body or write a suspend file with empty identifiers. It must also
+        fail closed on a missing comment URL. Pin both so they can't regress."""
+        block = self._headless_block()
+        assert "set -euo pipefail" in block, (
+            "QUESTION protocol must run as one atomic, fail-fast bash block"
+        )
+        assert '[[ -n "$COMMENT_URL" ]]' in block, (
+            "QUESTION protocol must guard against an empty comment URL before suspend"
+        )
+
+    def test_skill_reuses_one_question_id_and_url(self):
+        """PR4 review finding: the question_id invariant only holds if the SAME
+        shell variable feeds both commands. Assert against the actual command
+        spans (not raw block counts) that `format-comment` and `write-suspend`
+        each bind `--question-id "$QID"`, and that `write-suspend` reuses the
+        captured `$COMMENT_URL` — a CLI-level round-trip test can't catch a
+        SKILL.md regression that swaps the variable."""
+        commands = self._question_protocol_commands()
+        assert any('QID=$(python3 hooks/headless_interaction.py new-id)' in c
+                   for c in commands), "QUESTION protocol must generate one $QID"
+        fmt = [c for c in commands if "format-comment" in c]
+        sus = [c for c in commands if "write-suspend" in c]
+        assert len(fmt) == 1 and '--question-id "$QID"' in fmt[0], (
+            'the format-comment command must pass --question-id "$QID"'
+        )
+        assert len(sus) == 1, "expected exactly one write-suspend command"
+        assert '--question-id "$QID"' in sus[0], (
+            'the write-suspend command must pass the SAME --question-id "$QID"'
+        )
+        assert '--comment-url "$COMMENT_URL"' in sus[0], (
+            "the write-suspend command must reuse the captured $COMMENT_URL"
+        )
+
 
 class TestSkillCountCanary:
     """Canary: assert the number of SKILL.md files with <config-loading> matches expected."""

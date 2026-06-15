@@ -194,63 +194,56 @@ ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 
 **QUESTION protocol (post → label → suspend → exit):**
 
-1. Generate a structured comment using `hooks/headless_interaction.py`:
+1. Run the post-label-suspend sequence as **ONE atomic Bash block**. This is
+   mandatory: `$QID`, `$COMMENT_BODY`, and `$COMMENT_URL` are generated/captured
+   at runtime and shell variables do NOT persist across separate Bash tool
+   calls — splitting these into multiple blocks would post with an empty body or
+   write a suspend file with an empty question_id/comment_url. `set -euo
+   pipefail` plus the explicit URL guard make the whole sequence fail closed.
+   The CLI replaces inline `python3 -c` (a stable flag contract avoids the
+   quoting/escaping bugs of reconstructing a snippet on every suspend).
    ```bash
-   python3 -c "
-   import sys; sys.path.insert(0, 'hooks')
-   from headless_interaction import format_comment, format_suspend_state, write_suspend_state
-   comment = format_comment(
-       step=STEP_NUMBER,
-       title='QUESTION_TITLE',
-       context='WHAT_THE_WORKFLOW_IS_DOING',
-       question='THE_DECISION_NEEDED',
-       options=['(a) Option 1', '(b) Option 2'],
-       metadata={'question_id': 'GENERATED_UUID', 'step': STEP_NUMBER, 'type': 'INTERACTION_TYPE'}
-   )
-   print(comment)
-   "
-   ```
+   set -euo pipefail
 
-2. Post the comment to the GitHub issue:
-   ```bash
-   gh issue comment ISSUE_NUMBER --repo ${capabilities.repo} --body "COMMENT_BODY"
-   ```
+   # Generate a question_id + the structured comment body.
+   QID=$(python3 hooks/headless_interaction.py new-id)
+   COMMENT_BODY=$(python3 hooks/headless_interaction.py format-comment \
+     --step STEP_NUMBER \
+     --title "QUESTION_TITLE" \
+     --context "WHAT_THE_WORKFLOW_IS_DOING" \
+     --question "THE_DECISION_NEEDED" \
+     --option "(a) Option 1" --option "(b) Option 2" \
+     --type "INTERACTION_TYPE" \
+     --question-id "$QID")
 
-3. Add the waiting label:
-   ```bash
-   gh issue edit ISSUE_NUMBER --repo ${capabilities.repo} --add-label "rawgentic:ai-waiting"
-   ```
-   Create the label first if it doesn't exist:
-   ```bash
+   # Post the comment; capture the URL. Fail closed if gh returns no URL.
+   COMMENT_URL=$(gh issue comment ISSUE_NUMBER --repo ${capabilities.repo} --body "$COMMENT_BODY")
+   [[ -n "$COMMENT_URL" ]] || { echo "no comment URL returned by gh" >&2; exit 1; }
+
+   # Add the waiting label (create it first if missing).
    gh label create "rawgentic:ai-waiting" --repo ${capabilities.repo} \
      --description "Rawgentic headless: waiting for user reply" --color "FBCA04" 2>/dev/null || true
-   ```
+   gh issue edit ISSUE_NUMBER --repo ${capabilities.repo} --add-label "rawgentic:ai-waiting"
 
-4. Write the suspend state file:
-   ```bash
-   python3 -c "
-   import sys; sys.path.insert(0, 'hooks')
-   from headless_interaction import format_suspend_state, write_suspend_state
-   state = format_suspend_state(
-       session_id='N/A',
-       issue=ISSUE_NUMBER,
-       step=STEP_NUMBER,
-       question_id='GENERATED_UUID',
-       comment_url='COMMENT_URL',
-       clarification_round=0
-   )
-   write_suspend_state('claude_docs/headless_suspend.json', state)
-   "
-   ```
+   # Write the suspend state, reusing the SAME $QID and $COMMENT_URL. write-suspend
+   # rejects empty --question-id/--comment-url, so a lost variable fails closed
+   # rather than writing an unmatchable suspend file.
+   python3 hooks/headless_interaction.py write-suspend \
+     --path claude_docs/headless_suspend.json \
+     --issue ISSUE_NUMBER \
+     --step STEP_NUMBER \
+     --question-id "$QID" \
+     --comment-url "$COMMENT_URL"
 
-5. Write a SUSPEND WAL entry:
-   ```bash
+   # Write the SUSPEND WAL entry.
    bash hooks/wal-suspend
    ```
+   On a clarification re-ask, also pass `--clarification-round N` to
+   `write-suspend` (defaults to `0`); `--session-id` defaults to `N/A`.
 
-6. Write a rich checkpoint to session notes (see <headless-checkpoint>).
+2. Write a rich checkpoint to session notes (see <headless-checkpoint>).
 
-7. **EXIT the workflow cleanly.** Do NOT continue to the next step. The orchestrator
+3. **EXIT the workflow cleanly.** Do NOT continue to the next step. The orchestrator
    will re-invoke the skill in a fresh session after the user replies.
 
 **ERROR protocol (post error → exit WITHOUT label):**
@@ -1021,6 +1014,19 @@ Code review result with filtered findings and fixes applied. Committed `.rawgent
    ```bash
    git add CLAUDE.md && git commit -m "docs: update CLAUDE.md with implementation insights (#<issue_number>)"
    ```
+
+2a. **Update README + docs (mandatory decision, not optional):** Before pushing,
+   explicitly decide whether this feature changed anything user-facing — new
+   commands/flags, changed behavior, new files, or new config. If so, update
+   `README.md` and the relevant `docs/` file(s) and commit them so they ship in
+   this PR:
+   ```bash
+   git add README.md docs/ && git commit -m "docs: update README/docs for #<issue_number>"
+   ```
+   If there is genuinely no user-facing change (pure internal refactor, or
+   groundwork that does nothing visible yet), state that explicitly in the PR
+   body's Summary rather than silently skipping. Stale or omitted docs are a
+   recurring miss — make the call deliberately every time.
 
 3. **Final push:**
    ```bash

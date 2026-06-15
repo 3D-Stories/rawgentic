@@ -523,6 +523,20 @@ removed when the session resumes.
 - `parse_metadata()` — extracts JSON from hidden comment blocks
 - `format_suspend_state()` / `write_suspend_state()` / `read_suspend_state()`
 
+It also exposes a CLI so workflow skills drive the QUESTION-suspend protocol
+from Bash without reconstructing fragile inline `python3 -c` snippets:
+- `new-id` — print a fresh question_id (uuid4)
+- `format-comment` — render the structured comment body to stdout
+- `write-suspend` — write the suspend state file (atomic, fail-closed on empty
+  `--question-id`/`--comment-url`, non-positive `--issue`, or an out-of-range
+  `--step`)
+
+The skill runs these as one atomic `set -euo pipefail` block so the generated
+`$QID` and captured `$COMMENT_URL` flow consistently into the comment and the
+suspend file. (The resume side keeps using `read_suspend_state()` /
+`parse_metadata()` directly; those gain CLI subcommands when the resume protocol
+is wired to use them.)
+
 ### Security Notes
 
 - `session_id` is excluded from public GitHub comments (kept only in the
