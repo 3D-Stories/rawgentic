@@ -59,11 +59,20 @@ esac
 
 # Fetch a GitHub release asset whose name matches a grep pattern, to BIN_DIR.
 # $1=owner/repo  $2=asset-name grep pattern  $3=output binary name
-# Handles a raw binary, a .tar.gz (extracts the binary), best-effort.
+# Handles a raw binary, a .tar.gz (extracts the binary), best-effort. Uses
+# GITHUB_TOKEN/GH_TOKEN when set so CI (whose shared IPs hit the unauthenticated
+# 60/hr API limit) doesn't intermittently 403.
 _gh_release_binary() {
   repo="$1"; pattern="$2"; out="$3"
-  url=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null \
-    | python3 -c "import sys,json,re
+  local tok api_json
+  tok="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+  if [ -n "$tok" ]; then
+    api_json=$(curl -fsSL -H "Authorization: Bearer $tok" \
+      "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null)
+  else
+    api_json=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null)
+  fi
+  url=$(printf '%s' "$api_json" | python3 -c "import sys,json,re
 try:
     d=json.load(sys.stdin)
 except Exception:
@@ -115,8 +124,10 @@ install_one() {
         && chmod +x "$BIN_DIR/osv-scanner" && have osv-scanner \
         && { echo "  installed osv-scanner"; return 0; } ;;
     gitleaks)
-      echo "installing gitleaks (release binary, ${os}_${arch})..."
-      _gh_release_binary "gitleaks/gitleaks" "${os}_${arch}\\.tar\\.gz$" "gitleaks" \
+      # gitleaks names the x86_64 asset "x64" (not "amd64"); arm64 stays arm64.
+      garch=$(echo "$arch" | sed 's/amd64/x64/')
+      echo "installing gitleaks (release binary, ${os}_${garch})..."
+      _gh_release_binary "gitleaks/gitleaks" "${os}_${garch}\\.tar\\.gz$" "gitleaks" \
         && { echo "  installed gitleaks"; return 0; } ;;
     trivy)
       echo "installing trivy (release binary, ${os}_${arch})..."

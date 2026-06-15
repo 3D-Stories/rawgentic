@@ -17,6 +17,21 @@ jobs:
       - name: Verify jq available
         run: jq --version
 
+      - name: Install security scanners
+        # Dogfoods scripts/install-scanners.sh on a clean box (so installer
+        # regressions surface here) and lets the real-tool smoke test actually
+        # run instead of skipping. Best-effort: a scanner that fails to install
+        # just makes its tests skip — it never fails CI. GITHUB_TOKEN avoids the
+        # unauthenticated release-API rate limit on shared runner IPs.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          bash scripts/install-scanners.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Report scanner presence
+        run: bash scripts/install-scanners.sh --check || true
+
       - name: Install test deps
         run: pip install pytest jsonschema
 
