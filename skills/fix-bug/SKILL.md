@@ -632,35 +632,80 @@ Deployment verified OR rollback needed.
 
 ### Instructions
 
+The completion summary is no longer hand-typed. Assemble a structured
+**run-record** and drive the summary through `hooks/work_summary.py` — the same
+Tier-2 telemetry substrate WF2 Step 16 uses (see `docs/run-records.md`), so WF3's
+completion output is consistent and every run is measurable, not just a sentence
+read once.
+
 1. Update `claude_docs/session_notes.md` with fix summary.
 2. Close GitHub issue with closing comment:
    ```bash
    gh issue close <number> --repo capabilities.repo \
      --comment "Fixed in PR #<pr-number>. Root cause: <brief>. Fix: <brief>."
    ```
-3. Present completion summary to user:
+3. **Assemble the run-record** and write it to `/tmp/wf3-run-record.json` (use the
+   Write tool, or a `cat > … <<'JSON'` heredoc). Every key below must be
+   **present**; "nullable" means `null` is an allowed value, NOT that the key may
+   be omitted (a dropped field is a telemetry gap). Counts are non-negative
+   integers and `resolved` may not exceed `findings`:
 
-```
-WF3 COMPLETE
-=============
+   ```json
+   {
+     "workflow": "fix-bug",
+     "workflow_version": "<.claude-plugin/plugin.json version>",
+     "issue": {"number": <bug issue #>, "type": "bug",
+               "complexity": "trivial|standard|complex|null"},
+     "changes": {"files_changed": N, "insertions": N|null, "deletions": N|null,
+                 "commits": N},
+     "tests": {"added": N, "passing": N|null, "total": N|null},
+     "gates": [
+       {"step": "4", "name": "Lightweight Reflect", "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path"},
+       {"step": "9", "name": "Code Review",         "findings": N, "resolved": N, "status": "..."}
+     ],
+     "security_scan": {"ran": false, "blocking_resolved": 0, "advisory": 0, "skipped": []},
+     "loop_backs": {"used": N, "budget": 2},
+     "outcome": {"pr_number": N|null, "pr_url": "<url>"|null, "merged": true|false|null,
+                 "ci": "passed|failed|not_configured|skipped",
+                 "deploy": "success|manual|failed|not_applicable"},
+     "extra": [
+       {"label": "Root Cause", "value": "<one-line root cause>"},
+       {"label": "Fix",        "value": "<one-line fix>"}
+     ],
+     "follow_ups": ["<any item requiring future attention>", ...]
+   }
+   ```
+   WF3 has **no** tool-based security scan (that is WF2 Step 11.5), so
+   `security_scan.ran` is `false` (with zero counts and empty `skipped`) and the
+   render shows "Security Scan: not run". `extra` carries the Root Cause / Fix
+   lines WF3 has always shown. WF3's loop-back budget is **2**. Each gate's
+   `step` must be distinct; conditional memorization happens *within* Step 9
+   (Code Review), so record any memorized insights in `follow_ups` rather than as
+   a second step-9 gate.
 
-GitHub Issue: #<number> (CLOSED)
-PR: <URL> (#<pr-number>)
+4. **Render + persist** (carry `activeProject.path` in as a literal — shell vars
+   do not persist across Bash tool calls):
+   ```bash
+   python3 hooks/work_summary.py summarize \
+     --record-file /tmp/wf3-run-record.json \
+     --project-root <activeProject.path>
+   rc=$?
+   ```
+   The tool's stdout **is** the "WF3 COMPLETE" summary — present it to the user
+   as-is (do not re-type it). It also appends the record to
+   `<activeProject.path>/docs/measurements/run_records.jsonl` (override with
+   `--store` or `$RAWGENTIC_RUN_RECORD_STORE`).
 
-Root Cause: <one-line summary>
-Fix: <one-line summary>
+5. **Handle the exit code:**
+   - `rc == 0`: record valid and persisted. Done.
+   - `rc == 1`: the summary still rendered (the user keeps it) but the record
+     FAILED validation and was **not** persisted — a telemetry gap. The stderr
+     lists the bad fields; fix `/tmp/wf3-run-record.json` and re-run. If it
+     genuinely can't be fixed, record the gap in session notes.
+   - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
-Quality Gates:
-- Reflect: [passed / looped back N times]
-- Code review: [2-agent focused review passed / N findings applied]
-- Memorized insights: [N insights saved / none]
-- CI: [passed]
-- Post-deploy: [verified]
-
-Loop-backs used: N / 2 (global cap)
-
-WF3 complete.
-```
+Log a marker in `claude_docs/session_notes.md`:
+`### WF3 Step 14: Completion summary + run-record — DONE (persisted: yes/no)`
 
 ### Failure Modes
 
@@ -676,6 +721,7 @@ Before declaring WF3 complete, verify ALL of the following. Print the checklist 
 5. [ ] Root cause documented in session notes
 6. [ ] Same-class bug scan completed
 7. [ ] E2E passed
+8. [ ] Completion summary rendered via `work_summary.py` (Step 14) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
 
 If ANY item fails, go back and complete it before declaring "WF3 complete."
 You may NOT output "WF3 complete" until all items pass.

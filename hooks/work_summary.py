@@ -189,6 +189,11 @@ def validate_record(record) -> list:
                         f"gates[{i}].status must be one of {sorted(GATE_STATUSES)}")
                 if _is_int(fnd) and _is_int(rsv) and rsv > fnd:
                     errs.append(f"gates[{i}].resolved cannot exceed gates[{i}].findings")
+            steps = [g.get("step") for g in gates if isinstance(g, dict)]
+            dups = sorted({s for s in steps if _is_str(s) and steps.count(s) > 1})
+            if dups:
+                errs.append(f"gates have duplicate step id(s) {dups}; each gate "
+                            f"must have a distinct step (Tier-2 keys on step)")
 
     if "security_scan" in record:
         sec = record["security_scan"]
@@ -204,6 +209,14 @@ def validate_record(record) -> list:
             skipped = sec.get("skipped")
             if not isinstance(skipped, list) or not all(_is_str(s) for s in skipped):
                 errs.append("security_scan.skipped must be a list of strings")
+            # A scan that did NOT run cannot have resolved findings or skipped
+            # scanners. render shows only "not run" for ran=false, so accepting
+            # nonzero data here would hide it AND be self-contradictory telemetry.
+            if sec.get("ran") is False and (
+                    sec.get("blocking_resolved") or sec.get("advisory")
+                    or sec.get("skipped")):
+                errs.append("security_scan: ran=false requires blocking_resolved=0, "
+                            "advisory=0, and empty skipped")
 
     if "loop_backs" in record:
         lb = record["loop_backs"]
@@ -242,6 +255,23 @@ def validate_record(record) -> list:
         if not isinstance(fu, list) or not all(_is_str(s) for s in fu):
             errs.append("follow_ups must be a list of strings")
 
+    # `extra` carries ordered, workflow-specific labeled lines (e.g. WF3's Root
+    # Cause / Fix) that ride along in the human render without bloating the
+    # uniform core schema that Tier-2 aggregates across workflows. Optional.
+    if "extra" in record:
+        ex = record["extra"]
+        if not isinstance(ex, list):
+            errs.append("extra must be a list of {label, value} objects")
+        else:
+            for i, item in enumerate(ex):
+                if not isinstance(item, dict):
+                    errs.append(f"extra[{i}] must be an object")
+                    continue
+                if not (_is_str(item.get("label")) and item["label"].strip()):
+                    errs.append(f"extra[{i}].label must be a non-empty string")
+                if not _is_str(item.get("value")):
+                    errs.append(f"extra[{i}].value must be a string")
+
     return errs
 
 
@@ -256,6 +286,7 @@ def normalize_record(record, *, now, schema_version=SCHEMA_VERSION) -> dict:
     out["schema_version"] = schema_version
     out["generated_at"] = now
     out.setdefault("follow_ups", [])
+    out.setdefault("extra", [])
     return out
 
 
@@ -275,6 +306,7 @@ def render_summary(record) -> str:
     lb = _as_dict(r.get("loop_backs"))
     out = _as_dict(r.get("outcome"))
     follow = _as_list(r.get("follow_ups"))
+    extra = _as_list(r.get("extra"))
 
     header = f"{label} COMPLETE"
     lines = [header, "=" * len(header), ""]
@@ -294,6 +326,13 @@ def render_summary(record) -> str:
     lines.append(
         f"GitHub Issue: #{inum} ({itype})" if inum is not None
         else f"GitHub Issue: (none, {itype})")
+    for item in extra:
+        if isinstance(item, dict):
+            label, value = item.get("label"), item.get("value")
+            # best-effort: skip a malformed pair rather than leak "None:" or a
+            # dict/list repr into the human summary (render runs unvalidated).
+            if isinstance(label, str) and isinstance(value, str):
+                lines.append(f"{label}: {value}")
     lines.append("")
 
     lines.append("Quality Gates:")
@@ -304,11 +343,16 @@ def render_summary(record) -> str:
             f"- Step {g.get('step', '?')} ({g.get('name', '?')}): "
             f"{g.get('findings', '?')} findings, {g.get('resolved', '?')} resolved "
             f"[{g.get('status', '?')}]")
-    skipped = [str(s) for s in _as_list(sec.get("skipped"))]
-    lines.append(
-        f"- Step 11.5 (Security Scan): {sec.get('blocking_resolved', '?')} "
-        f"blocking resolved / {sec.get('advisory', '?')} advisory / "
-        f"skipped: {', '.join(skipped) if skipped else 'none'}")
+    if sec.get("ran"):
+        skipped = [str(s) for s in _as_list(sec.get("skipped"))]
+        lines.append(
+            f"- Step 11.5 (Security Scan): {sec.get('blocking_resolved', '?')} "
+            f"blocking resolved / {sec.get('advisory', '?')} advisory / "
+            f"skipped: {', '.join(skipped) if skipped else 'none'}")
+    else:
+        # A workflow with no tool-based security scan (e.g. WF3) — don't
+        # reference a Step 11.5 that never happened.
+        lines.append("- Security Scan: not run")
     lines.append("")
 
     lines.append("Verification:")
