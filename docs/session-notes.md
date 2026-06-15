@@ -51,6 +51,34 @@ working on.
 The session ID is persisted to `claude_docs/.current_session_id` by both hooks
 so `/rawgentic:switch` can read it (env vars are not available to skills).
 
+## Per-Project Handoff
+
+A **handoff** is a short "where I left off / what's next" briefing carried from
+one session to the next. Because every rawgentic-workspace session shares one
+`CLAUDE_PROJECT_DIR` (the workspace root), the generic `remember` plugin's
+workspace-level handoff (`.remember/remember.md`) cannot distinguish the bound
+project — switching projects would mix handoffs. rawgentic therefore keeps a
+**per-bound-project** handoff:
+
+- **File:** `claude_docs/session_notes/<project>.handoff.md` (one per project,
+  alongside the project's `<project>.md` notes).
+- **Injected by:** the `session-start` hook (SECTION 2e) on the fresh-context
+  events — `startup`, `resume`, and `clear` — for the **bound** project only
+  (resolved from the session registry). Skipped on `compact` (which already
+  preserves context). The hook also surfaces the file as the **write target** so
+  the next handoff lands in the right place, superseding the workspace-level
+  remember-plugin handoff for rawgentic-bound sessions.
+- **Persistent, not consumed-on-read.** Unlike the remember plugin (which clears
+  its handoff after injecting it), this file is left in place and simply
+  overwritten when a new handoff is written — so a crash before the next handoff
+  is recorded never loses the briefing.
+- **Size cap:** injection is bounded by `RAWGENTIC_HANDOFF_MAX_CHARS` (default
+  `8000`); longer handoffs are truncated in-context with a pointer to the full
+  file.
+
+Write the next handoff by overwriting `claude_docs/session_notes/<project>.handoff.md`
+with the current state and next actions.
+
 ## Session Lifecycle
 
 1. **Session starts.** `session-start` fires, trims oversized notes (see
