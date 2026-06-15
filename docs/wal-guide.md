@@ -165,3 +165,22 @@ automatically. Manual fix: `jq -c '.' file.jsonl > /tmp/clean.jsonl && mv
 **WAL file growing large** -- Rotation triggers at >5000 lines during
 session-start. Between sessions the file is untouched; it will be pruned at
 the next startup.
+
+**Two concurrent sessions bind to each other's project** -- Project binding is
+keyed on the session id. Hooks read the authoritative `session_id` from their
+stdin payload, but LLM-driven skills (`/rawgentic:switch`, `/rawgentic:new-project`)
+have no stdin and must self-identify. They read the per-process env var
+`$CLAUDE_CODE_SESSION_ID` (unique per session, concurrency-safe). They must
+**not** rely on `claude_docs/.current_session_id`, which is shared and
+overwritten by every session on every prompt — under concurrent sessions it can
+name the wrong session, writing a registry line that hijacks another session's
+binding (and `tail -1` resolution makes it sticky). The shared file remains only
+as a fallback for Claude Code builds that don't set the env var. To unstick a
+mis-bound live session without reinstalling, append an authoritative line from
+**that** session's terminal:
+```bash
+P=<project>
+printf '{"session_id":"%s","project":"%s","project_path":"./projects/%s","started":"%s","cwd":"%s"}\n' \
+  "$CLAUDE_CODE_SESSION_ID" "$P" "$P" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PWD" \
+  >> claude_docs/session_registry.jsonl
+```
