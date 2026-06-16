@@ -13,6 +13,7 @@ as normal (STOP and wait for terminal input). If in headless mode, follow this p
 AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept auto-generated ACs for WF1-created issues
 - Step 1: Accept capabilities for WF1-created issues
+- Step 2: Live environment probe — skip SSH probes entirely; local exploration only (file reads, grep, git). A headless run makes no outbound SSH.
 - Step 5: Remove excess tasks on scope creep (document in session notes)
 - Step 5: Risk ratio `warn` band — log to session notes, continue
 - Step 2: Trivial-work suggestion — continue the full workflow (no interactive user for a "do it directly" hand-off)
@@ -20,6 +21,7 @@ AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 7: Always resume existing branch
 - Step 8: Rewrite failing RED test (up to 2 attempts)
 - Step 13: Wait up to 2x CI_MAX_WAIT before erroring
+- Step 14: Merge and deploy — skip the entire step; PR creation is the terminal deliverable (no merge, no deploy, no SSH). Proceed to Step 16. Step 15 (post-deploy) is likewise skipped.
 
 QUESTION interactions (post comment, suspend, exit):
 - Step 1: Confirm capabilities/ACs for manually-created issues
@@ -31,7 +33,8 @@ QUESTION interactions (post comment, suspend, exit):
 - Step 8a: Ambiguity circuit breaker on per-task review findings
 - Step 8a: Reviewer dispatch failure after retry (REVIEW_DISPATCH_FAILED)
 - Step 11: Unresolved deferred-High findings at exit gate
-- Step 14: Manual deploy confirmation
+  (Step 14's manual-deploy confirmation is NOT a headless QUESTION — Step 14 is
+  skipped entirely in headless mode; see the Step 14 AUTO-RESOLVE entry above.)
 
 ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 - Step 4: Design loop-back budget exhausted
