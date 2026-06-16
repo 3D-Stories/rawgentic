@@ -1,0 +1,23 @@
+[
+  {"query": "can you open a github issue for adding CSV export to the grocusave dashboard? users keep asking for it", "should_trigger": true},
+  {"query": "file a bug report — the price-zone scraper on grocusave silently skips stores when Algolia returns a 429, there's no retry", "should_trigger": true},
+  {"query": "I need an issue created for supporting dark mode in the chorestory web app, with proper acceptance criteria and scope", "should_trigger": true},
+  {"query": "we should track this properly: the websocket reconnect logic drops messages during the gap. make an issue in the repo for it", "should_trigger": true},
+  {"query": "write up a feature request for letting admins bulk-reassign chores and put it on github", "should_trigger": true},
+  {"query": "log an issue for the OAuth callback 500ing when the state cookie is missing — repro is reliable on staging", "should_trigger": true},
+  {"query": "create-issue for adding rate limiting to the public API endpoints", "should_trigger": true},
+  {"query": "the pdf export hangs on docs over 50 pages. i want to report it properly with repro steps and environment, open it on github", "should_trigger": true},
+  {"query": "can you draft and file a github issue requesting a /healthz endpoint for the sentinel service?", "should_trigger": true},
+  {"query": "i keep hitting this: the deploy action doesn't fail when the build only warns. open a tracked issue for fixing the gate", "should_trigger": true},
+
+  {"query": "implement issue #137 — the websocket support feature", "should_trigger": false},
+  {"query": "go ahead and fix the bug where the throttler drops connections under load", "should_trigger": false},
+  {"query": "list all open issues on grocusave labeled 'enhancement'", "should_trigger": false},
+  {"query": "leave a comment on github issue #88 summarizing the root cause we found", "should_trigger": false},
+  {"query": "write a PRD for the new family-sharing feature in chorestory", "should_trigger": false},
+  {"query": "create the next story for the sprint from the epic", "should_trigger": false},
+  {"query": "add a bug_report.md issue template to the .github folder", "should_trigger": false},
+  {"query": "set up a new rawgentic project for the windrose game", "should_trigger": false},
+  {"query": "which github issues are assigned to me across all the repos?", "should_trigger": false},
+  {"query": "review this PR and tell me whether it actually closes issue #42", "should_trigger": false}
+]

@@ -1,0 +1,55 @@
+{
+  "expectations": [
+    {
+      "text": "Run executed against mock gh (calls recorded)",
+      "passed": true,
+      "evidence": "5 gh call(s) logged"
+    },
+    {
+      "text": "Issue was actually created via gh (not simulated)",
+      "passed": true,
+      "evidence": "created-issue.json present"
+    },
+    {
+      "text": "Targets the config repo octo-eval/sentinel-app",
+      "passed": true,
+      "evidence": "created repo = 'octo-eval/sentinel-app'"
+    },
+    {
+      "text": "Conventional title feat(scope): ...",
+      "passed": true,
+      "evidence": "title = 'feat(server): add WebSocket support for realtime updates'"
+    },
+    {
+      "text": "At least 3 numbered acceptance criteria",
+      "passed": true,
+      "evidence": "6 numbered items in body"
+    },
+    {
+      "text": "Explicit in-scope AND out-of-scope sections",
+      "passed": true,
+      "evidence": "in-scope=True out-of-scope=True"
+    },
+    {
+      "text": "Risk assessment present",
+      "passed": true,
+      "evidence": "'risk' in body = True"
+    },
+    {
+      "text": "Deduplication search ran before creation",
+      "passed": true,
+      "evidence": "issue-list-with-search logged = True"
+    }
+  ],
+  "summary": {
+    "passed": 8,
+    "failed": 0,
+    "total": 8,
+    "pass_rate": 1.0
+  },
+  "timing": {
+    "total_tokens": 67239,
+    "duration_ms": 253092,
+    "total_duration_seconds": 253.1
+  }
+}

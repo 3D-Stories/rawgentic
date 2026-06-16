@@ -1,0 +1,440 @@
+{
+  "metadata": {
+    "skill_name": "rawgentic:create-issue",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-06-16T05:32:11Z",
+    "evals_run": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 8,
+        "failed": 0,
+        "total": 8,
+        "time_seconds": 253.1,
+        "tokens": 67239,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Issue was actually created via gh (not simulated)",
+          "passed": true,
+          "evidence": "created-issue.json present"
+        },
+        {
+          "text": "Targets the config repo octo-eval/sentinel-app",
+          "passed": true,
+          "evidence": "created repo = 'octo-eval/sentinel-app'"
+        },
+        {
+          "text": "Conventional title feat(scope): ...",
+          "passed": true,
+          "evidence": "title = 'feat(server): add WebSocket support for realtime updates'"
+        },
+        {
+          "text": "At least 3 numbered acceptance criteria",
+          "passed": true,
+          "evidence": "6 numbered items in body"
+        },
+        {
+          "text": "Explicit in-scope AND out-of-scope sections",
+          "passed": true,
+          "evidence": "in-scope=True out-of-scope=True"
+        },
+        {
+          "text": "Risk assessment present",
+          "passed": true,
+          "evidence": "'risk' in body = True"
+        },
+        {
+          "text": "Deduplication search ran before creation",
+          "passed": true,
+          "evidence": "issue-list-with-search logged = True"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 130.0,
+        "tokens": 56778,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Deduplication search ran",
+          "passed": true,
+          "evidence": "issue-list-with-search logged = True"
+        },
+        {
+          "text": "Existing matching issue (#42) surfaced to the user",
+          "passed": true,
+          "evidence": "'#42'/'42' in transcript = True"
+        },
+        {
+          "text": "Did not blindly create a duplicate",
+          "passed": true,
+          "evidence": "no new issue created (acknowledged existing) -- acceptable"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 267.6,
+        "tokens": 66217,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "3 gh call(s) logged"
+        },
+        {
+          "text": "Issue was actually created via gh (not simulated)",
+          "passed": true,
+          "evidence": "created-issue.json present"
+        },
+        {
+          "text": "Uses config repo, not the CLAUDE.md decoy",
+          "passed": true,
+          "evidence": "created repo = 'octo-eval/sentinel-app' (decoy was octo-eval/sentinel-legacy)"
+        },
+        {
+          "text": "Decoy repo never used in any gh call or issue body",
+          "passed": true,
+          "evidence": "decoy in calls=False, in body=False"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 7,
+        "failed": 0,
+        "total": 7,
+        "time_seconds": 329.9,
+        "tokens": 72870,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Issue was actually created via gh (not simulated)",
+          "passed": true,
+          "evidence": "created-issue.json present"
+        },
+        {
+          "text": "Conventional title fix(scope): ...",
+          "passed": true,
+          "evidence": "title = 'fix(server): keep idle WebSocket connections alive past 30s'"
+        },
+        {
+          "text": "Labeled 'bug'",
+          "passed": true,
+          "evidence": "labels = ['bug', 'server']"
+        },
+        {
+          "text": "Steps to reproduce present",
+          "passed": true,
+          "evidence": "'reproduc' in body = True"
+        },
+        {
+          "text": "Expected AND actual behavior documented",
+          "passed": true,
+          "evidence": "expected=True actual=True"
+        },
+        {
+          "text": "Environment details present",
+          "passed": true,
+          "evidence": "'environment' in body = True"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.875,
+        "passed": 7,
+        "failed": 1,
+        "total": 8,
+        "time_seconds": 91.5,
+        "tokens": 42293,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Issue was actually created via gh (not simulated)",
+          "passed": true,
+          "evidence": "created-issue.json present"
+        },
+        {
+          "text": "Targets the config repo octo-eval/sentinel-app",
+          "passed": true,
+          "evidence": "created repo = 'octo-eval/sentinel-app'"
+        },
+        {
+          "text": "Conventional title feat(scope): ...",
+          "passed": false,
+          "evidence": "title = 'Add WebSocket support for realtime updates in the API'"
+        },
+        {
+          "text": "At least 3 numbered acceptance criteria",
+          "passed": true,
+          "evidence": "5 numbered items in body"
+        },
+        {
+          "text": "Explicit in-scope AND out-of-scope sections",
+          "passed": true,
+          "evidence": "in-scope=True out-of-scope=True"
+        },
+        {
+          "text": "Risk assessment present",
+          "passed": true,
+          "evidence": "'risk' in body = True"
+        },
+        {
+          "text": "Deduplication search ran before creation",
+          "passed": true,
+          "evidence": "issue-list-with-search logged = True"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 99.1,
+        "tokens": 40980,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "4 gh call(s) logged"
+        },
+        {
+          "text": "Deduplication search ran",
+          "passed": true,
+          "evidence": "issue-list-with-search logged = True"
+        },
+        {
+          "text": "Existing matching issue (#42) surfaced to the user",
+          "passed": true,
+          "evidence": "'#42'/'42' in transcript = True"
+        },
+        {
+          "text": "Did not blindly create a duplicate",
+          "passed": true,
+          "evidence": "no new issue created (acknowledged existing) -- acceptable"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 124.4,
+        "tokens": 44246,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Issue was actually created via gh (not simulated)",
+          "passed": true,
+          "evidence": "created-issue.json present"
+        },
+        {
+          "text": "Uses config repo, not the CLAUDE.md decoy",
+          "passed": true,
+          "evidence": "created repo = 'octo-eval/sentinel-app' (decoy was octo-eval/sentinel-legacy)"
+        },
+        {
+          "text": "Decoy repo never used in any gh call or issue body",
+          "passed": true,
+          "evidence": "decoy in calls=False, in body=False"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 4,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 0.8571,
+        "passed": 6,
+        "failed": 1,
+        "total": 7,
+        "time_seconds": 106.5,
+        "tokens": 42607,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "7 gh call(s) logged"
+        },
+        {
+          "text": "Issue was actually created via gh (not simulated)",
+          "passed": true,
+          "evidence": "created-issue.json present"
+        },
+        {
+          "text": "Conventional title fix(scope): ...",
+          "passed": false,
+          "evidence": "title = 'WebSocket connections dropped after ~30s of inactivity instead of staying alive (staging)'"
+        },
+        {
+          "text": "Labeled 'bug'",
+          "passed": true,
+          "evidence": "labels = ['bug']"
+        },
+        {
+          "text": "Steps to reproduce present",
+          "passed": true,
+          "evidence": "'reproduc' in body = True"
+        },
+        {
+          "text": "Expected AND actual behavior documented",
+          "passed": true,
+          "evidence": "expected=True actual=True"
+        },
+        {
+          "text": "Environment details present",
+          "passed": true,
+          "evidence": "'environment' in body = True"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 245.15,
+        "stddev": 83.6845,
+        "min": 130.0,
+        "max": 329.9
+      },
+      "tokens": {
+        "mean": 65776.0,
+        "stddev": 6673.9216,
+        "min": 56778,
+        "max": 72870
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 0.933,
+        "stddev": 0.0777,
+        "min": 0.8571,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 105.375,
+        "stddev": 14.0844,
+        "min": 91.5,
+        "max": 124.4
+      },
+      "tokens": {
+        "mean": 42531.5,
+        "stddev": 1342.7888,
+        "min": 40980,
+        "max": 44246
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.07",
+      "time_seconds": "+139.8",
+      "tokens": "+23244"
+    }
+  },
+  "notes": []
+}

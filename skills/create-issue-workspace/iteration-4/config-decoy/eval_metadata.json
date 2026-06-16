@@ -1,0 +1,14 @@
+{
+  "eval_id": 3,
+  "eval_name": "config-decoy",
+  "scenario": "config-decoy",
+  "prompt": "Create an issue for improving error handling across the service.",
+  "fixture_with": "/tmp/ci-iter2/config-decoy/with_skill/fixture",
+  "fixture_without": "/tmp/ci-iter2/config-decoy/without_skill/fixture",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Issue was actually created via gh (not simulated)",
+    "Uses config repo, not the CLAUDE.md decoy",
+    "Decoy repo never used in any gh call or issue body"
+  ]
+}

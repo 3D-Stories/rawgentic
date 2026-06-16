@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Mock `gh` CLI for create-issue evals.
+
+Installed at <fixture>/bin/gh and invoked by absolute path (per-call shells in
+Claude Code don't persist PATH). It resolves its state dir from its own location
+so no env var is required:
+
+    <fixture>/bin/gh        -> this script
+    <fixture>/.gh-mock/     -> state (calls.log, created-issue.json, body, seed data)
+
+Why it exists: it makes eval runs EXECUTE for real instead of being narrated.
+Every invocation is appended to calls.log, and a real `gh issue create` writes
+created-issue.json + created-issue-body.md. The grader keys liveness on those
+files: a simulated walkthrough (or a run that hit the real gh) leaves them
+absent and FAILS the eval. That is the property the previous eval set lacked.
+
+Supported subcommands (enough for WF1 Step 1 dedup + Step 8 creation, and for a
+no-skill baseline doing the same): auth status, issue list, issue view,
+label list, label create, issue create. Anything else is logged and exits 0 so
+an unexpected call never aborts the run (it just won't satisfy an assertion).
+"""
+import json
+import os
+import sys
+import time
+
+FIXTURE = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+STATE = os.path.join(FIXTURE, ".gh-mock")
+os.makedirs(STATE, exist_ok=True)
+
+
+def log_call(argv):
+    with open(os.path.join(STATE, "calls.log"), "a") as f:
+        f.write(" ".join(argv) + "\n")
+
+
+def opt(args, name):
+    """Return the value following --name, or None."""
+    if name in args:
+        i = args.index(name)
+        if i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
+def read_seed(filename, default=""):
+    p = os.path.join(STATE, filename)
+    if os.path.exists(p):
+        with open(p) as f:
+            return f.read()
+    return default
+
+
+def main():
+    argv = sys.argv[1:]
+    log_call(["gh"] + argv)
+
+    # gh auth status
+    if argv[:2] == ["auth", "status"]:
+        sys.stderr.write(
+            "github.com\n  Logged in to github.com account eval-bot (oauth_token)\n"
+            "  Token scopes: 'repo', 'read:org'\n")
+        return 0
+
+    if not argv:
+        return 0
+
+    obj = argv[0]
+    sub = argv[1] if len(argv) > 1 else ""
+
+    # gh issue list --repo R --search Q [--state all] [--limit N]
+    if obj == "issue" and sub == "list":
+        # Seeded existing issues (TSV: number<TAB>title<TAB>labels<TAB>updated).
+        # Used by the dedup-hit scenario; empty otherwise (clean repo).
+        sys.stdout.write(read_seed("seed_issues.tsv", ""))
+        return 0
+
+    # gh issue view N --repo R ...
+    if obj == "issue" and sub == "view":
+        sys.stdout.write(read_seed("seed_issue_view.txt", "title:\tstub\nstate:\tOPEN\n"))
+        return 0
+
+    # gh label list --repo R
+    if obj == "label" and sub == "list":
+        sys.stdout.write(read_seed(
+            "labels.txt",
+            "bug\tSomething isn't working\td73a4a\n"
+            "enhancement\tNew feature or request\ta2eeef\n"))
+        return 0
+
+    # gh label create NAME --repo R --description D --color C
+    if obj == "label" and sub == "create":
+        name = argv[2] if len(argv) > 2 and not argv[2].startswith("-") else "unknown"
+        with open(os.path.join(STATE, "labels.txt"), "a") as f:
+            f.write(f"{name}\t(created by mock)\t000000\n")
+        sys.stdout.write(f"Created label '{name}'\n")
+        return 0
+
+    # gh issue create --repo R --title T --body-file F | --body B --label L ...
+    if obj == "issue" and sub == "create":
+        repo = opt(argv, "--repo") or "UNKNOWN"
+        title = opt(argv, "--title") or ""
+        body_file = opt(argv, "--body-file")
+        body = opt(argv, "--body")
+        if body_file and os.path.exists(body_file):
+            with open(body_file) as f:
+                body = f.read()
+        body = body or ""
+        # Collect every --label occurrence.
+        labels = [argv[i + 1] for i, a in enumerate(argv)
+                  if a == "--label" and i + 1 < len(argv)]
+
+        record = {
+            "repo": repo,
+            "title": title,
+            "labels": labels,
+            "body_len": len(body),
+            "ts": int(time.time()),
+        }
+        with open(os.path.join(STATE, "created-issue.json"), "w") as f:
+            json.dump(record, f, indent=2)
+        with open(os.path.join(STATE, "created-issue-body.md"), "w") as f:
+            f.write(body)
+        url = f"https://github.com/{repo}/issues/101"
+        sys.stdout.write(url + "\n")
+        return 0
+
+    # Unknown command: recorded above, succeed quietly.
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

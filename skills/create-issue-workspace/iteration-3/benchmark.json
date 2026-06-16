@@ -1,0 +1,273 @@
+{
+  "metadata": {
+    "skill_name": "rawgentic:create-issue",
+    "skill_path": "<path/to/skill>",
+    "executor_model": "<model-name>",
+    "analyzer_model": "<model-name>",
+    "timestamp": "2026-06-16T06:13:02Z",
+    "evals_run": [
+      1,
+      2,
+      3
+    ],
+    "runs_per_configuration": 3
+  },
+  "runs": [
+    {
+      "eval_id": 1,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 225.6,
+        "tokens": 68238,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "4 gh call(s) logged"
+        },
+        {
+          "text": "Detected that ConnectionThrottler / src/throttle.js does not exist in the codebase",
+          "passed": true,
+          "evidence": "transcript acknowledges the component is absent"
+        },
+        {
+          "text": "Referenced the real connection-handling code (server.js / errorHandler.js)",
+          "passed": true,
+          "evidence": "real-file reference present = True"
+        },
+        {
+          "text": "Final issue does not present the nonexistent component as real",
+          "passed": true,
+          "evidence": "issue does not present the fake component as real"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 318.8,
+        "tokens": 71713,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Surfaced the missing specifics (asked to clarify / flagged as under-specified)",
+          "passed": true,
+          "evidence": "transcript shows clarification/under-specification handling"
+        },
+        {
+          "text": "Did not fabricate specific performance targets the user never provided",
+          "passed": true,
+          "evidence": "no invented numeric targets"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "with_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 314.7,
+        "tokens": 71250,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "4 gh call(s) logged"
+        },
+        {
+          "text": "Recognized the request is too broad for a single issue (suggested splitting / scoping down)",
+          "passed": true,
+          "evidence": "transcript proposes splitting or narrowing"
+        },
+        {
+          "text": "Issue defines explicit out-of-scope / deferred boundaries",
+          "passed": true,
+          "evidence": "explicit scope boundary in body = True"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 1,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 4,
+        "failed": 0,
+        "total": 4,
+        "time_seconds": 113.5,
+        "tokens": 42236,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Detected that ConnectionThrottler / src/throttle.js does not exist in the codebase",
+          "passed": true,
+          "evidence": "transcript acknowledges the component is absent"
+        },
+        {
+          "text": "Referenced the real connection-handling code (server.js / errorHandler.js)",
+          "passed": true,
+          "evidence": "real-file reference present = True"
+        },
+        {
+          "text": "Final issue does not present the nonexistent component as real",
+          "passed": true,
+          "evidence": "issue does not present the fake component as real"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 2,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 92.8,
+        "tokens": 41909,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "4 gh call(s) logged"
+        },
+        {
+          "text": "Surfaced the missing specifics (asked to clarify / flagged as under-specified)",
+          "passed": true,
+          "evidence": "transcript shows clarification/under-specification handling"
+        },
+        {
+          "text": "Did not fabricate specific performance targets the user never provided",
+          "passed": true,
+          "evidence": "no invented numeric targets"
+        }
+      ],
+      "notes": []
+    },
+    {
+      "eval_id": 3,
+      "configuration": "without_skill",
+      "run_number": 1,
+      "result": {
+        "pass_rate": 1.0,
+        "passed": 3,
+        "failed": 0,
+        "total": 3,
+        "time_seconds": 110.9,
+        "tokens": 43324,
+        "tool_calls": 0,
+        "errors": 0
+      },
+      "expectations": [
+        {
+          "text": "Run executed against mock gh (calls recorded)",
+          "passed": true,
+          "evidence": "5 gh call(s) logged"
+        },
+        {
+          "text": "Recognized the request is too broad for a single issue (suggested splitting / scoping down)",
+          "passed": true,
+          "evidence": "transcript proposes splitting or narrowing"
+        },
+        {
+          "text": "Issue defines explicit out-of-scope / deferred boundaries",
+          "passed": true,
+          "evidence": "explicit scope boundary in body = True"
+        }
+      ],
+      "notes": []
+    }
+  ],
+  "run_summary": {
+    "with_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 286.3667,
+        "stddev": 52.6654,
+        "min": 225.6,
+        "max": 318.8
+      },
+      "tokens": {
+        "mean": 70400.3333,
+        "stddev": 1886.8907,
+        "min": 68238,
+        "max": 71713
+      }
+    },
+    "without_skill": {
+      "pass_rate": {
+        "mean": 1.0,
+        "stddev": 0.0,
+        "min": 1.0,
+        "max": 1.0
+      },
+      "time_seconds": {
+        "mean": 105.7333,
+        "stddev": 11.2758,
+        "min": 92.8,
+        "max": 113.5
+      },
+      "tokens": {
+        "mean": 42489.6667,
+        "stddev": 740.8214,
+        "min": 41909,
+        "max": 43324
+      }
+    },
+    "delta": {
+      "pass_rate": "+0.00",
+      "time_seconds": "+180.6",
+      "tokens": "+27911"
+    }
+  },
+  "notes": []
+}

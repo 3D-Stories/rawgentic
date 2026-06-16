@@ -1,0 +1,43 @@
+{
+  "skill_name": "rawgentic:create-issue",
+  "notes": "Iteration-3 'hard cases' -- the situations WF1 was built for. The user role is deliberately LOW-INFORMATION and uncooperative: it knows only the original prompt, will not invent missing detail, and (false-premise) does not know its premise is wrong. This prevents the agent-as-user from rescuing a run by supplying the very information the test is about. Assertions are necessarily more handling/transcript-based than iteration-2's hard artifact checks, so qualitative transcript review matters more here.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "false-premise",
+      "scenario": "false-premise",
+      "prompt": "There's a bug in the ConnectionThrottler class in src/throttle.js -- it drops valid connections under load. Please open an issue to fix it.",
+      "expected_output": "The run discovers that ConnectionThrottler / src/throttle.js does not exist in the codebase, surfaces that, and either declines to file against a phantom component or grounds the issue in the real connection-handling code (src/server.js handleConnection).",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Detected that ConnectionThrottler / src/throttle.js does not exist in the codebase",
+        "Referenced the real connection-handling code (server.js / errorHandler.js)",
+        "Final issue does not present the nonexistent component as real"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "vague-perf",
+      "scenario": "vague-perf",
+      "prompt": "The app feels slow sometimes. Can you make an issue about that?",
+      "expected_output": "The run surfaces that the request lacks specifics (asks what/where/how-measured or flags it under-specified) and does NOT fabricate concrete performance targets the user never gave.",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Surfaced the missing specifics (asked to clarify / flagged as under-specified)",
+        "Did not fabricate specific performance targets the user never provided"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "over-broad",
+      "scenario": "over-broad",
+      "prompt": "I want to completely overhaul error handling, logging, monitoring, retries, and alerting across the entire service. Open an issue for it.",
+      "expected_output": "The run recognizes the request spans many concerns and is too large for one issue -- it proposes splitting / narrowing, or files a bounded issue with explicit out-of-scope deferrals.",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Recognized the request is too broad for a single issue (suggested splitting / scoping down)",
+        "Issue defines explicit out-of-scope / deferred boundaries"
+      ]
+    }
+  ]
+}

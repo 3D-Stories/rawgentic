@@ -27,10 +27,13 @@ WORKFLOW_SKILLS = [
     "optimize-perf",
 ]
 
-# The 6 skills that invoke /reflexion:critique and need critiqueMethod check.
+# The skills that invoke /reflexion:critique and need critiqueMethod check.
+# NOTE: create-issue (WF1) was slimmed to a lean template+dedup+config helper and no
+# longer runs a multi-agent critique — its quality bar is applied inline while drafting
+# (see skills/create-issue/SKILL.md <quality-bar>). It keeps only the default-off
+# adversarial-review opt-in, covered by test_adversarial_review_registration.
 CRITIQUE_SKILLS = [
     "implement-feature",
-    "create-issue",
     "refactor",
     "security-audit",
     "optimize-perf",

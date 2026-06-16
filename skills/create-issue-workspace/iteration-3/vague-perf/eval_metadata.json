@@ -1,0 +1,11 @@
+{
+  "eval_id": 2,
+  "eval_name": "vague-perf",
+  "scenario": "vague-perf",
+  "prompt": "The app feels slow sometimes. Can you make an issue about that?",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Surfaced the missing specifics (asked to clarify / flagged as under-specified)",
+    "Did not fabricate specific performance targets the user never provided"
+  ]
+}

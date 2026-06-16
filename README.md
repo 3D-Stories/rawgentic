@@ -117,7 +117,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 
 | Add-on | Check | Install | What it unlocks — and what you lose without it |
 | ------ | ----- | ------- | ---------------------------------------------- |
-| **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF1/WF2/WF4/WF9/WF10 (`/reflexion:critique`) and the lightweight reflect in WF3. **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
+| **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF2/WF4/WF9/WF10 (`/reflexion:critique`) and the lightweight reflect in WF3. **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
 | **superpowers** plugin | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official` | Structured **brainstorming / design exploration** (WF12 test-strategy design; complex-feature design). **Without it:** rawgentic falls back to lighter inline brainstorming — still works, less rigorous. |
 | **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review** — an independent, *different-model* second opinion on a design/spec/plan/PRD via OpenAI: the WF5 `/rawgentic:adversarial-review` skill plus the opt-in cross-model gates in WF1–WF4. **Without it:** WF5 errors out and any opt-in cross-model gate is skipped; you still get the same-model reflexion critique. |
 | **Security scanners** (gitleaks, semgrep, osv-scanner, trivy) | `bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner trivy` | Auto-provisioned by `/rawgentic:setup` and once in the background on first plugin use (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1`) | The **tool-based security scan** in WF2 Step 11.5 and WF9 (secrets / dependency-CVE / SAST / IaC misconfig). **Without them:** each missing scanner is a *visible skip* (never a silent pass) — the LLM security review still runs, but concrete known-pattern issues (leaked tokens, CVE'd deps) aren't caught. |
@@ -147,7 +147,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 
 | Workflow                 | Skill                          | Steps | Use When                                            |
 | ------------------------ | ------------------------------ | ----- | --------------------------------------------------- |
-| Issue Creation           | `/rawgentic:create-issue`      | 9     | Planning a feature or reporting a bug               |
+| Issue Creation           | `/rawgentic:create-issue`      | 5     | Planning a feature or reporting a bug               |
 | Feature Implementation   | `/rawgentic:implement-feature` | 16    | Building a new feature from a GitHub issue          |
 | Bug Fix                  | `/rawgentic:fix-bug`           | 14    | Fixing a bug with reproduce-first TDD               |
 | Refactoring              | `/rawgentic:refactor`          | 14    | Restructuring code while preserving behavior        |
@@ -160,16 +160,20 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Test Suite Creation      | `/rawgentic:create-tests`      | 14    | Bootstrap tests or fill coverage gaps across any language |
 
 <details>
-<summary><strong>Issue Creation (WF1)</strong> — 9 steps</summary>
+<summary><strong>Issue Creation (WF1)</strong> — 5 steps</summary>
 
-**Purpose:** Create well-structured GitHub issues through brainstorming, multi-agent critique, and user review.
+**Purpose:** Turn a raw feature/bug request into a clean, template-conformant GitHub issue on the right repo. A lean helper — no multi-agent critique; its quality bar (no hallucinated components, no fabricated criteria, bound an over-broad ask) is applied inline while drafting.
 
 **Invocation:** `/rawgentic:create-issue Add dark mode support to the dashboard`
 
 **Key Features:**
-- 3-judge critique panel (architecture, security, maintainability)
-- Ambiguity circuit breaker — stops and asks when findings conflict
+- Config-driven repo targeting (issue lands on the project's configured repo)
 - Duplicate detection via `gh issue list` before creation
+- Codebase grounding — referenced components are verified to exist (Serena MCP or Grep/Glob)
+- Conventional `feat(scope):` / `fix(scope):` titles, template conformance
+- Optional default-off cross-model adversarial review of the draft (opt-in per project)
+
+> Slimmed from a 9-step multi-agent workflow after head-to-head evals showed a current model produces an equivalent issue without the critique pipeline, at ~⅓ the time/tokens (see `skills/create-issue-workspace/`).
 </details>
 
 <details>
@@ -696,6 +700,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v2.38.0 (2026-06-16)
+- **WF1 (Issue Creation) slimmed from 9 steps to 5.** Removed the 3-judge critique panel, the ambiguity circuit-breaker step, loop-back iterations, and per-run memorization; kept config-based repo targeting, dedup, template conformance, codebase grounding, conventional titles, and the default-off cross-model adversarial-review opt-in. The judges' value — no hallucinated components, no fabricated acceptance criteria, bound an over-broad ask — is now a `<quality-bar>` applied inline while drafting. Head-to-head evals across 7 scenarios (incl. false-premise, vague, and over-broad hard cases) showed a current model produces an equivalent issue without the critique pipeline, at ~⅓ the time/tokens; the slim skill stays ≥ baseline quality (100% vs 96%) while recovering the conventional-title edge. Eval harness, transcripts, and analysis in `skills/create-issue-workspace/`. WF1 is no longer in the `/reflexion:critique` set. Description rewritten (prescriptive + near-miss guardrails) and a stale Serena-only codebase-verification reference made tool-agnostic.
 
 ### v2.37.0 (2026-06-16)
 - **WF2 / WF3 now suggest doing *trivial* work directly instead of running the full workflow.** A new `<trivial-work-check>` fires at Step 2: when a change is genuinely trivial (~1 file, ≤~10 lines, mechanical, no new logic), the orchestrator pauses and recommends doing it directly (quick edit + targeted test + PR) versus continuing the full 16-/14-step workflow — a human-in-the-loop suggestion, never automatic routing and never a hard gate. Headless auto-continues the workflow. Distinct from the existing fast path (which makes *non-trivial-but-simple* changes cheaper *inside* the workflow). Reconciles `docs/consolidation.md` D2, whose "no penalty for a bigger workflow on a small task" rationale didn't hold once multi-agent reviews were in play.
