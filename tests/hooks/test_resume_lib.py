@@ -253,3 +253,85 @@ class TestResumeSkillWiring:
             "the prose cascade was re-introduced alongside detect-step; the CLI "
             "is the single source of truth for the resume ordering."
         )
+
+
+class TestDetectResumeStepHeadless:
+    """Issue #47 Layer A — headless mode is PR-terminal: it never merges or deploys.
+
+    User decision: headless `open` (CI not yet green) still resumes at Step 13 so
+    the bot can fix CI via a local push (not a remote op); `ready-to-merge` and
+    `merged` resume at Step 16 (merge/deploy/post-deploy are skipped). Non-headless
+    behavior is unchanged.
+    """
+
+    def test_headless_ready_to_merge_goes_to_completion(self):
+        from resume_lib import detect_resume_step
+        assert detect_resume_step("ready-to-merge", "none", "none", headless=True) == 16
+
+    def test_headless_merged_goes_to_completion(self):
+        from resume_lib import detect_resume_step
+        # PR was merged (by a human) — post-deploy verification is meaningless in
+        # headless since the bot performed no deploy. Go straight to completion.
+        assert detect_resume_step("merged", "none", "none", headless=True) == 16
+
+    def test_headless_open_still_monitors_ci(self):
+        from resume_lib import detect_resume_step
+        # CI not yet green: the bot may still push CI fixes (local op) → Step 13.
+        assert detect_resume_step("open", "none", "none", headless=True) == 13
+
+    def test_headless_no_pr_uses_normal_branch_cascade(self):
+        from resume_lib import detect_resume_step
+        assert detect_resume_step("none", "verified", "none", headless=True) == 11
+        assert detect_resume_step("none", "empty", "none", headless=True) == 8
+
+    def test_completion_gate_outranks_headless_remap(self):
+        from resume_lib import detect_resume_step
+        # A fully-marked run that never printed its gate → gate, regardless of headless.
+        assert detect_resume_step(
+            "ready-to-merge", "none", "none",
+            markers_complete=True, headless=True,
+        ) == "completion-gate"
+
+    def test_non_headless_unchanged(self):
+        from resume_lib import detect_resume_step
+        assert detect_resume_step("ready-to-merge", "none", "none", headless=False) == 14
+        assert detect_resume_step("merged", "none", "none", headless=False) == 15
+        assert detect_resume_step("open", "none", "none", headless=False) == 13
+
+    def test_headless_defaults_false(self):
+        from resume_lib import detect_resume_step
+        # Omitting headless keeps the original mapping.
+        assert detect_resume_step("ready-to-merge", "none", "none") == 14
+
+
+class TestHeadlessCLI:
+    def test_cli_headless_ready_to_merge_prints_16(self):
+        out, err, rc = _run_cli(
+            "detect-step", "--pr-state", "ready-to-merge",
+            "--branch-state", "none", "--notes-state", "none", "--headless", "true",
+        )
+        assert rc == 0, err
+        assert out.strip() == "16"
+
+    def test_cli_headless_open_prints_13(self):
+        out, err, rc = _run_cli(
+            "detect-step", "--pr-state", "open",
+            "--branch-state", "none", "--notes-state", "none", "--headless", "true",
+        )
+        assert rc == 0, err
+        assert out.strip() == "13"
+
+    def test_cli_headless_default_false(self):
+        out, _, rc = _run_cli(
+            "detect-step", "--pr-state", "ready-to-merge",
+            "--branch-state", "none", "--notes-state", "none",
+        )
+        assert rc == 0
+        assert out.strip() == "14"
+
+    def test_cli_headless_rejects_invalid_value(self):
+        _, _, rc = _run_cli(
+            "detect-step", "--pr-state", "open",
+            "--branch-state", "none", "--notes-state", "none", "--headless", "maybe",
+        )
+        assert rc != 0
