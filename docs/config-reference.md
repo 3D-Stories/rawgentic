@@ -398,7 +398,8 @@ its workspace entry. Default is `false` (safe — must opt in).
   "projects": [
     {
       "name": "my-app",
-      "headlessEnabled": true
+      "headlessEnabled": true,
+      "headlessAllowSSH": false
     }
   ]
 }
@@ -408,6 +409,20 @@ Set during `/rawgentic:setup` (Step 2c) or manually in `.rawgentic_workspace.jso
 When `RAWGENTIC_HEADLESS=1` is set but the project has `headlessEnabled: false`
 (or missing), the session-start hook blocks headless execution and the agent
 is instructed to exit immediately.
+
+**`headlessAllowSSH`** (boolean, default `false`) — the SSH escape hatch for the
+headless remote-ops guard (issue #47). In headless mode the bot's job ends at PR
+creation: no merge, no deploy, no outbound SSH. `wal-guard` therefore **blocks any
+`ssh`/`scp`/`rsync`/`sftp` invocation** while `RAWGENTIC_HEADLESS=1`, regardless of
+which workflow step (or skill) issues it, and **independent of `protectionLevel`**
+— it fires even under `sandbox`. Set `headlessAllowSSH: true` on the project's
+workspace entry to opt back in (for a project that genuinely needs headless remote
+ops). Resolution is **fail-closed**: anything other than a literal `true` (absent,
+`false`, null, non-boolean, unresolved project) leaves SSH blocked. Like
+`headlessEnabled`, this flag is **workspace-scoped** (it lives on the
+`.rawgentic_workspace.json` project entry, not in the project's `.rawgentic.json`),
+so all headless access-control stays in one place. `git`/`gh` (which use their own
+transport, not the `ssh` program) are never blocked.
 
 ### Environment Variable
 
@@ -491,6 +506,7 @@ per project at a time — the orchestrator enforces this via `ai-in-progress`.
 | Step 1 | Confirm capabilities (WF1-created) | AUTO-RESOLVE |
 | Step 1 | Confirm capabilities (manual issue) | QUESTION |
 | Step 2 | Components don't exist | QUESTION |
+| Step 2 | Live environment SSH probe | AUTO-RESOLVE (skip SSH probes, local exploration only) |
 | Step 3 | Design approach trade-offs | QUESTION |
 | Step 3 | Scope larger than estimated | QUESTION |
 | Step 4 | Ambiguity circuit breaker | QUESTION |
@@ -503,7 +519,9 @@ per project at a time — the orchestrator enforces this via `ai-in-progress`.
 | Step 8 | Periodic checkpoint | Checkpoint to session notes |
 | Step 11 | Design flaw + budget exhausted | ERROR |
 | Step 13 | CI timeout | AUTO-RESOLVE (2x wait, then ERROR) |
-| Step 14 | Manual deploy confirmation | QUESTION |
+| Step 14 | Merge and deploy | AUTO-RESOLVE (skip entire step — PR creation is the terminal deliverable; no merge, no deploy) |
+| Step 14 | Manual deploy confirmation | n/a — Step 14 is skipped in headless, so this is interactive-only |
+| Step 15 | Post-deploy verification | AUTO-RESOLVE (skip — no deployment occurred) |
 
 ### Structured Comment Format
 
@@ -592,6 +610,13 @@ function exposed as a CLI:
 - `bypassPermissions` mode removes human oversight — WAL guards and security
   guards are the last line of defense in headless mode. Guard blocks are
   logged to the WAL as `GUARD_BLOCK` entries for audit visibility.
+- **Headless = no outbound remote ops.** Beyond the per-step workflow guards,
+  `wal-guard` blocks every `ssh`/`scp`/`rsync`/`sftp` invocation while
+  `RAWGENTIC_HEADLESS=1` (unless `headlessAllowSSH: true`), so an ad-hoc SSH from
+  *any* step or skill is denied even if the skill author forgot to annotate it.
+  This is a hook-level safety net for the chorestory #309 class of incident (a
+  headless run SSHing to a live host); container-level SSH removal (arc #1) is the
+  complementary outer layer.
 - The `suspended_at` timestamp uses UTC wall-clock time. The orchestrator host
   and Claude host must have synchronized clocks (NTP) for the 24h TTL-based
   stale file cleanup to work correctly. Clock skew may cause premature or
