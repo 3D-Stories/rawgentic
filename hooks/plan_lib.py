@@ -100,6 +100,19 @@ WF2_HIGH_RISK_RATIO_HALT_PCT: Final[int] = _halt
 PER_TASK_REVIEW_CONFIDENCE_THRESHOLD: Final[float] = _CONFIDENCE_DEFAULT
 PER_TASK_REVIEW_AGENT_COUNT: Final[int] = 2
 
+# Severity-banded confidence thresholds for filtering reviewer findings (Step 8a
+# per-task review AND Step 11 pre-PR review). Critical/High get a lower bar
+# because hiding them is more dangerous than flagging a false-positive. This dict
+# is the SINGLE source of truth: SKILL.md's <constants> block mirrors it and a
+# drift-guard test (tests/hooks/test_plan_lib_deferral_writer.py) asserts the two
+# stay equal, so the "source of truth is hooks/plan_lib.py" claim cannot rot.
+SEVERITY_BANDED_CONFIDENCE: Final[dict[str, float]] = {
+    "Critical": 0.50,
+    "High": 0.65,
+    "Medium": 0.80,
+    "Low": 0.90,
+}
+
 
 # --- parse_tasks: plan markdown -> [Task] ---
 
@@ -528,6 +541,17 @@ def _read_review_log(log_path: str) -> list[dict]:
     return out
 
 
+def read_review_log(log_path: str) -> list[dict]:
+    """Public reader for the review log.
+
+    Step 11's pre-flight builds `reviewed_shas` (and re-reads verdicts) from the
+    log; this thin public alias of the internal reader means callers never reach
+    into a private symbol or re-implement JSONL parsing inline (the fragile
+    pattern the CLI extraction in #87-89 set out to remove).
+    """
+    return _read_review_log(log_path)
+
+
 def assert_review_coverage(
     log_path: str,
     plan_tasks: list[Task],
@@ -605,6 +629,90 @@ def assert_no_unresolved_high_deferrals(deferrals_path: str) -> tuple[bool, list
         if d.get("severity") in _HIGH_SEVERITIES and not _deferral_is_resolved(d)
     ]
     return (len(unresolved) == 0, unresolved)
+
+
+def _write_deferrals(deferrals_path: str, deferrals: list[dict]) -> None:
+    os.makedirs(os.path.dirname(deferrals_path) or ".", exist_ok=True)
+    with open(deferrals_path, "w", encoding="utf-8") as f:
+        _json.dump(deferrals, f, indent=2)
+
+
+def append_deferral(deferrals_path: str, finding: dict) -> dict:
+    """Create (or re-defer) a finding in the deferrals file (a JSON array).
+
+    `finding` MUST include 'finding_id' and 'severity'. severity is required
+    because the Step 11 exit gate (assert_no_unresolved_high_deferrals) keys on
+    it — a missing severity would let a deferred High/Critical fall out of the
+    re-presentation silently, the exact failure this writer exists to prevent.
+    Safe defaults make the entry well-formed for `_deferral_is_resolved`:
+    status='deferred', defer_count=1, concurrences=[], user_ack=False. If a
+    deferral with the same finding_id already exists this is a RE-deferral: its
+    defer_count is incremented (so a chain of >=2 correctly demands user_ack)
+    rather than appending a duplicate row. Returns the written entry.
+    """
+    fid = finding.get("finding_id")
+    if not fid:
+        raise ValueError("append_deferral: finding must include 'finding_id'")
+    if not finding.get("severity"):
+        raise ValueError(
+            "append_deferral: finding must include 'severity' "
+            "(the Step 11 exit gate keys on it)"
+        )
+    deferrals = get_deferred_findings(deferrals_path)
+    existing = next((d for d in deferrals if d.get("finding_id") == fid), None)
+    if existing is not None:
+        existing["defer_count"] = int(existing.get("defer_count", 1)) + 1
+        entry = existing
+    else:
+        entry = {
+            "finding_id": fid,
+            "severity": finding["severity"],
+            "status": finding.get("status", "deferred"),
+            "defer_count": int(finding.get("defer_count", 1)),
+            "originator_reviewer_slot": finding.get("originator_reviewer_slot"),
+            "concurrences": list(finding.get("concurrences", [])),
+            "user_ack": bool(finding.get("user_ack", False)),
+        }
+        # carry through any extra descriptive fields without clobbering the above
+        for k, v in finding.items():
+            entry.setdefault(k, v)
+        deferrals.append(entry)
+    _write_deferrals(deferrals_path, deferrals)
+    return entry
+
+
+def resolve_deferral(
+    deferrals_path: str,
+    finding_id: str,
+    *,
+    status: str | None = None,
+    add_concurrence: str | None = None,
+    user_ack: bool | None = None,
+) -> dict:
+    """Apply a resolution to an existing deferral and persist it.
+
+    Mirrors append_deferral for the OTHER write direction so Step 11 never
+    hand-authors the resolution fields whose semantics live in
+    `_deferral_is_resolved`: set status='applied', and/or record an independent
+    concurrence (a slot != originator_reviewer_slot), and/or set user_ack for a
+    defer_count>=2 chain. Raises ValueError if finding_id is not present.
+    """
+    deferrals = get_deferred_findings(deferrals_path)
+    target = next((d for d in deferrals if d.get("finding_id") == finding_id), None)
+    if target is None:
+        raise ValueError(
+            f"resolve_deferral: no deferral with finding_id {finding_id!r}"
+        )
+    if status is not None:
+        target["status"] = status
+    if add_concurrence is not None:
+        cons = target.setdefault("concurrences", [])
+        if add_concurrence not in cons:
+            cons.append(add_concurrence)
+    if user_ack is not None:
+        target["user_ack"] = bool(user_ack)
+    _write_deferrals(deferrals_path, deferrals)
+    return target
 
 
 # --- loop-back budget persistence ---
