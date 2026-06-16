@@ -72,6 +72,33 @@ if wal_find_workspace; then
 fi
 # If resolution failed, WAL_ACTIVE_WAL_GUARDS defaults to "ALL" (strict)
 
+# --- Headless blanket SSH block (issue #47, Layer B) ---
+# In headless mode (RAWGENTIC_HEADLESS=1) the bot's job ends at PR creation:
+# no merge, no deploy, no outbound SSH to remote hosts (chorestory #309 incident).
+# Block any ssh/scp/rsync/sftp invocation — caught via the tested matcher in
+# headless_ssh_guard.py — unless the project opts in via headlessAllowSSH:true.
+# This is INDEPENDENT of protectionLevel (headless safety is orthogonal — it
+# fires even under sandbox) and so runs before, and outside, _check_patterns.
+_check_headless_ssh() {
+  [ "${RAWGENTIC_HEADLESS:-}" = "1" ] || return 0
+  wal_resolve_headless_allow_ssh
+  [ "${WAL_HEADLESS_ALLOW_SSH:-false}" = "true" ] && return 0
+
+  local prog rc
+  # set -e safe: capture both stdout and the matcher's exit code.
+  #   rc 0 = blocked program found ($prog); rc 1 = clean; rc>=2 = matcher failed.
+  prog=$(printf '%s' "$COMMAND" | python3 "$SCRIPT_DIR/headless_ssh_guard.py" detect 2>/dev/null) && rc=0 || rc=$?
+  if [ "$rc" -eq 0 ] && [ -n "$prog" ]; then
+    deny "BLOCKED: SSH ($prog) is disabled in headless mode — headless runs end at PR creation, with no outbound remote access. Set \"headlessAllowSSH\": true on this project's entry in .rawgentic_workspace.json to override." "$COMMAND"
+  elif [ "$rc" -ge 2 ]; then
+    # Matcher unavailable (e.g. python missing) — fail closed with a coarse check.
+    if printf '%s' "$COMMAND" | grep -qiE '(^|[;&|]|[[:space:]])(ssh|scp|rsync|sftp)([[:space:]]|$)'; then
+      deny "BLOCKED: headless SSH check could not run (matcher unavailable); SSH-like command blocked (fail-closed). Set \"headlessAllowSSH\": true to override." "$COMMAND"
+    fi
+  fi
+}
+_check_headless_ssh
+
 # --- Data-driven blocked patterns ---
 # Each entry: regex -> human-readable reason -> grep flags
 # Patterns match anywhere in the command string (no word boundaries).

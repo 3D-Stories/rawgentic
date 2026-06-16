@@ -291,3 +291,30 @@ wal_resolve_protection_level() {
       ;;
   esac
 }
+
+# --- Headless SSH allow-flag resolution (issue #47) ---
+# In headless mode, outbound ssh/scp/rsync/sftp is blocked (the bot's job ends at
+# PR creation — no merge, no deploy, no remote access) UNLESS the project opts in.
+# The opt-in is WORKSPACE-scoped: a `headlessAllowSSH` boolean on the project's
+# .rawgentic_workspace.json entry, a sibling of headlessEnabled (all headless
+# access-control lives in the workspace file, not the committed project config).
+# FAIL-CLOSED: anything other than a literal boolean true (absent, false, null,
+# non-bool, unreadable workspace, unresolved project, jq error) → "false" (block).
+# Sets: WAL_HEADLESS_ALLOW_SSH ("true" | "false")
+# Requires: WAL_PROJECT and WAL_WORKSPACE_FILE (call after wal_resolve_project).
+wal_resolve_headless_allow_ssh() {
+  WAL_HEADLESS_ALLOW_SSH="false"
+  local ws_config="${WAL_WORKSPACE_FILE:-}"
+  [ -n "$ws_config" ] && [ -f "$ws_config" ] || return 0
+  [ -n "${WAL_PROJECT:-}" ] || return 0
+  local val
+  val=$("$WAL_JQ" -r --arg name "$WAL_PROJECT" '
+    (.projects // [])
+    | map(select(.name == $name))
+    | (.[0].headlessAllowSSH)
+    | if . == true then "true" else "false" end
+  ' "$ws_config" 2>/dev/null || true)
+  if [ "$val" = "true" ]; then
+    WAL_HEADLESS_ALLOW_SSH="true"
+  fi
+}

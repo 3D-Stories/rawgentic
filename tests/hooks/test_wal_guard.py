@@ -415,3 +415,102 @@ class TestAnsibleExcludePattern:
         command = "ansible-playbook -i prod-inventory site.yml"
         decision, _ = _run_guard_with_level(command, "strict", make_workspace)
         assert decision == "deny"
+
+
+# ── Issue #47: headless blanket SSH block ────────────────────────────────
+
+def _run_guard_headless(
+    command, make_workspace, *, allow_ssh=None, level="standard", headless=True,
+):
+    """Run wal-guard with a session bound to testproj, optionally headless.
+
+    `headlessAllowSSH` is WORKSPACE-scoped (sibling of headlessEnabled in the
+    project's .rawgentic_workspace.json entry), so it is set via the project
+    entry, NOT the per-project .rawgentic.json.
+    """
+    session_id = "headless-guard-sess"
+    entry = {
+        "name": "testproj", "path": "./projects/testproj",
+        "active": True, "configured": True,
+    }
+    if allow_ssh is not None:
+        entry["headlessAllowSSH"] = allow_ssh
+    ws = make_workspace(
+        projects=[entry],
+        registry_entries=[{
+            "session_id": session_id, "project": "testproj",
+            "project_path": "./projects/testproj",
+        }],
+        project_configs={"testproj": {"protectionLevel": level}},
+    )
+    payload = {
+        "tool_input": {"command": command}, "tool_name": "Bash",
+        "session_id": session_id, "tool_use_id": "tu-h", "cwd": str(ws.root),
+    }
+    env = {"RAWGENTIC_HEADLESS": "1"} if headless else None
+    stdout, _stderr, _rc = run_hook(HOOK, payload, cwd=ws.root, env_override=env)
+    parsed = parse_hook_output(stdout)
+    decision = "allow"
+    if parsed and parsed.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+        decision = "deny"
+    return decision, parsed
+
+
+class TestHeadlessSSHBlock:
+    """Issue #47 Layer B — blanket ssh/scp/rsync/sftp block in headless mode."""
+
+    SSH_CMDS = [
+        ("ssh", "ssh deploy@host"),
+        ("scp", "scp build.tar.gz host:/opt/app/"),
+        ("rsync", "rsync -av dist/ host:/var/www/"),
+        ("sftp", "sftp host"),
+        ("sudo ssh", "sudo ssh host"),
+        ("piped ssh", "tar czf - d | ssh host 'tar xzf -'"),
+    ]
+
+    @pytest.mark.parametrize("label,command", SSH_CMDS, ids=[c[0] for c in SSH_CMDS])
+    def test_headless_blocks_ssh_family_default(self, label, command, make_workspace):
+        # allowSSH absent → fail-closed default → block
+        decision, _ = _run_guard_headless(command, make_workspace)
+        assert decision == "deny", f"[{label}] headless should block: {command}"
+
+    def test_headless_blocks_even_under_sandbox(self, make_workspace):
+        # Independent of protectionLevel: sandbox normally allows everything.
+        decision, _ = _run_guard_headless("ssh deploy@host", make_workspace, level="sandbox")
+        assert decision == "deny"
+
+    def test_headless_allow_ssh_true_permits(self, make_workspace):
+        decision, _ = _run_guard_headless("ssh deploy@host", make_workspace, allow_ssh=True)
+        assert decision == "allow"
+
+    def test_headless_allow_ssh_false_blocks(self, make_workspace):
+        decision, _ = _run_guard_headless("ssh deploy@host", make_workspace, allow_ssh=False)
+        assert decision == "deny"
+
+    @pytest.mark.parametrize("command", [
+        "git push origin main",
+        "git push -u origin fix/47-headless-remote-ops-guard",
+        "gh pr create --title x --body y",
+    ])
+    def test_headless_allows_git_gh(self, command, make_workspace):
+        # git/gh use their own transport — must NOT be blocked even in headless.
+        decision, _ = _run_guard_headless(command, make_workspace)
+        assert decision == "allow", f"headless must not block: {command}"
+
+    def test_non_headless_does_not_block_plain_ssh(self, make_workspace):
+        # No RAWGENTIC_HEADLESS → headless block inactive; plain `ssh host` (no
+        # "prod") under standard is allowed by the existing prod patterns.
+        decision, _ = _run_guard_headless(
+            "ssh deploy@host", make_workspace, headless=False, level="standard")
+        assert decision == "allow"
+
+    def test_non_headless_still_blocks_ssh_prod(self, make_workspace):
+        # Existing behavior unchanged: ssh-to-prod blocked under strict.
+        decision, _ = _run_guard_headless(
+            "ssh deploy@prod-1", make_workspace, headless=False, level="strict")
+        assert decision == "deny"
+
+    def test_block_message_mentions_allowssh_override(self, make_workspace):
+        _, parsed = _run_guard_headless("ssh deploy@host", make_workspace)
+        reason = parsed["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "headlessAllowSSH" in reason
