@@ -30,7 +30,7 @@ REVIEW_CONFIDENCE_THRESHOLD = 0.80                    # Flat fallback (legacy, r
 PER_TASK_REVIEW_AGENT_COUNT = 2                        # Step 8a uses 2 inline reviewer roles
 # Severity-banded confidence applied to Step 8a AND Step 11 reviewer findings.
 # Critical and High get a lower bar because hiding them is more dangerous than
-# flagging false-positives. Banded values are documented in hooks/plan_lib.py.
+# flagging false-positives. These values mirror plan_lib.SEVERITY_BANDED_CONFIDENCE
 SEVERITY_BANDED_CONFIDENCE:
   Critical: 0.50
   High:     0.65
@@ -38,7 +38,9 @@ SEVERITY_BANDED_CONFIDENCE:
   Low:      0.90
 WF2_HIGH_RISK_RATIO_WARN_PCT = ${WF2_HIGH_RISK_RATIO_WARN_PCT:-30}   # warn band; clamped [5,95]
 WF2_HIGH_RISK_RATIO_HALT_PCT = ${WF2_HIGH_RISK_RATIO_HALT_PCT:-50}   # halt band; clamped [10,95]; halt>=warn+10
-# Source of truth for these constants is hooks/plan_lib.py (env-var freeze at import).
+# Source of truth in hooks/plan_lib.py: the SEVERITY_BANDED_CONFIDENCE dict (mirrored
+# above; a drift-guard test asserts the two stay equal) and WF2_HIGH_RISK_RATIO_*
+# (env-var freeze at import).
 </constants>
 
 <state-files>
@@ -50,7 +52,11 @@ P15 (tiered review) introduces session-scoped state files under
   Step 9 (coverage assertion) and Step 11 (already-reviewed SHA list).
 - `deferrals.json` — finding-level deferrals re-presented at Step 11. Each
   entry: `finding_id`, `severity`, `status`, `defer_count`,
-  `originator_reviewer_slot`, `concurrences`, `user_ack`.
+  `originator_reviewer_slot`, `concurrences`, `user_ack`. Written via
+  `plan_lib.append_deferral` (create/re-defer) and `plan_lib.resolve_deferral`
+  (apply a resolution) — do NOT hand-author this JSON; the resolution semantics
+  live in `plan_lib._deferral_is_resolved`, so a mistyped field would silently
+  drop a deferred High/Critical from the Step 11 exit gate.
 - `loopback_counters.json` — per-source loop-back counters (`design`, `tdd`,
   `review_design`, `review`) plus `total`. Persisted across sessions via
   `plan_lib.consume_loopback`.
@@ -953,10 +959,10 @@ Promotion at the last task still triggers Step 8a (and any retroactive scan) bef
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (inline-defined prompt roles, same pattern as Step 11 — NOT registered subagents):
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
-3. **Filter findings using `SEVERITY_BANDED_CONFIDENCE`** (Critical ≥0.50, High ≥0.65, Medium ≥0.80, Low ≥0.90). Count dropped findings.
+3. **Filter findings using the `SEVERITY_BANDED_CONFIDENCE` thresholds** (values in `<constants>`; canonical in `plan_lib.SEVERITY_BANDED_CONFIDENCE`). Count dropped findings.
 4. **Triage:**
    - **Critical:** must fix before next task (block).
-   - **High:** fix before next task unless deferred-with-rationale. A deferral is persisted to `claude_docs/.wf2-state/<issue>/deferrals.json` and **must be re-presented to Step 11** for resolution.
+   - **High:** fix before next task unless deferred-with-rationale. Persist the deferral via `plan_lib.append_deferral(<deferrals_path>, finding)` (the `finding` needs at least `finding_id`, `severity`, `originator_reviewer_slot`) — it **must be re-presented to Step 11** for resolution.
    - **Medium/Low:** advisory; log to review log only.
 5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
 6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
@@ -1053,13 +1059,13 @@ Updated CLAUDE.md (if insights memorized) or no output.
    git diff ${capabilities.default_branch}..HEAD
    ```
 
-   **P15 pre-flight (when Step 8a fired any reviews):** read the review log via `plan_lib.append_review_log`'s companion reader and read deferrals via `plan_lib.get_deferred_findings(<deferrals_path>)`. Build:
+   **P15 pre-flight (when Step 8a fired any reviews):** read the review log via `plan_lib.read_review_log(<log_path>)` and read deferrals via `plan_lib.get_deferred_findings(<deferrals_path>)`. Build:
    - `reviewed_shas` — SHAs that already went through Step 8a
    - `deferred_findings` — the verbatim list of deferred-High findings to re-present
 
    Pass both to each reviewer as context:
    - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
-   - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator."
+   - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator." Record each resolution via `plan_lib.resolve_deferral(<deferrals_path>, <finding_id>, status='applied'` / `add_concurrence=<other_slot>` / `user_ack=True)` — do not edit the deferrals JSON by hand.
 
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
 
@@ -1081,7 +1087,7 @@ Updated CLAUDE.md (if insights memorized) or no output.
    - Are there security implications?
    - Is the change backward-compatible?
 
-3. **Filter by confidence:** Apply the severity-banded thresholds from `SEVERITY_BANDED_CONFIDENCE` (Critical ≥0.50, High ≥0.65, Medium ≥0.80, Low ≥0.90). The flat 0.80 in `REVIEW_CONFIDENCE_THRESHOLD` is a legacy fallback; the banded values are authoritative. Log dropped-finding counts.
+3. **Filter by confidence:** Apply the severity-banded thresholds from `SEVERITY_BANDED_CONFIDENCE` (values in `<constants>`; canonical in `plan_lib.SEVERITY_BANDED_CONFIDENCE`). The flat 0.80 in `REVIEW_CONFIDENCE_THRESHOLD` is a legacy fallback; the banded values are authoritative. Log dropped-finding counts.
 
 4. **Severity-based fix workflow:**
    - Critical/High: fix before PR
