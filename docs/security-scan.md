@@ -42,6 +42,31 @@ so a lower setting only makes the gate stricter (e.g. `medium` blocks
 medium/high/critical) and can never accidentally let a high/critical through. An
 empty or unrecognized value falls back to the fail-closed default.
 
+## Suppressing IaC misconfigs (`.trivyignore`)
+
+A project can suppress specific trivy IaC misconfigs by committing a `.trivyignore`
+file at its **project root**, listing the trivy IDs to ignore — written exactly as
+trivy emits them in the JSON `Misconfigurations[].ID` field (on current trivy that
+is the hyphenated form, e.g. `DS-0002`; a mismatched token such as `DS0002` matches
+nothing and silently suppresses nothing), one per line, with `#` comments for the
+rationale. When `<project-root>/.trivyignore` exists (and is a file), the gate
+passes it to trivy as `--ignorefile <project-root>/.trivyignore`, so the suppression
+is honored **deterministically, regardless of the cwd the gate runs from**. (trivy
+only auto-discovers `.trivyignore` from its own working directory, which the gate
+does not control — so without the explicit `--ignorefile` a committed suppression
+would be silently ignored.)
+
+Only the plain-line `.trivyignore` is honored; trivy's structured `.trivyignore.yaml`
+variant is **not** passed by the gate (track it as an enhancement if a project needs
+the YAML form's `reason`/`expires` fields).
+
+The file is anchored to the **declared `--project-root`**, never an arbitrary path;
+when absent, the trivy command is byte-for-byte unchanged. Because the suppression
+lives in the repo, appears in the diff, and goes through code review, it is the
+project owner's deliberate, auditable choice — matching trivy's intended model.
+Record the rationale beside each ID (and ideally in a `docs/` posture note) so a
+future reader sees *why* a finding is suppressed.
+
 ## CLI
 
 ```bash
