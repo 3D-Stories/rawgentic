@@ -53,7 +53,8 @@ def test_step2_triggers_trivial_work_check(skill_path):
 
 @pytest.mark.parametrize("skill_path", [WF2, WF3], ids=["wf2", "wf3"])
 def test_headless_auto_continues_trivial_suggestion(skill_path):
-    text = skill_path.read_text(encoding="utf-8")
+    # The AUTO-RESOLVE interaction list lives in the skill's references/headless.md.
+    text = (skill_path.parent / "references" / "headless.md").read_text(encoding="utf-8")
     auto = _section(text, "AUTO-RESOLVE interactions", "QUESTION interactions")
     assert "trivial" in auto.lower()
     # Headless must CONTINUE the full workflow (no interactive user to hand off to),
