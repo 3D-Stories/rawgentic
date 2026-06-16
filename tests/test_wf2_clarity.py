@@ -17,6 +17,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
+REFERENCES = REPO_ROOT / "skills" / "implement-feature" / "references"
 
 
 def _text() -> str:
@@ -60,3 +61,29 @@ def test_step4_has_single_breaker_decision_table():
     assert "Breaker runs over" in step4, "the table must state which findings the one breaker runs over"
     # The volume-loopback row skips the breaker; the non-success row still runs it.
     assert "SKIP" in step4
+
+
+# --- Tier 1 (progressive disclosure): run-record schema extracted to references/ ---
+
+class TestRunRecordReference:
+    def test_run_record_reference_exists_with_schema(self):
+        ref = REFERENCES / "run-record.md"
+        assert ref.exists(), "the run-record schema should live in references/run-record.md"
+        text = ref.read_text()
+        for key in ("workflow_version", '"gates"', "security_scan", "loop_backs", "follow_ups"):
+            assert key in text, f"run-record reference is missing the {key} field"
+
+    def test_step16_points_to_reference_and_keeps_invocation(self):
+        text = _text()
+        step16 = text[text.index("## Step 16:"):]
+        assert "references/run-record.md" in step16, "Step 16 must point at the extracted schema reference"
+        # The load-bearing CLI invocation + rc handling stay in the base (test_work_summary pins it too).
+        assert "work_summary.py summarize" in step16
+
+    def test_full_schema_not_reinlined_in_base(self):
+        text = _text()
+        step16 = text[text.index("## Step 16:"):text.index("<completion-gate>")]
+        assert step16.count('"workflow_version"') == 0, (
+            "the full run-record JSON schema should be in references/run-record.md, "
+            "not re-inlined in the base Step 16"
+        )
