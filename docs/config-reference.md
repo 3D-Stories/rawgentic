@@ -264,6 +264,8 @@ and defer to BMAD equivalents on a per-project basis.
 | `disabledSkills` | `string[]` | Bare skill names the user chose to replace with BMAD equivalents. |
 | `critiqueMethod` | `string` | `"reflexion"` (default) or `"bmad-party-mode"`. Controls which critique tool is used at quality gates. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
+| `headlessEnabled` | `bool` | Opt-in to headless (non-interactive) execution. Default `false`. See [Per-Project Access Control](#per-project-access-control). |
+| `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
 ### `disabledSkills` Semantics
 
