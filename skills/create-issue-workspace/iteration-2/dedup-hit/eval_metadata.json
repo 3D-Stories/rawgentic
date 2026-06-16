@@ -1,0 +1,14 @@
+{
+  "eval_id": 2,
+  "eval_name": "dedup-hit",
+  "scenario": "dedup-hit",
+  "prompt": "I want to add WebSocket support to the API so clients get realtime updates. Please open an issue for it.",
+  "fixture_with": "/tmp/ci-iter2/dedup-hit/with_skill/fixture",
+  "fixture_without": "/tmp/ci-iter2/dedup-hit/without_skill/fixture",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Deduplication search ran",
+    "Existing matching issue (#42) surfaced to the user",
+    "Did not blindly create a duplicate"
+  ]
+}

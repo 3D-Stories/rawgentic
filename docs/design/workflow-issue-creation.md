@@ -1,3 +1,13 @@
+> **⚠️ Superseded (2026-06-16).** This v2.3 spec describes the original 9-step,
+> multi-agent-critique workflow. The shipped skill was slimmed to a lean 5-step
+> helper (template + dedup + config-targeting + codebase grounding + a default-off
+> adversarial-review opt-in) — the 3-judge critique, ambiguity circuit-breaker step,
+> loop-back, and per-run memorization were removed after head-to-head evals
+> (`skills/create-issue-workspace/iteration-{2,3,4}`) showed a current model produces
+> an equivalent issue without them, at ~⅓ the time/tokens. The quality bar those steps
+> enforced is now applied inline while drafting (see `skills/create-issue/SKILL.md`
+> `<quality-bar>`). This document is retained as historical design rationale.
+
 # Phase 3 Workflow: Feature/Bug Issue Creation (v2.3)
 
 **Date:** 2026-03-01 (revised)

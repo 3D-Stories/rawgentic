@@ -1,0 +1,11 @@
+{
+  "eval_id": 3,
+  "eval_name": "over-broad",
+  "scenario": "over-broad",
+  "prompt": "I want to completely overhaul error handling, logging, monitoring, retries, and alerting across the entire service. Open an issue for it.",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Recognized the request is too broad for a single issue (suggested splitting / scoping down)",
+    "Issue defines explicit out-of-scope / deferred boundaries"
+  ]
+}

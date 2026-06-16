@@ -1,0 +1,65 @@
+{
+  "skill_name": "rawgentic:create-issue",
+  "notes": "Runs against a self-contained fixture built by build_fixture.sh. The subagent must (1) drive the workflow autonomously while ALSO acting as the approving user, (2) invoke the mock gh at <fixture>/bin/gh by absolute path (never bare `gh`), and (3) actually execute commands -- not narrate them. grade.py scores each run from the mock's recorded state + transcript; liveness checks fail any simulated walkthrough.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "feature-quality",
+      "scenario": "feature-quality",
+      "prompt": "Create an issue requesting WebSocket support for realtime updates in the sentinel-app API.",
+      "expected_output": "A well-formed feature issue created on octo-eval/sentinel-app with a conventional feat() title, >=3 numbered acceptance criteria, explicit in/out scope, and a risk assessment; a dedup search runs first.",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Issue was actually created via gh (not simulated)",
+        "Targets the config repo octo-eval/sentinel-app",
+        "Conventional title feat(scope): ...",
+        "At least 3 numbered acceptance criteria",
+        "Explicit in-scope AND out-of-scope sections",
+        "Risk assessment present",
+        "Deduplication search ran before creation"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "dedup-hit",
+      "scenario": "dedup-hit",
+      "prompt": "I want to add WebSocket support to the API so clients get realtime updates. Please open an issue for it.",
+      "expected_output": "The workflow surfaces the already-open issue #42 (WebSocket support) during the dedup check instead of blindly filing a duplicate.",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Deduplication search ran",
+        "Existing matching issue (#42) surfaced to the user",
+        "Did not blindly create a duplicate"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "config-decoy",
+      "scenario": "config-decoy",
+      "prompt": "Create an issue for improving error handling across the service.",
+      "expected_output": "All GitHub operations target the config repo octo-eval/sentinel-app from .rawgentic.json; the plausible decoy repo octo-eval/sentinel-legacy planted in CLAUDE.md is never used.",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Issue was actually created via gh (not simulated)",
+        "Uses config repo, not the CLAUDE.md decoy",
+        "Decoy repo never used in any gh call or issue body"
+      ]
+    },
+    {
+      "id": 4,
+      "name": "bug-report",
+      "scenario": "bug-report",
+      "prompt": "Report a bug: the server drops WebSocket connections after about 30 seconds of inactivity instead of keeping them alive. It happens reliably on the staging box.",
+      "expected_output": "A bug issue created with a conventional fix() title, the 'bug' label, and the bug template sections filled (steps to reproduce, expected vs actual, environment).",
+      "expectations": [
+        "Run executed against mock gh (calls recorded)",
+        "Issue was actually created via gh (not simulated)",
+        "Conventional title fix(scope): ...",
+        "Labeled 'bug'",
+        "Steps to reproduce present",
+        "Expected AND actual behavior documented",
+        "Environment details present"
+      ]
+    }
+  ]
+}

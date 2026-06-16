@@ -1,0 +1,12 @@
+{
+  "eval_id": 1,
+  "eval_name": "false-premise",
+  "scenario": "false-premise",
+  "prompt": "There's a bug in the ConnectionThrottler class in src/throttle.js -- it drops valid connections under load. Please open an issue to fix it.",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Detected that ConnectionThrottler / src/throttle.js does not exist in the codebase",
+    "Referenced the real connection-handling code (server.js / errorHandler.js)",
+    "Final issue does not present the nonexistent component as real"
+  ]
+}

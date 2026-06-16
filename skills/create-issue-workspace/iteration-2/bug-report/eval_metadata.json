@@ -1,0 +1,17 @@
+{
+  "eval_id": 4,
+  "eval_name": "bug-report",
+  "scenario": "bug-report",
+  "prompt": "Report a bug: the server drops WebSocket connections after about 30 seconds of inactivity instead of keeping them alive. It happens reliably on the staging box.",
+  "fixture_with": "/tmp/ci-iter2/bug-report/with_skill/fixture",
+  "fixture_without": "/tmp/ci-iter2/bug-report/without_skill/fixture",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Issue was actually created via gh (not simulated)",
+    "Conventional title fix(scope): ...",
+    "Labeled 'bug'",
+    "Steps to reproduce present",
+    "Expected AND actual behavior documented",
+    "Environment details present"
+  ]
+}

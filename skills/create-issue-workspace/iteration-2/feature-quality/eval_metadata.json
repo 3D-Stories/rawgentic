@@ -1,0 +1,18 @@
+{
+  "eval_id": 1,
+  "eval_name": "feature-quality",
+  "scenario": "feature-quality",
+  "prompt": "Create an issue requesting WebSocket support for realtime updates in the sentinel-app API.",
+  "fixture_with": "/tmp/ci-iter2/feature-quality/with_skill/fixture",
+  "fixture_without": "/tmp/ci-iter2/feature-quality/without_skill/fixture",
+  "assertions": [
+    "Run executed against mock gh (calls recorded)",
+    "Issue was actually created via gh (not simulated)",
+    "Targets the config repo octo-eval/sentinel-app",
+    "Conventional title feat(scope): ...",
+    "At least 3 numbered acceptance criteria",
+    "Explicit in-scope AND out-of-scope sections",
+    "Risk assessment present",
+    "Deduplication search ran before creation"
+  ]
+}
