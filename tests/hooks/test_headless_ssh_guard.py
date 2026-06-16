@@ -36,6 +36,18 @@ BLOCK_CASES = [
     ("sudo with flag", "sudo -n ssh host"),
     ("sudo -u user", "sudo -u deploy ssh host"),
     ("timeout wrapper", "timeout 5 ssh host"),
+    # Bypass forms an agent plausibly emits (Step 8a High finding) — must block:
+    ("bash -c", "bash -c 'ssh host whoami'"),
+    ("sh -c", 'sh -c "ssh host reboot"'),
+    ("sudo bash -c", "sudo bash -c 'ssh host'"),
+    ("eval", 'eval "ssh host"'),
+    ("command substitution", "x=$(ssh host whoami)"),
+    ("command subst inline", "echo $(ssh host hostname)"),
+    ("backtick", "echo `ssh host id`"),
+    ("subshell", "(ssh host)"),
+    ("process substitution", "diff <(ssh host cat /etc/hosts) local"),
+    ("find -exec", "find . -name '*.log' -exec scp {} host:/logs/ ;"),
+    ("timeout signal opt then ssh", "timeout -s KILL 5 ssh host"),
     ("timeout duration suffix", "timeout 5s ssh host"),
     ("env wrapper", "env ssh host"),
     ("env wrapper with assign", "env FOO=bar ssh host"),
@@ -70,6 +82,39 @@ ALLOW_CASES = [
     ("empty", ""),
     ("whitespace", "   "),
 ]
+
+
+class TestConservativeOverBlock:
+    """The wrapper scan is deliberately broad (fail-toward-blocking): once a known
+    command-wrapper leads the segment, an ssh-family basename ANYWHERE after it is
+    blocked, without parsing each wrapper's option arity. This avoids bypasses
+    (`timeout -s KILL 5 ssh`, `sudo -u user ssh`) at the cost of over-blocking a
+    few benign commands where ssh/scp/rsync is merely an ARGUMENT under a wrapper.
+    These cases are pinned as INTENTIONAL — the cost is acceptable: it only bites
+    in headless mode, and `headlessAllowSSH:true` is the explicit escape hatch."""
+
+    @pytest.mark.parametrize("command", [
+        "timeout 5 grep -rn rsync src/",   # grep for "rsync" under timeout
+        "sudo cat ssh",                    # cat a file literally named ssh
+        "timeout 10 cat /usr/bin/ssh",     # inspect the ssh binary under timeout
+    ])
+    def test_wrapper_over_blocks_ssh_arg(self, command):
+        from headless_ssh_guard import detect_blocked_program
+        assert detect_blocked_program(command) is not None
+
+
+class TestKnownGaps:
+    """Documented residual gaps — the matcher is a conservative safety net, not a
+    sandbox; these forms are not blocked (and headlessAllowSSH:true is the explicit
+    escape hatch for projects that genuinely need remote ops)."""
+
+    def test_foreign_interpreter_eval_is_a_gap(self):
+        # ssh embedded in a NON-shell interpreter string (python/perl/node -e) is
+        # out of scope — only shell interpreters (bash/sh/...) and `eval` recurse.
+        # The argument below is INERT TEST DATA (a string literal asserting the
+        # matcher returns None) — it is never executed.
+        from headless_ssh_guard import detect_blocked_program
+        assert detect_blocked_program("python3 -c \"import os;os.system('ssh h')\"") is None
 
 
 class TestDetectBlockedProgram:

@@ -14,16 +14,29 @@ wal-lib.sh, which already read the env and the resolved project config.
 
 Detection rules (deliberately conservative — this is a safety net, and the
 `headlessAllowSSH:true` escape hatch exists for projects that need remote ops):
-  * Split the command on shell control operators (`;`, `&&`, `||`, `|`, `&`, and
-    newlines) into segments — a blocked program anywhere in the pipeline counts.
-  * Per segment, skip leading `VAR=value` env-assignments, then look at the first
-    real token's basename. If it is ssh/scp/rsync/sftp -> blocked.
-  * If that first token is a known command *wrapper* (sudo/env/timeout/nohup/...),
-    a blocked program appearing anywhere later in the segment counts (the wrapper
-    is invoking it) — this catches `sudo -u x ssh h`, `timeout 5 ssh h`, etc.
+  * Recurse into command substitutions `$(...)`, backticks, subshells `(...)`,
+    and process substitutions `<(...)`/`>(...)` — ssh hidden there still counts.
+  * Recurse into shell interpreter command strings: `bash -c '...'`, `sh -c`,
+    `eval '...'`, and `find ... -exec <prog>`.
+  * Split the remaining command on shell control operators (`;`, `&&`, `||`,
+    `|`, `&`, newlines) into segments. Per segment, skip leading `VAR=value`
+    env-assignments, then look at the first real token's basename. ssh/scp/
+    rsync/sftp -> blocked.
+  * If that first token is a known command *wrapper* (sudo/env/timeout/nohup/...)
+    scan the rest of the segment for a blocked program (and recurse into any
+    interpreter/find found there). This is intentionally broad — it does NOT
+    parse each wrapper's option arity — so `timeout -s KILL 5 ssh` and
+    `sudo -u user ssh` are caught with no bypass; the cost is over-blocking the
+    rare case where ssh/scp/rsync is a mere ARGUMENT under a wrapper
+    (`timeout 5 grep rsync src/`). Fail-toward-blocking is the right default for
+    a safety net; the escape hatch covers projects that need otherwise.
   * Program detection is by **basename**, so `/usr/bin/ssh` matches but `git push`
-    (git's own ssh transport), `gh`, and `ssh` used as a mere argument
+    (git's own ssh transport), `gh`, and `ssh` as a mere argument
     (`grep ssh`, `cat /etc/ssh/sshd_config`) do NOT.
+
+Residual gaps (documented, accepted): ssh embedded in a NON-shell interpreter
+string (`python3 -c "...os.system('ssh')"`) is not detected — arbitrary-language
+eval is out of scope; WF2's own deploy path is closed by the Layer-A Step-14 skip.
 """
 import os
 import re
@@ -35,24 +48,79 @@ import sys
 BLOCKED_PROGRAMS = frozenset({"ssh", "scp", "rsync", "sftp"})
 
 # Command wrappers that run another program — a blocked program after one of
-# these is still an SSH invocation. We do NOT try to parse each wrapper's option
-# arity (a rabbit hole); instead, once the segment starts with a wrapper we scan
-# the rest of the segment for a blocked program (fail-toward-blocking).
+# these is still an SSH invocation.
 WRAPPERS = frozenset({
     "sudo", "doas", "env", "command", "builtin", "exec", "nohup",
     "time", "timeout", "stdbuf", "xargs", "ionice", "nice", "setsid",
 })
 
+# Shell interpreters whose `-c` string (or, for eval, whose args) is itself a
+# shell command we must look inside.
+INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash", "ash", "ksh", "eval"})
+
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||[;&|\n]")
+# Command substitution `$(...)`, backticks, and (process-)subshells `(...)`,
+# `<(...)`, `>(...)`. Non-nested capture is sufficient for the common forms; the
+# recursion depth guard bounds pathological input.
+_SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`|(?<![\w$])[<>]?\(([^()]*)\)")
+
+_MAX_DEPTH = 6
 
 
 def _basename(token: str) -> str:
-    """Basename of a program token (so /usr/bin/ssh -> ssh)."""
     return os.path.basename(token)
 
 
-def _segment_program(segment: str) -> str | None:
+def _interpreter_inner(tokens: list[str], depth: int) -> str | None:
+    """Recurse into a shell interpreter's command string (`bash -c '...'`, `eval ...`)."""
+    prog = _basename(tokens[0])
+    if prog == "eval":
+        return detect_blocked_program(" ".join(tokens[1:]), depth + 1)
+    for j in range(1, len(tokens)):
+        if tokens[j] == "-c" and j + 1 < len(tokens):
+            return detect_blocked_program(tokens[j + 1], depth + 1)
+    return None
+
+
+def _find_exec_inner(tokens: list[str], depth: int) -> str | None:
+    """Recurse into the command run by `find ... -exec <prog> ... ;`."""
+    for j in range(1, len(tokens)):
+        if tokens[j] in ("-exec", "-execdir") and j + 1 < len(tokens):
+            rest = []
+            for tok in tokens[j + 1:]:
+                if tok in (";", "+", "\\;"):
+                    break
+                rest.append(tok)
+            return detect_blocked_program(" ".join(rest), depth + 1)
+    return None
+
+
+def _scan_wrapped(rest: list[str], depth: int) -> str | None:
+    """Broad scan of a wrapped command's tokens for a blocked program.
+
+    Looks for a blocked basename anywhere (skipping env-assignments), and
+    recurses into any interpreter / find encountered. Intentionally does not
+    model option arity (see module docstring) — broad coverage, no bypass.
+    """
+    for k, tok in enumerate(rest):
+        if _ASSIGNMENT.match(tok):
+            continue
+        base = _basename(tok)
+        if base in BLOCKED_PROGRAMS:
+            return base
+        if base in INTERPRETERS:
+            hit = _interpreter_inner(rest[k:], depth)
+            if hit:
+                return hit
+        if base == "find":
+            hit = _find_exec_inner(rest[k:], depth)
+            if hit:
+                return hit
+    return None
+
+
+def _segment_program(segment: str, depth: int) -> str | None:
     """Return the blocked SSH-family program invoked by one shell segment, else None."""
     try:
         tokens = shlex.split(segment, comments=False, posix=True)
@@ -62,7 +130,6 @@ def _segment_program(segment: str) -> str | None:
     if not tokens:
         return None
 
-    # Skip leading env-assignments (FOO=bar ssh ...).
     idx = 0
     while idx < len(tokens) and _ASSIGNMENT.match(tokens[idx]):
         idx += 1
@@ -72,29 +139,35 @@ def _segment_program(segment: str) -> str | None:
     first = _basename(tokens[idx])
     if first in BLOCKED_PROGRAMS:
         return first
-
+    if first in INTERPRETERS:
+        return _interpreter_inner(tokens[idx:], depth)
+    if first == "find":
+        return _find_exec_inner(tokens[idx:], depth)
     if first in WRAPPERS:
-        # Wrapper invokes another program; a blocked program anywhere after it
-        # (skipping further env-assignments) counts.
-        for tok in tokens[idx + 1:]:
-            if _ASSIGNMENT.match(tok):
-                continue
-            base = _basename(tok)
-            if base in BLOCKED_PROGRAMS:
-                return base
+        return _scan_wrapped(tokens[idx + 1:], depth)
     return None
 
 
-def detect_blocked_program(command: str) -> str | None:
+def detect_blocked_program(command: str, depth: int = 0) -> str | None:
     """Return the SSH-family program the command invokes (ssh/scp/rsync/sftp), or None.
 
     Pure detection: caller decides whether to block based on headless mode and the
     project's `headlessAllowSSH` flag.
     """
-    if not command or not command.strip():
+    if not command or not command.strip() or depth > _MAX_DEPTH:
         return None
+
+    # 1. Recurse into command substitutions / subshells / process substitutions.
+    for match in _SUBST.finditer(command):
+        inner = match.group(1) or match.group(2) or match.group(3)
+        if inner:
+            hit = detect_blocked_program(inner, depth + 1)
+            if hit:
+                return hit
+
+    # 2. Segment scan on the outer command.
     for segment in _SEGMENT_SPLIT.split(command):
-        program = _segment_program(segment)
+        program = _segment_program(segment, depth)
         if program:
             return program
     return None

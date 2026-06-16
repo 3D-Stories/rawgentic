@@ -466,6 +466,9 @@ class TestHeadlessSSHBlock:
         ("sftp", "sftp host"),
         ("sudo ssh", "sudo ssh host"),
         ("piped ssh", "tar czf - d | ssh host 'tar xzf -'"),
+        # bypass forms must also block end-to-end through the hook (Step 8a):
+        ("bash -c ssh", "bash -c 'ssh deploy@host'"),
+        ("cmd subst ssh", "OUT=$(ssh deploy@host hostname)"),
     ]
 
     @pytest.mark.parametrize("label,command", SSH_CMDS, ids=[c[0] for c in SSH_CMDS])
