@@ -1,6 +1,6 @@
 ---
 name: rawgentic:implement-feature
-description: Implement a feature or bug fix from a GitHub issue through the WF2 16-step workflow with TDD, multi-agent code review, quality gates, and automated deployment. Invoke with /implement-feature followed by a GitHub issue number or URL. DO NOT use this skill if the user is working within a BMAD workflow, has BMAD story files, or is using bmad-dev-story. Only trigger when the user explicitly invokes /implement-feature or /rawgentic:implement-feature, or is working in a rawgentic-only project without BMAD.
+description: Implement a feature (or a design-heavy/complex bug fix) from a GitHub issue through the WF2 16-step workflow with TDD, multi-agent code review, quality gates, and — when the project configures them — CI and deployment verification. Invoke with /implement-feature followed by a GitHub issue number or URL. For a narrow, reproducible bug fix prefer /rawgentic:fix-bug (WF3); implement-feature is the home for features and for bugs that need full design + implementation. DO NOT use this skill if the user is working within a BMAD workflow, has BMAD story files, or is using bmad-dev-story. Only trigger when the user explicitly invokes /implement-feature or /rawgentic:implement-feature, or is working in a rawgentic-only project without BMAD.
 argument-hint: GitHub issue number (e.g., 155) or URL
 ---
 
@@ -68,8 +68,10 @@ P15 (tiered review) introduces session-scoped state files under
 `claude_docs/.wf2-state/<issue-number>/`:
 
 - `review_log.jsonl` — append-only Step 8a review entries (`task_id`, `sha`,
-  `reviewers`, `verdicts`, `findings_count`, `dropped_count`, `ts`). Read by
-  Step 9 (coverage assertion) and Step 11 (already-reviewed SHA list).
+  `reviewers`, `verdict`, nested `findings` `{crit, high, med, low, dropped}`, `ts` —
+  the same shape Step 8a writes). `sha` and `verdict` are the only fields the Step 9
+  coverage gate (`plan_lib.assert_review_coverage`) actually reads. Read by Step 9
+  (coverage assertion) and Step 11 (already-reviewed SHA list).
 - `deferrals.json` — finding-level deferrals re-presented at Step 11. Each
   entry: `finding_id`, `severity`, `status`, `defer_count`,
   `originator_reviewer_slot`, `concurrences`, `user_ack`. Written via
@@ -119,14 +121,12 @@ Conditional steps (skip ONLY when their condition is not met):
 - Step 14 (Merge/Deploy): skip only if user does not request merge
 - Step 15 (Post-Deploy): skip only if no deployment performed
 
-**ENFORCEMENT:** You MUST NOT rationalize skipping a mandatory step. Common invalid justifications:
-- "This session is very long" — NOT a valid reason to skip code review
-- "The architecture was already critiqued in WF1" — WF1 critiqued the SPEC, not the CODE
-- "The changes are mechanical" — mechanical changes can still have injection vulnerabilities
-- "I'll do a quick check instead" — a "quick check" is not a substitute for the full step
-- "Context window is running low" — checkpoint in session notes and resume, do not skip
-
-If you catch yourself about to skip a mandatory step, STOP and acknowledge: "I was about to skip Step N which is mandatory. Proceeding with the full step."
+**Why these hold even under pressure:** the tempting reasons to skip — a long session, a
+running-low context window, a change that "looks mechanical," or "WF1 already critiqued
+this" (WF1 critiqued the *spec*, not the *code*) — are exactly the conditions under which
+the expensive gates earn their cost: Step 11 caught 2 Critical bugs (HTML injection + path
+traversal) on a run the orchestrator judged too simple to review. So if you're tempted to
+skip a step to save time, checkpoint per `<resumption-protocol>` and resume — don't skip.
 
 **The ONE sanctioned way to not run these steps** is the pre-implementation
 `<trivial-work-check>` at Step 2: if the user explicitly chooses "do it directly," you
