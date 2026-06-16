@@ -10,6 +10,26 @@ argument-hint: GitHub issue number (e.g., 155) or URL
 You are the WF2 orchestrator implementing a 16-step feature implementation workflow. You take a GitHub issue (created by WF1 or manually) and guide it through codebase analysis, design, critique, implementation, code review, PR creation, and optional CI/deployment verification. You adapt your behavior based on project capabilities detected at startup — not all projects have tests, CI, or automated deployment, and the workflow gracefully handles each case.
 </role>
 
+<happy-path>
+The always-run spine, in order. Parenthesized steps are conditional (skipped only
+when their condition is unmet). When you lose the thread under context pressure,
+this is the sequence to return to:
+
+  1 → 2 → 3 → 4 → 5 → (6) → 7 → 8 → (8a) → 9 → (10) → 11 → 11.5 → 12 → (13) → (14) → (15) → 16
+
+- (6) Plan Drift — fast; run unless time-critical
+- (8a) Per-task Review — only when a task is `riskLevel: high` (P15)
+- (10) Memorize — background, never blocks
+- (13) CI — only if `has_ci`
+- (14) Merge/Deploy — only if the user requests merge
+- (15) Post-Deploy — only if a deployment happened
+
+Steps **1, 2, 3, 4, 5, 7, 8, 9, 11, 11.5, 12, 16 always run** (see <mandatory-steps>).
+Everything after this block is the per-step detail plus the cross-cutting protocols
+(<config-loading>, <loop-back-budget>, <resumption-protocol>, the headless blocks)
+that you consult situationally — not top-to-bottom on every run.
+</happy-path>
+
 <constants>
 MAX_DESIGN_LOOPBACK_ITERATIONS = 2
 MAX_TDD_DESIGN_LOOPBACK = 1
@@ -87,7 +107,9 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 8 | Implementation | The actual work |
 | 9 | Quality Gate (Drift) | Verifies implementation matches design and all ACs covered |
 | 11 | Code Review | **NON-NEGOTIABLE.** Full 3-agent review for complex_feature. Minimum 1-agent for simple/standard. This step found 2 Critical security issues (HTML injection + path traversal) when the orchestrator attempted to skip it. |
+| 11.5 | Security Scan | Tool-based pre-PR gate (secrets / dependency-CVE / SAST / IaC) via `hooks/security_scan.py`. Catches concrete known-pattern problems the LLM review misses; fail-closed on a real finding. The step always runs — absent scanners are a recorded *visible skip*, never a silent pass. |
 | 12 | Create PR | Deliverable — no PR means no review trail |
+| 16 | Completion Summary + run-record | WF2 terminates here. The run-record (`hooks/work_summary.py`) is the Tier-2 telemetry substrate — a dropped field is a measurement gap, so the step is not optional even when nothing deployed. |
 
 Conditional steps (skip ONLY when their condition is not met):
 - Step 6 (Plan Drift): lightweight, fast — run it unless time-critical
@@ -376,18 +398,24 @@ WF2 ALWAYS terminates after the completion summary. Do NOT suggest "shall I crea
 </termination-rule>
 
 <loop-back-budget>
-Track all design loop-backs across the workflow:
-- Step 4 -> Step 3: max 2 iterations (MAX_DESIGN_LOOPBACK_ITERATIONS)
-- Step 8 -> Step 3: max 1 iteration (MAX_TDD_DESIGN_LOOPBACK)
-- Step 11 -> Step 3: max 1 iteration (MAX_REVIEW_DESIGN_LOOPBACK)
+Track all design loop-backs across the workflow. There are **four** sources (the
+canonical caps live in `plan_lib._LOOPBACK_SOURCE_MAX`):
+- Step 4 -> Step 3: max 2 iterations (MAX_DESIGN_LOOPBACK_ITERATIONS, source `design`)
+- Step 8 -> Step 3: max 1 iteration (MAX_TDD_DESIGN_LOOPBACK, source `tdd`)
+- Step 8a -> Step 3: max 1 iteration (MAX_REVIEW_DESIGN_LOOPBACK_STEP_8A, source `review_design`)
+- Step 11 -> Step 3: max 1 iteration (MAX_REVIEW_DESIGN_LOOPBACK, source `review`)
 
-Global cap: GLOBAL_LOOPBACK_BUDGET = 3
-If global cap reached, STOP and escalate to user with full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
+Global cap: GLOBAL_LOOPBACK_BUDGET = 3 — this binds BEFORE the per-source caps (which
+sum to 5), so the workflow loops back at most 3 times total. `plan_lib.consume_loopback`
+enforces both the per-source and the global cap; call it and act on its `(ok, state)`
+return rather than pre-checking the in-context mirror.
+If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
 
-Track loop-back state:
+Track loop-back state (mirror of the canonical counters file — one var per source):
 design_loopback_count = 0
 tdd_loopback_used = false
 review_loopback_used = false
+review_design_loopback_used = false
 global_loopback_total = 0
 
 **Source of truth:** once it exists, `claude_docs/.wf2-state/<issue>/loopback_counters.json` (written via `plan_lib.consume_loopback`) is canonical for all *successfully persisted* counts — it survives context compaction, fresh headless sessions, and worktrees. The in-context variables above are a convenience mirror: on resume, initialize them from the file when it is present, otherwise from the defaults above (a missing file means "no loop-backs consumed yet," not an error). Do not write the in-context values back over a more-advanced file. If a `consume_loopback` call increments the in-context counter but fails to persist, treat that as a blocker — reconcile or STOP rather than blindly trusting either side, since a stale file would silently restore spent budget.
@@ -741,6 +769,21 @@ Design document. NOT presented to user — goes to Step 4 for critique.
    - **Codex failure is non-blocking (the review is additive — the reflexion gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the reflexion result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the reflexion-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
    - **Concurrency tradeoff (accepted):** because the review now overlaps the judges instead of waiting for them, a design that the judges send back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
    - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
+
+**Breaker decision — run the ambiguity circuit breaker EXACTLY ONCE (items 4–7, summarized).**
+The run-count is the most error-prone control flow in this step (it spreads across items
+5–7 with no hook to enforce it), so this one table is authoritative for *which* findings
+the single breaker runs over. It runs in exactly one row, never twice:
+
+| Volume loop-back fired (item 5)? | Adversarial sub-step (item 7) state | Breaker runs over |
+|---|---|---|
+| **yes** | (any) | **SKIP** — return to Step 3 now; discard any in-flight adversarial result as stale (item 5). The breaker runs on the *next* Step 4 pass. |
+| no | disabled / not opted-in / fast-path | **reflexion-only** findings |
+| no | enabled AND returned | **merged** reflexion + adversarial (the join barrier, item 7) |
+| no | enabled BUT non-success (not installed / timeout / error / parse error) | **reflexion-only** findings — skipping the adversarial layer must NOT skip the breaker, **else it runs zero times** (item 7) |
+
+The only path on which the breaker does not run is the volume-loop-back row, and that is
+because it returns to Step 3 *before* the breaker point — not because the breaker was skipped.
 
 **For fast path (`/reflexion:reflect`):**
 Single-pass checking: does the solution address the issue, are there unintended side effects, is it in the right layer? For WF1-validated issues: does design align with WF1-critiqued spec? (The adversarial review sub-step above does NOT run on the fast path.)
