@@ -126,7 +126,9 @@ running.
 
 ### Blocked Patterns
 
-Wal-guard blocks **production deployment commands** only:
+Wal-guard blocks two categories:
+
+**1. Production deployment commands** (always, subject to `protectionLevel`):
 - `ssh`/`scp`/`rsync` targeting prod hosts
 - `docker compose` targeting prod with `up`/`restart`/`start`
 - `ansible` targeting prod inventories
@@ -136,6 +138,17 @@ Wal-guard blocks **production deployment commands** only:
 
 All patterns are case-insensitive and match anywhere in the command string.
 
+**2. Blanket SSH-family block in headless mode** (issue #47): when
+`RAWGENTIC_HEADLESS=1`, wal-guard denies **any** `ssh`/`scp`/`rsync`/`sftp`
+invocation — not just prod-targeting ones — because a headless run's job ends at
+PR creation (no merge, no deploy, no remote access). This fires **regardless of
+`protectionLevel`** (even under `sandbox`) and is detected via the tested
+`hooks/headless_ssh_guard.py` matcher (which sees through env-assignments,
+wrappers like `sudo`/`timeout`, `bash -c`, `$(...)`, and absolute paths, but never
+flags `git`/`gh`, which use their own transport). Set `headlessAllowSSH: true` on
+the project's `.rawgentic_workspace.json` entry to opt out (see
+`docs/config-reference.md`). This block does **not** apply in interactive mode.
+
 ### What Is NOT Blocked
 
 Destructive local commands (`rm -rf`, `git push --force`, `git reset --hard`,
@@ -143,11 +156,14 @@ Destructive local commands (`rm -rf`, `git push --force`, `git reset --hard`,
 behavior already prompts the user before running these operations, and
 hard-blocking via hooks would prevent the user from approving when they
 intentionally want to proceed (hooks have no warn-and-confirm mechanism).
+`git`/`gh` are never treated as SSH commands even in headless mode.
 
 ### Fail-Closed Behavior
 
 If `jq` is unavailable, wal-guard denies **all** commands. This prevents
-unguarded execution when the pattern-matching infrastructure is broken.
+unguarded execution when the pattern-matching infrastructure is broken. The
+headless SSH block is likewise fail-closed: an unresolvable `headlessAllowSSH`
+(or an unavailable matcher) leaves SSH-family commands blocked.
 
 ## Troubleshooting
 

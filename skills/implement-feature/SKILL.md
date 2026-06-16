@@ -118,8 +118,8 @@ Conditional steps (skip ONLY when their condition is not met):
 - **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
-- Step 14 (Merge/Deploy): skip only if user does not request merge
-- Step 15 (Post-Deploy): skip only if no deployment performed
+- Step 14 (Merge/Deploy): skip only if user does not request merge — **always skipped in headless mode** (`additionalContext` has "HEADLESS MODE active"): PR creation is the terminal deliverable, so a headless run never merges or deploys (`references/headless.md`).
+- Step 15 (Post-Deploy): skip only if no deployment performed — also skipped in headless mode (no deployment occurred).
 
 **Why these hold even under pressure:** the tempting reasons to skip — a long session, a
 running-low context window, a change that "looks mechanical," or "WF1 already critiqued
@@ -188,6 +188,15 @@ user: the QUESTION (post→label→suspend→exit), ERROR, rich-checkpoint, and 
 resume protocols live in `references/headless.md`. **Read that file in full before acting on
 any of the per-step headless annotations below.** When NOT in headless mode, ignore them and behave
 normally (STOP and wait for terminal input at each interaction point).
+
+**Headless is PR-terminal — no remote ops.** A headless run's job ends at PR
+creation: no merge, no deploy, no outbound SSH to remote hosts. Step 14 (merge +
+deploy) and Step 15 (post-deploy) are skipped entirely; Step 2's live-environment
+probe does no SSH (local exploration only); CI handles deployment when a human
+merges the PR. This is also enforced at the hook layer — `wal-guard` blocks any
+`ssh`/`scp`/`rsync`/`sftp` invocation in headless mode regardless of step (set
+`headlessAllowSSH: true` on the project's `.rawgentic_workspace.json` entry to
+override), so even an ad-hoc SSH that a step forgot to annotate is denied.
 </headless-mode>
 
 <termination-rule>
@@ -244,13 +253,18 @@ set -euo pipefail
 #     none            = neither                                       [-> Step 1]
 # MARKERS_COMPLETE = true|false  (true iff ALL step markers are present in notes)
 # GATE_PRINTED     = true|false  (true iff the completion gate was already printed)
+# HEADLESS = true|false  (true iff additionalContext has "HEADLESS MODE active").
+#   In headless mode WF2 is PR-terminal: a ready-to-merge PR resumes at Step 16
+#   (no merge/deploy) and a merged PR resumes at Step 16 (no post-deploy); `open`
+#   still resumes at Step 13 so the bot can push CI fixes (a local op).
 STEP=$(python3 hooks/resume_lib.py detect-step \
   --pr-state PR_STATE --branch-state BRANCH_STATE --notes-state NOTES_STATE \
-  --markers-complete MARKERS_COMPLETE --completion-gate-printed GATE_PRINTED)
+  --markers-complete MARKERS_COMPLETE --completion-gate-printed GATE_PRINTED \
+  --headless HEADLESS)
 echo "Resuming at: $STEP"
 ```
 
-Pass the marker booleans on every call (don't leave the completion-gate rule to prose) — `detect-step` prints either a step number (1, 2, 5, 8, 9, 11, 13, 14, 15) or `completion-gate` (all markers present but the gate was never printed — run the completion gate, then terminate). Resume at the printed step. An unrecognized `--*-state` or non-`true`/`false` marker value exits non-zero rather than defaulting to Step 1, so a mistyped fact fails loudly instead of restarting in-flight work.
+Pass the marker booleans (and `--headless`) on every call (don't leave the completion-gate or headless rules to prose) — `detect-step` prints either a step number (1, 2, 5, 8, 9, 11, 13, 14, 15, 16) or `completion-gate` (all markers present but the gate was never printed — run the completion gate, then terminate). Resume at the printed step. An unrecognized `--*-state` or non-`true`/`false` flag value exits non-zero rather than defaulting to Step 1, so a mistyped fact fails loudly instead of restarting in-flight work.
 
 Before context compacts, document in session notes:
 - Current step number and sub-step
@@ -402,7 +416,7 @@ This enables workflow resumption if context is lost.
    - `docs`: identify cross-references, linked pages, publishing scripts
    - `research`: primarily analysis notebooks, data pipelines, or literature review — testing means validation of results and reproducibility
 
-3. **Live environment probe (infrastructure projects only):** When `capabilities.project_type == "infrastructure"` and target hosts are known (from `config.infrastructure.hosts[]`), SSH to each target host to discover current state. This catches discrepancies between issue specs (which may be outdated) and reality.
+3. **Live environment probe (infrastructure projects only):** When `capabilities.project_type == "infrastructure"` and target hosts are known (from `config.infrastructure.hosts[]`), SSH to each target host to discover current state. This catches discrepancies between issue specs (which may be outdated) and reality. **[Headless: AUTO-RESOLVE — skip the SSH probes entirely; do local exploration only (file reads, grep, git). A headless run makes no outbound SSH, and `wal-guard` will block it regardless.]**
 
    Probe for:
    - **Server capacity:** `nproc` (CPU count), `free -g` (RAM), `df -h` (disk) — compare against issue requirements
@@ -1133,6 +1147,8 @@ CI status or skip confirmation.
 
 ### Instructions
 
+**[Headless: AUTO-RESOLVE — SKIP THIS ENTIRE STEP. In headless mode the PR is the terminal deliverable: do NOT merge, do NOT deploy, do NOT SSH anywhere. Proceed directly to Step 16. CI handles deployment when a human merges the PR. (The `ssh`/`script`/`compose` deploy paths below would otherwise run unconditionally — this is the gap that caused the chorestory #309 dev-VM incident.) `wal-guard` also blocks any SSH at the hook layer as a backstop. Append the skip marker per Step 16 item 1b.]**
+
 **P15 pre-merge gate:** re-read via `plan_lib.read_review_state(repo_root, branch)`. If None or `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` AND the branch's `.rawgentic/review-state/<branch-sanitized>.json` happens on merge success.
 
 1. **Merge PR (squash merge):**
@@ -1169,7 +1185,7 @@ CI status or skip confirmation.
 
    Please deploy and confirm when complete.
    ```
-   Wait for user confirmation before proceeding to Step 15. **[Headless: QUESTION — post comment with deployment instructions and ask for confirmation, suspend.]**
+   Wait for user confirmation before proceeding to Step 15. **[Headless: not reachable — the whole step is skipped in headless mode (see the Step 14 header), so this manual-deploy confirmation only ever runs interactively.]**
 
 ### Output
 Deployed (or manual deployment instructions provided and confirmed).
@@ -1184,6 +1200,8 @@ Deployed (or manual deployment instructions provided and confirmed).
 ## Step 15: Quality Gate — Post-Deploy Verification (Conditional)
 
 ### Instructions
+
+**[Headless: SKIP — no deployment occurred (Step 14 was skipped), so there is nothing to verify. Proceed to Step 16.]**
 
 **If `capabilities.has_deploy == false` AND no deployment was performed:** Skip with note "No deployment target — verification deferred to manual testing."
 
@@ -1220,6 +1238,14 @@ the store is the Tier-2 measurement telemetry substrate (per
 measurable signal — not just a sentence the user reads once.
 
 1. Update session notes with WF2 results.
+
+1b. **Headless mode:** if `additionalContext` has "HEADLESS MODE active", Steps 14
+   and 15 were skipped — the PR is the terminal deliverable. Record this for
+   auditability by appending a session-notes marker:
+   `### WF2 Step 14/15: SKIPPED (headless — PR #N is terminal; merge/deploy deferred to human + CI)`
+   and set the run-record `outcome.deploy` to `"not_applicable"` with a
+   `follow_ups` note `"headless: merge/deploy deferred to human + CI"`. The
+   rendered summary then reflects deploy: not_applicable for the headless run.
 
 2. **Assemble the run-record** from the workflow so far and write it to
    `/tmp/wf2-run-record.json` (use the Write tool, or a `cat > … <<'JSON'`
@@ -1271,7 +1297,7 @@ Before declaring WF2 complete, verify the following. Items marked (conditional) 
 4. [ ] PR URL documented
 5. [ ] All commits pushed
 6. [ ] (conditional: has_ci) CI passed
-7. [ ] (conditional: has_deploy) Deployment verified or manual deploy confirmed
+7. [ ] (conditional: has_deploy, NOT headless) Deployment verified or manual deploy confirmed — auto-satisfied in headless mode, where Steps 14/15 are skipped (PR is the terminal deliverable)
 8. [ ] (conditional: architecture changed) CLAUDE.md updated
 9. [ ] All Critical/High code review findings resolved
 10. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)

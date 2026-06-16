@@ -61,15 +61,23 @@ def detect_resume_step(
     *,
     markers_complete: bool = False,
     completion_gate_printed: bool = False,
+    headless: bool = False,
 ) -> int | str:
     """Return the WF2 step to resume at given the gathered facts.
 
-    Returns an int step (1, 2, 5, 8, 9, 11, 13, 14, 15) or the ``COMPLETION_GATE``
-    sentinel. The mapping is total over all valid inputs: there is no input that
-    falls through to an undefined result. An *unrecognized* state raises
-    ``ValueError`` rather than defaulting to Step 1 — silently restarting an
-    in-flight workflow because a fact was mistyped would be worse than failing
-    loudly.
+    Returns an int step (1, 2, 5, 8, 9, 11, 13, 14, 15, 16) or the
+    ``COMPLETION_GATE`` sentinel. The mapping is total over all valid inputs:
+    there is no input that falls through to an undefined result. An *unrecognized*
+    state raises ``ValueError`` rather than defaulting to Step 1 — silently
+    restarting an in-flight workflow because a fact was mistyped would be worse
+    than failing loudly.
+
+    ``headless`` (issue #47): in headless mode WF2 is PR-terminal — it never
+    merges or deploys. A ``ready-to-merge`` PR (which non-headless would merge at
+    Step 14) and a ``merged`` PR (whose post-deploy at Step 15 is meaningless when
+    the bot performed no deploy) both resume at Step 16 (completion). ``open`` is
+    deliberately NOT remapped: the bot may still fix CI by pushing to its own PR
+    branch (a local op, not remote access), so it stays at Step 13.
     """
     for name, value, valid in (
         ("pr_state", pr_state, PR_STATES),
@@ -87,10 +95,13 @@ def detect_resume_step(
         return COMPLETION_GATE
 
     # PR cascade (rules 1-3) — a PR outranks branch/notes state.
+    # Headless (issue #47) is PR-terminal: ready-to-merge and merged both collapse
+    # to Step 16 (no merge, no deploy, no post-deploy). `open` is unchanged so the
+    # bot can still push CI fixes (a local op) before completing.
     if pr_state == "merged":
-        return 15
+        return 16 if headless else 15
     if pr_state == "ready-to-merge":
-        return 14
+        return 16 if headless else 14
     if pr_state == "open":
         return 13
 
@@ -148,6 +159,10 @@ def main(argv=None) -> int:
     p.add_argument("--completion-gate-printed", choices=["true", "false"],
                    default="false", dest="completion_gate_printed",
                    help="whether the completion gate was already printed")
+    p.add_argument("--headless", choices=["true", "false"], default="false",
+                   dest="headless",
+                   help="whether running in headless mode (PR-terminal: "
+                        "ready-to-merge/merged resume at Step 16, no merge/deploy)")
 
     args = parser.parse_args(argv)
 
@@ -157,6 +172,7 @@ def main(argv=None) -> int:
                 args.pr_state, args.branch_state, args.notes_state,
                 markers_complete=(args.markers_complete == "true"),
                 completion_gate_printed=(args.completion_gate_printed == "true"),
+                headless=(args.headless == "true"),
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
