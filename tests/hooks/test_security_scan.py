@@ -254,6 +254,50 @@ class TestParseTrivyConfig:
         assert "Dockerfile" in f["location"]
 
 
+# --- _build_trivy_config (honor a project-local .trivyignore) --------------
+
+class TestBuildTrivyConfig:
+    """trivy reads .trivyignore ONLY from its process CWD (not the scan target),
+    and the gate runs trivy from an uncontrolled CWD — so the command MUST pass
+    an explicit --ignorefile for a committed, reviewed project-local .trivyignore
+    to be honored at all. The ignorefile is anchored to the DECLARED project_root
+    (never an arbitrary path); when absent, the command is byte-for-byte
+    unchanged so today's behavior is preserved."""
+
+    def test_absent_trivyignore_passes_no_ignorefile(self, tmp_path):
+        from security_scan import _build_trivy_config
+        cmd = _build_trivy_config(str(tmp_path), "origin/main", False)
+        assert "--ignorefile" not in cmd
+        assert cmd == ["trivy", "config", "--quiet", "--format", "json",
+                       str(tmp_path)]
+
+    def test_present_trivyignore_adds_ignorefile_anchored_to_root(self, tmp_path):
+        from security_scan import _build_trivy_config
+        ti = tmp_path / ".trivyignore"
+        ti.write_text("DS-0002\n")
+        cmd = _build_trivy_config(str(tmp_path), "origin/main", False)
+        assert "--ignorefile" in cmd
+        i = cmd.index("--ignorefile")
+        # anchored to the DECLARED project_root, never an arbitrary location
+        assert cmd[i + 1] == str(ti)
+        # the positional scan target remains the project_root, and stays last
+        assert cmd[-1] == str(tmp_path)
+
+    def test_directory_named_trivyignore_is_not_treated_as_a_file(self, tmp_path):
+        from security_scan import _build_trivy_config
+        (tmp_path / ".trivyignore").mkdir()
+        cmd = _build_trivy_config(str(tmp_path), "origin/main", False)
+        assert "--ignorefile" not in cmd
+
+    def test_full_mode_also_honors_ignorefile(self, tmp_path):
+        # WF9 (--full / whole-tree) uses the same builder; a suppression must
+        # apply there too, not only in WF2's diff-scoped Step 11.5.
+        from security_scan import _build_trivy_config
+        (tmp_path / ".trivyignore").write_text("DS-0002\n")
+        cmd = _build_trivy_config(str(tmp_path), "origin/main", True)
+        assert "--ignorefile" in cmd
+
+
 # --- select_scanners -------------------------------------------------------
 
 class TestSelectScanners:

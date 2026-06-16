@@ -298,7 +298,19 @@ def _build_semgrep(project_root, base_ref, full):
 
 
 def _build_trivy_config(project_root, base_ref, full):
-    return ["trivy", "config", "--quiet", "--format", "json", project_root]
+    # trivy reads .trivyignore ONLY from its process cwd, not the scan target,
+    # and the gate (_default_runner) runs trivy from an uncontrolled cwd — so a
+    # committed, reviewed project-local .trivyignore would be SILENTLY IGNORED
+    # without an explicit --ignorefile. Pass it when present (anchored to the
+    # DECLARED project_root, never an arbitrary path) so the gate honors the
+    # project's documented misconfig suppressions deterministically, regardless
+    # of cwd. Absent -> the command is byte-for-byte unchanged (today's behavior).
+    cmd = ["trivy", "config", "--quiet", "--format", "json"]
+    ignorefile = os.path.join(project_root, ".trivyignore")
+    if os.path.isfile(ignorefile):
+        cmd += ["--ignorefile", ignorefile]
+    cmd.append(project_root)
+    return cmd
 
 
 # Each scanner: a kind + ordered tool candidates. select_scanners picks the first
