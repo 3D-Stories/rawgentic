@@ -911,3 +911,92 @@ class TestSessionStartBootstrap:
         assert "scanners-bootstrapped" in t  # run-once marker
         # must not block the hook: fire-and-forget
         assert "nohup" in t
+
+
+# --- #101: scanners must be cwd-independent (run from project_root) ---------
+
+class TestRunScanCwdIndependence:
+    """#101: every scanner must run with cwd == abspath(project_root).
+
+    semgrep resolves ``--baseline-commit`` against its *process cwd*, not the scan
+    target, so when the gate is invoked from any cwd other than the repo root it
+    exits rc=2 and fail-closes the WHOLE gate with zero findings (the #101 symptom
+    — the same class of latent cwd-dependence that #100 fixed for trivy's
+    ``.trivyignore``). The fix normalizes ``project_root`` to an absolute path once
+    and threads it as the subprocess ``cwd`` for ALL scanners, so the target and
+    the cwd stay consistent regardless of the caller's directory.
+
+    These tests simulate cwd-dependence through the injected ``runner`` (the
+    suite's no-real-tools philosophy) rather than chdir'ing the test process, so
+    they are deterministic and need neither semgrep nor a git repo installed.
+    """
+
+    @staticmethod
+    def _clean_runner(calls):
+        clean = {
+            "gitleaks": "[]",
+            "osv-scanner": '{"results": []}',
+            "semgrep": '{"results": [], "errors": []}',
+        }
+
+        def runner(cmd, **kwargs):
+            calls.append((cmd, kwargs))
+            return _proc(0, clean.get(cmd[0], "[]"))
+
+        return runner
+
+    def test_runner_receives_abspath_project_root_as_cwd(self):
+        from security_scan import run_scan
+        calls = []
+        run_scan("/proj", project_type="node", has_docker=False,
+                 base_ref="origin/main",
+                 which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                 runner=self._clean_runner(calls), env={})
+        assert calls, "expected at least one scanner to run"
+        assert all(kw.get("cwd") == os.path.abspath("/proj") for _, kw in calls), \
+            ("every scanner must run with cwd=abspath(project_root); got "
+             f"{[kw.get('cwd') for _, kw in calls]}")
+
+    def test_relative_project_root_is_normalized_to_absolute(self):
+        # The user-chosen design: a *relative* --project-root must be normalized to
+        # an absolute path so the threaded cwd is valid from any caller cwd AND the
+        # scan target stays consistent with it (a relative target would otherwise
+        # be re-rooted against the new cwd).
+        from security_scan import run_scan
+        calls = []
+        run_scan("relative/sub", project_type="node", has_docker=False,
+                 base_ref="origin/main",
+                 which=_which_from({"gitleaks", "semgrep"}),
+                 runner=self._clean_runner(calls), env={})
+        expected = os.path.abspath("relative/sub")
+        assert calls
+        assert all(os.path.isabs(kw.get("cwd") or "") for _, kw in calls), \
+            "a relative --project-root must be normalized to an absolute cwd"
+        assert all(kw.get("cwd") == expected for _, kw in calls)
+        # target handed to each builder is the same normalized absolute path
+        assert all(expected in cmd for cmd, _ in calls), \
+            f"expected absolute target {expected} in every scanner cmd"
+
+    def test_semgrep_not_failclosed_when_cwd_is_threaded(self):
+        # Behavioral regression mirroring the #101 repro: a cwd-sensitive semgrep
+        # exits rc=2 unless invoked from the repo root. With cwd threaded it
+        # resolves the baseline and the gate is clean; without it the gate
+        # fail-closes on a phantom scanner error.
+        from security_scan import run_scan
+        abs_root = os.path.abspath("/proj")
+
+        def runner(cmd, **kwargs):
+            if cmd[0] == "semgrep":
+                if kwargs.get("cwd") == abs_root:
+                    return _proc(0, '{"results": [], "errors": []}')
+                return _proc(2, "", stderr="fatal: bad revision 'origin/main'")
+            return _proc(0, "[]")
+
+        result = run_scan("/proj", project_type="node", has_docker=False,
+                          base_ref="origin/main",
+                          which=_which_from({"gitleaks", "semgrep"}),
+                          runner=runner, env={})
+        assert all(e["scanner"] != "semgrep" for e in result["gate"]["errors"]), \
+            ("semgrep must not fail-close once cwd is threaded; "
+             f"errors={result['gate']['errors']}")
+        assert result["gate"]["blocked"] is False

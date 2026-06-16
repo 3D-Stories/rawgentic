@@ -67,6 +67,22 @@ project owner's deliberate, auditable choice — matching trivy's intended model
 Record the rationale beside each ID (and ideally in a `docs/` posture note) so a
 future reader sees *why* a finding is suppressed.
 
+## Working directory (cwd-independence)
+
+The gate is **cwd-independent for every scanner**: `run_scan` normalizes
+`--project-root` to an absolute path once and runs each scanner with that
+directory as its working directory (`cwd`). This matters because some tools
+resolve git state against their *process cwd*, not the scan target — most
+notably semgrep's diff mode (`--baseline-commit <ref>`), which exits `rc=2` and
+(fail-closed) blocks the whole gate with zero findings if it can't resolve the
+baseline ref from the current directory. Threading `cwd=<project-root>` means
+the gate gives identical results whether you invoke it from the repo root or
+from the plugin's `hooks/` directory.
+
+This generalizes the `.trivyignore` `--ignorefile` fix above (which made *trivy*
+cwd-robust): now every scanner — gitleaks, the SCA tools, semgrep, and trivy —
+runs from the declared `--project-root` regardless of the caller's cwd.
+
 ## CLI
 
 ```bash

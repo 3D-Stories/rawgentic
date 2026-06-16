@@ -447,6 +447,9 @@ def decide_gate(findings, errors=(), block_severities=None) -> dict:
 # --- orchestrator ----------------------------------------------------------
 
 def _default_runner(cmd, **kwargs):
+    # **kwargs forwards run_scan's cwd=project_root (and anything else) straight to
+    # subprocess.run, so every scanner runs from the project root regardless of the
+    # gate's own working directory (#101).
     return subprocess.run(cmd, capture_output=True, text=True, **kwargs)
 
 
@@ -461,6 +464,16 @@ def run_scan(project_root, *, project_type="unknown", has_docker=False,
     which = which or shutil.which
     runner = runner or _default_runner
     env = os.environ if env is None else env
+    # Normalize to an absolute path ONCE so the gate is cwd-independent for every
+    # scanner (#101): this same value is both the scan TARGET handed to each
+    # builder below AND the subprocess `cwd` threaded into the runner, so the two
+    # can never disagree (a relative target would otherwise be re-rooted against a
+    # changed cwd). semgrep in particular resolves `--baseline-commit` against its
+    # process cwd, not the target, so without this it exits rc=2 — fail-closing the
+    # whole gate with zero findings — whenever the gate is invoked from any dir
+    # other than the repo root. Same class of latent cwd-dependence v2.36.0 fixed
+    # for trivy's .trivyignore.
+    project_root = os.path.abspath(project_root)
 
     # Resolve availability against the union of every candidate tool.
     candidate_tools = {c["tool"] for s in SCANNERS for c in s["candidates"]}
@@ -478,7 +491,11 @@ def run_scan(project_root, *, project_type="unknown", has_docker=False,
                 "reason": f"{scanner['tool']}: no scannable target in project"})
             continue
         try:
-            proc = runner(cmd)
+            # Run each scanner from the (absolute) project root so its git /
+            # baseline resolution happens against the target repo, not the caller's
+            # cwd (#101). _default_runner forwards cwd to subprocess.run via
+            # **kwargs; injected test runners accept (and may assert on) it too.
+            proc = runner(cmd, cwd=project_root)
         except (OSError, subprocess.SubprocessError) as exc:
             errors.append({"scanner": scanner["tool"],
                            "message": f"failed to run: {exc}"})
