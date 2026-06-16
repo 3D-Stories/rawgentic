@@ -916,7 +916,9 @@ class TestHeadlessCLISkillWiring:
     - someone re-introduces the fragile inline-Python pattern this PR removed
     """
 
-    SKILL_MD = Path(__file__).resolve().parent.parent.parent / "skills" / "implement-feature" / "SKILL.md"
+    # The headless protocol was extracted to references/headless.md (loaded on demand);
+    # these CLI-wiring guards follow it there.
+    SKILL_MD = Path(__file__).resolve().parent.parent.parent / "skills" / "implement-feature" / "references" / "headless.md"
     WIRED_SUBCOMMANDS = ["new-id", "format-comment", "write-suspend",
                          "read-suspend", "parse-reply"]
 

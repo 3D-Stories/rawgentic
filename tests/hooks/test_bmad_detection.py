@@ -111,32 +111,42 @@ class TestDisabledSkillsPreamble:
 
 
 class TestHeadlessInteractionBlock:
-    """Lint: WF2 must have <headless-interaction>, <headless-checkpoint>, <headless-resume> blocks."""
+    """Lint: the headless protocol lives in references/headless.md (loaded on demand),
+    with a <headless-mode> pointer + the per-step [Headless:] annotations in the body."""
 
     HEADLESS_SKILLS = ["implement-feature", "fix-bug"]
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
-    def test_skill_has_headless_interaction(self, skill_name: str):
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
+    def test_reference_has_headless_interaction(self, skill_name: str):
+        ref = SKILLS_DIR / skill_name / "references" / "headless.md"
+        assert ref.exists(), f"{skill_name} missing references/headless.md"
+        content = ref.read_text()
         assert "<headless-interaction>" in content and "</headless-interaction>" in content, (
-            f"{skill_name}/SKILL.md missing <headless-interaction> block"
+            f"{skill_name}/references/headless.md missing <headless-interaction> block"
         )
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
-    def test_skill_has_headless_checkpoint(self, skill_name: str):
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
+    def test_reference_has_headless_checkpoint(self, skill_name: str):
+        content = (SKILLS_DIR / skill_name / "references" / "headless.md").read_text()
         assert "<headless-checkpoint>" in content and "</headless-checkpoint>" in content, (
-            f"{skill_name}/SKILL.md missing <headless-checkpoint> block"
+            f"{skill_name}/references/headless.md missing <headless-checkpoint> block"
         )
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
-    def test_skill_has_headless_resume(self, skill_name: str):
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
+    def test_reference_has_headless_resume(self, skill_name: str):
+        content = (SKILLS_DIR / skill_name / "references" / "headless.md").read_text()
         assert "<headless-resume>" in content and "</headless-resume>" in content, (
-            f"{skill_name}/SKILL.md missing <headless-resume> block"
+            f"{skill_name}/references/headless.md missing <headless-resume> block"
+        )
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_body_points_to_headless_reference(self, skill_name: str):
+        """The body must keep a <headless-mode> pointer at references/headless.md so the
+        protocol is still discoverable; otherwise the moved protocol is orphaned."""
+        content = (SKILLS_DIR / skill_name / "SKILL.md").read_text()
+        assert "<headless-mode>" in content, f"{skill_name}/SKILL.md missing <headless-mode> pointer"
+        assert "references/headless.md" in content, (
+            f"{skill_name}/SKILL.md <headless-mode> must point at references/headless.md"
         )
 
     # Expected [Headless annotation counts per skill
