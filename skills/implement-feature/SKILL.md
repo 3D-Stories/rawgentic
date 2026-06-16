@@ -99,6 +99,12 @@ Conditional steps (skip ONLY when their condition is not met):
 - "Context window is running low" — checkpoint in session notes and resume, do not skip
 
 If you catch yourself about to skip a mandatory step, STOP and acknowledge: "I was about to skip Step N which is mandatory. Proceeding with the full step."
+
+**The ONE sanctioned way to not run these steps** is the pre-implementation
+`<trivial-work-check>` at Step 2: if the user explicitly chooses "do it directly," you
+are declining to run WF2 *at all* (no code has been written yet) — that is NOT skipping
+a mandatory step mid-run. Once you proceed past Step 2 into the workflow, every step
+above is non-negotiable.
 </mandatory-steps>
 
 <config-loading>
@@ -160,6 +166,7 @@ AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept capabilities for WF1-created issues
 - Step 5: Remove excess tasks on scope creep (document in session notes)
 - Step 5: Risk ratio `warn` band — log to session notes, continue
+- Step 2: Trivial-work suggestion — continue the full workflow (no interactive user for a "do it directly" hand-off)
 - Step 7: Always stash dirty directory
 - Step 7: Always resume existing branch
 - Step 8: Rewrite failing RED test (up to 2 attempts)
@@ -434,6 +441,50 @@ Two fast path variants reduce Step 4 from full critique to lightweight reflect:
 Neither fast path applies to complex_feature -- those always get full /reflexion:critique.
 </fast-path-detection>
 
+<trivial-work-check>
+Some changes are below even `simple_change` — genuinely **trivial**: a typo, a
+comment, a one-line guard, a version/string/constant tweak, a doc-only edit. Running
+the full 16-step workflow (and especially the multi-agent reviews) on these costs far
+more than the change is worth. This check surfaces that BEFORE the workflow invests in
+design, planning, and review.
+
+**Trigger (evaluated in Step 2, after complexity classification):** set
+`trivial_work = true` only when ALL hold:
+- 1 file (occasionally 2), and roughly ≤ 10 changed lines
+- no new logic / control flow / public surface, no new dependency, no migration
+- mechanical or cosmetic, low reversal cost (a wrong edit is trivially reverted)
+- nothing that warrants its own test *design* (a one-line regression test is fine; the
+  change does not need TDD ceremony to get right)
+
+This is a **suggestion, never a hard gate** — the orchestrator must NOT bail on its own,
+and continuing the full workflow is always a valid choice.
+
+**When `trivial_work == true` (interactive):** STOP and present, concisely:
+```
+Step 2 → TRIVIAL detected (<N files, ~M lines, <one-line why>).
+The full WF2 (16 steps) is likely overkill for this. Proceed how?
+  (a) Do it directly now — quick edit + a targeted test + branch + PR  [recommended]
+  (b) Continue the full WF2 workflow
+```
+Wait for the choice.
+- **(a) Do it directly:** LEAVE the workflow. Make the change with the project's
+  baseline hygiene only — branch off the default branch, add a targeted test if one is
+  warranted, run the suite, bump the version + update docs per the project's pre-PR
+  checklist, open a PR — but SKIP the design critique (Step 4), plan + drift gates
+  (Steps 5–6, 9), per-task + 3-agent reviews (Steps 8a, 11), and the run-record
+  ceremony (Step 16). If you do emit a run-record, set `complexity: "trivial"`.
+- **(b) Continue:** proceed to Step 3 as normal (valid when the user wants the full
+  audit trail regardless of size).
+
+**[Headless: AUTO-RESOLVE — continue the full workflow. There is no interactive user to
+take over a "do it directly" hand-off, and continuing is the conservative default. Log
+`### WF2 Step 2 — trivial-work suggestion (auto-continued in headless)`.]**
+
+This is distinct from `<fast-path-detection>`: the fast path makes a *non-trivial* change
+cheaper (reflect vs. critique) while staying in the workflow; the trivial-work check asks
+whether running the workflow is warranted *at all*.
+</trivial-work-check>
+
 <ambiguity-circuit-breaker>
 Active at ALL quality gates (Steps 4, 6, 9, 11, 15). Triggers when:
 - Any finding has ambiguity_flag == "ambiguous"
@@ -549,6 +600,12 @@ This enables workflow resumption if context is lost.
    - If `simple_change`: `fast_path_eligible = true`
    - If `standard_feature` AND `is_wf1_created`: `fast_path_eligible = true`
    - Otherwise: `fast_path_eligible = false`
+
+9. **Trivial-work check (the one Step 2 step that may surface to the user):** Apply
+   `<trivial-work-check>`. If the change is `trivial_work == true`, present the
+   "do it directly vs. continue the full workflow" suggestion and WAIT for the user's
+   choice before proceeding to Step 3 (headless: auto-continue). The analysis from
+   items 1–8 still feeds Step 3 silently; only this suggestion interacts with the user.
 
 ### Output
 Codebase analysis with complexity classification, fast path eligibility, and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3.

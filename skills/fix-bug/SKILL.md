@@ -109,6 +109,7 @@ as normal (STOP and wait for terminal input). If in headless mode, follow this p
 
 AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept bug confirmation for WF1-created issues
+- Step 2: Trivial-work suggestion — continue the full workflow (no interactive user for a "do it directly" hand-off)
 - Step 6: Always stash dirty directory (post brief issue comment with stash ref)
 - Step 6: Always resume existing branch
 
@@ -211,6 +212,40 @@ WF3 accepts bug reports of any complexity. However:
 - If the user disagrees, they can override and stay in WF3.
 </complexity-override>
 
+<trivial-work-check>
+The low-end mirror of `<complexity-override>`. Some bug fixes are **trivial** — a typo,
+a one-line off-by-one, a comment, a config/constant tweak — where even WF3's 14 steps
+are more ceremony than the fix warrants. This surfaces that BEFORE the workflow invests
+in root-cause analysis and review.
+
+**Trigger (evaluated in Step 2, after complexity classification):** set
+`trivial_work = true` only when the fix is ~1 file (occasionally 2), roughly ≤ 10 changed
+lines, mechanical, with no new logic and low reversal cost. (Reproduce-first still applies
+*in spirit* — a one-line regression test is cheap and worth it — but the full step
+machinery is not.)
+
+This is a **suggestion, never a hard gate** — the orchestrator must NOT bail on its own,
+and continuing the full workflow is always a valid choice.
+
+**When `trivial_work == true` (interactive):** STOP and present, concisely:
+```
+Step 2 → TRIVIAL bug detected (<N files, ~M lines, <one-line why>).
+The full WF3 (14 steps) is likely overkill. Proceed how?
+  (a) Do it directly — reproduce test + minimal fix + branch + PR  [recommended]
+  (b) Continue the full WF3 workflow
+```
+Wait for the choice.
+- **(a) Do it directly:** LEAVE the workflow. Still write the failing reproduction test
+  first (it is cheap and reproduce-first is the heart of WF3), apply the minimal fix, run
+  the suite, bump the version + update docs per the project's pre-PR checklist, open a PR
+  — but SKIP the reflect gate (Step 4), the code-review step, and the run-record ceremony.
+  If you do emit a run-record, set `complexity: "trivial"`.
+- **(b) Continue:** proceed to Step 3 (Root Cause Analysis) as normal.
+
+**[Headless: AUTO-RESOLVE — continue the full workflow; log `### WF3 Step 2 —
+trivial-work suggestion (auto-continued in headless)`.]**
+</trivial-work-check>
+
 <ambiguity-circuit-breaker>
 Inherited from WF2 (identical behavior): Apply ALL findings from quality gates automatically. If any finding is ambiguous, conflicting, or requires judgment — STOP and present to user for resolution before proceeding. User has final authority (P11). **[Headless: QUESTION — post comment with all ambiguous/conflicting findings and resolution options, suspend.]**
 </ambiguity-circuit-breaker>
@@ -287,6 +322,10 @@ Wait for user confirmation before proceeding to Step 2. **[Headless: AUTO-RESOLV
    - `moderate_bug`: 4-10 files, root cause requires investigation, may need migration
    - `complex_bug`: 10+ files, cross-service, unclear root cause → **prompt upgrade to WF2**
 5. **Related issues check:** `gh issue list --repo capabilities.repo --search "<keywords>" --limit 10`
+6. **Trivial-work check (may surface to user):** Apply `<trivial-work-check>`. If the fix
+   is `trivial_work == true`, present the "do it directly vs. continue the full workflow"
+   suggestion and WAIT for the user's choice before proceeding to Step 3 (headless:
+   auto-continue).
 
 ### Output
 
@@ -303,6 +342,7 @@ Bug analysis (internal working artifact):
 - Cannot reproduce from description → ask user for more details. **[Headless: QUESTION — post comment with reproduction attempt details, suspend.]**
 - Bug is in a dependency, not our code → document and suggest upstream report
 - Classified as `complex_bug` → prompt upgrade to WF2 (user can override)
+- Classified as `trivial_work` → suggest doing it directly (user can continue WF3); see `<trivial-work-check>`
 
 ---
 

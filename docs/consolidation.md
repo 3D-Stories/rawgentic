@@ -444,11 +444,13 @@ The architecture diagram shows:
 
 **Rationale:** Each workflow's skill file is a self-contained markdown document. Claude Code reads the entire skill file into context when invoked. Making workflows reference a separate "base.md" file would require an extra file read and make the skill harder to understand in isolation. Duplication across skill files is acceptable because: (a) the duplicated parts are simple (branch creation, PR creation), (b) each workflow may need slight variations, and (c) skill files are maintained by Claude, not humans.
 
-### D2: No Downward Escalation
+### D2: No Automatic Downward Escalation — but a trivial-work suggestion
 
-**Decision:** Workflows do NOT automatically downgrade (e.g., WF2 → WF3 when the feature turns out to be a simple bug fix).
+**Decision:** Workflows do NOT automatically downgrade or re-route (e.g., WF2 → WF3 when the feature turns out to be a simple bug fix). They DO, at Step 2, surface a one-time **suggestion** to do genuinely *trivial* work directly (see `<trivial-work-check>` in WF2/WF3) — a human-in-the-loop recommendation that the user accepts or declines, never automatic routing.
 
-**Rationale:** Downward escalation adds complexity for marginal benefit. If a user starts WF2 and the implementation is simple, WF2's fast path already handles it (skip full critique, use reflect). The user can also simply complete WF2 — there's no penalty for using a "bigger" workflow on a small task (just a few extra quality gates that take seconds). Upward escalation (WF3 → WF2) is important because it prevents underestimating complexity; downward escalation is not because overestimating has low cost.
+**Rationale:** Automatic downward *routing* adds machinery (re-entry, state hand-off, mis-route risk) for marginal benefit. Upward escalation (WF3 → WF2) earns that cost because underestimating complexity is dangerous; automatic downward routing does not.
+
+The original rationale here claimed "there's no penalty for using a bigger workflow on a small task (just a few extra quality gates that take seconds)." That was **wrong for *trivial* work**: the design critique, plan/drift gates, and especially the multi-agent code reviews cost minutes and significant tokens — disproportionate for a typo or a one-line fix, and markedly worse under aggressive review settings. The trivial-work check splits the difference: **no** auto-routing, but the orchestrator points out when the full workflow is overkill and lets the user choose to do it directly. The fast path (reflect vs. critique) still handles *non-trivial-but-simple* changes from inside the workflow.
 
 ### D3: WF3 Remains Separate from WF2
 
