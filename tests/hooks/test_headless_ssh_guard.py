@@ -43,6 +43,15 @@ BLOCK_CASES = [
     ("eval", 'eval "ssh host"'),
     ("command substitution", "x=$(ssh host whoami)"),
     ("command subst inline", "echo $(ssh host hostname)"),
+    # env-assignment whose $(...) value has a SPACE must not fragment detection
+    # (Step 11 High): the real ssh after the assignment must still be caught.
+    ("env-assign subst-space ssh", "TS=$(date +%s) ssh deploy@dev-vm 'systemctl restart api'"),
+    ("env-assign subst-space rsync", "D=$(date +%F) rsync -av dist/ dev-vm:/var/www/"),
+    ("env-assign subst-space scp", "H=$(cat host.txt) scp f dev-vm:/p"),
+    # combined interpreter short-flags (Step 11 Low): -lc / -ec / -cx carry -c.
+    ("bash -lc", "bash -lc 'ssh host whoami'"),
+    ("sh -ec", "sh -ec 'scp f host:/p'"),
+    ("bash -cx", 'bash -cx "ssh host"'),
     ("backtick", "echo `ssh host id`"),
     ("subshell", "(ssh host)"),
     ("process substitution", "diff <(ssh host cat /etc/hosts) local"),

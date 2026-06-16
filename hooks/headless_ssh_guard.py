@@ -78,7 +78,11 @@ def _interpreter_inner(tokens: list[str], depth: int) -> str | None:
     if prog == "eval":
         return detect_blocked_program(" ".join(tokens[1:]), depth + 1)
     for j in range(1, len(tokens)):
-        if tokens[j] == "-c" and j + 1 < len(tokens):
+        tok = tokens[j]
+        # `-c`, or a combined short-flag cluster carrying c (`-lc`, `-ec`, `-cx`):
+        # the following token is the command string. Long flags (`--x`) excluded.
+        if (tok.startswith("-") and not tok.startswith("--")
+                and "c" in tok and j + 1 < len(tokens)):
             return detect_blocked_program(tokens[j + 1], depth + 1)
     return None
 
@@ -122,6 +126,12 @@ def _scan_wrapped(rest: list[str], depth: int) -> str | None:
 
 def _segment_program(segment: str, depth: int) -> str | None:
     """Return the blocked SSH-family program invoked by one shell segment, else None."""
+    # Blank command-substitutions/subshells (no surrounding space) so a `$(...)`
+    # value that contains a space cannot fragment a leading env-assignment — e.g.
+    # `TS=$(date +%s) ssh host` must not tokenize to `TS=$(date`, `+%s)`, `ssh`,
+    # which would hide the real `ssh`. Their contents are still inspected by the
+    # _SUBST recursion in detect_blocked_program, so blanking here loses nothing.
+    segment = _SUBST.sub("__SUBST__", segment)
     try:
         tokens = shlex.split(segment, comments=False, posix=True)
     except ValueError:
