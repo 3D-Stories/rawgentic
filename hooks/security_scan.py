@@ -471,8 +471,8 @@ def run_scan(project_root, *, project_type="unknown", has_docker=False,
     # changed cwd). semgrep in particular resolves `--baseline-commit` against its
     # process cwd, not the target, so without this it exits rc=2 — fail-closing the
     # whole gate with zero findings — whenever the gate is invoked from any dir
-    # other than the repo root. Same class of latent cwd-dependence #100 fixed for
-    # trivy's .trivyignore.
+    # other than the repo root. Same class of latent cwd-dependence v2.36.0 fixed
+    # for trivy's .trivyignore.
     project_root = os.path.abspath(project_root)
 
     # Resolve availability against the union of every candidate tool.
