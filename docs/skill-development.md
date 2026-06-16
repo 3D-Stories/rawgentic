@@ -41,6 +41,29 @@ instructions.
 Users invoke a skill with `/rawgentic:<name>` followed by optional arguments.
 For example: `/rawgentic:create-issue Add retry logic to the API client`.
 
+## Shared Blocks (single-sourcing duplicated prose)
+
+Some prose blocks (e.g. `<config-loading>`) are identical across many skills. Claude Code
+marketplace plugins **cannot** share a file across skills at runtime — installed plugins
+are copied to a cache and any path outside a skill's own directory is blocked, and
+`${CLAUDE_PLUGIN_ROOT}` is not substituted into SKILL.md *body* text. So a shared block
+cannot be a single file the skills read at runtime.
+
+Instead, the canonical copy lives in `shared/blocks/<name>.md` and is **generated into**
+each skill's inline block by `scripts/sync_shared_blocks.py`. The block's existing
+XML-ish tags (e.g. `<config-loading>` … `</config-loading>`) are the sync sentinels —
+only the text between them is replaced.
+
+- **Edit** the source in `shared/blocks/`, then run `python3 scripts/sync_shared_blocks.py`.
+- **Which skills use which source** is the `MANIFEST` in that script. Skills not listed for
+  a block are intentionally bespoke (e.g. `create-issue`'s slim WF1 config-loading).
+- `python3 scripts/sync_shared_blocks.py --check` fails if any copy drifts; this runs in CI
+  via `tests/test_shared_block_drift.py`.
+- Keep an **every-run** block (like config-loading) inline and synced — do NOT move it to a
+  `references/` file, since the skill would just have to read it back on every invocation.
+  Only **situational** blocks (read rarely, e.g. a headless protocol) benefit from moving to
+  a per-skill `references/` file.
+
 ## Workspace Directories
 
 Each skill may have a corresponding workspace directory at
