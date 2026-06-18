@@ -697,3 +697,355 @@ class TestWorkSummarySkillWiring:
             f"{skill}/SKILL.md completion step must invoke "
             f"`work_summary.py summarize`; if you renamed it, update this guard."
         )
+
+
+# ===========================================================================
+# aggregate subcommand (#94) — Tier-2 run-record rollups
+# ===========================================================================
+import os as _os
+import subprocess as _subprocess
+
+
+def _store_rec(**ov):
+    """A stored (normalized) run-record: a schema-valid core plus the
+    generated_at/schema_version the writer stamps and the aggregate reader
+    requires. Override whole sections by keyword (gates=..., outcome=..., etc.)."""
+    r = _valid_record()
+    r["schema_version"] = 1
+    r["generated_at"] = "2026-06-15T18:00:00Z"
+    for k, v in ov.items():
+        r[k] = v
+    return r
+
+
+def _write_store(path, records):
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+    return str(path)
+
+
+class TestLoadStore:
+    def test_reads_valid_lines(self, tmp_path):
+        from work_summary import load_store
+        p = _write_store(tmp_path / "s.jsonl", [_store_rec(), _store_rec()])
+        recs, excl = load_store(p)
+        assert len(recs) == 2 and excl == []
+
+    def test_blank_lines_skipped_not_excluded(self, tmp_path):
+        from work_summary import load_store
+        p = tmp_path / "s.jsonl"
+        p.write_text(json.dumps(_store_rec()) + "\n\n   \n" + json.dumps(_store_rec()) + "\n")
+        recs, excl = load_store(str(p))
+        assert len(recs) == 2 and excl == []
+
+    def test_corrupt_json_line_excluded_with_lineno(self, tmp_path):
+        from work_summary import load_store
+        p = tmp_path / "s.jsonl"
+        p.write_text(json.dumps(_store_rec()) + "\n{not json\n" + json.dumps(_store_rec()) + "\n")
+        recs, excl = load_store(str(p))
+        assert len(recs) == 2
+        assert len(excl) == 1 and "line 2" in excl[0]
+
+    @pytest.mark.parametrize("bad", ["42", "[]", '"x"', "null", "true"])
+    def test_non_dict_json_value_excluded(self, tmp_path, bad):
+        from work_summary import load_store
+        p = tmp_path / "s.jsonl"
+        p.write_text(bad + "\n" + json.dumps(_store_rec()) + "\n")
+        recs, excl = load_store(str(p))
+        assert len(recs) == 1 and len(excl) == 1 and "line 1" in excl[0]
+
+    def test_schema_invalid_line_excluded(self, tmp_path):
+        from work_summary import load_store
+        bad = _store_rec()
+        del bad["outcome"]
+        p = _write_store(tmp_path / "s.jsonl", [bad, _store_rec()])
+        recs, excl = load_store(p)
+        assert len(recs) == 1 and len(excl) == 1 and "line 1" in excl[0]
+
+    def test_missing_generated_at_excluded(self, tmp_path):
+        from work_summary import load_store
+        bad = _store_rec()
+        del bad["generated_at"]
+        p = _write_store(tmp_path / "s.jsonl", [bad])
+        recs, excl = load_store(p)
+        assert recs == [] and len(excl) == 1 and "generated_at" in excl[0]
+
+    def test_non_iso_generated_at_excluded(self, tmp_path):
+        from work_summary import load_store
+        p = _write_store(tmp_path / "s.jsonl", [_store_rec(generated_at="not-a-date")])
+        recs, excl = load_store(p)
+        assert recs == [] and len(excl) == 1
+
+    def test_empty_file_no_records_no_error(self, tmp_path):
+        from work_summary import load_store
+        p = tmp_path / "s.jsonl"
+        p.write_text("")
+        assert load_store(str(p)) == ([], [])
+
+    def test_missing_file_raises(self, tmp_path):
+        from work_summary import load_store, WorkSummaryError
+        with pytest.raises(WorkSummaryError):
+            load_store(str(tmp_path / "nope.jsonl"))
+
+    def test_nul_in_path_raises(self):
+        from work_summary import load_store, WorkSummaryError
+        with pytest.raises(WorkSummaryError):
+            load_store("/tmp/a\x00b.jsonl")
+
+
+class TestFilterSince:
+    def test_none_returns_all(self):
+        from work_summary import filter_since
+        recs = [_store_rec(generated_at="2026-01-01T00:00:00Z")]
+        assert filter_since(recs, None) == recs
+
+    def test_boundary_excludes_prior_day(self):
+        from work_summary import filter_since
+        a = _store_rec(generated_at="2026-06-16T23:59:59Z")
+        b = _store_rec(generated_at="2026-06-17T12:00:00Z")
+        assert filter_since([a, b], "2026-06-17") == [b]
+
+    def test_same_day_full_timestamp_kept(self):
+        from work_summary import filter_since
+        r = _store_rec(generated_at="2026-06-17T00:00:01Z")
+        assert filter_since([r], "2026-06-17") == [r]
+
+
+class TestAggregateGates:
+    def test_name_drift_merges_on_step(self):
+        from work_summary import aggregate_records
+        r1 = _store_rec(); r1["gates"] = [{"step": "4", "name": "Design Critique",
+                                           "findings": 2, "resolved": 2, "status": "pass"}]
+        r2 = _store_rec(); r2["gates"] = [{"step": "4", "name": "design critique (3-judge + codex)",
+                                           "findings": 0, "resolved": 0, "status": "pass"}]
+        g = aggregate_records([r1, r2])["gates"]
+        assert set(g) == {"4"}
+        assert g["4"]["runs_present"] == 2
+        assert sorted(g["4"]["names"]) == sorted(
+            ["Design Critique", "design critique (3-judge + codex)"])
+        assert g["4"]["hit_rate"] == 0.5
+        assert g["4"]["total_findings"] == 2 and g["4"]["total_resolved"] == 2
+        assert g["4"]["resolution_rate"] == 1.0
+        assert g["4"]["mean_findings_per_run"] == 1.0
+
+    def test_resolution_rate_div0_is_none(self):
+        from work_summary import aggregate_records
+        r = _store_rec(); r["gates"] = [{"step": "6", "name": "Plan Drift",
+                                         "findings": 0, "resolved": 0, "status": "pass"}]
+        g = aggregate_records([r])["gates"]["6"]
+        assert g["resolution_rate"] is None and g["hit_rate"] == 0.0
+
+    def test_absent_gate_is_not_a_miss(self):
+        from work_summary import aggregate_records
+        r1 = _store_rec(); r1["gates"] = [{"step": "11", "name": "Code Review",
+                                           "findings": 1, "resolved": 1, "status": "pass"}]
+        r2 = _store_rec(); r2["gates"] = []
+        g = aggregate_records([r1, r2])["gates"]["11"]
+        assert g["runs_present"] == 1 and g["hit_rate"] == 1.0
+
+
+class TestAggregateLoopBacks:
+    def test_mean_and_cap_rate(self):
+        from work_summary import aggregate_records
+        recs = [_store_rec(loop_backs={"used": 3, "budget": 3}),
+                _store_rec(loop_backs={"used": 1, "budget": 3})]
+        lb = aggregate_records(recs)["loop_backs"]
+        assert lb["mean_used"] == 2.0
+        assert lb["pct_hit_cap"] == 0.5 and lb["cap_runs_considered"] == 2
+
+    def test_budget_zero_excluded_from_cap(self):
+        from work_summary import aggregate_records
+        recs = [_store_rec(loop_backs={"used": 0, "budget": 0}),
+                _store_rec(loop_backs={"used": 2, "budget": 2})]
+        lb = aggregate_records(recs)["loop_backs"]
+        assert lb["cap_runs_considered"] == 1 and lb["pct_hit_cap"] == 1.0
+
+
+class TestAggregateOutcomes:
+    def _o(self, **kw):
+        r = _store_rec()
+        r["outcome"] = {**r["outcome"], **kw}
+        return r
+
+    def test_ci_pass_rate_excludes_non_configured(self):
+        from work_summary import aggregate_records
+        recs = [self._o(ci="passed"), self._o(ci="failed"),
+                self._o(ci="not_configured"), self._o(ci="skipped")]
+        out = aggregate_records(recs)["outcomes"]
+        assert out["ci_runs_considered"] == 2 and out["ci_pass_rate"] == 0.5
+
+    def test_merge_rate_excludes_null(self):
+        from work_summary import aggregate_records
+        recs = [self._o(merged=True), self._o(merged=False), self._o(merged=None)]
+        out = aggregate_records(recs)["outcomes"]
+        assert out["merge_runs_considered"] == 2 and out["merge_rate"] == 0.5
+
+    def test_deploy_excludes_not_applicable(self):
+        from work_summary import aggregate_records
+        recs = [self._o(deploy="success"), self._o(deploy="failed"),
+                self._o(deploy="not_applicable")]
+        out = aggregate_records(recs)["outcomes"]
+        assert out["deploy_runs_considered"] == 2 and out["deploy_success_rate"] == 0.5
+
+    def test_security_blocked_and_skips_over_ran_true(self):
+        from work_summary import aggregate_records
+        r1 = _store_rec(security_scan={"ran": True, "blocking_resolved": 1,
+                                       "advisory": 0, "skipped": ["iac"]})
+        r2 = _store_rec(security_scan={"ran": True, "blocking_resolved": 0,
+                                       "advisory": 0, "skipped": ["iac", "sca"]})
+        r3 = _store_rec(security_scan={"ran": False, "blocking_resolved": 0,
+                                       "advisory": 0, "skipped": []})
+        out = aggregate_records([r1, r2, r3])["outcomes"]
+        assert out["security_runs_considered"] == 2
+        assert out["security_blocked_rate"] == 0.5
+        assert out["scanner_skip_freq"] == {"iac": 2, "sca": 1}
+
+    def test_zero_denominator_rates_are_none(self):
+        from work_summary import aggregate_records
+        r = self._o(ci="not_configured", merged=None, deploy="not_applicable")
+        r["security_scan"] = {"ran": False, "blocking_resolved": 0,
+                              "advisory": 0, "skipped": []}
+        out = aggregate_records([r])["outcomes"]
+        assert out["ci_pass_rate"] is None and out["merge_rate"] is None
+        assert out["deploy_success_rate"] is None and out["security_blocked_rate"] is None
+
+
+class TestAggregateEffort:
+    def test_means_and_null_exclusion(self):
+        from work_summary import aggregate_records
+        r1 = _store_rec(changes={"files_changed": 4, "insertions": 100,
+                                 "deletions": 10, "commits": 2})
+        r2 = _store_rec(changes={"files_changed": 2, "insertions": None,
+                                 "deletions": None, "commits": 4})
+        e = aggregate_records([r1, r2])["effort"]
+        assert e["mean_files_changed"] == 3.0 and e["mean_commits"] == 3.0
+        assert e["mean_insertions"] == 100.0
+
+    def test_all_null_insertions_is_none(self):
+        from work_summary import aggregate_records
+        r = _store_rec(changes={"files_changed": 1, "insertions": None,
+                                "deletions": None, "commits": 1})
+        assert aggregate_records([r])["effort"]["mean_insertions"] is None
+
+
+class TestAggregateGrouped:
+    def test_group_by_version(self):
+        from work_summary import aggregate_grouped
+        a = _store_rec(workflow_version="2.40.0")
+        b = _store_rec(workflow_version="2.41.0")
+        c = _store_rec(workflow_version="2.41.0")
+        g = aggregate_grouped([a, b, c], "version")
+        assert set(g) == {"2.40.0", "2.41.0"}
+        assert g["2.41.0"]["n"] == 2 and g["2.40.0"]["n"] == 1
+
+    def test_group_by_complexity_none_bucket(self):
+        from work_summary import aggregate_grouped
+        a = _store_rec()
+        a["issue"] = {**a["issue"], "complexity": None}
+        g = aggregate_grouped([a], "complexity")
+        assert "(none)" in g
+
+    @pytest.mark.parametrize("dim", ["workflow", "version", "type", "complexity"])
+    def test_all_dims_supported(self, dim):
+        from work_summary import aggregate_grouped
+        assert aggregate_grouped([_store_rec()], dim)
+
+
+class TestAggregateEdge:
+    def test_empty_records_no_crash(self):
+        from work_summary import aggregate_records
+        a = aggregate_records([])
+        assert a["n"] == 0 and a["gates"] == {}
+        assert a["loop_backs"]["mean_used"] is None
+        assert a["outcomes"]["ci_pass_rate"] is None
+        assert a["effort"]["mean_files_changed"] is None
+
+    def test_unknown_fields_ignored(self):
+        from work_summary import aggregate_records
+        r = _store_rec(); r["future_field"] = "x"
+        assert aggregate_records([r])["n"] == 1
+
+    def test_render_has_no_pr_url_leak(self):
+        from work_summary import aggregate_records, render_aggregate_markdown
+        md = render_aggregate_markdown(aggregate_records([_store_rec()]))
+        assert "https://github.com" not in md and "pr_url" not in md
+
+    def test_render_always_shows_excluded(self):
+        from work_summary import aggregate_records, render_aggregate_markdown
+        md = render_aggregate_markdown(aggregate_records([_store_rec()]),
+                                       excluded=["line 2: bad"])
+        assert "Excluded" in md and "line 2" in md
+
+
+class TestAggregateCLI:
+    def test_markdown_smoke(self, tmp_path, capsys):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl", [_store_rec(), _store_rec()])
+        rc = main(["aggregate", "--store", store])
+        out = capsys.readouterr().out
+        assert rc == 0 and "Gate effectiveness" in out and "Records: 2" in out
+
+    def test_json_keys(self, tmp_path, capsys):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl", [_store_rec()])
+        rc = main(["aggregate", "--store", store, "--json"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0
+        assert {"group_by", "since", "excluded", "excluded_count", "aggregate"} <= set(payload)
+        assert {"n", "gates", "loop_backs", "outcomes", "effort"} <= set(payload["aggregate"])
+
+    def test_group_by_version_cli(self, tmp_path, capsys):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl",
+                             [_store_rec(workflow_version="2.40.0"),
+                              _store_rec(workflow_version="2.41.0")])
+        rc = main(["aggregate", "--store", store, "--json", "--group-by", "version"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0 and {"2.40.0", "2.41.0"} <= set(payload["aggregate"])
+
+    def test_since_filter_cli(self, tmp_path, capsys):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl",
+                             [_store_rec(generated_at="2026-06-10T00:00:00Z"),
+                              _store_rec(generated_at="2026-06-17T00:00:00Z")])
+        rc = main(["aggregate", "--store", store, "--json", "--since", "2026-06-17"])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0 and payload["aggregate"]["n"] == 1
+
+    def test_corrupt_line_exit0_stderr(self, tmp_path, capsys):
+        from work_summary import main
+        p = tmp_path / "s.jsonl"
+        p.write_text(json.dumps(_store_rec()) + "\n{bad\n")
+        rc = main(["aggregate", "--store", str(p), "--json"])
+        cap = capsys.readouterr()
+        assert rc == 0
+        payload = json.loads(cap.out)
+        assert payload["excluded_count"] == 1
+        assert "exclud" in cap.err.lower()
+
+    def test_missing_store_and_no_env_exit2(self, capsys, monkeypatch):
+        from work_summary import main
+        monkeypatch.delenv("RAWGENTIC_RUN_RECORD_STORE", raising=False)
+        assert main(["aggregate"]) == 2
+
+    def test_missing_file_exit2(self, tmp_path):
+        from work_summary import main
+        assert main(["aggregate", "--store", str(tmp_path / "nope.jsonl")]) == 2
+
+    def test_env_store_fallback(self, tmp_path, monkeypatch):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl", [_store_rec()])
+        monkeypatch.setenv("RAWGENTIC_RUN_RECORD_STORE", store)
+        assert main(["aggregate", "--json"]) == 0
+
+    def test_bad_group_by_is_usage_error(self, tmp_path):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl", [_store_rec()])
+        with pytest.raises(SystemExit) as ei:
+            main(["aggregate", "--store", store, "--group-by", "nonsense"])
+        assert ei.value.code == 2
+
+    def test_real_subprocess(self, tmp_path):
+        store = _write_store(tmp_path / "s.jsonl", [_store_rec()])
+        r = _subprocess.run([sys.executable, str(SUMMARY_CLI), "aggregate",
+                             "--store", store], capture_output=True, text=True)
+        assert r.returncode == 0 and "Run-record aggregate" in r.stdout

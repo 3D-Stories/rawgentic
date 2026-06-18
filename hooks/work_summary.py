@@ -415,6 +415,293 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# --- aggregate: fail-closed JSONL reader (#94) -----------------------------
+
+def _looks_iso(s) -> bool:
+    """Cheap shape check for an ISO-8601 date/timestamp that sorts lexically
+    (the writer stamps '%Y-%m-%dT%H:%M:%SZ'): a leading YYYY-MM-DD with digit
+    groups and '-' separators. Used to fail-close on a record whose
+    generated_at the aggregator dates/filters on but validate_record never
+    checks (it is writer-stamped, not workflow-supplied)."""
+    if not _is_str(s) or len(s) < 10:
+        return False
+    d = s[:10]
+    return (d[4] == "-" and d[7] == "-" and d[:4].isdigit()
+            and d[5:7].isdigit() and d[8:10].isdigit())
+
+
+def load_store(path) -> tuple:
+    """Read a JSONL run-record store -> (records, excluded).
+
+    Fail-closed reader (mirrors the fail-closed writer): each non-blank line is
+    JSON-parsed and run through validate_record; a parse-error, non-object,
+    schema-invalid, or missing/non-ISO `generated_at` line is EXCLUDED and
+    appended to `excluded` as a "line N: <reason>" string — never silently
+    averaged in nor silently dropped. Blank lines are ignored (not errors).
+
+    An unreadable/missing file (or a NUL in the path) raises WorkSummaryError
+    (usage error). An empty file returns ([], [])."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, ValueError) as exc:   # ValueError: embedded NUL in path
+        raise WorkSummaryError(f"cannot read store {path}: {exc}")
+    records, excluded = [], []
+    for i, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError) as exc:
+            excluded.append(f"line {i}: not valid JSON ({exc})")
+            continue
+        errs = validate_record(obj)
+        if errs:
+            excluded.append(f"line {i}: schema-invalid ({errs[0]})")
+            continue
+        if not _looks_iso(obj.get("generated_at")):
+            excluded.append(f"line {i}: missing or non-ISO generated_at")
+            continue
+        records.append(obj)
+    return records, excluded
+
+
+def filter_since(records, since):
+    """Keep records whose `generated_at` >= `since` (lexical ISO compare —
+    correct for the writer's Zulu format vs a bare YYYY-MM-DD, where the full
+    timestamp sorts after the bare date). Records reaching here already carry a
+    valid generated_at (load_store fail-closes otherwise). `since` falsy -> all."""
+    if not since:
+        return list(records)
+    return [r for r in records if str(r.get("generated_at", "")) >= since]
+
+
+# --- aggregate: pure metrics (#94) -----------------------------------------
+
+def _mean(values):
+    """Mean of the non-None numbers, or None if there are none (0-denominator
+    -> null, consistent with _rate)."""
+    vals = [v for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _rate(numerator, denominator):
+    """numerator/denominator, or None when denominator is 0 (never divide by
+    zero; an empty denominator is 'not measurable', rendered as n/a)."""
+    return (numerator / denominator) if denominator else None
+
+
+def aggregate_records(records) -> dict:
+    """Roll a list of (already-validated) run-records up into the aggregate
+    metric object: gate effectiveness, loop-backs, outcome rates, effort means.
+
+    Gate identity is keyed on `step` (the stable id the writer already enforces
+    unique within a record), NOT step+name: real stores carry the same gate
+    under drifting names (e.g. '4: Design Critique' vs '4: design critique
+    (3-judge + codex)'), so keying on step+name would fragment the metric. The
+    distinct names are carried as a `names` label list. (Documented deviation
+    from issue #94 AC2; see docs/run-records.md.)"""
+    n = len(records)
+
+    # gate effectiveness, keyed on step
+    gate_acc = {}
+    for r in records:
+        for g in _as_list(r.get("gates")):
+            if not isinstance(g, dict):
+                continue
+            step = g.get("step")
+            if not _is_str(step):
+                continue
+            a = gate_acc.setdefault(step, {"names": [], "runs_present": 0,
+                                           "runs_with_findings": 0,
+                                           "total_findings": 0,
+                                           "total_resolved": 0})
+            name = g.get("name")
+            if _is_str(name) and name not in a["names"]:
+                a["names"].append(name)
+            a["runs_present"] += 1
+            fnd = g.get("findings") if _is_int(g.get("findings")) else 0
+            rsv = g.get("resolved") if _is_int(g.get("resolved")) else 0
+            a["total_findings"] += fnd
+            a["total_resolved"] += rsv
+            if fnd > 0:
+                a["runs_with_findings"] += 1
+    gates = {}
+    for step, a in gate_acc.items():
+        gates[step] = {
+            "names": a["names"],
+            "runs_present": a["runs_present"],
+            "hit_rate": _rate(a["runs_with_findings"], a["runs_present"]),
+            "total_findings": a["total_findings"],
+            "total_resolved": a["total_resolved"],
+            "resolution_rate": _rate(a["total_resolved"], a["total_findings"]),
+            "mean_findings_per_run": _rate(a["total_findings"], a["runs_present"]),
+        }
+
+    # loop-backs
+    used_vals, cap_denom, cap_hits = [], 0, 0
+    for r in records:
+        lb = r.get("loop_backs")
+        if not isinstance(lb, dict):
+            continue
+        if _is_int(lb.get("used")):
+            used_vals.append(lb["used"])
+        if _is_int(lb.get("budget")) and lb["budget"] > 0:
+            cap_denom += 1
+            if _is_int(lb.get("used")) and lb["used"] == lb["budget"]:
+                cap_hits += 1
+    loop_backs = {"mean_used": _mean(used_vals),
+                  "pct_hit_cap": _rate(cap_hits, cap_denom),
+                  "cap_runs_considered": cap_denom}
+
+    # outcomes
+    ci_denom = ci_pass = merge_denom = merge_yes = 0
+    dep_denom = dep_ok = sec_denom = sec_blocked = 0
+    skip_freq = {}
+    for r in records:
+        out = _as_dict(r.get("outcome"))
+        if out.get("ci") in ("passed", "failed"):
+            ci_denom += 1
+            if out["ci"] == "passed":
+                ci_pass += 1
+        if isinstance(out.get("merged"), bool):
+            merge_denom += 1
+            if out["merged"]:
+                merge_yes += 1
+        if out.get("deploy") in ("success", "manual", "failed"):
+            dep_denom += 1
+            if out["deploy"] == "success":
+                dep_ok += 1
+        sec = _as_dict(r.get("security_scan"))
+        if sec.get("ran") is True:
+            sec_denom += 1
+            if _is_int(sec.get("blocking_resolved")) and sec["blocking_resolved"] > 0:
+                sec_blocked += 1
+            for kind in _as_list(sec.get("skipped")):
+                if _is_str(kind):
+                    skip_freq[kind] = skip_freq.get(kind, 0) + 1
+    outcomes = {
+        "ci_pass_rate": _rate(ci_pass, ci_denom), "ci_runs_considered": ci_denom,
+        "merge_rate": _rate(merge_yes, merge_denom),
+        "merge_runs_considered": merge_denom,
+        "deploy_success_rate": _rate(dep_ok, dep_denom),
+        "deploy_runs_considered": dep_denom,
+        "security_blocked_rate": _rate(sec_blocked, sec_denom),
+        "security_runs_considered": sec_denom,
+        "scanner_skip_freq": skip_freq,
+    }
+
+    # effort proxies (means; null insertions/deletions excluded from their mean)
+    def _col(section, field):
+        return [r[section][field] for r in records
+                if isinstance(r.get(section), dict) and _is_int(r[section].get(field))]
+    effort = {
+        "mean_files_changed": _mean(_col("changes", "files_changed")),
+        "mean_insertions": _mean(_col("changes", "insertions")),
+        "mean_deletions": _mean(_col("changes", "deletions")),
+        "mean_commits": _mean(_col("changes", "commits")),
+        "mean_tests_added": _mean(_col("tests", "added")),
+    }
+    return {"n": n, "gates": gates, "loop_backs": loop_backs,
+            "outcomes": outcomes, "effort": effort}
+
+
+_GROUP_KEYS = {
+    "workflow": lambda r: r.get("workflow"),
+    "version": lambda r: r.get("workflow_version"),
+    "type": lambda r: _as_dict(r.get("issue")).get("type"),
+    "complexity": lambda r: _as_dict(r.get("issue")).get("complexity"),
+}
+
+
+def aggregate_grouped(records, group_by) -> dict:
+    """Partition records by `group_by` (one of _GROUP_KEYS) and aggregate each
+    partition. A missing/null group value buckets under '(none)'."""
+    keyfn = _GROUP_KEYS[group_by]
+    groups = {}
+    for r in records:
+        k = keyfn(r)
+        groups.setdefault(k if _is_str(k) else "(none)", []).append(r)
+    return {k: aggregate_records(v) for k, v in groups.items()}
+
+
+# --- aggregate: Markdown render (#94) --------------------------------------
+
+def _fmt_pct(x):
+    return "n/a" if x is None else f"{x * 100:.0f}%"
+
+
+def _fmt_num(x):
+    if x is None:
+        return "n/a"
+    return f"{x:.1f}" if isinstance(x, float) else str(x)
+
+
+def _render_one(a) -> list:
+    lines = [f"- Records: {a['n']}", "", "### Gate effectiveness (keyed on step)"]
+    if a["gates"]:
+        lines.append("| Step | Name(s) | Runs | Hit rate | Findings | Resolved | "
+                     "Resolution | Mean/run |")
+        lines.append("|------|---------|------|----------|----------|----------|"
+                     "------------|----------|")
+        for step in sorted(a["gates"], key=lambda s: (len(s), s)):
+            g = a["gates"][step]
+            names = ", ".join(g["names"]) or "?"
+            lines.append(
+                f"| {step} | {names} | {g['runs_present']} | "
+                f"{_fmt_pct(g['hit_rate'])} | {g['total_findings']} | "
+                f"{g['total_resolved']} | {_fmt_pct(g['resolution_rate'])} | "
+                f"{_fmt_num(g['mean_findings_per_run'])} |")
+    else:
+        lines.append("(no gates recorded)")
+    lb = a["loop_backs"]
+    lines += ["", "### Loop-backs",
+              f"- Mean used: {_fmt_num(lb['mean_used'])}",
+              f"- Hit cap: {_fmt_pct(lb['pct_hit_cap'])} "
+              f"(of {lb['cap_runs_considered']} runs with budget>0)"]
+    o = a["outcomes"]
+    skips = o["scanner_skip_freq"]
+    skipstr = ", ".join(f"{k}={v}" for k, v in sorted(skips.items())) if skips else "none"
+    lines += ["", "### Outcomes",
+              f"- CI pass rate: {_fmt_pct(o['ci_pass_rate'])} (of {o['ci_runs_considered']})",
+              f"- Merge rate: {_fmt_pct(o['merge_rate'])} (of {o['merge_runs_considered']})",
+              f"- Deploy success rate: {_fmt_pct(o['deploy_success_rate'])} "
+              f"(of {o['deploy_runs_considered']})",
+              f"- Security blocked-something rate: {_fmt_pct(o['security_blocked_rate'])} "
+              f"(of {o['security_runs_considered']})",
+              f"- Scanner skips: {skipstr}"]
+    e = a["effort"]
+    lines += ["", "### Effort (means)",
+              f"- Files changed: {_fmt_num(e['mean_files_changed'])}",
+              f"- Insertions: {_fmt_num(e['mean_insertions'])}",
+              f"- Deletions: {_fmt_num(e['mean_deletions'])}",
+              f"- Commits: {_fmt_num(e['mean_commits'])}",
+              f"- Tests added: {_fmt_num(e['mean_tests_added'])}"]
+    return lines
+
+
+def render_aggregate_markdown(agg, *, group_by=None, excluded=None, since=None) -> str:
+    """Render the aggregate metric object as a Markdown report. The excluded
+    count is ALWAYS shown so a fail-closed exclusion can never read as a clean run."""
+    excluded = excluded or []
+    lines = ["# Run-record aggregate", ""]
+    if since:
+        lines += [f"_Filtered to records on/after {since}._", ""]
+    if group_by:
+        lines += [f"Grouped by **{group_by}** — {len(agg)} group(s).", ""]
+        for key in sorted(agg):
+            lines += [f"## {group_by} = {key}", ""] + _render_one(agg[key]) + [""]
+    else:
+        lines += _render_one(agg)
+    lines.append("")
+    if excluded:
+        lines.append(f"## Excluded lines ({len(excluded)})")
+        lines += [f"- {e}" for e in excluded]
+    else:
+        lines.append("Excluded lines: 0")
+    return "\n".join(lines)
+
+
 # --- CLI -------------------------------------------------------------------
 
 def main(argv=None) -> int:
@@ -446,6 +733,19 @@ def main(argv=None) -> int:
                    help="emit the normalized record as JSON instead of human text")
     p.add_argument("--no-persist", action="store_true",
                    help="render only; do not append the record to the store")
+
+    pa = sub.add_parser(
+        "aggregate",
+        help="roll a JSONL run-record store up into aggregate Tier-2 metrics")
+    pa.add_argument("--store", default=None,
+                    help=f"run-record store path (falls back to ${STORE_ENV})")
+    pa.add_argument("--json", action="store_true",
+                    help="emit the metric object as JSON instead of Markdown")
+    pa.add_argument("--group-by", choices=sorted(_GROUP_KEYS), default=None,
+                    help="partition every metric by this dimension "
+                         "(version is the cross-skill A/B slice)")
+    pa.add_argument("--since", default=None,
+                    help="only records whose generated_at is on/after this ISO date")
     args = parser.parse_args(argv)
 
     if args.cmd == "summarize":
@@ -477,6 +777,36 @@ def main(argv=None) -> int:
                 print(f"failed to persist run-record to {store}: {exc}",
                       file=sys.stderr)
                 return 1
+        return 0
+
+    if args.cmd == "aggregate":
+        store = args.store or os.environ.get(STORE_ENV)
+        if not store:
+            print(f"aggregate requires --store or ${STORE_ENV}", file=sys.stderr)
+            return 2
+        try:
+            records, excluded = load_store(store)
+        except WorkSummaryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        records = filter_since(records, args.since)
+        agg = (aggregate_grouped(records, args.group_by) if args.group_by
+               else aggregate_records(records))
+        if args.json:
+            print(json.dumps(
+                {"group_by": args.group_by, "since": args.since,
+                 "excluded": excluded, "excluded_count": len(excluded),
+                 "aggregate": agg}, separators=(",", ":")))
+        else:
+            print(render_aggregate_markdown(
+                agg, group_by=args.group_by, excluded=excluded, since=args.since))
+        # AC8: corrupt/excluded lines are ALSO surfaced on stderr with a count,
+        # so a fail-closed exclusion is never invisible.
+        if excluded:
+            print(f"{len(excluded)} line(s) excluded as corrupt/invalid:",
+                  file=sys.stderr)
+            for e in excluded:
+                print(f"  - {e}", file=sys.stderr)
         return 0
 
     return 2
