@@ -100,6 +100,52 @@ Exit codes:
 | `1` | Record invalid: summary still rendered, errors on stderr, record **not** persisted. The skill records the telemetry gap. |
 | `2` | Usage error or unreadable/non-JSON record file. |
 
+## Aggregating the store (Tier-2 rollups)
+
+Once runs accumulate, `aggregate` turns the store into the measurements the
+substrate exists for — gate effectiveness becomes a query, not a guess:
+
+```bash
+python3 hooks/work_summary.py aggregate \
+  --store <path> \
+  [--json] [--group-by {workflow,version,type,complexity}] [--since <ISO-date>]
+```
+
+`--store` falls back to `$RAWGENTIC_RUN_RECORD_STORE`; unlike `summarize`,
+`aggregate` has **no implicit default store** (rolling up the wrong project's
+store silently would be worse than a clear usage error). Markdown by default;
+`--json` emits the metric object plus the `excluded`/`excluded_count`. Reported
+metrics:
+
+| Group | Metrics |
+|-------|---------|
+| Gate effectiveness | per gate: hit rate (% of present runs with findings>0), total findings, total resolved, resolution rate, mean findings/run, `runs_present` |
+| Loop-backs | mean used; `pct_hit_cap` (used==budget, over runs with budget>0) |
+| Outcomes | CI-pass (over ci∈{passed,failed}), merge (over non-null merged), deploy-success (over deploy≠not_applicable), security-blocked (over ran==true), scanner-skip frequency |
+| Effort | means of files_changed / insertions / deletions / commits / tests.added (null insertions/deletions excluded from their mean) |
+
+Every rate reports its denominator; a 0 denominator renders `n/a` (never a
+divide-by-zero). `--group-by` partitions every metric (a missing complexity
+buckets under `(none)`); **`--group-by version`** is the deterministic half of
+the cross-skill A/B.
+
+**Gate identity is keyed on `step`, not `step + name`.** Real stores carry the
+same gate under drifting names (e.g. `4: Design Critique` vs `4: design critique
+(3-judge + codex)`); keying on `step` (which the writer already enforces unique
+*within* a record) keeps one gate's effectiveness from fragmenting across name
+variants, and the distinct names ride along as a `names` label list. When a store
+mixes workflows that reuse a step number for different gates, use `--group-by
+workflow` for a clean read. (This is a deliberate refinement of issue #94's
+literal AC2.)
+
+**Fail-closed reader** (mirrors the fail-closed writer): a line that is unparseable
+JSON, not an object, schema-invalid, or missing/non-ISO `generated_at` is
+**excluded** with a `line N: <reason>` entry surfaced on stderr and counted in the
+output — never silently averaged in or dropped. A missing/unreadable store (or a
+NUL in the path) is a usage error (exit 2); an empty store renders a `0 records`
+report (exit 0). Exit codes follow the tool convention: `0` success (including
+corrupt-lines-excluded), `2` usage error.
+
 ## How the workflows wire it in
 
 Each completion step (WF2 Step 16 → `/tmp/wf2-run-record.json`; WF3 Step 14 →

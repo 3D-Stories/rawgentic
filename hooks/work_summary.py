@@ -784,6 +784,10 @@ def main(argv=None) -> int:
         if not store:
             print(f"aggregate requires --store or ${STORE_ENV}", file=sys.stderr)
             return 2
+        if args.since is not None and not _looks_iso(args.since):
+            print(f"--since must be an ISO-8601 date (YYYY-MM-DD); got: {args.since}",
+                  file=sys.stderr)
+            return 2
         try:
             records, excluded = load_store(store)
         except WorkSummaryError as exc:

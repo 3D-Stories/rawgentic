@@ -702,7 +702,6 @@ class TestWorkSummarySkillWiring:
 # ===========================================================================
 # aggregate subcommand (#94) — Tier-2 run-record rollups
 # ===========================================================================
-import os as _os
 import subprocess as _subprocess
 
 
@@ -1044,8 +1043,16 @@ class TestAggregateCLI:
             main(["aggregate", "--store", store, "--group-by", "nonsense"])
         assert ei.value.code == 2
 
+    def test_malformed_since_is_usage_error(self, tmp_path):
+        from work_summary import main
+        store = _write_store(tmp_path / "s.jsonl", [_store_rec()])
+        # an unpadded date would silently filter everything via lexical compare;
+        # fail loud instead of returning a confusing empty result.
+        assert main(["aggregate", "--store", store, "--since", "2026-6-17"]) == 2
+
     def test_real_subprocess(self, tmp_path):
         store = _write_store(tmp_path / "s.jsonl", [_store_rec()])
         r = _subprocess.run([sys.executable, str(SUMMARY_CLI), "aggregate",
-                             "--store", store], capture_output=True, text=True)
+                             "--store", store], capture_output=True, text=True,
+                            timeout=30)
         assert r.returncode == 0 and "Run-record aggregate" in r.stdout

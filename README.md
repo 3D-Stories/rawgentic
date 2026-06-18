@@ -562,6 +562,14 @@ for workflow-specific lines (e.g. WF3's Root Cause / Fix). The store is
 summary renders best-effort (a schema nit never costs the user their completion
 output). See [run-records.md](docs/run-records.md).
 
+Once runs accumulate, `work_summary.py aggregate --store <path>` rolls the store
+up into Tier-2 metrics — per-gate effectiveness (hit rate, findings caught vs
+resolved), loop-back behavior, outcome rates (CI/merge/deploy/security), and
+effort means — with `--json`, `--group-by {workflow,version,type,complexity}`
+(version is the cross-skill A/B slice), and `--since <ISO date>`. The reader is
+fail-closed: a corrupt or schema-invalid store line is excluded with a visible
+count, never silently averaged in.
+
 ### Shared Invariants
 
 1. **Config-loading protocol** — All workflow skills read `.rawgentic.json` before executing
