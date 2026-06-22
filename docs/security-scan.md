@@ -113,9 +113,19 @@ bash scripts/install-scanners.sh --check    # report presence only (exit 1 if an
 
 It runs automatically at two points, both honoring the opt-outs:
 
-- **On first plugin use** — the `session-start` hook runs it once in the
-  background (marker: `~/.rawgentic/scanners-bootstrapped`, log:
-  `~/.rawgentic/scanner-install.log`). It never blocks startup.
+- **Every startup/resume** — the `session-start` hook delegates to
+  `hooks/scanner_bootstrap.py`, which re-checks presence (cheap `--check`),
+  installs only what's missing in the **background** (it never blocks startup),
+  throttles repeat attempts (`RAWGENTIC_SCANNER_RETRY_SECONDS`, default 6h), and
+  is **self-healing** — a scanner that goes missing, or one added by a plugin
+  update, is reinstalled on the next session with no version bookkeeping. It
+  **always writes a status file** at `~/.rawgentic/scanner-status.json`
+  (`outcome` ∈ `ok` / `installing` / `throttled` / `skipped-optout-env` /
+  `skipped-optout-ws` / `skipped-headless` / `error`, plus `checked_at`,
+  `present`, `missing`) so a no-fire or failed install is **visible** instead of
+  looking like "all clean"; the install log is `~/.rawgentic/scanner-install.log`.
+  (This replaces the old fire-once 0-byte `~/.rawgentic/scanners-bootstrapped`
+  marker, which permanently disabled re-checks once written.) Skipped in headless.
 - **At `/rawgentic:setup`** — Step 2e runs it explicitly and reports results.
 
 **Opt out** with either:
