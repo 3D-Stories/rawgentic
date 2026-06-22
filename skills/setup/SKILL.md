@@ -211,45 +211,46 @@ The `/rawgentic:adversarial-review` skill (WF5) runs a cross-model review of a
 text artifact via the Codex CLI. It can also be wired into the WF1, WF2, WF3, and
 WF4 quality gates so they automatically run a cross-model second opinion on the
 issue spec (WF1), design / implementation plan (WF2), root-cause analysis (WF3),
-or refactoring design (WF4). This is **opt-in and default-off** because it adds
-latency and sends artifact text to OpenAI (Codex). The setting lives in the active
-project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled` /
-`critiqueMethod`), NOT in `.rawgentic.json` — it is workspace-scoped, not committed
-to the project repo.
+or refactoring design (WF4). WF5 is **on by default for the applicable workflows**
+— the only thing it needs is an OpenAI account for the Codex CLI, so setup ASKS
+about that account rather than asking you to opt in. The setting lives in the
+active project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled`
+/ `critiqueMethod`), NOT in `.rawgentic.json` — it is workspace-scoped, not
+committed to the project repo. (It does send artifact text to OpenAI; declining
+the account question keeps it fully off.)
 
 Check the active project's entry for the `adversarialReview` field.
 
-- **If `adversarialReview` is not set** (first-time configuration): prompt the user:
+- **If `adversarialReview` is not set** (first-time configuration): ask the
+  OpenAI-account question and default WF5 **on** when the answer is yes:
 
   ```
-  Wire cross-model adversarial review (WF5, via Codex CLI) into workflow quality gates for [project-name]?
+  Cross-model adversarial review (WF5) gives your workflows an independent,
+  different-model second opinion at their quality gates (WF2 design + plan, WF3
+  root-cause, WF4 refactoring design). It runs through the Codex CLI, which needs
+  an OpenAI account, and it sends the artifact text to OpenAI.
 
-  When enabled for a workflow, that workflow invokes /rawgentic:adversarial-review
-  to get an independent (different-model) critique at its quality gate. The
-  artifact text is sent to OpenAI (Codex). The standalone /rawgentic:adversarial-review
-  skill works regardless of this setting; this only controls the embedded hooks.
-
-  Enable for which workflows? Enter any combination of numbers (e.g. "1,2"),
-  "none", or "all" [default: none]:
-    1. implement-feature (WF2) — review the design (Step 4) and plan (Step 6)
-    2. fix-bug (WF3)          — review the root-cause analysis (Step 4)   [extra latency on bug fixes]
-    3. create-issue (WF1)     — review the issue spec (Step 4)            [redundant with WF1's own same-model critique]
-    4. refactor (WF4)         — review the refactoring design (Step 4, Extract/Restructure only)
+  Do you have an OpenAI account you can use for Codex? (y/n) [default: n]
   ```
+
+  - **If yes →** enable WF5 for all applicable workflows by default:
+    `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug", "refactor"] }`
+    Tell the user it's now on for implement-feature (WF2), fix-bug (WF3), and
+    refactor (WF4). `create-issue` (WF1) is intentionally **left off** by default
+    because WF1 already runs a full same-model 3-judge critique, so a cross-model
+    pass there is redundant — offer it as an opt-in add ("also enable for
+    create-issue? (y/n) [default: n]"). Remind them the Codex CLI must be installed
+    and authenticated (`curl -fsSL https://codex.openai.com/install.sh | bash`
+    then `codex login`); if Codex is absent at run time the gate fails closed and
+    is skipped (no error, just no cross-model pass). WF4 (refactor) only fires on
+    the Extract/Restructure path (Rename/Simplify skips it).
+  - **If no →** disable it:
+    `"adversarialReview": { "enabled": false, "workflows": [] }`
+    The standalone `/rawgentic:adversarial-review` skill still works on demand;
+    this only controls the workflow-embedded gates.
 
   Write the result to the project's entry using **bare skill names** in `workflows`
-  (map: 1→implement-feature, 2→fix-bug, 3→create-issue, 4→refactor). Examples:
-  - none        → `"adversarialReview": { "enabled": false, "workflows": [] }`
-  - "1"         → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature"] }`
-  - "1,2"       → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }`
-  - "all"       → `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug", "create-issue", "refactor"] }`
-
-  Notes: WF1 (create-issue) is listed but expected to stay off for most projects —
-  it already runs a full same-model 3-judge critique, so the cross-model pass is
-  additive/redundant. WF4 (refactor) only fires on the Extract/Restructure path
-  (Rename/Simplify skips it). Requires the Codex CLI installed and authenticated
-  (`curl -fsSL https://codex.openai.com/install.sh | bash` then `codex login`);
-  enabling without Codex present means the gate fails closed and is skipped.
+  (valid names: `implement-feature`, `fix-bug`, `create-issue`, `refactor`).
 
 - **If `adversarialReview` is already set** (re-configuration): show current
   status and allow changing:
@@ -300,10 +301,35 @@ skipped scanner is a real coverage gap, so setup installs whatever is missing.
    presence at run time (exactly like WF5 probes for the Codex CLI). Only the
    opt-out decision is persisted, and only to the workspace file.
 
-Note: the session-start hook also runs this installer once in the background the
-first time the plugin is added, honoring the same `RAWGENTIC_SKIP_SCANNER_INSTALL=1`
-/ `installScanners: false` opt-outs — so most projects already have the scanners
-by the time setup runs; this step is the explicit, user-visible confirmation.
+Note: the session-start hook (`hooks/scanner_bootstrap.py`) also re-checks the
+scanners every startup/resume and installs any that are missing in the background,
+honoring the same `RAWGENTIC_SKIP_SCANNER_INSTALL=1` / `installScanners: false`
+opt-outs and writing a status file at `~/.rawgentic/scanner-status.json` — so most
+projects already have the scanners by the time setup runs (and a scanner that goes
+missing, or one added by a plugin update, is reinstalled automatically). This step
+is the explicit, user-visible confirmation.
+
+### New features are ON by default (opt-OUT)
+
+The feature steps above (2b BMAD, 2c headless, 2d adversarial review, 2e scanners)
+run on **every** setup invocation, including Sub-flow A re-runs against an existing
+`.rawgentic.json`. When the plugin gains a capability, re-running setup therefore
+**enriches an older config and turns the new feature on by default** — features are
+opt-OUT, not opt-in. Two deliberate exceptions, which always require an explicit
+answer and are never force-enabled:
+
+- **Headless mode (2c)** stays opt-in — it grants an external orchestrator
+  autonomous access to the project, so it must be a conscious choice (default n).
+- **Adversarial review / WF5 (2d)** depends on an OpenAI account for the Codex CLI,
+  so setup asks the account question; "yes" turns it on for the applicable
+  workflows, "no" leaves it off.
+
+Everything else (e.g. the security scanners) installs/enables by default unless the
+user has an opt-out on record. The SessionStart post-update reconcile
+(`hooks/post_update_reconcile.py`) applies this same policy without a setup re-run:
+on a version change it enables any new opt-OUT feature whose flag is absent (honoring
+recorded opt-outs), leaves headless and WF5 alone, and nudges the user to run
+`/rawgentic:setup` for the answer-required ones.
 
 ---
 

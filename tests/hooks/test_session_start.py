@@ -16,12 +16,149 @@ def _run_session_start(cwd, session_id="test-sess", event_type="startup", env_ov
         fake_home = Path(str(cwd)) / ".test_home"
         fake_home.mkdir(exist_ok=True)
         env_override["HOME"] = str(fake_home)
+    # Send the REAL Claude Code SessionStart shape: hook_event_name is always the
+    # literal "SessionStart"; the startup/resume/clear/compact subtype is in `source`.
+    # (Previously this put the subtype in hook_event_name, which laundered the
+    # source-vs-hook_event_name bug — every subtype-gated test passed against the
+    # wrong contract.)
     stdin = {
         "session_id": session_id,
         "cwd": str(cwd),
-        "hook_event_name": event_type,
+        "hook_event_name": "SessionStart",
+        "source": event_type,
     }
     return run_hook("session-start", stdin, cwd=cwd, env_override=env_override)
+
+
+class TestEventSourceContract:
+    """Claude Code delivers the startup/resume/clear/compact subtype in the
+    `source` field; `hook_event_name` is always the literal "SessionStart".
+    The hook must read `source` (with a legacy fallback to `hook_event_name`),
+    or every subtype-gated section is dead code at runtime (the bug that left
+    the scanner bootstrap, migration, reconciliation, handoff, size-handler,
+    and staleness-check all silently disabled in production)."""
+
+    def test_real_payload_shape_fires_subtype_gated_section(self, make_workspace):
+        """REAL Claude Code shape: hook_event_name='SessionStart', source='startup'.
+        A subtype-gated section (project reconciliation, startup|resume) must fire.
+        Pre-fix EVENT_TYPE='SessionStart' != 'startup' so it never ran."""
+        ws = make_workspace(
+            projects=[
+                {"name": "gone", "path": "./projects/gone", "active": True,
+                 "configured": True, "lastUsed": "2026-03-08T00:00:00Z"},
+            ],
+            create_project_dirs=False,
+        )
+        fake_home = ws.root / ".test_home"
+        fake_home.mkdir(exist_ok=True)
+        stdin = {
+            "session_id": "test-sess",
+            "cwd": str(ws.root),
+            "hook_event_name": "SessionStart",  # the EVENT name, not the subtype
+            "source": "startup",                 # the subtype lives here
+        }
+        run_hook("session-start", stdin, cwd=ws.root,
+                 env_override={"HOME": str(fake_home)})
+        updated = json.loads(ws.workspace_json.read_text())
+        assert updated["projects"][0]["active"] is False, (
+            "reconciliation (a `source`-gated section) did not fire on the real "
+            "SessionStart payload — the hook is reading hook_event_name not source"
+        )
+
+    def test_legacy_shape_still_supported_via_fallback(self, make_workspace):
+        """Legacy/test callers that put the subtype in hook_event_name (no source)
+        must still work via the `.source // .hook_event_name` fallback."""
+        ws = make_workspace(
+            projects=[
+                {"name": "gone", "path": "./projects/gone", "active": True,
+                 "configured": True, "lastUsed": "2026-03-08T00:00:00Z"},
+            ],
+            create_project_dirs=False,
+        )
+        fake_home = ws.root / ".test_home"
+        fake_home.mkdir(exist_ok=True)
+        stdin = {
+            "session_id": "test-sess",
+            "cwd": str(ws.root),
+            "hook_event_name": "startup",  # legacy shape: subtype in hook_event_name
+        }
+        run_hook("session-start", stdin, cwd=ws.root,
+                 env_override={"HOME": str(fake_home)})
+        updated = json.loads(ws.workspace_json.read_text())
+        assert updated["projects"][0]["active"] is False
+
+
+class TestBootstrapHelperWiring:
+    """End-to-end: a REAL startup payload through session-start must actually
+    invoke the scanner-bootstrap and post-update-reconcile helpers. These guard
+    the source-field regression behaviorally — the grep-only wiring drift-guards
+    can't catch the bootstrap silently never firing (which is exactly what the
+    source/hook_event_name bug did)."""
+
+    def _fake_installer(self, tmp_path):
+        sentinel = tmp_path / "install.sentinel"
+        p = tmp_path / "fake-install-scanners.sh"
+        p.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "${1:-}" = "--check" ]; then echo "present: gitleaks"; '
+            'echo "MISSING: trivy"; exit 1; fi\n'
+            f'touch "{sentinel}"\n'
+            "exit 0\n"
+        )
+        p.chmod(0o755)
+        return p, sentinel
+
+    def test_session_start_fires_scanner_bootstrap(self, make_workspace, tmp_path):
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        installer, sentinel = self._fake_installer(tmp_path)
+        _run_session_start(ws.root, event_type="startup", env_override={
+            "HOME": str(fake_home),
+            "RAWGENTIC_SCANNER_INSTALLER": str(installer),
+        })
+        # The bootstrap wrote its status file -> it was actually invoked via the
+        # real EVENT_TYPE path (pre-fix EVENT_TYPE='SessionStart' never reached it).
+        status = fake_home / ".rawgentic" / "scanner-status.json"
+        assert status.exists(), "session-start did not invoke scanner_bootstrap.py"
+        st = json.loads(status.read_text())
+        assert st["outcome"] == "installing"
+        assert "trivy" in st["missing"]
+
+    def test_scanner_bootstrap_does_not_fire_on_compact(self, make_workspace, tmp_path):
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        installer, _ = self._fake_installer(tmp_path)
+        _run_session_start(ws.root, event_type="compact", env_override={
+            "HOME": str(fake_home),
+            "RAWGENTIC_SCANNER_INSTALLER": str(installer),
+        })
+        # compact is NOT in startup|resume -> bootstrap must not run
+        assert not (fake_home / ".rawgentic" / "scanner-status.json").exists()
+
+    def test_session_start_fires_post_update_reconcile(self, make_workspace, tmp_path):
+        # Default project ("testproj") has no adversarialReview -> reconcile nudges
+        # and records the version into claude_docs.
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        # Avoid the scanner bootstrap doing real work: opt it out for this test.
+        stdout, _, rc = _run_session_start(ws.root, event_type="startup", env_override={
+            "HOME": str(fake_home),
+            "RAWGENTIC_SKIP_SCANNER_INSTALL": "1",
+        })
+        assert rc == 0
+        # reconcile recorded the version per-workspace -> it was invoked via session-start
+        marker = ws.claude_docs / "rawgentic-reconciled-version"
+        assert marker.exists(), "session-start did not invoke post_update_reconcile.py"
+        assert marker.read_text().strip(), "reconciled-version marker is empty"
 
 
 class TestReconciliation:
@@ -316,7 +453,7 @@ class TestClaudeDocsMigration:
             session_notes={"testproj": "# Session Notes -- testproj\n"},
         )
 
-        env = {"HOME": str(fake_home)}
+        env = {"HOME": str(fake_home), "RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION": "1"}
         stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
         assert rc == 0
 
@@ -344,7 +481,7 @@ class TestClaudeDocsMigration:
 
         ws = make_workspace(claude_docs_path=str(target))
 
-        env = {"HOME": str(fake_home)}
+        env = {"HOME": str(fake_home), "RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION": "1"}
         stdout, stderr, rc = _run_session_start(ws.root, env_override=env)
         assert rc == 0
         # Source should still be a symlink (unchanged)
@@ -379,7 +516,7 @@ class TestClaudeDocsMigration:
             session_notes={"testproj": "# Session Notes -- testproj\n"},
         )
 
-        env = {"HOME": str(fake_home)}
+        env = {"HOME": str(fake_home), "RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION": "1"}
         _run_session_start(ws.root, env_override=env)
 
         # Both projects' data should exist at target
@@ -399,11 +536,32 @@ class TestClaudeDocsMigration:
         fake_home.mkdir()
 
         ws = make_workspace()
-        env = {"HOME": str(fake_home)}
+        env = {"HOME": str(fake_home), "RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION": "1"}
         _run_session_start(ws.root, event_type="compact", env_override=env)
 
         # Should NOT have migrated
         assert not (fake_home / "claude_docs").exists()
+        ws_data = json.loads(ws.workspace_json.read_text())
+        assert "claudeDocsPath" not in ws_data
+
+    def test_migration_dormant_without_optin(self, make_workspace, tmp_path):
+        """The migration is DEFERRED by default: even on a real `startup` payload,
+        it must NOT move data unless RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION=1."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj",
+                               "started": "2026-01-01T00:00:00Z"}],
+            session_notes={"testproj": "# Session Notes -- testproj\n"},
+        )
+        # Real startup payload, but NO opt-in env.
+        _run_session_start(ws.root, event_type="startup",
+                           env_override={"HOME": str(fake_home)})
+        # No data moved: target absent, source still a real dir, no claudeDocsPath.
+        assert not (fake_home / "claude_docs").exists()
+        assert (ws.root / "claude_docs").is_dir()
+        assert not (ws.root / "claude_docs").is_symlink()
         ws_data = json.loads(ws.workspace_json.read_text())
         assert "claudeDocsPath" not in ws_data
 

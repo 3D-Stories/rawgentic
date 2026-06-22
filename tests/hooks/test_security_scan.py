@@ -894,23 +894,39 @@ class TestInstallerScript:
 
 
 class TestSessionStartBootstrap:
-    """The session-start bootstrap is startup-only, opt-out, and run-once."""
+    """session-start delegates the scanner bootstrap to hooks/scanner_bootstrap.py.
+    The bootstrap's BEHAVIOR (presence re-check, throttle, status file, opt-outs)
+    is tested for real in test_scanner_bootstrap.py; this is a wiring drift-guard."""
 
     def _text(self):
         return (HOOKS_DIR / "session-start").read_text()
 
-    def test_bootstrap_section_present(self):
+    def test_bootstrap_delegates_to_helper(self):
         t = self._text()
         assert "_do_scanner_bootstrap" in t
-        assert "install-scanners.sh" in t
+        assert "scanner_bootstrap.py" in t
 
-    def test_bootstrap_is_opt_out_and_guarded(self):
+    def test_runs_on_startup_and_resume(self):
+        # resume-heavy workflows rarely hit a fresh startup, so the gate must
+        # include resume (the original startup-only gate is what left it dormant).
+        # Assert the exact guard, not just the substring (behavioral coverage is in
+        # test_session_start.py::TestBootstrapHelperWiring).
+        t = self._text()
+        assert 'case "$EVENT_TYPE" in startup|resume)' in t
+
+    def test_bootstrap_mentions_opt_outs(self):
         t = self._text()
         assert "RAWGENTIC_SKIP_SCANNER_INSTALL" in t
         assert "installScanners" in t
-        assert "scanners-bootstrapped" in t  # run-once marker
-        # must not block the hook: fire-and-forget
-        assert "nohup" in t
+
+    def test_permanent_run_once_marker_is_gone(self):
+        # The old 0-byte ~/.rawgentic/scanners-bootstrapped marker disabled
+        # re-check/self-healing forever once written; it must not return.
+        t = self._text()
+        assert "scanners-bootstrapped" not in t
+
+    def test_helper_module_exists(self):
+        assert (HOOKS_DIR / "scanner_bootstrap.py").exists()
 
 
 # --- #101: scanners must be cwd-independent (run from project_root) ---------

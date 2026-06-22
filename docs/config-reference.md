@@ -299,10 +299,20 @@ running the critique. If set to `"bmad-party-mode"`, that is used instead.
 
 ### `adversarialReview`
 
-Opt-in cross-model review (WF5, `/rawgentic:adversarial-review`). The field is a
+Cross-model review (WF5, `/rawgentic:adversarial-review`). The field is a
 **per-project entry in `.rawgentic_workspace.json`** (sibling to `critiqueMethod` /
 `headlessEnabled`), NOT in `.rawgentic.json` — it is workspace-scoped, not committed to
-the project repo. Shape:
+the project repo.
+
+**Default (setup):** WF5 is **on by default for the applicable workflows** — its
+only dependency is an OpenAI account for the Codex CLI, so `/rawgentic:setup`
+Step 2d asks the account question instead of asking you to opt in: "yes" enables
+it for `implement-feature`, `fix-bug`, and `refactor` (create-issue stays off —
+WF1 already runs a same-model 3-judge critique); "no" leaves it off. When the
+field is **absent** the loader still resolves to disabled (fail-closed), and the
+SessionStart post-update reconcile (`hooks/post_update_reconcile.py`) nudges you
+to run setup after a plugin update rather than silently enabling it (it sends
+artifact text to OpenAI, so it is never force-enabled). Shape:
 
 ```json
 "adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }

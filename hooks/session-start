@@ -25,15 +25,28 @@ INPUT=$(cat)
 JQ="${HOME}/.local/bin/jq"
 [ -x "$JQ" ] || JQ="jq"
 
+# EVENT_TYPE is the SessionStart *subtype* (startup/resume/clear/compact) that the
+# subtype-gated sections below switch on. Claude Code delivers that subtype in the
+# `.source` field; `.hook_event_name` is always the literal "SessionStart" (the
+# event NAME). Read `.source` first, then fall back to `.hook_event_name` for
+# legacy/test callers that put the subtype there, then to "startup". Reading
+# `.hook_event_name` alone (the prior bug) made every `[ "$EVENT_TYPE" = "..." ]`
+# guard always-false in production — silently disabling migration, reconciliation,
+# the notes size-handler, per-project handoff, the security-staleness check, and
+# the scanner bootstrap. See docs/hooks-reference / the SessionStart contract.
 if command -v "$JQ" &>/dev/null; then
     CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
     SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
-    EVENT_TYPE=$(printf '%s' "$INPUT" | "$JQ" -r '.hook_event_name // "startup"')
+    EVENT_TYPE=$(printf '%s' "$INPUT" | "$JQ" -r '.source // .hook_event_name // "startup"')
 else
     CWD=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd','.'))" 2>/dev/null || echo ".")
     SESSION_ID=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id','unknown'))" 2>/dev/null || echo "unknown")
-    EVENT_TYPE="startup"
+    EVENT_TYPE=$(printf '%s' "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source') or d.get('hook_event_name') or 'startup')" 2>/dev/null || echo "startup")
 fi
+# Defensive: jq's // keeps an empty-string .source (only null/false fall through),
+# and a malformed payload could yield empty — never leave EVENT_TYPE blank, or no
+# subtype-gated section (startup/resume/...) would match.
+[ -n "$EVENT_TYPE" ] || EVENT_TYPE="startup"
 
 CONTEXT_PARTS=()
 
@@ -66,6 +79,12 @@ fi
 # SECTION 0.5: claude_docs migration to ~/claude_docs (one-time, startup)
 # =========================================================================
 _do_migration() {
+    # DEFERRED by default. The field-read fix (above) revived the subtype gates,
+    # but this section MOVES data (workspace/claude_docs -> ~/claude_docs + symlink,
+    # merging into any existing ~/claude_docs). That data-layout change is opt-in so
+    # it never happens as a surprise side effect of another fix. Enable deliberately
+    # with RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION=1. See the P2 migration-decision issue.
+    [ "${RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION:-}" = "1" ] || return 0
     [ "$EVENT_TYPE" = "startup" ] || return 0
     [ -n "$WORKSPACE_FILE" ] || return 0
     command -v "$JQ" &>/dev/null || return 0
@@ -235,6 +254,10 @@ _do_migration 2>/dev/null || true
 
 # --- Deferred .bak cleanup (from prior migration) ---
 _do_bak_cleanup() {
+    # Part of the deferred claude_docs migration (see _do_migration): only finishes
+    # a migration that the opt-in actually performed. Gated identically so the whole
+    # migration feature stays dormant as one unit.
+    [ "${RAWGENTIC_ENABLE_CLAUDE_DOCS_MIGRATION:-}" = "1" ] || return 0
     [ "$EVENT_TYPE" = "startup" ] || return 0
     local bak_dir="$WS_ROOT/claude_docs.bak"
     [ -d "$bak_dir" ] || return 0
@@ -546,51 +569,56 @@ _do_security_staleness_check() {
 _do_security_staleness_check 2>/dev/null || true
 
 # =========================================================================
-# SECTION 2d: Security Scanner Bootstrap (startup only, opt-out, run-once)
+# SECTION 2d: Security Scanner Bootstrap (startup|resume, opt-out, self-healing)
 # =========================================================================
 # WF2 Step 11.5 + WF9 shell out to real scanners (gitleaks/semgrep/osv-scanner/
-# trivy). On the first startup after the plugin is added, install any that are
-# missing — in the BACKGROUND (this hook has a 10s budget, so it must
-# fire-and-forget) and exactly ONCE (marker-guarded). Installs are opt-OUT, never
-# opt-in: a user declines with RAWGENTIC_SKIP_SCANNER_INSTALL=1 or
-# "installScanners": false in .rawgentic_workspace.json. Skipped in headless/CI.
+# trivy/pip-audit). Delegate to hooks/scanner_bootstrap.py, which re-checks
+# presence each eligible session, installs only what's missing IN THE BACKGROUND
+# (this hook has a 10s budget), throttles repeat attempts, and ALWAYS writes a
+# timestamped status file (~/.rawgentic/scanner-status.json) so a no-fire/failed
+# install is visible instead of looking like "all clean". Re-checking each
+# session also means a scanner added by a plugin update is installed on the next
+# session with no version bookkeeping. Opt-outs (RAWGENTIC_SKIP_SCANNER_INSTALL=1
+# / "installScanners": false) and headless are honored inside the helper. Runs on
+# startup|resume — NOT clear/compact — because a resume-heavy workflow would
+# otherwise rarely hit a fresh startup (the original startup-only gate).
 _do_scanner_bootstrap() {
-    [ "$EVENT_TYPE" = "startup" ] || return 0
-    if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then return 0; fi
-    if [ "${RAWGENTIC_SKIP_SCANNER_INSTALL:-}" = "1" ]; then return 0; fi
+    case "$EVENT_TYPE" in startup|resume) ;; *) return 0 ;; esac
+    command -v python3 &>/dev/null || return 0
+    local bootstrap="$SCRIPT_DIR/scanner_bootstrap.py"
+    [ -f "$bootstrap" ] || return 0
 
-    # Workspace-level opt-out (lets /rawgentic:setup persist the choice).
-    if [ -n "$WORKSPACE_FILE" ] && command -v "$JQ" &>/dev/null; then
-        local _optout
-        _optout=$("$JQ" -r '.installScanners // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
-        if [ "$_optout" = "false" ]; then return 0; fi
+    local _out
+    if [ -n "$WORKSPACE_FILE" ]; then
+        _out=$(python3 "$bootstrap" --event "$EVENT_TYPE" --workspace "$WORKSPACE_FILE" 2>/dev/null || true)
+    else
+        _out=$(python3 "$bootstrap" --event "$EVENT_TYPE" 2>/dev/null || true)
     fi
-
-    local installer="$SCRIPT_DIR/../scripts/install-scanners.sh"
-    [ -f "$installer" ] || return 0
-
-    local marker_dir="$HOME/.rawgentic"
-    local marker="$marker_dir/scanners-bootstrapped"
-    if [ -f "$marker" ]; then return 0; fi
-
-    # Marker is machine-global because the scanners are; write it FIRST so a slow
-    # or failed install never re-fires on every subsequent startup.
-    mkdir -p "$marker_dir" 2>/dev/null || true
-
-    # Nothing missing? Record and stay quiet.
-    if bash "$installer" --check >/dev/null 2>&1; then
-        : > "$marker" 2>/dev/null || true
-        return 0
-    fi
-
-    : > "$marker" 2>/dev/null || true
-    local logf="$marker_dir/scanner-install.log"
-    nohup bash "$installer" >"$logf" 2>&1 &
-    disown 2>/dev/null || true
-
-    CONTEXT_PARTS+=("rawgentic is installing the WF2/WF9 security scanners (gitleaks/semgrep/osv-scanner/trivy) in the background — log at ~/.rawgentic/scanner-install.log. This runs once. Opt out anytime with RAWGENTIC_SKIP_SCANNER_INSTALL=1 or \"installScanners\": false in .rawgentic_workspace.json.")
+    [ -n "$_out" ] && CONTEXT_PARTS+=("$_out")
 }
 _do_scanner_bootstrap 2>/dev/null || true
+
+# =========================================================================
+# SECTION 2f: Post-Update Feature Reconcile (startup|resume)
+# =========================================================================
+# When the plugin version changes, turn on new opt-OUT features by default
+# (honoring recorded opt-outs), leave headless opt-in, and nudge the user to run
+# /rawgentic:setup for answer-required features (WF5/adversarialReview). Delegates
+# to hooks/post_update_reconcile.py, which records the reconciled version
+# per-workspace (in claude_docs) so it runs ONCE per version.
+_do_post_update_reconcile() {
+    case "$EVENT_TYPE" in startup|resume) ;; *) return 0 ;; esac
+    command -v python3 &>/dev/null || return 0
+    [ -n "$WORKSPACE_FILE" ] || return 0
+    [ -n "$CLAUDE_DOCS" ] || return 0
+    local reconcile="$SCRIPT_DIR/post_update_reconcile.py"
+    [ -f "$reconcile" ] || return 0
+
+    local _out
+    _out=$(python3 "$reconcile" --workspace "$WORKSPACE_FILE" --state-dir "$CLAUDE_DOCS" 2>/dev/null || true)
+    [ -n "$_out" ] && CONTEXT_PARTS+=("$_out")
+}
+_do_post_update_reconcile 2>/dev/null || true
 
 # =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
