@@ -164,14 +164,19 @@ Read `.rawgentic_workspace.json`, then:
    ```json
    {"session_id":"<your session_id>","project":"<name>","project_path":"<path>","started":"<current ISO 8601 timestamp>","cwd":"<WORKSPACE_ROOT>"}
    ```
-   **For `<your session_id>` use the per-session env var `$CLAUDE_CODE_SESSION_ID`** (correct and unique even with concurrent sessions) — do this in a single Bash call so the id is captured atomically:
+   **For `<your session_id>` use the per-session env var `$CLAUDE_CODE_SESSION_ID`** (correct and unique even with concurrent sessions). Register in **two expansion-free Bash calls** so the command contains no `$(...)` command substitution: a `$(...)` (or backtick) command is flagged "Contains expansion" and **always** prompts — no `permissions.allow` rule can suppress it. Expansion-free lets `Bash(printf:*)` / `Bash(date:*)` / `Bash(printenv:*)` auto-approve the bind.
+
+   **Call 1 — read the session ID and timestamp:**
    ```bash
-   SID="${CLAUDE_CODE_SESSION_ID:-$(cat claude_docs/.current_session_id 2>/dev/null)}"
-   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' \
-     "$SID" "<name>" "<path>" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "<WORKSPACE_ROOT>" \
-     >> claude_docs/session_registry.jsonl
+   printenv CLAUDE_CODE_SESSION_ID; date -u +%Y-%m-%dT%H:%M:%SZ
    ```
-   **Do NOT** read `claude_docs/.current_session_id` as the primary source — it is shared across all sessions and overwritten on every prompt, so under concurrent sessions it can name the wrong session. (The legacy name `$CLAUDE_SESSION_ID` is not set; use `$CLAUDE_CODE_SESSION_ID`.)
+   **Call 2 — append the registry line, inlining those two values as literals** (starts with `printf`, no `$(...)` — matches `Bash(printf:*)`):
+   ```bash
+   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<SESSION_ID from call 1>" "<name>" "<path>" "<TIMESTAMP from call 1>" "<WORKSPACE_ROOT>" >> claude_docs/session_registry.jsonl
+   ```
+   `$CLAUDE_CODE_SESSION_ID` is per-process, so reading it in call 1 and writing in call 2 stays race-free.
+
+   **Do NOT** read `claude_docs/.current_session_id` as the source — it is shared across all sessions and overwritten on every prompt, so under concurrent sessions it can name the wrong session. If `printenv` prints nothing, STOP and ask the user. (The legacy name `$CLAUDE_SESSION_ID` is not set; use `$CLAUDE_CODE_SESSION_ID`.)
 4. **Initialize session notes file:** If `claude_docs/session_notes/<name>.md` does not exist, create it with:
    ```markdown
    # Session Notes -- <name>

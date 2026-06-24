@@ -92,18 +92,23 @@ Read `.rawgentic_workspace.json`, then:
 
    **How to get your session ID — use the per-session env var, NOT the shared file:**
 
-   Read it from `$CLAUDE_CODE_SESSION_ID`, which is set per Claude Code process (so it is unique and correct even when multiple sessions run **concurrently**). Always read and write the registry line in a **single Bash call** so the id is captured atomically:
+   The session ID is in `$CLAUDE_CODE_SESSION_ID`, set per Claude Code process (so it is unique and correct even when multiple sessions run **concurrently**). Register in **two expansion-free Bash calls** so the command contains no `$(...)` command substitution: a command containing `$(...)` (or backticks) is flagged "Contains expansion" and **always** triggers a permission prompt that **no `permissions.allow` rule can suppress** — keeping it expansion-free lets a `Bash(printf:*)` / `Bash(date:*)` / `Bash(printenv:*)` allow rule auto-approve the bind.
+
+   **Call 1 — read the session ID and timestamp** (two allowlistable leading binaries, no command substitution):
 
    ```bash
-   SID="${CLAUDE_CODE_SESSION_ID}"
-   # Fallback only for older Claude Code that doesn't set the env var:
-   [ -n "$SID" ] || SID="$(cat claude_docs/.current_session_id 2>/dev/null)"
-   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' \
-     "$SID" "<target project name>" "<target project path>" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "<workspace root>" \
-     >> claude_docs/session_registry.jsonl
+   printenv CLAUDE_CODE_SESSION_ID; date -u +%Y-%m-%dT%H:%M:%SZ
    ```
 
-   **Do NOT** read `claude_docs/.current_session_id` as the primary source: that file is **shared across all sessions** and is overwritten by every session on every prompt, so under concurrent sessions it can return *another* session's id and bind the wrong session. (Note: the legacy name `$CLAUDE_SESSION_ID` is **not** set — the correct variable is `$CLAUDE_CODE_SESSION_ID`.) **Do NOT invent a session ID.**
+   **Call 2 — append the registry line, inlining those two values as literals** (starts with `printf`, no `$(...)`, only `>>` redirection, so it matches a `Bash(printf:*)` allow rule):
+
+   ```bash
+   printf '{"session_id":"%s","project":"%s","project_path":"%s","started":"%s","cwd":"%s"}\n' "<SESSION_ID from call 1>" "<target project name>" "<target project path>" "<TIMESTAMP from call 1>" "<workspace root>" >> claude_docs/session_registry.jsonl
+   ```
+
+   Because `$CLAUDE_CODE_SESSION_ID` is per-process, reading it in call 1 and writing in call 2 is still race-free — there is no shared state between the two calls to corrupt.
+
+   **Do NOT** read `claude_docs/.current_session_id` as the source: that file is **shared across all sessions** and is overwritten by every session on every prompt, so under concurrent sessions it can return *another* session's id and bind the wrong session. If `printenv` prints nothing (only older Claude Code that does not set the env var), STOP and ask the user rather than guessing. (The legacy name `$CLAUDE_SESSION_ID` is **not** set — the correct variable is `$CLAUDE_CODE_SESSION_ID`.) **Do NOT invent a session ID.**
 
 Report:
 ```
