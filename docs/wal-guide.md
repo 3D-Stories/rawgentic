@@ -191,9 +191,14 @@ have no stdin and must self-identify. They read the per-process env var
 overwritten by every session on every prompt — under concurrent sessions it can
 name the wrong session, writing a registry line that hijacks another session's
 binding (and `tail -1` resolution makes it sticky). The shared file remains only
-as a fallback for Claude Code builds that don't set the env var. To unstick a
-mis-bound live session without reinstalling, append an authoritative line from
-**that** session's terminal:
+as a fallback for Claude Code builds that don't set the env var. The skills issue
+the bind as **two expansion-free Bash calls** — `printenv CLAUDE_CODE_SESSION_ID; date -u …`
+to read the id + timestamp, then a fully-literal `printf … >> …session_registry.jsonl` —
+so no `$(...)` command substitution appears in the command Claude runs (Claude Code flags
+`$(...)` as "Contains expansion" and always prompts, which no `permissions.allow` rule can
+suppress). The manual recovery snippet below runs in *your* shell, not through Claude's
+permission layer, so it can use `$(date)` freely. To unstick a mis-bound live session
+without reinstalling, append an authoritative line from **that** session's terminal:
 ```bash
 P=<project>
 printf '{"session_id":"%s","project":"%s","project_path":"./projects/%s","started":"%s","cwd":"%s"}\n' \
