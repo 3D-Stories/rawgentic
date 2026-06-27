@@ -102,6 +102,31 @@ def test_render_includes_ambiguity():
     assert "unclear scope" in md
 
 
+def test_render_includes_evidence_quote_and_confidence():
+    f = _f("Critical", evidence="passwords stored in plaintext", confidence="high")
+    md = arl.render_report_md([f], {"artifact": "x.md", "date": "d"})
+    assert "> passwords stored in plaintext" in md  # rendered as a quote block
+    assert "high confidence" in md
+
+
+def test_render_multiline_evidence_is_quoted_per_line():
+    f = _f("High", evidence="line one\nline two")
+    md = arl.render_report_md([f], {"artifact": "x.md", "date": "d"})
+    assert "> line one\n> line two" in md
+
+
+def test_render_reviewer_line_shows_model_and_effort():
+    md = arl.render_report_md([], {"artifact": "x.md", "date": "d",
+                                   "model": "gpt-5.5", "effort": "high"})
+    assert "gpt-5.5" in md and "high" in md
+
+
+def test_render_reviewer_line_defaults_when_model_inherited():
+    md = arl.render_report_md([], {"artifact": "x.md", "date": "d",
+                                   "model": "", "effort": "high"})
+    assert "config-default" in md  # model inherited from Codex/config
+
+
 def test_render_is_report_only_note():
     md = arl.render_report_md([], {"artifact": "x.md", "date": "d"})
     assert "does not edit" in md.lower()

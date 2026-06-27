@@ -34,6 +34,9 @@ def _make_codex_stub(bin_dir: Path, *, login_rc: int = 0, exec_body: str = "",
         'if [ "$1" = "--version" ]; then echo "codex-cli 0.139.0"; exit 0; fi\n'
         'if [ "$1" = "exec" ]; then\n'
         f"  sleep {sleep}\n"
+        # Capture full argv (before the shift loop consumes it) so a test can
+        # assert the invocation flags. Opt-in via CODEX_STUB_ARGS_FILE.
+        '  if [ -n "$CODEX_STUB_ARGS_FILE" ]; then printf \'%s\\n\' "$@" > "$CODEX_STUB_ARGS_FILE"; fi\n'
         "  out=\"\"\n"
         "  while [ $# -gt 0 ]; do\n"
         '    if [ "$1" = "-o" ]; then out="$2"; fi\n'
@@ -117,15 +120,38 @@ def test_prereq_ok(tmp_path, monkeypatch):
 # --- build_prompt ---
 
 def test_build_prompt_includes_artifact_and_lens():
-    p = arl.build_prompt("# My Design", "design")
+    p = arl.build_prompt("# My Design", "design", nonce="abc123")
     assert "My Design" in p
     assert "architectural" in p.lower()
-    assert "ARTIFACT START" in p
+    assert "BEGIN UNTRUSTED ARTIFACT" in p and "END UNTRUSTED ARTIFACT" in p
 
 
 def test_build_prompt_unknown_type_uses_generic_lens():
-    p = arl.build_prompt("text", "weird-type")
+    p = arl.build_prompt("text", "weird-type", nonce="n")
     assert "broadly" in p.lower()  # generic lens text
+
+
+def test_build_prompt_nonce_in_both_fence_lines_and_instruction():
+    # The same nonce must appear in BOTH fence markers AND the instruction that
+    # references it; if they drift apart the unforgeable-delimiter guard weakens.
+    p = arl.build_prompt("body", "design", nonce="DEADBEEF")
+    assert p.count("[k=DEADBEEF]") == 3  # 2 fence lines + 1 instruction reference
+
+
+def test_build_prompt_generates_unforgeable_nonce_when_omitted():
+    a = arl.build_prompt("x", "design")
+    b = arl.build_prompt("x", "design")
+    # Each call mints a fresh random nonce (untrusted text can't predict it).
+    assert a != b
+
+
+def test_build_prompt_has_injection_and_tool_guards():
+    p = arl.build_prompt("payload", "design", nonce="n")
+    assert "STRICTLY FORBIDDEN" in p            # forbid shell/tools (bwrap workaround)
+    assert "untrusted DATA" in p                # data-not-instructions framing
+    assert "SEVERITY RUBRIC" in p               # de-inflation rubric
+    assert "GROUNDING" in p and "verbatim" in p  # evidence grounding rule
+    assert "Respond using the provided output schema only." in p
 
 
 # --- run_codex_review: success + every fail-closed path ---
@@ -134,9 +160,11 @@ def _valid_output() -> str:
     return json.dumps({
         "summary": "ok",
         "findings": [
-            {"severity": "High", "category": "security", "description": "Issue here",
+            {"evidence": "q1", "severity": "High", "category": "security",
+             "confidence": "high", "description": "Issue here",
              "recommendation": "Fix it", "location": "S2"},
-            {"severity": "Low", "category": "scope", "description": "Minor",
+            {"evidence": "q2", "severity": "Low", "category": "scope",
+             "confidence": "low", "description": "Minor",
              "recommendation": "Consider", "location": "S3"},
         ],
     })
@@ -152,6 +180,60 @@ def test_run_success(tmp_path, monkeypatch):
     assert len(res.findings) == 2
     # ranked: High before Low
     assert res.findings[0]["severity"] == "High"
+    # model/effort recorded for report auditability (effort pinned, model inherited)
+    assert res.effort == arl.REASONING_EFFORT
+    assert res.model == (arl.REVIEW_MODEL or "")
+
+
+def test_run_invocation_pins_effort_ephemeral_and_clean_output(tmp_path, monkeypatch):
+    args_file = tmp_path / "argv.txt"
+    monkeypatch.setenv("CODEX_STUB_ARGS_FILE", str(args_file))
+    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
+    _path_with(tmp_path / "bin", monkeypatch)
+    root = tmp_path / "proj"; root.mkdir()
+    art = root / "design.md"; art.write_text("# Design\nstuff")
+    res = arl.run_codex_review(str(art), "design", str(root))
+    assert res.status == "success"
+    argv = args_file.read_text().splitlines()
+    # the quality/privacy/parse-safety/independence levers must all be present
+    assert f"model_reasoning_effort={arl.REASONING_EFFORT}" in argv
+    assert "--ephemeral" in argv
+    assert "--color" in argv and "never" in argv
+    assert "project_doc_max_bytes=0" in argv
+    assert "read-only" in argv               # sandbox belt-and-suspenders kept
+    assert "--skip-git-repo-check" in argv
+    # model NOT pinned by default (would rot as OpenAI retires model ids)
+    assert "-m" not in argv
+
+
+def test_run_invocation_pins_model_when_env_set(tmp_path, monkeypatch):
+    args_file = tmp_path / "argv.txt"
+    monkeypatch.setenv("CODEX_STUB_ARGS_FILE", str(args_file))
+    monkeypatch.setattr(arl, "REVIEW_MODEL", "gpt-some-model")
+    _make_codex_stub(tmp_path / "bin", exec_body=_valid_output())
+    _path_with(tmp_path / "bin", monkeypatch)
+    root = tmp_path / "proj"; root.mkdir()
+    art = root / "design.md"; art.write_text("# Design\nstuff")
+    res = arl.run_codex_review(str(art), "design", str(root))
+    assert res.status == "success"
+    argv = args_file.read_text().splitlines()
+    assert "-m" in argv and "gpt-some-model" in argv
+    assert res.model == "gpt-some-model"
+
+
+def test_run_invalid_when_codex_drops_evidence(tmp_path, monkeypatch):
+    # If Codex returns findings missing the required grounding quote, fail-closed
+    # (parse_error) rather than presenting ungrounded findings as a clean review.
+    bad = json.dumps({"summary": "s", "findings": [
+        {"severity": "High", "category": "security", "confidence": "high",
+         "description": "d", "recommendation": "r", "location": "S1",
+         "ambiguity_flag": None, "ambiguity_reason": None}]})  # no evidence
+    _make_codex_stub(tmp_path / "bin", exec_body=bad)
+    _path_with(tmp_path / "bin", monkeypatch)
+    root = tmp_path / "proj"; root.mkdir()
+    art = root / "d.md"; art.write_text("x")
+    res = arl.run_codex_review(str(art), "design", str(root))
+    assert res.status == "parse_error"
 
 
 def test_run_not_installed(tmp_path, monkeypatch):

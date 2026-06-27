@@ -16,8 +16,10 @@ def _finding(**over):
     # FINDINGS_SCHEMA (OpenAI strict structured-output requires every property in
     # `required`, recursively — see #80). A realistic finding always carries them
     # (null when not flagged), so the helper must too, or it diverges from the
-    # schema the strict jsonschema test enforces.
-    base = {"severity": "High", "category": "security",
+    # schema the strict jsonschema test enforces. evidence (grounding quote) and
+    # confidence are required + non-nullable.
+    base = {"evidence": "a quoted span", "severity": "High", "category": "security",
+            "confidence": "high",
             "description": "d", "recommendation": "r", "location": "S1",
             "ambiguity_flag": False, "ambiguity_reason": None}
     base.update(over)
@@ -49,6 +51,43 @@ def test_validate_finding_non_dict():
 def test_validate_finding_bad_ambiguity_type():
     ok, errs = arl.validate_finding(_finding(ambiguity_flag="yes"))
     assert not ok and any("ambiguity_flag" in e for e in errs)
+
+
+def test_validate_finding_missing_evidence():
+    # Grounding gate: a finding with no quotable evidence is exactly the generic
+    # hallucinated nitpick the rule exists to drop.
+    ok, errs = arl.validate_finding(_finding(evidence=""))
+    assert not ok and any("evidence" in e for e in errs)
+
+
+def test_validate_finding_evidence_non_string():
+    ok, errs = arl.validate_finding(_finding(evidence=123))
+    assert not ok and any("evidence" in e for e in errs)
+
+
+def test_validate_finding_category_off_vocab():
+    # category is now an enum; an off-vocab value (valid in old free-string schema)
+    # must be rejected so it can't break report grouping.
+    ok, errs = arl.validate_finding(_finding(category="design"))
+    assert not ok and any("category" in e for e in errs)
+
+
+def test_validate_finding_all_known_categories_accepted():
+    for cat in arl.CATEGORIES:
+        ok, errs = arl.validate_finding(_finding(category=cat))
+        assert ok, (cat, errs)
+
+
+@pytest.mark.parametrize("bad", ["sure", "HIGH", "", None, 0.9])
+def test_validate_finding_bad_confidence(bad):
+    ok, errs = arl.validate_finding(_finding(confidence=bad))
+    assert not ok and any("confidence" in e for e in errs)
+
+
+@pytest.mark.parametrize("good", ["high", "medium", "low"])
+def test_validate_finding_good_confidence(good):
+    ok, errs = arl.validate_finding(_finding(confidence=good))
+    assert ok, errs
 
 
 # --- validate_findings ---
@@ -164,6 +203,51 @@ def test_optional_finding_fields_are_nullable_in_schema():
         assert "null" in t, f"{field} must allow null (strict mode requires it in `required`)"
 
 
+def test_category_is_enum_sharing_one_source_of_truth():
+    item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
+    assert item["properties"]["category"]["enum"] == list(arl.CATEGORIES)
+
+
+def test_confidence_is_enum_in_schema():
+    item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
+    assert item["properties"]["confidence"]["enum"] == ["high", "medium", "low"]
+
+
+def test_evidence_and_confidence_required_non_nullable():
+    item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
+    assert "evidence" in item["required"] and "confidence" in item["required"]
+    # non-nullable: a plain string type, not ["string","null"]
+    assert item["properties"]["evidence"]["type"] == "string"
+
+
+def test_evidence_is_first_property_for_cot_grounding():
+    # Emitting the grounding quote BEFORE the conclusion conditions generation on
+    # real text — order matters, so lock it.
+    props = list(arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]["properties"])
+    assert props[0] == "evidence"
+
+
+def test_schema_has_no_strict_mode_rejected_keywords():
+    # minLength/pattern/minItems/minimum/maxItems are rejected by OpenAI strict
+    # mode (HTTP 400). Enforce non-emptiness in validate_finding, never the schema.
+    banned = {"minLength", "maxLength", "pattern", "minItems", "maxItems",
+              "minimum", "maximum", "format"}
+    found = []
+
+    def walk(node, path="root"):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k in banned:
+                    found.append(f"{path}.{k}")
+                walk(v, f"{path}.{k}")
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(v, f"{path}[{i}]")
+
+    walk(arl.FINDINGS_SCHEMA)
+    assert not found, f"strict-mode-rejected keywords present: {found}"
+
+
 def test_validate_finding_accepts_null_optionals():
     # Codex now returns ALL fields (optionals as null) under strict mode.
     f = _finding(ambiguity_flag=None, ambiguity_reason=None, location=None)
@@ -194,7 +278,8 @@ def test_normalize_handles_null_location():
 def test_strict_schema_validates_full_findings_with_jsonschema():
     jsonschema = pytest.importorskip("jsonschema")
     doc = {"summary": "s", "findings": [
-        {"severity": "High", "category": "security", "description": "d",
-         "recommendation": "r", "ambiguity_flag": None, "ambiguity_reason": None, "location": None},
+        {"evidence": "q", "severity": "High", "category": "security",
+         "confidence": "high", "description": "d", "recommendation": "r",
+         "ambiguity_flag": None, "ambiguity_reason": None, "location": None},
     ]}
     jsonschema.validate(doc, arl.FINDINGS_SCHEMA)  # must not raise
