@@ -57,7 +57,8 @@ def _ws(tmp_path, adv):
 
 def _valid_output():
     return json.dumps({"summary": "s", "findings": [
-        {"severity": "High", "category": "security", "description": "d",
+        {"evidence": "a quoted span", "severity": "High", "category": "security",
+         "confidence": "high", "description": "d",
          "recommendation": "r", "location": "S1"}]})
 
 

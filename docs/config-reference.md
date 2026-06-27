@@ -359,7 +359,25 @@ tokens, private keys) and names any detected categories in the notice. Set
 Findings reports are written locally to `<project>/docs/reviews/` and are never uploaded.
 The Codex CLI must be installed (`curl -fsSL https://codex.openai.com/install.sh | bash`)
 and authenticated (`codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
-for headless/CI). Tunable via `RAWGENTIC_ADV_REVIEW_MAX_BYTES`, `_TIMEOUT`, `_MAX_RETRIES`.
+for headless/CI).
+
+The reviewer is invoked via `codex exec` (never `codex review`, which is git-diff-only)
+with tools forbidden, structured-JSON output, and these env-tunable knobs:
+
+| Env var | Default | Effect |
+| --- | --- | --- |
+| `RAWGENTIC_ADV_REVIEW_EFFORT` | `high` | Codex reasoning effort (`low`\|`medium`\|`high`). Pinned explicitly so a fresh `~/.codex/config.toml` that defaults to medium does not silently shallow the review. Unknown values fall back to `high`. |
+| `RAWGENTIC_ADV_REVIEW_MODEL` | _unset_ | Override the reviewer model (`codex exec -m`). Unset = inherit the Codex/config default. **Don't hardcode a model id** — OpenAI retires them over time. |
+| `RAWGENTIC_ADV_REVIEW_TIMEOUT` | `600` | Codex invocation timeout (seconds). 600 (was 300) gives high-effort reviews of large artifacts headroom so they don't silently fail-closed. |
+| `RAWGENTIC_ADV_REVIEW_MAX_BYTES` | `200000` | Artifact size cap; over-cap truncates and warns. |
+| `RAWGENTIC_ADV_REVIEW_MAX_RETRIES` | `1` | Retries on transient Codex failure. |
+| `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS` | _off_ | When set, block egress if secrets are detected (otherwise warn-only). |
+
+The review also runs `--ephemeral` (the prompt, which inlines the artifact, is not
+persisted to Codex session history) and `-c project_doc_max_bytes=0` (suppresses the
+reviewed project's `AGENTS.md` so the cross-model reviewer stays independent). Each
+finding must carry a verbatim `evidence` quote and a `confidence`; severity follows an
+explicit rubric to curb inflation.
 
 ### Detection Flow
 

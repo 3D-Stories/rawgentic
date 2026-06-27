@@ -18,10 +18,23 @@ OUTPUT: <activeProject.path>/docs/reviews/<slug>-<YYYY-MM-DD>.md  (report-only)
 ENGINE: hooks/adversarial_review_lib.py
 ENV (all optional, frozen at lib import):
   RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap truncates + warns
-  RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 300)    — Codex invocation timeout (seconds)
+  RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — Codex invocation timeout (seconds); 600 gives high-effort reviews of large artifacts headroom
   RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient Codex failure
   RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected
+  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — Codex reasoning effort (low|medium|high); pinned explicitly so a fresh ~/.codex/config.toml that defaults to medium does not silently degrade the review
+  RAWGENTIC_ADV_REVIEW_MODEL       (default unset)  — override the reviewer model (`codex exec -m`); unset = inherit Codex/config default (do NOT hardcode a model id — OpenAI retires them)
 </constants>
+
+<reviewer-invocation>
+The engine invokes Codex as a one-shot, tools-OFF, structured-JSON reviewer (NOT
+`codex review`, which is git-diff-only with no `--output-schema`). The argv is:
+`codex exec [-m <model>] --output-schema <schema> -o <out> -c model_reasoning_effort=<effort> --ephemeral --color never -c project_doc_max_bytes=0 -s read-only -C <root> --skip-git-repo-check -`
+- **effort pinned** (high): gpt-5.5 defaults to medium; deep critique benefits from high.
+- **--ephemeral**: the prompt inlines the full (possibly proprietary) artifact; this keeps it out of CODEX_HOME session history.
+- **project_doc_max_bytes=0**: suppresses the reviewed project's AGENTS.md so the cross-model reviewer stays independent of the project's own conventions.
+- **--color never**: keeps the parsed output byte-clean.
+- The prompt itself FORBIDS the model from running any shell/tool/file/network op (review purely from inlined text) — required where the Codex bubblewrap sandbox is unavailable, and a defense against artifact-embedded prompt injection. Each finding must carry a verbatim `evidence` quote (grounding) and a `confidence`; severity is governed by an explicit rubric to curb inflation.
+</reviewer-invocation>
 
 <config-loading>
 Before executing any workflow steps, load the project configuration:
