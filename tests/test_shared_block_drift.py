@@ -6,6 +6,7 @@ is single-sourced by keeping the source in shared/blocks/ and generating each sk
 inline copy via scripts/sync_shared_blocks.py. This guard fails if any copy drifts from
 its source — the exact failure that let config-loading silently diverge (an em-dash) before.
 """
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,15 @@ SHARED = REPO_ROOT / "shared" / "blocks"
 
 def _run(*args):
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
+
+
+def _run_in(root: Path, *args):
+    """Run a COPY of the sync script rooted at `root` (it resolves paths from its
+    own __file__). Isolates any file-writing sync from the real working tree."""
+    return subprocess.run(
+        [sys.executable, str(root / "scripts" / "sync_shared_blocks.py"), *args],
+        capture_output=True, text=True,
+    )
 
 
 def _config_block(skill: str) -> str:
@@ -35,11 +45,21 @@ def test_no_shared_block_drift():
     assert r.returncode == 0, f"drift detected:\n{r.stderr}"
 
 
-def test_sync_is_idempotent():
-    """Running sync when already in sync changes nothing."""
-    r = _run()
+def test_sync_is_idempotent(tmp_path):
+    """Running sync when already in sync changes nothing.
+
+    Runs in a COPY of the repo, not the working tree: a bare `sync` WRITES files,
+    so on a tree with in-progress drift it would silently clobber the edit. The
+    sandbox keeps this guard from ever mutating a contributor's real checkout.
+    """
+    for d in ("scripts", "shared", "skills"):
+        shutil.copytree(REPO_ROOT / d, tmp_path / d)
+    r = _run_in(tmp_path)
     assert r.returncode == 0
     assert "nothing to sync" in r.stdout.lower(), r.stdout
+    # And it truly touched nothing: the copied skills equal the originals.
+    for skill in ("config-loading.md",):  # source block itself unchanged
+        assert (tmp_path / "shared" / "blocks" / skill).read_text() == (SHARED / skill).read_text()
 
 
 def test_create_issue_intentionally_not_synced():
