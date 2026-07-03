@@ -102,6 +102,33 @@ recovery, legacy archival removal verification, notes size handler
 integration, security pattern staleness detection, context emission,
 and claude_docs migration.
 
+### Model Routing (`tests/hooks/test_model_routing.py`)
+
+16 unit tests for `hooks/model_routing_lib.py` (v2.46.0). Covers role
+resolution, partial/absent config, invalid values, malformed/invalid-UTF-8
+workspace files (fail-open to `inherit`), the review-role opus-floor warning,
+and the always-exit-0 CLI contract.
+
+### Model Routing Dispatch Guard (`tests/hooks/test_model_routing_dispatch.py`)
+
+Drift guard asserting every subagent dispatch site in
+implement-feature/fix-bug/refactor carries its `<!-- model-routing: role=X -->`
+annotation, plus the WF2 Step 8 delegation clean-state-boundary contract.
+
+### Peer Consult Lib (`tests/hooks/test_peer_consult_lib.py`)
+
+12 tests for the consult mode in `hooks/adversarial_review_lib.py` (WF13):
+`--key` backward compatibility, `PROPOSAL_SCHEMA` shape, peer-framed prompt
+nonce fencing, report paths, and PATH-stubbed CLI runner tests proving the
+exit-code contract (0/2/3/4) and the empty-proposal marker on every
+non-success path.
+
+### Peer Consult Registration (`tests/hooks/test_peer_consult_registration.py`)
+
+WF13 registration drift guard (mirrors WF5's): skill dir + frontmatter,
+marketplace entry, evals stub, the WF2 Step 3 blind-both-ways integration
+markers, and the setup Step 2f/2g presence checks.
+
 ## Skill Evaluation
 
 Skills are tested via the `/skill-creator` eval pipeline, which produces

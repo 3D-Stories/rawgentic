@@ -1,0 +1,171 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rawgentic v2.45 → v2.46 — What Changed</title>
+<style>
+:root{
+  --ink:#1E2B23; --ink-2:#4A5B50; --ink-3:#718276;
+  --paper:#F6F8F5; --card:#FFFFFF; --line:#DCE3DC;
+  --accent:#256D4F; --accent-ink:#1D5740; --accent-soft:#E4F0E9;
+  --gone:#8A4A33; --gone-soft:#F4E9E4;
+  --code-bg:#EDF1EC; --new:#256D4F;
+}
+@media (prefers-color-scheme: dark){:root{
+  --ink:#E6ECE7; --ink-2:#A9B8AD; --ink-3:#7C8B80;
+  --paper:#111815; --card:#18211C; --line:#2A3630;
+  --accent:#5CBF93; --accent-ink:#5CBF93; --accent-soft:#1D2E26;
+  --gone:#D98E6C; --gone-soft:#2E211B;
+  --code-bg:#1E2A24; --new:#5CBF93;
+}}
+:root[data-theme="dark"]{
+  --ink:#E6ECE7; --ink-2:#A9B8AD; --ink-3:#7C8B80;
+  --paper:#111815; --card:#18211C; --line:#2A3630;
+  --accent:#5CBF93; --accent-ink:#5CBF93; --accent-soft:#1D2E26;
+  --gone:#D98E6C; --gone-soft:#2E211B;
+  --code-bg:#1E2A24; --new:#5CBF93;
+}
+:root[data-theme="light"]{
+  --ink:#1E2B23; --ink-2:#4A5B50; --ink-3:#718276;
+  --paper:#F6F8F5; --card:#FFFFFF; --line:#DCE3DC;
+  --accent:#256D4F; --accent-ink:#1D5740; --accent-soft:#E4F0E9;
+  --gone:#8A4A33; --gone-soft:#F4E9E4;
+  --code-bg:#EDF1EC; --new:#256D4F;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);
+  font:16px/1.6 -apple-system,"Segoe UI",system-ui,Roboto,sans-serif}
+main{max-width:76ch;margin:0 auto;padding:3rem 1.25rem 5rem;
+  display:flex;flex-direction:column;gap:2.5rem}
+header{border-bottom:3px solid var(--accent);padding-bottom:1.4rem}
+.eyebrow{font-size:.72rem;font-weight:650;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--accent-ink)}
+h1{font-size:1.85rem;line-height:1.2;margin:.4rem 0 .5rem;font-weight:750;
+  letter-spacing:-.015em;text-wrap:balance}
+.meta{color:var(--ink-3);font-size:.88rem}
+.meta b{color:var(--ink-2)}
+section{display:flex;flex-direction:column;gap:.75rem}
+h2{font-size:1.25rem;margin:0;font-weight:700;letter-spacing:-.01em;text-wrap:balance}
+h2 .ver{font-size:.72rem;font-weight:650;letter-spacing:.08em;color:var(--accent-ink);
+  background:var(--accent-soft);border-radius:99px;padding:.15rem .6rem;
+  vertical-align:middle;margin-left:.5rem;white-space:nowrap}
+h3{font-size:1rem;margin:.35rem 0 0;font-weight:650}
+p{margin:0;color:var(--ink-2)}
+p strong,li strong{color:var(--ink)}
+ul{margin:0;padding-left:1.25rem;color:var(--ink-2);display:flex;
+  flex-direction:column;gap:.45rem}
+code{font-family:ui-monospace,"Cascadia Code",Menlo,Consolas,monospace;
+  font-size:.86em;background:var(--code-bg);padding:.1em .35em;border-radius:3px}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:6px;
+  padding:.85rem 1rem;overflow-x:auto;margin:0}
+pre code{background:none;padding:0;font-size:.84rem;line-height:1.55}
+.tablewrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:.9rem;background:var(--card);
+  font-variant-numeric:tabular-nums}
+th{font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:650;text-align:left}
+th,td{padding:.55rem .8rem;border:1px solid var(--line)}
+.pill{display:inline-block;font-size:.7rem;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;border-radius:99px;padding:.12rem .55rem;white-space:nowrap}
+.pill.new{background:var(--accent-soft);color:var(--accent-ink)}
+.pill.gone{background:var(--gone-soft);color:var(--gone)}
+.callout{border-left:3px solid var(--accent);background:var(--card);
+  padding:.8rem 1.05rem;border-radius:0 6px 6px 0;color:var(--ink-2)}
+.callout.gone{border-left-color:var(--gone)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.9rem}
+.cardbox{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:.95rem 1.1rem;display:flex;flex-direction:column;gap:.45rem}
+.cardbox h3{margin:0}
+.stat{display:flex;gap:2rem;flex-wrap:wrap;background:var(--card);
+  border:1px solid var(--line);border-radius:8px;padding:1rem 1.25rem}
+.stat div{display:flex;flex-direction:column}
+.stat b{font-size:1.35rem;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.stat span{font-size:.75rem;color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion: no-preference){
+  section{animation:rise .3s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+}
+</style>
+
+<main>
+<header>
+  <div class="eyebrow">Rawgentic · Release Brief · 2026-07-03</div>
+  <h1>v2.45 → v2.46: model routing, a Codex peer designer, and BMAD's retirement</h1>
+  <div class="meta"><b>For teams running rawgentic workflows.</b> Everything here is opt-in and default-off — upgrading changes nothing until you configure it. Upgrade: <code>claude plugin marketplace update rawgentic</code> → reinstall → fresh session.</div>
+</header>
+
+<section>
+  <div class="stat">
+    <div><b>2.44.0 → 2.46.1</b><span>version path</span></div>
+    <div><b>4 PRs</b><span>#124 · #125 · #128 · #129</span></div>
+    <div><b>1384 → 1420</b><span>tests, 0 failures</span></div>
+    <div><b>1 new skill</b><span>WF13 peer-consult</span></div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="pill gone">removed</span> BMAD integration &amp; <code>disabledSkills</code> <span class="ver">v2.45.0 · #124</span></h2>
+  <p>The BMAD coexistence layer is gone: the <code>_bmad/</code> detection probe in <code>switch</code>/<code>setup</code>, the per-project skill-preference UI, the <code>disabledSkills</code> check in every workflow skill, and the CLAUDE.md routing template.</p>
+  <div class="callout gone"><strong>If your workspace still has <code>bmadDetected</code> or <code>disabledSkills</code> fields:</strong> they are now ignored — nothing errors, nothing to migrate. Skills previously blocked by <code>disabledSkills</code> (e.g. <code>update-docs</code>) are active again everywhere.</div>
+</section>
+
+<section>
+  <h2><span class="pill new">new</span> modelRouting — route subagent fleets to cheaper models <span class="ver">v2.46.0 · #128</span></h2>
+  <p>Rawgentic workflows dispatch subagent fleets at seven sites (3 design judges, 2 per-task reviewers, 3 pre-PR reviewers per WF2 run, codebase gather, background memorization). Until now every one inherited your session model — premium tokens on work a cheaper strong model handles. Now each <em>role</em> is routable, per project:</p>
+  <pre><code>// .rawgentic_workspace.json — your project's entry
+"modelRouting": {
+  "review": "opus",          // all judge/reviewer fleets
+  "analysis": "sonnet",      // codebase gather + memorization
+  "implementation": "opus"   // opt-in Step 8 task delegation
+}</code></pre>
+  <ul>
+    <li><strong>Default-off:</strong> absent block or role = <code>inherit</code> — subagents use the session model, byte-identical to v2.45.</li>
+    <li><strong>Fail-open:</strong> malformed/unknown values warn and resolve to <code>inherit</code>. Routing is a cost knob, never a gate — it cannot block a run.</li>
+    <li><strong>Soft opus floor:</strong> routing <code>review</code> below opus (explicit <code>sonnet</code>/<code>haiku</code>) warns but still applies — your call per project.</li>
+    <li><strong>Configure via</strong> <code>/rawgentic:setup</code> (new Step 2f) or hand-edit the workspace JSON.</li>
+  </ul>
+  <h3>Step 8 implementation delegation (the big token lever)</h3>
+  <p>With <code>implementation</code> set, WF2 Step 8 hands each validated plan task to a subagent on that model instead of executing inline — serial, one task at a time, each ending committed. A <strong>clean-state boundary</strong> protects every task: pre-task state is recorded, and any failed/vacuous task-agent is rolled back <em>before</em> the one inline retry, so a retry never runs on a half-mutated tree. Implementation is the largest token block of a WF2 run; this moves it off your premium session model — the design and plan (already critiqued by that point) steer the executor.</p>
+</section>
+
+<section>
+  <h2><span class="pill new">new</span> peerConsult — Codex as a peer designer, not a reviewer <span class="ver">WF13 · v2.46.0 · #128</span></h2>
+  <p>WF5 already lets Codex <em>critique</em> your artifacts. WF13 lets it <em>propose</em>: an independent, different-model design for the same problem.</p>
+  <div class="grid2">
+    <div class="cardbox">
+      <h3>Standalone — works today</h3>
+      <p><code>/rawgentic:peer-consult docs/design/feature.md</code></p>
+      <p>Sends the problem artifact to Codex as a peer senior engineer; writes its proposal (approach, key decisions, risks, sketch) to <code>docs/reviews/peer-&lt;slug&gt;-&lt;date&gt;.md</code>. Report-only — never edits your artifact. Requires the Codex CLI installed + authenticated (same as WF5); artifact text leaves the machine (egress warning shown).</p>
+    </div>
+    <div class="cardbox">
+      <h3>WF2 integration — opt-in, blind both ways</h3>
+      <pre><code>"peerConsult": {
+  "enabled": true,
+  "workflows": ["implement-feature"]
+}</code></pre>
+      <p>At the WF2 design step, Codex drafts its proposal in the background while Claude drafts its own — <strong>neither sees the other's until Claude's draft is on disk</strong> — then Claude synthesizes best-of-both with provenance recorded. Codex failure never blocks the step. Configure via setup Step 2g.</p>
+    </div>
+  </div>
+  <div class="callout"><strong>WF5 vs WF13 in one line:</strong> WF5 tears a finished artifact down (evaluative gate); WF13 proposes an independent alternative up front (generative design). Both can be on at once — they run at different steps.</div>
+</section>
+
+<section>
+  <h2>Also in this release</h2>
+  <ul>
+    <li><strong>Hardened test hygiene</strong> <span class="ver">v2.46.0–.1 · #129</span> — the shared-block sync test now runs in a sandboxed copy (can no longer clobber an in-progress edit in your checkout); ResourceWarning cleanups; doc counts reconciled.</li>
+    <li><strong>Docs:</strong> full <code>modelRouting</code>/<code>peerConsult</code> reference in <code>docs/config-reference.md</code>; WF13 registered in the workflow tables; design spec (md + visual HTML) and implementation plan committed under <code>docs/design/</code> and <code>docs/plans/</code>.</li>
+    <li><strong>Quality trail:</strong> the design passed a cross-model WF5 adversarial review pre-implementation (5 findings, all applied); the build ran TDD with two-stage review per task plus a final whole-branch review that caught a cross-task bug before merge.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Upgrade &amp; adopt</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Step</th><th>Command / action</th></tr>
+    <tr><td>1 · Update marketplace</td><td><code>claude plugin marketplace update rawgentic</code></td></tr>
+    <tr><td>2 · Reinstall</td><td><code>claude plugin remove rawgentic@rawgentic &amp;&amp; claude plugin install rawgentic@rawgentic</code></td></tr>
+    <tr><td>3 · Fresh session</td><td>Restart Claude Code (skills/hooks load at session start)</td></tr>
+    <tr><td>4 · Opt in (optional)</td><td>Run <code>/rawgentic:setup</code> on a project → Steps 2f (modelRouting) + 2g (peerConsult)</td></tr>
+  </table></div>
+  <p>Nothing else required. Projects that never opt in behave exactly as before.</p>
+</section>
+</main>
