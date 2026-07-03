@@ -43,13 +43,7 @@ makes the issue land on the right repo instead of a guess.
    - `activeProject.path` may be relative (e.g. `./projects/app`); resolve it against
      the directory containing `.rawgentic_workspace.json`.
 
-2. Disabled-skill check: find the active project's entry in `.rawgentic_workspace.json`.
-   If its `disabledSkills` array contains `create-issue`, STOP and tell the user it's
-   disabled (and, if a BMAD alternative was chosen, name it). If workspace
-   `bmadDetected` is true but the entry has no `disabledSkills` field at all, STOP:
-   "BMAD detected but no skill preferences configured — run `/rawgentic:setup`."
-
-3. Derive capabilities from one tested source of truth (never hand-derive):
+2. Derive capabilities from one tested source of truth (never hand-derive):
    ```bash
    python3 hooks/capabilities_lib.py derive --config <activeProject.path>/.rawgentic.json
    ```

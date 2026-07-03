@@ -15,8 +15,6 @@ SCRIPT = REPO_ROOT / "scripts" / "sync_shared_blocks.py"
 SKILLS = REPO_ROOT / "skills"
 SHARED = REPO_ROOT / "shared" / "blocks"
 
-CLEANUP_MARKER = "[Headless cleanup]"
-
 
 def _run(*args):
     return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True)
@@ -28,8 +26,7 @@ def _config_block(skill: str) -> str:
 
 
 def test_shared_sources_exist():
-    assert (SHARED / "config-loading.standard.md").exists()
-    assert (SHARED / "config-loading.headless.md").exists()
+    assert (SHARED / "config-loading.md").exists()
 
 
 def test_no_shared_block_drift():
@@ -45,20 +42,7 @@ def test_sync_is_idempotent():
     assert "nothing to sync" in r.stdout.lower(), r.stdout
 
 
-def test_headless_skills_carry_cleanup_paragraph():
-    """implement-feature + fix-bug use the headless config-loading variant."""
-    for skill in ("implement-feature", "fix-bug"):
-        assert CLEANUP_MARKER in _config_block(skill), f"{skill} should use the headless variant"
-
-
-def test_standard_skills_omit_cleanup_paragraph():
-    """The 8 standard skills use the standard variant (proves the split is real, not vacuous)."""
-    for skill in ("refactor", "incident", "security-audit", "update-deps"):
-        assert CLEANUP_MARKER not in _config_block(skill), f"{skill} should use the standard variant"
-
-
 def test_create_issue_intentionally_not_synced():
     """create-issue (WF1) keeps its deliberately-slim bespoke block (PR #104)."""
     block = _config_block("create-issue")
-    assert block.rstrip("\n") != (SHARED / "config-loading.standard.md").read_text().rstrip("\n")
-    assert block.rstrip("\n") != (SHARED / "config-loading.headless.md").read_text().rstrip("\n")
+    assert block.rstrip("\n") != (SHARED / "config-loading.md").read_text().rstrip("\n")

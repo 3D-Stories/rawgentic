@@ -1,6 +1,6 @@
 ---
 name: rawgentic:create-tests
-description: Create or improve a project's test suite using the WF12 14-step workflow with brainstorming-driven test strategy, context7 framework docs lookup, test harness generation, coverage gap analysis, and verified test execution. Invoke with /create-tests optionally followed by a specific file or module path. DO NOT use this skill if the user has BMAD's TEA module installed — use the TEA test workflows (bmad-testarch-*) instead. Only trigger when the user explicitly invokes /create-tests or /rawgentic:create-tests, or is working in a rawgentic-only project without BMAD.
+description: Create or improve a project's test suite using the WF12 14-step workflow with brainstorming-driven test strategy, context7 framework docs lookup, test harness generation, coverage gap analysis, and verified test execution. Invoke with /create-tests optionally followed by a specific file or module path. Only trigger when the user explicitly invokes /create-tests or /rawgentic:create-tests.
 argument-hint: Optional file/module path (e.g., "src/auth/") or omit for whole project
 ---
 
@@ -36,17 +36,6 @@ Before executing any workflow steps, load the project configuration:
    - `.rawgentic_workspace.json` malformed -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
    - No active project found at any level -> STOP. Tell user: "No active project. Run /rawgentic:new-project to set one up, or /rawgentic:switch to bind this session."
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
-
-1b. **Disabled skill check:** After resolving the active project, read `.rawgentic_workspace.json` (if not already read in step 1) and find the active project's entry.
-   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it: **STOP.**
-     - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
-       "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
-     - Otherwise, tell user:
-       "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
-   - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:
-     "BMAD detected but no skill preferences configured for [project]. Run `/rawgentic:switch` or `/rawgentic:setup` to configure."
-   - Otherwise: proceed to step 2.
 
 2. Load the config and derive capabilities with the helper CLI (one tested
    source of truth — never hand-derive the `capabilities` object, so all 11

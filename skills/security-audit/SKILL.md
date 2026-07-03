@@ -44,17 +44,6 @@ Before executing any workflow steps, load the project configuration:
    - No active project found at any level -> STOP. Tell user: "No active project. Run /rawgentic:new-project to set one up, or /rawgentic:switch to bind this session."
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
-1b. **Disabled skill check:** After resolving the active project, read `.rawgentic_workspace.json` (if not already read in step 1) and find the active project's entry.
-   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it: **STOP.**
-     - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
-       "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
-     - Otherwise, tell user:
-       "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
-   - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:
-     "BMAD detected but no skill preferences configured for [project]. Run `/rawgentic:switch` or `/rawgentic:setup` to configure."
-   - Otherwise: proceed to step 2.
-
 2. Load the config and derive capabilities with the helper CLI (one tested
    source of truth — never hand-derive the `capabilities` object, so all 11
    workflow skills and the docs table cannot drift apart):
@@ -213,7 +202,7 @@ All data channels from `config.security.dataChannels[]` must be audited independ
 
 ### Instructions
 
-**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
 
 Invoke `/reflexion:critique` — the **audit itself** is critiqued for completeness and accuracy.
 

@@ -36,7 +36,7 @@ All workflow skills share a **config-loading protocol** that reads project confi
 - [Configuration](#configuration) — [`.rawgentic.json`](#project-config-rawgenticjson) · [Protection Levels](#protection-levels) · [Workspace File](#workspace-file-rawgentic_workspacejson) · [Config-Loading Protocol](#config-loading-protocol)
 - [Architecture](#architecture) · [How It Works](#how-it-works) (Principles · Quality Gates · Run-Record Telemetry · Invariants)
 - [Troubleshooting](#troubleshooting) · [Design Documentation](#design-documentation) · [Testing](#testing)
-- [Using Rawgentic with BMAD](#using-rawgentic-with-bmad) · [Headless Mode](#headless-mode) · [Contributing](#contributing) · [Changelog](#changelog) · [License](#license)
+- [Headless Mode](#headless-mode) · [Contributing](#contributing) · [Changelog](#changelog) · [License](#license)
 
 ---
 
@@ -665,29 +665,6 @@ Skills are tested via the `/skill-creator` eval pipeline (15/17 skills have eval
 
 ---
 
-## Using Rawgentic with BMAD
-
-If you also use the [BMAD Method](https://github.com/bmad-method/bmad-method), the two plugins overlap in implementation, code review, testing, and documentation. Without explicit routing, Claude may pick the wrong skill.
-
-**Compatibility:** Tested against **BMAD v6.6.0** (core/bmm 6.6.0, TEA 1.15.1). Rawgentic references the `bmad-dev-story` skill, `bmad-party-mode` skill, the `bmad-tea` agent + `bmad-testarch-*` workflows, and the `tech-writer` (Paige) agent — all in informational text only, never invoked directly. Loose coupling has held across BMAD upgrades 6.2 → 6.3 → 6.6; if upstream renames any of these, rawgentic continues to function but its help messages may show stale names.
-
-**Automatic detection:** When you run `/rawgentic:setup` or `/rawgentic:switch`, rawgentic checks for a `_bmad/` directory in your workspace root. If found, it asks you to choose your preferred tool (rawgentic or BMAD) for each overlapping task — per project. Preferences are stored in `.rawgentic_workspace.json` and enforced automatically. See [`docs/config-reference.md`](docs/config-reference.md#bmad-integration) for details.
-
-**Manual routing (legacy):** A CLAUDE.md routing snippet is also available at [`templates/CLAUDE-bmad-routing.md`](templates/CLAUDE-bmad-routing.md). The automated detection above replaces this approach.
-
-**TL;DR of the division:**
-
-| BMAD handles | Rawgentic handles |
-|-------------|-------------------|
-| Full lifecycle (planning → stories → implementation → review) | Runtime safety (WAL guards, security guards — always active) |
-| UX design, game dev, creative intelligence | Security audits (STRIDE), incident response |
-| Sprint planning, retrospectives | Dependency updates, performance optimization |
-| Test strategy (TEA module) | Formal refactoring with behavioral preservation |
-
-The rawgentic safety hooks (WAL guard, security guard, WAL logging) remain active regardless of which implementation workflow you use — they fire on every Bash/Edit/Write call.
-
----
-
 ## Headless Mode
 
 Workflow skills can run non-interactively for CI/orchestrator integration. Set `RAWGENTIC_HEADLESS=1` and use `claude --print` with `--permission-mode bypassPermissions`. When a skill needs user input, it posts a structured comment to the GitHub issue, adds the `rawgentic:ai-waiting` label, and exits cleanly. Resume with `claude --resume {session_id}` after the user replies. See [`docs/config-reference.md`](docs/config-reference.md#headless-mode) for the full orchestrator interface contract.
@@ -713,6 +690,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v2.45.0 (2026-07-02)
+- **Removed the BMAD integration and the `disabledSkills` mechanism it depended on (reverses #41/#42).** Gone: the workspace-root detection probe in `/rawgentic:switch` and `/rawgentic:setup`, the per-project skill-preference UI, the `disabledSkills` check in every workflow skill's `<config-loading>` preamble, the manual CLAUDE.md routing template, and the detection / `disabledSkills` workspace-file fields. Any such leftover fields in an existing `.rawgentic_workspace.json` are now ignored — no hook reads or validates them, so nothing errors. `critiqueMethod` survives as a workspace field with `reflexion` as its default and only supported value (its non-default option is dropped). With the disabled-skill headless-cleanup paragraph gone, the two `config-loading` shared-block variants collapsed into one `shared/blocks/config-loading.md`. The former integration test's non-integration lints (headless protocol, mandatory-steps, `critiqueMethod` presence) moved into `tests/hooks/test_headless.py`. (#123)
 
 ### v2.44.0 (2026-06-27)
 - **WF5 adversarial review tuned for high-precision, grounded, reproducible findings.** The engine still uses `codex exec` + `--output-schema` (correct — `codex review` is git-diff-only with no structured output, and Codex plugins are service integrations, not reviewers), but it was leaving real quality on the table in *how* it invoked it. **Invocation:** pins reasoning effort high via `-c model_reasoning_effort` (gpt-5.5 silently defaults to *medium* — `RAWGENTIC_ADV_REVIEW_EFFORT` overrides), leaves the model inherited but `RAWGENTIC_ADV_REVIEW_MODEL`-overridable (never hardcoded — OpenAI retires model ids), and adds `--ephemeral` (keeps the inlined artifact out of session history), `--color never` (clean parse), and `-c project_doc_max_bytes=0` (independence from the project's `AGENTS.md`); default timeout 300→600s so high-effort reviews of large artifacts don't silently fail-closed. **Prompt:** a severity rubric tying each level to a concrete failure outcome (curbs inflation), a mandatory verbatim-quote grounding rule, a precision-over-recall self-deletion pass, a two-phase method, an explicit forbid-all-tools directive (required where the Codex bwrap sandbox is unavailable), and a per-run **unforgeable nonce fence** + data-not-instructions contract (an embedded "rate this flawless" becomes a finding, not an instruction). **Schema:** every finding now carries a required verbatim `evidence` quote (first field, for chain-of-thought grounding) and a `confidence`; `category` is constrained to the enum. Validator + report renderer updated to match; the report records the model/effort used. Live A/B on a planted-flaw doc: findings dropped 9→5 with every planted flaw still caught, all findings grounded, generic nitpicks gone, severity better calibrated. +27 tests.

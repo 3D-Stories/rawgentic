@@ -1189,7 +1189,7 @@ class TestSkillCountCanary:
     EXPECTED_CONFIG_LOADING_COUNT = 11  # +adversarial-review (WF5, #77)
 
     def test_config_loading_skill_count(self):
-        """If a new workflow skill is added, this test reminds you to add the disabledSkills check."""
+        """If a new workflow skill is added, this test reminds you to wire in the config-loading preamble."""
         count = 0
         for skill_dir in self.SKILLS_DIR.iterdir():
             skill_file = skill_dir / "SKILL.md"
@@ -1197,6 +1197,151 @@ class TestSkillCountCanary:
                 count += 1
         assert count == self.EXPECTED_CONFIG_LOADING_COUNT, (
             f"Expected {self.EXPECTED_CONFIG_LOADING_COUNT} skills with <config-loading>, "
-            f"found {count}. If you added a new workflow skill, update the disabledSkills "
-            f"check and bump this count."
+            f"found {count}. If you added a new workflow skill, add the <config-loading> "
+            f"preamble and bump this count."
+        )
+
+
+# =========================================================================
+# Skill preamble / protocol lints — moved from the former test_bmad_detection.py
+# when the BMAD detection + disabledSkills mechanism was removed (#123). None of
+# these are BMAD-specific: they lint the headless protocol, the mandatory-steps
+# enforcement block, and the critiqueMethod preference check.
+# =========================================================================
+
+SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
+
+# Skills that invoke /reflexion:critique and carry the critiqueMethod preference check.
+# create-issue (WF1) was slimmed and no longer runs a multi-agent critique, so it is
+# intentionally absent.
+CRITIQUE_SKILLS = [
+    "implement-feature",
+    "refactor",
+    "security-audit",
+    "optimize-perf",
+    "setup",
+]
+
+
+class TestHeadlessInteractionBlock:
+    """Lint: the headless protocol lives in references/headless.md (loaded on demand),
+    with a <headless-mode> pointer + the per-step [Headless:] annotations in the body."""
+
+    HEADLESS_SKILLS = ["implement-feature", "fix-bug"]
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_reference_has_headless_interaction(self, skill_name: str):
+        ref = SKILLS_DIR / skill_name / "references" / "headless.md"
+        assert ref.exists(), f"{skill_name} missing references/headless.md"
+        content = ref.read_text()
+        assert "<headless-interaction>" in content and "</headless-interaction>" in content, (
+            f"{skill_name}/references/headless.md missing <headless-interaction> block"
+        )
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_reference_has_headless_checkpoint(self, skill_name: str):
+        content = (SKILLS_DIR / skill_name / "references" / "headless.md").read_text()
+        assert "<headless-checkpoint>" in content and "</headless-checkpoint>" in content, (
+            f"{skill_name}/references/headless.md missing <headless-checkpoint> block"
+        )
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_reference_has_headless_resume(self, skill_name: str):
+        content = (SKILLS_DIR / skill_name / "references" / "headless.md").read_text()
+        assert "<headless-resume>" in content and "</headless-resume>" in content, (
+            f"{skill_name}/references/headless.md missing <headless-resume> block"
+        )
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_body_points_to_headless_reference(self, skill_name: str):
+        """The body must keep a <headless-mode> pointer at references/headless.md so the
+        protocol is still discoverable; otherwise the moved protocol is orphaned."""
+        content = (SKILLS_DIR / skill_name / "SKILL.md").read_text()
+        assert "<headless-mode>" in content, f"{skill_name}/SKILL.md missing <headless-mode> pointer"
+        assert "references/headless.md" in content, (
+            f"{skill_name}/SKILL.md <headless-mode> must point at references/headless.md"
+        )
+
+    # Expected [Headless annotation counts per skill
+    EXPECTED_COUNTS = {
+        "implement-feature": 29,  # 17 base + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block + 1 Step 2 trivial-work suggestion + 3 headless remote-ops guards (#47): Step 2 SSH-probe skip, Step 14 merge/deploy skip, Step 15 post-deploy skip
+        "fix-bug": 11,            # 10 interaction points + 1 Step 2 trivial-work suggestion
+    }
+
+    @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
+    def test_skill_has_correct_headless_annotation_count(self, skill_name: str):
+        """Annotation count must match expected — catches missing annotations on new steps."""
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        count = content.count("[Headless")  # matches [Headless: annotations
+        expected = self.EXPECTED_COUNTS[skill_name]
+        assert count == expected, (
+            f"{skill_name}/SKILL.md has {count} [Headless] annotations, "
+            f"expected {expected}. If you added a new interaction point, "
+            f"add a [Headless:] annotation and bump this count."
+        )
+
+    def test_headless_resume_in_resumption_protocol(self):
+        """The resumption protocol must reference headless-resume as Step -1."""
+        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<resumption-protocol>")
+        end = content.find("</resumption-protocol>")
+        block = content[start:end]
+        assert "headless-resume" in block, (
+            "implement-feature/SKILL.md <resumption-protocol> must reference <headless-resume>"
+        )
+
+
+class TestMandatoryStepsEnforcement:
+    """Lint: workflow skills with code review steps must have <mandatory-steps> block."""
+
+    # Skills that have multi-step workflows with code review
+    ENFORCED_SKILLS = ["implement-feature", "fix-bug"]
+
+    @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
+    def test_skill_has_mandatory_steps_block(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        assert "<mandatory-steps>" in content and "</mandatory-steps>" in content, (
+            f"{skill_name}/SKILL.md is missing the <mandatory-steps> enforcement block"
+        )
+
+    @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
+    def test_mandatory_steps_marks_code_review_non_negotiable(self, skill_name: str):
+        """Code review must be explicitly marked NON-NEGOTIABLE."""
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<mandatory-steps>")
+        end = content.find("</mandatory-steps>")
+        block = content[start:end]
+        assert "NON-NEGOTIABLE" in block, (
+            f"{skill_name}/SKILL.md <mandatory-steps> must mark code review as NON-NEGOTIABLE"
+        )
+
+    @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
+    def test_mandatory_steps_lists_invalid_justifications(self, skill_name: str):
+        """Block must include common invalid justifications to counter-program the LLM."""
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        content = skill_path.read_text()
+        start = content.find("<mandatory-steps>")
+        end = content.find("</mandatory-steps>")
+        block = content[start:end]
+        assert "session is" in block.lower() or "context window" in block.lower(), (
+            f"{skill_name}/SKILL.md <mandatory-steps> must address common skip justifications"
+        )
+
+
+class TestCritiqueMethodPreamble:
+    """Lint: the critique-invoking skills contain the critiqueMethod preference check."""
+
+    @pytest.mark.parametrize("skill_name", CRITIQUE_SKILLS)
+    def test_skill_contains_critique_method_check(self, skill_name: str):
+        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
+        assert skill_path.exists(), f"SKILL.md not found at {skill_path}"
+
+        content = skill_path.read_text()
+        assert "critiqueMethod" in content, (
+            f"{skill_name}/SKILL.md is missing the critiqueMethod preference "
+            f"check near its /reflexion:critique invocation"
         )
