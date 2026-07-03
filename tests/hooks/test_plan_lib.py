@@ -773,9 +773,11 @@ class TestReviewState:
         # Manually corrupt: rename branch inside file
         path = mod.review_state_path(str(tmp_path), "feature/x")
         import json
-        data = json.loads(open(path).read())
+        with open(path) as f:
+            data = json.load(f)
         data["branch"] = "feature/y"
-        open(path, "w").write(json.dumps(data))
+        with open(path, "w") as f:
+            json.dump(data, f)
         result = mod.read_review_state(str(tmp_path), "feature/x")
         assert result is None
         captured = capsys.readouterr()
@@ -785,7 +787,8 @@ class TestReviewState:
         mod = _reload_plan_lib()
         path = mod.review_state_path(str(tmp_path), "feature/x")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "w").write("{not json")
+        with open(path, "w") as f:
+            f.write("{not json")
         assert mod.read_review_state(str(tmp_path), "feature/x") is None
         assert "unreadable" in capsys.readouterr().err.lower()
 
