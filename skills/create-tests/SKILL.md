@@ -38,7 +38,7 @@ Before executing any workflow steps, load the project configuration:
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 2. Load the config and derive capabilities with the helper CLI (one tested
-   source of truth — never hand-derive the `capabilities` object, so all 11
+   source of truth — never hand-derive the `capabilities` object, so all 12
    workflow skills and the docs table cannot drift apart):
    ```bash
    python3 hooks/capabilities_lib.py derive \

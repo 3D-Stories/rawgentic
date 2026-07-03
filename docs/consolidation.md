@@ -23,12 +23,15 @@
 | WF9  | Security Audit         | `/security-audit`    | 14    | security/     | Full (on audit) |
 | WF10 | Performance Optim.     | `/optimize-perf`     | 15    | perf/         | Full critique   |
 | WF11 | Incident Response      | `/incident`          | 14    | hotfix/       | Reflect (RCA)   |
+| WF13 | Peer Consult           | `/peer-consult`      | 5     | —             | Independent peer |
 
 ### 1.2 Numbering Gaps
 
 WF5 is **Adversarial Review** (`/adversarial-review`) — a standalone, report-only skill that runs a cross-model critique (via the Codex CLI) of a text artifact (design/spec/plan/PRD/ADR/RFC/README). It is also optionally wired into the WF2 (design Step 4, plan Step 6) and WF3 (Step 4) quality gates, per-project opt-in via the `adversarialReview` field. It was previously a reserved slot for "Code Review"; that functionality remains embedded as quality gates inside other workflows (Step 11 in WF2, Step 9 in WF3, etc.) rather than as a standalone numbered workflow.
 
 WF6 (Testing) is intentionally absent — its functionality is embedded as quality gates inside other workflows. This avoids artificial workflow boundaries for activities that are always part of a larger pipeline.
+
+WF13 is **Peer Consult** (`/rawgentic:peer-consult`) — a standalone, report-only skill that engages Codex as an independent peer *designer* (not a reviewer) for a problem/spec artifact, writing its proposal to `docs/reviews/peer-<slug>-<date>.md`. It is also optionally wired into the WF2 design step (Step 3) as a blind-both-ways peer consult, per-project opt-in via the `peerConsult` field. It complements WF5 (which critiques an existing artifact) — WF13 proposes an independent alternative.
 
 ---
 

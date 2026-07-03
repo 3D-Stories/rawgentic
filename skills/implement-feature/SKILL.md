@@ -150,7 +150,7 @@ Before executing any workflow steps, load the project configuration:
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 2. Load the config and derive capabilities with the helper CLI (one tested
-   source of truth — never hand-derive the `capabilities` object, so all 11
+   source of truth — never hand-derive the `capabilities` object, so all 12
    workflow skills and the docs table cannot drift apart):
    ```bash
    python3 hooks/capabilities_lib.py derive \
@@ -161,6 +161,15 @@ Before executing any workflow steps, load the project configuration:
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
+
+<model-routing-resolve>
+Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For each role this skill dispatches (`analysis`, `review`, `implementation`), resolve the configured model:
+```bash
+python3 hooks/model_routing_lib.py resolve \
+  --workspace .rawgentic_workspace.json --project <name> --role <analysis|review|implementation>
+```
+Run once per role (three invocations total). Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
+</model-routing-resolve>
 
 <learning-config>
 If this workflow discovers new project capabilities during execution (e.g., a new test framework, a previously unknown service), update `.rawgentic.json` before completing:
@@ -394,6 +403,9 @@ This enables workflow resumption if context is lost.
 
 **Execution model — map first, then parallel gather, then synthesize.** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. So run item 1 first, then **fan out the remaining read-only analyses (items 2–6) as concurrent subagents** (Agent tool), passing each the component map from item 1 as **shared input**. One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one **sequential subagent** (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. This collapses ~5 sequential read passes into roughly one and loses no quality — each subagent goes deeper in its own lane. Items 7–8 (complexity classification, fast-path eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. The issue's complexity hint from Step 1 chooses only the *orchestration cost*, never the workflow path or which gates run — for a trivially small change, skip the subagent spin-up and run items 1–6 inline (the same analyses, in the same order, feeding the same synthesis); otherwise fan out. If a subagent errors, fall back to running that single analysis inline — the per-analysis failure modes below still apply.
 
+<!-- model-routing: role=analysis -->
+When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2 fan-out subagent with `model: <analysis>`.
+
 1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts.
 
 2. **Dependency analysis:** Trace relationships from affected components to understand the blast radius. The scope depends on project type:
@@ -455,6 +467,22 @@ Codebase analysis with complexity classification, fast path eligibility, and (fo
 
 ### Instructions
 
+**Optional peer consult (opt-in, cross-model — blind both ways).** Evaluate up front:
+```bash
+python3 hooks/adversarial_review_lib.py is-enabled \
+  --workspace .rawgentic_workspace.json --project <name> --skill implement-feature --key peerConsult
+```
+Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subprocess). When enabled:
+1. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — `resolve_artifact_path` rejects any `--artifact` outside `project_root`, so a `/tmp` path fails closed silently as an empty proposal). Launch the consult as a BACKGROUND process writing structured output to a temp out-file (the out-file may live anywhere; the step gates on exit code, not its location):
+   ```bash
+   python3 hooks/adversarial_review_lib.py consult \
+     --artifact <problem-file> --project-root <root> --out <out-file> --date "$(date -u +%Y-%m-%d)" &
+   ```
+2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read `<out-file>` before your own draft is on disk.
+3. After your draft is written, read `<out-file>`. On timeout/failure the file holds an explicit **empty-proposal marker** (never partial content) — proceed with your design alone. Otherwise synthesize best-of-both and record the peer's contributions (provenance) in the design doc. Delete the problem file now that the consult has completed.
+4. **Gate on the background process's EXIT CODE, not just file content** — the empty-proposal write is best-effort, so on an unwritable out-path a non-zero exit can leave the file missing or unreadable entirely. If the exit code is non-zero OR the file is missing/unreadable, treat it identically to an empty proposal and proceed.
+5. Codex failure is non-blocking: log and proceed. This sub-step never gates Step 3.
+
 1. **Design approach:** For complex features, use the Agent tool with a brainstorming prompt to generate 2-3 implementation approaches. For standard features, design inline with 1-2 approaches.
 
 2. **Each approach includes:**
@@ -511,6 +539,9 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 - If `fast_path_eligible == false`: use `/reflexion:critique` (full 3-judge)
 
 **For full critique (`/reflexion:critique`):**
+
+<!-- model-routing: role=review -->
+Dispatch the judge sub-agents with `model: <review>` unless routing resolved `inherit`.
 
 1. Launch three judge sub-agents in parallel. If any returns 429, retry that agent after 30s.
 
@@ -768,6 +799,17 @@ Execute the implementation plan task by task.
    git push origin <branch_name>
    ```
 
+<!-- model-routing: role=implementation -->
+**Optional implementation delegation (`implementation` role).** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent (`model: <implementation>`) instead of inline, subject to a per-task **clean-state boundary**:
+
+1. **Before dispatch:** record the pre-task state — current `HEAD` and `git status --porcelain` (the tree must already be clean from the previous task's commit).
+2. **Dispatch one task-agent** (serial — one at a time; each task builds on the previous commit) with the brief: the design doc, this plan task, the TDD requirement, project conventions, and the current test baseline. The agent implements the task test-first and commits it.
+3. **After it returns:** re-run the test suite and diff against the recorded baseline. On success (tests green, only expected paths changed, task committed) → proceed to the next task.
+4. **On failure or vacuous return:** **restore** the pre-task state first — `git reset --hard <recorded HEAD>` and `git clean -fd` to discard the agent's partial edits — then retry that task once inline in the main loop. Log the fallback. Because the restore runs first, the inline retry never operates on a half-mutated tree.
+5. Delegation can never block Step 8: a second failure falls through to the normal Step 8 failure handling.
+
+When the `implementation` role is `inherit` (default), Step 8 runs inline exactly as today — no delegation, no behavior change.
+
 **Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently. **Until isolated concurrent execution lands (issue #85), execute ALL tasks sequentially in plan order**, including parallel-eligible groups. Do NOT dispatch concurrent Agent calls that write to the working tree: with no worktree isolation, concurrent edits to the shared tree can collide and corrupt commits — sequential execution is the safe floor. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
 
 **Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
@@ -798,6 +840,9 @@ Promotion at the last task still triggers Step 8a (and any retroactive scan) bef
    ```bash
    git show --no-color --format= <sha>
    ```
+<!-- model-routing: role=review -->
+Dispatch these reviewers with `model: <review>` unless routing resolved `inherit`.
+
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (inline-defined prompt roles, same pattern as Step 11 — NOT registered subagents):
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
@@ -878,6 +923,9 @@ Implementation drift check with verification evidence.
 
 ### Instructions
 
+<!-- model-routing: role=analysis -->
+Dispatch the memorization sub-agent with `model: <analysis>` unless routing resolved `inherit`.
+
 **Runs in PARALLEL with Step 11** (dispatch with `run_in_background=true`).
 
 1. Review quality gate findings from Steps 4, 6, and 9.
@@ -908,6 +956,9 @@ Updated CLAUDE.md (if insights memorized) or no output.
    Pass both to each reviewer as context:
    - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
    - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator." Record each resolution via `plan_lib.resolve_deferral(<deferrals_path>, <finding_id>, status='applied'` / `add_concurrence=<other_slot>` / `user_ack=True)` — do not edit the deferrals JSON by hand.
+
+<!-- model-routing: role=review -->
+Dispatch the 3 review agents with `model: <review>` unless routing resolved `inherit`.
 
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
 

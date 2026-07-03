@@ -25,7 +25,7 @@ invokes `/rawgentic:<name>`. This typically includes role definitions,
 constants, numbered workflow steps, quality gates, and config-loading
 instructions.
 
-> **Config-driven workflows vs. lightweight skills.** The 11 SDLC workflow
+> **Config-driven workflows vs. lightweight skills.** The 12 SDLC workflow
 > skills are *config-driven*: each opens with a `<config-loading>` block,
 > reads `.rawgentic.json`, and runs numbered quality-gated steps. Not every
 > skill needs that machinery. Lightweight skills such as `add-exception`
@@ -33,8 +33,12 @@ instructions.
 > skill) are a `<role>` plus a short prompt body — no `<config-loading>`, no
 > plan_lib counters, no eval workspace. Keep new skills lightweight unless they
 > genuinely need the full workflow protocol. The `<config-loading>` canary in
-> `tests/hooks/test_headless.py` expects exactly 11 skills to carry that block,
+> `tests/hooks/test_headless.py` expects exactly 12 skills to carry that block,
 > so adding it to a skill is a deliberate choice that must bump the canary.
+> A sibling optional tag, `<model-routing-resolve>`, follows `<config-loading>`
+> in skills that dispatch subagents (implement-feature, fix-bug, refactor) —
+> it resolves per-role model routing via `hooks/model_routing_lib.py` and is
+> not part of the config-loading canary count.
 
 ### Invocation
 

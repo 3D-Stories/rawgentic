@@ -234,18 +234,24 @@ is the explicit, user-visible confirmation.
 
 ### New features are ON by default (opt-OUT)
 
-The feature steps above (2c headless, 2d adversarial review, 2e scanners)
-run on **every** setup invocation, including Sub-flow A re-runs against an existing
-`.rawgentic.json`. When the plugin gains a capability, re-running setup therefore
-**enriches an older config and turns the new feature on by default** — features are
-opt-OUT, not opt-in. Two deliberate exceptions, which always require an explicit
-answer and are never force-enabled:
+The feature steps above (2c headless, 2d adversarial review, 2e scanners, 2f model
+routing, 2g peer consult) run on **every** setup invocation, including Sub-flow A
+re-runs against an existing `.rawgentic.json`. When the plugin gains a capability,
+re-running setup therefore **enriches an older config and turns the new feature on
+by default** — features are opt-OUT, not opt-in. Four deliberate exceptions, which
+always require an explicit answer and are never force-enabled:
 
 - **Headless mode (2c)** stays opt-in — it grants an external orchestrator
   autonomous access to the project, so it must be a conscious choice (default n).
 - **Adversarial review / WF5 (2d)** depends on an OpenAI account for the Codex CLI,
   so setup asks the account question; "yes" turns it on for the applicable
   workflows, "no" leaves it off.
+- **Model routing (2f)** stays opt-in — it has no dependency to gate on, but routing
+  is a deliberate per-project choice; declining stages nothing (absent = inherit
+  everywhere, byte-identical to today).
+- **Peer consult / WF13 (2g)** mirrors 2d's answer-required pattern (same Codex CLI
+  dependency) but, unlike WF5, has no default-on recommendation — it always asks,
+  and "no" leaves the WF2 integration off (the standalone skill still works).
 
 Everything else (e.g. the security scanners) installs/enables by default unless the
 user has an opt-out on record. The SessionStart post-update reconcile
@@ -253,6 +259,28 @@ user has an opt-out on record. The SessionStart post-update reconcile
 on a version change it enables any new opt-OUT feature whose flag is absent (honoring
 recorded opt-outs), leaves headless and WF5 alone, and nudges the user to run
 `/rawgentic:setup` for the answer-required ones.
+
+---
+
+## Step 2f: Model Routing (optional)
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs).
+
+Offer per-project subagent model routing. Ask whether to route the three dispatch roles to specific models (skip any role = inherit the session model). Suggested defaults: `review: opus`, `analysis: sonnet`, `implementation: opus`.
+
+- If the user opts in, collect a model (`opus`/`sonnet`/`haiku`/`fable`) or "skip" per role, and stage:
+  `"modelRouting": { "<role>": "<model>", ... }` (omit skipped roles).
+- If the user declines, stage nothing (absent block = inherit everywhere; byte-identical default).
+- Note the soft opus floor: routing `review` below opus warns at run time but still applies.
+
+## Step 2g: Peer Consult (WF13) Integration
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs).
+
+Mirror Step 2d (Adversarial Review). Check the project entry's `peerConsult` field.
+
+- If not set: ask whether to enable the cross-model peer designer at the WF2 design step. On yes, stage `"peerConsult": { "enabled": true, "workflows": ["implement-feature"] }`; on no, `"peerConsult": { "enabled": false, "workflows": [] }`. The standalone `/rawgentic:peer-consult` works regardless.
+- If already set: show status and allow changing.
 
 ---
 
@@ -557,7 +585,7 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 ## Step 8: Update Workspace
 
-Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c) and `adversarialReview` (Step 2d) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c), `adversarialReview` (Step 2d), `modelRouting` (Step 2f), and `peerConsult` (Step 2g) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
 
 ### Step 8b: Ensure Session Notes Infrastructure
 

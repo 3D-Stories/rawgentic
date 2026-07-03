@@ -34,7 +34,7 @@ MANIFEST = {
         "config-loading.md": [
             "adversarial-review", "create-tests", "incident", "refactor",
             "security-audit", "update-docs", "optimize-perf", "update-deps",
-            "implement-feature", "fix-bug",
+            "implement-feature", "fix-bug", "peer-consult",
         ],
     },
 }

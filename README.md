@@ -1,6 +1,6 @@
 # rawgentic
 
-**11 SDLC workflow skills + 4 workspace management + 1 planning skill + 1 security skill + hooks for Claude Code**
+**12 SDLC workflow skills + 4 workspace management + 1 planning skill + 1 security skill + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 17 skills organized in three layers:
+**Rawgentic** provides 18 skills organized in three layers:
 
 - **Workspace management** (4 skills) — Project registration, configuration, session binding, and guard exception management
-- **SDLC workflows** (11 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
+- **SDLC workflows** (12 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
@@ -109,7 +109,7 @@ Rawgentic won't function without these — the workflow skills and hooks depend 
 | Git              | `git --version`     | [git-scm.com/downloads](https://git-scm.com/downloads)          |
 | jq (JSON processor) | `jq --version`   | `apt install jq` / `brew install jq`                            |
 
-**Python** runs every hook and the per-skill config engine (`hooks/capabilities_lib.py`, which all 11 workflows shell out to) — 3.10+ is required (the hooks use `X | None` type syntax); CI runs on 3.12. **`gh`** drives all issue/PR operations. **`jq`** is used throughout the shell hooks. (The run-record / completion summary uses Python's built-in `json` — no separate JSON formatter to install.)
+**Python** runs every hook and the per-skill config engine (`hooks/capabilities_lib.py`, which all 12 workflows shell out to) — 3.10+ is required (the hooks use `X | None` type syntax); CI runs on 3.12. **`gh`** drives all issue/PR operations. **`jq`** is used throughout the shell hooks. (The run-record / completion summary uses Python's built-in `json` — no separate JSON formatter to install.)
 
 ### Optional
 
@@ -119,7 +119,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | ------ | ----- | ------- | ---------------------------------------------- |
 | **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF2/WF4/WF9/WF10 (`/reflexion:critique`) and the lightweight reflect in WF3. **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
 | **superpowers** plugin | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official` | Structured **brainstorming / design exploration** (WF12 test-strategy design; complex-feature design). **Without it:** rawgentic falls back to lighter inline brainstorming — still works, less rigorous. |
-| **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review** — an independent, *different-model* second opinion on a design/spec/plan/PRD via OpenAI: the WF5 `/rawgentic:adversarial-review` skill plus the opt-in cross-model gates in WF1–WF4. **Without it:** WF5 errors out and any opt-in cross-model gate is skipped; you still get the same-model reflexion critique. |
+| **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review + peer consult** — an independent, *different-model* second opinion (WF5) or design proposal (WF13) via OpenAI: the `/rawgentic:adversarial-review` and `/rawgentic:peer-consult` skills, plus the opt-in cross-model gates in WF1–WF4 and WF2 Step 3. **Without it:** WF5/WF13 error out and any opt-in cross-model gate is skipped; you still get the same-model reflexion critique. |
 | **Security scanners** (gitleaks, semgrep, osv-scanner, trivy) | `bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner trivy` | Auto-provisioned by `/rawgentic:setup` and once in the background on first plugin use (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1`) | The **tool-based security scan** in WF2 Step 11.5 and WF9 (secrets / dependency-CVE / SAST / IaC misconfig). **Without them:** each missing scanner is a *visible skip* (never a silent pass) — the LLM security review still runs, but concrete known-pattern issues (leaked tokens, CVE'd deps) aren't caught. |
 
 > **Contributing / running the tests** also needs `pip install pytest` (plus `jsonschema` for the adversarial-review schema tests, which otherwise skip). These are dev-only — not needed to *use* the plugin. See [Testing](#testing).
@@ -158,6 +158,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Performance Optimization | `/rawgentic:optimize-perf`     | 15    | Benchmark-driven performance improvements           |
 | Incident Response        | `/rawgentic:incident`          | 14    | Production incident: stabilize first, then RCA      |
 | Test Suite Creation      | `/rawgentic:create-tests`      | 14    | Bootstrap tests or fill coverage gaps across any language |
+| Peer Consult             | `/rawgentic:peer-consult`      | 5     | Independent cross-model design proposal for a problem/spec artifact |
 
 <details>
 <summary><strong>Issue Creation (WF1)</strong> — 5 steps</summary>
@@ -324,6 +325,21 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 - Learning config: updates `.rawgentic.json` with discovered testing frameworks
 </details>
 
+<details>
+<summary><strong>Peer Consult (WF13)</strong> — 5 steps</summary>
+
+**Purpose:** Engage Codex as an independent PEER senior engineer — not a reviewer — to produce its own design proposal for a problem/spec artifact, without seeing or critiquing any proposal of yours. Report-only.
+
+**Invocation:** `/rawgentic:peer-consult docs/design/feature.md`
+
+**Key Features:**
+- Independent proposal, not critique — complements WF5 (which reviews an existing artifact); WF13 proposes an alternative
+- Report-only — writes `docs/reviews/peer-<slug>-<date>.md`, never edits the artifact or auto-applies its proposal
+- Shares WF5's Codex engine (`hooks/adversarial_review_lib.py` consult mode): same egress notice, secret scanning, and reproducibility knobs
+- Optionally wired into WF2 Step 3 (design) as a blind-both-ways consult, per-project opt-in via `peerConsult` (default-off; mirrors `adversarialReview`'s shape)
+- Requires the Codex CLI installed + authenticated. See [Data Handling](#cross-model-review-data-handling-codex).
+</details>
+
 ### Security & Infrastructure
 
 | Skill | Purpose |
@@ -455,13 +471,13 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 11 workflow skills share an identical config-loading block that runs before any workflow step:
+All 12 workflow skills share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`
 3. All subsequent steps use config and capabilities — never probe the filesystem
 
-The config→`capabilities` derivation lives in **one tested place** (`hooks/capabilities_lib.py`) instead of an identical prose block duplicated across all 11 skills + the docs table. It is fail-closed: a missing/corrupt config or a present-but-malformed optional section exits non-zero (rather than silently yielding a feature-less object), while an absent optional section yields its documented default. This means skills adapt automatically: TDD mode when tests are configured, Implement-Verify mode when they're not. No capability detection, no guessing.
+The config→`capabilities` derivation lives in **one tested place** (`hooks/capabilities_lib.py`) instead of an identical prose block duplicated across all 12 skills + the docs table. It is fail-closed: a missing/corrupt config or a present-but-malformed optional section exits non-zero (rather than silently yielding a feature-less object), while an absent optional section yields its documented default. This means skills adapt automatically: TDD mode when tests are configured, Implement-Verify mode when they're not. No capability detection, no guessing.
 
 ### Learning Config
 
@@ -535,19 +551,21 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | WF10 Performance           | Full critique      | `/reflexion:critique` | After optimization design    |
 | WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
 | WF12 Test Suite Creation   | Brainstorm-driven  | `/superpowers:brainstorming` | Before writing any tests |
+| WF13 Peer Consult          | Independent peer   | Codex CLI             | Standalone; opt-in in WF2 Step 3 |
 
 ### Cross-Model Review Data Handling (Codex)
 
 WF5 Adversarial Review (`/rawgentic:adversarial-review`) and its opt-in WF1/WF2/WF3/WF4
-hooks send the **text of the reviewed artifact to OpenAI** via the Codex CLI for an
-independent, different-model critique. This is **warn-only**: a one-time egress
+hooks, plus WF13 Peer Consult (`/rawgentic:peer-consult`) and its opt-in WF2 Step 3
+integration, send the **text of the reviewed artifact to OpenAI** via the Codex CLI for an
+independent, different-model critique or proposal. This is **warn-only**: a one-time egress
 notice is printed before each invocation, and the engine scans the artifact for
 obvious secrets (API keys, passwords, tokens, private keys), naming any detected
 categories. Set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` to block egress when secrets
 are found. Findings reports are written locally to `<project>/docs/reviews/` and are
 never uploaded. The feature is **default-disabled** per project; existing WF1/WF2/WF3/WF4
-runs are unchanged unless explicitly opted in via `adversarialReview` in
-`.rawgentic_workspace.json`. Requires the Codex CLI installed
+runs are unchanged unless explicitly opted in via `adversarialReview` (WF5) or `peerConsult`
+(WF13) in `.rawgentic_workspace.json`. Requires the Codex CLI installed
 (`curl -fsSL https://codex.openai.com/install.sh | bash`) and authenticated
 (`codex login`). See [config-reference.md](docs/config-reference.md#adversarial-review-data-handling).
 
@@ -634,7 +652,8 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Test Suite Creation (WF12)](docs/design/workflow-test-suite-creation.md)
   - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
   - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
-  - [Model Routing + Peer Consult](docs/design/2026-07-03-model-routing-and-peer-consult-design.md) ([visual](docs/design/2026-07-03-model-routing-and-peer-consult-design.html))
+  - [Model Routing + Peer Consult (WF13) design](docs/design/2026-07-03-model-routing-and-peer-consult-design.md) ([visual](docs/design/2026-07-03-model-routing-and-peer-consult-design.html))
+  - [Model Routing + Peer Consult plan](docs/plans/2026-07-03-model-routing-and-peer-consult.md)
   - [Dual Memory Backend (draft)](docs/superpowers/specs/2026-04-08-dual-memory-backend-design.md)
 - **[Run-Records](docs/run-records.md)** — Per-run structured run-record schema + store + the `work_summary.py` CLI (WF2 Step 16; Tier-2 telemetry substrate)
 - **[Testing](docs/testing.md)** — Test suite overview, hook test descriptions, skill evaluation methodology
@@ -660,7 +679,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (15/17 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception` and `interview` skills have none).
+Skills are tested via the `/skill-creator` eval pipeline (15/18 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception` and `interview` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -691,6 +710,10 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v2.46.0 (2026-07-03)
+- **modelRouting** — optional per-project `modelRouting` config in `.rawgentic_workspace.json` routes subagent dispatch roles (`review`/`analysis`/`implementation`) to specific models via `hooks/model_routing_lib.py` (fail-open; default-off = inherit session model; soft opus floor on `review`). Routes the 7 dispatch sites in WF2/WF3/refactor; adds an opt-in WF2 Step 8 implementation-delegation sub-step with a clean-state boundary. `/rawgentic:setup` gains a step to configure it. (design #125)
+- **peerConsult (WF13)** — new standalone `/rawgentic:peer-consult` skill engages Codex as an independent peer *designer* (not a reviewer), plus an opt-in WF2 Step 3 blind-both-ways integration via the `peerConsult` config field. (design #125)
 
 ### v2.45.0 (2026-07-02)
 - **Removed the BMAD integration and the `disabledSkills` mechanism it depended on (reverses #41/#42).** Gone: the workspace-root detection probe in `/rawgentic:switch` and `/rawgentic:setup`, the per-project skill-preference UI, the `disabledSkills` check in every workflow skill's `<config-loading>` preamble, the manual CLAUDE.md routing template, and the detection / `disabledSkills` workspace-file fields. Any such leftover fields in an existing `.rawgentic_workspace.json` are now ignored — no hook reads or validates them, so nothing errors. `critiqueMethod` survives as a workspace field with `reflexion` as its default and only supported value (its non-default option is dropped). With the disabled-skill headless-cleanup paragraph gone, the two `config-loading` shared-block variants collapsed into one `shared/blocks/config-loading.md`. The former integration test's non-integration lints (headless protocol, mandatory-steps, `critiqueMethod` presence) moved into `tests/hooks/test_headless.py`. (#123)
