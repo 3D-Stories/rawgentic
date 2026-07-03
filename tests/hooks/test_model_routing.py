@@ -71,6 +71,13 @@ def test_malformed_workspace_json_returns_inherit(tmp_path, capsys):
     assert capsys.readouterr().err
 
 
+def test_invalid_utf8_workspace_file_returns_inherit(tmp_path, capsys):
+    p = tmp_path / ".rawgentic_workspace.json"
+    p.write_bytes(b'{"projects":[]}\xff')
+    assert mr.resolve(str(p), "app", "review") == "inherit"
+    assert capsys.readouterr().err  # warned
+
+
 def test_review_below_opus_floor_warns_sonnet(tmp_path, capsys):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "sonnet"}})

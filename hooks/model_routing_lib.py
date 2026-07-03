@@ -33,7 +33,9 @@ def _load_block(workspace_path: str, project_name: str) -> dict:
             ws = json.load(f)
     except FileNotFoundError:
         return {}
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:
+        # ValueError covers json.JSONDecodeError and UnicodeDecodeError (invalid
+        # UTF-8 bytes), both of which must fail open like any other bad workspace.
         _warn(f"cannot read workspace ({exc}); using inherit")
         return {}
     projects = ws.get("projects") if isinstance(ws, dict) else None
