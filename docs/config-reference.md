@@ -245,57 +245,26 @@ The older `security.exceptions` array (per-rule + per-path exceptions) is still
 supported for backward compatibility but deprecated. Migrate to
 `guards.securityExcludePaths` for simpler path-based exclusions.
 
-## BMAD Integration
+## Workspace-File Fields
 
-When BMAD is installed alongside rawgentic (detected by the presence of a `_bmad/`
-directory in the workspace root), rawgentic can disable overlapping workflow skills
-and defer to BMAD equivalents on a per-project basis.
-
-### Workspace-Level Fields (`.rawgentic_workspace.json`)
-
-| Field | Type | Location | Description |
-|-------|------|----------|-------------|
-| `bmadDetected` | boolean | Top-level | Whether `_bmad/` was found in the workspace root. Set by `/rawgentic:setup` or `/rawgentic:switch`. |
+Beyond each project's committed [`.rawgentic.json`](#core-sections), a few settings live in
+the workspace file `.rawgentic_workspace.json`. They are **workspace-scoped** — not committed
+to any project repo — and are set by `/rawgentic:setup`.
 
 ### Per-Project Fields (in each `projects[]` entry)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `disabledSkills` | `string[]` | Bare skill names the user chose to replace with BMAD equivalents. |
-| `critiqueMethod` | `string` | `"reflexion"` (default) or `"bmad-party-mode"`. Controls which critique tool is used at quality gates. |
+| `critiqueMethod` | `string` | Critique tool used at quality gates. `"reflexion"` (the default, also used when the field is absent) is the supported value. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `headlessEnabled` | `bool` | Opt-in to headless (non-interactive) execution. Default `false`. See [Per-Project Access Control](#per-project-access-control). |
 | `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
-### `disabledSkills` Semantics
-
-- **Missing field** = not yet configured. Triggers a redirect to `/rawgentic:setup` when the user runs `/rawgentic:switch`.
-- **Empty array `[]`** = user explicitly chose rawgentic for all overlapping tasks.
-- **Populated array** = user chose BMAD for those specific tasks. Only those rawgentic skills are blocked.
-
-### BMAD Overlap Table
-
-| Rawgentic Skill | BMAD Equivalent |
-|-----------------|-----------------|
-| `implement-feature` | `bmad-dev-story` |
-| `fix-bug` | `bmad-dev-story` |
-| `create-tests` | BMAD TEA module (`bmad-tea` agent / `bmad-testarch-*` workflows) |
-| `update-docs` | BMAD tech-writer agent |
-
-Skills not in this table (create-issue, refactor, security-audit, incident, update-deps,
-optimize-perf) have no BMAD equivalent and are never candidates for BMAD-based disabling.
-
-### Enforcement
-
-All 10 workflow skills check `disabledSkills` in their config-loading preamble (Step 1b).
-If the current skill is listed, it stops and suggests the BMAD alternative. The check runs
-after active project resolution but before loading `.rawgentic.json`.
-
 ### `critiqueMethod`
 
-Six skills that invoke `/reflexion:critique` (implement-feature, create-issue, refactor,
-security-audit, optimize-perf, setup) check the project's `critiqueMethod` field before
-running the critique. If set to `"bmad-party-mode"`, that is used instead.
+The critique-invoking skills (implement-feature, refactor, security-audit, optimize-perf,
+setup) check the project's `critiqueMethod` field before running the critique. `reflexion`
+(the default, also used when the field is absent) is the supported method.
 
 ### `adversarialReview`
 
@@ -379,33 +348,25 @@ reviewed project's `AGENTS.md` so the cross-model reviewer stays independent). E
 finding must carry a verbatim `evidence` quote and a `confidence`; severity follows an
 explicit rubric to curb inflation.
 
-### Detection Flow
-
-1. `/rawgentic:switch` checks for `_bmad/` at session bind time. If found and the project
-   lacks `disabledSkills`, it redirects to `/rawgentic:setup`.
-2. `/rawgentic:setup` Step 2b presents the per-task choice UI and writes preferences.
-3. On re-run, if `_bmad/` is gone, setup offers to remove BMAD-related disabled skills.
-
 ### Example Configuration
 
 ```json
 {
-  "bmadDetected": true,
+  "defaultProtectionLevel": "standard",
   "projects": [
     {
       "name": "chorestory",
       "path": "./projects/chorestory",
       "active": true,
       "configured": true,
-      "disabledSkills": ["implement-feature", "fix-bug", "create-tests", "update-docs"],
-      "critiqueMethod": "bmad-party-mode"
+      "headlessEnabled": true,
+      "adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }
     },
     {
       "name": "rawgentic",
       "path": "./projects/rawgentic",
       "active": true,
-      "configured": true,
-      "disabledSkills": []
+      "configured": true
     }
   ]
 }

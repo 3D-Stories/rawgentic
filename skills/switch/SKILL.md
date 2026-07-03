@@ -172,28 +172,7 @@ Run `/rawgentic:setup` to update your config (existing values will be preserved)
 
 **If no fields are missing:** Silent pass — print nothing.
 
-### 3. BMAD Detection Check
-
-Check if `${WORKSPACE_ROOT}/_bmad/` directory exists (where WORKSPACE_ROOT is the directory containing `.rawgentic_workspace.json`).
-
-**If `_bmad/` exists:**
-1. Read `.rawgentic_workspace.json`. If `bmadDetected` is not already `true`, set it to `true` and write the file back.
-2. Check the target project's entry for a `disabledSkills` field.
-3. **If `disabledSkills` is missing** (project not yet configured for BMAD): redirect to setup:
-   ```
-   BMAD detected but no skill preferences configured for [project-name].
-   Running /rawgentic:setup to configure...
-   ```
-   Invoke `/rawgentic:setup` for the active project. Note: full setup will run (including verification and migration checks), but only Step 2b will actively prompt for BMAD preferences. After setup completes, return here and continue to "Confirm Ready."
-4. **If `disabledSkills` exists** (already configured): silent pass. Proceed to "Confirm Ready."
-
-**If `_bmad/` does NOT exist AND `bmadDetected` is `true` in `.rawgentic_workspace.json`:** Warn the user:
-   "BMAD was previously detected but `_bmad/` no longer exists. Run `/rawgentic:setup` to update skill preferences."
-   Proceed to "Confirm Ready."
-
-**If `_bmad/` does NOT exist AND `bmadDetected` is not set or `false`:** Silent pass — proceed to "Confirm Ready."
-
-### 4. Headless Access Check
+### 3. Headless Access Check
 
 If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the target project's `headlessEnabled` field in `.rawgentic_workspace.json`.
 
@@ -203,7 +182,7 @@ If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the
 
 If not in headless mode: skip this check entirely.
 
-### 5. Confirm Ready
+### 4. Confirm Ready
 
 After all checks complete, print the final confirmation:
 

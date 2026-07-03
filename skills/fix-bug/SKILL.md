@@ -1,6 +1,6 @@
 ---
 name: rawgentic:fix-bug
-description: Fix a bug using the WF3 14-step workflow with reproduce-first TDD, root cause analysis, lightweight reflect, and conventional commit PR. Invoke with /fix-bug followed by an issue number. DO NOT use this skill if the user is working within a BMAD workflow or has BMAD story files — use bmad-dev-story instead. Only trigger when the user explicitly invokes /fix-bug or /rawgentic:fix-bug, or is working in a rawgentic-only project without BMAD.
+description: Fix a bug using the WF3 14-step workflow with reproduce-first TDD, root cause analysis, lightweight reflect, and conventional commit PR. Invoke with /fix-bug followed by an issue number. Only trigger when the user explicitly invokes /fix-bug or /rawgentic:fix-bug.
 argument-hint: GitHub issue number (e.g., "42") or issue URL
 ---
 
@@ -66,18 +66,6 @@ Before executing any workflow steps, load the project configuration:
    - `.rawgentic_workspace.json` malformed -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
    - No active project found at any level -> STOP. Tell user: "No active project. Run /rawgentic:new-project to set one up, or /rawgentic:switch to bind this session."
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
-
-1b. **Disabled skill check:** After resolving the active project, read `.rawgentic_workspace.json` (if not already read in step 1) and find the active project's entry.
-   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it:
-     **[Headless cleanup]:** Before stopping, check if `claude_docs/headless_suspend.json` exists. If it does, delete it, remove `rawgentic:ai-waiting` label from the issue (read issue number from suspend file), and add `rawgentic:ai-error` with a comment: "This skill was disabled after a headless session was suspended. The pending question can no longer be processed." Then **STOP.**
-     - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
-       "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
-     - Otherwise, tell user:
-       "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
-   - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:
-     "BMAD detected but no skill preferences configured for [project]. Run `/rawgentic:switch` or `/rawgentic:setup` to configure."
-   - Otherwise: proceed to step 2.
 
 2. Load the config and derive capabilities with the helper CLI (one tested
    source of truth — never hand-derive the `capabilities` object, so all 11

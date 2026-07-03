@@ -95,83 +95,6 @@ Check if `CLAUDE.md` (in the Claude root) contains either of these markers from 
 
 ---
 
-## Step 2b: BMAD Detection and Skill Preferences
-
-This step runs on **every** setup invocation (including Sub-flow A re-runs).
-
-### Detection
-
-Check if `${WORKSPACE_ROOT}/_bmad/` directory exists (where WORKSPACE_ROOT is the directory containing `.rawgentic_workspace.json`).
-
-- **If `_bmad/` exists:**
-  1. Read `.rawgentic_workspace.json`. If `bmadDetected` is not already `true`, set it to `true` and write the file back.
-  2. Find the active project's entry in `.rawgentic_workspace.json`.
-  3. **If the project entry has no `disabledSkills` field** (first-time configuration): proceed to the **Per-Task Choice UI** below.
-  4. **If the project entry already has `disabledSkills`** (re-configuration): proceed to the **Re-Configuration UI** below.
-
-- **If `_bmad/` does NOT exist AND `bmadDetected` was previously `true`:** proceed to the **Removal Flow** below.
-
-- **If `_bmad/` does NOT exist AND `bmadDetected` is not set or `false`:** skip this step silently.
-
-### Per-Task Choice UI (first-time configuration)
-
-Present the user with a per-task choice for the active project:
-
-```
-BMAD detected (_bmad/ found). For [project-name], choose your preferred tool:
-
-1. Feature implementation:  (a) rawgentic:implement-feature  (b) bmad-dev-story      [default: b]
-2. Bug fixing:              (a) rawgentic:fix-bug            (b) bmad-dev-story      [default: b]
-3. Test creation:           (a) rawgentic:create-tests       (b) bmad-testarch-*     [default: b]
-4. Documentation:           (a) rawgentic:update-docs        (b) BMAD tech-writer    [default: b]
-
-Accept all defaults? (y) Or enter numbers to change (e.g., "1,3" to pick rawgentic for those)
-```
-
-For each task where the user picks **(b)** (BMAD), add the rawgentic skill name to `disabledSkills`.
-For each task where the user picks **(a)** (rawgentic), do NOT add it.
-
-Then present the critique method choice (only if at least one rawgentic workflow is kept):
-
-```
-5. Code critique method:    (a) /reflexion:critique  (b) bmad-party-mode    [default: a]
-```
-
-Write the results to the active project's entry in `.rawgentic_workspace.json`:
-- `disabledSkills`: array of bare skill names the user chose to replace with BMAD (e.g., `["implement-feature", "fix-bug", "create-tests", "update-docs"]`)
-- `critiqueMethod`: `"bmad-party-mode"` or `"reflexion"` (only if user chose non-default)
-
-**Semantics:**
-- `disabledSkills` missing = not yet configured (triggers redirect in `/rawgentic:switch`)
-- `disabledSkills: []` = user explicitly chose rawgentic for all tasks
-- `disabledSkills: [...]` = user chose BMAD for those specific tasks
-
-### Re-Configuration UI (re-run with existing preferences)
-
-Present the current selections and allow toggling:
-
-```
-Current BMAD preferences for [project-name]:
-1. Feature implementation:  rawgentic:implement-feature  [DISABLED — using bmad-dev-story]
-2. Bug fixing:              rawgentic:fix-bug            [DISABLED — using bmad-dev-story]
-3. Test creation:           rawgentic:create-tests       [ENABLED]
-4. Documentation:           rawgentic:update-docs        [DISABLED — using BMAD tech-writer]
-5. Critique method:         [show actual value from project entry's critiqueMethod field; default: reflexion]
-
-Change any? (enter numbers to toggle, or "keep" to keep current)
-```
-
-Update `disabledSkills` and `critiqueMethod` in the project entry based on user changes.
-
-### Removal Flow (BMAD previously detected but `_bmad/` gone)
-
-1. Prompt: "BMAD was previously detected but `_bmad/` no longer exists. Remove disabled skills for **[project-name]**? (y/n)"
-2. If yes: remove only entries matching `{implement-feature, fix-bug, create-tests, update-docs}` from this project's `disabledSkills`. Any manually-added entries are preserved. Remove `critiqueMethod` if it was `"bmad-party-mode"`.
-3. Check all project entries — if none have BMAD-related disabled skills remaining, set `bmadDetected` to `false`.
-4. If no: leave everything as-is.
-
----
-
 ## Step 2c: Headless Mode Access
 
 This step runs on **every** setup invocation (including Sub-flow A re-runs).
@@ -311,7 +234,7 @@ is the explicit, user-visible confirmation.
 
 ### New features are ON by default (opt-OUT)
 
-The feature steps above (2b BMAD, 2c headless, 2d adversarial review, 2e scanners)
+The feature steps above (2c headless, 2d adversarial review, 2e scanners)
 run on **every** setup invocation, including Sub-flow A re-runs against an existing
 `.rawgentic.json`. When the plugin gains a capability, re-running setup therefore
 **enriches an older config and turns the new feature on by default** — features are
@@ -511,7 +434,7 @@ If the user declines (or score is 0), proceed to Step 5 with the config unchange
 
 ### Critique Execution
 
-**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
 
 If the user accepts, invoke `/reflexion:critique` with the detected `.rawgentic.json` as the work product.
 
@@ -624,8 +547,6 @@ Read `~/.claude/CLAUDE.md` and check for content that the three-layer architectu
 
 - **Empty placeholder sections** (sections with only `---` or whitespace as content): Suggest: "You have empty sections in `~/.claude/CLAUDE.md` (e.g., Infrastructure, Servers). Would you like me to remove them to reduce clutter?"
 
-- **BMAD routing table** (pattern: `## Plugin Routing: BMAD vs Rawgentic` or `## Plugin Routing: BMAD + Rawgentic`): If `bmadDetected` is `true` in `.rawgentic_workspace.json` (meaning automated detection is now active), suggest: "Plugin routing is now handled per-project via `disabledSkills` in `.rawgentic_workspace.json`. Remove the manual routing table from `~/.claude/CLAUDE.md`?" If approved, remove from the heading through to (but not including) the next `##` heading.
-
 All suggestions require explicit user approval. If the user declines, leave Layer 1 unchanged. If the user approves a move:
 1. Remove the content from `~/.claude/CLAUDE.md`
 2. Add it to `{WORKSPACE_ROOT}/CLAUDE.md` in the appropriate section
@@ -636,7 +557,7 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 ## Step 8: Update Workspace
 
-Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `disabledSkills` and `critiqueMethod` (Step 2b), `headlessEnabled` (Step 2c), and `adversarialReview` (Step 2d) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c) and `adversarialReview` (Step 2d) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
 
 ### Step 8b: Ensure Session Notes Infrastructure
 

@@ -31,11 +31,11 @@ SHARED = ROOT / "shared" / "blocks"
 # config-loading from PR #104) and are never touched.
 MANIFEST = {
     "config-loading": {
-        "config-loading.standard.md": [
+        "config-loading.md": [
             "adversarial-review", "create-tests", "incident", "refactor",
             "security-audit", "update-docs", "optimize-perf", "update-deps",
+            "implement-feature", "fix-bug",
         ],
-        "config-loading.headless.md": ["implement-feature", "fix-bug"],
     },
 }
 

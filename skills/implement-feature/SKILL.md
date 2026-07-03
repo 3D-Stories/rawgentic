@@ -1,6 +1,6 @@
 ---
 name: rawgentic:implement-feature
-description: Implement a feature (or a design-heavy/complex bug fix) from a GitHub issue through the WF2 16-step workflow with TDD, multi-agent code review, quality gates, and — when the project configures them — CI and deployment verification. Invoke with /implement-feature followed by a GitHub issue number or URL. For a narrow, reproducible bug fix prefer /rawgentic:fix-bug (WF3); implement-feature is the home for features and for bugs that need full design + implementation. DO NOT use this skill if the user is working within a BMAD workflow, has BMAD story files, or is using bmad-dev-story. Only trigger when the user explicitly invokes /implement-feature or /rawgentic:implement-feature, or is working in a rawgentic-only project without BMAD.
+description: Implement a feature (or a design-heavy/complex bug fix) from a GitHub issue through the WF2 16-step workflow with TDD, multi-agent code review, quality gates, and — when the project configures them — CI and deployment verification. Invoke with /implement-feature followed by a GitHub issue number or URL. For a narrow, reproducible bug fix prefer /rawgentic:fix-bug (WF3); implement-feature is the home for features and for bugs that need full design + implementation. Only trigger when the user explicitly invokes /implement-feature or /rawgentic:implement-feature.
 argument-hint: GitHub issue number (e.g., 155) or URL
 ---
 
@@ -148,18 +148,6 @@ Before executing any workflow steps, load the project configuration:
    - `.rawgentic_workspace.json` malformed -> STOP. Tell user: "Workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix manually."
    - No active project found at any level -> STOP. Tell user: "No active project. Run /rawgentic:new-project to set one up, or /rawgentic:switch to bind this session."
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
-
-1b. **Disabled skill check:** After resolving the active project, read `.rawgentic_workspace.json` (if not already read in step 1) and find the active project's entry.
-   - If the project entry has a `disabledSkills` array and this skill's bare name appears in it:
-     **[Headless cleanup]:** Before stopping, check if `claude_docs/headless_suspend.json` exists. If it does, delete it, remove `rawgentic:ai-waiting` label from the issue (read issue number from suspend file), and add `rawgentic:ai-error` with a comment: "This skill was disabled after a headless session was suspended. The pending question can no longer be processed." Then **STOP.**
-     - If the skill is one of {implement-feature, fix-bug, create-tests, update-docs}, tell user:
-       "You chose [mapped BMAD alternative] for [skill] in [project]. To change, re-run `/rawgentic:setup` or edit `disabledSkills` in `.rawgentic_workspace.json`."
-       Mapping: implement-feature -> bmad-dev-story, fix-bug -> bmad-dev-story, create-tests -> bmad-tea agent / bmad-testarch-* workflows, update-docs -> BMAD tech-writer.
-     - Otherwise, tell user:
-       "Skill [name] is disabled in [project]. Remove it from `disabledSkills` in `.rawgentic_workspace.json` to re-enable."
-   - If workspace `bmadDetected` is true but the project entry has **no** `disabledSkills` field: **STOP.** Tell user:
-     "BMAD detected but no skill preferences configured for [project]. Run `/rawgentic:switch` or `/rawgentic:setup` to configure."
-   - Otherwise: proceed to step 2.
 
 2. Load the config and derive capabilities with the helper CLI (one tested
    source of truth — never hand-derive the `capabilities` object, so all 11
@@ -516,7 +504,7 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Instructions
 
-**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. If set to `"bmad-party-mode"`, use bmad-party-mode instead of the critique below. If missing or `"reflexion"`, proceed as normal.
+**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
 
 **Determine gate type based on fast path eligibility:**
 - If `fast_path_eligible == true`: use `/reflexion:reflect` (lightweight)
