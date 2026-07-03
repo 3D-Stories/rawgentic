@@ -6,11 +6,10 @@ from pathlib import Path
 SKILLS = Path(__file__).resolve().parent.parent.parent / "skills"
 
 # (file, role, count of annotations expected in that file)
-# NOTE: implement-feature Step 8 "implementation" role annotation is added in
-# Task 3 (delegation dispatch); excluded here per task-2-brief.md.
 EXPECTED = [
     ("implement-feature/SKILL.md", "analysis", 2),
     ("implement-feature/SKILL.md", "review", 3),
+    ("implement-feature/SKILL.md", "implementation", 1),
     ("fix-bug/SKILL.md", "review", 1),
     ("refactor/SKILL.md", "review", 1),
 ]
@@ -30,3 +29,12 @@ def test_resolve_invoked_in_preambles():
     for rel in ("implement-feature/SKILL.md", "fix-bug/SKILL.md", "refactor/SKILL.md"):
         text = (SKILLS / rel).read_text()
         assert "model_routing_lib.py resolve" in text, f"{rel} missing routing resolve call"
+
+
+def test_step8_delegation_documents_clean_state_boundary():
+    text = (SKILLS / "implement-feature" / "SKILL.md").read_text()
+    # the delegation sub-step must document pre-task state capture + restore-before-retry
+    assert "clean-state boundary" in text
+    assert "git status --porcelain" in text
+    assert "restore" in text.lower()
+    assert "retries that task once inline" in text or "retry that task once inline" in text
