@@ -257,6 +257,8 @@ to any project repo — and are set by `/rawgentic:setup`.
 |-------|------|-------------|
 | `critiqueMethod` | `string` | Critique tool used at quality gates. `"reflexion"` (the default, also used when the field is absent) is the supported value. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
+| `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown values warn and resolve to `inherit`, never block. See [`modelRouting`](#modelrouting). |
+| `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `headlessEnabled` | `bool` | Opt-in to headless (non-interactive) execution. Default `false`. See [Per-Project Access Control](#per-project-access-control). |
 | `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
@@ -316,6 +318,74 @@ Loading is **fail-closed**: a missing file, malformed JSON, missing field, or ba
 resolves to disabled — a workflow never crashes and never silently enables. Bool shorthand
 (`"adversarialReview": true`) enables the standalone-skill intent but lists no workflows,
 so the embedded gates stay off.
+
+### `modelRouting`
+
+Per-project subagent model routing. The field is a **per-project entry in
+`.rawgentic_workspace.json`** (sibling to `critiqueMethod` / `adversarialReview`),
+NOT in `.rawgentic.json` — it is workspace-scoped, not committed to the project repo.
+
+**Default:** absent, which resolves every role to `inherit` (the session's own model)
+— byte-identical to routing not existing at all. Setup (Step 2f) offers to opt in;
+declining stages nothing.
+
+Shape:
+
+```json
+"modelRouting": { "review": "opus", "analysis": "sonnet", "implementation": "opus" }
+```
+
+Three roles, each independently optional (an absent role inherits):
+
+- `review` — code/design review subagent dispatch
+- `analysis` — codebase-analysis subagent dispatch
+- `implementation` — implementation subagent dispatch
+
+Each value is one of `opus` / `sonnet` / `haiku` / `fable` / `inherit`. Resolved via
+`hooks/model_routing_lib.py resolve --workspace <path> --project <name> --role <role>`,
+which is invoked by the dispatching skill's `<model-routing-resolve>` preamble
+(right after `<config-loading>`, before any subagent dispatch).
+
+**Fail-open by design** — routing is an optimization knob, never a gate:
+a missing workspace file, malformed JSON, a non-dict `modelRouting` block, or an
+unknown/invalid model value all resolve to `inherit` with a stderr warning; the CLI
+always exits 0 and never blocks the calling workflow.
+
+**Soft opus floor (review only):** an explicit `sonnet` or `haiku` for the `review`
+role still applies (routing is honored, not overridden) but emits an advisory stderr
+warning that review quality may drop below the recommended `opus` floor. `analysis`
+and `implementation` have no such floor.
+
+### `peerConsult`
+
+Cross-model peer design consult (WF13, `/rawgentic:peer-consult`). The field is a
+**per-project entry in `.rawgentic_workspace.json`** (sibling to `adversarialReview`),
+NOT in `.rawgentic.json` — it is workspace-scoped, not committed to the project repo.
+It shares the same loader as `adversarialReview`
+(`hooks/adversarial_review_lib.py load_adversarial_review_config(..., key="peerConsult")`)
+and the identical `{enabled, workflows}` shape — see [`adversarialReview`](#adversarialreview)
+for the full loading/fail-closed semantics, which apply here unchanged.
+
+**Default (setup):** **off** — Step 2g mirrors Step 2d's question, but unlike WF5
+there is no default-on recommendation; the standalone `/rawgentic:peer-consult` skill
+always works regardless of this field. Shape:
+
+```json
+"peerConsult": { "enabled": true, "workflows": ["implement-feature"] }
+```
+
+`peerConsult` **governs the WF2 integration only** — it does not gate the standalone
+skill. When enabled and `implement-feature` is listed: at the WF2 design step
+(Step 3), a **blind-both-ways** peer consult runs — Codex never sees your draft
+design and you don't read its proposal until after yours is written — so neither
+side anchors on the other. Findings/proposal are presented alongside your own
+design for the user to weigh; nothing is auto-merged.
+
+Loading is **fail-closed**, identical to `adversarialReview`: a missing file,
+malformed JSON, missing field, or bad value resolves to disabled — the workflow
+never crashes and never silently enables. The review is **non-blocking**: any Codex
+failure (including a missing/unauthenticated CLI) is logged and skipped, never
+blocking WF2. Only the standalone WF13 skill ERRORs on an unmet prerequisite.
 
 ### Adversarial Review Data Handling
 

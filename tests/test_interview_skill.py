@@ -1,7 +1,7 @@
 """Drift guards for the `interview` skill (lightweight planning skill).
 
 `interview` is NOT a config-driven SDLC workflow — it deliberately has no
-`<config-loading>` block — so it must NOT be counted among the 11 config-driven
+`<config-loading>` block — so it must NOT be counted among the 12 config-driven
 workflow skills, and it must NOT trip the config-loading canary in
 `tests/hooks/test_headless.py`.
 
@@ -25,7 +25,7 @@ def test_skill_dir_and_frontmatter_exist():
 
 
 def test_skill_is_lightweight_no_config_loading():
-    """interview must stay lightweight — no <config-loading>, so the 11-count canary holds."""
+    """interview must stay lightweight — no <config-loading>, so the 12-count canary holds."""
     text = SKILL.read_text()
     assert "<config-loading>" not in text
 
@@ -57,8 +57,8 @@ def test_descriptions_account_for_interview_as_planning_skill():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     for desc in (plugin["description"], mp["plugins"][0]["description"]):
-        # interview is a separate planning skill, NOT a 12th SDLC workflow
-        assert "11 SDLC workflow skills" in desc
+        # interview is a separate planning skill, NOT counted among the SDLC workflows
+        assert "12 SDLC workflow skills" in desc
         assert "planning skill" in desc
 
 
