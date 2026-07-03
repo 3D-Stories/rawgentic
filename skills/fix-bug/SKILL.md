@@ -80,6 +80,15 @@ Before executing any workflow steps, load the project configuration:
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
 
+<model-routing-resolve>
+Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For the `review` role this skill dispatches, resolve the configured model:
+```bash
+python3 hooks/model_routing_lib.py resolve \
+  --workspace .rawgentic_workspace.json --project <name> --role review
+```
+Exit is always 0; stdout is a model name or `inherit`. Carry the resolved value as a literal into later steps (fresh-shell rule). When the value is `inherit`, dispatch review subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for review. A stderr warning is advisory — never treat it as failure.
+</model-routing-resolve>
+
 <learning-config>
 If this workflow discovers new project capabilities during execution (e.g., a new test framework, a previously unknown service), update `.rawgentic.json` before completing:
 - Append to arrays (e.g., add new test framework to testing.frameworks[])
@@ -435,6 +444,9 @@ Verification pass/fail.
 ### Instructions
 
 **Part A: Code Review**
+
+<!-- model-routing: role=review -->
+Dispatch these 2 review agents with `model: <review>` unless routing resolved `inherit`.
 
 Launch a focused 2-agent code review in parallel using Agent tool calls (subagent_type per the PR review toolkit):
 

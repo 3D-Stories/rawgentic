@@ -162,6 +162,15 @@ Before executing any workflow steps, load the project configuration:
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
 
+<model-routing-resolve>
+Resolve model routing (optional, fail-open) right after `<config-loading>`, before any subagent dispatch. For each role this skill dispatches (`analysis`, `review`, `implementation`), resolve the configured model:
+```bash
+python3 hooks/model_routing_lib.py resolve \
+  --workspace .rawgentic_workspace.json --project <name> --role review
+```
+Exit is always 0; stdout is a model name or `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
+</model-routing-resolve>
+
 <learning-config>
 If this workflow discovers new project capabilities during execution (e.g., a new test framework, a previously unknown service), update `.rawgentic.json` before completing:
 - Append to arrays (e.g., add new test framework to testing.frameworks[])
@@ -394,6 +403,9 @@ This enables workflow resumption if context is lost.
 
 **Execution model — map first, then parallel gather, then synthesize.** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. So run item 1 first, then **fan out the remaining read-only analyses (items 2–6) as concurrent subagents** (Agent tool), passing each the component map from item 1 as **shared input**. One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one **sequential subagent** (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. This collapses ~5 sequential read passes into roughly one and loses no quality — each subagent goes deeper in its own lane. Items 7–8 (complexity classification, fast-path eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. The issue's complexity hint from Step 1 chooses only the *orchestration cost*, never the workflow path or which gates run — for a trivially small change, skip the subagent spin-up and run items 1–6 inline (the same analyses, in the same order, feeding the same synthesis); otherwise fan out. If a subagent errors, fall back to running that single analysis inline — the per-analysis failure modes below still apply.
 
+<!-- model-routing: role=analysis -->
+When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2 fan-out subagent with `model: <analysis>`.
+
 1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts.
 
 2. **Dependency analysis:** Trace relationships from affected components to understand the blast radius. The scope depends on project type:
@@ -511,6 +523,9 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 - If `fast_path_eligible == false`: use `/reflexion:critique` (full 3-judge)
 
 **For full critique (`/reflexion:critique`):**
+
+<!-- model-routing: role=review -->
+Dispatch the judge sub-agents with `model: <review>` unless routing resolved `inherit`.
 
 1. Launch three judge sub-agents in parallel. If any returns 429, retry that agent after 30s.
 
@@ -798,6 +813,9 @@ Promotion at the last task still triggers Step 8a (and any retroactive scan) bef
    ```bash
    git show --no-color --format= <sha>
    ```
+<!-- model-routing: role=review -->
+Dispatch these reviewers with `model: <review>` unless routing resolved `inherit`.
+
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (inline-defined prompt roles, same pattern as Step 11 — NOT registered subagents):
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
@@ -878,6 +896,9 @@ Implementation drift check with verification evidence.
 
 ### Instructions
 
+<!-- model-routing: role=analysis -->
+Dispatch the memorization sub-agent with `model: <analysis>` unless routing resolved `inherit`.
+
 **Runs in PARALLEL with Step 11** (dispatch with `run_in_background=true`).
 
 1. Review quality gate findings from Steps 4, 6, and 9.
@@ -908,6 +929,9 @@ Updated CLAUDE.md (if insights memorized) or no output.
    Pass both to each reviewer as context:
    - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
    - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator." Record each resolution via `plan_lib.resolve_deferral(<deferrals_path>, <finding_id>, status='applied'` / `add_concurrence=<other_slot>` / `user_ack=True)` — do not edit the deferrals JSON by hand.
+
+<!-- model-routing: role=review -->
+Dispatch the 3 review agents with `model: <review>` unless routing resolved `inherit`.
 
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
 
