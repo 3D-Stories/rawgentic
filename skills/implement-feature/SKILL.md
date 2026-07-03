@@ -467,6 +467,22 @@ Codebase analysis with complexity classification, fast path eligibility, and (fo
 
 ### Instructions
 
+**Optional peer consult (opt-in, cross-model — blind both ways).** Evaluate up front:
+```bash
+python3 hooks/adversarial_review_lib.py is-enabled \
+  --workspace .rawgentic_workspace.json --project <name> --skill implement-feature --key peerConsult
+```
+Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subprocess). When enabled:
+1. Write the issue body + the Step 2 codebase-analysis summary to a temp problem file. Launch the consult as a BACKGROUND process writing structured output to a temp out-file:
+   ```bash
+   python3 hooks/adversarial_review_lib.py consult \
+     --artifact <problem-file> --project-root <root> --out <out-file> --date "$(date -u +%Y-%m-%d)" &
+   ```
+2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read `<out-file>` before your own draft is on disk.
+3. After your draft is written, read `<out-file>`. On timeout/failure the file holds an explicit **empty-proposal marker** (never partial content) — proceed with your design alone. Otherwise synthesize best-of-both and record the peer's contributions (provenance) in the design doc.
+4. **Gate on the background process's EXIT CODE, not just file content** — the empty-proposal write is best-effort, so on an unwritable out-path a non-zero exit can leave the file missing or unreadable entirely. If the exit code is non-zero OR the file is missing/unreadable, treat it identically to an empty proposal and proceed.
+5. Codex failure is non-blocking: log and proceed. This sub-step never gates Step 3.
+
 1. **Design approach:** For complex features, use the Agent tool with a brainstorming prompt to generate 2-3 implementation approaches. For standard features, design inline with 1-2 approaches.
 
 2. **Each approach includes:**

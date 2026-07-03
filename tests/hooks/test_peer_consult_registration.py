@@ -24,3 +24,11 @@ def test_marketplace_registers_skill():
 
 def test_evals_stub_exists():
     assert (SKILLS / "peer-consult" / "evals.json").exists()
+
+
+def test_wf2_step3_integration_present():
+    text = (SKILLS / "implement-feature" / "SKILL.md").read_text()
+    assert "--key peerConsult" in text          # gate check
+    assert "blind" in text.lower()
+    assert "empty-proposal marker" in text       # timeout handling
+    assert "before reading" in text.lower() or "must not read" in text.lower()
