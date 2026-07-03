@@ -634,6 +634,7 @@ The `docs/` directory contains detailed design documentation for contributors:
   - [Test Suite Creation (WF12)](docs/design/workflow-test-suite-creation.md)
   - [Security Guard](docs/plans/2026-03-07-security-guard-design.md)
   - [Multi-Project Concurrent Sessions](docs/plans/2026-03-07-multi-project-sessions-design.md)
+  - [Model Routing + Peer Consult](docs/design/2026-07-03-model-routing-and-peer-consult-design.md) ([visual](docs/design/2026-07-03-model-routing-and-peer-consult-design.html))
   - [Dual Memory Backend (draft)](docs/superpowers/specs/2026-04-08-dual-memory-backend-design.md)
 - **[Run-Records](docs/run-records.md)** — Per-run structured run-record schema + store + the `work_summary.py` CLI (WF2 Step 16; Tier-2 telemetry substrate)
 - **[Testing](docs/testing.md)** — Test suite overview, hook test descriptions, skill evaluation methodology
