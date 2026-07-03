@@ -23,7 +23,7 @@
 | WF9  | Security Audit         | `/security-audit`    | 14    | security/     | Full (on audit) |
 | WF10 | Performance Optim.     | `/optimize-perf`     | 15    | perf/         | Full critique   |
 | WF11 | Incident Response      | `/incident`          | 14    | hotfix/       | Reflect (RCA)   |
-| WF13 | Peer Consult           | `/peer-consult`      | 5     | —             | Independent peer|
+| WF13 | Peer Consult           | `/peer-consult`      | 5     | —             | Independent peer |
 
 ### 1.2 Numbering Gaps
 

@@ -1,11 +1,11 @@
 """Tests for hooks/capabilities_lib.py — the config->capabilities derivation.
 
 PR 4c extracts the "Build the capabilities object" derivation (previously an
-identical prose block duplicated across all 11 workflow SKILL.md files + the
+identical prose block duplicated across all 12 workflow SKILL.md files + the
 docs table) into one tested, fail-closed CLI. The orchestrator resolves the
 active project (semantic, stays in prose); the CLI loads + validates the config
 and derives the capabilities object so the mapping can no longer drift between
-11 copies, and a malformed config can't masquerade as a feature-less project.
+12 copies, and a malformed config can't masquerade as a feature-less project.
 """
 import json
 import sys
