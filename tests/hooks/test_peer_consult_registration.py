@@ -1,5 +1,6 @@
 """WF13 peer-consult registration drift guard (mirrors WF5's)."""
 import json
+import re
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent.parent
@@ -32,3 +33,20 @@ def test_wf2_step3_integration_present():
     assert "blind" in text.lower()
     assert "empty-proposal marker" in text       # timeout handling
     assert "before reading" in text.lower() or "must not read" in text.lower()
+
+
+def test_setup_has_modelrouting_and_peerconsult_steps():
+    text = (SKILLS / "setup" / "SKILL.md").read_text()
+    assert "modelRouting" in text
+    assert "peerConsult" in text
+    # The Step 8 finalize write must apply all four pending fields in one
+    # read-modify-write sentence, so no step's write clobbers another's field.
+    match = re.search(
+        r"Apply any pending per-project field changes.*?Write the file back once\.",
+        text,
+        re.DOTALL,
+    )
+    assert match, "Step 8 finalize read-modify-write sentence not found"
+    finalize_sentence = match.group(0)
+    for field in ("headlessEnabled", "adversarialReview", "modelRouting", "peerConsult"):
+        assert field in finalize_sentence, f"{field!r} missing from finalize sentence"

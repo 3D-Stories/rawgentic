@@ -256,6 +256,24 @@ recorded opt-outs), leaves headless and WF5 alone, and nudges the user to run
 
 ---
 
+## Step 2f: Model Routing (optional)
+
+Offer per-project subagent model routing. Ask whether to route the three dispatch roles to specific models (skip any role = inherit the session model). Suggested defaults: `review: opus`, `analysis: sonnet`, `implementation: opus`.
+
+- If the user opts in, collect a model (`opus`/`sonnet`/`haiku`/`fable`) or "skip" per role, and stage:
+  `"modelRouting": { "<role>": "<model>", ... }` (omit skipped roles).
+- If the user declines, stage nothing (absent block = inherit everywhere; byte-identical default).
+- Note the soft opus floor: routing `review` below opus warns at run time but still applies.
+
+## Step 2g: Peer Consult (WF13) Integration
+
+Mirror Step 2d (Adversarial Review). Check the project entry's `peerConsult` field.
+
+- If not set: ask whether to enable the cross-model peer designer at the WF2 design step. On yes, stage `"peerConsult": { "enabled": true, "workflows": ["implement-feature"] }`; on no, `"peerConsult": { "enabled": false, "workflows": [] }`. The standalone `/rawgentic:peer-consult` works regardless.
+- If already set: show status and allow changing.
+
+---
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to understand the full schema structure.
@@ -557,7 +575,7 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 ## Step 8: Update Workspace
 
-Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c) and `adversarialReview` (Step 2d) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c), `adversarialReview` (Step 2d), `modelRouting` (Step 2f), and `peerConsult` (Step 2g) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
 
 ### Step 8b: Ensure Session Notes Infrastructure
 
