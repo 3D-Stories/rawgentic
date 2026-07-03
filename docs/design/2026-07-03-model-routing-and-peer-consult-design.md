@@ -41,6 +41,10 @@ Optional block in the project's entry in `.rawgentic_workspace.json` (same place
 - **Defaults:** absent block, absent role, or `inherit` → subagents inherit the session model. Byte-identical behavior to v2.45.0 unless configured (default-off, like `adversarialReview`).
 - Roles are partial: `{"review": "opus"}` alone is valid.
 
+### Setup integration
+
+`/rawgentic:setup` gains a modelRouting step alongside the existing per-project steps (headless, adversarialReview): it offers the three roles with suggested defaults (`review: opus`, `analysis: sonnet`, `implementation: opus`) and skip-per-role (= inherit), plus a peerConsult enable/workflows step mirroring the adversarialReview one. Both are applied in the same single finalize read-modify-write as the other per-project fields so no step clobbers another.
+
 ### Resolution library
 
 New `hooks/model_routing_lib.py`, CLI mirroring `adversarial_review_lib.py`:
@@ -52,7 +56,7 @@ python3 hooks/model_routing_lib.py resolve \
 
 - stdout: model name or `inherit`; exit 0 in all degradable cases.
 - Unknown model value, malformed block, missing project → stderr warning + `inherit`. **Fail-open by design:** routing is an optimization knob, not a security gate; nothing in this feature may block a workflow run.
-- Soft opus floor: a `review` role resolved below `opus` (`sonnet`/`haiku`) resolves as configured but emits a stderr warning ("below recommended opus floor"). Warned, not blocked — per-project judgment stays with the owner.
+- Soft opus floor: a `review` role resolved below `opus` (`sonnet`/`haiku`) resolves as configured but emits a stderr warning ("below recommended opus floor"). Warned, not blocked — per-project judgment stays with the owner. The warning fires only on explicit `sonnet`/`haiku` values; `inherit` and `fable` never warn (no cross-model ordering defined or needed).
 
 ### Skill changes (3 skills, 7 sites)
 
@@ -65,7 +69,7 @@ When `implementation` is configured, WF2 Step 8 delegates each plan task to a su
 - **Brief per task:** design doc + the plan task + TDD requirement + project conventions + current test baseline.
 - **Serial:** one task-agent at a time (subagent guideline; each task builds on the previous commit). No parallel dispatch in v1.
 - **Main loop stays orchestrator:** after each task it re-runs the suite, diffs against the recorded baseline, and proceeds or intervenes. Step 8a high-risk reviews are unchanged.
-- **Fail-open:** a task-agent that dies or returns vacuous output → the main loop retries that task once inline, logs the fallback, and continues. Delegation can never block Step 8.
+- **Fail-open with a clean-state boundary:** before each dispatch the main loop records the pre-task state (HEAD + `git status --porcelain`). A task-agent that dies or returns vacuous output → the main loop **restores the pre-task state first** (discarding the agent's partial edits after confirming only expected paths changed), then retries that task once inline, logs the fallback, and continues. A successful delegated task must end committed, so every task starts from a clean tree. Delegation can never block Step 8, and an inline retry never runs on a half-mutated tree.
 - **Why safe:** the subagent receives a validated plan task (post Step 4 critique + Step 6 drift check), not an open problem — a strong executor model performs well precisely when design and plan are already right, enforced here by workflow position. Proven in-session 2026-07-03 (#123: Opus executed a 24-file removal to a green PR from a main-loop-written brief).
 - **Absent role →** Step 8 runs inline, exactly today's behavior.
 
@@ -77,9 +81,17 @@ When `implementation` is configured, WF2 Step 8 delegates each plan task to a su
 | Step 4 / 8a / 11 / WF3 / refactor review fleets | `review` (opus) |
 | Step 2 gather, Step 10 memorization | `analysis` (sonnet) |
 | Step 8 task execution (only when `implementation` set) | `implementation` (opus) |
-| WF5 adversarial, peerConsult | Codex (OpenAI) |
+| WF5 adversarial, WF13 peer consult | Codex (OpenAI) |
 
-## Feature 2: peerConsult
+## Feature 2: peerConsult (WF13 — standalone skill + WF2 integration)
+
+### Shape — the WF5 pattern
+
+A standalone skill `/rawgentic:peer-consult` registered as **WF13** (WF6 stays reserved per `docs/consolidation.md`; highest used was WF12), plus an opt-in WF2 Step 3 integration — exactly how WF5 pairs `/rawgentic:adversarial-review` with its opt-in gate wiring. `docs/consolidation.md` and the README workflow table are updated to register WF13.
+
+### Standalone invocation
+
+`/rawgentic:peer-consult <problem-artifact-path>` — takes a problem statement (issue export, brief, or design-input doc), dispatches Codex as peer designer, and writes the peer proposal to `<project>/docs/reviews/peer-<slug>-<date>.md`. Report-only, same output/egress conventions as WF5. Standalone invocation always works; config governs only the WF2 integration (same as WF5).
 
 ### Config
 
@@ -93,14 +105,14 @@ Same shape and placement as `adversarialReview`. Default-off. v1 wires only `imp
 
 When enabled for the workflow, Codex is engaged as a **peer senior engineer — on par with the reasoning tier, a different perspective; a peer, not a reviewer** (this framing goes verbatim into the prompt file):
 
-1. **Blind both ways.** At Step 3 start, dispatch `codex exec` with the issue body + the Step 2 codebase-analysis summary (the same context Claude designs from), passed as inline content per the known codex sandbox read restriction, requesting Codex's *own design proposal* as structured output: approach, key decisions, risks, sketch. Claude drafts its own design concurrently and does not read Codex's output until both proposals exist. (Claude + Codex concurrency is safe — separate quota pools, no shared session limit.)
-2. **Synthesis.** With both proposals in hand, Claude synthesizes best-of-both; the design doc records what the peer contributed (provenance).
+1. **Blind both ways — mechanism.** At Step 3 start, WF2 launches the WF13 engine as a background `codex exec` process writing structured output to a temp file (`-o <path>`); the prompt carries the issue body + the Step 2 codebase-analysis summary (the same context Claude designs from), inlined per the known codex sandbox read restriction, requesting Codex's *own design proposal*: approach, key decisions, risks, sketch. The main loop records the output path but **must not read it until Claude's own draft design is written to the design-doc file**. Completion detection = process exit; on timeout/failure the engine writes an explicit empty-proposal marker (never partial content). (Claude + Codex concurrency is safe — separate quota pools, no shared session limit.)
+2. **Synthesis.** After Claude's draft is on disk, read the peer proposal, synthesize best-of-both; the design doc records what the peer contributed (provenance).
 3. **Gates unchanged.** Step 4 judges critique the *synthesized* design. WF5 adversarial review keeps its evaluative role and its #121 high-precision tuning — peer consult is generative (design phase), adversarial review is evaluative (gate phase); both may be enabled simultaneously.
 4. **Non-blocking.** Any Codex failure → log it, proceed with Claude's design alone (same posture as the WF5 sub-step in WF2).
 
 ### Plumbing
 
-Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default `adversarialReview` (backward compatible — existing callers unchanged), new value `peerConsult`. One lib, no parallel copy. The peer prompt lives at `skills/implement-feature/references/peer-consult.md`.
+Extend `adversarial_review_lib.py` with a consult mode reusing the shared codex invocation, prereq, and egress code (different prompt + output schema: a proposal, not findings). `is-enabled` gains the `--key` parameter: default `adversarialReview` (backward compatible), new value `peerConsult`. One lib, no parallel copy. The peer prompt lives in `skills/peer-consult/` (the WF13 skill's own directory).
 
 ## Error handling
 
@@ -112,7 +124,8 @@ Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default 
 - `adversarial_review_lib` tests extended: `--key` default compatibility + `peerConsult` resolution.
 - Skill-lint additions: each of the 7 known dispatch sites must carry its role annotation (drift guard — a new dispatch site cannot silently bypass routing); peer-consult prompt file exists; WF2 Step 3 sub-step documents the non-blocking failure path; Step 8 delegation documents the brief template and the retry-once-inline fallback.
 - `model_routing_lib` tests cover the `implementation` role identically to the others.
-- Full suite green against the post-#123 baseline (1384 passed, 5 warnings).
+- WF13 registration test (mirroring `test_adversarial_review_registration`); consult-mode lib tests (schema, empty-proposal marker on timeout); setup-step lint for the new modelRouting/peerConsult prompts.
+- Acceptance criterion (future, verified at implementation): full suite green against the recorded pre-implementation baseline — expected 1384 passed / 5 warnings as of spec time (post-#123).
 
 ## Docs + release
 
@@ -126,7 +139,6 @@ Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default 
 - Registered/plugin-shipped agents (contradicts WF2's inline-role design; session-load fragility).
 - Parallel task dispatch within Step 8 delegation (serial only in v1).
 - Effort-level routing (model only in v1).
-- Setup-wizard UI for either block (hand-edit JSON in v1).
 - Peer consult wired into fix-bug/refactor (config-ready only).
 - Any change to WF5's adversarial stance or #121 tuning.
 
@@ -136,5 +148,6 @@ Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default 
 - **Approach:** config + inline `model:` at dispatch sites — over registered agents (B) and hardcoded models (C) (owner choice).
 - **Peer consult folded into this design** rather than a follow-up issue (owner choice, option b).
 - **`implementation` role added at spec review** (owner, 2026-07-03): opt-in Step 8 delegation — serial, fail-open to inline; the `mechanical` reserved tier dropped as redundant.
-- **Cross-model gate:** this spec goes to WF5 adversarial review (Codex) before implementation planning.
+- **Cross-model gate:** this spec went to WF5 adversarial review (Codex) — 5 findings (0C/1H/3M/1L), all accepted and applied in rev 3 (`docs/reviews/2026-07-03-model-routing-and-peer-consult-design-m-2026-07-03.md`).
+- **Owner review (2026-07-03):** setup gains modelRouting + peerConsult steps; peer consult promoted to standalone **WF13** with WF2 integration (WF6 remains reserved).
 - **Guided workflows over ad-hoc orchestration:** assessed and chosen before this design; the deep-reasoner/fast-worker agent definitions remain personal `~/.claude/agents` conveniences, out of plugin scope.
