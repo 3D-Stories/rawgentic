@@ -150,7 +150,7 @@ Before executing any workflow steps, load the project configuration:
    - **Path resolution:** The `activeProject.path` may be relative (e.g., `./projects/my-app`). Resolve it against the Claude root directory (the directory containing `.rawgentic_workspace.json`) to get the absolute path for file operations.
 
 2. Load the config and derive capabilities with the helper CLI (one tested
-   source of truth — never hand-derive the `capabilities` object, so all 11
+   source of truth — never hand-derive the `capabilities` object, so all 12
    workflow skills and the docs table cannot drift apart):
    ```bash
    python3 hooks/capabilities_lib.py derive \
@@ -168,7 +168,7 @@ Resolve model routing (optional, fail-open) right after `<config-loading>`, befo
 python3 hooks/model_routing_lib.py resolve \
   --workspace .rawgentic_workspace.json --project <name> --role <analysis|review|implementation>
 ```
-Run once per role (three invocations total). Exit is always 0; stdout is a model name or `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
+Run once per role (three invocations total). Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
 </model-routing-resolve>
 
 <learning-config>
@@ -473,13 +473,13 @@ python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill implement-feature --key peerConsult
 ```
 Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subprocess). When enabled:
-1. Write the issue body + the Step 2 codebase-analysis summary to a temp problem file. Launch the consult as a BACKGROUND process writing structured output to a temp out-file:
+1. Write the issue body + the Step 2 codebase-analysis summary to a problem file UNDER the project root (e.g. `<root>/.rawgentic-peer-problem-<n>.md` — `resolve_artifact_path` rejects any `--artifact` outside `project_root`, so a `/tmp` path fails closed silently as an empty proposal). Launch the consult as a BACKGROUND process writing structured output to a temp out-file (the out-file may live anywhere; the step gates on exit code, not its location):
    ```bash
    python3 hooks/adversarial_review_lib.py consult \
      --artifact <problem-file> --project-root <root> --out <out-file> --date "$(date -u +%Y-%m-%d)" &
    ```
 2. **Blindness rule:** draft your OWN design first and write it to the design doc. You MUST NOT read `<out-file>` before your own draft is on disk.
-3. After your draft is written, read `<out-file>`. On timeout/failure the file holds an explicit **empty-proposal marker** (never partial content) — proceed with your design alone. Otherwise synthesize best-of-both and record the peer's contributions (provenance) in the design doc.
+3. After your draft is written, read `<out-file>`. On timeout/failure the file holds an explicit **empty-proposal marker** (never partial content) — proceed with your design alone. Otherwise synthesize best-of-both and record the peer's contributions (provenance) in the design doc. Delete the problem file now that the consult has completed.
 4. **Gate on the background process's EXIT CODE, not just file content** — the empty-proposal write is best-effort, so on an unwritable out-path a non-zero exit can leave the file missing or unreadable entirely. If the exit code is non-zero OR the file is missing/unreadable, treat it identically to an empty proposal and proceed.
 5. Codex failure is non-blocking: log and proceed. This sub-step never gates Step 3.
 
