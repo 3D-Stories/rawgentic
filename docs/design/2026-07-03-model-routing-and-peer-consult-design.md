@@ -24,7 +24,7 @@ Dispatch inventory — no dispatch specifies a model today:
 | WF3 (bug-fix review) | 2 reviewers | `review` |
 | Refactor (post-refactor review) | 4 reviewers | `review` |
 
-~90% of dispatch is review fleets; the "mechanical" tier of the original orchestration idea has no consumer until WF2 Step 8 parallel task execution ships.
+~90% of dispatch is review fleets. Implementation runs inline in the main loop today — it becomes routable via the `implementation` role's opt-in Step 8 delegation (below), the largest token block of a WF2 run.
 
 ## Feature 1: modelRouting
 
@@ -33,10 +33,10 @@ Dispatch inventory — no dispatch specifies a model today:
 Optional block in the project's entry in `.rawgentic_workspace.json` (same placement as `adversarialReview`, `critiqueMethod`, `headlessEnabled`):
 
 ```json
-"modelRouting": { "review": "opus", "analysis": "sonnet" }
+"modelRouting": { "review": "opus", "analysis": "sonnet", "implementation": "opus" }
 ```
 
-- **Roles:** `review` (all judge/reviewer fleets), `analysis` (WF2 Step 2 gather + Step 10 background memorization). `mechanical` is reserved and documented but has no consumer in v1.
+- **Roles:** `review` (all judge/reviewer fleets), `analysis` (WF2 Step 2 gather + Step 10 background memorization), `implementation` (WF2 Step 8 task delegation — see below).
 - **Values:** `opus` | `sonnet` | `haiku` | `fable` | `inherit`.
 - **Defaults:** absent block, absent role, or `inherit` → subagents inherit the session model. Byte-identical behavior to v2.45.0 unless configured (default-off, like `adversarialReview`).
 - Roles are partial: `{"review": "opus"}` alone is valid.
@@ -57,6 +57,27 @@ python3 hooks/model_routing_lib.py resolve \
 ### Skill changes (3 skills, 7 sites)
 
 The config-loading preamble of implement-feature, fix-bug, and refactor gains one `resolve` call per role the skill uses; resolved values are carried as literals into later steps (fresh-shell rule). Each Agent dispatch adds `model: <resolved>` unless the resolution is `inherit`. Adversarial-review/Codex dispatches are untouched (different mechanism). No registered agents are introduced.
+
+### Step 8 implementation delegation (`implementation` role)
+
+When `implementation` is configured, WF2 Step 8 delegates each plan task to a subagent instead of executing inline:
+
+- **Brief per task:** design doc + the plan task + TDD requirement + project conventions + current test baseline.
+- **Serial:** one task-agent at a time (subagent guideline; each task builds on the previous commit). No parallel dispatch in v1.
+- **Main loop stays orchestrator:** after each task it re-runs the suite, diffs against the recorded baseline, and proceeds or intervenes. Step 8a high-risk reviews are unchanged.
+- **Fail-open:** a task-agent that dies or returns vacuous output → the main loop retries that task once inline, logs the fallback, and continues. Delegation can never block Step 8.
+- **Why safe:** the subagent receives a validated plan task (post Step 4 critique + Step 6 drift check), not an open problem — a strong executor model performs well precisely when design and plan are already right, enforced here by workflow position. Proven in-session 2026-07-03 (#123: Opus executed a 24-file removal to a green PR from a main-loop-written brief).
+- **Absent role →** Step 8 runs inline, exactly today's behavior.
+
+## What runs where (Fable session, full example config)
+
+| Work | Model |
+|---|---|
+| Orchestration, issue analysis, design, planning, gates, PR — all inline steps | session model (Fable) |
+| Step 4 / 8a / 11 / WF3 / refactor review fleets | `review` (opus) |
+| Step 2 gather, Step 10 memorization | `analysis` (sonnet) |
+| Step 8 task execution (only when `implementation` set) | `implementation` (opus) |
+| WF5 adversarial, peerConsult | Codex (OpenAI) |
 
 ## Feature 2: peerConsult
 
@@ -89,7 +110,8 @@ Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default 
 
 - `tests/hooks/test_model_routing.py`: absent block / partial roles / invalid value / opus-floor warning / malformed JSON / missing project / `inherit` passthrough.
 - `adversarial_review_lib` tests extended: `--key` default compatibility + `peerConsult` resolution.
-- Skill-lint additions: each of the 7 known dispatch sites must carry its role annotation (drift guard — a new dispatch site cannot silently bypass routing); peer-consult prompt file exists; WF2 Step 3 sub-step documents the non-blocking failure path.
+- Skill-lint additions: each of the 7 known dispatch sites must carry its role annotation (drift guard — a new dispatch site cannot silently bypass routing); peer-consult prompt file exists; WF2 Step 3 sub-step documents the non-blocking failure path; Step 8 delegation documents the brief template and the retry-once-inline fallback.
+- `model_routing_lib` tests cover the `implementation` role identically to the others.
 - Full suite green against the post-#123 baseline (1384 passed, 5 warnings).
 
 ## Docs + release
@@ -102,7 +124,7 @@ Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default 
 ## Out of scope
 
 - Registered/plugin-shipped agents (contradicts WF2's inline-role design; session-load fragility).
-- `mechanical` role consumers (blocked on WF2 Step 8 parallel task execution).
+- Parallel task dispatch within Step 8 delegation (serial only in v1).
 - Effort-level routing (model only in v1).
 - Setup-wizard UI for either block (hand-edit JSON in v1).
 - Peer consult wired into fix-bug/refactor (config-ready only).
@@ -113,4 +135,6 @@ Extend `adversarial_review_lib.py is-enabled` with a `--key` parameter: default 
 - **Goal semantics:** absolute model names, cost-optimizing, soft opus floor on `review` (owner choice, 2026-07-03).
 - **Approach:** config + inline `model:` at dispatch sites — over registered agents (B) and hardcoded models (C) (owner choice).
 - **Peer consult folded into this design** rather than a follow-up issue (owner choice, option b).
+- **`implementation` role added at spec review** (owner, 2026-07-03): opt-in Step 8 delegation — serial, fail-open to inline; the `mechanical` reserved tier dropped as redundant.
+- **Cross-model gate:** this spec goes to WF5 adversarial review (Codex) before implementation planning.
 - **Guided workflows over ad-hoc orchestration:** assessed and chosen before this design; the deep-reasoner/fast-worker agent definitions remain personal `~/.claude/agents` conveniences, out of plugin scope.

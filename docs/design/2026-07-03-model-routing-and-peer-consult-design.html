@@ -107,16 +107,16 @@ td code{white-space:nowrap}
     <tr><td>WF3 — bug-fix review</td><td>2 reviewers</td><td class="role-review">review</td></tr>
     <tr><td>Refactor — post-refactor review</td><td>4 reviewers</td><td class="role-review">review</td></tr>
   </table></div>
-  <p>~90% of dispatch is review fleets. The <code>mechanical</code> tier of the original orchestration idea has no consumer until WF2 Step 8 parallel task execution ships — it is reserved, not wired.</p>
+  <p>~90% of dispatch is review fleets. Implementation runs inline in the main loop today — it becomes routable via the <code>implementation</code> role's opt-in Step 8 delegation (below), the largest token block of a WF2 run.</p>
 </section>
 
 <section>
   <div class="eyebrow">Feature 1</div>
   <h2>modelRouting — role→model config, default-off</h2>
   <p>Optional block in the project's <code>.rawgentic_workspace.json</code> entry (same placement as <code>adversarialReview</code>, <code>critiqueMethod</code>, <code>headlessEnabled</code>):</p>
-  <pre><code>"modelRouting": { "review": "opus", "analysis": "sonnet" }</code></pre>
+  <pre><code>"modelRouting": { "review": "opus", "analysis": "sonnet", "implementation": "opus" }</code></pre>
   <ul>
-    <li><strong>Roles:</strong> <code>review</code> (all judge/reviewer fleets), <code>analysis</code> (Step 2 gather + Step 10 memorization). <code>mechanical</code> reserved.</li>
+    <li><strong>Roles:</strong> <code>review</code> (all judge/reviewer fleets), <code>analysis</code> (Step 2 gather + Step 10 memorization), <code>implementation</code> (Step 8 task delegation — below).</li>
     <li><strong>Values:</strong> <code>opus</code> · <code>sonnet</code> · <code>haiku</code> · <code>fable</code> · <code>inherit</code>. Partial config valid.</li>
     <li><strong>Default:</strong> absent block/role or <code>inherit</code> → session model. Byte-identical to v2.45.0 unless configured.</li>
   </ul>
@@ -126,6 +126,29 @@ td code{white-space:nowrap}
   <p>stdout = model or <code>inherit</code>, exit 0 in all degradable cases. Unknown value, malformed block, missing project → stderr warning + <code>inherit</code>. <strong>Fail-open by design:</strong> routing is an optimization knob, not a security gate — nothing here may block a workflow run. Soft floor: <code>review</code> below <code>opus</code> resolves as configured but warns ("below recommended opus floor").</p>
   <h3>Skill changes — 3 skills, 7 sites</h3>
   <p>Config-loading preambles of implement-feature, fix-bug, refactor gain one <code>resolve</code> call per used role, carried as literals (fresh-shell rule). Each Agent dispatch adds <code>model:</code> unless <code>inherit</code>. Codex/adversarial dispatches untouched. No registered agents.</p>
+  <h3>Step 8 implementation delegation (<code>implementation</code> role)</h3>
+  <p>When configured, WF2 Step 8 delegates each plan task to a subagent instead of executing inline:</p>
+  <ul>
+    <li><strong>Brief per task:</strong> design doc + plan task + TDD requirement + conventions + current test baseline.</li>
+    <li><strong>Serial:</strong> one task-agent at a time; each task builds on the previous commit. No parallel dispatch in v1.</li>
+    <li><strong>Main loop stays orchestrator:</strong> re-runs the suite after each task, diffs against baseline, proceeds or intervenes. Step 8a reviews unchanged.</li>
+    <li><strong>Fail-open:</strong> dead/vacuous task-agent → retry once inline, log, continue. Delegation can never block Step 8.</li>
+    <li><strong>Why safe:</strong> the subagent gets a validated plan task (post Step 4 critique + Step 6 drift check), not an open problem. Proven 2026-07-03: #123 executed to a green PR by an Opus agent from a main-loop brief.</li>
+    <li><strong>Absent role →</strong> inline, exactly today's behavior.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="eyebrow">What runs where</div>
+  <h2>Fable session, full example config</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Work</th><th>Model</th></tr>
+    <tr><td>Orchestration, issue analysis, design, planning, gates, PR — all inline steps</td><td>session model (Fable)</td></tr>
+    <tr><td>Step 4 / 8a / 11 / WF3 / refactor review fleets</td><td class="role-review">review (opus)</td></tr>
+    <tr><td>Step 2 gather, Step 10 memorization</td><td class="role-analysis">analysis (sonnet)</td></tr>
+    <tr><td>Step 8 task execution (only when <code>implementation</code> set)</td><td class="role-review">implementation (opus)</td></tr>
+    <tr><td>WF5 adversarial, peerConsult</td><td>Codex (OpenAI)</td></tr>
+  </table></div>
 </section>
 
 <section>
@@ -154,7 +177,8 @@ td code{white-space:nowrap}
   <ul>
     <li><code>tests/hooks/test_model_routing.py</code>: absent block / partial roles / invalid value / floor warning / malformed JSON / missing project / <code>inherit</code> passthrough.</li>
     <li><code>adversarial_review_lib</code> tests extended: <code>--key</code> default compatibility + <code>peerConsult</code>.</li>
-    <li>Skill-lint: each of the 7 dispatch sites must carry its role annotation (a new dispatch site cannot silently bypass routing); peer prompt file exists; Step 3 sub-step documents the non-blocking path.</li>
+    <li>Skill-lint: each of the 7 dispatch sites must carry its role annotation (a new dispatch site cannot silently bypass routing); peer prompt file exists; Step 3 sub-step documents the non-blocking path; Step 8 delegation documents the brief template and retry-once-inline fallback.</li>
+    <li><code>model_routing_lib</code> tests cover <code>implementation</code> identically to the other roles.</li>
     <li>Full suite green vs post-#123 baseline (1384 passed, 5 warnings).</li>
   </ul>
 </section>
@@ -170,7 +194,7 @@ td code{white-space:nowrap}
   <h2>Named and left</h2>
   <ul>
     <li>Registered/plugin-shipped agents (contradicts WF2's inline-role design; session-load fragility).</li>
-    <li><code>mechanical</code> consumers (blocked on Step 8 parallel task execution).</li>
+    <li>Parallel task dispatch within Step 8 delegation (serial only in v1).</li>
     <li>Effort-level routing (model only in v1) · setup-wizard UI (hand-edit JSON in v1).</li>
     <li>Peer consult wired into fix-bug/refactor (config-ready only).</li>
     <li>Any change to WF5's adversarial stance or #121 tuning.</li>
@@ -184,6 +208,8 @@ td code{white-space:nowrap}
     <dt>Goal semantics</dt><dd>absolute model names, cost-optimizing, soft opus floor on <code>review</code>.</dd>
     <dt>Approach</dt><dd>config + inline <code>model:</code> at dispatch sites — over registered agents and hardcoded models.</dd>
     <dt>Peer consult</dt><dd>folded into this design (option b), not a follow-up issue.</dd>
+    <dt>Implementation role</dt><dd>added at spec review: opt-in Step 8 delegation — serial, fail-open to inline; <code>mechanical</code> reserved tier dropped as redundant.</dd>
+    <dt>Cross-model gate</dt><dd>this spec goes to WF5 adversarial review (Codex) before implementation planning.</dd>
     <dt>Operating model</dt><dd>guided workflows over ad-hoc orchestration; deep-reasoner / fast-worker stay personal <code>~/.claude/agents</code> conveniences.</dd>
   </dl>
 </section>
