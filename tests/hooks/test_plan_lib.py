@@ -911,6 +911,12 @@ class TestAnyHighRiskPath:
         mod = _reload_plan_lib()
         assert mod.any_high_risk_path([]) is None
 
+    def test_extra_patterns_str_rejected_not_iterated_char_wise(self):
+        """A str extra_patterns would silently iterate char-wise (per-char regex)."""
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.any_high_risk_path(["src/auth/login.py"], extra_patterns="billing")
+
 
 # --- should_run_diff_review (pure WF2 Step 11 dispatch gate, #131) ---
 
@@ -961,3 +967,26 @@ class TestShouldRunDiffReview:
         assert mod.should_run_diff_review(True, self.CLEAN, False) == (
             False, "no security surface"
         )
+
+    def test_str_changed_paths_rejected_not_iterated_char_wise(self):
+        """A str changed_paths would silently iterate char-wise (per-char paths)."""
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.should_run_diff_review(True, self.HRP, False)
+
+    def test_none_changed_paths_rejected_not_read_as_empty_diff(self):
+        """A failed git diff (None) must not be conflated with a clean empty diff."""
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.should_run_diff_review(True, None, False)
+
+    def test_str_extra_patterns_rejected(self):
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.should_run_diff_review(True, [self.HRP], False, extra_patterns="billing")
+
+    def test_blank_entries_filtered_before_emptiness_check(self):
+        """"".split("\n") yields ['']; falsy entries must be filtered before the
+        emptiness check so an all-blank list still reads as "empty diff"."""
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, ["", ""], False) == (False, "empty diff")
