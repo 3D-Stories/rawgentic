@@ -1,0 +1,45 @@
+{
+  "name": "rawgentic",
+  "version": "2.56.0",
+  "description": "SDLC workflow skills for Codex and Claude Code: project setup, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, incident response, test suite creation, and cross-model adversarial review.",
+  "author": {
+    "name": "3D-Stories",
+    "url": "https://github.com/3D-Stories"
+  },
+  "homepage": "https://github.com/3D-Stories/rawgentic",
+  "repository": "https://github.com/3D-Stories/rawgentic",
+  "license": "MIT",
+  "keywords": [
+    "sdlc",
+    "workflow",
+    "tdd",
+    "code-review",
+    "quality-gates",
+    "conventional-commits",
+    "security-audit",
+    "incident-response",
+    "workspace-management",
+    "project-config",
+    "codex",
+    "agent-skills"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rawgentic",
+    "shortDescription": "SDLC workflow skills with TDD, quality gates, and project config.",
+    "longDescription": "Rawgentic packages 17 workflow and workspace skills for disciplined software delivery. This Codex Phase 1 package exposes the skills through a private marketplace while Codex hook support is planned for Phase 2.",
+    "developerName": "3D-Stories",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/3D-Stories/rawgentic",
+    "defaultPrompt": [
+      "Create a tracked issue with rawgentic.",
+      "Implement a GitHub issue with rawgentic.",
+      "Interview me before building a feature."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
