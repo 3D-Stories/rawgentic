@@ -1298,3 +1298,94 @@ class TestValidateUsage:
             model_mix={"opus": {"input_tokens": -1, "output_tokens": 50}})
         assert any("model_mix['opus']" in e and "input_tokens" in e
                    for e in validate_record(rec))
+
+
+# --- #155 Task 3: render_summary best-effort Usage line --------------------
+
+class TestRenderUsage:
+    def _usage(self, **overrides):
+        base = {"input_tokens": 12345, "output_tokens": 6789,
+                "cost_estimate_usd": 1.23, "wall_clock_s": 42.5,
+                "model_mix": {"opus": {"input_tokens": 100, "output_tokens": 50}}}
+        base.update(overrides)
+        return base
+
+    def test_no_usage_no_usage_line(self):
+        from work_summary import render_summary
+        text = render_summary(_valid_record())
+        assert "Usage:" not in text
+
+    def test_full_usage_renders_tokens_cost_wall_model_mix(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage()
+        text = render_summary(rec)
+        assert "- Usage: 12345 in / 6789 out tokens" in text
+        assert "~$1.23" in text
+        assert "42.5s wall" in text
+        assert "opus: 100/50" in text
+
+    def test_null_fields_render_placeholders_no_raise(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": None, "output_tokens": None,
+                        "cost_estimate_usd": None, "wall_clock_s": None,
+                        "model_mix": None}
+        text = render_summary(rec)
+        assert "- Usage: ? in / ? out tokens" in text
+        assert "~$" not in text
+        assert "wall" not in text
+
+    def test_malformed_usage_string_no_raise_no_line(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = "a lot of tokens"
+        text = render_summary(rec)
+        assert "Usage:" not in text
+
+    def test_malformed_usage_list_no_raise_no_line(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = ["opus"]
+        text = render_summary(rec)
+        assert "Usage:" not in text
+
+    def test_malformed_usage_int_no_raise_no_line(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = 42
+        text = render_summary(rec)
+        assert "Usage:" not in text
+
+    def test_model_mix_malformed_entry_skipped(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage(
+            model_mix={"opus": {"input_tokens": 100, "output_tokens": 50},
+                       "haiku": "not a dict"})
+        text = render_summary(rec)
+        assert "opus: 100/50" in text
+        assert "haiku" not in text
+
+    def test_cost_bool_true_not_rendered_as_cost(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=True)
+        text = render_summary(rec)
+        assert "~$" not in text
+
+    def test_usage_line_before_deferred_and_ci(self):
+        """Placement: after Tests, before deferred block, and CI/Deploy stay last."""
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage()
+        rec["verification_deferred"] = [
+            {"task_id": "2", "reason": "no makensis in dev env",
+             "local_proxy": "unit tests", "target_check": "manual install"}]
+        text = render_summary(rec)
+        tests_i = text.index("- Tests:")
+        usage_i = text.index("- Usage:")
+        deferred_i = text.index("Verification deferred")
+        ci_i = text.index("- CI:")
+        deploy_i = text.index("- Deploy:")
+        assert tests_i < usage_i < deferred_i < ci_i < deploy_i

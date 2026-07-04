@@ -374,6 +374,43 @@ def normalize_record(record, *, now, schema_version=SCHEMA_VERSION) -> dict:
     return out
 
 
+def _render_usage_line(usage: dict) -> str:
+    """Render the best-effort '- Usage: ...' line (#155 Task 3). `usage` is
+    already coerced by _as_dict and confirmed truthy by the caller. Every inner
+    value is isinstance-guarded (never trusted) since render_summary runs on
+    UNVALIDATED records: a wrong-typed field degrades to '?' or is dropped
+    rather than raising or leaking a dict/list repr."""
+    it = usage.get("input_tokens")
+    ot = usage.get("output_tokens")
+    it_str = str(it) if _is_int(it) else "?"
+    ot_str = str(ot) if _is_int(ot) else "?"
+    line = f"- Usage: {it_str} in / {ot_str} out tokens"
+
+    cost = usage.get("cost_estimate_usd")
+    if _is_num(cost):
+        line += f", ~${cost}"
+
+    wall = usage.get("wall_clock_s")
+    if _is_num(wall):
+        line += f", {wall}s wall"
+
+    mix = usage.get("model_mix")
+    if isinstance(mix, dict) and mix:
+        parts = []
+        for model, counts in mix.items():
+            if not isinstance(model, str) or not isinstance(counts, dict):
+                continue  # malformed entry: skip silently, best-effort
+            min_ = counts.get("input_tokens")
+            mout = counts.get("output_tokens")
+            min_str = str(min_) if _is_int(min_) else "?"
+            mout_str = str(mout) if _is_int(mout) else "?"
+            parts.append(f"{model}: {min_str}/{mout_str}")
+        if parts:
+            line += f" ({', '.join(parts)})"
+
+    return line
+
+
 # --- render_summary (pure, best-effort) ------------------------------------
 
 def render_summary(record) -> str:
@@ -445,6 +482,9 @@ def render_summary(record) -> str:
         lines.append(f"- Tests: {tests.get('added', 0)} added, {passing}/{total} passing")
     else:
         lines.append(f"- Tests: {tests.get('added', 0)} added")
+    usage = _as_dict(r.get("usage"))
+    if usage:
+        lines.append(_render_usage_line(usage))
     deferred = record.get("verification_deferred")
     if isinstance(deferred, list) and deferred:
         lines.append("- Verification deferred (must be checked on target):")
