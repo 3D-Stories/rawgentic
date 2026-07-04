@@ -1,6 +1,6 @@
 # rawgentic
 
-**12 SDLC workflow skills + 4 workspace management + 1 planning skill + 1 security skill + hooks for Claude Code**
+**6 SDLC workflow skills (+6 deprecated stubs, removal at v3.0.0) + 4 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,7 +11,7 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 18 skills organized in three layers:
+**Rawgentic** provides 19 skills organized in three layers (6 of them deprecation stubs since v2.60.0, removed at v3.0.0 — #160):
 
 - **Workspace management** (4 skills) — Project registration, configuration, session binding, and guard exception management
 - **SDLC workflows** (12 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
@@ -485,7 +485,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 12 workflow skills share an identical config-loading block that runs before any workflow step:
+All 7 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step (the 6 deprecation stubs carry none):
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`
@@ -707,7 +707,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (15/18 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception` and `interview` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring).
+Skills are tested via the `/skill-creator` eval pipeline (15/19 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception` and `interview` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 

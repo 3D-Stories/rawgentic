@@ -1,6 +1,6 @@
 {
   "name": "rawgentic",
-  "version": "2.59.0",
+  "version": "2.60.0",
   "description": "SDLC workflow skills for Codex and Claude Code: project setup, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, incident response, test suite creation, and cross-model adversarial review.",
   "author": {
     "name": "3D-Stories",
@@ -27,7 +27,7 @@
   "interface": {
     "displayName": "Rawgentic",
     "shortDescription": "SDLC workflow skills with TDD, quality gates, and project config.",
-    "longDescription": "Rawgentic packages 18 workflow and workspace skills for disciplined software delivery. This Codex Phase 1 package exposes the skills through a private marketplace while Codex hook support is planned for Phase 2.",
+    "longDescription": "Rawgentic packages 19 workflow and workspace skills for disciplined software delivery. This Codex Phase 1 package exposes the skills through a private marketplace while Codex hook support is planned for Phase 2.",
     "developerName": "3D-Stories",
     "category": "Productivity",
     "capabilities": [
