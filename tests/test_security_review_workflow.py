@@ -44,8 +44,22 @@ def test_permissions_are_least_privilege():
 
 
 def test_lane_is_non_blocking_initially():
-    """AC1: advisory lane — a red review (or missing secret) must not gate the PR."""
-    assert "continue-on-error: true" in _text()
+    """AC1: advisory lane — a red review (or missing secret) must not gate the PR.
+
+    Pinned at JOB scope (4-space indent): step-level continue-on-error would
+    change the semantics (a failed later step could still fail the job).
+    """
+    assert re.search(r"^    continue-on-error: true$", _text(), re.M)
+
+
+def test_missing_secret_is_legible_never_a_fake_clean_signal():
+    """A skipped review must be visibly distinct from a clean one — the 10-PR
+    promotion tally is measured off this signal."""
+    text = _text()
+    assert "::warning::" in text
+    assert text.count("if: steps.key.outputs.present == 'true'") == 2, (
+        "checkout AND review step must both gate on the key being present"
+    )
 
 
 def test_api_key_comes_from_secrets_never_inline():

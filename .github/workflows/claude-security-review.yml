@@ -6,7 +6,13 @@
 # non-blocking contract (AC1): continue-on-error keeps this lane advisory —
 # a red review, a missing CLAUDE_API_KEY secret, or an action outage never
 # gates the PR. Promote to a required check only after 10 clean-signal PRs
-# (true/false-positive tally tracked per the issue's success metric).
+# (true/false-positive tally per the issue's success metric). PROMOTION MUST
+# ALSO REMOVE continue-on-error: true — a required check that can't fail is
+# vacuous and would silently defeat the gate.
+#
+# A run only counts toward the 10-PR tally if the review actually EXECUTED:
+# the check-key step emits a ::warning:: annotation when the secret is unset,
+# so "never ran" is legible and never mistaken for "reviewed clean".
 #
 # Supply chain: the action is SHA-pinned (no releases/tags exist upstream as of
 # 2026-07-04; @main would float). Bump the pin deliberately, reviewing the diff.
@@ -25,11 +31,25 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      - name: Check CLAUDE_API_KEY is configured
+        id: key
+        env:
+          KEY: ${{ secrets.CLAUDE_API_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::warning::CLAUDE_API_KEY unset — security review SKIPPED, not a clean signal"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.key.outputs.present == 'true'
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
 
       - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
+        if: steps.key.outputs.present == 'true'
         with:
           claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
