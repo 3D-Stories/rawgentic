@@ -85,11 +85,12 @@ def test_review_below_opus_floor_warns_sonnet(tmp_path, capsys):
     assert "opus floor" in capsys.readouterr().err
 
 
-def test_review_haiku_also_warns_floor(tmp_path, capsys):
+def test_review_haiku_bumped_to_sonnet(tmp_path, capsys):
+    # rawgentic never uses Haiku for routed work: a haiku config bumps to sonnet.
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "haiku"}})
-    assert mr.resolve(ws, "app", "review") == "haiku"
-    assert "opus floor" in capsys.readouterr().err
+    assert mr.resolve(ws, "app", "review") == "sonnet"
+    assert "never uses Haiku" in capsys.readouterr().err
 
 
 def test_review_inherit_and_fable_do_not_warn_floor(tmp_path, capsys):
@@ -99,11 +100,23 @@ def test_review_inherit_and_fable_do_not_warn_floor(tmp_path, capsys):
     assert "opus floor" not in capsys.readouterr().err
 
 
-def test_analysis_below_opus_does_not_warn_floor(tmp_path, capsys):
+def test_analysis_haiku_bumped_to_sonnet(tmp_path, capsys):
+    # never-Haiku is global (all roles), not just review; and it is NOT the
+    # review-only opus floor.
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"analysis": "haiku"}})
-    assert mr.resolve(ws, "app", "analysis") == "haiku"
-    assert "opus floor" not in capsys.readouterr().err  # floor is review-only
+    assert mr.resolve(ws, "app", "analysis") == "sonnet"
+    err = capsys.readouterr().err
+    assert "never uses Haiku" in err
+    assert "opus floor" not in err
+
+
+def test_analysis_sonnet_no_floor_warn(tmp_path, capsys):
+    # a non-haiku sub-opus model on a non-review role warns nothing (floor is review-only).
+    ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                        "modelRouting": {"analysis": "sonnet"}})
+    assert mr.resolve(ws, "app", "analysis") == "sonnet"
+    assert "opus floor" not in capsys.readouterr().err
 
 
 def test_cli_resolve_prints_value_exit_zero(tmp_path, capsys):
@@ -136,11 +149,14 @@ class TestSelectImplModel:
             ("fable", "high", "standard_feature", "fable"),
             ("fable", "standard", "simple_change", "sonnet"),
             ("inherit", "high", "complex_feature", "inherit"),
-            ("haiku", "high", "complex_feature", "inherit"),
-            ("bogus", "standard", "simple_change", "inherit"),
+            # never-Haiku: a haiku or unknown ceiling floors to sonnet (never
+            # inherit, which could resolve to a Haiku session model).
+            ("haiku", "high", "complex_feature", "sonnet"),
+            ("bogus", "standard", "simple_change", "sonnet"),
         ],
     )
     def test_select_impl_model(self, ceiling, risk_level, complexity, expected):
         model, reason = mr.select_impl_model(ceiling, risk_level, complexity)
         assert model == expected
         assert isinstance(reason, str) and reason
+        assert model != "haiku"  # rawgentic never routes coding to Haiku
