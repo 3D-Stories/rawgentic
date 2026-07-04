@@ -41,6 +41,11 @@ class Task:
     # tuple (not list) to stay hashable under frozen=True.
     parallel_group: str | None = None
     files: tuple[str, ...] = ()
+    # Optional (#138). Set to the parenthesized reason when a task declares
+    # `- verification: deferred-to-target (<reason>)` — the dev env cannot
+    # exercise this artifact, so its remaining behavior must be checked on the
+    # target. None = not deferred. Additive; absence never changes any contract.
+    deferral_reason: str | None = None
 
 
 # --- Env-var loading with clamping and freeze-at-import ---
@@ -126,6 +131,13 @@ _RISKLEVEL_RE = re.compile(
 _PARALLEL_GROUP_RE = re.compile(r"^\s*[-*]\s*parallel_group\s*:\s*(\S+)\s*$", re.IGNORECASE)
 _FILES_RE = re.compile(r"^\s*[-*]\s*files\s*:\s*(.+?)\s*$", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^#{1,6}\s+")
+# Deferred-to-target verification (#138). Any `- verification: <value>` line;
+# only a value beginning with the `deferred-to-target` keyword is our concern
+# (free-text values are ordinary Implement-Verify commands and stay ignored).
+# A deferral MUST carry a non-empty parenthesized reason, else it is malformed.
+_VERIFICATION_RE = re.compile(r"^\s*[-*]\s*verification\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_DEFERRAL_KEYWORD_RE = re.compile(r"^deferred-to-target\b", re.IGNORECASE)
+_DEFERRAL_VALUE_RE = re.compile(r"^deferred-to-target\s*\(([^)]*)\)\s*$", re.IGNORECASE)
 
 
 def _split_files(raw: str) -> tuple[str, ...]:
@@ -152,7 +164,9 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
     bug, not a migration.
     """
     lines = plan_markdown.splitlines()
-    raw_tasks: list[tuple[str, str, str | None, str | None, str | None, tuple[str, ...]]] = []
+    raw_tasks: list[
+        tuple[str, str, str | None, str | None, str | None, tuple[str, ...], str | None]
+    ] = []
     i = 0
     while i < len(lines):
         m = _TASK_HEADER_RE.match(lines[i])
@@ -165,6 +179,7 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
         reason: str | None = None
         parallel_group: str | None = None
         files: tuple[str, ...] = ()
+        deferral_reason: str | None = None
         body_start = i + 1
         j = body_start
         while j < len(lines):
@@ -180,11 +195,25 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
             fm = _FILES_RE.match(lines[j])
             if fm:
                 files = _split_files(fm.group(1))
+            vm = _VERIFICATION_RE.match(lines[j])
+            if vm and _DEFERRAL_KEYWORD_RE.match(vm.group(1).strip()):
+                # A deferral is declared — the parenthesized reason is mandatory.
+                dv = _DEFERRAL_VALUE_RE.match(vm.group(1).strip())
+                reason_text = dv.group(1).strip() if dv else ""
+                if not reason_text:
+                    raise PlanFormatError(
+                        f"Task {task_id} ({title!r}) declares "
+                        f"`verification: deferred-to-target` without a (reason); "
+                        f"the reason is required so the deferred surface is legible"
+                    )
+                deferral_reason = reason_text
             j += 1
-        raw_tasks.append((task_id, title, risk_level, reason, parallel_group, files))
+        raw_tasks.append(
+            (task_id, title, risk_level, reason, parallel_group, files, deferral_reason)
+        )
         i = j
 
-    tagged_count = sum(1 for _, _, rl, _, _, _ in raw_tasks if rl is not None)
+    tagged_count = sum(1 for t in raw_tasks if t[2] is not None)
     if raw_tasks and tagged_count == 0:
         # Pre-P15 plan: default every task to standard and warn once.
         print(
@@ -195,19 +224,92 @@ def parse_tasks(plan_markdown: str) -> list[Task]:
         )
         return [
             Task(id=tid, title=t, risk_level="standard", reason=None,
-                 parallel_group=pg, files=fs)
-            for tid, t, _, _, pg, fs in raw_tasks
+                 parallel_group=pg, files=fs, deferral_reason=dr)
+            for tid, t, _, _, pg, fs, dr in raw_tasks
         ]
 
     out: list[Task] = []
-    for tid, t, rl, r, pg, fs in raw_tasks:
+    for tid, t, rl, r, pg, fs, dr in raw_tasks:
         if rl is None:
             raise PlanFormatError(
                 f"Task {tid} ({t!r}) is missing required `riskLevel` line"
             )
         out.append(Task(id=tid, title=t, risk_level=rl, reason=r,
-                        parallel_group=pg, files=fs))
+                        parallel_group=pg, files=fs, deferral_reason=dr))
     return out
+
+
+def deferred_tasks(tasks: list[Task]) -> list[Task]:
+    """Tasks whose verification is deferred to the target (#138) — i.e. those
+    with a `deferral_reason`. Used by Step 9 (list + local proxy), Step 12 (PR
+    section), and the completion gate."""
+    return [t for t in tasks if t.deferral_reason is not None]
+
+
+def assert_deferrals_recorded(
+    plan_deferred: list[Task],
+    recorded_entries,
+) -> tuple[bool, list[str]]:
+    """Verify every plan-deferred task is recorded exactly once in the run-record.
+
+    The completion-gate mechanism for "unrecorded deferral = failure" (#138):
+    compares `deferred_tasks(plan)` against the run-record's `verification_deferred`
+    list. Returns (ok, errors). Fails on a plan-deferred task missing from the
+    record, a duplicate task_id in the record, or a foreign task_id (recorded but
+    not planned-deferred). Fail-closed: a non-list record → error.
+    """
+    errors: list[str] = []
+    if not isinstance(recorded_entries, list):
+        return (False, ["verification_deferred must be a list"])
+    recorded_ids: list[str] = []
+    for idx, e in enumerate(recorded_entries):
+        if not isinstance(e, dict) or not _is_nonempty_str(e.get("task_id")):
+            errors.append(f"verification_deferred[{idx}] has no string task_id")
+            continue
+        # Every recorded entry must carry the full evidence set, else a bare
+        # {task_id} would satisfy the gate without the required local proxy /
+        # target check (the anti-abuse invariant would fail open).
+        for f in ("reason", "local_proxy", "target_check"):
+            if not _is_nonempty_str(e.get(f)):
+                errors.append(
+                    f"verification_deferred[{idx}] (task {e['task_id']}) is missing "
+                    f"non-empty {f}")
+        recorded_ids.append(e["task_id"])
+    dupes = sorted({i for i in recorded_ids if recorded_ids.count(i) > 1})
+    if dupes:
+        errors.append(f"verification_deferred has duplicate task_id(s) {dupes}")
+    planned_ids = {t.id for t in plan_deferred}
+    recorded_set = set(recorded_ids)
+    for tid in sorted(planned_ids - recorded_set):
+        errors.append(f"deferred task {tid} is not recorded in verification_deferred")
+    for tid in sorted(recorded_set - planned_ids):
+        errors.append(f"verification_deferred names task {tid} that the plan did not defer")
+    return (len(errors) == 0, errors)
+
+
+_DEFERRED_PR_HEADING = "## Deferred verification"
+
+
+def assert_pr_body_has_deferred_section(
+    pr_body: str,
+    plan_deferred: list[Task],
+) -> tuple[bool, list[str]]:
+    """When the plan has deferred tasks, the PR body MUST carry the canonical
+    `## Deferred verification` section (#138). Returns (ok, errors). No deferrals
+    → always ok (the section is omitted-when-empty by design)."""
+    if not plan_deferred:
+        return (True, [])
+    body = pr_body if isinstance(pr_body, str) else ""
+    if _DEFERRED_PR_HEADING not in body:
+        return (False, [
+            f"plan has {len(plan_deferred)} deferred task(s) but the PR body is "
+            f"missing the '{_DEFERRED_PR_HEADING}' section"
+        ])
+    return (True, [])
+
+
+def _is_nonempty_str(v) -> bool:
+    return isinstance(v, str) and bool(v.strip())
 
 
 _GLOB_CHARS = frozenset("*?[]")

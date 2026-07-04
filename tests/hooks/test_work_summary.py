@@ -1068,3 +1068,64 @@ class TestAggregateCLI:
                              "--store", store], capture_output=True, text=True,
                             timeout=30)
         assert r.returncode == 0 and "Run-record aggregate" in r.stdout
+
+
+# --- #138: verification_deferred (structured list) ------------------------
+
+class TestVerificationDeferred:
+    def _entry(self, tid="2"):
+        return {"task_id": tid, "reason": "no makensis in dev env",
+                "local_proxy": "compiled + unit-tested extractable logic",
+                "target_check": "run installer on Windows target"}
+
+    def test_absent_is_valid_old_records(self):
+        from work_summary import validate_record
+        assert validate_record(_valid_record()) == []  # no field = pre-#138 record
+
+    def test_valid_list_accepted(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["verification_deferred"] = [self._entry("2"), self._entry("3")]
+        assert validate_record(rec) == []
+
+    def test_empty_list_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["verification_deferred"] = []
+        assert validate_record(rec) == []
+
+    def test_not_a_list_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["verification_deferred"] = 3  # a bare count is exactly what F1 forbids
+        assert any("verification_deferred" in e for e in validate_record(rec))
+
+    def test_item_missing_field_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        bad = self._entry()
+        del bad["target_check"]
+        rec["verification_deferred"] = [bad]
+        assert any("target_check" in e for e in validate_record(rec))
+
+    def test_item_empty_task_id_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        e = self._entry()
+        e["task_id"] = ""
+        rec["verification_deferred"] = [e]
+        assert any("task_id" in e2 for e2 in validate_record(rec))
+
+    def test_duplicate_task_id_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["verification_deferred"] = [self._entry("2"), self._entry("2")]
+        assert any("duplicate" in e.lower() for e in validate_record(rec))
+
+    def test_render_lists_deferred_items(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["verification_deferred"] = [self._entry("2")]
+        out = render_summary(rec)
+        assert "deferred" in out.lower()
+        assert "no makensis in dev env" in out

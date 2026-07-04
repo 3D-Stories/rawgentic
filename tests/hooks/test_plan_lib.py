@@ -1332,3 +1332,198 @@ class TestValidateBuildReceipt:
         ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
         assert ok is False
         assert any("Z" in e and ("plan" in e.lower() or "unknown" in e.lower()) for e in errors)
+
+
+# --- #138: deferred-to-target verification field ---
+
+class TestVerificationDeferral:
+    def test_deferral_parsed_with_reason(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: NSIS uninstaller hook
+- riskLevel: standard
+- verification: deferred-to-target (no makensis in dev env; check on Windows target)
+"""
+        tasks = mod.parse_tasks(plan)
+        assert len(tasks) == 1
+        assert tasks[0].deferral_reason == "no makensis in dev env; check on Windows target"
+
+    def test_absent_field_is_none(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: normal task
+- riskLevel: standard
+"""
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].deferral_reason is None
+
+    def test_deferral_missing_reason_is_malformed(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: bad deferral
+- riskLevel: standard
+- verification: deferred-to-target
+"""
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_deferral_empty_parens_is_malformed(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: bad deferral
+- riskLevel: standard
+- verification: deferred-to-target ()
+"""
+        with pytest.raises(mod.PlanFormatError):
+            mod.parse_tasks(plan)
+
+    def test_free_text_verification_ignored(self):
+        """A non-deferral `- verification:` line is an ordinary Implement-Verify
+        command, not our concern — parsed to deferral_reason=None, no error."""
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: run a command
+- riskLevel: standard
+- verification: npm run test:e2e
+"""
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].deferral_reason is None
+
+    def test_case_insensitive_keyword(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: tray menu
+- riskLevel: high (native UI)
+- verification: Deferred-To-Target (cannot render tray headless)
+"""
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].deferral_reason == "cannot render tray headless"
+
+    def test_deferred_tasks_helper(self):
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: normal
+- riskLevel: standard
+### Task 2: win32 paste
+- riskLevel: high (native)
+- verification: deferred-to-target (WSL build, Windows target)
+### Task 3: also deferred
+- riskLevel: standard
+- verification: deferred-to-target (no makensis)
+"""
+        tasks = mod.parse_tasks(plan)
+        deferred = mod.deferred_tasks(tasks)
+        assert [t.id for t in deferred] == ["2", "3"]
+
+    def test_deferral_survives_pre_p15_migration(self):
+        """A plan with NO riskLevel anywhere still parses the deferral field on the
+        pre-P15 default path (deferral is independent of the risk contract)."""
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: legacy task
+- verification: deferred-to-target (target-only)
+"""
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].risk_level == "standard"
+        assert tasks[0].deferral_reason == "target-only"
+
+
+class TestAssertDeferralsRecorded:
+    def _deferred(self, mod, ids):
+        return [mod.Task(id=i, title=f"t{i}", risk_level="standard", reason=None,
+                         deferral_reason="cannot exercise locally") for i in ids]
+
+    def _rec(self, ids):
+        return [{"task_id": i, "reason": "r", "local_proxy": "compile",
+                 "target_check": "run on target"} for i in ids]
+
+    def test_all_recorded_ok(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2", "3"]), self._rec(["2", "3"]))
+        assert ok is True, errs
+        assert errs == []
+
+    def test_no_deferrals_no_records_ok(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded([], [])
+        assert ok is True and errs == []
+
+    def test_missing_record_fails(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2", "3"]), self._rec(["2"]))
+        assert ok is False
+        assert any("3" in e and "not recorded" in e for e in errs)
+
+    def test_foreign_record_fails(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2"]), self._rec(["2", "9"]))
+        assert ok is False
+        assert any("9" in e and "did not defer" in e for e in errs)
+
+    def test_duplicate_record_fails(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2"]), self._rec(["2", "2"]))
+        assert ok is False
+        assert any("duplicate" in e for e in errs)
+
+    def test_entry_without_task_id_fails(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2"]), [{"reason": "r"}])
+        assert ok is False
+
+    def test_non_list_record_fails_closed(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2"]), None)
+        assert ok is False
+        assert any("must be a list" in e for e in errs)
+
+
+class TestDeferralGateHardening:
+    """Codex Step-11 findings folded (#138)."""
+
+    def _deferred(self, mod, ids):
+        return [mod.Task(id=i, title=f"t{i}", risk_level="standard", reason=None,
+                         deferral_reason="cannot exercise locally") for i in ids]
+
+    def test_recorded_entry_missing_evidence_fails(self):
+        """F1 [High]: an entry with only task_id (no reason/local_proxy/target_check)
+        must NOT satisfy the gate — that was a fail-open evidence bypass."""
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(
+            self._deferred(mod, ["2"]), [{"task_id": "2"}])
+        assert ok is False
+        assert any("reason" in e or "local_proxy" in e or "target_check" in e for e in errs)
+
+    def test_recorded_entry_full_evidence_ok(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(
+            self._deferred(mod, ["2"]),
+            [{"task_id": "2", "reason": "r", "local_proxy": "compile", "target_check": "run"}])
+        assert ok is True, errs
+
+    def test_recorded_entry_empty_evidence_field_fails(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(
+            self._deferred(mod, ["2"]),
+            [{"task_id": "2", "reason": "r", "local_proxy": "", "target_check": "run"}])
+        assert ok is False
+        assert any("local_proxy" in e for e in errs)
+
+    def test_pr_body_section_present_ok(self):
+        mod = _reload_plan_lib()
+        body = "## Summary\nx\n## Deferred verification\n- 2 (r): run on target\n"
+        ok, errs = mod.assert_pr_body_has_deferred_section(body, self._deferred(mod, ["2"]))
+        assert ok is True, errs
+
+    def test_pr_body_section_missing_fails(self):
+        """F2 [Medium]: deferrals exist but the PR body omits the canonical section."""
+        mod = _reload_plan_lib()
+        body = "## Summary\nx\n"
+        ok, errs = mod.assert_pr_body_has_deferred_section(body, self._deferred(mod, ["2"]))
+        assert ok is False
+        assert any("Deferred verification" in e for e in errs)
+
+    def test_pr_body_no_deferrals_no_section_ok(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_pr_body_has_deferred_section("## Summary\n", [])
+        assert ok is True and errs == []
