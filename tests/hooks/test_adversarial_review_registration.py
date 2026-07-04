@@ -34,7 +34,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "2.48.0"
+    assert plugin["version"] == "2.49.0"
 
 
 def test_descriptions_consistent_count():
@@ -238,3 +238,33 @@ def test_adversarial_review_workspace_has_no_skill_md():
     """Workspace dirs are eval artifacts — must NOT contain a SKILL.md (validator rejects)."""
     ws = SKILLS_DIR / "adversarial-review-workspace"
     assert not (ws / "SKILL.md").exists()
+
+
+# --- whole-issue delegation (#133) drift guards ---
+
+def test_whole_issue_delegation_reference_exists():
+    ref = SKILLS_DIR / "implement-feature" / "references" / "whole-issue-delegation.md"
+    assert ref.exists(), "references/whole-issue-delegation.md must exist"
+    body = ref.read_text()
+    # the receipt schema keys + the trust-boundary contract must be documented
+    for token in ("task_shas", "files_per_task", "exit_code", "promotions",
+                  "validate_build_receipt", "never self-certif", "fall"):
+        assert token in body, f"reference missing {token!r}"
+
+
+def test_wf2_step8_documents_whole_issue_delegation_submode():
+    skill = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    # the opt-in block, its gate invocation, the validator, and the reference pointer
+    assert "whole-issue-delegation: #133" in skill
+    assert "--key wholeIssueDelegation" in skill
+    assert "validate_build_receipt" in skill
+    assert "references/whole-issue-delegation.md" in skill
+    # the reject path must NOT prescribe a blanket clean against the operator tree
+    assert "never" in skill.lower() and "git clean -fd" in skill  # named only to forbid it
+
+
+def test_wf2_step8_delegation_is_opt_in_default_off():
+    skill = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    # default-off: a non-zero is-enabled exit skips silently
+    assert "default-off" in skill
+    assert "skip silently" in skill

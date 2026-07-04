@@ -976,6 +976,205 @@ def scan_prior_commits_for_trigger(
     return flagged
 
 
+# --- Whole-issue delegated build receipt validation (#133) ---
+
+
+def _commit_exists(repo: str, sha: str) -> bool:
+    """True iff `sha` resolves to a commit object in `repo`."""
+    try:
+        _git_run(repo, ["cat-file", "-e", f"{sha}^{{commit}}"])
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+
+
+def _same_commit(repo: str, a: str, b: str) -> bool:
+    """True iff `a` and `b` resolve to the same commit object."""
+    try:
+        ra = _git_run(repo, ["rev-parse", f"{a}^{{commit}}"]).strip()
+        rb = _git_run(repo, ["rev-parse", f"{b}^{{commit}}"]).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+    return bool(ra) and ra == rb
+
+
+def _sha_is_descendant(repo: str, base: str, sha: str) -> bool:
+    """True iff `base` is an ancestor of `sha` (sha is at or after base).
+
+    `git merge-base --is-ancestor` exits 0 when base is an ancestor, 1 when it
+    is not, and 128 on a bad object; only 0 counts as a descendant so a bad
+    object fails closed.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", base, sha],
+            cwd=repo, capture_output=True, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return False
+    return result.returncode == 0
+
+
+def _commit_files(repo: str, sha: str) -> set[str] | None:
+    """The set of paths a single commit changed (its own diff vs its parent).
+
+    Returns None on git failure so the caller fails closed.
+    """
+    try:
+        out = _git_run(repo, ["show", "--name-only", "--format=", sha])
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+    return {p for p in (line.strip() for line in out.splitlines()) if p}
+
+
+def _diff_files(repo: str, base: str) -> set[str] | None:
+    """The set of paths changed across `base..HEAD`. None on git failure."""
+    try:
+        out = _git_run(repo, ["diff", "--name-only", f"{base}..HEAD"])
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return None
+    return {p for p in (line.strip() for line in out.splitlines()) if p}
+
+
+def validate_build_receipt(
+    receipt: dict,
+    plan_tasks: list[Task],
+    repo_root: str,
+    branch_base_sha: str,
+) -> tuple[bool, list[str], dict]:
+    """Validate a whole-issue build subagent's RECEIPT against the real git tree.
+
+    The receipt is a hypothesis; this is where the orchestrator confirms it
+    before trusting a delegated build (#133). Fail-closed: any structural
+    problem, missing/foreign/duplicate/base-equal sha, sha↔task file-set
+    mismatch, baseline regression, or staging-discipline violation → rejected.
+    git is read-only (cat-file, rev-parse, merge-base, show, diff); any git
+    failure rejects rather than raises.
+
+    Returns (ok, errors, normalized). `normalized["promoted_task_ids"]` is
+    surfaced even on rejection, but ONLY when it is derivable — i.e. `receipt`
+    is a dict and `receipt["promotions"]` is a list of objects with a string
+    `task_id`. A non-dict receipt yields an empty list (nothing to derive), so
+    the orchestrator must not assume Step 8a promotion scheduling happens on
+    every rejected receipt.
+
+    Receipt shape:
+        {"task_shas": {task_id: sha}, "files_per_task": {task_id: [path]},
+         "baseline": {"before": {"passed", "failed"},
+                      "after": {"passed", "failed", "exit_code"}},
+         "promotions": [{"task_id", "reason"}]}
+    """
+    normalized: dict = {"promoted_task_ids": [], "task_shas": {}}
+    if not isinstance(receipt, dict):
+        return (False, ["receipt is not a dict"], normalized)
+
+    # Promotions surfaced first, best-effort, so they survive a later reject.
+    promos = receipt.get("promotions", [])
+    if isinstance(promos, list):
+        normalized["promoted_task_ids"] = [
+            p["task_id"]
+            for p in promos
+            if isinstance(p, dict) and isinstance(p.get("task_id"), str)
+        ]
+
+    errors: list[str] = []
+
+    task_shas = receipt.get("task_shas")
+    if not isinstance(task_shas, dict):
+        return (False, ["receipt.task_shas is missing or not a dict"], normalized)
+    files_per_task = receipt.get("files_per_task")
+    if not isinstance(files_per_task, dict):
+        return (False, ["receipt.files_per_task is missing or not a dict"], normalized)
+    baseline = receipt.get("baseline")
+    if not isinstance(baseline, dict):
+        return (False, ["receipt.baseline is missing or not a dict"], normalized)
+
+    # Foreign-key guard: task_shas/files_per_task may only name real plan tasks.
+    # Otherwise a fake files_per_task entry could launder an unplanned changed
+    # file past Rule 4 (the entry makes the file "declared" while the sha/binding
+    # loop — which iterates plan_tasks only — never checks it).
+    plan_ids = {task.id for task in plan_tasks}
+    foreign = sorted((set(task_shas) | set(files_per_task)) - plan_ids)
+    if foreign:
+        errors.append(f"receipt names keys outside the plan task set: {foreign}")
+
+    # Rule 3: baseline non-regression.
+    before = baseline.get("before") if isinstance(baseline.get("before"), dict) else {}
+    after = baseline.get("after") if isinstance(baseline.get("after"), dict) else {}
+    try:
+        b_failed = int(before.get("failed"))
+        a_failed = int(after.get("failed"))
+        a_exit = int(after.get("exit_code"))
+    except (TypeError, ValueError):
+        errors.append("baseline before.failed / after.failed / after.exit_code missing or non-int")
+    else:
+        if a_failed > b_failed:
+            errors.append(
+                f"baseline regression: after.failed={a_failed} > before.failed={b_failed}"
+            )
+        if a_exit != 0:
+            errors.append(f"baseline.after.exit_code={a_exit} (expected 0)")
+
+    # Rule 1 + 2: existence, lineage, distinctness, and sha↔task file binding.
+    seen_shas: dict[str, str] = {}
+    for task in plan_tasks:
+        tid = task.id
+        sha = task_shas.get(tid)
+        if not isinstance(sha, str) or not sha:
+            errors.append(f"task {tid} has no sha in task_shas")
+            continue
+        normalized["task_shas"][tid] = sha
+        if not _commit_exists(repo_root, sha):
+            errors.append(f"task {tid} sha {sha} does not exist on the branch")
+            continue
+        if _same_commit(repo_root, sha, branch_base_sha):
+            errors.append(f"task {tid} sha equals branch_base_sha (no commit for the task)")
+            continue
+        if not _sha_is_descendant(repo_root, branch_base_sha, sha):
+            errors.append(f"task {tid} sha {sha} is not a descendant of the base")
+            continue
+        if sha in seen_shas:
+            errors.append(
+                f"task {tid} sha {sha} duplicates task {seen_shas[sha]} — task commits must be distinct"
+            )
+        else:
+            seen_shas[sha] = tid
+        # Rule 2: bind the sha to its claimed files (the trust boundary).
+        claimed = files_per_task.get(tid)
+        if not isinstance(claimed, list):
+            errors.append(f"task {tid} has no files_per_task entry")
+            continue
+        commit_files = _commit_files(repo_root, sha)
+        if commit_files is None:
+            errors.append(f"task {tid}: cannot read the changed-file set for commit {sha}")
+            continue
+        claimed_set = {c for c in claimed if isinstance(c, str)}
+        if claimed_set != commit_files:
+            errors.append(
+                f"task {tid}: files_per_task {sorted(claimed_set)} != commit {sha} "
+                f"changed files {sorted(commit_files)}"
+            )
+
+    # Rule 4: staging discipline is set EQUALITY, not subset (both directions).
+    diff_files = _diff_files(repo_root, branch_base_sha)
+    if diff_files is None:
+        errors.append("cannot compute git diff base..HEAD")
+    else:
+        union: set[str] = set()
+        for tid in plan_ids:  # plan tasks only — foreign keys already errored above
+            v = files_per_task.get(tid)
+            if isinstance(v, list):
+                union |= {x for x in v if isinstance(x, str)}
+        undeclared = diff_files - union
+        overclaimed = union - diff_files
+        if undeclared:
+            errors.append(f"branch changed files claimed by no task: {sorted(undeclared)}")
+        if overclaimed:
+            errors.append(f"task-claimed files not in the branch diff: {sorted(overclaimed)}")
+
+    return (len(errors) == 0, errors, normalized)
+
+
 # --- Committed per-branch review-state pointer (.rawgentic/review-state/) ---
 
 _REVIEW_STATE_DIR = ".rawgentic/review-state"

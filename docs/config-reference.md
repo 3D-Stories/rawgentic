@@ -259,6 +259,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown values warn and resolve to `inherit`, never block. See [`modelRouting`](#modelrouting). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
+| `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
 | `headlessEnabled` | `bool` | Opt-in to headless (non-interactive) execution. Default `false`. See [Per-Project Access Control](#per-project-access-control). |
 | `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
@@ -408,6 +409,37 @@ malformed JSON, missing field, or bad value resolves to disabled — the workflo
 never crashes and never silently enables. The review is **non-blocking**: any Codex
 failure (including a missing/unauthenticated CLI) is logged and skipped, never
 blocking WF2. Only the standalone WF13 skill ERRORs on an unmet prerequisite.
+
+### `wholeIssueDelegation`
+
+Opt-in whole-issue delegated build mode for WF2 Step 8 (#133). The field is a
+**per-project entry in `.rawgentic_workspace.json`** (sibling to `adversarialReview`),
+NOT in `.rawgentic.json` — it is workspace-scoped, not committed to the project repo.
+It shares the same loader as `adversarialReview`
+(`hooks/adversarial_review_lib.py load_adversarial_review_config(..., key="wholeIssueDelegation")`)
+and the identical `{enabled, workflows}` shape — see [`adversarialReview`](#adversarialreview)
+for the full loading/fail-closed semantics, which apply here unchanged. Shape:
+
+```json
+"wholeIssueDelegation": { "enabled": true, "workflows": ["implement-feature"] }
+```
+
+`wholeIssueDelegation` **governs the WF2 Step 8 delegated-build sub-mode only**.
+When enabled and `implement-feature` is listed: instead of implementing plan tasks
+one at a time, Step 8 dispatches **one build-subagent** that implements the whole
+branch and returns a structured RECEIPT.
+
+**Trust boundary:** the build-subagent never self-certifies its own work. The
+orchestrator validates the receipt via `plan_lib.validate_build_receipt` and then
+**re-runs every gate against the real tree** — Step 8a per-task review, Step 9 plan
+drift, Step 11 code review, and Step 11.5 security scan all execute exactly as they
+would for a per-task build; the receipt is a hypothesis until those gates confirm it,
+never a substitute for them. If the receipt is rejected, the worktree is restored to
+its pre-dispatch state and the workflow falls back to normal per-task Step 8.
+
+Loading is **fail-closed**, identical to `adversarialReview`: a missing file,
+malformed JSON, missing field, or bad value resolves to disabled — Step 8 runs its
+normal per-task path. Default disabled; absent field → unchanged behavior.
 
 ### Adversarial Review Data Handling
 

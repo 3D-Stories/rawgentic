@@ -925,6 +925,32 @@ Execute the implementation plan task by task.
 
 When the `implementation` role is `inherit` (default), Step 8 runs inline exactly as today — no delegation, no behavior change (and if the session model is Haiku, dispatch any implementation subagent with `model: sonnet`).
 
+<!-- whole-issue-delegation: #133 -->
+**Optional WHOLE-ISSUE delegated build sub-mode (`wholeIssueDelegation`, default-off).** Per-task delegation above still runs the full per-task ceremony (dispatch, suite re-run, diff) in the orchestrator's own loop, so an orchestrator working a backlog bloats fast. When opted in, Step 8 instead hands ONE build-subagent the whole branch and validates a structured **receipt** — the *typing* is delegated, the *gating* is not. **Trust boundary:** the builder never self-certifies; every gate re-runs in the orchestrator against the real tree, and a receipt claim is a hypothesis until confirmed. Read `references/whole-issue-delegation.md` in full before using this mode — it holds the build-subagent brief template, the receipt schema, and the validation/fallback contract; the block below is only the spine.
+
+1. **Gate.** Only when enabled for this skill:
+   ```bash
+   python3 hooks/adversarial_review_lib.py is-enabled \
+     --workspace .rawgentic_workspace.json --project <name> --skill implement-feature \
+     --key wholeIssueDelegation
+   ```
+   Exit `0` → enabled; non-zero → **skip silently** and run Step 8 exactly as above (per-task or inline). An explicit invocation opt-out also skips.
+2. **Pre-flight clean-worktree gate (data-loss guard).** Require `git status --porcelain` empty. If the operator has ANY staged/unstaged/untracked work, do NOT enter this mode — log it and fall back to the normal per-task Step 8. The reject path must be able to discard the builder's output without touching pre-existing operator files.
+3. **Record** `branch_base_sha` (`git rev-parse HEAD`) and the pre-build test baseline (`{before:{passed,failed}}`).
+4. **Dispatch ONE build-subagent** with the brief (design, plan w/ riskLevels, TDD requirement, conventions, baseline) + the required receipt schema (both in the reference file). Model: `select_impl_model(<ceiling>, <riskLevel>, <complexity>)` sized to the plan's **highest-risk** task (one agent → size to the hardest task); **never `model: haiku`** (same inherit+Haiku→sonnet rule as above).
+5. **Validate the receipt** against the real tree:
+   ```bash
+   python3 -c "import sys,json; sys.path.insert(0,'hooks'); from plan_lib import validate_build_receipt, parse_tasks; r=json.load(open('<receipt.json>')); tasks=parse_tasks(open('<plan.md>').read()); ok,errs,norm=validate_build_receipt(r,tasks,'.','<branch_base_sha>'); print(ok); print('\n'.join(errs)); print(json.dumps(norm))"
+   ```
+   **Reject (ok=False)** → **restore then fall back** (delegation can never block Step 8): `git reset --hard <branch_base_sha>` (tracked) then remove ONLY the untracked paths the receipt declared (`union(files_per_task)` filtered to still-untracked); on an unparseable/partial receipt, reset only and WARN that builder untracked files may remain — **never** blanket `git clean -fd` against the operator's checkout. Log the fallback loudly, then run the normal per-task Step 8.
+6. **On a valid receipt, run the gates in the orchestrator against the real tree** (not the receipt's word for them):
+   - **Step 8a** for every high-risk task (tagged in Step 5 **OR** in `norm["promoted_task_ids"]`) on that task's receipt sha; coverage asserted via `plan_lib.assert_review_coverage(<log>, tasks, receipt["task_shas"])`. **8a is NOT delegated** — the orchestrator owns it.
+   - **Step 9** re-run the full suite from the orchestrator (the receipt baseline is a claim; the orchestrator's own run is the gate).
+   - **Steps 11 / 11.5** unchanged (full diff review + scan).
+7. **Marker** (session notes): `### WF2 Step 8 whole-issue-delegation: <APPLIED receipt-valid | FALLBACK per-task (<reason>) | SKIPPED not-enabled>`.
+
+Interplay with `<small-standard-lane>`: whole-issue delegation is still allowed in the lane — the collapsed gates still run in the orchestrator; the receipt's Step-8a set is just usually empty.
+
 **Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently. **Until isolated concurrent execution lands (issue #85), execute ALL tasks sequentially in plan order**, including parallel-eligible groups. Do NOT dispatch concurrent Agent calls that write to the working tree: with no worktree isolation, concurrent edits to the shared tree can collide and corrupt commits — sequential execution is the safe floor. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
 
 **Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
