@@ -1129,3 +1129,120 @@ class TestVerificationDeferred:
         out = render_summary(rec)
         assert "deferred" in out.lower()
         assert "no makensis in dev env" in out
+
+
+# --- #155 Task 1: optional top-level `usage` (strict-when-present) ---------
+
+class TestValidateUsage:
+    def _usage(self, **overrides):
+        base = {"input_tokens": 12345, "output_tokens": 6789,
+                "cost_estimate_usd": 1.23, "wall_clock_s": 42.5,
+                "model_mix": {"opus": {"input_tokens": 100, "output_tokens": 50}}}
+        base.update(overrides)
+        return base
+
+    def test_absent_is_valid_legacy_record(self):
+        from work_summary import validate_record
+        assert validate_record(_valid_record()) == []
+
+    def test_all_keys_null_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": None, "output_tokens": None,
+                         "cost_estimate_usd": None, "wall_clock_s": None,
+                         "model_mix": None}
+        assert validate_record(rec) == []
+
+    def test_happy_path_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage()
+        assert validate_record(rec) == []
+
+    def test_not_a_dict_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = "a lot"
+        assert any("usage must be an object" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("key", ["input_tokens", "output_tokens",
+                                      "cost_estimate_usd", "wall_clock_s",
+                                      "model_mix"])
+    def test_missing_key_rejected(self, key):
+        from work_summary import validate_record
+        rec = _valid_record()
+        u = self._usage()
+        del u[key]
+        rec["usage"] = u
+        assert any(key in e for e in validate_record(rec))
+
+    def test_input_tokens_bool_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(input_tokens=True)
+        assert any("input_tokens" in e for e in validate_record(rec))
+
+    def test_input_tokens_negative_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(input_tokens=-1)
+        assert any("input_tokens" in e for e in validate_record(rec))
+
+    def test_cost_estimate_bool_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=True)
+        assert any("cost_estimate_usd" in e for e in validate_record(rec))
+
+    def test_cost_estimate_negative_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=-0.01)
+        assert any("cost_estimate_usd" in e for e in validate_record(rec))
+
+    def test_cost_estimate_nan_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=float("nan"))
+        assert any("cost_estimate_usd" in e for e in validate_record(rec))
+
+    def test_cost_estimate_float_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=1.23)
+        assert validate_record(rec) == []
+
+    def test_model_mix_not_dict_or_null_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(model_mix=["opus"])
+        assert any("model_mix" in e for e in validate_record(rec))
+
+    def test_model_mix_empty_dict_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(model_mix={})
+        assert validate_record(rec) == []
+
+    def test_model_mix_value_missing_input_tokens_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(model_mix={"opus": {"output_tokens": 50}})
+        assert any("model_mix['opus']" in e and "input_tokens" in e
+                   for e in validate_record(rec))
+
+    def test_model_mix_inner_bool_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(
+            model_mix={"opus": {"input_tokens": True, "output_tokens": 50}})
+        assert any("model_mix['opus']" in e and "input_tokens" in e
+                   for e in validate_record(rec))
+
+    def test_model_mix_inner_negative_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(
+            model_mix={"opus": {"input_tokens": -1, "output_tokens": 50}})
+        assert any("model_mix['opus']" in e and "input_tokens" in e
+                   for e in validate_record(rec))

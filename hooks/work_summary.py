@@ -28,6 +28,7 @@ their Step 16 output. main() exits 1 in that case so the skill surfaces the gap.
 import argparse
 import copy
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -64,6 +65,16 @@ def _is_int(x) -> bool:
     isinstance(x, int) would accept `findings: true` and corrupt the substrate —
     reject bool explicitly."""
     return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _is_num(x) -> bool:
+    """True only for a real, finite int or float. bool is a subclass of int in
+    Python, so a naive isinstance(x, (int, float)) would accept
+    `cost_estimate_usd: true` and corrupt aggregation — reject bool explicitly.
+    NaN/inf are rejected too (math.isfinite): a NaN cost or duration would
+    silently corrupt any downstream sum/average in the Tier-2 substrate."""
+    return (isinstance(x, (int, float)) and not isinstance(x, bool)
+            and math.isfinite(x))
 
 
 def _is_str(x) -> bool:
@@ -297,6 +308,45 @@ def validate_record(record) -> list:
             dups = sorted({t for t in seen_ids if seen_ids.count(t) > 1})
             if dups:
                 errs.append(f"verification_deferred has duplicate task_id(s) {dups}")
+
+    # `usage` (#155 Task 1) — OPTIONAL top-level telemetry: absent → old records
+    # stay valid, but present is strict (deliberate-null-vs-dropped-field, same
+    # philosophy as elsewhere in this validator). Schema-only here; aggregation
+    # and rendering land in later tasks.
+    if "usage" in record:
+        usage = record["usage"]
+        if not isinstance(usage, dict):
+            errs.append("usage must be an object")
+        else:
+            _require_present(usage, "usage",
+                              ("input_tokens", "output_tokens", "cost_estimate_usd",
+                               "wall_clock_s", "model_mix"), errs)
+            for f in ("input_tokens", "output_tokens"):
+                v = usage.get(f)
+                if v is not None and (not _is_int(v) or v < 0):
+                    errs.append(f"usage.{f} must be a non-negative integer or null")
+            for f in ("cost_estimate_usd", "wall_clock_s"):
+                v = usage.get(f)
+                if v is not None and (not _is_num(v) or v < 0):
+                    errs.append(f"usage.{f} must be a non-negative number or null")
+            mix = usage.get("model_mix")
+            if mix is not None and not isinstance(mix, dict):
+                errs.append("usage.model_mix must be an object or null")
+            elif isinstance(mix, dict):
+                for model, counts in mix.items():
+                    if not (_is_str(model) and model.strip()):
+                        errs.append("usage.model_mix keys must be non-empty strings")
+                        continue
+                    if not isinstance(counts, dict):
+                        errs.append(f"usage.model_mix['{model}'] must be an object")
+                        continue
+                    _require_present(counts, f"usage.model_mix['{model}']",
+                                      ("input_tokens", "output_tokens"), errs)
+                    for f in ("input_tokens", "output_tokens"):
+                        v = counts.get(f)
+                        if v is not None and (not _is_int(v) or v < 0):
+                            errs.append(f"usage.model_mix['{model}'].{f} must be "
+                                        f"a non-negative integer or null")
 
     return errs
 
