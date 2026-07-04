@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
+from tests.corpus import SKILLS_DIR, skill_corpus
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WF2 = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
-WF3 = REPO_ROOT / "skills" / "fix-bug" / "SKILL.md"
 CONSOLIDATION = REPO_ROOT / "docs" / "consolidation.md"
 
 
@@ -28,9 +28,11 @@ def _section(text: str, header: str, next_header: str) -> str:
     return text[start:end]
 
 
-@pytest.mark.parametrize("skill_path", [WF2, WF3], ids=["wf2", "wf3"])
-def test_trivial_work_check_block_present(skill_path):
-    text = skill_path.read_text(encoding="utf-8")
+# Content pins read the CORPUS (SKILL.md + references/) so the #158 prose
+# restructure can move the block without weakening the guard.
+@pytest.mark.parametrize("skill_name", ["implement-feature", "fix-bug"], ids=["wf2", "wf3"])
+def test_trivial_work_check_block_present(skill_name):
+    text = skill_corpus(skill_name)
     assert "<trivial-work-check>" in text
     assert "</trivial-work-check>" in text
     block = _section(text, "<trivial-work-check>", "</trivial-work-check>")
@@ -44,17 +46,18 @@ def test_trivial_work_check_block_present(skill_path):
     assert "1 file" in block and "10 " in block
 
 
-@pytest.mark.parametrize("skill_path", [WF2, WF3], ids=["wf2", "wf3"])
-def test_step2_triggers_trivial_work_check(skill_path):
-    text = skill_path.read_text(encoding="utf-8")
+@pytest.mark.parametrize("skill_name", ["implement-feature", "fix-bug"], ids=["wf2", "wf3"])
+def test_step2_triggers_trivial_work_check(skill_name):
+    text = skill_corpus(skill_name)
     step2 = _section(text, "## Step 2", "## Step 3")
     assert "trivial-work-check" in step2.lower()
 
 
-@pytest.mark.parametrize("skill_path", [WF2, WF3], ids=["wf2", "wf3"])
-def test_headless_auto_continues_trivial_suggestion(skill_path):
-    # The AUTO-RESOLVE interaction list lives in the skill's references/headless.md.
-    text = (skill_path.parent / "references" / "headless.md").read_text(encoding="utf-8")
+@pytest.mark.parametrize("skill_name", ["implement-feature", "fix-bug"], ids=["wf2", "wf3"])
+def test_headless_auto_continues_trivial_suggestion(skill_name):
+    # LOCATION pin: the AUTO-RESOLVE interaction list must live in the skill's
+    # references/headless.md specifically — reads that file directly.
+    text = (SKILLS_DIR / skill_name / "references" / "headless.md").read_text(encoding="utf-8")
     auto = _section(text, "AUTO-RESOLVE interactions", "QUESTION interactions")
     assert "trivial" in auto.lower()
     # Headless must CONTINUE the full workflow (no interactive user to hand off to),
@@ -65,7 +68,7 @@ def test_headless_auto_continues_trivial_suggestion(skill_path):
 def test_wf2_mandatory_steps_carveout_for_trivial_exit():
     """The trivial-work exit must be reconciled with <mandatory-steps>, so a future
     orchestrator doesn't read it as 'skipping a mandatory step'."""
-    text = WF2.read_text(encoding="utf-8")
+    text = skill_corpus("implement-feature")
     mand = _section(text, "<mandatory-steps>", "</mandatory-steps>")
     assert "trivial-work-check" in mand
     # flatten whitespace so the match is robust to markdown line-wrapping

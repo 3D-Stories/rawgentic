@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.corpus import skill_corpus
+
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SKILLS_DIR = REPO_ROOT / "skills"
 
@@ -18,10 +20,12 @@ SKILLS_DIR = REPO_ROOT / "skills"
 def test_skill_dir_and_frontmatter_exist():
     skill = SKILLS_DIR / "adversarial-review" / "SKILL.md"
     assert skill.exists()
-    text = skill.read_text()
-    assert "name: rawgentic:adversarial-review" in text
-    assert "<config-loading>" in text
-    assert "<completion-gate>" in text
+    # LOCATION pin: frontmatter must be in SKILL.md itself (registration);
+    # the prose blocks are content pins over the corpus.
+    assert "name: rawgentic:adversarial-review" in skill.read_text()
+    corpus = skill_corpus("adversarial-review")
+    assert "<config-loading>" in corpus
+    assert "<completion-gate>" in corpus
 
 
 def test_marketplace_registers_skill():
@@ -34,7 +38,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "2.57.0"
+    assert plugin["version"] == "2.58.0"
 
 
 def test_descriptions_consistent_count():
@@ -65,14 +69,15 @@ def test_marketplace_skill_dirs_all_exist():
 # --- diff artifact type support in SKILL.md (issue #131, Task 4) ---
 
 def test_description_mentions_diff_review_and_drops_not_for_clause():
-    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
-    frontmatter = text.split("---")[1]
+    # frontmatter is a LOCATION pin (SKILL.md); the dropped clause must be
+    # absent from the whole corpus.
+    frontmatter = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text().split("---")[1]
     assert "diff" in frontmatter.lower()
-    assert "NOT for reviewing code diffs" not in text
+    assert "NOT for reviewing code diffs" not in skill_corpus("adversarial-review")
 
 
 def test_constants_supported_artifact_types_includes_diff():
-    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    text = skill_corpus("adversarial-review")
     constants = _section(text, "<constants>", "</constants>")
     line = next(l for l in constants.splitlines() if l.startswith("SUPPORTED_ARTIFACT_TYPES:"))
     types = [t.strip() for t in line.split(":", 1)[1].split(",")]
@@ -80,12 +85,12 @@ def test_constants_supported_artifact_types_includes_diff():
 
 
 def test_body_documents_findings_json_sidecar_flag():
-    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    text = skill_corpus("adversarial-review")
     assert "--findings-json" in text
 
 
 def test_step1_autodetect_mentions_patch_and_diff_globs():
-    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    text = skill_corpus("adversarial-review")
     step1 = _section(text, "## Step 1:", "## Step 2:")
     assert "*.patch" in step1
     assert "*.diff" in step1
@@ -93,7 +98,7 @@ def test_step1_autodetect_mentions_patch_and_diff_globs():
 
 
 def test_data_handling_mentions_diff_secret_density_and_egress_classifier():
-    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    text = skill_corpus("adversarial-review")
     dh = _section(text, "<data-handling>", "</data-handling>")
     low = dh.lower()
     assert "raw source code" in low
@@ -123,7 +128,7 @@ def _section(text: str, header: str, next_header: str | None) -> str:
 
 
 def test_wf2_invokes_in_step4_and_step6():
-    text = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    text = skill_corpus("implement-feature")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     step6 = _section(text, "## Step 6:", "## Step 7:")
     for section, name in ((step4, "Step 4"), (step6, "Step 6")):
@@ -132,14 +137,14 @@ def test_wf2_invokes_in_step4_and_step6():
 
 
 def test_wf2_step4_is_fast_path_gated():
-    text = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    text = skill_corpus("implement-feature")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert "fast_path_eligible == false" in step4
 
 
 def test_wf2_reuses_existing_design_loopback_not_new_source():
     """Decision A: adversarial design flaws consume the existing 'design' counter."""
-    text = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    text = skill_corpus("implement-feature")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert '"design"' in step4 or "design` loop-back" in step4
     # must NOT introduce a new 'adversarial' loopback source
@@ -147,7 +152,7 @@ def test_wf2_reuses_existing_design_loopback_not_new_source():
 
 
 def test_wf3_invokes_in_step4_default_off():
-    text = (SKILLS_DIR / "fix-bug" / "SKILL.md").read_text()
+    text = skill_corpus("fix-bug")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert "adversarial-review" in step4.lower()
     assert "is-enabled" in step4
@@ -163,7 +168,7 @@ def test_plan_lib_has_no_adversarial_loopback_source():
 
 
 def test_setup_has_step_2d():
-    text = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+    text = skill_corpus("setup")
     assert "Step 2d" in text
     assert "adversarialReview" in text
 
@@ -171,7 +176,7 @@ def test_setup_has_step_2d():
 # --- WF1 / WF4 integration (issue #79) ---
 
 def test_wf1_invokes_in_step4_default_off():
-    text = (SKILLS_DIR / "create-issue" / "SKILL.md").read_text()
+    text = skill_corpus("create-issue")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert "adversarial-review" in step4.lower(), "WF1 Step 4 missing adversarial-review invocation"
     assert "is-enabled" in step4, "WF1 Step 4 missing config gate (is-enabled)"
@@ -185,13 +190,13 @@ def test_wf1_uses_no_plan_lib_loopback():
     (The prose may mention `consume_loopback` to say it is NOT used; we assert there
     is no actual call, i.e. no `consume_loopback(` invocation.)
     """
-    text = (SKILLS_DIR / "create-issue" / "SKILL.md").read_text()
+    text = skill_corpus("create-issue")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert "consume_loopback(" not in step4
 
 
 def test_wf4_invokes_in_step4_extract_restructure_only():
-    text = (SKILLS_DIR / "refactor" / "SKILL.md").read_text()
+    text = skill_corpus("refactor")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert "adversarial-review" in step4.lower(), "WF4 Step 4 missing adversarial-review invocation"
     assert "is-enabled" in step4, "WF4 Step 4 missing config gate (is-enabled)"
@@ -207,14 +212,14 @@ def test_wf4_uses_textual_budget_not_plan_lib():
     Assert no actual `consume_loopback(` invocation, and that the textual budget
     is referenced.
     """
-    text = (SKILLS_DIR / "refactor" / "SKILL.md").read_text()
+    text = skill_corpus("refactor")
     step4 = _section(text, "## Step 4:", "## Step 5:")
     assert "consume_loopback(" not in step4  # WF4 does not use plan_lib counters
     assert "LOOPBACK_BUDGET" in step4
 
 
 def test_setup_offers_all_four_workflows():
-    text = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+    text = skill_corpus("setup")
     step2d = _section(text, "## Step 2d:", "## Step 3:")
     for name in ("implement-feature", "fix-bug", "create-issue", "refactor"):
         assert name in step2d, f"setup Step 2d must offer {name}"
@@ -253,7 +258,7 @@ def test_whole_issue_delegation_reference_exists():
 
 
 def test_wf2_step8_documents_whole_issue_delegation_submode():
-    skill = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    skill = skill_corpus("implement-feature")
     # the opt-in block, its gate invocation, the validator, and the reference pointer
     assert "whole-issue-delegation: #133" in skill
     assert "--key wholeIssueDelegation" in skill
@@ -264,7 +269,7 @@ def test_wf2_step8_documents_whole_issue_delegation_submode():
 
 
 def test_wf2_step8_delegation_is_opt_in_default_off():
-    skill = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+    skill = skill_corpus("implement-feature")
     # default-off: a non-zero is-enabled exit skips silently
     assert "default-off" in skill
     assert "skip silently" in skill

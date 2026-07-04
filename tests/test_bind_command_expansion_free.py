@@ -15,10 +15,8 @@ This guard fails if either skill reintroduces command substitution into its
 registry-append block.
 """
 import re
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILLS = REPO_ROOT / "skills"
+from tests.corpus import skill_corpus
 
 # Skills whose bind step appends to the session registry from a fenced code block.
 BIND_SKILLS = ["switch", "new-project"]
@@ -48,20 +46,20 @@ def _fenced_blocks(text: str):
 
 
 def _registry_blocks(skill: str):
-    """Return fenced blocks in <skill>/SKILL.md that append to the session registry.
+    """Return fenced blocks in the skill's corpus that append to the session registry.
 
     Selects by content (`session_registry.jsonl` only appears in the bash append
     command, not in the adjacent JSON example), so it is robust to the fence label.
+    Reads the corpus (SKILL.md + references/) so a #158 prose move keeps the guard live.
     """
-    text = (SKILLS / skill / "SKILL.md").read_text()
-    return [b for b in _fenced_blocks(text) if "session_registry.jsonl" in b]
+    return [b for b in _fenced_blocks(skill_corpus(skill)) if "session_registry.jsonl" in b]
 
 
 def test_registry_block_exists_for_each_bind_skill():
     """Sanity: the guard is non-vacuous — each bind skill really has a registry-append block."""
     for skill in BIND_SKILLS:
         assert _registry_blocks(skill), (
-            f"{skill}/SKILL.md has no fenced block appending to session_registry.jsonl "
+            f"{skill} corpus has no fenced block appending to session_registry.jsonl "
             "(guard would be vacuous)"
         )
 
@@ -71,7 +69,7 @@ def test_bind_command_has_no_command_substitution():
     for skill in BIND_SKILLS:
         for block in _registry_blocks(skill):
             assert not CMD_SUBST_RE.search(block), (
-                f"{skill}/SKILL.md registry-append block contains $(...) command "
+                f"{skill} registry-append block contains $(...) command "
                 "substitution -> Claude Code flags it 'Contains expansion' and always "
                 f"prompts (cannot be allowlisted):\n{block}"
             )
@@ -82,6 +80,6 @@ def test_bind_command_has_no_backtick_substitution():
     for skill in BIND_SKILLS:
         for block in _registry_blocks(skill):
             assert "`" not in block, (
-                f"{skill}/SKILL.md registry-append block contains backtick command "
+                f"{skill} registry-append block contains backtick command "
                 f"substitution -> permission prompt:\n{block}"
             )
