@@ -349,6 +349,17 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 |-------|---------|
 | `/rawgentic:sync-security-patterns` | Merge upstream security patterns from Anthropic's official plugin into local config |
 
+#### Bundled Subagents
+
+The plugin ships two subagent definitions, auto-discovered from `agents/` and namespaced on install (#164):
+
+| Agent type | Role | Key properties |
+|-----------|------|----------------|
+| `rawgentic:rawgentic-implementer` | WF2/WF3 per-task implementation | `model: inherit`, `isolation: worktree` — mutating work runs in an isolated git worktree |
+| `rawgentic:rawgentic-reviewer` | Quality-gate reviews (Steps 4/8a/11) | `model: inherit`, read-heavy tools only (Read/Grep/Glob/Bash, no Write/Edit) |
+
+Both declare `model: inherit` because model routing is per-project config: WF2 resolves the routed role model and passes it per-invocation, which overrides the definition's frontmatter. Never-Haiku is enforced in the definitions and by a drift guard (`tests/test_bundled_agents.py`). When worktree isolation is unavailable (the `probe-parallelism` capability reports `serial-only`), dispatch gracefully falls back to non-isolated, strictly serial execution.
+
 #### Hooks
 
 Rawgentic includes hooks that run automatically on Claude Code events:
