@@ -810,7 +810,11 @@ class TestWF2Wiring:
     """WF2 Step 11.5 must invoke the shared lib as a real pre-PR gate."""
 
     def _text(self):
-        return (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+        # Corpus (SKILL.md + references/): #158 moved the Step 11.5 detail into
+        # references/steps.md — these wiring pins follow the prose. The
+        # completion-gate pin below still resolves (that block stays in SKILL.md).
+        from tests.corpus import skill_corpus
+        return skill_corpus("implement-feature")
 
     def test_step_11_5_exists_and_invokes_lib(self):
         t = self._text()

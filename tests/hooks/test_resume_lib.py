@@ -216,11 +216,11 @@ class TestResumeSkillWiring:
     `detect-step` CLI, not by hand-applying the numbered cascade in prose (which
     is exactly the ordering bug this extraction removes)."""
 
-    SKILL_MD = (Path(__file__).resolve().parent.parent.parent
-                / "skills" / "implement-feature" / "SKILL.md")
-
     def _resumption_block(self):
-        content = self.SKILL_MD.read_text()
+        # Corpus (SKILL.md + references/): #158 moved <resumption-protocol> into
+        # references/state-and-resume.md — this content pin follows the prose.
+        from tests.corpus import skill_corpus
+        content = skill_corpus("implement-feature")
         start = content.index("<resumption-protocol>")
         end = content.index("</resumption-protocol>")
         return content[start:end]
