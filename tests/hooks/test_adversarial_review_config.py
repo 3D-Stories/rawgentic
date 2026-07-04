@@ -151,3 +151,33 @@ def test_is_enabled_for_accepts_all_workflow_skill_names(tmp_path, skill):
     assert arl.is_enabled_for(str(ws), "p", skill) is True
     # a different skill not in the list stays off
     assert arl.is_enabled_for(str(ws), "p", "some-other-skill") is False
+
+
+# --- wholeIssueDelegation (#133): the "no lib change" claim, proven end-to-end ---
+
+def test_is_enabled_for_reads_whole_issue_delegation_key(tmp_path):
+    """#133: is_enabled_for(..., key="wholeIssueDelegation") reads the arbitrary
+    per-project field through the same loader, so the feature needs NO lib change.
+    Guards against a regression that hardcodes the key set."""
+    ws = _write_ws(tmp_path, [{
+        "name": "p", "path": "./projects/p",
+        "wholeIssueDelegation": {"enabled": True, "workflows": ["implement-feature"]},
+    }])
+    assert arl.is_enabled_for(str(ws), "p", "implement-feature", key="wholeIssueDelegation") is True
+    # a skill not in the list stays off
+    assert arl.is_enabled_for(str(ws), "p", "fix-bug", key="wholeIssueDelegation") is False
+    # and the default key is independent — absent adversarialReview stays off
+    assert arl.is_enabled_for(str(ws), "p", "implement-feature") is False
+
+
+def test_whole_issue_delegation_absent_is_disabled(tmp_path):
+    ws = _write_ws(tmp_path, [{"name": "p", "path": "./projects/p"}])
+    assert arl.is_enabled_for(str(ws), "p", "implement-feature", key="wholeIssueDelegation") is False
+
+
+def test_whole_issue_delegation_disabled_flag(tmp_path):
+    ws = _write_ws(tmp_path, [{
+        "name": "p", "path": "./projects/p",
+        "wholeIssueDelegation": {"enabled": False, "workflows": ["implement-feature"]},
+    }])
+    assert arl.is_enabled_for(str(ws), "p", "implement-feature", key="wholeIssueDelegation") is False
