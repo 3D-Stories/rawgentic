@@ -32,9 +32,10 @@ SHARED = ROOT / "shared" / "blocks"
 MANIFEST = {
     "config-loading": {
         "config-loading.md": [
-            "adversarial-review", "create-tests", "incident", "refactor",
-            "security-audit", "update-docs", "optimize-perf", "update-deps",
-            "implement-feature", "fix-bug", "peer-consult",
+            # WF4/7/8/9/10/12 removed 2026-07-04 (#160): deprecation stubs carry
+            # no config-loading block; removal at v3.0.0 (#161).
+            "adversarial-review", "incident",
+            "implement-feature", "fix-bug", "peer-consult", "scan",
         ],
     },
 }

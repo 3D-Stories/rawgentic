@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "rawgentic",
-      "description": "12 SDLC workflow skills + 4 workspace management + 1 planning skill + 1 security skill + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, refactoring, adversarial review, documentation, dependency updates, security audits, performance optimization, incident response, test suite creation, peer consultation, security pattern syncing, and dangerous pattern blocking with per-project exceptions.",
+      "description": "6 SDLC workflow skills + 6 deprecated stubs (removal at v3.0.0) + 4 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, incident response, peer consultation, whole-tree security scanning, security pattern syncing, and dangerous pattern blocking with per-project exceptions.",
       "source": "./",
       "strict": true,
       "skills": [
@@ -27,6 +27,7 @@
         "./skills/optimize-perf",
         "./skills/peer-consult",
         "./skills/refactor",
+        "./skills/scan",
         "./skills/security-audit",
         "./skills/setup",
         "./skills/switch",

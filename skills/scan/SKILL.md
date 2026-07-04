@@ -1,3 +1,20 @@
+---
+name: rawgentic:scan
+description: Run the full tool-based security scan (secrets, dependency CVEs, SAST, IaC) over the whole project tree via hooks/security_scan.py --full. The surviving tooling from the deprecated WF9 security-audit workflow — use for an on-demand whole-tree scan outside a PR gate. Invoke with /rawgentic:scan.
+argument-hint: none (scans the active project's whole tree)
+---
+
+# Scan — whole-tree security scanners
+
+<role>
+You run the project's tool-based security scanners over the WHOLE tree — the
+same fail-closed `hooks/security_scan.py` engine that gates every WF2/WF3 PR
+at Step 11.5, but with `--full` (whole tree, not diff-scoped) and on demand.
+This is tooling, not a workflow: no branch, no PR, no remediation loop — you
+scan, report honestly, and stop. Remediation runs through WF2 with an issue.
+</role>
+
+<config-loading>
 Before executing any workflow steps, load the project configuration:
 
 1. Determine the active project using this fallback chain:
@@ -22,3 +39,36 @@ Before executing any workflow steps, load the project configuration:
    - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
+</config-loading>
+
+## Step 1: Run the full scan
+
+```bash
+python3 hooks/security_scan.py scan \
+  --project-root <activeProject.path> \
+  --project-type <capabilities.project_type> \
+  --full \
+  --json
+```
+
+Append `--has-docker` when `capabilities.has_docker` is true. The JSON `gate`
+object is authoritative (exit `0` PASS, `1` BLOCKED, `2` usage error).
+
+## Step 2: Report
+
+Present, in order: `gate.blocking` (each with file/rule — these are real,
+fail-closed findings), `gate.errors` (an installed scanner produced unparseable
+output — NOT clean; name the cause), `gate.advisory`, and `skipped` (a skipped
+scanner is a visible gap, never a pass; recommend `/rawgentic:setup` to install
+missing scanners). A **real leaked credential must be called out for rotation**
+— deleting it from the tree does not un-leak history.
+
+For anything that needs fixing, recommend filing an issue and running
+`/rawgentic:implement-feature` — do NOT start editing files from this skill.
+
+<completion-gate>
+Before declaring the scan complete: the scan command actually ran (exit code
+captured), every blocking/error/advisory/skipped item was surfaced verbatim,
+and one marker line was appended to `claude_docs/session_notes.md`:
+`### rawgentic:scan — DONE (blocking: N, advisory: N, errors: N, skipped: <kinds>)`.
+</completion-gate>

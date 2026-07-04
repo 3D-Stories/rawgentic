@@ -18,6 +18,15 @@ Run through all steps below **sequentially** (Steps 1–9, with optional Step 4b
 The full annotated schema lives at `templates/rawgentic-json-schema.json` in the rawgentic plugin directory. Read it at the start of Step 3 to understand every field and section available. That file is the single source of truth for the `.rawgentic.json` structure.
 </schema-reference>
 
+<references>
+This spine carries every step heading in order with a short summary; the detailed
+prose for the heavier steps lives in `references/`. Read the pointed-to reference
+file **before executing** that step:
+- **Steps 2c, 2d, 2f, 2g** → `references/integrations.md` (Step 2e stays in this spine)
+- **Step 3** → `references/detect-flows.md`
+- **Steps 4, 4b** → `references/config-reference.md`
+</references>
+
 ---
 
 ## Step 1: Verify Context
@@ -97,92 +106,27 @@ Check if `CLAUDE.md` (in the Claude root) contains either of these markers from 
 
 ## Step 2c: Headless Mode Access
 
-This step runs on **every** setup invocation (including Sub-flow A re-runs).
+Runs on **every** setup invocation (including Sub-flow A re-runs). Checks the
+active project's `headlessEnabled` field in `.rawgentic_workspace.json`: prompts
+(default n) on first-time configuration, or shows status and allows toggling on
+re-configuration. Headless mode grants an external orchestrator autonomous
+access, so it stays opt-in.
 
-Check the active project's entry in `.rawgentic_workspace.json` for the `headlessEnabled` field.
-
-- **If `headlessEnabled` is not set** (first-time configuration): prompt the user:
-
-  ```
-  Allow autonomous AI agent (headless mode) to work on [project-name]?
-
-  When enabled, an external orchestrator can run rawgentic workflow skills
-  on this project without interactive terminal access. The agent posts
-  questions to GitHub issues and waits for replies.
-
-  Enable headless mode for [project-name]? (y/n) [default: n]
-  ```
-
-  Write `headlessEnabled: true` or `headlessEnabled: false` to the project's
-  entry in `.rawgentic_workspace.json` based on the user's choice.
-
-- **If `headlessEnabled` is already set** (re-configuration): show current
-  status and allow toggling:
-
-  ```
-  Headless mode: [ENABLED / DISABLED]
-  Change? (y/n) [default: keep current]
-  ```
+**Read `references/integrations.md` before executing Step 2c.**
 
 ---
 
 ## Step 2d: Adversarial Review (WF5) Integration
 
-This step runs on **every** setup invocation (including Sub-flow A re-runs).
+Runs on **every** setup invocation (including Sub-flow A re-runs). Asks whether an
+OpenAI account is available for the Codex CLI and, on yes, turns WF5 cross-model
+review **on by default** for the applicable workflows — implement-feature (WF2)
+and fix-bug (WF3), with create-issue (WF1) offered as an opt-in add. Stores the
+`adversarialReview` field in the project's `.rawgentic_workspace.json` entry
+(workspace-scoped, not committed to the repo). The standalone
+`/rawgentic:adversarial-review` skill works regardless of this setting.
 
-The `/rawgentic:adversarial-review` skill (WF5) runs a cross-model review of a
-text artifact via the Codex CLI. It can also be wired into the WF1, WF2, WF3, and
-WF4 quality gates so they automatically run a cross-model second opinion on the
-issue spec (WF1), design / implementation plan (WF2), root-cause analysis (WF3),
-or refactoring design (WF4). WF5 is **on by default for the applicable workflows**
-— the only thing it needs is an OpenAI account for the Codex CLI, so setup ASKS
-about that account rather than asking you to opt in. The setting lives in the
-active project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled`
-/ `critiqueMethod`), NOT in `.rawgentic.json` — it is workspace-scoped, not
-committed to the project repo. (It does send artifact text to OpenAI; declining
-the account question keeps it fully off.)
-
-Check the active project's entry for the `adversarialReview` field.
-
-- **If `adversarialReview` is not set** (first-time configuration): ask the
-  OpenAI-account question and default WF5 **on** when the answer is yes:
-
-  ```
-  Cross-model adversarial review (WF5) gives your workflows an independent,
-  different-model second opinion at their quality gates (WF2 design + plan, WF3
-  root-cause, WF4 refactoring design). It runs through the Codex CLI, which needs
-  an OpenAI account, and it sends the artifact text to OpenAI.
-
-  Do you have an OpenAI account you can use for Codex? (y/n) [default: n]
-  ```
-
-  - **If yes →** enable WF5 for all applicable workflows by default:
-    `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug", "refactor"] }`
-    Tell the user it's now on for implement-feature (WF2), fix-bug (WF3), and
-    refactor (WF4). `create-issue` (WF1) is intentionally **left off** by default
-    because WF1 already runs a full same-model 3-judge critique, so a cross-model
-    pass there is redundant — offer it as an opt-in add ("also enable for
-    create-issue? (y/n) [default: n]"). Remind them the Codex CLI must be installed
-    and authenticated (`curl -fsSL https://codex.openai.com/install.sh | bash`
-    then `codex login`); if Codex is absent at run time the gate fails closed and
-    is skipped (no error, just no cross-model pass). WF4 (refactor) only fires on
-    the Extract/Restructure path (Rename/Simplify skips it).
-  - **If no →** disable it:
-    `"adversarialReview": { "enabled": false, "workflows": [] }`
-    The standalone `/rawgentic:adversarial-review` skill still works on demand;
-    this only controls the workflow-embedded gates.
-
-  Write the result to the project's entry using **bare skill names** in `workflows`
-  (valid names: `implement-feature`, `fix-bug`, `create-issue`, `refactor`).
-
-- **If `adversarialReview` is already set** (re-configuration): show current
-  status and allow changing:
-
-  ```
-  Adversarial review (WF5): [DISABLED / enabled for: <bare skill names>]
-  Change? Enter numbers (1=implement-feature, 2=fix-bug, 3=create-issue, 4=refactor),
-  "none", or "all" [default: keep current]
-  ```
+**Read `references/integrations.md` before executing Step 2d.**
 
 ---
 
@@ -264,275 +208,55 @@ recorded opt-outs), leaves headless and WF5 alone, and nudges the user to run
 
 ## Step 2f: Model Routing (optional)
 
-This step runs on **every** setup invocation (including Sub-flow A re-runs).
+Runs on **every** setup invocation (including Sub-flow A re-runs). Offers
+per-project subagent model routing for the three dispatch roles (review, analysis,
+implementation); stages the `modelRouting` field in the project's
+`.rawgentic_workspace.json` entry. Stays opt-in — declining stages nothing (absent
+block = inherit everywhere).
 
-Offer per-project subagent model routing. Ask whether to route the three dispatch roles to specific models (skip any role = inherit the session model). Suggested defaults: `review: opus`, `analysis: sonnet`, `implementation: opus`.
-
-Check the active project's entry for the `modelRouting` field.
-
-- **If `modelRouting` is not set** (first-time configuration): ask the
-  per-role question below.
-- **If `modelRouting` is already set** (re-configuration): show the current
-  per-role values first, then ask change-or-keep — never rewrite silently:
-
-  ```
-  Model routing: review=<value>, analysis=<value>, implementation=<value> (unset roles show as "inherit")
-  Change? (y/n) [default: keep current]
-  ```
-
-  If keeping, write nothing for this section.
-
-Per-role question (asked when opting in, or on "change"):
-
-- Collect a model (`opus`/`sonnet`/`haiku`/`fable` — a `haiku` choice is bumped
-  to `sonnet` at resolve time, since rawgentic never routes work to Haiku),
-  "skip", or a model plus an optional effort tier (`low`/`medium`/`high`/`xhigh`/`max`),
-  per role.
-- A plain model choice stays staged as the string: `"<role>": "<model>"`. Do
-  NOT convert an existing string value to a dict unless the user picks an
-  effort for that role. A model + effort choice stages
-  `"<role>": { "model": "<model>", "effort": "<effort>" }` instead. Omit
-  skipped roles.
-- If the user picks an effort tier for any role, tell them the `{model, effort}`
-  shape needs the updated plugin (v2.55.0+) loaded in the running session's
-  cache — an older cached lib fail-opens that role to `inherit` with a stderr
-  warning, silently turning routing off for it until the plugin is reloaded.
-- If the user declines routing entirely, stage nothing (absent block = inherit everywhere; byte-identical default).
-- Note the soft opus floor: routing `review` to `sonnet` warns at run time but still
-  applies (`haiku` is bumped to `sonnet` instead, per the never-Haiku rule).
-- Note that `implementation` acts as a per-task ceiling, not a blanket assignment:
-  WF2 Step 8 down-routes standard/simple tasks to `sonnet` and reserves the
-  configured model for high-risk or complex tasks.
+**Read `references/integrations.md` before executing Step 2f.**
 
 ## Step 2g: Peer Consult (WF13) Integration
 
-This step runs on **every** setup invocation (including Sub-flow A re-runs).
+Runs on **every** setup invocation (including Sub-flow A re-runs). Mirrors Step 2d:
+asks whether to enable the cross-model peer designer at the WF2 design step and
+stages the `peerConsult` field in the project's `.rawgentic_workspace.json` entry.
+The standalone `/rawgentic:peer-consult` works regardless.
 
-Mirror Step 2d (Adversarial Review). Check the project entry's `peerConsult` field.
-
-- If not set: ask whether to enable the cross-model peer designer at the WF2 design step. On yes, stage `"peerConsult": { "enabled": true, "workflows": ["implement-feature"] }`; on no, `"peerConsult": { "enabled": false, "workflows": [] }`. The standalone `/rawgentic:peer-consult` works regardless.
-- If already set: show status and allow changing.
+**Read `references/integrations.md` before executing Step 2g.**
 
 ---
 
 ## Step 3: Detect or Brainstorm
 
-Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to understand the full schema structure.
+Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to
+understand the full schema structure, then dispatch to one of three sub-flows:
+**A** (existing `.rawgentic.json` — re-run with the merge policy), **B** (existing
+code, no config — run the auto-detection sequence), or **C** (empty/new project —
+brainstorm intent).
 
-Then determine which of the three sub-flows applies:
-
-### Sub-flow A: Existing `.rawgentic.json` (re-run)
-
-**Condition:** `<activeProject.path>/.rawgentic.json` exists.
-
-1. Read and parse the existing config.
-2. Present the current configuration to the user, section by section.
-3. Ask: "What would you like to update? Or say 'full re-detect' to re-scan the project."
-4. If user wants updates: apply changes following the **merge policy** below.
-5. If user wants full re-detect: proceed to Sub-flow B but preserve any values from the existing config that the user hasn't asked to change (these are "learned entries" from previous skill runs).
-
-<merge-policy>
-When merging with an existing .rawgentic.json:
-- **Append** to arrays — add newly detected items, never remove existing entries
-- **Set** fields that are null, missing, or empty — never overwrite existing non-null values
-- **On conflict** (detected value differs from existing value) — present both to the user and ask which to keep
-- Always read the full file, modify in memory, write the full file back
-</merge-policy>
-
-### Sub-flow B: Existing Code, No Config (auto-detect)
-
-**Condition:** The project directory has files (not empty) but no `.rawgentic.json`.
-
-Run the detection sequence below. If migration seed values exist from Step 2, use them to pre-fill fields — but still verify them against the actual project files.
-
-<detection-sequence>
-Scan the project root (`<activeProject.path>`) for each of the following. Only include a section in the config if you actually find evidence for it.
-
-**1. Required: Project metadata**
-- `project.name`: Use the active project name from workspace
-- `project.type`: Infer from what you find — `application` (has runnable services), `library` (has package publishing config), `infrastructure` (primarily IaC/config), `scripts` (utility scripts), `docs` (documentation-focused), `research` (notebooks/data analysis). Ask user to confirm.
-- `project.description`: Draft from README.md first line, or package.json description, or ask user.
-
-**2. Required: Repository**
-- Run `git remote get-url origin` from the project directory.
-- Parse `owner/repo` from HTTPS (`https://github.com/owner/repo.git`) or SSH (`git@github.com:owner/repo.git`) formats.
-- Detect default branch: `git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null` or fall back to `main`.
-
-**3. Optional: Tech stack (informational)**
-Build a list of technologies detected. This is informational only — workflow skills use the structured sections below, not this list.
-
-**4. Optional: Testing**
-Search for test framework configuration:
-
-| Indicator | Framework | Type |
-|-----------|-----------|------|
-| `vitest.config.*` or vitest in package.json | vitest | unit |
-| `jest.config.*` or jest in package.json | jest | unit |
-| `playwright.config.*` | playwright | e2e |
-| `cypress.config.*` or `cypress/` dir | cypress | e2e |
-| `pytest.ini`, `pyproject.toml [tool.pytest]`, `setup.cfg [tool:pytest]` | pytest | unit |
-| `*_test.go` files | go test | unit |
-| `Cargo.toml` with `[dev-dependencies]` test entries | cargo test | unit |
-| `.rspec` or `spec/` dir with Gemfile containing rspec | rspec | unit |
-| `phpunit.xml` | phpunit | unit |
-
-For each found: determine the run command (check package.json scripts, Makefile targets, or use framework defaults), config file path, and test directory.
-
-**5. Optional: Database**
-- Check `.env*` files for patterns: `DATABASE_URL`, `DB_HOST`, `DB_NAME`, `POSTGRES_*`, `MYSQL_*`, `MONGO_*` (report presence only — **never display secret values**)
-- Check Docker Compose files for database service images (postgres, mysql, mongo, redis, etc.)
-- If found: determine type, CLI tool, and container name if dockerized.
-
-**6. Optional: Services**
-- Check Docker Compose files for service definitions with port mappings
-- Check package.json for dev server scripts (e.g., `vite`, `next dev`, `express`)
-- Check for Python entry points (`main.py`, `app.py`, `manage.py`)
-- Check for Go entry points (`cmd/*/main.go`)
-- For each service: infer name, type (frontend/backend/worker/api/proxy), framework, port, and entry point.
-
-**7. Optional: Infrastructure**
-- Find all `docker-compose*.yml` and `compose*.yml` files
-- Check for host references in `.env*` files or config
-- Check for Terraform, Pulumi, CloudFormation, or Ansible files
-
-**8. Optional: Deploy**
-- Check for deploy scripts, Makefile deploy targets, or CI deployment steps
-- Infer method: `compose` (Docker Compose up), `script` (custom script), `ssh` (remote deploy), `manual` (nothing automated)
-
-**9. Optional: Security**
-- Search source files for auth patterns: JWT token handling, API key middleware, OAuth config
-- Detect validation libraries: search imports/requires for zod, joi, yup, ajv, pydantic, marshmallow
-- Identify data channels: REST endpoints, WebSocket/Socket.IO, gRPC, message queues
-
-**10. Optional: CI**
-- Check `.github/workflows/` for GitHub Actions
-- Check `.gitlab-ci.yml` for GitLab CI
-- Check `Jenkinsfile`, `.circleci/`, `bitbucket-pipelines.yml`
-- Write `ci.provider` when found (drives `has_ci`).
-- **CI quarantine (#137):** if the user reports the suite is chronically red for reasons unrelated to any diff (an incomplete port, a stale artifact check) and should NOT gate, offer to set `ci.status: "quarantined"` with a required `ci.quarantineReason` (a one-line why) and an optional `ci.quarantinedSince` (ISO date, so a staleness nag can fire after 30 days). Never set this automatically — quarantine is a human declaration (a chronically-red suite and a genuinely broken diff are mechanically indistinguishable). Omit `ci.status` (or set `"active"`) for a healthy suite. Example: `"ci": { "provider": "github-actions", "status": "quarantined", "quarantineReason": "incomplete Tauri port; build-path check stale", "quarantinedSince": "2026-07-01" }`.
-
-**11. Optional: Formatting**
-- Check for `.prettierrc*`, `.eslintrc*`, `biome.json`
-- Check `pyproject.toml` for `[tool.black]`, `[tool.ruff]`
-- Check for `.editorconfig`, `rustfmt.toml`
-
-**12. Optional: Documentation**
-- Check for `README.md`, `docs/` directory, `CHANGELOG.md`
-- Detect format (markdown, rst, asciidoc)
-</detection-sequence>
-
-### Sub-flow C: Empty/New Project (brainstorm)
-
-**Condition:** The project directory is empty or contains only git initialization files (`.git/`, `.gitignore`).
-
-1. Tell the user: "This looks like a new project. Let's figure out what you're building."
-2. Invoke `/superpowers:brainstorm` to explore:
-   - What is this project for? (application, library, infrastructure, scripts, docs, research)
-   - What technologies are planned?
-   - What's the core purpose / one-sentence description?
-3. Use the brainstorm results to populate the required fields (`project`, `repo`).
-4. Add any planned technologies to `techStack` (informational).
-5. Leave optional sections empty — they'll be populated by the learning config pattern as workflow skills discover capabilities.
+**Read `references/detect-flows.md` before executing Step 3.**
 
 ---
 
 ## Step 4: Present Detected Config
 
-Show the user the assembled `.rawgentic.json` as formatted JSON. For each section, show where the values came from:
+Show the user the assembled `.rawgentic.json` as formatted JSON, annotating each
+section with the source the values came from. Only present sections that were
+actually detected.
 
-```
-## Detected Configuration
-
-### project (required)
-Source: README.md + git remote
-{
-  "name": "my-app",
-  "type": "application",
-  "description": "A real-time monitoring dashboard"
-}
-
-### repo (required)
-Source: git remote get-url origin
-{
-  "provider": "github",
-  "fullName": "org/my-app",
-  "defaultBranch": "main"
-}
-
-### testing
-Source: vitest.config.ts, playwright.config.ts
-{
-  "frameworks": [...]
-}
-
-[... only sections where something was detected ...]
-```
+**Read `references/config-reference.md` before executing Step 4.**
 
 ---
 
 ## Step 4b: Critique Detected Config (Optional)
 
-After presenting the detected config in Step 4, compute a **complexity score** to determine whether to offer a multi-agent critique.
+Compute a complexity score from the detected config and, above threshold, offer a
+multi-agent `/reflexion:critique` (three parallel judges) to validate completeness
+before the user reviews. Includes the `critiqueMethod` preference check. Skip when
+the score is 0 or the user declines.
 
-### Complexity Heuristic
-
-Count these signals from the detected config:
-
-| Signal | Condition | +1 if |
-|--------|-----------|-------|
-| Compose files | `infrastructure.docker.composeFiles` | length ≥ 3 |
-| Infrastructure hosts | `infrastructure.hosts` | length ≥ 2 |
-| Test frameworks | `testing.frameworks` | length ≥ 2 |
-| Multi-env database | `database` exists AND multiple environments detected (e.g., dev/prod/test values in `.env*` files) | true |
-| Deploy complexity | Multiple deploy methods detected (e.g., script + CI/CD, or ssh + compose) | true |
-
-**Score interpretation:**
-- **Score 0:** Skip critique entirely — proceed directly to Step 5.
-- **Score 1:** Offer passively: *"Would you like me to run a critique on the detected config? (Optional — can catch missing capabilities)"*
-- **Score ≥ 2:** Auto-suggest: *"This is a complex project (N complexity signals detected). I recommend running a multi-agent critique to validate completeness before you review. Run critique?"*
-
-If the user declines (or score is 0), proceed to Step 5 with the config unchanged.
-
-### Critique Execution
-
-**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
-
-If the user accepts, invoke `/reflexion:critique` with the detected `.rawgentic.json` as the work product.
-
-**Three judges evaluate in parallel:**
-
-**Judge 1: Requirements Validator**
-- For each schema section, check whether the detected config missed capabilities that exist in the actual project files
-- Look for: test frameworks with config files but not detected, services with port mappings not captured, database references in `.env*` not reflected in config
-- Check: are all Docker Compose services represented? Are all CI workflows captured?
-
-**Judge 2: Solution Architect**
-- Evaluate structural decisions: should services be split (e.g., frontend + backend vs monolith)?
-- Check environment awareness: does the database config cover all environments?
-- Validate infrastructure topology: do host assignments match actual deployment targets?
-- Check service dependencies and port consistency across compose files
-
-**Judge 3: Code Quality Reviewer**
-- Verify every concrete value against source files: ports in config match ports in compose/code, paths exist on disk, container names match compose service names
-- Check test commands actually work (correct binary, correct config file reference)
-- Validate framework detection: does the detected framework version/type match the actual config file?
-
-Each judge produces findings:
-```
-Finding #N:
-- Severity: Critical | High | Medium | Low
-- Category: missing_capability | wrong_value | structural | environment | completeness
-- Description: [what was missed or incorrect]
-- Recommendation: [specific config change]
-- Ambiguity flag: clear | ambiguous
-```
-
-### Applying Findings
-
-1. **Auto-apply** all findings with `ambiguity_flag == "clear"` — amend the detected config in memory.
-2. **Present ambiguous findings** to the user for resolution before proceeding.
-3. **Re-present** the amended config with a summary of changes: *"Critique found N issues. Applied M automatically. K need your input:"*
-4. Proceed to Step 5 with the amended config.
+**Read `references/config-reference.md` before executing Step 4b.**
 
 ---
 

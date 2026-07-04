@@ -14,7 +14,7 @@ EXPECTED = [
     ("implement-feature", "review", 3),
     ("implement-feature", "implementation", 1),
     ("fix-bug", "review", 1),
-    ("refactor", "review", 1),
+    # refactor deprecated to a stub (#160) — no dispatch sites remain.
 ]
 
 
@@ -29,7 +29,7 @@ def test_dispatch_sites_annotated():
 
 
 def test_resolve_invoked_in_preambles():
-    for skill in ("implement-feature", "fix-bug", "refactor"):
+    for skill in ("implement-feature", "fix-bug"):
         text = skill_corpus(skill)
         assert "model_routing_lib.py resolve" in text, f"{skill} missing routing resolve call"
 

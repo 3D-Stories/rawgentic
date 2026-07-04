@@ -38,25 +38,27 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "2.59.0"
+    assert plugin["version"] == "2.60.0"
 
 
 def test_descriptions_consistent_count():
-    """plugin.json + marketplace.json descriptions both claim 12 SDLC skills."""
+    """plugin.json + marketplace.json descriptions both reflect the #160 split:
+    6 active SDLC workflows + 6 deprecated stubs (removal at v3.0.0)."""
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     for desc in (plugin["description"], mp["plugins"][0]["description"]):
-        assert "12 SDLC workflow skills" in desc
-        assert "11 SDLC workflow skills" not in desc
+        assert "6 SDLC workflow skills" in desc
+        assert "6 deprecated stubs" in desc
+        assert "12 SDLC workflow skills" not in desc
 
 
 def test_readme_count_strings_updated():
     readme = (REPO_ROOT / "README.md").read_text()
-    assert "12 SDLC workflow skills" in readme
-    assert "11 SDLC workflow skills" not in readme
-    assert "provides 18 skills" in readme
-    assert "All 12 workflow skills share" in readme
-    assert "15/18 skills have evals.json" in readme
+    assert "6 SDLC workflow skills" in readme
+    assert "12 SDLC workflow skills" not in readme
+    assert "provides 19 skills" in readme
+    assert "All 7 config-driven skills" in readme
+    assert "15/19 skills have evals.json" in readme
 
 
 def test_marketplace_skill_dirs_all_exist():
@@ -195,37 +197,32 @@ def test_wf1_uses_no_plan_lib_loopback():
     assert "consume_loopback(" not in step4
 
 
-def test_wf4_invokes_in_step4_extract_restructure_only():
+def test_wf4_is_a_deprecation_stub():
+    """WF4 deprecated to a stub (#160): its Step 4 adversarial integration is
+    gone WITH the workflow — the stub carries no gates. Redirect + telemetry
+    are pinned in tests/test_deprecation_stubs.py; this asserts the old
+    integration didn't half-survive."""
     text = skill_corpus("refactor")
-    step4 = _section(text, "## Step 4:", "## Step 5:")
-    assert "adversarial-review" in step4.lower(), "WF4 Step 4 missing adversarial-review invocation"
-    assert "is-enabled" in step4, "WF4 Step 4 missing config gate (is-enabled)"
-    assert "refactor" in step4
-    # gated to the full-critique path only (extract/restructure), not rename/simplify
-    low = step4.lower()
-    assert "extract" in low and "restructure" in low
+    assert "DEPRECATED" in text
+    assert "## Step 4:" not in text
+    assert "consume_loopback(" not in text
 
 
-def test_wf4_uses_textual_budget_not_plan_lib():
-    """WF4 manages loop-back via its own textual LOOPBACK_BUDGET, not plan_lib.
-
-    Assert no actual `consume_loopback(` invocation, and that the textual budget
-    is referenced.
-    """
-    text = skill_corpus("refactor")
-    step4 = _section(text, "## Step 4:", "## Step 5:")
-    assert "consume_loopback(" not in step4  # WF4 does not use plan_lib counters
-    assert "LOOPBACK_BUDGET" in step4
-
-
-def test_setup_offers_all_four_workflows():
-    text = skill_corpus("setup")
-    step2d = _section(text, "## Step 2d:", "## Step 3:")
-    for name in ("implement-feature", "fix-bug", "create-issue", "refactor"):
-        assert name in step2d, f"setup Step 2d must offer {name}"
-
-
-# --- adversarial-review evals workspace (issue #79) ---
+def test_setup_offers_surviving_workflows():
+    """#160: refactor (WF4) is deprecated — setup's Step 2d offer detail lives in
+    references/integrations.md (LOCATION pin: the corpus slice between the spine's
+    '## Step 2d:' and '## Step 3:' headings resolves to the spine SUMMARY only, so
+    this reads the reference file directly to guard the real offer list)."""
+    detail = (SKILLS_DIR / "setup" / "references" / "integrations.md").read_text()
+    for name in ("implement-feature", "fix-bug", "create-issue"):
+        assert name in detail, f"setup Step 2d detail must offer {name}"
+    # the example config must not present refactor as a live workflow
+    assert '"workflows": ["implement-feature", "fix-bug"]' in detail
+    assert '"refactor"]' not in detail
+    # spine summary also names no refactor offer
+    spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+    step2d = _section(spine, "## Step 2d:", "## Step 3:")
+    assert "refactor" not in step2d
 
 def test_adversarial_review_evals_exist_and_valid():
     evals_path = SKILLS_DIR / "adversarial-review-workspace" / "evals" / "evals.json"

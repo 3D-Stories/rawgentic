@@ -1188,7 +1188,7 @@ class TestSkillCountCanary:
     """Canary: assert the number of SKILL.md files with <config-loading> matches expected."""
 
     SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
-    EXPECTED_CONFIG_LOADING_COUNT = 12  # +peer-consult (WF13, model-routing+peer-consult)
+    EXPECTED_CONFIG_LOADING_COUNT = 7  # -6 deprecated stubs (#160: WF4/7/8/9/10/12), +scan (#160); was 12
 
     def test_config_loading_skill_count(self):
         """If a new workflow skill is added, this test reminds you to wire in the config-loading preamble."""
@@ -1219,11 +1219,9 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 # Skills that invoke /reflexion:critique and carry the critiqueMethod preference check.
 # create-issue (WF1) was slimmed and no longer runs a multi-agent critique, so it is
 # intentionally absent.
+# WF4/WF9/WF10 deprecated to stubs (#160) — no critique preamble on a redirect.
 CRITIQUE_SKILLS = [
     "implement-feature",
-    "refactor",
-    "security-audit",
-    "optimize-perf",
     "setup",
 ]
 
