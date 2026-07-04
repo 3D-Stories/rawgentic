@@ -206,11 +206,14 @@ def test_wf4_is_a_deprecation_stub():
     assert "consume_loopback(" not in text
 
 
-def test_setup_offers_all_four_workflows():
+def test_setup_offers_surviving_workflows():
+    # #160: WF4 (refactor) deprecated to a stub, so setup no longer offers it as
+    # a configurable adversarial-review workflow — only the three survivors.
     text = skill_corpus("setup")
     step2d = _section(text, "## Step 2d:", "## Step 3:")
-    for name in ("implement-feature", "fix-bug", "create-issue", "refactor"):
+    for name in ("implement-feature", "fix-bug", "create-issue"):
         assert name in step2d, f"setup Step 2d must offer {name}"
+    assert "refactor" not in step2d, "setup Step 2d must not offer refactor (WF4 deprecated, #160)"
 
 
 # --- adversarial-review evals workspace (issue #79) ---
