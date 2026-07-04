@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Whole-Issue Delegated Build Mode (#133)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --border: #30363d;
+      --card: #161b22;
+      --code-bg: #1c2128;
+      --link: #4493f8;
+      --accent: #a371f7;
+      --chosen: #3fb950;
+      --rejected: #ff7b72;
+      --thead-bg: #1c2128;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --card: #161b22;
+    --code-bg: #1c2128;
+    --link: #4493f8;
+    --accent: #a371f7;
+    --chosen: #3fb950;
+    --rejected: #ff7b72;
+    --thead-bg: #1c2128;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    padding: 2.5rem 1.25rem 5rem;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4 {
+    line-height: 1.3;
+    font-weight: 600;
+    scroll-margin-top: 1rem;
+  }
+  h1 {
+    font-size: 1.7rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.3rem;
+  }
+  h1 + p {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin-top: 0.4rem;
+  }
+  h2 {
+    font-size: 1.28rem;
+    margin-top: 2.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin-top: 1.8rem;
+    color: var(--accent);
+  }
+  p { margin: 0.7rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  li > ul, li > ol { margin-top: 0.35rem; }
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  strong { font-weight: 650; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--card);
+    color: var(--muted);
+  }
+  blockquote p { margin: 0.3rem 0; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.1rem 0 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.92rem;
+  }
+  thead th {
+    background: var(--thead-bg);
+    text-align: left;
+    font-weight: 650;
+    border-bottom: 1px solid var(--border);
+  }
+  th, td {
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin: 0 0.3rem 0.3rem 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.6rem 0 1.6rem;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+</style>
+</head>
+<body>
+<div class="meta">
+  <span class="badge">Issue #133</span>
+  <span class="badge">standard_feature</span>
+  <span class="badge">lean gate</span>
+  <span class="badge">2026-07-03</span>
+</div>
+<h1>Design: whole-issue delegated build mode (#133)</h1>
+<p>Date: 2026-07-03 · Issue #133 · Complexity: standard_feature (workflow mode) · lean gate</p>
+<blockquote><p>Codex adversarial pass folded — 0 Critical / 2 High / 3 Medium, all incorporated in place (no design loop-back per the lean review policy). See the findings table at the end.</p></blockquote>
+
+<h2>Problem</h2>
+<p>WF2 Step 8 runs in the orchestrator's main loop. Even with per-task delegation (#132), the orchestrator dispatches each task-agent serially and re-runs the suite + diffs after every task — so an orchestrator working a multi-issue backlog accumulates the full per-task ceremony in its own context and bloats fast. Field feedback: this was a primary reason the operator diverged from WF2 after one issue.</p>
+
+<h2>Approach</h2>
+<p>Add an <strong>opt-in whole-issue delegated build mode</strong>: after Step 6, the orchestrator hands ONE build-subagent the complete contract (design + plan + TDD requirement + conventions + test baseline). The subagent implements ALL tasks on the branch, commits per plan, and returns a structured <strong>receipt</strong>. The orchestrator's context then holds the receipt, not the build.</p>
+<p><strong>Trust boundary (the core invariant):</strong> the builder never self-certifies. Every gate stays with the orchestrator, re-run against the real tree — a receipt claim is a hypothesis until the orchestrator confirms it. Delegation relocates the <em>typing</em>, never the <em>gating</em>.</p>
+
+<h3>Enablement (mirror adversarialReview / peerConsult)</h3>
+<p>Per-project <code>.rawgentic_workspace.json</code> field <code>wholeIssueDelegation: {enabled, workflows}</code>, read via the existing <code>adversarial_review_lib.is_enabled_for(..., key="wholeIssueDelegation")</code>. <strong>Verified (not assumed):</strong> <code>is_enabled_for</code> (adversarial_review_lib.py:243) takes an arbitrary <code>key</code> and forwards it to <code>load_adversarial_review_config(..., key=key)</code>, which does <code>_coerce_config(proj.get(key))</code> — a generic per-project field read, not hardcoded to <code>adversarialReview</code>/<code>peerConsult</code>. So <code>key="wholeIssueDelegation"</code> reads the <code>{enabled, workflows}</code> shape with <strong>no lib change</strong>; a test asserts this end-to-end. Default absent → disabled → Step 8 runs exactly as today.</p>
+
+<h3>Receipt contract (<code>hooks/plan_lib.py</code>)</h3>
+<p><code>validate_build_receipt(receipt, plan_tasks, repo_root, branch_base_sha) -&gt; (ok, errors, normalized)</code> — pure-ish (git read-only), fail-closed. Receipt shape:</p>
+<pre><code>{
+  "task_shas":      {"&lt;task_id&gt;": "&lt;commit_sha&gt;"},   // every task → a DISTINCT commit
+  "baseline":       {"before": {"passed": N, "failed": N},
+                     "after":  {"passed": N, "failed": N, "exit_code": 0}},
+  "files_per_task": {"&lt;task_id&gt;": ["&lt;path&gt;"]},        // MUST equal that commit's own file set
+  "promotions":     [{"task_id": "&lt;id&gt;", "reason": "&lt;why&gt;"}]
+}</code></pre>
+<p>Validation rules (any failure → receipt REJECTED → fall back):</p>
+<div class="table-wrap"><table>
+<thead>
+<tr><th>#</th><th>Rule</th><th>Reject when</th></tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Existence + lineage + distinctness</strong> — each sha exists (<code>git cat-file -e</code>), is a strict descendant of base (<code>git merge-base --is-ancestor</code> AND <code>sha != base</code>), all SHAs distinct.</td>
+<td>missing / unknown / foreign / duplicate / equals-base sha</td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong style="color:var(--chosen)">sha↔task binding (the trust boundary in code)</strong> [Codex F2] — each task's OWN commit file-set (<code>git show --name-only &lt;sha&gt;</code>) equals <code>set(files_per_task[id])</code>.</td>
+<td>a task's commit doesn't touch exactly its claimed files (builder parked a risky change in a benign commit)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong>Baseline non-regression</strong> — <code>after.failed &lt;= before.failed</code> AND <code>after.exit_code == 0</code> [Codex F5: exit_code lives at <code>baseline.after.exit_code</code>].</td>
+<td>new failures or non-zero exit</td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong>Staging discipline = set EQUALITY</strong> [Codex F4] — <code>set(union(files_per_task)) == set(git diff --name-only base..HEAD)</code>, both directions (subset is not enough).</td>
+<td>a task claims a file not in the diff, OR the diff shows a file no task claims</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>promotions</code> normalized → <code>normalized["promoted_task_ids"]</code> surfaced (even on reject, where derivable).</td>
+<td>— (surfaces work for the orchestrator's Step 8a)</td>
+</tr>
+</tbody>
+</table></div>
+
+<h3>WF2 Step 8 — delegated-build sub-mode</h3>
+<p>Detail lives in <code>skills/implement-feature/references/whole-issue-delegation.md</code> to keep SKILL.md lean. When enabled:</p>
+<ol>
+<li><strong style="color:var(--rejected)">Pre-flight clean-worktree gate</strong> [Codex F1 — data-loss guard]: require <code>git status --porcelain</code> empty; any operator staged/unstaged/untracked work → do NOT enter delegation, fall back to per-task Step 8. The reject path must be able to discard the builder's output without touching pre-existing files.</li>
+<li><strong>Record</strong> <code>branch_base_sha</code> + the pre-build test baseline.</li>
+<li><strong>Dispatch ONE build-subagent</strong> with the brief + receipt schema. Model: <code>select_impl_model</code> sized to the plan's highest-risk task (one agent → size to the hardest task; never Haiku).</li>
+<li><strong>On return, VALIDATE</strong> via <code>validate_build_receipt</code>. Reject → <strong>restore</strong> (<code>git reset --hard base</code>, then remove ONLY the receipt-declared untracked paths — <strong>never</strong> a blanket <code>git clean -fd</code> against the operator's checkout; unparseable receipt → reset only + WARN) and <strong>fall back to per-task Step 8</strong> (delegation can never block Step 8). Log loudly.</li>
+<li><strong>On a valid receipt, run the gates in the orchestrator against the real tree:</strong> Step 8a per high-risk/promoted task on its receipt sha (coverage via <code>assert_review_coverage</code>, NOT delegated); Step 9 full-suite re-run (receipt baseline is a claim, the orchestrator's run is the gate); Steps 11 / 11.5 unchanged.</li>
+</ol>
+<p>Interplay with #135 lane: whole-issue delegation is still allowed in the small-standard lane — the collapsed gates still run in the orchestrator; the receipt's Step-8a set is just usually empty.</p>
+
+<h2>Files</h2>
+<ul>
+<li><code>hooks/plan_lib.py</code>: <code>validate_build_receipt</code> + read-only git helpers (<code>_commit_exists</code>, <code>_same_commit</code>, <code>_sha_is_descendant</code>, <code>_commit_files</code>, <code>_diff_files</code>), fail-closed tuple return.</li>
+<li><code>skills/implement-feature/SKILL.md</code>: thin Step 8 delegated-build sub-mode block + pointer to the reference.</li>
+<li><code>skills/implement-feature/references/whole-issue-delegation.md</code>: build-subagent brief template + receipt schema + validation/fallback contract.</li>
+<li><code>docs/config-reference.md</code>: document <code>wholeIssueDelegation</code>.</li>
+<li><code>tests/hooks/test_plan_lib.py</code>: receipt-validation matrix against a real temp git repo; <code>tests/hooks/test_adversarial_review_config.py</code>: the <code>key="wholeIssueDelegation"</code> end-to-end read; <code>tests/hooks/test_adversarial_review_registration.py</code>: SKILL + reference drift guards, version pin.</li>
+<li>Version bump minor → 2.49.0.</li>
+</ul>
+
+<h2>AC coverage (issue #133)</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr><th>AC</th><th>Requirement</th><th>Coverage</th></tr>
+</thead>
+<tbody>
+<tr><td>AC1</td><td>opt-in flag, default unchanged</td><td><code>wholeIssueDelegation</code> config + <code>is_enabled_for</code> (verified generic-key)</td></tr>
+<tr><td>AC2</td><td>build brief + receipt schema documented</td><td><code>references/whole-issue-delegation.md</code></td></tr>
+<tr><td>AC3</td><td>all 8a/9/11/11.5 gates in the orchestrator against receipt + tree</td><td>the gate loop; receipt is hypothesis-until-confirmed</td></tr>
+<tr><td>AC4</td><td>failure path restore + fallback + log</td><td>step 4 (targeted restore, never blanket clean)</td></tr>
+<tr><td>AC5</td><td>receipt validation tests (missing sha / regression / undeclared file → reject)</td><td>the matrix (15 cases incl. F2 binding + F4 equality)</td></tr>
+</tbody>
+</table></div>
+
+<h2>Out of scope</h2>
+<p>Parallel multi-issue builds (needs worktrees — #136/#85); changing any gate's semantics; delegating Step 8a/11 (they stay orchestrator-side by design — that IS the trust boundary).</p>
+
+<h2>Codex adversarial review — findings folded</h2>
+<p>2026-07-03 · 0 Critical / 2 High / 3 Medium · no Critical/blocker → no design loop-back (lean review policy); folded in place.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr><th>#</th><th>Sev</th><th>Finding</th><th>Fold</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td style="color:var(--rejected)">High</td><td><code>git clean -fd</code> reject-path deletes operator's untracked work</td><td>step-0 clean-worktree gate + targeted (not blanket) untracked removal</td></tr>
+<tr><td>2</td><td style="color:var(--rejected)">High</td><td>descendant-sha doesn't prove the commit is that task's work</td><td>validation rule 2 binds each sha to its commit's own file-set</td></tr>
+<tr><td>3</td><td style="color:var(--accent)">Med</td><td><code>is_enabled_for</code> arbitrary-key claim unverified</td><td>verified in source (adversarial_review_lib.py:243); end-to-end test added</td></tr>
+<tr><td>4</td><td style="color:var(--accent)">Med</td><td>subset vs equality ambiguity</td><td>rule 4 is now set EQUALITY, both directions</td></tr>
+<tr><td>5</td><td style="color:var(--accent)">Med</td><td><code>exit_code</code> schema/rule location mismatch</td><td>normalized to <code>baseline.after.exit_code</code></td></tr>
+</tbody>
+</table></div>
+
+<footer>
+  Rendered from <code>docs/design/2026-07-03-whole-issue-delegation.md</code> —
+  the Markdown file is the source of truth; this HTML is a static, standalone rendering
+  for visual review.
+</footer>
+</body>
+</html>
