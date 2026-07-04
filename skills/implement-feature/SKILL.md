@@ -852,10 +852,16 @@ Plan drift check result.
    ```
    If dirty: stash, create branch, ask user about stash. **[Headless: AUTO-RESOLVE — always stash, log to session notes AND post a brief comment to the issue noting uncommitted changes were stashed (include `git stash list` output for the stash ref).]**
 
-2. Pull latest default branch and create feature branch:
+2. Create the feature branch from a **freshly-fetched** default branch — never `git pull` into the current checkout first. `git pull origin <default>` merges the default INTO whatever branch is checked out; if the session still sits on a prior issue's feature branch (a multi-issue campaign, or a headless PR-terminal run that never ran Step 14), that mutates the sibling branch AND bases the new branch on the mixture, silently carrying the sibling's unmerged commits into this PR. Fetch, then branch off `origin/<default>` regardless of the starting checkout:
    ```bash
-   git pull origin ${capabilities.default_branch} && git checkout -b <branch_name>
+   git fetch origin ${capabilities.default_branch}
+   git checkout -b <branch_name> origin/${capabilities.default_branch}
    ```
+   **Base assertion — STOP on mismatch.** Confirm the new branch's base is exactly `origin/<default>` HEAD (nothing foreign rode along):
+   ```bash
+   [ "$(git merge-base HEAD origin/${capabilities.default_branch})" = "$(git rev-parse origin/${capabilities.default_branch})" ] && echo BASE_OK || echo BASE_MISMATCH
+   ```
+   `BASE_MISMATCH` → STOP and reconcile before writing any code (do not build on a wrong base). **[Headless: ERROR — post an error comment noting the base mismatch, add the `rawgentic:ai-error` label, exit.]** Because nothing is pulled into the current checkout, no pre-existing branch is mutated as a side effect.
 
 3. Push empty branch to origin:
    ```bash

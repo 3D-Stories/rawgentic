@@ -239,3 +239,44 @@ class TestSmallStandardLane:
         assert "NON-NEGOTIABLE in the lane" in block
         assert "Step 11" in block
         assert "11.5" in block
+
+
+# --- #140: Step 7 branches from fresh origin/<default>, mutates nothing ---
+
+def _step7() -> str:
+    """The Step 7 section text (## Step 7 ... up to the next ## Step)."""
+    text = _text()
+    m = re.search(r"## Step 7:.*?(?=\n## Step 8:)", text, re.DOTALL)
+    assert m, "Step 7 section not found"
+    return m.group(0)
+
+
+class TestStep7BranchBase:
+    def test_branches_from_fresh_origin_default(self):
+        s7 = _step7()
+        assert "git fetch origin" in s7, "Step 7 must fetch before branching"
+        # stance-independent create: checkout -b <branch> origin/<default>
+        assert re.search(
+            r"git checkout -b <branch_name> origin/\$\{capabilities\.default_branch\}", s7
+        ), "Step 7 must create the branch from origin/<default>, not the current HEAD"
+
+    def test_no_pull_into_current_branch(self):
+        s7 = _step7()
+        # the buggy form merged origin/main INTO whatever branch was checked out
+        assert "git pull origin ${capabilities.default_branch} && git checkout -b" not in s7, \
+            "Step 7 must not pull into the current branch before creating the new one"
+
+    def test_has_base_assertion(self):
+        s7 = _step7()
+        assert "merge-base" in s7, "Step 7 must assert the new branch's base == origin/<default>"
+
+
+def test_incident_hotfix_branch_fetches_first():
+    """#140 AC4: incident is the one sibling whose branch step lacked an explicit
+    fetch (the other 7 already fetch). Its hotfix branch must fetch first so a
+    stale origin/<default> ref can't reintroduce the bug."""
+    incident = (REPO_ROOT / "skills" / "incident" / "SKILL.md").read_text()
+    idx = incident.find("git checkout -b hotfix/")
+    assert idx != -1, "incident hotfix checkout not found"
+    preceding = incident[:idx]
+    assert "git fetch origin" in preceding, "incident must fetch origin before the hotfix checkout"

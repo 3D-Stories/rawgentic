@@ -366,7 +366,7 @@ Log in session notes: `### WF11 Step 9: RCA Critique — DONE (confidence: high|
 
 If fix is within WF11 scope:
 
-1. Create hotfix branch: `git checkout -b hotfix/<incident-desc> origin/<default_branch>`
+1. Create hotfix branch from a freshly-fetched default (a stale `origin/<default_branch>` ref would silently base the hotfix on old code): `git fetch origin <default_branch> && git checkout -b hotfix/<incident-desc> origin/<default_branch>`
 2. Write test reproducing the incident condition.
 3. Implement permanent fix.
 4. Run all tests.
