@@ -1,0 +1,35 @@
+# Semantic security review lane (#166) — anthropics/claude-code-security-review.
+#
+# Complements the local Step 11.5 scanners (hooks/security_scan.py); replaces
+# nothing. Findings land as PR review comments on the affected lines.
+#
+# non-blocking contract (AC1): continue-on-error keeps this lane advisory —
+# a red review, a missing CLAUDE_API_KEY secret, or an action outage never
+# gates the PR. Promote to a required check only after 10 clean-signal PRs
+# (true/false-positive tally tracked per the issue's success metric).
+#
+# Supply chain: the action is SHA-pinned (no releases/tags exist upstream as of
+# 2026-07-04; @main would float). Bump the pin deliberately, reviewing the diff.
+name: Claude Security Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  security-review:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 2
+
+      - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
+        with:
+          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
