@@ -548,8 +548,14 @@ When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2
    choice before proceeding to Step 3 (headless: auto-continue). The analysis from
    items 1–8 still feeds Step 3 silently; only this suggestion interacts with the user.
 
+10. **Worktree-isolation probe (#136 — parallelism capability).** Probe once so WF2 (and any outer multi-issue orchestrator) knows up front whether worktree-isolated concurrency is possible, instead of attempt-then-fail on an Agent-tool "not in a git repository" error:
+    ```bash
+    python3 hooks/capabilities_lib.py probe-parallelism --repo-root "$(git rev-parse --show-toplevel)"
+    ```
+    Prints `worktree` or `serial-only` (the probe is non-mutating — it creates and force-removes a throwaway worktree under the system temp dir — and never fails the run). Carry it as `capabilities.parallelism` and log one session-note line. Step 8 consults it. **Gotcha to encode for parallel-build orchestrators:** `secret-scan --since` full-scans a *linked* worktree — push from the MAIN checkout (existing documented behavior).
+
 ### Output
-Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3 (the lane suggestion in item 8 is the one part that may interact with the user).
+Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3 (the lane suggestion in item 8 is the one part that may interact with the user).
 
 ### Failure Modes
 - Serena MCP unavailable: fall back to Grep/Glob
@@ -967,7 +973,7 @@ When the `implementation` role is `inherit` (default), Step 8 runs inline exactl
 
 Interplay with `<small-standard-lane>`: whole-issue delegation is still allowed in the lane — the collapsed gates still run in the orchestrator; the receipt's Step-8a set is just usually empty.
 
-**Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently. **Until isolated concurrent execution lands (issue #85), execute ALL tasks sequentially in plan order**, including parallel-eligible groups. Do NOT dispatch concurrent Agent calls that write to the working tree: with no worktree isolation, concurrent edits to the shared tree can collide and corrupt commits — sequential execution is the safe floor. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
+**Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently, and the `capabilities.parallelism` probe from Step 2 item 10 (#136) to know whether the environment *can* isolate them. When `parallelism == "serial-only"`, state it once ("worktree isolation unavailable → serial execution") rather than attempting concurrent dispatch and hitting an Agent-tool error; when `parallelism == "worktree"`, note that concurrent execution still waits on the execution layer (#85). **Until isolated concurrent execution lands (issue #85), execute ALL tasks sequentially in plan order regardless**, including parallel-eligible groups. Do NOT dispatch concurrent Agent calls that write to the working tree: with no worktree isolation, concurrent edits to the shared tree can collide and corrupt commits — sequential execution is the safe floor. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
 
 **Mid-flight risk promotion (P15):** After implementing each task and staging its diff, re-evaluate the task against the 8 risk criteria via two paths:
 

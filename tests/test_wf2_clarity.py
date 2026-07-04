@@ -352,3 +352,23 @@ class TestBranchProtectionProbe:
         s14 = re.search(r"## Step 14:.*?(?=\n## Step 15:)", _text(), re.DOTALL)
         assert s14, "Step 14 not found"
         assert "quarantine_protection_contradiction" in s14.group(0)
+
+
+# --- #136: worktree-isolation parallelism probe ---
+
+class TestParallelismProbe:
+    def test_step2_probes_parallelism(self):
+        s2 = re.search(r"## Step 2:.*?(?=\n## Step 3:)", _text(), re.DOTALL)
+        assert s2, "Step 2 not found"
+        body = s2.group(0)
+        assert "probe-parallelism" in body
+        assert "capabilities.parallelism" in body
+
+    def test_step8_consults_parallelism(self):
+        # the Step 8 parallel-execution block references the probe result
+        text = _text()
+        s8 = re.search(r"## Step 8:.*?(?=\n## Step 9:)", text, re.DOTALL)
+        assert s8, "Step 8 not found"
+        body = s8.group(0)
+        assert "capabilities.parallelism" in body
+        assert "serial-only" in body

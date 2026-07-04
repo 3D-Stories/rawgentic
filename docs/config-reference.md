@@ -42,6 +42,15 @@ truth (skills no longer hand-derive it in prose). The fields are:
 | `has_docker` | `config.infrastructure.docker.composeFiles` is a non-empty array |
 | `migration_dir` | `config.database.migrationsDir` (else `null`) |
 
+**Parallelism probe (`probe-parallelism`, #136).** Separate from the config-derived
+capabilities above (it inspects git, not `.rawgentic.json`), a sibling subcommand
+reports whether the environment supports worktree isolation for parallel builds:
+`python3 hooks/capabilities_lib.py probe-parallelism --repo-root <git-root>` prints
+`worktree` or `serial-only`. Non-mutating (creates + force-removes a throwaway
+worktree under the system temp dir) and fail-open (`serial-only` on any error), so
+an orchestrator learns up front instead of attempt-then-fail on an Agent-tool error.
+WF2 carries it as `capabilities.parallelism`; the parallel *execution* layer is #85.
+
 Skills adapt their behavior based on these flags -- for example, a project without
 tests uses implement-verify mode instead of TDD, and a project without CI skips the
 CI verification step. The derivation is fail-closed: a missing/corrupt config, or a
