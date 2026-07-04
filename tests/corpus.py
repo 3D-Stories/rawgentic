@@ -16,8 +16,8 @@ SKILLS_DIR = REPO_ROOT / "skills"
 def skill_corpus(skill_name: str) -> str:
     """SKILL.md + sorted references/*.md, newline-joined. Raises if no SKILL.md."""
     skill_dir = SKILLS_DIR / skill_name
-    parts = [(skill_dir / "SKILL.md").read_text()]
+    parts = [(skill_dir / "SKILL.md").read_text(encoding="utf-8")]
     refs = skill_dir / "references"
     if refs.is_dir():
-        parts.extend(p.read_text() for p in sorted(refs.glob("*.md")))
+        parts.extend(p.read_text(encoding="utf-8") for p in sorted(refs.glob("*.md")))
     return "\n".join(parts)

@@ -1195,8 +1195,10 @@ class TestSkillCountCanary:
         count = 0
         for skill_dir in self.SKILLS_DIR.iterdir():
             skill_file = skill_dir / "SKILL.md"
-            # corpus, not SKILL.md alone: #158 may move the preamble into references/
-            if skill_file.exists() and "<config-loading>" in skill_corpus(skill_dir.name):
+            # corpus, not SKILL.md alone: #158 may move the preamble into references/.
+            # Line-anchored opening tag, not a bare substring: a backtick MENTION of
+            # `<config-loading>` in a reference doc must not count as the real block.
+            if skill_file.exists() and re.search(r"^<config-loading>", skill_corpus(skill_dir.name), re.M):
                 count += 1
         assert count == self.EXPECTED_CONFIG_LOADING_COUNT, (
             f"Expected {self.EXPECTED_CONFIG_LOADING_COUNT} skills with <config-loading>, "
