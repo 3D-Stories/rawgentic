@@ -120,3 +120,27 @@ def test_cli_resolve_bad_config_still_exit_zero(tmp_path, capsys):
     rc = mr.main(["resolve", "--workspace", ws, "--project", "app", "--role", "review"])
     assert rc == 0  # fail-open: never non-zero
     assert capsys.readouterr().out.strip() == "inherit"
+
+
+class TestSelectImplModel:
+    @pytest.mark.parametrize(
+        "ceiling, risk_level, complexity, expected",
+        [
+            ("opus", "high", "standard_feature", "opus"),
+            ("opus", "standard", "simple_change", "sonnet"),
+            ("opus", "standard", "standard_feature", "sonnet"),
+            ("opus", "standard", "complex_feature", "opus"),
+            ("opus", "high", "complex_feature", "opus"),
+            ("sonnet", "high", "complex_feature", "sonnet"),
+            ("sonnet", "standard", "simple_change", "sonnet"),
+            ("fable", "high", "standard_feature", "fable"),
+            ("fable", "standard", "simple_change", "sonnet"),
+            ("inherit", "high", "complex_feature", "inherit"),
+            ("haiku", "high", "complex_feature", "inherit"),
+            ("bogus", "standard", "simple_change", "inherit"),
+        ],
+    )
+    def test_select_impl_model(self, ceiling, risk_level, complexity, expected):
+        model, reason = mr.select_impl_model(ceiling, risk_level, complexity)
+        assert model == expected
+        assert isinstance(reason, str) and reason

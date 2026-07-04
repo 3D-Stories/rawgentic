@@ -20,6 +20,9 @@ VALID_MODELS: Final[frozenset[str]] = frozenset(
 INHERIT: Final[str] = "inherit"
 # review-role soft floor: explicit models weaker than opus warn (but still apply)
 _BELOW_OPUS: Final[frozenset[str]] = frozenset({"sonnet", "haiku"})
+# per-task implementation ceiling clamp, cheap -> capable. haiku deliberately
+# absent — never Haiku for coding (standing project rule).
+_IMPL_RANK: Final[dict[str, int]] = {"sonnet": 1, "opus": 2, "fable": 3}
 
 
 def _warn(msg: str) -> None:
@@ -73,6 +76,36 @@ def resolve(workspace_path: str, project_name: str, role: str) -> str:
             f"— review quality may drop"
         )
     return value
+
+
+def select_impl_model(ceiling: str, risk_level: str, complexity: str) -> tuple[str, str]:
+    """Pick the per-task implementation model under a resolved ceiling.
+
+    Pure, never raises, fail-open: any ceiling outside _IMPL_RANK (including
+    'inherit', 'haiku', or an unknown string) degrades to ('inherit', ...).
+    """
+    if ceiling == "inherit":
+        return "inherit", "no routing configured — session model"
+    if ceiling not in _IMPL_RANK:
+        return "inherit", f"ceiling {ceiling!r} not a valid implementation model — session model"
+
+    if risk_level == "high" or complexity == "complex_feature":
+        desired = ceiling
+    else:
+        desired = "sonnet"
+
+    if _IMPL_RANK[desired] <= _IMPL_RANK[ceiling]:
+        actual = desired
+    else:
+        actual = ceiling  # defensive: unreachable while sonnet is rank 1 (the minimum)
+
+    if desired == ceiling:
+        reason = f"high-risk/complex → ceiling {actual}"
+    elif actual == desired:
+        reason = f"standard/simple → down-routed to {actual}"
+    else:
+        reason = f"standard/simple, clamped to ceiling {actual}"
+    return actual, reason
 
 
 def main(argv: list[str] | None = None) -> int:
