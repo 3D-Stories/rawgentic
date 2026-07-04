@@ -212,16 +212,9 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 </details>
 
 <details>
-<summary><strong>Refactoring (WF4)</strong> — 14 steps</summary>
+<summary><strong>Refactoring (WF4)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
 
-**Purpose:** Restructure code while preserving external behavior.
-
-**Invocation:** `/rawgentic:refactor Extract validation logic into a shared service`
-
-**Key Features:**
-- Characterization tests written before refactoring
-- Category-based critique (full for extract/restructure, reflect for rename/move)
-- Behavioral preservation as primary constraint
+File a typed issue and use `/rawgentic:implement-feature` instead.
 </details>
 
 <details>
@@ -244,56 +237,27 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 </details>
 
 <details>
-<summary><strong>Documentation (WF7)</strong> — 10 steps</summary>
+<summary><strong>Documentation (WF7)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
 
-**Purpose:** Create or update documentation with accuracy verification against the codebase.
-
-**Invocation:** `/rawgentic:update-docs Update the API reference`
-
-**Key Features:**
-- Accuracy-first: only documents facts verified against source code
-- Uses `primaryFiles` from config, not hardcoded paths
-- Learning config: adds newly discovered doc files to config
+File a typed issue and use `/rawgentic:implement-feature` instead.
 </details>
 
 <details>
-<summary><strong>Dependency Update (WF8)</strong> — 12 steps</summary>
+<summary><strong>Dependency Update (WF8)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
 
-**Purpose:** Update dependencies safely with security-first ordering.
-
-**Invocation:** `/rawgentic:update-deps` or `/rawgentic:update-deps Update React to v19`
-
-**Key Features:**
-- Security-first ordering: CRITICAL > HIGH > MEDIUM before non-security updates
-- Automated vulnerability scanning before and after
-- Learning config: updates tech stack versions in `.rawgentic.json`
+File a typed issue and use `/rawgentic:implement-feature` instead.
 </details>
 
 <details>
-<summary><strong>Security Audit (WF9)</strong> — 14 steps</summary>
+<summary><strong>Security Audit (WF9)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use built-in /security-review + /rawgentic:scan.</summary>
 
-**Purpose:** STRIDE threat modeling across all data channels.
-
-**Invocation:** `/rawgentic:security-audit` or `/rawgentic:security-audit Focus on authentication`
-
-**Key Features:**
-- STRIDE model (Spoofing, Tampering, Repudiation, Info Disclosure, DoS, Elevation)
-- Enumerates data channels from config (REST, WebSocket, gRPC, etc.)
-- **Tool-based scan** (Step 2/8): runs the same `hooks/security_scan.py` lib as WF2 Step 11.5, in `--full` (whole-tree) mode — so the secret/CVE/SAST/IaC tooling never drifts between the two workflows; tool findings feed STRIDE, they don't replace it
-- Learning config: adds discovered auth mechanisms to config
+Use the built-in `/security-review` plus `/rawgentic:scan` instead.
 </details>
 
 <details>
-<summary><strong>Performance Optimization (WF10)</strong> — 15 steps</summary>
+<summary><strong>Performance Optimization (WF10)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
 
-**Purpose:** Benchmark-driven performance improvements.
-
-**Invocation:** `/rawgentic:optimize-perf Reduce dashboard load time`
-
-**Key Features:**
-- Benchmark-first: baseline measurements required before changes
-- Uses profiling tools from config (clinic-js, py-spy, etc.)
-- Quantitative improvement verification
+File a typed issue and use `/rawgentic:implement-feature` instead.
 </details>
 
 <details>
@@ -312,20 +276,9 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 </details>
 
 <details>
-<summary><strong>Test Suite Creation (WF12)</strong> — 14 steps</summary>
+<summary><strong>Test Suite Creation (WF12)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use superpowers TDD skills + WF2.</summary>
 
-**Purpose:** Bootstrap a test suite from scratch or audit existing tests and fill coverage gaps, for any language.
-
-**Invocation:** `/rawgentic:create-tests` or `/rawgentic:create-tests src/auth/`
-
-**Key Features:**
-- Two modes: greenfield (no tests — full bootstrap) and coverage-gap (audit + fill gaps)
-- Language-agnostic: supports Python, JS/TS, Go, Rust, C/C++, Shell/Bash, Ruby, PHP, Java, Kotlin, Swift
-- Uses `superpowers:brainstorming` to design testing strategy before writing any code
-- Uses context7 MCP for up-to-date framework documentation
-- Shell script testing via bats-core with PATH-based mocking
-- Multi-language projects get per-language test infrastructure + unified runner
-- Learning config: updates `.rawgentic.json` with discovered testing frameworks
+Use the superpowers TDD skills plus WF2 instead.
 </details>
 
 <details>
@@ -348,6 +301,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Skill | Purpose |
 |-------|---------|
 | `/rawgentic:sync-security-patterns` | Merge upstream security patterns from Anthropic's official plugin into local config |
+| `/rawgentic:scan` | Whole-tree tool-based security scan (secrets/SCA/SAST/IaC) via hooks/security_scan.py --full — the surviving WF9 tooling |
 
 #### Bundled Subagents
 
@@ -557,14 +511,14 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | WF1 Issue Creation         | Full critique      | `/reflexion:critique` | After brainstorming          |
 | WF2 Feature Implementation | Full critique      | `/reflexion:critique` | After design                 |
 | WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
-| WF4 Refactoring            | Category-based     | Full or Reflect       | Full for extract/restructure |
+| WF4 Refactoring (DEPRECATED #160) | Category-based     | Full or Reflect       | Full for extract/restructure |
 | WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF1–WF4 |
-| WF7 Documentation          | Reflect only       | `/reflexion:reflect`  | After draft                  |
-| WF8 Dependency Update      | None (audit-based) | `npm audit` + tests   | Automated                    |
-| WF9 Security Audit         | Full (on audit)    | `/reflexion:critique` | Critique the findings        |
-| WF10 Performance           | Full critique      | `/reflexion:critique` | After optimization design    |
+| WF7 Documentation (DEPRECATED #160) | Reflect only       | `/reflexion:reflect`  | After draft                  |
+| WF8 Dependency Update (DEPRECATED #160) | None (audit-based) | `npm audit` + tests   | Automated                    |
+| WF9 Security Audit (DEPRECATED #160) | Full (on audit)    | `/reflexion:critique` | Critique the findings        |
+| WF10 Performance (DEPRECATED #160) | Full critique      | `/reflexion:critique` | After optimization design    |
 | WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
-| WF12 Test Suite Creation   | Brainstorm-driven  | `/superpowers:brainstorming` | Before writing any tests |
+| WF12 Test Suite Creation (DEPRECATED #160) | Brainstorm-driven  | `/superpowers:brainstorming` | Before writing any tests |
 | WF13 Peer Consult          | Independent peer   | Codex CLI             | Standalone; opt-in in WF2 Step 3 |
 
 ### Cross-Model Review Data Handling (Codex)
