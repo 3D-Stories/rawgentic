@@ -25,9 +25,9 @@ this is the sequence to return to:
 - (15) Post-Deploy — only if a deployment happened
 
 Steps **1, 2, 3, 4, 5, 7, 8, 9, 11, 11.5, 12, 16 always run** (see <mandatory-steps>).
-Everything after this block is the per-step detail plus the cross-cutting protocols
-(<config-loading>, <loop-back-budget>, <resumption-protocol>, the headless blocks)
-that you consult situationally — not top-to-bottom on every run.
+The per-step detail lives in references/steps.md (read §N before executing Step N);
+the cross-cutting protocols live in this spine's blocks and references/state-and-resume.md.
+Consult them situationally — not top-to-bottom on every run.
 </happy-path>
 
 <constants>
@@ -159,7 +159,7 @@ Both declare `model: inherit` because routing is per-project config a static def
 When `additionalContext` contains "HEADLESS MODE active", you operate without a terminal
 user: the QUESTION (post→label→suspend→exit), ERROR, rich-checkpoint, and fresh-session
 resume protocols live in `references/headless.md`. **Read that file in full before acting on
-any of the per-step headless annotations below.** When NOT in headless mode, ignore them and behave
+any of the per-step headless annotations in references/steps.md.** When NOT in headless mode, ignore them and behave
 normally (STOP and wait for terminal input at each interaction point).
 
 **Headless is PR-terminal — no remote ops.** A headless run's job ends at PR

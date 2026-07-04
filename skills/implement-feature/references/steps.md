@@ -995,9 +995,10 @@ Code review result with filtered findings and fixes applied. Committed `.rawgent
 
 Step 11's review is the LLM *reasoning* about the diff; this step runs the
 *actual* scanners — secrets, dependency CVEs, SAST, and (for Docker projects)
-IaC misconfig — via the shared `hooks/security_scan.py` lib. WF9
-(`/rawgentic:security-audit`) calls the **same** lib, so the tool-based scanning
-can never drift between the two workflows. Scanners catch concrete, known-pattern
+IaC misconfig — via the shared `hooks/security_scan.py` lib. The
+`/rawgentic:scan` utility (WF9's surviving tooling — the security-audit
+workflow itself is a deprecation stub since #160) calls the **same** lib, so
+the tool-based scanning can never drift between the two callers. Scanners catch concrete, known-pattern
 problems that reasoning misses (a leaked token, a CVE'd transitive dependency);
 they do **not** replace the review or WF9's STRIDE/authorization analysis — those
 find logic and authz flaws that no scanner can. Run this AFTER Step 11 has applied
