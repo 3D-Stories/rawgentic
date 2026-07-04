@@ -268,11 +268,36 @@ This step runs on **every** setup invocation (including Sub-flow A re-runs).
 
 Offer per-project subagent model routing. Ask whether to route the three dispatch roles to specific models (skip any role = inherit the session model). Suggested defaults: `review: opus`, `analysis: sonnet`, `implementation: opus`.
 
-- If the user opts in, collect a model (`opus`/`sonnet`/`haiku`/`fable` — a `haiku`
-  choice is bumped to `sonnet` at resolve time, since rawgentic never routes work
-  to Haiku) or "skip" per role, and stage:
-  `"modelRouting": { "<role>": "<model>", ... }` (omit skipped roles).
-- If the user declines, stage nothing (absent block = inherit everywhere; byte-identical default).
+Check the active project's entry for the `modelRouting` field.
+
+- **If `modelRouting` is not set** (first-time configuration): ask the
+  per-role question below.
+- **If `modelRouting` is already set** (re-configuration): show the current
+  per-role values first, then ask change-or-keep — never rewrite silently:
+
+  ```
+  Model routing: review=<value>, analysis=<value>, implementation=<value> (unset roles show as "inherit")
+  Change? (y/n) [default: keep current]
+  ```
+
+  If keeping, write nothing for this section.
+
+Per-role question (asked when opting in, or on "change"):
+
+- Collect a model (`opus`/`sonnet`/`haiku`/`fable` — a `haiku` choice is bumped
+  to `sonnet` at resolve time, since rawgentic never routes work to Haiku),
+  "skip", or a model plus an optional effort tier (`low`/`medium`/`high`/`xhigh`/`max`),
+  per role.
+- A plain model choice stays staged as the string: `"<role>": "<model>"`. Do
+  NOT convert an existing string value to a dict unless the user picks an
+  effort for that role. A model + effort choice stages
+  `"<role>": { "model": "<model>", "effort": "<effort>" }` instead. Omit
+  skipped roles.
+- If the user picks an effort tier for any role, tell them the `{model, effort}`
+  shape needs the updated plugin (v2.55.0+) loaded in the running session's
+  cache — an older cached lib fail-opens that role to `inherit` with a stderr
+  warning, silently turning routing off for it until the plugin is reloaded.
+- If the user declines routing entirely, stage nothing (absent block = inherit everywhere; byte-identical default).
 - Note the soft opus floor: routing `review` to `sonnet` warns at run time but still
   applies (`haiku` is bumped to `sonnet` instead, per the never-Haiku rule).
 - Note that `implementation` acts as a per-task ceiling, not a blanket assignment:
