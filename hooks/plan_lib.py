@@ -453,6 +453,59 @@ def _path_matches_high_risk(path: str, extra_patterns: tuple[str, ...] = ()) -> 
     return None
 
 
+def any_high_risk_path(paths: list[str], extra_patterns: tuple[str, ...] = ()) -> str | None:
+    """Return the FIRST path in `paths` that matches the high-risk allowlist.
+
+    Public plural face of the private `_path_matches_high_risk` matcher (same
+    precedent as `read_review_log` wrapping `_read_review_log`). Used by WF2
+    Step 11's adversarial-diff-review dispatch gate (#131). Returns the PATH
+    (not the matched pattern), or None if no path matches. Paths are expected
+    POSIX-separated (git output form); backslash-separated paths will not match.
+    """
+    if isinstance(extra_patterns, str):
+        raise TypeError("extra_patterns must be a tuple of patterns, not str")
+    for p in paths:
+        if _path_matches_high_risk(p, extra_patterns) is not None:
+            return p
+    return None
+
+
+def should_run_diff_review(
+    enabled: bool,
+    changed_paths: list[str],
+    has_high_risk_task: bool,
+    extra_patterns: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    """WF2 Step 11's adversarial-diff-review dispatch gate (#131).
+
+    Pure (no I/O) so the 9-cell decision matrix is unit-testable. Paths are
+    expected POSIX-separated (git output form); backslash-separated paths
+    will not match. Evaluated in order:
+    - not enabled              -> (False, "disabled")
+    - not changed_paths        -> (False, "empty diff")
+    - a high-risk path matches -> (True, f"high-risk path: {matched_path}")
+    - has_high_risk_task       -> (True, "high-risk task in plan")
+    - else                     -> (False, "no security surface")
+    """
+    if isinstance(extra_patterns, str):
+        raise TypeError("extra_patterns must be a tuple of patterns, not str")
+    if changed_paths is None or isinstance(changed_paths, str):
+        raise TypeError(
+            "changed_paths must be a list of paths (got %s)" % type(changed_paths).__name__
+        )
+    changed_paths = [p for p in changed_paths if p]
+    if not enabled:
+        return False, "disabled"
+    if not changed_paths:
+        return False, "empty diff"
+    matched = any_high_risk_path(changed_paths, extra_patterns)
+    if matched:
+        return True, f"high-risk path: {matched}"
+    if has_high_risk_task:
+        return True, "high-risk task in plan"
+    return False, "no security surface"
+
+
 def should_promote(
     _task_id: str,
     file_paths: list[str],

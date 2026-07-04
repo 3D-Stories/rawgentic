@@ -309,6 +309,17 @@ artifact text to OpenAI, so it is never force-enabled). Shape:
   Extract/Restructure full-critique path** (Rename/Simplify skips it). Loop-back uses
   WF4's own textual `LOOPBACK_BUDGET`, not `plan_lib`.
 
+> **Diff-stage cross-model review (Step 11, #131):** opting `implement-feature` into
+> `workflows` now enables the cross-model pass at **Steps 4, 6, AND 11** — Step 11 is
+> the diff-stage pass, additionally gated on the change touching a security surface (a
+> high-risk path pattern, or any plan task marked `riskLevel: high`), and costs one
+> extra Codex egress/call per gated run. `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` (see
+> [Adversarial Review Data Handling](#adversarial-review-data-handling)) applies to
+> diff reviews the same as text-artifact reviews. The diff patch and its
+> `--findings-json` sidecar are temp files written under the project root
+> (`.rawgentic-diff-review-*.patch` / `.rawgentic-diff-findings-*.json`) and are
+> gitignored.
+
 In every embedded workflow the review is **non-blocking / fail-closed**: any Codex
 failure (including a missing/unauthenticated CLI, even in headless mode) is logged and
 skipped, never blocking the host workflow. Only the standalone WF5 skill ERRORs on an

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Diff-Stage Adversarial Review (#131)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --border: #30363d;
+      --card: #161b22;
+      --code-bg: #1c2128;
+      --link: #4493f8;
+      --accent: #a371f7;
+      --chosen: #3fb950;
+      --rejected: #ff7b72;
+      --thead-bg: #1c2128;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    padding: 2.5rem 1.25rem 5rem;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4 {
+    line-height: 1.3;
+    font-weight: 600;
+    scroll-margin-top: 1rem;
+  }
+  h1 {
+    font-size: 1.7rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.3rem;
+  }
+  h1 + p {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin-top: 0.4rem;
+  }
+  h2 {
+    font-size: 1.28rem;
+    margin-top: 2.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin-top: 1.8rem;
+    color: var(--accent);
+  }
+  p { margin: 0.7rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  li > ul, li > ol { margin-top: 0.35rem; }
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  strong { font-weight: 650; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.1rem 0 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.92rem;
+  }
+  thead th {
+    background: var(--thead-bg);
+    text-align: left;
+    font-weight: 650;
+    border-bottom: 1px solid var(--border);
+  }
+  th, td {
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin: 0 0.3rem 0.3rem 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.6rem 0 1.6rem;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+</style>
+</head>
+<body>
+<div class="meta">
+  <span class="badge">Issue #131</span>
+  <span class="badge">rev 3</span>
+  <span class="badge">standard_feature</span>
+  <span class="badge">2026-07-03</span>
+</div>
+<h1>Design: Diff-Stage Cross-Model Adversarial Review at WF2 Step 11 (#131) — rev 3</h1>
+<p>Date: 2026-07-03 · Issue: #131 · Complexity: standard_feature · rev 3 (rev 2 after pass-1 critique: Codex 2H/3M + Judge1 2M/5L + Judge2 1H/3M/3L + Judge3 1H/4M, loop-back 1; rev 3 after pass-2 Codex 1H/3M, loop-back 2 — design budget now exhausted 2/2)</p>
+<h2>Problem</h2>
+<p>WF2's cross-model gates (Step 4 design, Step 6 plan) never see the code diff; Step 11 is same-model only. Field evidence: three fail-open security bugs caught only by ad-hoc cross-model diff review. WF5's engine scopes to text artifacts and explicitly excludes diffs.</p>
+<h2>Approaches considered</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Verdict</th>
+<th>Rationale</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>A</strong> — additive <code>diff</code> artifact type + temp-file reuse</td>
+<td><strong style="color:var(--chosen)">Chosen</strong></td>
+<td>Register <code>diff</code> in the engine's type registry with a refutation lens; WF2 Step 11 writes the diff to a temp file under the project root and invokes the existing <code>review</code> CLI. Engine core (schema, nonce fencing, validation, fail-closed exits, report rendering, secret scan, truncation) reused.</td>
+</tr>
+<tr>
+<td><strong>B</strong> — <code>review-diff</code> subcommand running <code>git diff</code> inside the lib</td>
+<td style="color:var(--rejected)">Rejected</td>
+<td>Couples engine to repo state, more plumbing, no added safety.</td>
+</tr>
+<tr>
+<td><strong>C</strong> — same-model registered code-reviewer subagent</td>
+<td style="color:var(--rejected)">Rejected</td>
+<td>Defeats the cross-model purpose.</td>
+</tr>
+</tbody>
+</table></div>
+<h2>File changes</h2>
+<h3>1. <code>hooks/adversarial_review_lib.py</code> (additive)</h3>
+<ul>
+<li><code>ARTIFACT_TYPES += ("diff",)</code>.</li>
+<li><code>_TYPE_LENS["diff"]</code> — refutation framing: the artifact is a unified git diff; attack the CHANGE: hunt fail-open paths (guard bypassable, error path silently passes, check vacuous on empty/corrupt/absent input, "no response"/"not found" treated as success, a security gate weakened or annotated away, tenant/auth/session/token boundary mistakes) and behavior regressions the change's intent does not admit; evidence quotes copy diff lines verbatim including <code>+</code>/<code>-</code> markers.</li>
+<li><strong><code>review --findings-json &lt;path&gt;</code> (optional) with a fail-closed sidecar contract</strong> (exit 0 ⟺ fresh, valid sidecar):</li>
+<li>The path is VALIDATED before any use: realpath of the target's parent directory must be <code>project_root</code> or under it (mirror of <code>resolve_artifact_path</code> for a not-yet-existing file; NUL/traversal/absolute-escape rejected) → violation is a usage error, non-zero exit. [Judge3 H1]</li>
+<li>Any pre-existing file at the path is REMOVED before the codex call (stale-read protection, mirroring <code>run_codex_consult</code>'s out_path discipline). [Judge3 M4, Judge2 M3b]</li>
+<li>The sidecar is written ONLY on genuine success, AFTER the markdown report write succeeds; a sidecar-write OSError exits 3 exactly like the existing report-write fail-closed path. [Judge1 L4, Judge2 M3, Codex M4]</li>
+<li>Payload: <code>{"status": "success", "summary": str, "truncated": bool, "secrets": [str], "findings": [normalized findings]}</code> — <code>truncated</code>/<code>secrets</code> give the structured consumer parity with the human report. [Judge1 M2]</li>
+<li>Absent flag → CLI behavior byte-identical to today.</li>
+<li>Naming (<code>--findings-json</code>, not <code>--out</code>): <code>consult</code> is JSON-primary with a REQUIRED <code>--out</code>; <code>review</code> stays markdown-primary with an OPTIONAL sidecar — different contract, different name, documented in the CLI help. Step 4/6 embedded callers are NOT migrated in this issue (they consume the summary/report today and work; convergence is a possible follow-up). [Judge1 L3 resolution]</li>
+<li><code>ADV_CONFIDENCE_TO_FLOAT: Final = {"high": 0.9, "medium": 0.7, "low": 0.4}</code> — the explicit enum→numeric mapping consumers use to run adversarial findings through <code>SEVERITY_BANDED_CONFIDENCE</code> filtering. [Judge2 M2]</li>
+<li><strong>Diff-type secret posture (rev 4 — hard block REJECTED):</strong> the diff type keeps the existing warn-only posture. Rationale: the identifier-level scanner (<code>password[:=]</code>, <code>api[_-]?key[:=]</code>, <code>token[:= ]</code>, <code>secret[:=]</code>) matches legitimate identifiers that densely populate exactly the security-surface diffs this feature targets — a headless hard block would fail-closed the review on its primary target set, and the resulting <code>failed</code> state would masquerade as coverage [rev3-verifier F2, refuting rev-2's J3#3 adoption]. Instead: the sidecar's <code>secrets</code> categories are SURFACED — appended to the Step 11 marker and included in the headless STATUS comment — so detection is visible without self-defeating the gate. Environments wanting a hard block set the existing <code>RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1</code> lever (documented for the diff type in config-reference).</li>
+</ul>
+<h3>2. <code>hooks/plan_lib.py</code> (additive; <code>should_promote</code> UNTOUCHED)</h3>
+<ul>
+<li><code>any_high_risk_path(paths, extra_patterns=()) -&gt; str | None</code> — thin plural wrapper looping over the EXISTING private <code>_path_matches_high_risk</code> (the <code>read_review_log</code> public-alias precedent); returns the <strong>first matching PATH</strong> (not the pattern), which is what reason strings and markers need [rev2-Codex M3]. No refactor of <code>should_promote</code>; one matcher, zero drift. [Judge1 M1, Judge3 note]</li>
+<li><code>should_run_diff_review(enabled: bool, changed_paths: list[str], has_high_risk_task: bool, extra_patterns=()) -&gt; tuple[bool, str]</code> — the PURE composite gate, so the dispatch decision is unit-testable red-green instead of living in prose [Judge2 H1]. Truth table:</li>
+<li><code>not enabled</code> → <code>(False, "disabled")</code> (checked first — opt-in gates everything) [Codex M3: explicit <code>enabled AND (path OR task)</code> precedence]</li>
+<li><code>enabled and not changed_paths</code> → <code>(False, "empty diff")</code> (no wasted egress on an empty diff even when a high-risk task exists) [Judge2 L6]</li>
+<li><code>enabled and any_high_risk_path(changed_paths)</code> → <code>(True, "high-risk path: &lt;first matching path&gt;")</code> — the reason carries the PATH only; <code>any_high_risk_path</code> returns the first matching path (<code>str | None</code>), so no pattern plumbing is needed [rev2-Codex M3]</li>
+<li><code>enabled and has_high_risk_task</code> → <code>(True, "high-risk task in plan")</code></li>
+<li>otherwise → <code>(False, "no security surface")</code></li>
+</ul>
+<h3>3. <code>skills/adversarial-review/SKILL.md</code></h3>
+<ul>
+<li>description: drop the blanket "NOT for reviewing code diffs"; supported types += <code>diff</code> (report-only, refutation lens); argument-hint += diff.</li>
+<li>Step 1 auto-detect: <code>*.patch</code> / <code>*.diff</code> → <code>diff</code>.</li>
+<li><code>&lt;constants&gt;</code>: document <code>--findings-json</code> and the diff-type headless secret-block.</li>
+<li><code>&lt;data-handling&gt;</code>: a diff is raw source code — highest secret density; headless diff reviews block on detected secrets; NOTE an agent-harness egress classifier may block the invocation entirely — embedded callers treat that as review-failed (non-blocking), standalone runs surface it.</li>
+</ul>
+<h3>4. <code>skills/implement-feature/SKILL.md</code> — Step 11 sub-step (mirrors Step 4 item 7 contract)</h3>
+<ul>
+<li><strong>Stale-temp startup cleanup:</strong> at sub-step start, delete any leftover <code>.rawgentic-diff-review-*.patch</code> / <code>.rawgentic-diff-findings-*.json</code> under the project root (crash recovery from a prior killed run — cleanup-on-exit cannot cover SIGKILL). [rev2-Codex M4]</li>
+<li><strong>Gate (up front, before dispatching the 3 review agents):</strong> determine enablement with the exact existing probe — <code>python3 hooks/adversarial_review_lib.py is-enabled --workspace .rawgentic_workspace.json --project &lt;name&gt; --skill implement-feature</code>; exit 0 ⇒ enabled, any non-zero ⇒ disabled (same command and semantics as Step 4 item 7) [rev2-Codex M2]. Compute <code>changed_paths</code> from <code>git diff --name-only origin/&lt;default_branch&gt;..HEAD</code> — the SAME base ref used for the patch below, so detection and reviewed content are identical [Judge1 L5]. <strong>If the git command exits non-zero (missing/unfetched base ref), emit the marker <code>failed (base ref unavailable: &lt;reason&gt;)</code>, skip dispatch, and continue — the failed marker satisfies the completion-gate requirement</strong> [rev2-Codex H1]. <code>has_high_risk_task</code> from the Step 5 plan. Call <code>plan_lib.should_run_diff_review(enabled, changed_paths, has_high_risk_task)</code>. False → log the 4-state marker <code>skipped (&lt;reason&gt;)</code>, done.</li>
+<li><strong>Dispatch (concurrent with the 3 review agents):</strong> write the diff <strong>high-risk-files-first</strong> (<code>git diff origin/&lt;default&gt;..HEAD -- &lt;matching files&gt;</code> then the remainder) so engine truncation can only cut low-risk tail [Codex H1]; unique run-scoped names <code>.rawgentic-diff-review-&lt;issue&gt;-&lt;token&gt;.patch</code> and <code>.rawgentic-diff-findings-&lt;issue&gt;-&lt;token&gt;.json</code> under the project root [Judge2 L5]; run <code>review --artifact &lt;patch&gt; --type diff --project-root &lt;root&gt; --date &lt;date&gt; --findings-json &lt;sidecar&gt;</code> [Codex H2] in the background, appending <code>--headless</code> when the WF2 run is headless (correct prereq/auth messaging; the flag is the engine's ONLY headless signal — no env detection exists) [rev3-verifier F1].</li>
+<li><strong>Join (before item 3's confidence filter):</strong></li>
+<li>non-zero exit → <code>failed (&lt;exit&gt;: &lt;reason&gt;)</code>, loud log; <strong>headless: post a STATUS comment noting the skipped diff review (parity with Step 4)</strong> [Judge2 L7]; continue with same-model findings — never treated as passed.</li>
+<li>exit 0 but sidecar missing/unreadable/schema-invalid → <code>failed (&lt;reason&gt;)</code>, never <code>no_findings</code>. [Codex M4]</li>
+<li>sidecar <code>truncated: true</code> → <code>failed (truncated)</code> — even with high-risk-first ordering, an over-200KB high-risk surface means the reviewer did not see it all; conservative and rare. [Codex H1]</li>
+<li>success → map each finding's confidence via <code>ADV_CONFIDENCE_TO_FLOAT</code>, tag <code>source: adversarial</code>, merge into the Step 11 finding list BEFORE item 3 so the severity-banded confidence filter processes them identically [Judge2 M2]; single ambiguity breaker at item 6 over the merged list; design-flaw loop-back stays the single existing <code>review</code> source. Marker: <code>findings_present &lt;N&gt;</code> or <code>no_findings</code>; when the sidecar's <code>secrets</code> list is non-empty, append <code>; secrets detected: &lt;categories&gt;</code> to the marker (and to the headless STATUS comment) so scanner hits are visible without blocking [rev3-verifier F1/F2 resolution].</li>
+<li><strong>Cleanup (always-run, finally-style):</strong> delete patch + sidecar on every handled exit path, including failures before join [Judge3 M2]; create both files with restrictive permissions (0600 / umask 077) [Judge3 note, rev2-Codex M4]; the startup stale-temp sweep above covers unhandled termination; <code>.gitignore</code> gains <code>.rawgentic-diff-review-*.patch</code> and <code>.rawgentic-diff-findings-*.json</code> as the staging backstop (repo currently has no gitignore coverage for these) [Judge1 L6, Judge2 L5].</li>
+<li><strong>Marker (4-state):</strong> <code>### WF2 Step 11 — Adversarial Diff Review: findings_present &lt;N&gt;|no_findings|failed (&lt;reason&gt;)|skipped (&lt;reason&gt;) — &lt;report path if any&gt;</code>.</li>
+<li><strong>Enforcement (rev 4 — no recompute):</strong> <code>&lt;completion-gate&gt;</code> gains an item — when the project is opted in (<code>is-enabled … --skill implement-feature</code> exits 0), a Step 11 Adversarial Diff Review 4-state marker MUST exist in session notes; absence fails the gate. No gate-time diff recompute: a post-merge recompute sees an empty diff and would waive the requirement exactly in the merge path [rev3-verifier F3]. Opt-in ⇒ marker, unconditionally — <code>skipped (&lt;reason&gt;)</code> is a legitimate marker, silent omission is not. Turns "never ran" into a detectable state. [Judge3 M5]</li>
+</ul>
+<h3>5. Tests (TDD, pytest — PATH-stubbed codex; no live calls)</h3>
+<ul>
+<li><code>tests/hooks/test_plan_lib.py</code>: <code>any_high_risk_path</code> (match, boundary no-match e.g. <code>src/author.ts</code>, extra_patterns, empty→None); <code>should_run_diff_review</code> full matrix — disabled×{path,task,both,neither}, enabled×{empty-diff+task, path-only, task-only, both, neither} — asserting both the bool and the reason string. [Judge2 H1]</li>
+<li><code>tests/hooks/test_adversarial_review_diff.py</code>: <code>diff</code> in ARTIFACT_TYPES; lens contains refutation phrases; <code>build_prompt(…,"diff")</code> embeds lens + nonce fences; CLI <code>review --type diff</code> happy path writes report AND sidecar with the documented shape incl. <code>truncated</code>/<code>secrets</code> keys; sidecar ABSENT (and pre-existing one removed) on exit 2/3/4; report-write failure leaves no exit-0 illusion and no fresh sidecar; sidecar-write failure exits 3; sidecar path escaping project root rejected; headless diff secret-block (secret-bearing diff + --headless → status error, no codex call); interactive warn-only unchanged. [Judge2 M4, Judge3 H1/M3/M4]</li>
+<li>Existing suites (<code>test_adversarial_review_*</code>, <code>test_plan_lib</code>) stay green — all changes additive.</li>
+</ul>
+<h3>6. Docs</h3>
+<ul>
+<li>README: WF5 scope line (+diff), WF2 Step 11 gate mention.</li>
+<li><code>docs/config-reference.md</code>: <strong>coupled opt-in called out explicitly</strong> — <code>adversarialReview.workflows: ["implement-feature"]</code> now enables the cross-model pass at Steps 4, 6 AND 11 (one more Codex egress/call per security-surface run); per-stage granularity would be a future sub-key. [Judge1 L7]</li>
+<li><code>docs/design/workflow-adversarial-review.md</code> scope note; this design doc committed to <code>docs/design/</code> + HTML artifact.</li>
+</ul>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>All engine failure modes inherited (exit 2/3/4, fail-closed, never fabricate findings).</li>
+<li>Oversized diff → high-risk-first construction + truncated⇒failed (above).</li>
+<li>Egress blocked by an agent-harness exfil classifier (observed in the field; a diff IS repo content) → non-zero → the failed path, loud, non-blocking.</li>
+<li>Secrets in diff → headless: blocked; interactive: named categories in the egress warning before proceeding.</li>
+<li>Concurrent runs → run-scoped unique temp names; engine temp files already uuid-keyed.</li>
+</ul>
+<h2>Security implications</h2>
+<p>Egress of proprietary source (opt-in config gates the feature; warn-interactive/block-headless posture for the diff type). Prompt injection from diff content: nonce fence + injected-text-is-a-finding rule inherited. Sidecar write path validated under project root, fail-closed. Report-only invariant preserved.</p>
+<h2>Peer-consult provenance (cross-model, blind both ways)</h2>
+<p>Codex peer proposal (docs/reviews/peer-rawgentic-peer-problem-131-2026-07-03.md) independently converged on the architecture (diff-as-guarded-text-artifact, engine lens, opt-in AND security-surface gate, non-blocking join). Adopted from the peer: structured findings sidecar (→ <code>--findings-json</code>); explicit outcome vocabulary (→ 4-state marker). Rejected: <code>generic</code>-type reuse (AC1 wants first-class <code>diff</code>); <code>.rawgentic/reviews/</code> temp dir (root-dotfile convention + gitignore backstop instead).</p>
+<h2>Critique amendments (rev 1 → rev 2)</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Sev</th>
+<th>Amendment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Codex #1</td>
+<td>High</td>
+<td>high-risk-first patch construction; truncated ⇒ failed</td>
+</tr>
+<tr>
+<td>Codex #2</td>
+<td>High</td>
+<td>dispatch command includes <code>--findings-json &lt;sidecar&gt;</code></td>
+</tr>
+<tr>
+<td>Judge2 #1</td>
+<td>High</td>
+<td>pure <code>should_run_diff_review</code> gate function; 9-cell tested matrix</td>
+</tr>
+<tr>
+<td>Judge3 #1</td>
+<td>High</td>
+<td>sidecar path validated under project root, fail-closed</td>
+</tr>
+<tr>
+<td>Codex #3 / J2#2 / J3#4 / J1#2,#4</td>
+<td>Med</td>
+<td>explicit gate precedence; enum→float confidence map + merge before item 3; stale-sidecar removal; sidecar carries truncated/secrets; write-failure ⇒ exit 3</td>
+</tr>
+<tr>
+<td>Codex #5 / J3#2 / J1#6 / J2#5</td>
+<td>Med/Low</td>
+<td>finally-cleanup, run-unique names, gitignore entries</td>
+</tr>
+<tr>
+<td>J3#3</td>
+<td>Med</td>
+<td>headless diff secret-block</td>
+</tr>
+<tr>
+<td>J3#5</td>
+<td>Med</td>
+<td>completion-gate marker enforcement</td>
+</tr>
+<tr>
+<td>J1#1</td>
+<td>Med</td>
+<td>thin wrapper; <code>should_promote</code> untouched</td>
+</tr>
+<tr>
+<td>J2#6</td>
+<td>Low</td>
+<td>empty-diff cell in the gate function</td>
+</tr>
+<tr>
+<td>J2#7</td>
+<td>Low</td>
+<td>headless STATUS comment parity</td>
+</tr>
+<tr>
+<td>J1#3,#5,#7</td>
+<td>Low</td>
+<td>naming justification; single base ref; coupled opt-in documented</td>
+</tr>
+<tr>
+<td>rev2-Codex #1</td>
+<td>High</td>
+<td>base-ref failure ⇒ <code>failed (base ref unavailable)</code> marker, never a crashed gate</td>
+</tr>
+<tr>
+<td>rev2-Codex #2,#3,#4</td>
+<td>Med</td>
+<td>exact is-enabled command named; reason carries path only (wrapper returns first matching path); stale-temp startup sweep + 0600 perms</td>
+</tr>
+<tr>
+<td>rev3-verifier F2</td>
+<td>High</td>
+<td>headless hard secret-block REVERTED — identifier-level scanner would self-block the feature's own target set; warn-only + visible surfacing + existing env lever instead</td>
+</tr>
+<tr>
+<td>rev3-verifier F1</td>
+<td>Med</td>
+<td><code>--headless</code> propagated on the dispatch command (engine's only headless signal)</td>
+</tr>
+<tr>
+<td>rev3-verifier F3</td>
+<td>Med</td>
+<td>completion-gate enforcement = opt-in ⇒ marker exists, no post-merge diff recompute</td>
+</tr>
+</tbody>
+</table></div>
+<h2>Out of scope</h2>
+<p>Step 11 3-agent replacement; WF3 equivalent (follow-up); migrating Step 4/6 callers to the sidecar; base refs other than <code>origin/&lt;default_branch&gt;</code>; mandatory pass for non-security diffs.</p>
+<footer>
+  Rendered from <code>docs/design/2026-07-03-diff-stage-adversarial-review.md</code> —
+  the Markdown file is the source of truth; this HTML is a static, standalone rendering
+  for visual review.
+</footer>
+</body>
+</html>

@@ -957,6 +957,32 @@ Updated CLAUDE.md (if insights memorized) or no output.
    - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
    - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator." Record each resolution via `plan_lib.resolve_deferral(<deferrals_path>, <finding_id>, status='applied'` / `add_concurrence=<other_slot>` / `user_ack=True)` — do not edit the deferrals JSON by hand.
 
+1a. **Adversarial diff review sub-step (opt-in, cross-model — runs concurrently with the 3 review agents; issue #131).**
+   Mirrors the Step 4 item 7 join-barrier pattern, but over the *diff* instead of the design doc. Report-only; additive to the 3-agent review, never a replacement.
+
+   - **Stale sweep (first thing):** delete any leftover `.rawgentic-diff-review-*.patch` and `.rawgentic-diff-findings-*.json` under the project root before doing anything else. This is crash recovery — a finally-style cleanup-on-exit cannot cover a SIGKILL, so a prior run's stale temp files may still be on disk.
+   - **Gate:** enablement via the SAME probe as Step 4 item 7 —
+     ```bash
+     python3 hooks/adversarial_review_lib.py is-enabled \
+       --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
+     ```
+     exit `0` = enabled, non-zero = skip. Compute `changed_paths` from `git diff --name-only origin/${capabilities.default_branch}..HEAD` — the SAME base ref as the patch below. **If that git command exits non-zero:** log the marker `failed (base ref unavailable: <reason>)`, skip dispatch, and continue (the `failed` marker satisfies the completion gate). Set `has_high_risk_task` = any plan task tagged `riskLevel: high`. Decide via `plan_lib.should_run_diff_review(enabled, changed_paths, has_high_risk_task)` (pure, tested; it raises on str/None inputs, so pass a real list). It returns `(False, <reason>)` → log marker `skipped (<reason>)` and stop; `(True, <reason>)` → dispatch.
+   - **Dispatch (concurrent with the 3 review agents):** build the diff **high-risk-first** so that if the artifact is truncated, only the low-risk tail is cut. `any_high_risk_path` returns only the *first* matching path, so do NOT pass it a whole list here — instead **partition** `changed_paths`: `high = [p for p in changed_paths if plan_lib.any_high_risk_path([p])]`, `low = [p for p in changed_paths if p not in high]`. Then `git diff origin/<default>..HEAD -- <high...>` first, then `git diff origin/<default>..HEAD -- <low...>`, concatenated. **Fallback:** if `high` is empty (dispatch was reached via `has_high_risk_task` alone), build the plain full `git diff origin/<default>..HEAD` **once** — do not emit an empty-pathspec diff (which would double the patch). Write the result to `.rawgentic-diff-review-<issue>-<token>.patch` (unique token, mode `0600`) under the project root, with sidecar path `.rawgentic-diff-findings-<issue>-<token>.json`. Run in the background:
+     ```bash
+     python3 hooks/adversarial_review_lib.py review \
+       --artifact <patch> --type diff --project-root <root> --date <date> \
+       --findings-json <sidecar>
+     ```
+     append `--headless` when the run is headless.
+   - **Join (before item 3's confidence filter):**
+     - Non-zero exit → marker `failed (<reason>)`, loud session-note log, continue with the same-model findings — **never** treat a failed review as passed (and, in headless mode, post a STATUS comment noting the diff review was skipped, mirroring Step 4).
+     - Exit `0` but the sidecar is missing / unreadable / invalid JSON → `failed (<reason>)`, never `no_findings`.
+     - Sidecar `truncated: true` → `failed (truncated)`.
+     - Success → map each finding's confidence enum through `ADV_CONFIDENCE_TO_FLOAT` (from `adversarial_review_lib`), tag each `source: adversarial`, and **merge** them into the finding list BEFORE item 3 so the severity-banded filter processes them identically. The single ambiguity breaker at item 6 runs **once** over the merged list; the design-flaw loop-back at item 7 stays the single `review` source. Marker `findings_present <N>` or `no_findings`; when the sidecar `secrets` list is non-empty, append `; secrets detected: <categories>` to the marker (and to the headless STATUS comment).
+   - **Cleanup (finally-style):** delete the patch + sidecar on every handled exit path after the join. The startup stale sweep covers unhandled termination. **Staging backstop:** the temp files land under the *target* project's root (which is usually NOT this plugin repo), so the primary protection is the finally-cleanup + startup sweep, plus the explicit "stage ONLY this task's files, never `git add -A`" rule. As belt-and-suspenders, on first use append the two globs to the target repo's `.git/info/exclude` (local, untracked — does not dirty the target's committed `.gitignore`); the globs added to this plugin repo's own `.gitignore` only protect self-dogfooding runs.
+   - **Marker (log exactly one per run):**
+     `### WF2 Step 11 — Adversarial Diff Review: findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
+
 <!-- model-routing: role=review -->
 Dispatch the 3 review agents with `model: <review>` unless routing resolved `inherit`.
 
@@ -990,7 +1016,7 @@ Dispatch the 3 review agents with `model: <review>` unless routing resolved `inh
 
 6. Apply ambiguity circuit breaker.
 
-7. **Design flaw detection:** If review finds fundamental flaw, consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review")`. On success, return to Step 3. On exhaustion, escalate.
+7. **Design flaw detection:** If review finds fundamental flaw, consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review")`. On success, return to Step 3. On exhaustion, escalate. Consume a loop-back **only** for findings with `source: review` (same-model); adversarial-sourced findings (merged in by sub-step 1a with `source: adversarial`) are report-only and MUST NOT consume a design loop-back here — they are advisory input to the fix workflow, not a loop-back trigger.
 
 8. **Deferred-resolution exit gate (P15):** before declaring Step 11 complete, call `plan_lib.assert_no_unresolved_high_deferrals(<deferrals_path>)`. If any deferred Critical/High remains unresolved (not `applied` and lacking independent concurrence from a different reviewer slot), Step 11 cannot complete. A finding with `defer_count >= 2` additionally requires `user_ack: true`.
 
@@ -1339,8 +1365,9 @@ Before declaring WF2 complete, verify the following. Items marked (conditional) 
 7. [ ] (conditional: has_deploy, NOT headless) Deployment verified or manual deploy confirmed — auto-satisfied in headless mode, where Steps 14/15 are skipped (PR is the terminal deliverable)
 8. [ ] (conditional: architecture changed) CLAUDE.md updated
 9. [ ] All Critical/High code review findings resolved
-10. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
-11. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
+10. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
+11. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
+12. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
 
 If ANY applicable item fails, complete it before declaring "WF2 complete."
 </completion-gate>

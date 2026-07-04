@@ -5,6 +5,18 @@
 - **Issue:** #77
 - **Status:** v1
 
+## 2026-07-03 scope update (#131)
+
+The engine gained a `diff` artifact type (refutation lens — attacks the CHANGE for
+fail-open guards, silently-passing error paths, and weakened security checks) plus a
+fail-closed `--findings-json` sidecar for structured embedded consumers. WF2 Step 11
+is now such a consumer: an opt-in cross-model diff review, gated on `adversarialReview`
+covering `implement-feature` AND the diff touching a security surface. See
+`docs/design/2026-07-03-diff-stage-adversarial-review.md` for the full design and
+`docs/config-reference.md` for the config/data-handling details. The "not a code-diff
+reviewer" framing below now describes the *standalone* skill's original scope — diff
+review is additive and still report-only.
+
 ## Purpose
 
 Provide an **independent, cross-model** adversarial review of a TEXT artifact —

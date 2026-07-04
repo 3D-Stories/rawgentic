@@ -147,7 +147,7 @@ CATEGORIES: Final[tuple[str, ...]] = (
     "internal-consistency", "security", "scope", "ambiguity",
 )
 ARTIFACT_TYPES: Final[tuple[str, ...]] = (
-    "design", "spec", "plan", "prd", "adr", "rfc", "readme", "generic",
+    "design", "spec", "plan", "prd", "adr", "rfc", "readme", "generic", "diff",
 )
 
 # Per-type emphasis appended to the adversarial prompt (the "lens").
@@ -160,6 +160,22 @@ _TYPE_LENS: Final[dict[str, str]] = {
     "rfc": "Focus on interoperability, migration/backward-compat, and protocol edge cases.",
     "readme": "Focus on accuracy versus the described system, completeness, and stale instructions.",
     "generic": "Apply correctness, completeness, consistency, security, and ambiguity lenses broadly.",
+    "diff": (
+        "This artifact is a unified git diff of a code change. Attack the CHANGE "
+        "itself: hunt fail-open paths — a guard that can be bypassed, an error "
+        "path that silently passes, a check that is vacuous on empty/corrupt/"
+        "absent input, 'no response' or 'not found' treated as success, a "
+        "security gate weakened or annotated away, and tenant/auth/session/token "
+        "boundary mistakes — plus behavior regressions the change's stated "
+        "intent does not admit. Evidence quotes must copy diff lines verbatim "
+        "including their leading +/- markers."
+    ),
+}
+
+# Maps the findings-schema `confidence` enum (high/medium/low) onto the numeric
+# SEVERITY_BANDED_CONFIDENCE scale consumed by WF2 Step 11 (issue #131).
+ADV_CONFIDENCE_TO_FLOAT: Final[dict[str, float]] = {
+    "high": 0.9, "medium": 0.7, "low": 0.4,
 }
 
 
@@ -260,6 +276,31 @@ def resolve_artifact_path(artifact_path: str, project_root: str) -> str:
             f"artifact path escapes project root: {artifact_path!r} -> {resolved!r}"
         )
     return resolved
+
+
+def resolve_sidecar_path(path: str, project_root: str) -> str:
+    """Validate a findings-sidecar output path under project_root.
+
+    Unlike resolve_artifact_path, the sidecar file need not exist yet, so we
+    realpath the PARENT directory (resolving symlinks in the dir) rather than the
+    file. Rejects NUL bytes; the resolved parent must equal project_root's
+    realpath or start with it + os.sep (same sibling-prefix-safe check). Raises
+    ArtifactError on violation. Returns the absolute sidecar path to write.
+
+    Caller contract: the returned path's final component is NOT resolved for
+    symlinks (only the parent dir is) -- the output must be unlinked before
+    write, or written via the atomic tmp-file + os.replace() pattern.
+    """
+    if "\x00" in path or "\x00" in project_root:
+        raise ArtifactError("NUL byte in path")
+    root = os.path.realpath(project_root)
+    abs_path = os.path.abspath(path)
+    parent = os.path.realpath(os.path.dirname(abs_path))
+    if parent != root and not parent.startswith(root + os.sep):
+        raise ArtifactError(
+            f"sidecar path escapes project root: {path!r} -> {parent!r}"
+        )
+    return os.path.join(parent, os.path.basename(abs_path))
 
 
 def read_artifact(
@@ -1202,6 +1243,9 @@ def main(argv: list[str] | None = None) -> int:
     p_review.add_argument("--project-root", required=True)
     p_review.add_argument("--date", default="")
     p_review.add_argument("--headless", action="store_true")
+    # Optional machine-readable sidecar for embedded consumers (WF2 Step 11).
+    # Fail-closed: written ONLY on success, AFTER the report write succeeds.
+    p_review.add_argument("--findings-json", default=None)
 
     p_consult = sub.add_parser("consult", help="run a peer-designer consult")
     p_consult.add_argument("--artifact", required=True)
@@ -1224,6 +1268,51 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "review":
         artifact_type = args.type if args.type in ARTIFACT_TYPES else "generic"
+        # Sidecar path validation + stale-removal happen BEFORE any codex/egress:
+        # a bad path fails-closed (exit 2, codex never invoked), and clearing the
+        # stale file up front means a failed run leaves NO sidecar behind (exit 0
+        # is the only path that writes a fresh one).
+        sidecar_path = None
+        if args.findings_json is not None:
+            try:
+                sidecar_path = resolve_sidecar_path(args.findings_json, args.project_root)
+            except ArtifactError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            # Collision guards, BEFORE the stale-removal os.remove() below: the
+            # sidecar must never BE the artifact (os.remove would destroy the
+            # input before codex even runs) or the computed report path (the
+            # later sidecar write would clobber the human-readable report) (#131).
+            sidecar_real = os.path.realpath(sidecar_path)
+            try:
+                artifact_real = resolve_artifact_path(args.artifact, args.project_root)
+            except ArtifactError:
+                artifact_real = None
+            if artifact_real is not None and sidecar_real == artifact_real:
+                print(
+                    f"--findings-json collision: sidecar path is the same file as "
+                    f"--artifact ({sidecar_path!r}); refusing (would destroy the "
+                    "artifact before review)", file=sys.stderr,
+                )
+                return 2
+            date_str = args.date or "unknown-date"
+            report_path = os.path.normpath(
+                review_report_path(args.project_root, args.artifact, date_str)
+            )
+            if os.path.normpath(sidecar_path) == report_path:
+                print(
+                    f"--findings-json collision: sidecar path is the same as the "
+                    f"computed report path ({sidecar_path!r}); refusing (would "
+                    "clobber the report)", file=sys.stderr,
+                )
+                return 2
+            try:
+                os.remove(sidecar_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"failed to clear stale findings sidecar: {exc}", file=sys.stderr)
+                return 2
         result = run_codex_review(
             args.artifact, artifact_type, args.project_root, headless=args.headless
         )
@@ -1255,6 +1344,35 @@ def main(argv: list[str] | None = None) -> int:
             # traceback that a caller could misread as success (#77 Step 8a F3).
             print(f"failed to write report: {exc}", file=sys.stderr)
             return 3
+        # Machine-readable sidecar for embedded consumers — written ONLY here,
+        # after the report write succeeded. A write OSError fails-closed (exit 3,
+        # mirroring the report-write contract) so a consumer never read-gates on a
+        # missing/partial sidecar and misreads it as success (#131).
+        if sidecar_path is not None:
+            # Atomic write: build the full sidecar in a tmp file, then os.replace()
+            # into place, so a crash/interrupt mid-write never leaves a partial
+            # sidecar at the canonical path (a reader either sees the old file, if
+            # any, or the complete new one). O_NOFOLLOW on the tmp path defends
+            # against a symlink planted at the tmp name between calls.
+            tmp_path = sidecar_path + ".tmp"
+            try:
+                fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "status": "success",
+                        "summary": result.summary,
+                        "truncated": result.truncated,
+                        "secrets": list(result.secrets),
+                        "findings": list(result.findings),
+                    }, f)
+                os.replace(tmp_path, sidecar_path)
+            except OSError as exc:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+                print(f"failed to write findings sidecar: {exc}", file=sys.stderr)
+                return 3
         print(path)
         return 0
 
