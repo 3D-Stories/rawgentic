@@ -38,8 +38,8 @@ Dedup policy: extends open issues #148 (driver build), #85 (worktree Step 8), #1
 
 | Milestone | Theme | Slots | Version | Success metric |
 |---|---|---|---|---|
-| **M1** | Instrument + guard | 1–4 | v2.54–2.56 | run-records carry usage + reviewer-kind fields on 3 consecutive runs; goal guard fires 0 false blocks; security lane commenting on PRs |
-| **M2** | Enable + restructure | 5–9 | v2.57+ minors | WF2 invocation load ≤450 lines; suite green; corpus −44%; stubs live (clock running); quality non-regressed over 5 runs |
+| **M1** | Instrument + guard | 1–4 | v2.54–2.57 | run-records carry usage + reviewer-kind fields on 3 consecutive runs; goal guard fires 0 false blocks; security lane commenting on PRs |
+| **M2** | Enable + restructure | 5–9 | v2.58+ minors | WF2 invocation load ≤450 lines; suite green; corpus −44%; stubs live (clock running); quality non-regressed over 5 runs |
 | **M3** | Autonomy + v3.0.0 | 10–12 | **v3.0.0** | #162 + #161 complete as a dependency-ordered driver campaign with 0 operator interventions; v3.0.0 published via upgrade guide |
 | **M4** | Headless platform | 13 | v3.1 | 1 issue shipped label→PR with green CI, zero operator touches |
 
@@ -47,7 +47,7 @@ Sequencing rationale: **instrument before anything** (M1's telemetry gates M3's 
 
 ---
 
-## M1 — Instrument + guard (slots 1–4, v2.54–2.56)
+## M1 — Instrument + guard (slots 1–4, v2.54–2.57)
 
 **Issue #155 (B) — `feat(work_summary,telemetry): usage + reviewer-kind fields in run-records; commit the store`** — slot 1 ⬆ *(extends #115 + #116)*
 - ACs: (1) run-record schema gains optional `usage: {input_tokens, output_tokens, cost_estimate_usd, wall_clock_s, model_mix}` — best-effort, never blocks Step 16. (2) Each `gates[]` review entry gains `reviewer_kind: inline|reflexion|builtin_code_review|codex|hand_rolled_multi` (canonicalization per #116). (3) `docs/measurements/run_records.jsonl` is committed (append-only) — the current file is untracked [confirmed in review]; decide committed-raw vs committed-weekly-aggregate with #115's fleet design. (4) `ccusage` documented as the local backfill path for token numbers.
@@ -73,7 +73,7 @@ Sequencing rationale: **instrument before anything** (M1's telemetry gates M3's 
 
 ---
 
-## M2 — Enable + restructure (slots 5–9, v2.57+ minors)
+## M2 — Enable + restructure (slots 5–9, v2.58+ minors)
 
 **Issue #157 (D) — `test(infra): skill_corpus() helper — drift guards assert over SKILL.md ∪ references/`** — slot 5, test-only *(precursor; must merge before any prose moves)*
 - ACs: (1) `tests/` helper returns concatenated SKILL.md + `references/*.md` per skill. (2) The prose-pinning guards enumerated in the findings doc (§AC4) are ported to it. (3) Suite green with zero prose moved (pure refactor of tests). (4) Headless-annotation count test parameterized by corpus, pins kept.
