@@ -193,6 +193,8 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 - Parallelized analysis (Step 2) and review (Step 4) phases for lower latency
 - Global loopback budget of 3 across all retry loops
 - Learning config: updates `.rawgentic.json` when new patterns discovered
+
+Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-demand references (`references/steps.md` for per-step detail, `state-and-resume.md`, `headless.md`, `run-record.md`) instead of a 1,600-line monolith — progressive disclosure that shrinks the context paid on every invocation. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
 </details>
 
 <details>
