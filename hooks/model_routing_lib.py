@@ -20,6 +20,9 @@ VALID_MODELS: Final[frozenset[str]] = frozenset(
 INHERIT: Final[str] = "inherit"
 # review-role soft floor: explicit models weaker than opus warn (but still apply)
 _BELOW_OPUS: Final[frozenset[str]] = frozenset({"sonnet", "haiku"})
+# per-task implementation ceiling clamp, cheap -> capable. haiku deliberately
+# absent — never Haiku for coding (standing project rule).
+_IMPL_RANK: Final[dict[str, int]] = {"sonnet": 1, "opus": 2, "fable": 3}
 
 
 def _warn(msg: str) -> None:
@@ -58,7 +61,15 @@ def _load_block(workspace_path: str, project_name: str) -> dict:
 
 
 def resolve(workspace_path: str, project_name: str, role: str) -> str:
-    """Resolve a dispatch role to a model name (or 'inherit'). Never raises."""
+    """Resolve a dispatch role to a model name (or 'inherit'). Never raises.
+
+    rawgentic NEVER uses Haiku for any routed subagent role: a config value of
+    ``haiku`` is accepted (not rejected to inherit) but hard-bumped to ``sonnet``
+    with a warning, so a misconfigured entry can never send review/analysis/
+    implementation work to Haiku. (A session model of Haiku when a role is
+    ``inherit`` is guarded at the dispatch site, not here — see the WF2 Step 8
+    delegation block.)
+    """
     block = _load_block(workspace_path, project_name)
     value = block.get(role, INHERIT)
     if not isinstance(value, str) or value not in VALID_MODELS:
@@ -67,12 +78,52 @@ def resolve(workspace_path: str, project_name: str, role: str) -> str:
             f"(valid: {sorted(VALID_MODELS)}); using inherit"
         )
         return INHERIT
+    if value == "haiku":
+        _warn(
+            f"role '{role}' configured to 'haiku' — rawgentic never uses Haiku for "
+            f"routed work; using 'sonnet' instead"
+        )
+        return "sonnet"
     if role == "review" and value in _BELOW_OPUS:
         _warn(
             f"review role resolved to '{value}', below recommended opus floor "
             f"— review quality may drop"
         )
     return value
+
+
+def select_impl_model(ceiling: str, risk_level: str, complexity: str) -> tuple[str, str]:
+    """Pick the per-task implementation model under a resolved ceiling.
+
+    Pure, never raises, fail-open. `inherit` ceiling → ('inherit', ...) (routing
+    off, use the session model). A `haiku` or otherwise-unknown ceiling floors to
+    ('sonnet', ...) — rawgentic never routes coding to Haiku, and never punts to a
+    session model that might BE Haiku. Otherwise picks the cheapest sufficient
+    model under the ceiling: high-risk/complex → ceiling, else sonnet.
+    """
+    if ceiling == "inherit":
+        return "inherit", "no routing configured — session model"
+    if ceiling not in _IMPL_RANK:
+        # haiku / unknown ceiling: never route coding to Haiku and never punt to a
+        # session model that might BE Haiku — fall back to the sonnet coding floor.
+        return "sonnet", f"ceiling {ceiling!r} not a valid implementation model — floor to sonnet"
+
+    # Reason keys off WHY the task was routed (the branch taken), NOT off a
+    # desired==ceiling coincidence — a standard task under a sonnet ceiling is a
+    # down-route to sonnet, and must not be logged as "high-risk/complex".
+    high_or_complex = risk_level == "high" or complexity == "complex_feature"
+    desired = ceiling if high_or_complex else "sonnet"
+
+    if _IMPL_RANK[desired] <= _IMPL_RANK[ceiling]:
+        actual = desired
+    else:
+        actual = ceiling  # defensive: unreachable while sonnet is rank 1 (the minimum)
+
+    if high_or_complex:
+        reason = f"high-risk/complex → ceiling {actual}"
+    else:
+        reason = f"standard/simple → down-routed to {actual}"
+    return actual, reason
 
 
 def main(argv: list[str] | None = None) -> int:
