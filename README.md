@@ -211,6 +211,8 @@ Since v2.61.0 (#158), the WF2 skill itself loads as a ~295-line spine with on-de
 - Security finding support: auto-detects STRIDE-format issues from WF9
 - Pre-flight dependency check before first test run
 - Respects project-level merge approval rules
+
+Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-demand references (`references/steps.md` for per-step detail, `incident.md`, `headless.md`) instead of a monolith — progressive disclosure that shrinks the context paid on every invocation. `references/incident.md` carries the deprecated WF11 comms/post-mortem checklist for incident-severity bugs, absorbed in the WF11 merge. All gates are preserved verbatim and drift-guarded via the `tests/corpus.py` helper.
 </details>
 
 <details>
