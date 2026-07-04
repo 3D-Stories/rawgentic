@@ -31,7 +31,10 @@ non-negative integers and `resolved` may not exceed `findings`:
               "ci": "passed|failed|not_configured|skipped",
               "deploy": "success|manual|failed|not_applicable"},
   "follow_ups": ["<any item requiring future attention>", ...],
-  "lane": "small-standard|full"
+  "lane": "small-standard|full",
+  "verification_deferred": [{"task_id": "<id>", "reason": "<why the dev env can't exercise it>",
+                            "local_proxy": "<what WAS run locally>",
+                            "target_check": "<exact manual check on the target>"}, ...]
 }
 ```
 
@@ -47,3 +50,13 @@ run-records recorded before #135 have no `lane` key and remain valid; this is a 
 addition, not a schema version bump. If a Step-9 lane cross-check widened the lane (see the
 small-standard lane design, `docs/design/2026-07-03-small-standard-lane.md`), add a
 `"lane-widened"` note to `follow_ups` rather than mutating `lane` after the fact.
+
+**`verification_deferred` (OPTIONAL, #138):** a **structured list** (not a count) of tasks whose
+verification was deferred to the target because the dev env fundamentally cannot exercise the
+artifact. Each entry MUST carry non-empty `task_id`, `reason`, `local_proxy` (what WAS run locally
+— compile/typecheck/extractable unit tests), and `target_check` (the exact manual check for the
+human). Omitted/empty on a run with no deferrals; records predating #138 have no key and remain
+valid (same forward-compatible, no-version-bump rule as `lane`). A bare count is deliberately NOT
+used — the completion gate reconciles each planned deferred task against this list via
+`plan_lib.assert_deferrals_recorded`, which needs the task ids, and the per-task evidence must be
+legible, not summed away. `task_id`s must be distinct.

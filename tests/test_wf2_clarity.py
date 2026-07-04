@@ -280,3 +280,29 @@ def test_incident_hotfix_branch_fetches_first():
     assert idx != -1, "incident hotfix checkout not found"
     preceding = incident[:idx]
     assert "git fetch origin" in preceding, "incident must fetch origin before the hotfix checkout"
+
+
+# --- #138: deferred-to-target verification surfaced across the spine ---
+
+class TestDeferredVerification:
+    def test_step5_documents_deferral_marker(self):
+        text = _text()
+        assert "deferred-to-target" in text, "Step 5 must document the deferral marker"
+        assert "best local proxy" in text, "deferral must require the best local proxy (anti-abuse)"
+
+    def test_step9_lists_deferred_never_verified(self):
+        s9 = re.search(r"## Step 9:.*?(?=\n## Step 10:)", _text(), re.DOTALL)
+        assert s9, "Step 9 section not found"
+        body = s9.group(0)
+        assert "deferred_tasks" in body
+        assert "never counts as verified" in body
+
+    def test_step12_has_canonical_deferred_heading(self):
+        s12 = re.search(r"## Step 12:.*?(?=\n## Step 13:)", _text(), re.DOTALL)
+        assert s12, "Step 12 section not found"
+        assert "## Deferred verification" in s12.group(0), "canonical PR heading required"
+
+    def test_completion_gate_calls_assert_deferrals_recorded(self):
+        gate = _block(_text(), "completion-gate")
+        assert "assert_deferrals_recorded" in gate
+        assert "unrecorded" in gate.lower()

@@ -790,6 +790,7 @@ form (run them when not in the lane).
    - Shell command that confirms correct behavior
    - Manual inspection criteria
    - Health check URL
+   - **Deferred-to-target (#138):** when the dev environment *fundamentally cannot* exercise the artifact (e.g. an NSIS uninstaller with no `makensis`; native Win32 code built from WSL for a Windows target; an OS-native tray menu that cannot render headless), declare a `- verification: deferred-to-target (<reason>)` line on that task. This is NOT a skip: the task still requires its **best local proxy** (compile, typecheck, unit tests of any extractable logic); deferral covers only the *unexercisable remainder*, which will be checked on the target box. `plan_lib.parse_tasks` records the reason (a deferral line with no `(reason)` fails closed). A proxy you can run is never the path you can't — so the gap is named here, carried through Step 9 (listed, never counted as verified), Step 12 (the `## Deferred verification` PR section), Step 16 (the run-record `verification_deferred` list), and enforced by `<completion-gate>`.
 
 5. **Migrations / config changes (if applicable):** Specify files, content, and rollback approach. Use `capabilities.migration_dir` if it exists, otherwise specify where migration files should live.
 
@@ -1072,6 +1073,8 @@ If NOT `capabilities.has_tests`:
 - Confirm all produce expected results
 - Document verification evidence in session notes
 
+**Deferred-to-target tasks (#138):** for every task in `plan_lib.deferred_tasks(tasks)`, list it explicitly with (a) its deferral reason and (b) the **local proxy that WAS run** (compile/typecheck/extractable-unit-tests). A deferred task **never counts as verified** and **never fails the gate by itself** — but a deferred task with NO local-proxy evidence recorded is NOT satisfied (the proxy is still required; deferral is not a pass). It is impossible to silently convert deferred → passed: the deferred surface is tracked separately in the Step 16 run-record `verification_deferred` list, and `<completion-gate>` reconciles the plan's deferred tasks against that list via `plan_lib.assert_deferrals_recorded`.
+
 Apply ambiguity circuit breaker on combined findings.
 
 ### Output
@@ -1331,6 +1334,12 @@ recorded for the PR body and session notes.
    ## Verification
    [test results if available, or verification evidence]
 
+   ## Deferred verification
+   [ONLY when plan_lib.deferred_tasks(tasks) is non-empty; OMIT this whole
+   section when empty. One bullet per deferred task, generated from the same
+   verification_deferred list the run-record carries:
+   - <task_id> (<reason>): <the exact manual check to run on the target — command/steps>]
+
    ## Quality Gate Summary
    - Design critique (Step 4): N findings
    - Plan drift check (Step 6): N findings
@@ -1338,6 +1347,7 @@ recorded for the PR body and session notes.
    - Code review (Step 11): N findings (all Critical/High resolved)
    - Security scan (Step 11.5): N blocking resolved, N advisory, skipped: <kinds or "none">
    ```
+   The `## Deferred verification` heading is the one canonical string (Step 9, Step 16, and `<completion-gate>` all key on it); do not reword it.
 
 ### Output
 PR URL.
@@ -1541,6 +1551,7 @@ Before declaring WF2 complete, verify the following. Items marked (conditional) 
 10. [ ] (conditional: adversarialReview opt-in for implement-feature) A "### WF2 Step 11 — Adversarial Diff Review:" 4-state marker exists in session notes — opt-in ⇒ marker, unconditionally (skipped (<reason>) is a legitimate marker; silent omission is not; no gate-time diff recompute — a post-merge recompute sees an empty diff and would waive the check exactly in the merge path)
 11. [ ] Security scan (Step 11.5) ran; all blocking findings resolved (or, if no scanners were installed, the skips are recorded in session notes + PR body)
 12. [ ] Completion summary rendered via `work_summary.py` (Step 16) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
+13. [ ] (conditional: any `plan_lib.deferred_tasks(tasks)` — verification deferred to target, #138) Every deferred task is recorded: `plan_lib.assert_deferrals_recorded(deferred_tasks(tasks), record["verification_deferred"])` returns `ok=True` (each entry carries reason + local_proxy + target_check), AND the PR body has the `## Deferred verification` section. Recorded ⇒ gate satisfied-with-note. An **unrecorded** deferral (planned deferred but missing/duplicate/foreign in the run-record list) ⇒ gate FAILURE — a deferral must never silently vanish into a pass.
 
 If ANY applicable item fails, complete it before declaring "WF2 complete."
 </completion-gate>
