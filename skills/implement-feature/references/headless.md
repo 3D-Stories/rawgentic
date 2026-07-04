@@ -13,6 +13,7 @@ as normal (STOP and wait for terminal input). If in headless mode, follow this p
 AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept auto-generated ACs for WF1-created issues
 - Step 1: Accept capabilities for WF1-created issues
+- Step 1b: Goal guard — WF1-created: emit built goal text to checkpoint for the driver to set; unlabeled: skip and log (skipped)
 - Step 2: Live environment probe — skip SSH probes entirely; local exploration only (file reads, grep, git). A headless run makes no outbound SSH.
 - Step 5: Remove excess tasks on scope creep (document in session notes)
 - Step 5: Risk ratio `warn` band — log to session notes, continue

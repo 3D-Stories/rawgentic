@@ -1264,8 +1264,8 @@ class TestHeadlessInteractionBlock:
 
     # Expected [Headless annotation counts per skill
     EXPECTED_COUNTS = {
-        "implement-feature": 32,  # 17 base + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block + 1 Step 2 trivial-work suggestion + 3 headless remote-ops guards (#47): Step 2 SSH-probe skip, Step 14 merge/deploy skip, Step 15 post-deploy skip + 1 Step 7 base-mismatch ERROR (#140) + 1 Step 13 CI-quarantine-change approval (#137) + 1 Step 14 quarantine×protection contradiction (#139)
-        "fix-bug": 11,            # 10 interaction points + 1 Step 2 trivial-work suggestion
+        "implement-feature": 33,  # 17 base + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block + 1 Step 2 trivial-work suggestion + 3 headless remote-ops guards (#47): Step 2 SSH-probe skip, Step 14 merge/deploy skip, Step 15 post-deploy skip + 1 Step 7 base-mismatch ERROR (#140) + 1 Step 13 CI-quarantine-change approval (#137) + 1 Step 14 quarantine×protection contradiction (#139) + 1 Step 1b goal guard (#156)
+        "fix-bug": 12,            # 10 interaction points + 1 Step 2 trivial-work suggestion + 1 Step 1b goal guard (#156)
     }
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
@@ -1290,6 +1290,28 @@ class TestHeadlessInteractionBlock:
         block = content[start:end]
         assert "headless-resume" in block, (
             "implement-feature/SKILL.md <resumption-protocol> must reference <headless-resume>"
+        )
+
+
+class TestGoalGuardStep1b:
+    """Drift guard: Step 1b (AC-derived /goal guard, #156) must be present and wired
+    to plan_lib.build_goal_text in both WF2 and WF3."""
+
+    def test_implement_feature_has_step_1b_and_build_goal_text(self):
+        content = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+        assert "## Step 1b" in content, "implement-feature/SKILL.md missing '## Step 1b'"
+        assert "build_goal_text" in content, (
+            "implement-feature/SKILL.md Step 1b must reference plan_lib.build_goal_text"
+        )
+        assert "or a blocker is posted to the issue via the ERROR protocol" in content, (
+            "implement-feature/SKILL.md Step 1b missing the escape-disjunct phrasing"
+        )
+
+    def test_fix_bug_has_step_1b_and_build_goal_text(self):
+        content = (SKILLS_DIR / "fix-bug" / "SKILL.md").read_text()
+        assert "## Step 1b" in content, "fix-bug/SKILL.md missing '## Step 1b'"
+        assert "build_goal_text" in content, (
+            "fix-bug/SKILL.md Step 1b must reference plan_lib.build_goal_text"
         )
 
 

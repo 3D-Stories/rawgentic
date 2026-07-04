@@ -12,6 +12,7 @@ as normal (STOP and wait for terminal input). If in headless mode, follow this p
 
 AUTO-RESOLVE interactions (no user input needed in headless mode):
 - Step 1: Accept bug confirmation for WF1-created issues
+- Step 1b: Goal guard — WF1-created: emit built goal text to checkpoint for the driver to set; unlabeled: skip and log (skipped)
 - Step 2: Trivial-work suggestion — continue the full workflow (no interactive user for a "do it directly" hand-off)
 - Step 6: Always stash dirty directory (post brief issue comment with stash ref)
 - Step 6: Always resume existing branch
