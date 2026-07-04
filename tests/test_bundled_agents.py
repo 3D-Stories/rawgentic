@@ -124,8 +124,13 @@ def test_wf2_step8_reconciles_worktree_commit():
     must collect it and assert the branch advanced — otherwise the diff-scoped
     gates (8a/11/secret scan) would run over an empty diff and pass vacuously."""
     corpus = skill_corpus("implement-feature")
+    # per-task path (Step 8 item 3)
     assert "cherry-pick or fast-forward" in corpus
     assert "branch actually advanced" in corpus
+    # whole-issue path (Step 8 item 4b + reference): collect BEFORE validate,
+    # else receipt Rule 4 diffs an un-advanced HEAD and rejects every build
+    assert "Collect BEFORE validating" in corpus
+    assert "Collect before validation" in corpus  # references/whole-issue-delegation.md section
     impl = IMPLEMENTER.read_text(encoding="utf-8")
     assert "does NOT land" in impl and "commit SHA" in impl
 
