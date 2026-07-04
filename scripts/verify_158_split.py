@@ -8,6 +8,11 @@ pointers are additions and never checked; this only proves nothing was dropped
 or reworded. Exits 0 clean, 1 with the missing lines listed.
 
 Throwaway by design — delete after #158 merges (it pins a one-time migration).
+
+NOTE: green only at the PURE-SPLIT commit (cbb29a0) against the pre-split base.
+The later dead-weight pass + #160 rename intentionally edit ~9 connective lines,
+so running this at branch HEAD reports those 9 as "missing" — that is the
+sanctioned commit-3 rewrite, not dropped content.
 """
 import subprocess
 import sys
