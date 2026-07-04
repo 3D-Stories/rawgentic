@@ -27,6 +27,7 @@
         "./skills/optimize-perf",
         "./skills/peer-consult",
         "./skills/refactor",
+        "./skills/scan",
         "./skills/security-audit",
         "./skills/setup",
         "./skills/switch",
