@@ -266,6 +266,14 @@ def assert_deferrals_recorded(
         if not isinstance(e, dict) or not _is_nonempty_str(e.get("task_id")):
             errors.append(f"verification_deferred[{idx}] has no string task_id")
             continue
+        # Every recorded entry must carry the full evidence set, else a bare
+        # {task_id} would satisfy the gate without the required local proxy /
+        # target check (the anti-abuse invariant would fail open).
+        for f in ("reason", "local_proxy", "target_check"):
+            if not _is_nonempty_str(e.get(f)):
+                errors.append(
+                    f"verification_deferred[{idx}] (task {e['task_id']}) is missing "
+                    f"non-empty {f}")
         recorded_ids.append(e["task_id"])
     dupes = sorted({i for i in recorded_ids if recorded_ids.count(i) > 1})
     if dupes:
@@ -277,6 +285,27 @@ def assert_deferrals_recorded(
     for tid in sorted(recorded_set - planned_ids):
         errors.append(f"verification_deferred names task {tid} that the plan did not defer")
     return (len(errors) == 0, errors)
+
+
+_DEFERRED_PR_HEADING = "## Deferred verification"
+
+
+def assert_pr_body_has_deferred_section(
+    pr_body: str,
+    plan_deferred: list[Task],
+) -> tuple[bool, list[str]]:
+    """When the plan has deferred tasks, the PR body MUST carry the canonical
+    `## Deferred verification` section (#138). Returns (ok, errors). No deferrals
+    → always ok (the section is omitted-when-empty by design)."""
+    if not plan_deferred:
+        return (True, [])
+    body = pr_body if isinstance(pr_body, str) else ""
+    if _DEFERRED_PR_HEADING not in body:
+        return (False, [
+            f"plan has {len(plan_deferred)} deferred task(s) but the PR body is "
+            f"missing the '{_DEFERRED_PR_HEADING}' section"
+        ])
+    return (True, [])
 
 
 def _is_nonempty_str(v) -> bool:

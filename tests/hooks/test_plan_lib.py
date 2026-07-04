@@ -1476,3 +1476,54 @@ class TestAssertDeferralsRecorded:
         ok, errs = mod.assert_deferrals_recorded(self._deferred(mod, ["2"]), None)
         assert ok is False
         assert any("must be a list" in e for e in errs)
+
+
+class TestDeferralGateHardening:
+    """Codex Step-11 findings folded (#138)."""
+
+    def _deferred(self, mod, ids):
+        return [mod.Task(id=i, title=f"t{i}", risk_level="standard", reason=None,
+                         deferral_reason="cannot exercise locally") for i in ids]
+
+    def test_recorded_entry_missing_evidence_fails(self):
+        """F1 [High]: an entry with only task_id (no reason/local_proxy/target_check)
+        must NOT satisfy the gate — that was a fail-open evidence bypass."""
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(
+            self._deferred(mod, ["2"]), [{"task_id": "2"}])
+        assert ok is False
+        assert any("reason" in e or "local_proxy" in e or "target_check" in e for e in errs)
+
+    def test_recorded_entry_full_evidence_ok(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(
+            self._deferred(mod, ["2"]),
+            [{"task_id": "2", "reason": "r", "local_proxy": "compile", "target_check": "run"}])
+        assert ok is True, errs
+
+    def test_recorded_entry_empty_evidence_field_fails(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_deferrals_recorded(
+            self._deferred(mod, ["2"]),
+            [{"task_id": "2", "reason": "r", "local_proxy": "", "target_check": "run"}])
+        assert ok is False
+        assert any("local_proxy" in e for e in errs)
+
+    def test_pr_body_section_present_ok(self):
+        mod = _reload_plan_lib()
+        body = "## Summary\nx\n## Deferred verification\n- 2 (r): run on target\n"
+        ok, errs = mod.assert_pr_body_has_deferred_section(body, self._deferred(mod, ["2"]))
+        assert ok is True, errs
+
+    def test_pr_body_section_missing_fails(self):
+        """F2 [Medium]: deferrals exist but the PR body omits the canonical section."""
+        mod = _reload_plan_lib()
+        body = "## Summary\nx\n"
+        ok, errs = mod.assert_pr_body_has_deferred_section(body, self._deferred(mod, ["2"]))
+        assert ok is False
+        assert any("Deferred verification" in e for e in errs)
+
+    def test_pr_body_no_deferrals_no_section_ok(self):
+        mod = _reload_plan_lib()
+        ok, errs = mod.assert_pr_body_has_deferred_section("## Summary\n", [])
+        assert ok is True and errs == []

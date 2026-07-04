@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deferred-to-Target Verification (#138)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --border: #30363d;
+      --card: #161b22;
+      --code-bg: #1c2128;
+      --link: #4493f8;
+      --accent: #a371f7;
+      --chosen: #3fb950;
+      --rejected: #ff7b72;
+      --thead-bg: #1c2128;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --card: #161b22;
+    --code-bg: #1c2128;
+    --link: #4493f8;
+    --accent: #a371f7;
+    --chosen: #3fb950;
+    --rejected: #ff7b72;
+    --thead-bg: #1c2128;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    padding: 2.5rem 1.25rem 5rem;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4 {
+    line-height: 1.3;
+    font-weight: 600;
+    scroll-margin-top: 1rem;
+  }
+  h1 {
+    font-size: 1.7rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.3rem;
+  }
+  h1 + p {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin-top: 0.4rem;
+  }
+  h2 {
+    font-size: 1.28rem;
+    margin-top: 2.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin-top: 1.8rem;
+    color: var(--accent);
+  }
+  p { margin: 0.7rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  li > ul, li > ol { margin-top: 0.35rem; }
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  strong { font-weight: 650; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--card);
+    color: var(--muted);
+  }
+  blockquote p { margin: 0.3rem 0; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.1rem 0 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.92rem;
+  }
+  thead th {
+    background: var(--thead-bg);
+    text-align: left;
+    font-weight: 650;
+    border-bottom: 1px solid var(--border);
+  }
+  th, td {
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin: 0 0.3rem 0.3rem 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.6rem 0 1.6rem;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="meta">
+  <span class="badge">Issue #138</span>
+  <span class="badge">standard_feature (M)</span>
+  <span class="badge">gate honesty</span>
+  <span class="badge">2026-07-04</span>
+</div>
+<h1>Design: first-class deferred-to-target verification state (#138)</h1>
+<p>Date: 2026-07-04 · Issue #138 · Complexity: standard_feature (M — touches gate honesty) · lean gate</p>
+<blockquote><p>Codex passes folded — design (0 Critical / 2 High / 2 Medium) + Step-11 diff (0 Critical / 1 High / 1 Medium). All incorporated in place; no design loop-back (lean policy).</p></blockquote>
+
+<h2>Problem</h2>
+<p>WF2's gates assume verification runs locally: TDD mode needs runnable tests, Implement-Verify needs a runnable command. Neither expresses "the dev env <em>fundamentally cannot</em> exercise this artifact" — an NSIS uninstaller with no <code>makensis</code>, native Win32 paste built from WSL for a Windows target, an OS-native tray menu that can't render headless (all from the SayStory campaign). Today that honest outcome ("compiles; must be verified on the target box") has no legible slot — it degrades into a hand-waved pass or an awkwardly skipped gate. Both dishonest.</p>
+
+<h2>Core invariant (anti-abuse)</h2>
+<p>Deferral must be <strong>impossible to use as a skip-everything lever</strong>. A deferred task STILL requires its best local proxy (compile, typecheck, unit tests of extractable logic); deferral covers only the <em>unexercisable remainder</em>, which never counts as verified. The gate is satisfied only when the deferral is <strong>recorded with evidence</strong> (reason + what-was-run-locally + the manual target check); an unrecorded or evidence-less deferral is a gate FAILURE. A proxy you can run is never the path you can't — so the gap is named, never papered over.</p>
+
+<h2>Approach</h2>
+<h3>1. Plan contract (plan_lib)</h3>
+<ul>
+<li><code>Task.deferral_reason</code> parsed from <code>- verification: deferred-to-target (&lt;reason&gt;)</code>. Additive; absent → None (fail-open); a deferral line with no <code>(reason)</code> → <code>PlanFormatError</code> (fail-closed). Free-text <code>- verification:</code> lines stay ignored (no existing parser consumes them).</li>
+<li><code>deferred_tasks(tasks)</code> → the deferred subset.</li>
+<li><code>assert_deferrals_recorded(plan_deferred, recorded_entries)</code> → the mechanical completion-gate check: every plan-deferred id appears exactly once, and <strong>every entry carries non-empty task_id + reason + local_proxy + target_check</strong> [Step-11 F1 — an evidence-less entry must not satisfy the gate]. Missing/duplicate/foreign/evidence-less → fail.</li>
+<li><code>assert_pr_body_has_deferred_section(pr_body, plan_deferred)</code> → fails when deferrals exist but the canonical <code>## Deferred verification</code> heading is absent [Step-11 F2].</li>
+</ul>
+<h3>2–5. Across the spine (SKILL.md + work_summary + run-record.md)</h3>
+<ul>
+<li><strong>Step 5:</strong> declare deferral when the env can't exercise the artifact (best local proxy still required).</li>
+<li><strong>Step 9 Part B:</strong> list each deferred task + the local proxy that WAS run; never counted as verified; a deferred task with no proxy evidence is not satisfied.</li>
+<li><strong>Step 12:</strong> a <code>## Deferred verification</code> PR section (one canonical heading everywhere [F4]), omitted when empty, generated from the same list.</li>
+<li><strong>Step 16 run-record:</strong> <code>verification_deferred</code> is a <strong>structured list</strong> <code>[{task_id, reason, local_proxy, target_check}]</code> [design-F1 — a bare count can't tell which tasks were recorded or whether evidence exists]. Validated only when present; old records stay valid. Rendered per item.</li>
+<li><strong>&lt;completion-gate&gt;:</strong> calls both helpers; recorded-with-evidence + PR section ⇒ satisfied-with-note; any gap ⇒ FAILURE.</li>
+</ul>
+
+<h2>Codex findings folded</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Pass</th><th>Sev</th><th>Finding</th><th>Fold</th></tr></thead>
+<tbody>
+<tr><td>design</td><td class="rejected" style="color:var(--rejected)">High</td><td>a bare count can't identify which deferred tasks were recorded</td><td>structured list {task_id,reason,local_proxy,target_check}</td></tr>
+<tr><td>design</td><td style="color:var(--rejected)">High</td><td>no mechanism to detect an unrecorded deferral</td><td><code>assert_deferrals_recorded</code> exact-once id reconcile</td></tr>
+<tr><td>design</td><td style="color:var(--accent)">Med</td><td>free-text verification handling ambiguous</td><td>clarified: parser never consumed it; deferral extraction is purely additive</td></tr>
+<tr><td>design</td><td style="color:var(--accent)">Med</td><td>heading casing drift</td><td>one canonical <code>## Deferred verification</code></td></tr>
+<tr><td>diff</td><td style="color:var(--rejected)">High</td><td><code>assert_deferrals_recorded</code> checked only task_id → evidence-less entry satisfied the gate</td><td>require non-empty reason/local_proxy/target_check per entry + tests</td></tr>
+<tr><td>diff</td><td style="color:var(--accent)">Med</td><td>PR-body section not code-checked</td><td><code>assert_pr_body_has_deferred_section</code> + wired into item 13</td></tr>
+</tbody>
+</table></div>
+
+<h2>Out of scope</h2>
+<p>Remote-target execution (SSH-to-target verification is a separate feature); WF3.</p>
+
+<footer>
+  Rendered from <code>docs/design/2026-07-04-deferred-to-target-verification.md</code> —
+  the Markdown file is the source of truth; this HTML is a static, standalone rendering for visual review.
+</footer>
+
+</body>
+</html>
