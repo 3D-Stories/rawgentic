@@ -1119,3 +1119,201 @@ class TestShouldRunDiffReview:
         emptiness check so an all-blank list still reads as "empty diff"."""
         mod = _reload_plan_lib()
         assert mod.should_run_diff_review(True, ["", ""], False) == (False, "empty diff")
+
+
+# --- validate_build_receipt (#133 whole-issue delegation trust boundary) ---
+
+def _default_branch(repo):
+    return subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def _receipt(task_shas, files_per_task, before_failed=0, after=(12, 0, 0), promotions=None):
+    """Build a receipt dict. `after` = (passed, failed, exit_code)."""
+    return {
+        "task_shas": dict(task_shas),
+        "baseline": {
+            "before": {"passed": 10, "failed": before_failed},
+            "after": {"passed": after[0], "failed": after[1], "exit_code": after[2]},
+        },
+        "files_per_task": {k: list(v) for k, v in files_per_task.items()},
+        "promotions": promotions or [],
+    }
+
+
+class TestValidateBuildReceipt:
+    def _fixture(self, tmp_path):
+        """base + task A (auth/login.py) + task B (widgets.py). Returns
+        (mod, repo, base, shaA, shaB, plan_tasks)."""
+        mod = _reload_plan_lib()
+        repo = _init_repo(tmp_path)
+        base = _make_commit(repo, {"README.md": "x"}, "base")
+        shaA = _make_commit(repo, {"src/auth/login.py": "a"}, "task A")
+        shaB = _make_commit(repo, {"src/widgets.py": "b"}, "task B")
+        plan = [_t("A", "high", "auth"), _t("B", "standard")]
+        return mod, repo, base, shaA, shaB, plan
+
+    def test_valid_receipt_accepts(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+        )
+        ok, errors, norm = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is True, errors
+        assert errors == []
+        assert norm["promoted_task_ids"] == []
+
+    def test_missing_task_sha_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt({"A": shaA}, {"A": ["src/auth/login.py"]})
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("B" in e for e in errors)
+
+    def test_nonexistent_sha_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": "0" * 40, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("exist" in e.lower() for e in errors)
+
+    def test_foreign_sha_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        start = _default_branch(repo)
+        # Orphan commit — a real object but NOT a descendant of base.
+        subprocess.run(["git", "checkout", "-q", "--orphan", "divergent"], cwd=repo, check=True)
+        subprocess.run(["git", "rm", "-rf", "-q", "--cached", "."], cwd=repo, check=True)
+        foreign = _make_commit(repo, {"other.py": "o"}, "orphan")
+        subprocess.run(["git", "checkout", "-q", start], cwd=repo, check=True)
+        r = _receipt(
+            {"A": foreign, "B": shaB},
+            {"A": ["other.py"], "B": ["src/widgets.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("descendant" in e.lower() for e in errors)
+
+    def test_sha_equals_base_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": base, "B": shaB},
+            {"A": [], "B": ["src/widgets.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("base" in e.lower() for e in errors)
+
+    def test_duplicate_sha_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaA},
+            {"A": ["src/auth/login.py"], "B": ["src/auth/login.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("distinct" in e.lower() or "duplicate" in e.lower() for e in errors)
+
+    def test_commit_file_set_mismatch_rejects(self, tmp_path):
+        """Finding 2 (isolated): union==diff holds (rule 4 passes) but each sha's
+        OWN commit files are swapped vs files_per_task, so the sha↔task binding
+        breaks. This is the exact 'park risky change in a benign commit' attack."""
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/widgets.py"], "B": ["src/auth/login.py"]},  # swapped
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("commit" in e.lower() and "A" in e for e in errors)
+
+    def test_baseline_regression_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+            before_failed=0, after=(11, 2, 0),
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("regression" in e.lower() for e in errors)
+
+    def test_after_nonzero_exit_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+            after=(12, 0, 1),
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("exit_code" in e for e in errors)
+
+    def test_unclaimed_diff_file_rejects(self, tmp_path):
+        """Rule 4 (isolated diff⊄union): a third commit touches a file no task
+        claims. Per-commit bindings for A and B still pass; only the union
+        equality catches the stray file."""
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        _make_commit(repo, {"stray.py": "s"}, "unclaimed extra commit")
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("stray.py" in e for e in errors)
+
+    def test_overclaimed_file_rejects(self, tmp_path):
+        """Rule 4 union⊄diff AND rule 2 both fire when a task claims a ghost file."""
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py", "ghost.py"], "B": ["src/widgets.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("ghost.py" in e for e in errors)
+
+    def test_promotions_surfaced_on_valid(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+            promotions=[{"task_id": "B", "reason": "touched a risky path mid-build"}],
+        )
+        ok, errors, norm = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is True, errors
+        assert norm["promoted_task_ids"] == ["B"]
+
+    def test_promotions_surfaced_even_on_reject(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        r = _receipt(
+            {"A": shaA},  # missing B -> reject
+            {"A": ["src/auth/login.py"]},
+            promotions=[{"task_id": "A", "reason": "x"}],
+        )
+        ok, errors, norm = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert norm["promoted_task_ids"] == ["A"]
+
+    def test_non_dict_receipt_rejects(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        ok, errors, _ = mod.validate_build_receipt("not a dict", plan, str(repo), base)
+        assert ok is False
+        assert errors
+
+    def test_git_failure_rejects_gracefully(self, tmp_path):
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        bogus = str(tmp_path / "does-not-exist")
+        r = _receipt(
+            {"A": shaA, "B": shaB},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, bogus, base)
+        assert ok is False  # no crash
+        assert errors
