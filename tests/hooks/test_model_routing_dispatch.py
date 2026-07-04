@@ -47,7 +47,8 @@ def test_step8_documents_ceiling_downrouting():
     text = (SKILLS / "implement-feature" / "SKILL.md").read_text()
     assert "CEILING, not a blanket assignment" in text
     assert "select_impl_model" in text
-    # never-Haiku guarantee is stated at the dispatch site (covers inherit→session-model)
-    assert "never" in text.lower() and "haiku" in text.lower()
+    # never-Haiku guarantee is stated at the dispatch site (covers inherit→session-model):
+    # pin the specific guard sentence, not just the two words appearing somewhere.
+    assert "Never dispatch an implementation subagent with `model: haiku`" in text
     # per-task audit log line
     assert "impl task <id>: model" in text

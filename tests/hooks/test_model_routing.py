@@ -160,3 +160,14 @@ class TestSelectImplModel:
         assert model == expected
         assert isinstance(reason, str) and reason
         assert model != "haiku"  # rawgentic never routes coding to Haiku
+
+    def test_reason_reflects_branch_not_ceiling_coincidence(self):
+        # a standard/simple task under a sonnet ceiling is a down-route, not
+        # "high-risk/complex", even though desired==ceiling==sonnet.
+        model, reason = mr.select_impl_model("sonnet", "standard", "simple_change")
+        assert model == "sonnet"
+        assert "down-routed" in reason
+        assert "high-risk" not in reason
+        # and a genuine high-risk task IS labelled as such
+        _, hi_reason = mr.select_impl_model("sonnet", "high", "standard_feature")
+        assert "high-risk/complex" in hi_reason

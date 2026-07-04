@@ -108,22 +108,21 @@ def select_impl_model(ceiling: str, risk_level: str, complexity: str) -> tuple[s
         # session model that might BE Haiku — fall back to the sonnet coding floor.
         return "sonnet", f"ceiling {ceiling!r} not a valid implementation model — floor to sonnet"
 
-    if risk_level == "high" or complexity == "complex_feature":
-        desired = ceiling
-    else:
-        desired = "sonnet"
+    # Reason keys off WHY the task was routed (the branch taken), NOT off a
+    # desired==ceiling coincidence — a standard task under a sonnet ceiling is a
+    # down-route to sonnet, and must not be logged as "high-risk/complex".
+    high_or_complex = risk_level == "high" or complexity == "complex_feature"
+    desired = ceiling if high_or_complex else "sonnet"
 
     if _IMPL_RANK[desired] <= _IMPL_RANK[ceiling]:
         actual = desired
     else:
         actual = ceiling  # defensive: unreachable while sonnet is rank 1 (the minimum)
 
-    if desired == ceiling:
+    if high_or_complex:
         reason = f"high-risk/complex → ceiling {actual}"
-    elif actual == desired:
-        reason = f"standard/simple → down-routed to {actual}"
     else:
-        reason = f"standard/simple, clamped to ceiling {actual}"
+        reason = f"standard/simple → down-routed to {actual}"
     return actual, reason
 
 
