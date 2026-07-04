@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Small-Standard Lane (#135)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --border: #30363d;
+      --card: #161b22;
+      --code-bg: #1c2128;
+      --link: #4493f8;
+      --accent: #a371f7;
+      --chosen: #3fb950;
+      --rejected: #ff7b72;
+      --thead-bg: #1c2128;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --card: #161b22;
+    --code-bg: #1c2128;
+    --link: #4493f8;
+    --accent: #a371f7;
+    --chosen: #3fb950;
+    --rejected: #ff7b72;
+    --thead-bg: #1c2128;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    padding: 2.5rem 1.25rem 5rem;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4 {
+    line-height: 1.3;
+    font-weight: 600;
+    scroll-margin-top: 1rem;
+  }
+  h1 {
+    font-size: 1.7rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.3rem;
+  }
+  h1 + p {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin-top: 0.4rem;
+  }
+  h2 {
+    font-size: 1.28rem;
+    margin-top: 2.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin-top: 1.8rem;
+    color: var(--accent);
+  }
+  p { margin: 0.7rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  li > ul, li > ol { margin-top: 0.35rem; }
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  strong { font-weight: 650; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--card);
+    color: var(--muted);
+  }
+  blockquote p { margin: 0.3rem 0; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.1rem 0 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.92rem;
+  }
+  thead th {
+    background: var(--thead-bg);
+    text-align: left;
+    font-weight: 650;
+    border-bottom: 1px solid var(--border);
+  }
+  th, td {
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin: 0 0.3rem 0.3rem 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.6rem 0 1.6rem;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+</style>
+</head>
+<body>
+<div class="meta">
+  <span class="badge">Issue #135</span>
+  <span class="badge">rev 2</span>
+  <span class="badge">standard_feature</span>
+  <span class="badge">2026-07-03</span>
+</div>
+<h1>Design: small-standard lane — a middle gear between trivial and full WF2 (#135)</h1>
+<p>Date: 2026-07-03 · Issue #135 · Complexity: standard_feature (workflow-spine change) · lean gate</p>
+<blockquote><p>rev 2 — all 5 Codex findings folded (exact file-count rule, input-source honesty, retained/removed gate lists, evidence-as-heuristic table, semantic-replacement predicate).</p></blockquote>
+
+<h2>Problem</h2>
+<p>WF2 has two cost reducers with a gap between them:</p>
+<ul>
+<li><code>&lt;trivial-work-check&gt;</code> — exits WF2 entirely for typo-grade changes (1 file, ≤10 lines).</li>
+<li><code>&lt;fast-path-detection&gt;</code> — lightens <strong>Step 4 only</strong> (reflect vs 3-judge critique).</li>
+</ul>
+<p>Everything above trivial pays the full remaining spine regardless of size: plan + drift gates (Steps 5/6/9), the design-stage machinery (peer consult, 3-judge panel, adversarial-on-design), and full run-record ceremony. Two field campaigns (SayStory 7-issue Tauri, 3dstories backend) hand-rolled a middle gear for small/standard features — a 3–5-file UI feature or a 2-file hardening guard genuinely needs a <strong>code review</strong> but not a <strong>pre-implementation design panel</strong>. Field evidence: across 6 SayStory features the Step-11 diff review caught every real bug; the Step-4 design panel mostly reaffirmed already-sound designs. Invest in review, not design ceremony, for small work.</p>
+
+<h2>Approach</h2>
+<p><strong>The lane is a SEMANTIC REPLACEMENT of the Step-4-only fast path, generalized to the whole spine</strong> [rev2, Codex F5]. Today <code>fast_path_eligible</code> (Step 2 item 8) only swaps critique→reflect at Step 4. This is NOT a rename or a pure extension — it changes the target set AND what the flag controls, so it gets a new canonical predicate:</p>
+<ul>
+<li><strong><code>small_standard_lane_eligible</code></strong> replaces <code>fast_path_eligible</code>. <code>fast_path_eligible</code> is kept as a <strong>deprecated alias</strong> (<code>fast_path_eligible = small_standard_lane_eligible</code>) so any existing "Step-4 reflect vs critique" reader keeps working unchanged — for that one decision the lane still selects reflect, so old Step-4-only callers see identical behavior. New code reads the canonical name.</li>
+<li>The flag now controls the <strong>whole lane</strong> (Steps 3/4/5/6/9 collapse), not just Step 4.</li>
+</ul>
+
+<h3>Lane eligibility (Step 2, replaces item 8; suggested-never-silent)</h3>
+<p><code>small_standard_lane_eligible == true</code> when ALL:</p>
+<ul>
+<li>complexity ∈ {simple_change, standard_feature} (never complex_feature — always full spine), AND</li>
+<li><strong>changed implementation source files ≤ 7</strong> — counting rule (same rule used by <code>lane_decision</code>) [rev2, Codex F1]: count non-test, non-doc <strong>source</strong> files the change will create/modify; <strong>exclude</strong> test files (<code>test_*</code>, <code>*_test.*</code>, <code>tests/</code>), docs (<code>*.md</code>, <code>docs/</code>), and generated/lockfiles; a rename counts as <strong>1</strong>. Test+doc files are deliberately excluded because a small feature legitimately touches several test/doc files without being "big." AND</li>
+<li>no architecture change, no migration, no new cross-service surface, no new dependency (the signals Step 2 already gathers), AND</li>
+<li>not <code>trivial_work</code> (that has its own exit at <code>&lt;trivial-work-check&gt;</code>).</li>
+</ul>
+<p>This SUPERSEDES the old two-branch rule (simple_change unconditionally + standard_feature only if WF1-validated). Rationale: a non-WF1 standard_feature of bounded size is exactly the SayStory case that needed the lane; requiring WF1 origin excluded it. WF1 origin still <em>strengthens</em> confidence but is no longer required.</p>
+
+<p><strong>Input-source honesty</strong> [rev2, Codex F2]: <code>lane_decision</code> is a pure, unit-tested function, but at Step 2 (pre-implementation) <code>file_count</code> is an <strong>estimate</strong> from the component map — there is no diff yet. So lane eligibility is "mechanically decided <strong>given</strong> the Step-2 estimates," not fully mechanical end-to-end. Guard: <strong>Step 9 cross-checks the actual changed-file count</strong> (<code>git diff --name-only origin/&lt;default&gt;..HEAD</code>, applying the same counting rule); if the real count materially exceeds the lane threshold, record a <code>lane-widened</code> note in session notes + the run-record (the design panel was skipped on a change that turned out larger than estimated) — do NOT retroactively fail (the gates that DID run — Step 11, 11.5, 8a — are still valid and are the load-bearing ones). A deterministic pre-diff detector is the AC5 follow-up.</p>
+
+<p><strong>Surfacing (mirror <code>&lt;trivial-work-check&gt;</code>):</strong> when <code>lane_eligible</code> and not already forced, present:</p>
+<pre><code>Step 2 → SMALL-STANDARD detected (&lt;N files, complexity&gt;). Recommend the small-standard lane:
+  keeps TDD + code review + security scan + CI; skips the design panel + drift gates.
+  (a) Small-standard lane  [recommended]
+  (b) Full WF2 (design panel + all gates)</code></pre>
+<p>[Headless: AUTO-RESOLVE → lane for eligible; full for complex_feature. Log the choice.]</p>
+
+<h3>Keep / collapse table (the contract)</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Full WF2</th>
+<th>Small-standard lane</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3 Design</td>
+<td>inline 1-2 approaches + doc</td>
+<td><strong>brief design note</strong> (file list + failure modes + security), no multi-approach brainstorm</td>
+<td>small work has one obvious approach</td>
+</tr>
+<tr>
+<td>4 Design critique</td>
+<td>3-judge panel + peer consult + adversarial-on-design</td>
+<td><strong><code>/reflexion:reflect</code> only</strong> (already the fast-path) — NO panel, NO peer consult, NO adversarial-on-design</td>
+<td>field: panel reaffirms sound small designs</td>
+</tr>
+<tr>
+<td>5 Plan</td>
+<td>full task decomposition + drift-ready fields</td>
+<td><strong>checklist plan</strong>: ordered tasks, each with <code>riskLevel</code> + a verification line; parallel_group/files optional</td>
+<td>keeps TDD + risk tagging; drops ceremony</td>
+</tr>
+<tr>
+<td>6 Plan drift</td>
+<td>reflect + optional adversarial-on-plan</td>
+<td><strong>SKIP</strong> (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage)</td>
+<td>a 3-task checklist has no drift surface</td>
+</tr>
+<tr>
+<td>8 / 8a</td>
+<td>TDD; 8a per high-risk task</td>
+<td><strong>UNCHANGED</strong> — TDD kept; <strong>8a still fires for any <code>riskLevel: high</code> task</strong></td>
+<td>security surface never loses per-task review</td>
+</tr>
+<tr>
+<td>9 Impl drift</td>
+<td>reflect (Part A) + evidence (Part B)</td>
+<td><strong>evidence-only</strong>: run the suite, record the delta, verify each AC has a covering test; skip the alignment reflect</td>
+<td>the reflect adds little on a checklist plan; evidence is the real gate</td>
+</tr>
+<tr>
+<td>11 Code review</td>
+<td>3-agent (complex)</td>
+<td><strong>≥1 reviewer</strong> (existing "minimum 1-agent for simple/standard") + the opt-in diff adversarial sub-step (#131) still applies</td>
+<td><strong style="color:var(--chosen)">NON-NEGOTIABLE — this is where the value is</strong></td>
+</tr>
+<tr>
+<td>11.5 Security scan</td>
+<td>full</td>
+<td><strong>UNCHANGED</strong></td>
+<td>tool gate never skipped</td>
+</tr>
+<tr>
+<td>12/13/14 PR/CI/merge</td>
+<td>full</td>
+<td><strong>UNCHANGED</strong></td>
+<td>—</td>
+</tr>
+<tr>
+<td>16 run-record</td>
+<td>full</td>
+<td><strong>UNCHANGED shape</strong>, <code>complexity</code> reflects lane; add <code>lane: "small-standard"</code> marker</td>
+<td>lane runs stay measurable vs full</td>
+</tr>
+</tbody>
+</table></div>
+
+<p><strong>Exact retained vs removed gates</strong> [rev2, Codex F4 — no vague "every safety gate"]:</p>
+<ul>
+<li><strong style="color:var(--chosen)">RETAINED (unchanged):</strong> TDD red-green (Step 8), Step 8a per-task review for any <code>riskLevel: high</code> task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).</li>
+<li><strong style="color:var(--accent)">COLLAPSED:</strong> Step 3 (brief note, no multi-approach brainstorm), Step 4 (<code>/reflexion:reflect</code> only — no 3-judge panel, no peer consult, no adversarial-on-design), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).</li>
+<li><strong style="color:var(--rejected)">REMOVED entirely:</strong> Step 6 (plan drift).</li>
+</ul>
+<p>The skill's own history is the reason the RETAINED set is non-negotiable: Step 11 caught 2 Criticals on a run judged "too simple to review." The lane is cheaper on <strong>design ceremony</strong>, never on <strong>review or security</strong>.</p>
+
+<h3><code>&lt;mandatory-steps&gt;</code> reconciliation</h3>
+<p>Steps 4, 5, 9 stay "mandatory" but gain a lane column: in the lane they run in their collapsed form (reflect / checklist / evidence-only) — they are not <em>skipped</em>, so the mandatory-step invariant holds. Only Step 6 is skipped in the lane, and it is already a conditional step ("run unless time-critical") — add "or in the small-standard lane" to its skip condition.</p>
+
+<h2>Files</h2>
+<ul>
+<li><code>skills/implement-feature/SKILL.md</code>: rewrite <code>&lt;fast-path-detection&gt;</code> → <code>&lt;small-standard-lane&gt;</code> (eligibility + surfacing + keep/collapse table); update Step 2 item 8, Step 4 gate selection, Step 5 (checklist variant), Step 6 skip condition, Step 9 (evidence-only variant), <code>&lt;mandatory-steps&gt;</code> lane note, Step 16 lane marker.</li>
+<li><code>hooks/plan_lib.py</code>: <code>lane_decision(complexity, impl_file_count, has_arch_change, has_migration, has_new_dep, is_trivial) -&gt; tuple[str, str]</code> returning <code>("full"|"lane"|"trivial", reason)</code> — pure, unit-testable (mirrors <code>should_run_diff_review</code>). <code>impl_file_count</code> follows the counting rule above (tests/docs/generated excluded). Decision order: <code>is_trivial</code> → <code>("trivial", …)</code> (handled by the trivial-work exit, not the lane); <code>complexity == "complex_feature"</code> OR any of arch/migration/new-dep → <code>("full", …)</code>; <code>impl_file_count &gt; 7</code> → <code>("full", …)</code>; else → <code>("lane", …)</code>. Plus <code>LANE_MAX_IMPL_FILES = 7</code> constant + a <code>count_impl_files(paths) -&gt; int</code> helper applying the exclusion rule (reused by the Step 9 cross-check on real <code>git diff --name-only</code>).</li>
+<li><code>docs/config-reference.md</code> or <code>docs/</code> WF2 doc: document the three tiers (trivial / small-standard lane / full).</li>
+<li><code>tests/</code>: <code>lane_decision</code> matrix + SKILL.md drift guards (keep/collapse table present, hard-floor steps still mandatory-tagged, run-record lane marker).</li>
+<li>Version bump minor → 2.48.0 (new workflow lane).</li>
+</ul>
+
+<h2>AC coverage (issue #135)</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>AC</th>
+<th>Requirement</th>
+<th>Coverage</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AC1</td>
+<td>lane entry mechanically decided</td>
+<td><code>lane_decision</code> pure fn (mechanical GIVEN Step-2 inputs; file_count is a Step-2 estimate, cross-checked at Step 9 — see input-source honesty)</td>
+</tr>
+<tr>
+<td>AC2</td>
+<td>keep/collapse table with rationale</td>
+<td>the exact retained/collapsed/removed lists above, ported into SKILL.md</td>
+</tr>
+<tr>
+<td>AC3</td>
+<td>suggested-never-silent + headless behavior</td>
+<td>surfacing block</td>
+</tr>
+<tr>
+<td>AC4</td>
+<td>run-record still emitted with lane marker</td>
+<td>Step 16 unchanged + <code>lane</code> field</td>
+</tr>
+<tr>
+<td>AC5</td>
+<td>follow-up impl issue</td>
+<td>file one for a deterministic pre-diff file_count/arch-change detector (beyond the Step-2 estimate)</td>
+</tr>
+</tbody>
+</table></div>
+
+<h2>Out of scope</h2>
+<p>Changing WF3 (fix-bug already exists for narrow bugs); weakening Step 11/11.5 in any lane; auto-measuring file_count/arch-change (the orchestrator estimates from Step 2 today — a mechanical detector is the AC5 follow-up); a fourth tier.</p>
+
+<h2>Field-evidence note (observational, not a controlled study) [rev2, Codex F3]</h2>
+<p>Two autonomous campaigns hand-rolled this middle gear; the split below is what they converged on. This is <strong>observational</strong> (2 campaigns, self-reported, no control arm) — treated as a <strong>heuristic</strong>, not proof. The retained gates do not rest on it (they rest on the skill's own Step-11-caught-2-Criticals history); the evidence only motivates <em>dropping the design panel for small work</em>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Campaign</th>
+<th>Small features</th>
+<th>Real bugs caught by Step 11 (diff review)</th>
+<th>Design-panel (Step 4) contribution</th>
+<th>Missed/rework</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SayStory (Tauri)</td>
+<td>6</td>
+<td>5 — filter mismatch mis-stating a delete count; non-atomic write resetting lifetime stats on crash; dead "stalled" branch; pause-state desync; stale tray after download</td>
+<td>mostly reaffirmed already-sound designs</td>
+<td>none reported attributable to skipping the panel</td>
+</tr>
+<tr>
+<td>3dstories backend</td>
+<td>(this campaign)</td>
+<td>fail-open bugs caught at diff stage (motivated #131)</td>
+<td>design/plan gates missed the code-level fail-opens</td>
+<td>—</td>
+</tr>
+</tbody>
+</table></div>
+<p>Caveat: neither campaign ran the full panel AND the lane on the same feature, so "panel would have added nothing" is inferred, not measured. If a future run finds a design-stage defect the lane would have missed, revisit the collapse of Step 4.</p>
+
+<footer>
+  Rendered from <code>docs/design/2026-07-03-small-standard-lane.md</code> —
+  the Markdown file is the source of truth; this HTML is a static, standalone rendering
+  for visual review.
+</footer>
+</body>
+</html>

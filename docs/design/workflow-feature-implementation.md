@@ -68,6 +68,8 @@
 
 **WF1-validated fast path:** If a `standard_feature` issue was created by WF1 (and therefore already has a critique-validated specification with acceptance criteria, scope, and risk assessment), Step 4 MAY use `/reflexion:reflect` instead of the full `/reflexion:critique`. Rationale: WF1 already ran a full 3-judge critique on the issue specification, so re-running a full critique on the design is partially redundant. Detection: Step 1 checks if the issue has the `wf1-created` label (set by WF1 Step 8). This fast path does NOT apply to `complex_feature` issues, which always get the full critique regardless of origin.
 
+**Superseded by #135 (v1.3):** the flag this section describes is `fast_path_eligible`, kept today as a deprecated alias for the canonical `small_standard_lane_eligible` — see "WF2 execution tiers" near the end of this document. The lane generalizes this Step-4-only mechanism to collapse Steps 3/4/5/9 and skip Step 6, and no longer requires WF1 origin for `standard_feature` eligibility.
+
 ---
 
 ## Finding Application and Ambiguity Circuit Breaker
@@ -873,6 +875,7 @@ Single PR per issue is the default. If the plan (Step 5) identifies more than 50
 | v1.0    | 2026-03-01 | Initial workflow design with 16 steps, 5 quality gates, fast path for simple bug fixes, multi-PR strategy, design decisions documented                                                                                                                                                                                                                                                                                                                                                     |
 | v1.1    | 2026-03-02 | Critique fixes (1C, 4H, 8M, 7L): workflow resumption section, global loop-back budget, structured rollback plan, WF1-validated fast path, brainstorm→brainstorming rename, remove git rebase -i, CI timeout requires user approval, P6 header corrected, P11 deviation documented, Step 5/7 branch overlap resolved, parallel execution mechanism specified, multi-PR execution subsection, Step 10 reclassified, Step 3 color corrected, diagram arrows added, fast path criteria aligned |
 | v1.2    | 2026-05-14 | P15 (Risk-stratified Review) tiered code review added: Step 8a per-task review for high-risk tasks (2 inline reviewers — code-level + silent-failure-hunt), 8-criterion classification with regex path allowlist, mid-flight promotion with retroactive scan, severity-banded confidence filter (Crit ≥0.50 / High ≥0.65 / Med ≥0.80 / Low ≥0.90) applied to Step 8a AND Step 11, persistent state under claude_docs/.wf2-state/<issue>/ (review_log.jsonl, deferrals.json, loopback_counters.json) plus committed status pointer .rawgentic/review-state.json, separate `review_design_loopback_used` counter (not shared with tdd), defer-chain integrity with independent-concurrence requirement, drift guard between SKILL.md and hooks/plan_lib.py. See Principle 15 in docs/principles.md.                                                                                                                                                                                                                       |
+| v1.3    | 2026-07-03 | Small-standard lane added (#135): a third execution tier between the trivial-work exit and the full 16-step spine, for `simple_change`/`standard_feature` changes touching ≤7 impl files (`hooks/plan_lib.lane_decision`/`count_impl_files`, tests/docs excluded from the count). Collapses Steps 3/4/5/9 to lighter variants and skips Step 6 entirely; keeps TDD, Step 8a, Step 11 review, Step 11.5 security scan, CI/PR/merge, and the run-record unchanged. `small_standard_lane_eligible` is the canonical predicate; `fast_path_eligible` (from the "Fast Path for Simple Bug Fixes" section above) is now a deprecated alias. See "WF2 execution tiers" below and `docs/design/2026-07-03-small-standard-lane.md`.                                                                                                                                                                                                                       |
 
 ---
 
@@ -907,3 +910,29 @@ The Python helper `hooks/plan_lib.py` carries all testable logic (parsing, ratio
 ### Pre-PR checklist (AC9)
 
 Pre-PR ordering is a manual gate in SKILL.md prose, not code-enforced: version bump, README, design doc, principles.md, consolidation.md, tests, drift guard. The drift guard catches helper-vs-SKILL.md mismatches; the rest are reviewer-checked.
+
+---
+
+## WF2 execution tiers
+
+As of #135, WF2 runs at one of **three tiers**, decided at Step 2 and never silently: **trivial-work exit**, the **small-standard lane**, or the **full 16-step spine**. The two cost reducers this section supersedes/generalizes are the "Fast Path for Simple Bug Fixes" section above (now a deprecated alias, see below) and the `<trivial-work-check>` (unchanged, still the first check evaluated).
+
+| Tier | When | Cost |
+|---|---|---|
+| **Trivial-work exit** (`<trivial-work-check>`) | ~1 file, ≤~10 changed lines, mechanical, no new logic/dependency/migration | Leaves WF2 entirely — quick edit + targeted test + PR, no design/plan/review ceremony. Suggested, never automatic; headless auto-continues into the full workflow. |
+| **Small-standard lane** (`<small-standard-lane>`) | `complexity ∈ {simple_change, standard_feature}` (never `complex_feature`) AND **≤ 7 changed implementation source files** AND no architecture change / migration / new dependency AND not trivial | Stays inside WF2 but collapses design ceremony (see keep/collapse table below). |
+| **Full WF2** | `complex_feature`, or any architecture change / migration / new dependency, or > 7 impl files | All 16 steps run at full weight: 3-judge design critique + peer consult + adversarial-on-design, full task-decomposition plan, plan-drift gate, alignment-reflect + evidence at Step 9. |
+
+**The ≤7-impl-file rule** (`hooks/plan_lib.py`: `LANE_MAX_IMPL_FILES = 7`, `count_impl_files`, `lane_decision`): counts non-test, non-doc **source** files the change creates or modifies. **Excluded from the count:** test files (`test_*`, `*_test.*`, anything under `tests/`), docs (`*.md`, anything under `docs/`), and generated/lockfiles (`package-lock.json`, `poetry.lock`, `*.lock`, `*.min.*`). A rename counts as 1 file. Tests and docs are excluded deliberately — a small feature legitimately touches several test/doc files without being "big." The count is a **Step-2 estimate** (there is no diff yet); Step 9 cross-checks the real `git diff --name-only` count against the same rule and records a `lane-widened` note (not a retroactive failure) if the estimate was low.
+
+### Small-standard lane keep/collapse summary
+
+The lane is cheaper on **design ceremony**, never on **review or security**:
+
+- **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16, gains an optional `lane` marker).
+- **COLLAPSED:** Step 3 (brief design note, no multi-approach brainstorm), Step 4 (`/reflexion:reflect` only — no 3-judge panel, no peer consult, no adversarial-on-design), Step 5 (checklist plan — ordered tasks with `riskLevel` + a verification line, keeping TDD and risk tagging), Step 9 (evidence-only — run the suite, record the delta, verify each AC has a covering test; the alignment reflect is skipped).
+- **REMOVED entirely:** Step 6 (plan drift) — the checklist plan is small enough to eyeball, and Step 9 still verifies AC coverage.
+
+The canonical eligibility predicate is `small_standard_lane_eligible` (`hooks/plan_lib.lane_decision`). The old `fast_path_eligible` flag from "Fast Path for Simple Bug Fixes" above is kept as a **deprecated alias** (`fast_path_eligible = small_standard_lane_eligible`) — for the one decision it used to gate (Step 4 reflect vs. critique) the lane still selects reflect, so existing readers of that flag see identical behavior. The flag's scope is now the whole lane (Steps 3/4/5/6/9), not Step 4 alone, and lane eligibility no longer requires WF1 origin for `standard_feature` — a non-WF1 standard_feature of bounded size is exactly the field case (SayStory, 3dstories backend) that motivated the lane.
+
+Full design: `docs/design/2026-07-03-small-standard-lane.md` (issue #135).

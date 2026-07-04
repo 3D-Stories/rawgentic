@@ -99,6 +99,18 @@ class TestValidateHappyPath:
                         {"label": "Fix", "value": "clamp index"}]
         assert validate_record(rec) == []
 
+    @pytest.mark.parametrize("lane", ["small-standard", "full"])
+    def test_lane_field_optional_and_valid(self, lane):
+        """`lane` (#135) marks whether a run took the small-standard lane. It is
+        OPTIONAL — validate_record only checks keys it recognizes and does not
+        reject unknown top-level keys, so an old record with no `lane` key stays
+        valid (backward-compatible) and a record WITH `lane` also validates."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        assert validate_record(rec) == []           # absent (pre-#135 record) is fine
+        rec["lane"] = lane
+        assert validate_record(rec) == []
+
 
 class TestValidateExtra:
     def test_extra_must_be_list(self):

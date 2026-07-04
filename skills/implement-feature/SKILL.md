@@ -1457,9 +1457,9 @@ measurable signal — not just a sentence the user reads once.
    `"small-standard"` when the run took the `<small-standard-lane>`, `"full"` otherwise — so lane
    runs stay measurable against full runs (`complexity` still reflects the Step-2 classification).
    If a Step-9 lane cross-check widened the lane, add the `lane-widened` note to `follow_ups`.
-   This is a prose note only for now: do NOT change `hooks/work_summary.py` here. If
-   `references/run-record.md` needs to formalize the `lane` field in the schema, that is a
-   Task-3/follow-up (extra keys pass the current validator, so a `lane` field is safe to emit).
+   `lane` is documented as an OPTIONAL field in `references/run-record.md` (#135): do NOT change
+   `hooks/work_summary.py` — `validate_record` only checks the keys it knows about and does not
+   reject unrecognized top-level keys, so an omitted or present `lane` are both valid.
 
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):
