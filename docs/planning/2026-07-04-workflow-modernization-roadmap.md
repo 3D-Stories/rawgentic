@@ -4,6 +4,32 @@ Date: 2026-07-04 · Companion to [findings](2026-07-04-workflow-modernization-re
 
 > **Status 2026-07-04: approved and FILED.** Epics: **M1 #167 · M2 #168 · M3 #169 · M4 #170** (label `epic:modernization`). Draft-issue mapping: A→#154 B→#155 C→#156 D→#157 E→#158 F→#159 G→#160 H→#161 I→#162 J→#163 K→#164 L→#165 M→#166. The epics' task lists are the live tracking surface; this doc is the design record.
 
+## Dogfood execution order (approved 2026-07-04)
+
+The milestones below remain the **capability groupings**; execution follows a different, owner-approved order optimized for **dogfooding** — rawgentic implements its own updates, the plugin cache is refreshed after each merge (at session boundaries, never mid-session), so **each issue's build runs on — and field-proves — the features shipped before it**.
+
+| Slot | Issue | Epic | Refresh? | Why this slot |
+|---|---|---|---|---|
+| 1 | #155 telemetry | M1 | ⬆ | instrument first — every later run generates before/after data; starts feeding #162's gate |
+| 2 | #154 routing/effort | M1 | ⬆ | savings apply to all remaining builds; cost dip measurable because #155 is live |
+| 3 | #156 goal guard | M1 | ⬆ | every later run AC-guarded; protects the big restructure runs |
+| 4 | #166 security CI lane | M4 | repo-side | every later modernization PR gets semantic security review |
+| 5 | #157 corpus helper | M2 | test-only | unblocks slots 6–8 |
+| 6 | #164 agent defs + worktree | M3 | ⬆ | later dispatches on enforced routing + isolation; deletes dispatch prose, shrinking #158 |
+| 7 | #160 stubs + setup shrink | M2 | ⬆ | **starts the stub-cycle clock early** — cycle elapses during the program instead of blocking v3.0.0 |
+| 8 | #158 WF2 split | M2 | ⬆ | the L-size risk runs instrumented + guarded + agent-dispatched; every later run ~70% cheaper — compounds |
+| 9 | #159 WF3 lane | M2 | ⬆ | needs #158's spine |
+| 10 | #148 + #163 driver + DAG | M3 | ⬆ | then the **remaining issues run as the first driver campaign** — flagship feature proves itself on its own program |
+| 11 | #162 review switch | M2 | ⬆ | data gate satisfied by the program's own ≥10 reviewer_kind runs — the program is its own A/B |
+| 12 | #161 v3.0.0 | M2 | upgrade guide | stub cycle (slot 7) already elapsed — no trailing wait |
+| 13 | #165 Action pilot | M4 | repo-side | last, on stable v3; crown move: run it by labeling a final issue `rawgentic:auto` |
+
+**Refresh cadence:** merge → exit sessions → `claude plugin remove/install` → fresh session → next issue. Touches all concurrent sessions — that is the real cost of per-issue refresh.
+
+**Named risks:** version-pin test churn per PR (one-line, known) · #164-before-#158 edits dispatch prose twice (mitigated: #164 deletes most of what #158 would move) · #162's A/B spans a WF2 that changed mid-program (acceptable: comparison is per-stage reviewer yield, not cross-version totals) · self-hosting hazard — a bad WF2/hook merge breaks the tool building itself; rollback = reinstall prior version from marketplace history, and from slot 10 the driver's rollback anchors cover it.
+
+**Deliberate fork, decided:** driver could run earlier (more issues as campaign = more proof) but #158 is the riskiest build and should run directly, not as the driver's maiden voyage; driver-late still gets 3+ real campaign issues.
+
 Dedup policy: extends open issues #148 (driver build), #85 (worktree Step 8), #115/#116 (telemetry) rather than duplicating; #48/#51/#52 (headless) fold into M4's pilot; #143 and #122 are untouched by this roadmap and remain standalone.
 
 ---
