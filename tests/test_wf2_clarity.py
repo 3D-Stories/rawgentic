@@ -149,3 +149,93 @@ class TestStep11DiffReview:
         gi = GITIGNORE.read_text()
         assert ".rawgentic-diff-review-*.patch" in gi
         assert ".rawgentic-diff-findings-*.json" in gi
+
+
+# --- Task 2 (#135): WF2 small-standard lane — a middle gear between the ---
+# --- trivial-work exit and the full 16-step spine. ---
+
+
+def _section(text: str, header: str, next_header: str) -> str:
+    start = text.index(header)
+    end = text.index(next_header, start)
+    return text[start:end]
+
+
+class TestSmallStandardLane:
+    """Drift guards for the WF2 small-standard lane (#135). The lane is a semantic
+    replacement of the old Step-4-only fast path, generalized to the whole spine:
+    it collapses design ceremony (Steps 3/4/5/9) and skips Step 6, but keeps TDD,
+    code review, and the security scan. These assert the block, its canonical
+    predicate + deprecated alias, the mechanical decision call, the keep/collapse
+    contract, the Step-9 input-source cross-check, the Step 6 lane skip, the
+    suggested-never-silent surfacing, and the non-negotiable review/security gates
+    all stay present so a later edit can't silently drop them.
+    """
+
+    def test_lane_block_present_and_replaces_fast_path(self):
+        text = _text()
+        assert "<small-standard-lane>" in text and "</small-standard-lane>" in text
+        # The old Step-4-only block name is REPLACED, not kept alongside.
+        assert "<fast-path-detection>" not in text
+
+    def test_canonical_predicate_and_deprecated_alias(self):
+        block = _block(_text(), "small-standard-lane")
+        assert "small_standard_lane_eligible" in block
+        # fast_path_eligible kept ONLY as a deprecated alias so Step-4 readers work.
+        assert "fast_path_eligible = small_standard_lane_eligible" in block
+        assert "deprecated alias" in block.lower()
+
+    def test_lane_decision_and_count_helper_wired(self):
+        block = _block(_text(), "small-standard-lane")
+        assert "lane_decision" in block
+        assert "count_impl_files" in block
+
+    def test_keep_collapse_contract_wording(self):
+        block = _block(_text(), "small-standard-lane")
+        for token in ("RETAINED", "COLLAPSED", "REMOVED"):
+            assert token in block, f"keep/collapse contract missing {token!r}"
+        # The one removed gate is Step 6 (plan drift).
+        assert "Step 6" in block
+
+    def test_input_source_honesty_and_step9_lane_widened_crosscheck(self):
+        text = _text()
+        block = _block(text, "small-standard-lane")
+        # Step-2 file_count is an ESTIMATE (input-source honesty).
+        assert "estimate" in block.lower()
+        # Step 9 cross-checks the REAL diff count and records lane-widened, never fails.
+        step9 = _section(text, "## Step 9:", "## Step 10:")
+        assert "lane-widened" in step9
+        assert "count_impl_files" in step9
+        assert "git diff --name-only" in step9
+
+    def test_surfacing_block_recommends_lane(self):
+        block = _block(_text(), "small-standard-lane")
+        assert "(a) Small-standard lane" in block
+        assert "[recommended]" in block
+        # Headless auto-resolves the lane-vs-full choice (no interactive user).
+        assert "AUTO-RESOLVE" in block
+
+    def test_step6_skip_mentions_lane(self):
+        step6 = _section(_text(), "## Step 6:", "## Step 7:")
+        assert "small-standard lane" in step6.lower()
+
+    def test_step5_checklist_variant_keeps_risklevel(self):
+        step5 = _section(_text(), "## Step 5:", "## Step 6:")
+        assert "checklist plan" in step5.lower()
+        # riskLevel tagging is RETAINED in the lane (Step 8a still needs it).
+        assert "riskLevel" in step5
+
+    def test_step9_evidence_only_variant(self):
+        step9 = _section(_text(), "## Step 9:", "## Step 10:")
+        low = step9.lower()
+        assert "evidence-only" in low or "evidence only" in low
+
+    def test_mandatory_steps_lane_note_keeps_review_and_security(self):
+        block = _block(_text(), "mandatory-steps")
+        assert "small-standard lane" in block.lower()
+        # Steps 4/5/9 COLLAPSE (not skipped) so the mandatory invariant holds.
+        assert "COLLAPSED" in block
+        # Step 11 (review) + 11.5 (security) stay non-negotiable in the lane.
+        assert "NON-NEGOTIABLE in the lane" in block
+        assert "Step 11" in block
+        assert "11.5" in block

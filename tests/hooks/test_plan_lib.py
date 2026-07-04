@@ -918,6 +918,135 @@ class TestAnyHighRiskPath:
             mod.any_high_risk_path(["src/auth/login.py"], extra_patterns="billing")
 
 
+# --- count_impl_files + lane_decision (small-standard lane, #135) ---
+
+class TestCountImplFiles:
+    def test_all_impl(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["src/a.py", "src/b.py"]) == 2
+
+    def test_excludes_tests_dir_segment(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["tests/test_x.py"]) == 0
+
+    def test_excludes_test_suffix_basename(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["src/foo_test.py"]) == 0
+
+    def test_excludes_readme_md(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["README.md"]) == 0
+
+    def test_excludes_docs_dir_segment(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["docs/x.md"]) == 0
+
+    def test_excludes_package_lock_json(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["package-lock.json"]) == 0
+
+    def test_excludes_poetry_lock(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["poetry.lock"]) == 0
+
+    def test_excludes_dot_lock(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["x.lock"]) == 0
+
+    def test_excludes_min_generated(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["dist/app.min.js"]) == 0
+
+    def test_mixed_list_counts_only_impl(self):
+        mod = _reload_plan_lib()
+        paths = [
+            "src/a.py", "tests/test_x.py", "README.md", "docs/x.md",
+            "package-lock.json", "x.lock", "src/b.ts",
+        ]
+        assert mod.count_impl_files(paths) == 2
+
+    def test_none_returns_zero(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(None) == 0
+
+    def test_str_rejected_not_iterated_char_wise(self):
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.count_impl_files("src/a.py")
+
+    def test_single_impl_path_counts_as_one(self):
+        """Rename semantics: a single declared path is just 1 impl file."""
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["src/renamed.py"]) == 1
+
+
+class TestLaneDecision:
+    def test_trivial_short_circuits_regardless_of_other_args(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("complex_feature", 999, True, True, True, True)
+        assert tier == "trivial"
+        assert "trivial" in reason.lower()
+
+    def test_complex_feature_is_full(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("complex_feature", 1, False, False, False, False)
+        assert tier == "full"
+        assert "complex_feature" in reason
+
+    def test_arch_change_alone_is_full(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("standard_feature", 1, True, False, False, False)
+        assert tier == "full"
+        assert "architecture change" in reason
+
+    def test_migration_alone_is_full(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("standard_feature", 1, False, True, False, False)
+        assert tier == "full"
+        assert "migration" in reason
+
+    def test_new_dep_alone_is_full(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("standard_feature", 1, False, False, True, False)
+        assert tier == "full"
+        assert "new dependency" in reason
+
+    def test_simple_change_small_is_lane(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("simple_change", 2, False, False, False, False)
+        assert tier == "lane"
+        assert "simple_change" in reason
+
+    def test_standard_feature_at_boundary_is_lane(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("standard_feature", 7, False, False, False, False)
+        assert tier == "lane"
+        assert "standard_feature" in reason
+
+    def test_standard_feature_over_boundary_is_full(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("standard_feature", 8, False, False, False, False)
+        assert tier == "full"
+        assert "8" in reason
+        assert "7" in reason
+
+    def test_unknown_complexity_is_full(self):
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision("foo", 1, False, False, False, False)
+        assert tier == "full"
+        assert "foo" in reason
+
+    def test_impl_file_count_bool_rejected(self):
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.lane_decision("standard_feature", True, False, False, False, False)
+
+    def test_impl_file_count_str_rejected(self):
+        mod = _reload_plan_lib()
+        with pytest.raises(TypeError):
+            mod.lane_decision("standard_feature", "3", False, False, False, False)
+
+
 # --- should_run_diff_review (pure WF2 Step 11 dispatch gate, #131) ---
 
 class TestShouldRunDiffReview:

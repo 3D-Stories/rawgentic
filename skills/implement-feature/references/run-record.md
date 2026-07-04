@@ -30,10 +30,20 @@ non-negative integers and `resolved` may not exceed `findings`:
   "outcome": {"pr_number": N|null, "pr_url": "<url>"|null, "merged": true|false|null,
               "ci": "passed|failed|not_configured|skipped",
               "deploy": "success|manual|failed|not_applicable"},
-  "follow_ups": ["<any item requiring future attention>", ...]
+  "follow_ups": ["<any item requiring future attention>", ...],
+  "lane": "small-standard|full"
 }
 ```
 
 The `gates` array carries whichever gates actually ran (Step 11.5 is captured in
 `security_scan`, not as a gate row). Use `status: "fast_path"` for a gate the fast path
 replaced, `"skipped"` for one that didn't apply.
+
+**`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
+`"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`
+in `hooks/work_summary.py` only checks the keys it knows about and does not reject unrecognized
+top-level keys, so a record without `lane` is exactly as valid as one with it. Existing
+run-records recorded before #135 have no `lane` key and remain valid; this is a forward-compatible
+addition, not a schema version bump. If a Step-9 lane cross-check widened the lane (see the
+small-standard lane design, `docs/design/2026-07-03-small-standard-lane.md`), add a
+`"lane-widened"` note to `follow_ups` rather than mutating `lane` after the fact.

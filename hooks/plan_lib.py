@@ -550,6 +550,96 @@ def format_promotion_note(
     )
 
 
+# --- Small-standard lane decision (#135) ---
+
+LANE_MAX_IMPL_FILES: Final[int] = 7
+
+
+def _is_excluded_impl_file(path: str) -> bool:
+    """True if `path` should NOT count toward LANE_MAX_IMPL_FILES.
+
+    Excludes test files, docs, and lockfiles/generated build output. Paths
+    are expected POSIX-separated (git diff output form), matching the same
+    convention as any_high_risk_path/should_run_diff_review.
+    """
+    segments = path.split("/")
+    basename = segments[-1]
+    if "tests" in segments or basename.startswith("test_") or "_test." in basename:
+        return True
+    if "docs" in segments or basename.endswith(".md"):
+        return True
+    if (
+        basename in ("package-lock.json", "poetry.lock")
+        or basename.endswith(".lock")
+        or ".min." in basename
+    ):
+        return True
+    return False
+
+
+def count_impl_files(paths) -> int:
+    """Count implementation source files for the small-standard lane (#135).
+
+    Excludes test files, docs, and lockfiles/generated artifacts — see
+    `_is_excluded_impl_file`. `None` -> 0 (no files is a valid pre-diff
+    state). A bare str raises TypeError (same fail-closed precedent as
+    `should_run_diff_review`) so a single path isn't iterated char-wise.
+    """
+    if paths is None:
+        return 0
+    if isinstance(paths, str):
+        raise TypeError("paths must be an iterable of path strings, not str")
+    return sum(1 for p in paths if not _is_excluded_impl_file(p))
+
+
+_LANE_ELIGIBLE_COMPLEXITIES: Final[tuple[str, ...]] = ("simple_change", "standard_feature")
+
+
+def lane_decision(
+    complexity: str,
+    impl_file_count: int,
+    has_arch_change: bool,
+    has_migration: bool,
+    has_new_dep: bool,
+    is_trivial: bool,
+) -> tuple[str, str]:
+    """Decide the WF2 execution tier for the small-standard lane (#135).
+
+    Pure (no I/O); never raises except the impl_file_count type guard below.
+    Returns (tier, reason) with tier in {"trivial", "full", "lane"}.
+    Evaluated in order:
+    - is_trivial                              -> ("trivial", ...)
+    - complexity == "complex_feature"         -> ("full", ...)
+    - arch change / migration / new dep       -> ("full", ...) (first true wins)
+    - complexity not lane-eligible (defensive)-> ("full", ...)
+    - impl_file_count > LANE_MAX_IMPL_FILES   -> ("full", ...)
+    - else                                    -> ("lane", ...)
+    """
+    if is_trivial:
+        return "trivial", "trivial — handled by trivial-work exit"
+    if complexity == "complex_feature":
+        return "full", "complex_feature — full spine"
+    if has_arch_change or has_migration or has_new_dep:
+        if has_arch_change:
+            reason = "architecture change"
+        elif has_migration:
+            reason = "migration"
+        else:
+            reason = "new dependency"
+        return "full", f"{reason} — full spine"
+    if complexity not in _LANE_ELIGIBLE_COMPLEXITIES:
+        return "full", f"unknown complexity {complexity!r} — full spine"
+    # Type guard protects the comparison below: bool is an int subclass, and
+    # a truthy string/None must not silently pass `>` rather than raise.
+    if isinstance(impl_file_count, bool) or not isinstance(impl_file_count, int):
+        raise TypeError(
+            f"impl_file_count must be an int (got {type(impl_file_count).__name__})"
+        )
+    if impl_file_count > LANE_MAX_IMPL_FILES:
+        return "full", f"{impl_file_count} impl files > {LANE_MAX_IMPL_FILES} — full spine"
+    return "lane", f"small-standard: {complexity}, {impl_file_count} impl files ≤ {LANE_MAX_IMPL_FILES}"
+
+
 # --- review log (jsonl) ---
 
 
