@@ -269,7 +269,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 |-------|------|-------------|
 | `critiqueMethod` | `string` | Critique tool used at quality gates. `"reflexion"` (the default, also used when the field is absent) is the supported value. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
-| `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown values warn and resolve to `inherit`, never block. See [`modelRouting`](#modelrouting). |
+| `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`, or a `{model, effort}` object; string shorthand ≡ `{model, effort: null}`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown model or effort values warn and resolve to `inherit`/`null`, never block. See [`modelRouting`](#modelrouting). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
 | `headlessEnabled` | `bool` | Opt-in to headless (non-interactive) execution. Default `false`. See [Per-Project Access Control](#per-project-access-control). |
@@ -356,7 +356,11 @@ declining stages nothing.
 Shape:
 
 ```json
-"modelRouting": { "review": "opus", "analysis": "sonnet", "implementation": "opus" }
+"modelRouting": {
+  "review": { "model": "opus", "effort": "high" },
+  "analysis": "sonnet",
+  "implementation": { "model": "opus", "effort": null }
+}
 ```
 
 Three roles, each independently optional (an absent role inherits):
@@ -365,18 +369,40 @@ Three roles, each independently optional (an absent role inherits):
 - `analysis` — codebase-analysis subagent dispatch
 - `implementation` — implementation subagent dispatch
 
-Each value is one of `opus` / `sonnet` / `haiku` / `fable` / `inherit`. Resolved via
+Each role's value is either a bare model string, or a `{model, effort}` object — the
+two are equivalent: a plain string `"<model>"` is shorthand for
+`{"model": "<model>", "effort": null}`, so every config written before the dict shape
+existed still parses unchanged. `model` is one of `opus` / `sonnet` / `haiku` / `fable`
+/ `inherit`; `effort` is one of `low` / `medium` / `high` / `xhigh` / `max`, or `null`
+(no effort preference). An invalid `effort` value **fails open**: it warns on stderr
+and is ignored (treated as `null`) — the model half of the value still resolves
+normally, and the CLI still exits 0.
+
+Resolved via
 `hooks/model_routing_lib.py resolve --workspace <path> --project <name> --role <role>`,
 which is invoked by the dispatching skill's `<model-routing-resolve>` preamble
-(right after `<config-loading>`, before any subagent dispatch).
+(right after `<config-loading>`, before any subagent dispatch). `resolve()` returns
+the `(model, effort)` pair; the CLI's default stdout still prints only the model
+(back-compat, unchanged), and a new `--effort` flag prints the resolved effort tier
+instead (or the literal string `none` when there is no effort).
 
 rawgentic **never uses Haiku for routed work**: a `haiku` value is accepted (not
-rejected to `inherit`) but hard-bumped to `sonnet` with a warning, for every role.
+rejected to `inherit`) but hard-bumped to `sonnet` with a warning, for every role —
+the bump applies to the `model` member only; a configured `effort` alongside a
+bumped `haiku` is preserved and still resolved normally.
+
+**Delivery is dual-path.** The Agent tool has no per-invocation effort parameter, so
+a resolved non-null effort is carried two ways: passed through wherever the dispatch
+layer itself supports an effort setting (e.g. the Workflow tool's `agent()` options,
+or a Codex dispatch's reasoning-effort flag), and always recorded in the dispatch's
+session-note/audit line regardless, so the resolved tier stays observable even on a
+dispatch path with no effort knob to plug it into (WF2/WF3 — see their
+`<model-routing-resolve>` preambles).
 
 **Fail-open by design** — routing is an optimization knob, never a gate:
 a missing workspace file, malformed JSON, a non-dict `modelRouting` block, or an
-unknown/invalid model value all resolve to `inherit` with a stderr warning; the CLI
-always exits 0 and never blocks the calling workflow.
+unknown/invalid model or effort value all resolve to `inherit` / `null` with a stderr
+warning; the CLI always exits 0 and never blocks the calling workflow.
 
 **Soft opus floor (review only):** an explicit `sonnet` for the `review` role still
 applies (routing is honored, not overridden) but emits an advisory stderr warning
@@ -389,7 +415,8 @@ the *maximum* model WF2 Step 8 will use, not the model every task gets. Step 8 c
 `model_routing_lib.select_impl_model(ceiling, riskLevel, complexity)` per task:
 high-risk or `complex_feature` tasks get the ceiling; standard/simple tasks
 down-route to `sonnet`, escalating to the ceiling if a down-routed task struggles.
-No schema change — same `modelRouting.implementation` key, clarified meaning.
+Same `modelRouting.implementation` key throughout; the only schema change is the
+role value itself gaining the optional `{model, effort}` object shape above.
 
 ### `peerConsult`
 
