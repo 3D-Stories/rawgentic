@@ -49,6 +49,15 @@ Currently: "When routing resolved the `implementation` role to a non-`inherit` m
 - ceiling=fable, high → (fable); ceiling=fable, standard → (sonnet)
 - ceiling=inherit → (inherit, …); ceiling=haiku → (inherit, misconfig); ceiling="bogus" → (inherit)
 
+## Supersession note (never-Haiku directive, mid-implementation)
+
+After this doc was drafted, the owner directed: **rawgentic must never route work to Haiku.** That changed two rows of the matrix below and the fallback semantics as SHIPPED (commit 8530f7c):
+- `select_impl_model` step 2 (haiku / unknown ceiling) → **`("sonnet", …)`**, NOT `("inherit", …)` — never punt coding to a session model that might be Haiku.
+- `resolve()` bumps ANY role configured to `haiku` → `sonnet` (warned), all roles.
+- Step 8 dispatch never uses `model: haiku`; under `inherit` with a Haiku session model, dispatch `sonnet`.
+
+The matrix rows for `ceiling=haiku`/`bogus` therefore resolve to `sonnet` (not `inherit`) in the shipped code and tests. The rest of the design stands.
+
 ## Out of scope
 `review`/`analysis` role down-routing (a cheaper reviewer weakens a gate — separate discussion, explicitly deferred per issue). Other dispatch sites (WF3/WF8) — follow-up once WF2 proven. No config schema change.
 
