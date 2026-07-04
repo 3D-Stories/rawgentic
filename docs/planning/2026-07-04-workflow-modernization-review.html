@@ -1,0 +1,330 @@
+<title>rawgentic · Workflow Modernization Review</title>
+<style>
+:root{
+  --bg:#f6f7f8;--surface:#ffffff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+  --line:#dde3e6;--accent:#0f766e;--accent-ink:#ffffff;--accent-soft:#e6f2f0;
+  --keep:#15803d;--keep-bg:#e9f5ec;--dep:#b4553a;--dep-bg:#f8ece7;
+  --defer:#a16207;--defer-bg:#f8f2e2;--merge:#1d4ed8;--merge-bg:#e8eefb;
+  --chip-c:#0f766e;--chip-c-bg:#e6f2f0;--chip-i:#7c3aed;--chip-i-bg:#f1eafd;
+  --code:#eef1f3;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#71808a;
+  --line:#2a353c;--accent:#2dd4bf;--accent-ink:#06211e;--accent-soft:#123531;
+  --keep:#4ade80;--keep-bg:#122a1c;--dep:#f0a58c;--dep-bg:#33201a;
+  --defer:#fbbf24;--defer-bg:#302a14;--merge:#93b4f5;--merge-bg:#17223a;
+  --chip-c:#2dd4bf;--chip-c-bg:#123531;--chip-i:#c4a5f7;--chip-i-bg:#2a2140;
+  --code:#232d34;
+}}
+:root[data-theme="dark"]{
+  --bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#71808a;
+  --line:#2a353c;--accent:#2dd4bf;--accent-ink:#06211e;--accent-soft:#123531;
+  --keep:#4ade80;--keep-bg:#122a1c;--dep:#f0a58c;--dep-bg:#33201a;
+  --defer:#fbbf24;--defer-bg:#302a14;--merge:#93b4f5;--merge-bg:#17223a;
+  --chip-c:#2dd4bf;--chip-c-bg:#123531;--chip-i:#c4a5f7;--chip-i-bg:#2a2140;
+  --code:#232d34;
+}
+:root[data-theme="light"]{
+  --bg:#f6f7f8;--surface:#ffffff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+  --line:#dde3e6;--accent:#0f766e;--accent-ink:#ffffff;--accent-soft:#e6f2f0;
+  --keep:#15803d;--keep-bg:#e9f5ec;--dep:#b4553a;--dep-bg:#f8ece7;
+  --defer:#a16207;--defer-bg:#f8f2e2;--merge:#1d4ed8;--merge-bg:#e8eefb;
+  --chip-c:#0f766e;--chip-c-bg:#e6f2f0;--chip-i:#7c3aed;--chip-i-bg:#f1eafd;
+  --code:#eef1f3;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 80px}
+header.hero{padding:44px 0 20px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+h1{font-size:clamp(24px,4vw,34px);line-height:1.15;margin:.35em 0 .3em;font-weight:750;letter-spacing:-.02em;text-wrap:balance}
+.sub{color:var(--ink-2);max-width:68ch;margin:0}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.meta span{background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:3px 11px;font-size:12.5px;color:var(--ink-2)}
+nav.toc{position:sticky;top:0;z-index:5;background:var(--bg);padding:10px 0;border-bottom:1px solid var(--line);
+  display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+nav.toc::-webkit-scrollbar{display:none}
+nav.toc a{flex:0 0 auto;text-decoration:none;color:var(--ink-2);font-size:12.5px;font-weight:600;
+  padding:5px 11px;border-radius:99px;border:1px solid transparent}
+nav.toc a:hover{color:var(--accent);border-color:var(--line);background:var(--surface)}
+section{padding-top:34px}
+h2{font-size:20px;font-weight:720;letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+h2 .no{color:var(--ink-3);font-weight:600;font-size:13px;letter-spacing:.08em}
+.h2sub{color:var(--ink-2);margin:0 0 16px;max-width:75ch}
+.chip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  border-radius:5px;padding:2.5px 8px;vertical-align:1px}
+.c-keep{color:var(--keep);background:var(--keep-bg)}
+.c-dep{color:var(--dep);background:var(--dep-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-merge{color:var(--merge);background:var(--merge-bg)}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-inf{color:var(--chip-i);background:var(--chip-i-bg)}
+.cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:14px 0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h3{margin:0 0 6px;font-size:15px;font-weight:700;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.card p{margin:0;color:var(--ink-2);font-size:13.8px}
+.card .ev{margin-top:10px;font-size:12px;color:var(--ink-3)}
+.tscroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin:14px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:640px}
+th{white-space:nowrap;text-align:left;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
+  padding:11px 14px;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:0}
+td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink-2)}
+tr:last-child td{border-bottom:none}
+td b,.card b{color:var(--ink);font-weight:650}
+td .num{font-variant-numeric:tabular-nums}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.big5{counter-reset:n;display:grid;gap:10px;margin:16px 0}
+.big5 .row{counter-increment:n;display:flex;gap:14px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:14px 16px;align-items:flex-start}
+.big5 .row::before{content:counter(n);flex:0 0 30px;height:30px;border-radius:8px;background:var(--accent);
+  color:var(--accent-ink);font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center}
+.big5 .row div{color:var(--ink-2);font-size:13.8px}
+.rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:14px 0}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px}
+.mstone h3{margin:0;font-size:14px}
+.mstone .v{color:var(--ink-3);font-size:12px;margin:2px 0 8px}
+.mstone ul{margin:0;padding-left:17px;color:var(--ink-2);font-size:13px}
+.mstone li{margin:3px 0}
+.mstone .metric{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);font-size:12px;color:var(--ink-3)}
+.note{background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:13px 16px;color:var(--ink-2);font-size:13.5px;margin:14px 0}
+.note b{color:var(--ink)}
+footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0}
+</style>
+
+<div class="wrap">
+<header class="hero">
+  <div class="eyebrow">rawgentic v2.53.0 · report-only review · 2026-07-04</div>
+  <h1>Workflow Modernization Review</h1>
+  <p class="sub">Evidence-backed findings across 12 acceptance criteria, a definitive model-topology verdict, plugin dispositions, and a four-milestone roadmap. Full detail lives in the committed markdown docs; this dashboard is the navigable summary.</p>
+  <div class="meta">
+    <span>18 skills · 7,751 SKILL lines</span><span>12 run-records, all WF2</span>
+    <span>29 downstream projects</span><span>~1,631 tests must stay green</span>
+  </div>
+  <div class="legend">
+    <span class="chip c-conf">Confirmed</span><span class="chip c-inf">Inferred</span>
+    <span class="chip c-keep">Keep / Adopt</span><span class="chip c-merge">Merge / Extend</span>
+    <span class="chip c-defer">Defer / Probation</span><span class="chip c-dep">Deprecate / Reject</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#top5">Top 5</a><a href="#ac1">AC1 Topology</a><a href="#ac2">AC2 /goal</a><a href="#ac3">AC3 Multi-issue</a>
+  <a href="#ac4">AC4 Shrink</a><a href="#ac5">AC5 Primitives</a><a href="#ac6">AC6 Installed</a><a href="#ac7">AC7 New</a>
+  <a href="#ac8">AC8 Architecture</a><a href="#ac9">AC9 Metrics</a><a href="#ac10">AC10 Headless</a>
+  <a href="#ac11">AC11 Compat</a><a href="#ac12">AC12 Deprecation</a><a href="#roadmap">Roadmap</a>
+</nav>
+
+<section id="top5">
+  <h2>The five highest-leverage changes</h2>
+  <div class="big5">
+    <div class="row"><div><b>Deprecate 7 unused workflows + restructure the core to &lt;500-line spines.</b> Removes ~3,476 lines (44.8% of corpus); WF2's per-invocation context load drops ~70%. Three independent evidence lines agree the 7 are unused.</div></div>
+    <div class="row"><div><b>Ship plugin-bundled subagent definitions</b> with model + effort frontmatter and worktree isolation — 19 prose dispatch paragraphs collapse into enforceable agent files; codifies strong-model-on-top.</div></div>
+    <div class="row"><div><b>Cut review-gate spend to what telemetry supports:</b> retire the 3-judge panel; built-in <code>/code-review</code> + the Codex cross-model diff pass carry Step 11. Data-gated switch, WF5 untouched.</div></div>
+    <div class="row"><div><b>Build the multi-issue driver (#148) with a dependency DAG + campaign-level /goal</b> — first-class dependency-ordered campaigns instead of "first issue faithful, rest loose."</div></div>
+    <div class="row"><div><b>Pilot claude-code-action for label-triggered headless WF2</b> — the overnight end-state on GA tooling; folds open issues #48/#51/#52.</div></div>
+  </div>
+</section>
+
+<section id="ac1">
+  <h2><span class="no">AC1</span> Model delegation &amp; effort <span class="chip c-keep">Verdict: strong-model-on-top</span></h2>
+  <p class="h2sub">Confidence ~80% for long-horizon coding work. Escalate-up survives only as mid-loop consultation (advisor pattern), never as topology. The carve-out — per-query cascades — matches no rawgentic workflow shape.</p>
+  <div class="cardgrid">
+    <div class="card"><h3>Orchestrator tier dominates <span class="chip c-conf">Confirmed</span></h3>
+      <p>OptAgent's 25-pairing benchmark: accuracy is driven by the orchestrator tier; weak-top configs collapse on complex tasks (53.9%→0.0%), strong-top holds 91–95%. MAST taxonomy: 78.7% of multi-agent failures sit in orchestrator-owned work.</p>
+      <div class="ev">arxiv 2601.20005 · arxiv 2503.13657</div></div>
+    <div class="card"><h3>Caching makes it affordable <span class="chip c-conf">Confirmed</span></h3>
+      <p>Cache-aware model: Opus-top + Sonnet workers <b>$3.50/run</b> vs Sonnet-top + escalation <b>$2.30/run</b> — a 1.5× premium that <b>one failed retry (~$2.30) erases twice over</b>. Recorded strong-top loop-back rate: 0.</p>
+      <div class="ev">platform.claude.com pricing, fetched live by 2 independent agents</div></div>
+    <div class="card"><h3>Escalation blindness is measured <span class="chip c-conf">Confirmed</span></h3>
+      <p>Anthropic's own advisor-tool data: weak executors under-call the strong model (Haiku needed a scripted nudge worth ~7pp pass rate). The cheap-top topology gates its escape hatch on the skill the cheap model lacks.</p>
+      <div class="ev">platform.claude.com advisor-tool doc</div></div>
+    <div class="card"><h3>Field data agrees <span class="chip c-conf">Confirmed</span></h3>
+      <p>Campaign 131–140: strongest-model orchestration, Sonnet down-routing — 10/10 merged, green CI, <b>0 loop-backs, 0 budget overruns</b>. No weak-top counterfactual exists; the A/B is in the measurement plan.</p>
+      <div class="ev">campaign-131-140.handoff.md</div></div>
+    <div class="card"><h3>Subscription users (the majority) <span class="chip c-conf">Confirmed</span></h3>
+      <p>Pro/Max currency = shared plan bucket, 5-hour window + weekly cap, <b>hard lockout</b>. Cache reads count at the same 0.1× — the 1.5× premium carries over in bucket units. Failure cost sharpens: a loop-back can bust the cap and <b>stall the whole campaign until reset</b>. Verdict unchanged, strengthened.</p>
+      <div class="ev">support.claude.com 11145838 · code.claude.com prompt-caching / authentication</div></div>
+    <div class="card"><h3>Subscriber session-model ladder</h3>
+      <p>The rule: <b>strongest model your billing keeps in-plan (or deliberately funded) on top</b> — not "Opus" per se. Today: Opus 4.8 in-plan for routine runs (loop-backs already 0). <b>Credits-funded Fable</b> (2× Opus, orchestrator slot ≈ $5.50/run): dollars buy the judgment tier, bucket pays the volume tier — for high-stakes engagements. <b>If Fable returns in-plan</b>, the rule promotes it to the top slot by default; cap-constrained users check the rework delta via run-records. Thinking tokens count at full bucket weight → effort routing matters more; /fast is never in-plan; headless subscription OAuth is official.</p>
+      <div class="ev">code.claude.com fast-mode / authentication · platform.claude.com extended-thinking</div></div>
+  </div>
+  <div class="tscroll"><table>
+    <tr><th>Task class</th><th>Model</th><th>Effort</th><th>Why</th></tr>
+    <tr><td><b>Top-level orchestration</b></td><td>strongest (Fable/Opus)</td><td>high</td><td>decomposition errors propagate to every task; cache cheapens the premium</td></tr>
+    <tr><td><b>Design &amp; architecture</b> (Step 3)</td><td>opus</td><td>xhigh</td><td>highest reasoning density per token</td></tr>
+    <tr><td><b>Adversarial / security review</b></td><td>opus + Codex peer</td><td>xhigh</td><td>asymmetric miss cost; cross-model diversity</td></tr>
+    <tr><td><b>Standard code review</b> (Step 11)</td><td>opus</td><td>high</td><td>matches severity-banded confidence design</td></tr>
+    <tr><td><b>Standard implementation</b></td><td>opus ceiling, sonnet down-route</td><td>medium–high</td><td>#132 per-task ceiling semantics — already shipped</td></tr>
+    <tr><td><b>Mechanical tasks</b> (low risk)</td><td>sonnet</td><td>low–medium</td><td>bounded blast radius; gates catch failures cheaply; 2.5× cheaper</td></tr>
+    <tr><td><b>Analysis / inventory</b></td><td>sonnet</td><td>medium</td><td>volume-heavy, judgment-light</td></tr>
+    <tr><td><b>Anything</b></td><td>never haiku</td><td>—</td><td>hard rule, model_routing_lib.py</td></tr>
+  </table></div>
+  <div class="note"><b>/fast:</b> interactive-latency tool only (Opus 4.8 at 2× price, ~2.5× faster) — never in headless/batch paths. <b>modelRouting:</b> current models are already right; extend values to <code>{model, effort}</code> objects (string shorthand preserved — non-breaking).</div>
+</section>
+
+<section id="ac2">
+  <h2><span class="no">AC2</span> /goal integration <span class="chip c-keep">Adopt — Step 1b goal guard</span></h2>
+  <p class="h2sub">Confirmed: /goal is GA and headless-capable; 4,000-char condition; skills cannot set it — they construct the text and hand it over.</p>
+  <div class="cardgrid">
+    <div class="card"><h3>The flow</h3><p>Extract numbered ACs from the validated issue → one user verification → emit compact goal text: <i>"Issue #N done: verified ACs met, PR open with green CI, run-record persisted — or a blocker is posted via the ERROR protocol."</i></p></div>
+    <div class="card"><h3>The escape clause is the design</h3><p>The "or a blocker is posted" disjunct lets a legitimately-blocked run satisfy the goal honestly — no lying, no manual clear in the common failure path. Goal is a condition, never instructions (re-injection burn).</p></div>
+    <div class="card"><h3>Headless</h3><p><code>wf1-created</code>-labeled issues use their pre-approved ACs verbatim; unlabeled issues skip the guard. Driver or Action sets the goal at session start. PR-terminal wording always.</p></div>
+  </div>
+</section>
+
+<section id="ac3">
+  <h2><span class="no">AC3</span> Multi-issue runs <span class="chip c-merge">Extend #148 — add dependency DAG</span></h2>
+  <p class="h2sub">Fresh WF2 invocation per issue (the shipped #134 design) is the fix for "first faithful, rest loose." This review endorses it unchanged and adds one layer.</p>
+  <div class="cardgrid">
+    <div class="card"><h3>Dependency-ordered execution</h3><p>Parse <code>depends on #N</code> / task-lists / GH relationships → <code>issues[].depends_on</code> in the queue file (schema v2) → topo-sort at campaign start → <b>halt fail-closed on cycles</b>. Advance only when deps are merged (policy knob for pr_open).</p></div>
+    <div class="card"><h3>Deferred deps park dependents</h3><p><code>cross-issue-dependency</code> DEFER reason; the loop continues with independent issues — never stalls the backlog.</p></div>
+    <div class="card"><h3>Campaign-level /goal + compaction</h3><p>One goal wraps the driver session (one goal per session); compaction between issues is the proven pattern from 131–140.</p></div>
+    <div class="card"><h3>Epic anchor — offered, not forced</h3><p>Epic issue = human-facing intent + progress mirror (task-list checkboxes, STATUS/QUESTION channel, DAG input); the state file stays the machine source of truth, mirrored one-way. <b>Optional interactively, mandatory headless</b> — an unattended run needs somewhere to talk to its humans.</p></div>
+  </div>
+</section>
+
+<section id="ac4">
+  <h2><span class="no">AC4</span> Shrink the skill files <span class="chip c-keep">Restructure, don't rewrite</span></h2>
+  <p class="h2sub">WF2: 1,584 → ≤450-line spine + on-demand references. Per-invocation context load −70%. Every gate preserved verbatim — WF1's lean rewrite was safe because issue drafting is judgment-light; WF2's gates encode failure lessons.</p>
+  <div class="tscroll"><table>
+    <tr><th>Layer</th><th>Contents</th><th>WF2 target</th></tr>
+    <tr><td><b>SKILL.md spine</b></td><td>role, happy path, mandatory-steps table, constants, 1–3 lines/step + read-pointers</td><td class="num">≤450 lines (from 1,584)</td></tr>
+    <tr><td><b>references/steps.md</b></td><td>per-step detail, gate protocols</td><td class="num">~600</td></tr>
+    <tr><td><b>references/state-and-resume.md</b></td><td>state files, loop-back budget, resumption</td><td class="num">~150</td></tr>
+    <tr><td><b>references/headless.md</b></td><td>absorbs per-step headless detail (exists)</td><td class="num">+50</td></tr>
+    <tr><td><b>shared/blocks/</b></td><td>+ model-routing-resolve, loop-back-budget</td><td class="num">+2 blocks</td></tr>
+  </table></div>
+  <div class="note"><b>Drift-guard survival:</b> a one-time <code>skill_corpus()</code> test helper points the 12 prose-pinning guards at SKILL.md ∪ references/ — guards are taught about the corpus, never weakened. Ships before any prose moves.</div>
+</section>
+
+<section id="ac5">
+  <h2><span class="no">AC5</span> Harness primitives</h2>
+  <div class="tscroll"><table>
+    <tr><th>Primitive</th><th>Status</th><th>Verdict</th><th>Why</th></tr>
+    <tr><td><b>Plugin-bundled agent definitions</b></td><td>GA</td><td><span class="chip c-keep">Adopt</span></td><td>highest leverage — model/effort/isolation in frontmatter replaces 19 dispatch paragraphs</td></tr>
+    <tr><td><b>Worktree isolation</b></td><td>GA, zero token cost</td><td><span class="chip c-keep">Adopt</span></td><td>extends #85; #136 probe already shipped</td></tr>
+    <tr><td><b>/goal</b></td><td>GA, headless</td><td><span class="chip c-keep">Adopt</span></td><td>AC2 goal guard</td></tr>
+    <tr><td><b>claude-code-action</b></td><td>v1.0 GA</td><td><span class="chip c-keep">Adopt (pilot)</span></td><td>invokes plugin skills directly; AC8e</td></tr>
+    <tr><td><b>Hooks (23+ events)</b></td><td>GA</td><td><span class="chip c-merge">Extend</span></td><td>SubagentStop as telemetry capture point (spike first)</td></tr>
+    <tr><td><b>/tasks + TaskCreate</b></td><td>GA, session-scoped</td><td><span class="chip c-defer">Keep markers</span></td><td>tasks reset on new session — session-notes markers are the durable resumption substrate</td></tr>
+    <tr><td><b>Workflow tool</b></td><td>experimental, env-gated</td><td><span class="chip c-defer">Defer</span></td><td>don't build plugin behavior on an experimental gate</td></tr>
+    <tr><td><b>/loop</b></td><td>GA, jitter ≤30min</td><td><span class="chip c-defer">Marginal</span></td><td>jitter wrong for CI watch; <code>gh run watch</code> better</td></tr>
+    <tr><td><b>/fast</b></td><td>preview, Opus-only, 2×</td><td><span class="chip c-defer">Document only</span></td><td>interactive sessions only</td></tr>
+    <tr><td><b>Cron / background</b></td><td>GA, 7-day expiry</td><td><span class="chip c-dep">Pass</span></td><td>no workflow fit; driver uses fresh invocations</td></tr>
+  </table></div>
+</section>
+
+<section id="ac6">
+  <h2><span class="no">AC6</span> Installed plugins — keep / replace / remove</h2>
+  <div class="tscroll"><table>
+    <tr><th>Plugin</th><th>Verdict</th><th>Evidence</th></tr>
+    <tr><td><b>codex</b> (WF5/WF13 engine)</td><td><span class="chip c-keep">Keep — load-bearing</span></td><td>cross-model diversity irreplaceable; found the #133 foreign-key laundering hole + real Criticals</td></tr>
+    <tr><td><b>reflexion</b></td><td><span class="chip c-dep">Retire critique from spine</span></td><td>3-judge panel: 0 measured gain (owner telemetry); lean spine shipped 10/10 with 0 loop-backs. reflect stays short-term; inline quality-bar replaces it long-term</td></tr>
+    <tr><td><b>Built-in /code-review</b></td><td><span class="chip c-keep">Adopt at Step 11</span></td><td>typed findings + severity filter for simple/standard lanes; hand-rolled multi-agent retained for complex until A/B settles</td></tr>
+    <tr><td><b>superpowers</b></td><td><span class="chip c-keep">Keep + lean on harder</span></td><td>WF2's TDD prose delegates to superpowers:test-driven-development; 3 of 4 brainstorm call-sites die with deprecated hosts</td></tr>
+    <tr><td><b>skill-creator</b></td><td><span class="chip c-keep">Keep</span></td><td>validated WF1's rewrite; reuse for WF2 restructure evals</td></tr>
+    <tr><td><b>mempalace / context7 / exa / firecrawl</b></td><td><span class="chip c-keep">Keep</span></td><td>session infra + research (this review used them)</td></tr>
+    <tr><td><b>caveman / ponytail / sdd / drawio / others</b></td><td><span class="chip c-keep">Keep, out of scope</span></td><td>no rawgentic workflow call sites</td></tr>
+  </table></div>
+</section>
+
+<section id="ac7">
+  <h2><span class="no">AC7</span> Not-installed candidates <span class="chip c-conf">568-plugin marketplace swept</span></h2>
+  <div class="tscroll"><table>
+    <tr><th>#</th><th>Candidate</th><th>Slots into</th><th>Signal</th></tr>
+    <tr><td class="num">1</td><td><b>claude-code-action</b> ⭐ top-3</td><td>headless substrate: triage, PR review, scheduled runs</td><td>official; Anthropic dogfoods issue-triage on its own repo</td></tr>
+    <tr><td class="num">2</td><td><b>claude-code-security-review</b> ⭐ top-3</td><td>CI-side semantic security lane beside Step 11.5</td><td>5.5k stars, <b>261 dependent repos</b> — strongest usage signal found</td></tr>
+    <tr><td class="num">3</td><td><b>ccusage</b> ⭐ top-3</td><td>token/cost telemetry → AC9 usage fields</td><td>local JSONL, zero upload, npx</td></tr>
+    <tr><td class="num">4</td><td><b>Socket MCP</b></td><td>supply-chain guardrail for unattended installs</td><td>hosted, zero setup; install-block hook unverified [I]</td></tr>
+    <tr><td class="num">5</td><td><b>code-review</b> (official plugin)</td><td>headless Action review lane</td><td>marketplace-coordinates gotcha — verify before wiring</td></tr>
+    <tr><td class="num">6</td><td><b>pr-review-toolkit</b></td><td>dimension-specific local reviewers</td><td>official; complements Codex</td></tr>
+    <tr><td class="num">7</td><td><b>ralph-wiggum</b></td><td>campaign loop</td><td>superseded by native /goal (exact-string matching loses to model-evaluated condition)</td></tr>
+    <tr><td class="num">8</td><td><b>hookify</b></td><td>guardrail-hook generation pre-campaign</td><td>official; detail unverified [I]</td></tr>
+  </table></div>
+</section>
+
+<section id="ac8">
+  <h2><span class="no">AC8</span> Architecture adjustments</h2>
+  <div class="cardgrid">
+    <div class="card"><h3>(a) Workflow-tool / Agent SDK <span class="chip c-dep">No</span></h3><p>Workflow tool experimental; SDK rewrite kills the zero-dep markdown-plugin distribution model. Revisit at GA.</p></div>
+    <div class="card"><h3>(b) Harness-native state <span class="chip c-defer">Hybrid</span></h3><p>/goal adopted; /tasks rejected as source of truth (session-scoped); session-notes markers + committed state files stay — they survive compaction and machine moves.</p></div>
+    <div class="card"><h3>(c) Consolidation <span class="chip c-keep">Yes</span></h3><p>13 numbered workflows → 5–6: WF3 becomes a bug lane over WF2's spine; WF11 merges into WF3 hotfix lane; 6 deprecate (AC12).</p></div>
+    <div class="card"><h3>(d) Hooks as MCP server <span class="chip c-dep">No</span></h3><p>Pure local functions; a server adds lifecycle + version-skew risk for zero capability gain. CLI stays.</p></div>
+    <div class="card"><h3>(e) GitHub-native automation <span class="chip c-keep">Pilot</span></h3><p>Label-triggered headless WF2 via claude-code-action; PR-terminal matches Action semantics; folds #48/#51/#52. The real overnight answer.</p></div>
+  </div>
+</section>
+
+<section id="ac9">
+  <h2><span class="no">AC9</span> Measurement plan</h2>
+  <div class="cardgrid">
+    <div class="card"><h3>Fix the substrate first</h3><p><code>run_records.jsonl</code> is <b>untracked</b> (confirmed) — single-host telemetry. Commit it (or committed aggregates, with #115). Add optional <code>usage</code> + <code>reviewer_kind</code> fields (#116 vehicle); never blocks Step 16.</p></div>
+    <div class="card"><h3>Every proposal carries a metric</h3><p>AC1: cost + loop-backs per issue by routing config · AC2: premature stops = 0 · AC3: ordering violations = 0 · AC4: invocation tokens −70% at non-regressed quality · AC6: findings-yield per token by reviewer kind · AC8e: issues/week with zero touches.</p></div>
+    <div class="card"><h3>Rule</h3><p>No roadmap issue ships without its metric named in the issue body. E5's review switch is explicitly data-gated: no A/B evidence → issue abandoned with the data cited.</p></div>
+  </div>
+</section>
+
+<section id="ac10">
+  <h2><span class="no">AC10</span> Headless parity</h2>
+  <p class="h2sub">The references/headless.md contract (QUESTION/ERROR, PR-terminal, SSH block) is preserved verbatim by every proposal. Per-proposal headless statements are inline in the findings doc; #48 → Action STATUS comments, #51 → PR comment, #52 → Action timeout + heartbeats — all fold into M4.</p>
+</section>
+
+<section id="ac11">
+  <h2><span class="no">AC11</span> Back-compat &amp; consumers <span class="chip c-merge">v3.0.0 verdict</span></h2>
+  <div class="tscroll"><table>
+    <tr><th>Proposal</th><th>Class</th><th>Migration / rollback</th></tr>
+    <tr><td>modelRouting {model, effort}</td><td><span class="chip c-keep">Transparent</span></td><td>string shorthand preserved; revert config</td></tr>
+    <tr><td>Goal guard, agent defs, driver DAG, Action pilot</td><td><span class="chip c-keep">Additive</span></td><td>opt-in; delete to roll back</td></tr>
+    <tr><td>SKILL restructure</td><td><span class="chip c-keep">Transparent to configs</span></td><td>cache refresh; git revert; old cache version still runs</td></tr>
+    <tr><td>Review-gate switch</td><td><span class="chip c-defer">Behavioral</span></td><td>config keys unchanged; version-pin to 2.x</td></tr>
+    <tr><td>7 workflow deprecations</td><td><span class="chip c-dep">Breaking</span></td><td>stubs one minor cycle → removal at v3.0.0; upgrade guide; marketplace history for rollback</td></tr>
+  </table></div>
+  <p class="h2sub">Consumers confirmed: STARS mirror Action (in-repo), marketplace version-drift validation, 29 project configs (2 with modelRouting), stale plugin-cache gotcha, in-flight .wf2-state (schema untouched). Bundle the breaking changes into <b>one v3.0.0 boundary</b> with <code>docs/upgrade-3.0.md</code>.</p>
+</section>
+
+<section id="ac12">
+  <h2><span class="no">AC12</span> Deprecation audit <span class="chip c-dep">−3,476 lines (44.8%)</span></h2>
+  <p class="h2sub">Three converging evidence lines: run-records (12/12 = WF2 only), session-note traces (zero for the seven), design-doc mtimes (frozen since March). Notes rotate, so "zero ever" is inferred — the stub cycle is the definitive test.</p>
+  <div class="tscroll"><table>
+    <tr><th>Workflow</th><th>Lines</th><th>Verdict</th><th>Replacement</th></tr>
+    <tr><td>WF1 create-issue</td><td class="num">181</td><td><span class="chip c-keep">Keep</span></td><td>— (lean rewrite proven)</td></tr>
+    <tr><td>WF2 implement-feature</td><td class="num">1,584</td><td><span class="chip c-keep">Keep</span></td><td>restructured per AC4</td></tr>
+    <tr><td>WF3 fix-bug</td><td class="num">734</td><td><span class="chip c-merge">Merge</span></td><td>bug lane over WF2 spine</td></tr>
+    <tr><td>WF4 refactor</td><td class="num">535</td><td><span class="chip c-dep">Deprecate</span></td><td>WF2 refactor-type issue</td></tr>
+    <tr><td>WF5 adversarial-review</td><td class="num">243</td><td><span class="chip c-keep">Keep</span></td><td>— (catches real Criticals)</td></tr>
+    <tr><td>WF7 update-docs</td><td class="num">488</td><td><span class="chip c-dep">Deprecate</span></td><td>plain session / WF2 docs issue</td></tr>
+    <tr><td>WF8 update-deps</td><td class="num">424</td><td><span class="chip c-dep">Deprecate</span></td><td>osv/trivy cover audit; bumps = WF2 issues; Socket MCP optional</td></tr>
+    <tr><td>WF9 security-audit</td><td class="num">490</td><td><span class="chip c-dep">Deprecate skill, keep tooling</span></td><td><code>/rawgentic:scan</code> + built-in /security-review + WF5 · Step 11.5 untouched</td></tr>
+    <tr><td>WF10 optimize-perf</td><td class="num">482</td><td><span class="chip c-dep">Deprecate</span></td><td>WF2 perf issue + perf-checklist reference</td></tr>
+    <tr><td>WF11 incident</td><td class="num">537</td><td><span class="chip c-merge">Merge</span></td><td>WF3 hotfix lane + incident checklist reference</td></tr>
+    <tr><td>WF12 create-tests</td><td class="num">520</td><td><span class="chip c-dep">Deprecate</span></td><td>WF2 test issue + superpowers TDD</td></tr>
+    <tr><td>WF13 peer-consult</td><td class="num">219</td><td><span class="chip c-defer">Probation</span></td><td>re-audit after 10 runs with peerConsult on</td></tr>
+    <tr><td>interview · sync-security-patterns · setup / switch / new-project / add-exception</td><td class="num">23–643</td><td><span class="chip c-keep">Keep</span></td><td>utilities; setup shrinks under AC4</td></tr>
+  </table></div>
+</section>
+
+<section id="roadmap">
+  <h2>Roadmap — four independently shippable milestones</h2>
+  <div class="rail">
+    <div class="mstone"><h3>M1 · Instrument + additive</h3><div class="v">v2.54–2.55</div>
+      <ul><li>modelRouting {model, effort} (S)</li><li>usage + reviewer-kind telemetry, commit the store (S–M, ext. #115/#116)</li><li>WF2/WF3 goal guard (S)</li></ul>
+      <div class="metric">Metric: 3 consecutive instrumented run-records; 0 goal false-blocks</div></div>
+    <div class="mstone"><h3>M2 · Restructure + deprecate</h3><div class="v">v3.0.0</div>
+      <ul><li>skill_corpus() test helper (S, first)</li><li>WF2 split ≤450 (L) · WF3 lane (M)</li><li>Deprecation stubs + /rawgentic:scan (M)</li><li>Review-gate switch, data-gated (M)</li><li>v3.0.0 + upgrade guide (S)</li></ul>
+      <div class="metric">Metric: load ≤450 lines; suite green; quality non-regressed over 5 runs</div></div>
+    <div class="mstone"><h3>M3 · Multi-issue autonomy</h3><div class="v">v3.1</div>
+      <ul><li>Dependency DAG on #148 queue (M)</li><li>Bundled agent definitions + worktree isolation (M, ext. #85)</li></ul>
+      <div class="metric">Metric: 5-issue dependency-ordered campaign, 0 violations, 0 interventions</div></div>
+    <div class="mstone"><h3>M4 · Headless platform</h3><div class="v">v3.2</div>
+      <ul><li>claude-code-action label-triggered pilot (L, folds #48/#51/#52)</li><li>claude-code-security-review CI lane (S)</li></ul>
+      <div class="metric">Metric: 1 issue label→PR with zero operator touches</div></div>
+  </div>
+  <div class="note"><b>Sequencing:</b> measure before switching · test-infra before restructure · restructure before driver · platform last. <b>Constraints held everywhere:</b> never-Haiku, PRs-only, no fail-closed gate weakened. Draft issue bodies (WF1-ready) live in the roadmap markdown — not filed without approval.</div>
+</section>
+
+<footer>
+  Report-only review · rawgentic v2.53.0 @ 6b7d009 · Findings: docs/planning/2026-07-04-workflow-modernization-review.md · Roadmap: …-roadmap.md · Every claim tagged confirmed/inferred in the markdown; external sources live-fetched 2026-07-04.
+</footer>
+</div>
