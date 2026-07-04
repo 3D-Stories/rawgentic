@@ -87,3 +87,65 @@ class TestRunRecordReference:
             "the full run-record JSON schema should be in references/run-record.md, "
             "not re-inlined in the base Step 16"
         )
+
+
+# --- Task 5 (#131): WF2 Step 11 opt-in adversarial diff-review sub-step ---
+
+GITIGNORE = REPO_ROOT / ".gitignore"
+
+
+def _step11() -> str:
+    """Text of Step 11 only (up to Step 11.5), where the sub-step lives."""
+    text = _text()
+    start = text.index("## Step 11: Pre-PR Code Review")
+    end = text.index("## Step 11.5:")
+    return text[start:end]
+
+
+class TestStep11DiffReview:
+    def test_marker_template_four_states(self):
+        s11 = _step11()
+        assert "### WF2 Step 11 — Adversarial Diff Review:" in s11
+        for state in ("findings_present", "no_findings", "failed (", "skipped ("):
+            assert state in s11, f"Step 11 diff-review marker missing state {state!r}"
+
+    def test_gate_probe_is_enabled_for_this_skill(self):
+        s11 = _step11()
+        assert "is-enabled" in s11, "Step 11 must reuse the is-enabled enablement probe"
+        assert "--skill implement-feature" in s11
+
+    def test_should_run_diff_review_referenced(self):
+        assert "plan_lib.should_run_diff_review" in _step11()
+
+    def test_dispatch_command_flags(self):
+        s11 = _step11()
+        for flag in ("--type diff", "--findings-json", "--headless"):
+            assert flag in s11, f"Step 11 dispatch command missing {flag!r}"
+
+    def test_patch_construction_and_failure_strings(self):
+        s11 = _step11()
+        assert "high-risk-first" in s11, "patch must be built high-risk-first"
+        assert "truncated" in s11 and "failed (truncated)" in s11
+        assert "base ref unavailable" in s11
+
+    def test_stale_sweep_and_confidence_mapping(self):
+        s11 = _step11()
+        assert ".rawgentic-diff-review-" in s11, "stale-temp sweep must name the patch glob prefix"
+        assert re.search(r"stale|cleanup|leftover", s11, re.IGNORECASE), (
+            "the sweep must carry cleanup/stale language (crash recovery)"
+        )
+        assert "ADV_CONFIDENCE_TO_FLOAT" in s11, "confidence enum must map via ADV_CONFIDENCE_TO_FLOAT"
+
+    def test_secrets_surfacing_in_marker(self):
+        assert "secrets detected" in _step11()
+
+    def test_completion_gate_conditional_marker(self):
+        gate = _block(_text(), "completion-gate")
+        assert "Adversarial Diff Review" in gate, (
+            "completion-gate must require the 4-state diff-review marker when opted in"
+        )
+
+    def test_gitignore_has_diff_review_globs(self):
+        gi = GITIGNORE.read_text()
+        assert ".rawgentic-diff-review-*.patch" in gi
+        assert ".rawgentic-diff-findings-*.json" in gi
