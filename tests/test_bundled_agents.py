@@ -86,7 +86,10 @@ def test_reviewer_tools_are_read_heavy():
     assert tools, "reviewer must declare an explicit read-heavy tools list"
     for forbidden in ("Write", "Edit", "NotebookEdit"):
         assert forbidden not in tools, f"reviewer tools must not include {forbidden}"
-    for required in ("Read", "Grep", "Glob"):
+    # Bash is REQUIRED, not merely tolerated — the definition's contract relies
+    # on it (git log/show/diff, running the suite); its write capability is
+    # bounded by prose (pinned below), not by the tool layer.
+    for required in ("Read", "Grep", "Glob", "Bash"):
         assert required in tools, f"reviewer tools must include {required}"
 
 
