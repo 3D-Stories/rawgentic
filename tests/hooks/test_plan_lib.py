@@ -1317,3 +1317,18 @@ class TestValidateBuildReceipt:
         ok, errors, _ = mod.validate_build_receipt(r, plan, bogus, base)
         assert ok is False  # no crash
         assert errors
+
+    def test_foreign_files_per_task_key_rejected(self, tmp_path):
+        """Codex Step-11 F1: a fake files_per_task/task_shas entry outside the plan
+        must not launder an unplanned changed file past Rule 4. A real extra commit
+        touches stray.py and a fake task 'Z' claims it — the union would otherwise
+        equal the diff and validate. Foreign keys must reject."""
+        mod, repo, base, shaA, shaB, plan = self._fixture(tmp_path)
+        shaZ = _make_commit(repo, {"stray.py": "s"}, "unplanned change")
+        r = _receipt(
+            {"A": shaA, "B": shaB, "Z": shaZ},
+            {"A": ["src/auth/login.py"], "B": ["src/widgets.py"], "Z": ["stray.py"]},
+        )
+        ok, errors, _ = mod.validate_build_receipt(r, plan, str(repo), base)
+        assert ok is False
+        assert any("Z" in e and ("plan" in e.lower() or "unknown" in e.lower()) for e in errors)

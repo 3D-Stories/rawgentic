@@ -95,8 +95,13 @@ rule violation → `ok=False`. git is read-only. Rules:
    Both directions: a task claiming a file not in the diff, OR the diff showing a
    file no task claims → reject. Subset is not enough.
 
-`normalized["promoted_task_ids"]` is surfaced even on rejection (where
-derivable) so the orchestrator can still schedule Step 8a for promotions.
+`normalized["promoted_task_ids"]` is surfaced even on rejection, but only when
+derivable — `receipt` is a dict and `receipt["promotions"]` is a list of
+objects with a string `task_id`. A non-dict/malformed receipt yields an empty
+list, so do not assume Step 8a promotion scheduling happens on *every* rejected
+receipt. Note also that `task_shas`/`files_per_task` keys outside the plan's
+task ids reject the whole receipt (they cannot launder an unplanned file past
+the staging-discipline check).
 
 ## Fallback contract (reject path)
 

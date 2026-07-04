@@ -1052,8 +1052,11 @@ def validate_build_receipt(
     failure rejects rather than raises.
 
     Returns (ok, errors, normalized). `normalized["promoted_task_ids"]` is
-    surfaced even on rejection (where derivable) so the orchestrator can still
-    dispatch Step 8a for mid-flight risk promotions.
+    surfaced even on rejection, but ONLY when it is derivable — i.e. `receipt`
+    is a dict and `receipt["promotions"]` is a list of objects with a string
+    `task_id`. A non-dict receipt yields an empty list (nothing to derive), so
+    the orchestrator must not assume Step 8a promotion scheduling happens on
+    every rejected receipt.
 
     Receipt shape:
         {"task_shas": {task_id: sha}, "files_per_task": {task_id: [path]},
@@ -1085,6 +1088,15 @@ def validate_build_receipt(
     baseline = receipt.get("baseline")
     if not isinstance(baseline, dict):
         return (False, ["receipt.baseline is missing or not a dict"], normalized)
+
+    # Foreign-key guard: task_shas/files_per_task may only name real plan tasks.
+    # Otherwise a fake files_per_task entry could launder an unplanned changed
+    # file past Rule 4 (the entry makes the file "declared" while the sha/binding
+    # loop — which iterates plan_tasks only — never checks it).
+    plan_ids = {task.id for task in plan_tasks}
+    foreign = sorted((set(task_shas) | set(files_per_task)) - plan_ids)
+    if foreign:
+        errors.append(f"receipt names keys outside the plan task set: {foreign}")
 
     # Rule 3: baseline non-regression.
     before = baseline.get("before") if isinstance(baseline.get("before"), dict) else {}
@@ -1149,7 +1161,8 @@ def validate_build_receipt(
         errors.append("cannot compute git diff base..HEAD")
     else:
         union: set[str] = set()
-        for v in files_per_task.values():
+        for tid in plan_ids:  # plan tasks only — foreign keys already errored above
+            v = files_per_task.get(tid)
             if isinstance(v, list):
                 union |= {x for x in v if isinstance(x, str)}
         undeclared = diff_files - union
