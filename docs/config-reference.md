@@ -33,6 +33,9 @@ truth (skills no longer hand-derive it in prose). The fields are:
 | `has_tests` | `config.testing.frameworks` is a non-empty array |
 | `test_commands` | `config.testing.frameworks[].command` (one per framework) |
 | `has_ci` | `config.ci.provider` exists |
+| `ci_quarantined` | `config.ci.status == "quarantined"` (human-declared; needs `provider` + a non-empty `quarantineReason`, else derive errors) |
+| `ci_quarantine_reason` | `config.ci.quarantineReason` when quarantined (else `null`) |
+| `ci_quarantined_since` | `config.ci.quarantinedSince` when quarantined (optional; else `null`) |
 | `has_deploy` | `config.deploy.method` exists and != `"manual"` |
 | `deploy_method` | `config.deploy.method` (one of `compose`/`ssh`/`script`/`manual`; `null` when absent, error if outside the enum) |
 | `has_database` | `config.database.type` exists |

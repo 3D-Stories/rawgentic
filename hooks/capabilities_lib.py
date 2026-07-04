@@ -32,6 +32,9 @@ CAPABILITY_FIELDS = (
     "has_tests",
     "test_commands",
     "has_ci",
+    "ci_quarantined",
+    "ci_quarantine_reason",
+    "ci_quarantined_since",
     "has_deploy",
     "deploy_method",
     "has_database",
@@ -147,6 +150,12 @@ def derive_capabilities(config) -> dict:
             caps["test_commands"] = commands
 
     # --- ci -> has_ci (keys on config.ci.provider) ---
+    # Quarantine (#137) is a HUMAN declaration read from config, never inferred:
+    # a chronically-red suite and a genuinely broken diff are mechanically
+    # indistinguishable, so the workflow must not decide this itself.
+    caps["ci_quarantined"] = False
+    caps["ci_quarantine_reason"] = None
+    caps["ci_quarantined_since"] = None
     ci = _optional_section(config, "ci")
     if ci is _MISSING:
         caps["has_ci"] = False
@@ -157,6 +166,26 @@ def derive_capabilities(config) -> dict:
         else:
             _require_nonempty_str(provider, "config.ci.provider")  # null/wrong/empty -> error
             caps["has_ci"] = True
+        status = ci.get("status", _MISSING)
+        if status is not _MISSING:
+            if status not in ("active", "quarantined"):
+                raise CapabilitiesError(
+                    f"config.ci.status must be 'active' or 'quarantined' "
+                    f"(got {status!r}). Run /rawgentic:setup.")
+            if status == "quarantined":
+                if not caps["has_ci"]:
+                    raise CapabilitiesError(
+                        "config.ci.status is 'quarantined' but no config.ci.provider "
+                        "is set — cannot quarantine CI that isn't declared. "
+                        "Run /rawgentic:setup.")
+                # A quarantine claim MUST carry its justification.
+                caps["ci_quarantine_reason"] = _require_nonempty_str(
+                    ci.get("quarantineReason", _MISSING), "config.ci.quarantineReason")
+                caps["ci_quarantined"] = True
+                since = ci.get("quarantinedSince", _MISSING)
+                if since is not _MISSING:
+                    caps["ci_quarantined_since"] = _require_nonempty_str(
+                        since, "config.ci.quarantinedSince")
 
     # --- deploy -> has_deploy, deploy_method (method=="manual" is the carve-out) ---
     deploy = _optional_section(config, "deploy")
