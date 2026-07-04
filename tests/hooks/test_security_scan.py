@@ -833,10 +833,12 @@ class TestWF2Wiring:
 class TestWF9Wiring:
     """WF9 must reuse the SAME lib (full mode) and the stale Serena ref is gone."""
 
+    # WF9 deprecated to a stub (#160); its --full tooling lives on as the
+    # /rawgentic:scan utility skill — the wiring pin moves with it.
     def _text(self):
-        return (SKILLS_DIR / "security-audit" / "SKILL.md").read_text()
+        return (SKILLS_DIR / "scan" / "SKILL.md").read_text()
 
-    def test_wf9_invokes_shared_lib_full_mode(self):
+    def test_scan_skill_invokes_shared_lib_full_mode(self):
         t = self._text()
         assert "hooks/security_scan.py" in t
         assert "--full" in t

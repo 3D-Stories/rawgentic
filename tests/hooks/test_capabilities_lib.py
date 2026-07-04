@@ -306,9 +306,11 @@ class TestDeriveCLI:
 # The 11 workflow skills whose config-loading block carried the identical
 # (now-extracted) capabilities derivation.
 WIRED_SKILLS = [
-    "adversarial-review", "create-issue", "create-tests", "fix-bug",
-    "implement-feature", "incident", "optimize-perf", "refactor",
-    "security-audit", "update-deps", "update-docs",
+    # WF4/7/8/9/10/12 deprecated to stubs 2026-07-04 (#160) — stubs carry no
+    # config-loading; their guard is tests/test_deprecation_stubs.py. scan (#160)
+    # is the new config-driven utility skill.
+    "adversarial-review", "create-issue", "fix-bug",
+    "implement-feature", "incident", "scan",
 ]
 SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 DOCS = Path(__file__).resolve().parent.parent.parent / "docs" / "config-reference.md"

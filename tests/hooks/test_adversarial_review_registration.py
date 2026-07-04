@@ -195,27 +195,15 @@ def test_wf1_uses_no_plan_lib_loopback():
     assert "consume_loopback(" not in step4
 
 
-def test_wf4_invokes_in_step4_extract_restructure_only():
+def test_wf4_is_a_deprecation_stub():
+    """WF4 deprecated to a stub (#160): its Step 4 adversarial integration is
+    gone WITH the workflow — the stub carries no gates. Redirect + telemetry
+    are pinned in tests/test_deprecation_stubs.py; this asserts the old
+    integration didn't half-survive."""
     text = skill_corpus("refactor")
-    step4 = _section(text, "## Step 4:", "## Step 5:")
-    assert "adversarial-review" in step4.lower(), "WF4 Step 4 missing adversarial-review invocation"
-    assert "is-enabled" in step4, "WF4 Step 4 missing config gate (is-enabled)"
-    assert "refactor" in step4
-    # gated to the full-critique path only (extract/restructure), not rename/simplify
-    low = step4.lower()
-    assert "extract" in low and "restructure" in low
-
-
-def test_wf4_uses_textual_budget_not_plan_lib():
-    """WF4 manages loop-back via its own textual LOOPBACK_BUDGET, not plan_lib.
-
-    Assert no actual `consume_loopback(` invocation, and that the textual budget
-    is referenced.
-    """
-    text = skill_corpus("refactor")
-    step4 = _section(text, "## Step 4:", "## Step 5:")
-    assert "consume_loopback(" not in step4  # WF4 does not use plan_lib counters
-    assert "LOOPBACK_BUDGET" in step4
+    assert "DEPRECATED" in text
+    assert "## Step 4:" not in text
+    assert "consume_loopback(" not in text
 
 
 def test_setup_offers_all_four_workflows():
