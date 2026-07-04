@@ -1527,3 +1527,69 @@ class TestDeferralGateHardening:
         mod = _reload_plan_lib()
         ok, errs = mod.assert_pr_body_has_deferred_section("## Summary\n", [])
         assert ok is True and errs == []
+
+
+# --- #139: branch-protection probe classification ---
+
+class TestBranchProtection:
+    def test_protected_with_required_checks(self):
+        mod = _reload_plan_lib()
+        body = {
+            "required_status_checks": {"checks": [{"context": "test"}, {"context": "lint"}]},
+            "required_pull_request_reviews": {"required_approving_review_count": 1},
+        }
+        state, details = mod.classify_branch_protection(200, body)
+        assert state == "protected"
+        assert set(details["required_checks"]) == {"test", "lint"}
+        assert details["required_reviews"] is True
+
+    def test_protected_contexts_legacy_shape(self):
+        mod = _reload_plan_lib()
+        body = {"required_status_checks": {"contexts": ["ci/build"]}}
+        state, details = mod.classify_branch_protection(200, body)
+        assert state == "protected"
+        assert details["required_checks"] == ["ci/build"]
+
+    def test_unprotected_on_404(self):
+        mod = _reload_plan_lib()
+        state, details = mod.classify_branch_protection(404, {"message": "Branch not protected"})
+        assert state == "unprotected"
+        assert details["required_checks"] == []
+
+    def test_unknown_on_403(self):
+        mod = _reload_plan_lib()
+        state, _ = mod.classify_branch_protection(403, {"message": "Forbidden"})
+        assert state == "unknown"
+
+    def test_unknown_on_other_error(self):
+        mod = _reload_plan_lib()
+        state, _ = mod.classify_branch_protection(500, {})
+        assert state == "unknown"
+
+    def test_protection_line_unprotected(self):
+        mod = _reload_plan_lib()
+        line = mod.branch_protection_line("unprotected", {"required_checks": []})
+        assert "none" in line.lower()
+        assert "WF2 only" in line or "wf2" in line.lower()
+
+    def test_protection_line_protected(self):
+        mod = _reload_plan_lib()
+        line = mod.branch_protection_line("protected", {"required_checks": ["test"], "required_reviews": True})
+        assert "test" in line
+
+    def test_contradiction_when_quarantined_and_required_checks(self):
+        mod = _reload_plan_lib()
+        msg = mod.quarantine_protection_contradiction(True, "protected", ["test"])
+        assert msg is not None and "quarantin" in msg.lower()
+
+    def test_no_contradiction_when_not_quarantined(self):
+        mod = _reload_plan_lib()
+        assert mod.quarantine_protection_contradiction(False, "protected", ["test"]) is None
+
+    def test_no_contradiction_when_unprotected(self):
+        mod = _reload_plan_lib()
+        assert mod.quarantine_protection_contradiction(True, "unprotected", []) is None
+
+    def test_no_contradiction_when_no_required_checks(self):
+        mod = _reload_plan_lib()
+        assert mod.quarantine_protection_contradiction(True, "protected", []) is None
