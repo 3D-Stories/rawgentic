@@ -1277,6 +1277,104 @@ def validate_build_receipt(
     return (len(errors) == 0, errors, normalized)
 
 
+# --- Branch-protection probe classification (#139) ---
+
+
+_PROTECTION_KEYS = frozenset({
+    "required_status_checks", "required_pull_request_reviews", "enforce_admins",
+    "restrictions", "url", "required_signatures", "required_linear_history",
+    "allow_force_pushes", "allow_deletions", "required_conversation_resolution",
+    "lock_branch", "block_creations",
+})
+
+
+def classify_branch_protection(status_code: int, body) -> tuple[str, dict]:
+    """Classify a `gh api .../branches/<b>/protection` result (#139).
+
+    Returns (state, details) where state is 'protected' | 'unprotected' |
+    'unknown'. The probe is ADVISORY and fail-open, but it must NOT misread an
+    ambiguous result as a definitive one (that would overstate OR understate
+    protection):
+    - 404 is 'unprotected' ONLY when the body is the GitHub "Branch not
+      protected" shape; any other 404 (wrong repo/branch, inaccessible) is
+      'unknown', so an absent probe never reads as a confirmed no-protection.
+    - 200 is 'protected' ONLY when the body is a recognizable protection object;
+      a 200 with a non-dict, unrecognized, or malformed `required_status_checks`
+      body is 'unknown' (a corrupt parse must not silently pass as valid data,
+      or the contradiction check would be skipped).
+    - 403/401/other -> 'unknown'.
+    `details` always carries `required_checks: list[str]`.
+    """
+    if status_code == 200:
+        if not isinstance(body, dict) or not (_PROTECTION_KEYS & set(body)):
+            return ("unknown", {"required_checks": []})
+        checks: list[str] = []
+        if "required_status_checks" in body:
+            rsc = body["required_status_checks"]
+            if not isinstance(rsc, dict):
+                return ("unknown", {"required_checks": []})
+            if isinstance(rsc.get("checks"), list):
+                checks = [c.get("context") for c in rsc["checks"]
+                          if isinstance(c, dict) and isinstance(c.get("context"), str)]
+            elif isinstance(rsc.get("contexts"), list):
+                checks = [c for c in rsc["contexts"] if isinstance(c, str)]
+            elif "checks" in rsc or "contexts" in rsc:
+                return ("unknown", {"required_checks": []})  # present but wrong type
+        reviews = body.get("required_pull_request_reviews")
+        return ("protected", {
+            "required_checks": checks,
+            "required_reviews": isinstance(reviews, dict),
+        })
+    if status_code == 404 and isinstance(body, dict) \
+            and "not protected" in str(body.get("message", "")).lower():
+        return ("unprotected", {"required_checks": []})
+    # 403/401 (forbidden/not visible), a non-"not protected" 404, or any other
+    # status -> fail-open unknown.
+    return ("unknown", {"required_checks": []})
+
+
+def branch_protection_line(state: str, details: dict) -> str:
+    """One-line summary for session notes + the Step 12 PR body (#139).
+
+    States plainly which layer enforces the shipping gates so a passed PR does
+    not overstate its server-side protection.
+    """
+    checks = (details or {}).get("required_checks") or []
+    if state == "protected":
+        parts = []
+        if checks:
+            parts.append("required checks: " + ", ".join(checks))
+        if (details or {}).get("required_reviews"):
+            parts.append("reviews required")
+        detail = f" ({'; '.join(parts)})" if parts else ""
+        return f"Branch protection: enabled{detail} — GitHub enforces these server-side."
+    if state == "unprotected":
+        return ("Branch protection: none — review/CI gates enforced by WF2 only, "
+                "not by GitHub (a direct push or unreviewed merge is not blocked server-side).")
+    return ("Branch protection: unknown (protection API not visible — e.g. token "
+            "lacks scope) — treat as WF2-only enforcement.")
+
+
+def quarantine_protection_contradiction(
+    ci_quarantined: bool,
+    protection_state: str,
+    required_checks: list,
+) -> str | None:
+    """Flag the quarantined-CI × required-status-check contradiction (#139).
+
+    If CI is quarantined (WF2 won't gate on it) but branch protection REQUIRES
+    status checks, a merge attempt will hit a server-side wall. Surface it before
+    Step 14 rather than merging into the wall. Returns a message or None.
+    """
+    if ci_quarantined and protection_state == "protected" and required_checks:
+        return (
+            "CONTRADICTION: CI is quarantined (WF2 treats it as non-gating) but "
+            f"branch protection requires status checks {list(required_checks)} — "
+            "a merge will be blocked server-side. Lift the quarantine, fix CI, or "
+            "adjust protection before attempting Step 14.")
+    return None
+
+
 # --- Committed per-branch review-state pointer (.rawgentic/review-state/) ---
 
 _REVIEW_STATE_DIR = ".rawgentic/review-state"

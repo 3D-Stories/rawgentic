@@ -1264,7 +1264,7 @@ class TestHeadlessInteractionBlock:
 
     # Expected [Headless annotation counts per skill
     EXPECTED_COUNTS = {
-        "implement-feature": 31,  # 17 base + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block + 1 Step 2 trivial-work suggestion + 3 headless remote-ops guards (#47): Step 2 SSH-probe skip, Step 14 merge/deploy skip, Step 15 post-deploy skip + 1 Step 7 base-mismatch ERROR (#140) + 1 Step 13 CI-quarantine-change approval (#137)
+        "implement-feature": 32,  # 17 base + 7 P15 (#73): Step 5 warn/halt/decompose + 8a ambiguity/dispatch-failure/design-flaw/headless-suspend + Step 11 deferred-High + 1 Step 11.5 security-scan block + 1 Step 2 trivial-work suggestion + 3 headless remote-ops guards (#47): Step 2 SSH-probe skip, Step 14 merge/deploy skip, Step 15 post-deploy skip + 1 Step 7 base-mismatch ERROR (#140) + 1 Step 13 CI-quarantine-change approval (#137) + 1 Step 14 quarantine×protection contradiction (#139)
         "fix-bug": 11,            # 10 interaction points + 1 Step 2 trivial-work suggestion
     }
 
