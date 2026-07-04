@@ -145,6 +145,58 @@ class TestValidateExtra:
         assert validate_record(rec) == []
 
 
+class TestValidateReviewerKind:
+    """`reviewer_kind` (#155, task 2) canonicalizes reviewer identity per #116's
+    controlled-vocabulary contract. OPTIONAL per gate — absent is valid (keeps
+    every legacy record valid); when present it must be a REVIEWER_KINDS member,
+    fail-closed on free text or null (omit the key instead of nulling it)."""
+
+    def test_gate_without_reviewer_kind_is_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        assert "reviewer_kind" not in rec["gates"][0]
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("kind", [
+        "inline", "reflexion", "builtin_code_review", "codex", "hand_rolled_multi",
+    ])
+    def test_each_canonical_value_is_valid(self, kind):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = kind
+        assert validate_record(rec) == []
+
+    def test_free_text_value_is_error(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = "3-agent panel"
+        errs = validate_record(rec)
+        assert any("gates[0].reviewer_kind" in e for e in errs)
+
+    def test_null_is_error(self):
+        """null is NOT a stand-in for absent — the caller must omit the key."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = None
+        errs = validate_record(rec)
+        assert any("gates[0].reviewer_kind" in e for e in errs)
+
+    @pytest.mark.parametrize("bad", [7, True, ["codex"]])
+    def test_non_string_value_is_error(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = bad
+        errs = validate_record(rec)
+        assert any("gates[0].reviewer_kind" in e for e in errs)
+
+    def test_mixed_gates_with_and_without_are_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = "codex"
+        assert "reviewer_kind" not in rec["gates"][1]
+        assert validate_record(rec) == []
+
+
 # --- validate_record: fail-closed ------------------------------------------
 
 class TestValidateFailClosed:

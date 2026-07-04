@@ -50,6 +50,10 @@ COMPLEXITIES = {"trivial", "standard", "complex"}  # None also allowed
 GATE_STATUSES = {"pass", "fail", "skipped", "fast_path"}
 CI_STATUSES = {"passed", "failed", "not_configured", "skipped"}
 DEPLOY_STATUSES = {"success", "manual", "failed", "not_applicable"}
+# Canonicalizes reviewer identity on a gate entry per #116's controlled-
+# vocabulary contract. Optional; free text is rejected by design.
+REVIEWER_KINDS = {"inline", "reflexion", "builtin_code_review", "codex",
+                   "hand_rolled_multi"}
 
 # Human-summary header label per workflow; falls back to the upper-cased name.
 _WF_LABELS = {"implement-feature": "WF2", "fix-bug": "WF3"}
@@ -200,6 +204,10 @@ def validate_record(record) -> list:
                         f"gates[{i}].status must be one of {sorted(GATE_STATUSES)}")
                 if _is_int(fnd) and _is_int(rsv) and rsv > fnd:
                     errs.append(f"gates[{i}].resolved cannot exceed gates[{i}].findings")
+                if "reviewer_kind" in g and (not _is_str(g["reviewer_kind"])
+                                              or g["reviewer_kind"] not in REVIEWER_KINDS):
+                    errs.append(f"gates[{i}].reviewer_kind must be one of "
+                                f"{sorted(REVIEWER_KINDS)}")
             steps = [g.get("step") for g in gates if isinstance(g, dict)]
             dups = sorted({s for s in steps if _is_str(s) and steps.count(s) > 1})
             if dups:
