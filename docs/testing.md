@@ -29,6 +29,22 @@ Additionally, rawgentic's `.rawgentic.json` includes a `testing` section,
 so all SDLC workflow skills (WF2-WF4, WF7-WF12) automatically run the test
 suite when working on rawgentic itself.
 
+## Drift-Guard Corpus (`tests/corpus.py`)
+
+Prose-pinning drift guards assert over a skill's **corpus** — `SKILL.md` plus
+every `references/*.md` — via `tests.corpus.skill_corpus(skill_name)`, not over
+`SKILL.md` alone. The M2 restructure (#158) moves step prose into `references/`;
+reading the corpus means a prose move never silently un-pins a guard.
+
+Two pin kinds, chosen per assertion:
+
+- **Content pins** (does this prose exist anywhere in the skill?) read
+  `skill_corpus(...)` — e.g. block presence, helper wiring, annotation counts.
+- **Location pins** (must this text be in a specific file?) still read that file
+  directly — e.g. frontmatter in `SKILL.md`, the `<headless-mode>` pointer in the
+  body, the AUTO-RESOLVE list in `references/headless.md`, and negative
+  "not re-inlined in the base" assertions.
+
 ## Hook Tests
 
 ### Shared Fixtures (`tests/hooks/conftest.py`)
