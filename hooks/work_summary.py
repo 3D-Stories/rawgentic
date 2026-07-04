@@ -319,8 +319,8 @@ def validate_record(record) -> list:
 
     # `usage` (#155 Task 1) — OPTIONAL top-level telemetry: absent → old records
     # stay valid, but present is strict (deliberate-null-vs-dropped-field, same
-    # philosophy as elsewhere in this validator). Schema-only here; aggregation
-    # and rendering land in later tasks.
+    # philosophy as elsewhere in this validator). Rendering is _render_usage_line;
+    # aggregation lands with #115 (fleet rollups).
     if "usage" in record:
         usage = record["usage"]
         if not isinstance(usage, dict):
