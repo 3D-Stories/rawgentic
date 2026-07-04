@@ -329,3 +329,25 @@ class TestCiQuarantine:
         s1 = re.search(r"## Step 1:.*?(?=\n## Step 2:)", _text(), re.DOTALL)
         assert s1, "Step 1 not found"
         assert "ci_quarantined" in s1.group(0) and "30 calendar days" in s1.group(0)
+
+
+# --- #139: branch-protection probe + gate-layer honesty ---
+
+class TestBranchProtectionProbe:
+    def test_step1_probes_protection(self):
+        s1 = re.search(r"## Step 1:.*?(?=\n## Step 2:)", _text(), re.DOTALL)
+        assert s1, "Step 1 not found"
+        body = s1.group(0)
+        assert "classify_branch_protection" in body
+        assert "branches/${capabilities.default_branch}/protection" in body
+        assert "fail-open" in body.lower() or "never fail the run" in body.lower()
+
+    def test_step12_pr_body_has_protection_line(self):
+        s12 = re.search(r"## Step 12:.*?(?=\n## Step 13:)", _text(), re.DOTALL)
+        assert s12, "Step 12 not found"
+        assert "branch_protection_line" in s12.group(0)
+
+    def test_step14_checks_quarantine_protection_contradiction(self):
+        s14 = re.search(r"## Step 14:.*?(?=\n## Step 15:)", _text(), re.DOTALL)
+        assert s14, "Step 14 not found"
+        assert "quarantine_protection_contradiction" in s14.group(0)

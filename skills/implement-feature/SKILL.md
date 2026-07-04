@@ -473,6 +473,12 @@ This enables workflow resumption if context is lost.
 
 8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
+9. **Branch-protection probe (#139 — advisory, fail-open).** So a passed PR does not overstate its server-side protection, probe once here:
+   ```bash
+   gh api repos/${capabilities.repo}/branches/${capabilities.default_branch}/protection
+   ```
+   Capture the HTTP status and body, then classify with `plan_lib.classify_branch_protection(status, body)` → `(state, details)` (state ∈ `protected`/`unprotected`/`unknown`; 404→unprotected, 403/401/error→unknown — NEVER fail the run on an API error). Record `plan_lib.branch_protection_line(state, details)` in session notes; carry `state` + `details["required_checks"]` forward for Step 12 (PR body) and Step 14 (contradiction check).
+
 ### Failure Modes
 - Issue does not exist -> ask for correct number
 - Issue is closed -> ask if user wants to reopen or use different issue
@@ -1348,6 +1354,7 @@ recorded for the PR body and session notes.
    - Implementation drift check (Step 9): N findings
    - Code review (Step 11): N findings (all Critical/High resolved)
    - Security scan (Step 11.5): N blocking resolved, N advisory, skipped: <kinds or "none">
+   - <the `plan_lib.branch_protection_line(...)` string from Step 1 item 9 (#139) — states which layer enforces the gates>
    ```
    The `## Deferred verification` heading is the one canonical string (Step 9, Step 16, and `<completion-gate>` all key on it); do not reword it.
 
@@ -1398,6 +1405,8 @@ CI status, quarantine notice, or skip confirmation.
 **[Headless: AUTO-RESOLVE — SKIP THIS ENTIRE STEP. In headless mode the PR is the terminal deliverable: do NOT merge, do NOT deploy, do NOT SSH anywhere. Proceed directly to Step 16. CI handles deployment when a human merges the PR. (The `ssh`/`script`/`compose` deploy paths below would otherwise run unconditionally — this is the gap that caused the chorestory #309 dev-VM incident.) `wal-guard` also blocks any SSH at the hook layer as a backstop. Append the skip marker per Step 16 item 1b.]**
 
 **P15 pre-merge gate:** re-read via `plan_lib.read_review_state(repo_root, branch)`. If None or `last_review_log_status != "applied"`, refuse to merge. Cleanup of `claude_docs/.wf2-state/<issue>/` AND the branch's `.rawgentic/review-state/<branch-sanitized>.json` happens on merge success.
+
+**Quarantine × protection contradiction check (#139):** before attempting the merge, call `plan_lib.quarantine_protection_contradiction(capabilities.ci_quarantined, <protection state from Step 1 item 9>, <required_checks>)`. A non-None message means CI is quarantined (WF2 non-gating) but branch protection REQUIRES a status check — the squash-merge below would hit a server-side wall. Surface the message to the user and STOP rather than merging into the wall. **[Headless: QUESTION — post the contradiction message, suspend for a human to lift the quarantine, fix CI, or adjust protection.]**
 
 1. **Merge PR (squash merge):**
    ```bash
