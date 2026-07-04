@@ -272,6 +272,32 @@ def validate_record(record) -> list:
                 if not _is_str(item.get("value")):
                     errs.append(f"extra[{i}].value must be a string")
 
+    # `verification_deferred` (#138) — a STRUCTURED list, not a count. A bare
+    # count could be satisfied while the required per-task evidence (reason /
+    # local proxy / target check) is missing, so each item must carry all four
+    # fields; the completion gate keys on task_id via
+    # plan_lib.assert_deferrals_recorded. Optional: absent → old records valid.
+    if "verification_deferred" in record:
+        vd = record["verification_deferred"]
+        if not isinstance(vd, list):
+            errs.append("verification_deferred must be a list of "
+                        "{task_id, reason, local_proxy, target_check} objects")
+        else:
+            seen_ids = []
+            for i, item in enumerate(vd):
+                if not isinstance(item, dict):
+                    errs.append(f"verification_deferred[{i}] must be an object")
+                    continue
+                for f in ("task_id", "reason", "local_proxy", "target_check"):
+                    if not (_is_str(item.get(f)) and item[f].strip()):
+                        errs.append(f"verification_deferred[{i}].{f} must be a non-empty string")
+                tid = item.get("task_id")
+                if _is_str(tid):
+                    seen_ids.append(tid)
+            dups = sorted({t for t in seen_ids if seen_ids.count(t) > 1})
+            if dups:
+                errs.append(f"verification_deferred has duplicate task_id(s) {dups}")
+
     return errs
 
 
@@ -361,6 +387,12 @@ def render_summary(record) -> str:
         lines.append(f"- Tests: {tests.get('added', 0)} added, {passing}/{total} passing")
     else:
         lines.append(f"- Tests: {tests.get('added', 0)} added")
+    deferred = record.get("verification_deferred")
+    if isinstance(deferred, list) and deferred:
+        lines.append("- Verification deferred (must be checked on target):")
+        for d in deferred:
+            if isinstance(d, dict):
+                lines.append(f"  - {d.get('task_id', '?')} — {d.get('reason', '')}")
     lines.append(f"- CI: {out.get('ci', 'n/a')}")
     lines.append(f"- Deploy: {out.get('deploy', 'n/a')}")
     lines.append("")
