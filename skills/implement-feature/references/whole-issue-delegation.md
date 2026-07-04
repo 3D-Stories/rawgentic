@@ -72,6 +72,19 @@ orchestrator owns everything after the build.
 - `promotions` — mid-flight risk promotions the builder flagged; the
   orchestrator dispatches Step 8a for each.
 
+## Collect before validation (worktree-isolated builds, #164)
+
+The build-subagent (`rawgentic:rawgentic-implementer`) runs `isolation:
+worktree`: its commits land in the shared object store, NOT on the feature
+branch. Validation Rule 4 diffs `base..HEAD` on the ORCHESTRATOR's checkout,
+so an un-collected worktree build always fails Rule 4 (empty diff) and would
+be discarded on every run. Therefore, before invoking
+`validate_build_receipt`: fast-forward the feature branch to the receipt's
+final sha (or cherry-pick `task_shas` in plan order) and assert the branch
+advanced past `branch_base_sha`. A build whose commits never reach the branch
+is NOT done — and skipping the collect would also let the later diff-scoped
+gates (8a/11/secret scan) run over an empty diff.
+
 ## Validation (`plan_lib.validate_build_receipt`)
 
 `validate_build_receipt(receipt, plan_tasks, repo_root, branch_base_sha)` returns
