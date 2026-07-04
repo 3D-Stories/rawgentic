@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Multi-Issue Driver (#134)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --border: #30363d;
+      --card: #161b22;
+      --code-bg: #1c2128;
+      --link: #4493f8;
+      --accent: #a371f7;
+      --chosen: #3fb950;
+      --rejected: #ff7b72;
+      --thead-bg: #1c2128;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --border: #30363d;
+    --card: #161b22;
+    --code-bg: #1c2128;
+    --link: #4493f8;
+    --accent: #a371f7;
+    --chosen: #3fb950;
+    --rejected: #ff7b72;
+    --thead-bg: #1c2128;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff;
+    --fg: #1b1f23;
+    --muted: #57606a;
+    --border: #d0d7de;
+    --card: #f6f8fa;
+    --code-bg: #eef1f4;
+    --link: #0969da;
+    --accent: #8250df;
+    --chosen: #1a7f37;
+    --rejected: #cf222e;
+    --thead-bg: #eaeef2;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    padding: 2.5rem 1.25rem 5rem;
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4 {
+    line-height: 1.3;
+    font-weight: 600;
+    scroll-margin-top: 1rem;
+  }
+  h1 {
+    font-size: 1.7rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.3rem;
+  }
+  h1 + p {
+    color: var(--muted);
+    font-size: 0.92rem;
+    margin-top: 0.4rem;
+  }
+  h2 {
+    font-size: 1.28rem;
+    margin-top: 2.4rem;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 {
+    font-size: 1.05rem;
+    margin-top: 1.8rem;
+    color: var(--accent);
+  }
+  p { margin: 0.7rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  li > ul, li > ol { margin-top: 0.35rem; }
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    padding: 1rem;
+    border-radius: 8px;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+  }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  strong { font-weight: 650; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  blockquote {
+    margin: 1rem 0;
+    padding: 0.5rem 1rem;
+    border-left: 3px solid var(--accent);
+    background: var(--card);
+    color: var(--muted);
+  }
+  blockquote p { margin: 0.3rem 0; }
+
+  .table-wrap {
+    overflow-x: auto;
+    margin: 1.1rem 0 1.5rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 560px;
+    font-size: 0.92rem;
+  }
+  thead th {
+    background: var(--thead-bg);
+    text-align: left;
+    font-weight: 650;
+    border-bottom: 1px solid var(--border);
+  }
+  th, td {
+    padding: 0.55rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin: 0 0.3rem 0.3rem 0;
+  }
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin: 0.6rem 0 1.6rem;
+  }
+  footer {
+    margin-top: 3rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="meta">
+  <span class="badge">Issue #134</span>
+  <span class="badge">design-only</span>
+  <span class="badge">L program / M design</span>
+  <span class="badge">2026-07-04</span>
+</div>
+<h1>Design: autonomous multi-issue driver (#134)</h1>
+<p>Date: 2026-07-04 · Issue #134 · <strong>design-only</strong> — this issue is the design gate, not the build.</p>
+<blockquote><p>Codex adversarial pass folded — 0 Critical / 1 High / 3 Medium, all incorporated in place (no design loop-back per the lean review policy).</p></blockquote>
+
+<h2>Problem</h2>
+<p>WF2 is per-issue by contract: <code>&lt;termination-rule&gt;</code> ends at Step 16 and forbids auto-continuation. An autonomous backlog (N issues, push/PR/merge each) means re-invoking the 16-step skill N times with <strong>no shared state</strong>. This very campaign (six issues merged) hand-rolled every missing piece:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Hand-rolled this campaign</th><th>Where it lived</th><th>Failure risk when improvised</th></tr></thead>
+<tbody>
+<tr><td>Ordered queue with per-issue status</td><td>impact-order list in the handoff</td><td>drift between "what's next" and reality</td></tr>
+<tr><td>Rollback anchor per issue</td><td>base SHA at branch creation</td><td>none captured → can't cleanly revert a bad merge</td></tr>
+<tr><td>Alignment ledger</td><td><code>campaign-131-140.handoff.md</code></td><td>lost across compaction if not written</td></tr>
+<tr><td>Inter-issue policy (review budget, never-Haiku)</td><td>operator memory + standing rules</td><td>silently forgotten mid-run</td></tr>
+<tr><td>DEFER (park + keep going)</td><td><em>never existed</em></td><td>an owner-reserved surface would stall the whole loop</td></tr>
+</tbody></table></div>
+<p>Two real bugs trace to the missing structure: <strong>#138</strong> was committed to local <code>main</code> (no driver enforced "branch before first commit"); <strong>#140</strong> fixed a Step-7 base bug that only bites in a multi-issue loop (branching off a stale sibling). Both are exactly what a driver prevents.</p>
+
+<h2>Decision (AC2): documented PATTERN + a small committed state file — NOT a new skill</h2>
+<p><strong>Recommendation: documented pattern.</strong> Why the skill alternative loses:</p>
+<ul>
+<li><strong>A skill adds ceremony where the agent is already competent.</strong> The looping — run WF2, advance on success, park on DEFER, repeat — is control flow an orchestrator runs reliably without a skill (six issues, zero loop-control errors this campaign).</li>
+<li><strong>The value is in CONVENTIONS (data + docs), not executable logic:</strong> the queue schema, DEFER taxonomy, rollback-anchor protocol, resumption contract. Those are a pattern doc + one JSON state file, optionally a thin pure validator — not a 16-step skill.</li>
+<li><strong>A skill would be tempted to re-implement or weaken WF2's gates.</strong> A pattern that invokes <code>/rawgentic:implement-feature</code> fresh per issue makes weakening WF2 structurally impossible — AC3.</li>
+</ul>
+<p>Ships (in the follow-up build, not here): <code>docs/multi-issue-driver.md</code>; a committed queue state file <code>claude_docs/.driver-state/&lt;campaign&gt;.json</code>; OPTIONAL thin <code>hooks/driver_lib.py</code> pure validators, added only if hand-maintained JSON proves error-prone.</p>
+
+<h2>Queue schema (AC1)</h2>
+<p>Per-campaign <code>claude_docs/.driver-state/&lt;campaign&gt;.json</code>: <code>policy</code> {order, deploy, has_deploy, smoke_gate, review_budget, never_haiku}, <code>base_default_branch_sha</code>, and an <code>issues</code> array with {number, status, pr, merge_sha, rollback_anchor, deferred_reason, deferred_branch, branch_preservation}.</p>
+<p><strong>Status transitions</strong> (folded F1 — <code>pr_open</code> is first-class so headless is representable):</p>
+<pre><code>queued → in_progress → { pr_open | merged | deferred | abandoned }
+pr_open → { merged | deferred | abandoned }   # headless stops at pr_open</code></pre>
+<p>One issue <code>in_progress</code>/<code>pr_open</code> at a time (serial; parallel needs worktrees, #136/#85).</p>
+
+<h2>DEFER taxonomy (AC1)</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Type</th><th>Trigger</th><th>Loop action</th></tr></thead>
+<tbody>
+<tr><td><code>owner-decision</code></td><td>needs a human product/risk call</td><td>park, ledger, next issue</td></tr>
+<tr><td><code>owner-reserved</code></td><td>touches an owner-reserved surface</td><td>park, note the gate, next issue</td></tr>
+<tr><td><code>cross-repo</code></td><td>change spans another repo</td><td>park with the blocking dependency</td></tr>
+<tr><td><code>budget</code></td><td>campaign token/time budget exhausted</td><td>park remaining queued, stop cleanly</td></tr>
+</tbody></table></div>
+<p><strong>Branch preservation on DEFER</strong> (folded F2 — deterministic + persisted): <code>branch_preservation ∈ {pushed, discarded, none}</code> with <code>deferred_branch</code>. Resumable deferrals with commits → <code>pushed</code>; abandoned approach → <code>discarded</code> (branch deleted); no commits → <code>none</code>. Resumption never assumes a discarded branch or loses pushed work.</p>
+
+<h2>Rollback-anchor protocol (AC1)</h2>
+<p>Capture <code>origin/&lt;default&gt;</code> SHA as each issue's <code>rollback_anchor</code> before its branch is created (this campaign captured it implicitly; the driver persists it). Bad merge → <code>git revert &lt;merge_sha&gt;</code>. The anchor also asserts the next issue branches from a fresh base (the #140 fix), not a stale sibling.</p>
+
+<h2>Deploy policy (AC1)</h2>
+<p><code>per-issue</code> (deploy + smoke each merge; safest, slowest), <code>batch</code> (deploy once at end), <code>none</code> (libraries / PR-terminal — this campaign). <code>has_deploy</code> + <code>smoke_gate</code> copied from <code>capabilities</code> into the state file (folded F4); <code>deploy: per-issue</code> with <code>has_deploy: false</code> is a rejected config error.</p>
+
+<h2>Resumption (AC1) — reconciliation table (folded F3)</h2>
+<p>The committed state file is the resumption substrate. Observed remote state wins over the stale queue value:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Real gh/git state</th><th>Reconciled action</th></tr></thead>
+<tbody>
+<tr><td>PR merged</td><td>mark <code>merged</code>, advance</td></tr>
+<tr><td>PR open, CI green</td><td>non-headless → merge + advance; headless → leave <code>pr_open</code>, stop</td></tr>
+<tr><td>PR open, CI red/pending</td><td>resume WF2 at Step 13</td></tr>
+<tr><td>no PR, branch has commits</td><td>resume WF2 at Step 9/11 per <code>resume_lib</code></td></tr>
+<tr><td>no PR, empty branch</td><td>resume WF2 at Step 8</td></tr>
+<tr><td>no branch</td><td>restart at WF2 Step 7 (fresh base)</td></tr>
+<tr><td><code>branch_preservation: discarded</code></td><td>honor the deferral, do not seek the branch</td></tr>
+<tr><td><code>branch_preservation: pushed</code></td><td>re-open per deferral reason when unblocked</td></tr>
+</tbody></table></div>
+<p>The driver decides only the driver-layer action; intra-WF2 resume is delegated to WF2's own <code>resume_lib</code> so the driver never re-implements step detection.</p>
+
+<h2><code>&lt;termination-rule&gt;</code> interplay (AC3 — not weakened)</h2>
+<p>The driver never re-enters or extends a WF2 run. Each iteration invokes <code>/rawgentic:implement-feature</code> fresh for one issue; that run terminates at Step 16 with all its gates. The driver observes the outcome and advances its own queue — it owns queue/deferral/anchor/policy, never a WF2 step.</p>
+
+<h2>Follow-up issues (AC4) — filed from this design once approved</h2>
+<ol>
+<li>Build the pattern + queue state schema + resumption contract.</li>
+<li>(evidence-gated) thin <code>driver_lib.py</code> validator — only if hand-maintained JSON proves error-prone.</li>
+<li>Parallel multi-issue execution — depends on worktrees (#136/#85); deferred.</li>
+</ol>
+
+<h2>Codex findings folded</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Sev</th><th>Finding</th><th>Fold</th></tr></thead>
+<tbody>
+<tr><td style="color:var(--rejected)">High</td><td>state machine excluded <code>pr_open</code> (headless needs it)</td><td>added <code>pr_open</code> status + transitions</td></tr>
+<tr><td style="color:var(--accent)">Med</td><td>DEFER branch preservation ambiguous</td><td><code>branch_preservation</code>/<code>deferred_branch</code> + rule</td></tr>
+<tr><td style="color:var(--accent)">Med</td><td>resumption only referenced, not specified</td><td>ordered reconciliation table</td></tr>
+<tr><td style="color:var(--accent)">Med</td><td><code>has_deploy</code>/<code>smoke_gate</code> absent from schema</td><td>added to <code>policy</code> from capabilities</td></tr>
+</tbody></table></div>
+
+<h2>Out of scope</h2>
+<p>Implementation (follow-ups above); parallel issue execution (#136/#85); changing any WF2 gate.</p>
+
+<footer>
+  Rendered from <code>docs/design/2026-07-04-multi-issue-driver.md</code> —
+  the Markdown file is the source of truth; this HTML is a static, standalone rendering for visual review.
+</footer>
+
+</body>
+</html>
