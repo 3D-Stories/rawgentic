@@ -111,7 +111,7 @@ Also resolve the `review` role's effort tier with a second invocation appending 
 When `additionalContext` contains "HEADLESS MODE active", you operate without a terminal
 user: the QUESTION (post→label→suspend→exit), ERROR, rich-checkpoint, and fresh-session
 resume protocols live in `references/headless.md`. **Read that file in full before acting on
-any of the per-step headless annotations below.** When NOT in headless mode, ignore them and behave
+any of the per-step headless annotations in `references/steps.md`.** When NOT in headless mode, ignore them and behave
 normally (STOP and wait for terminal input at each interaction point).
 </headless-mode>
 
