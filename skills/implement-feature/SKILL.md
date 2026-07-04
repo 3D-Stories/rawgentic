@@ -473,11 +473,12 @@ This enables workflow resumption if context is lost.
 
 8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
-9. **Branch-protection probe (#139 — advisory, fail-open).** So a passed PR does not overstate its server-side protection, probe once here:
+9. **Branch-protection probe (#139 — advisory, fail-open).** So a passed PR does not overstate its server-side protection, probe once here. **URL-encode the branch** (a default branch like `release/v1` has a `/` that would otherwise hit the wrong endpoint and look like a 404):
    ```bash
-   gh api repos/${capabilities.repo}/branches/${capabilities.default_branch}/protection
+   BR_ENC=$(printf %s "${capabilities.default_branch}" | jq -sRr @uri)
+   gh api "repos/${capabilities.repo}/branches/${BR_ENC}/protection" -i
    ```
-   Capture the HTTP status and body, then classify with `plan_lib.classify_branch_protection(status, body)` → `(state, details)` (state ∈ `protected`/`unprotected`/`unknown`; 404→unprotected, 403/401/error→unknown — NEVER fail the run on an API error). Record `plan_lib.branch_protection_line(state, details)` in session notes; carry `state` + `details["required_checks"]` forward for Step 12 (PR body) and Step 14 (contradiction check).
+   Capture the HTTP status AND body, then classify with `plan_lib.classify_branch_protection(status, body)` → `(state, details)`. The classifier is strict: only the GitHub "Branch not protected" 404 body → `unprotected`; a 200 that isn't a recognizable protection object, or any 403/401/other → `unknown`. **NEVER fail the run on an API error** — record a probe-command failure (non-zero `gh` exit, network error) as `unknown` in session notes, *distinct* from a confirmed `unprotected`. Record `plan_lib.branch_protection_line(state, details)` in session notes; carry `state` + `details["required_checks"]` forward for Step 12 (PR body) and Step 14 (contradiction check).
 
 ### Failure Modes
 - Issue does not exist -> ask for correct number

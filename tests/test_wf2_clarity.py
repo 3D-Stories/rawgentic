@@ -339,7 +339,8 @@ class TestBranchProtectionProbe:
         assert s1, "Step 1 not found"
         body = s1.group(0)
         assert "classify_branch_protection" in body
-        assert "branches/${capabilities.default_branch}/protection" in body
+        assert "/protection" in body
+        assert "@uri" in body or "URL-encode" in body  # branch URL-encoded (#139 F2)
         assert "fail-open" in body.lower() or "never fail the run" in body.lower()
 
     def test_step12_pr_body_has_protection_line(self):

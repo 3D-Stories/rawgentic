@@ -1280,33 +1280,56 @@ def validate_build_receipt(
 # --- Branch-protection probe classification (#139) ---
 
 
+_PROTECTION_KEYS = frozenset({
+    "required_status_checks", "required_pull_request_reviews", "enforce_admins",
+    "restrictions", "url", "required_signatures", "required_linear_history",
+    "allow_force_pushes", "allow_deletions", "required_conversation_resolution",
+    "lock_branch", "block_creations",
+})
+
+
 def classify_branch_protection(status_code: int, body) -> tuple[str, dict]:
     """Classify a `gh api .../branches/<b>/protection` result (#139).
 
     Returns (state, details) where state is 'protected' | 'unprotected' |
-    'unknown'. The probe is ADVISORY and fail-open: a 403/401 (not visible) or
-    any unexpected error is 'unknown', never a run failure. 404 = the branch has
-    no protection. 200 parses required status checks (new `checks` or legacy
-    `contexts` shape) and whether reviews are required. `details` always carries
-    `required_checks: list[str]`.
+    'unknown'. The probe is ADVISORY and fail-open, but it must NOT misread an
+    ambiguous result as a definitive one (that would overstate OR understate
+    protection):
+    - 404 is 'unprotected' ONLY when the body is the GitHub "Branch not
+      protected" shape; any other 404 (wrong repo/branch, inaccessible) is
+      'unknown', so an absent probe never reads as a confirmed no-protection.
+    - 200 is 'protected' ONLY when the body is a recognizable protection object;
+      a 200 with a non-dict, unrecognized, or malformed `required_status_checks`
+      body is 'unknown' (a corrupt parse must not silently pass as valid data,
+      or the contradiction check would be skipped).
+    - 403/401/other -> 'unknown'.
+    `details` always carries `required_checks: list[str]`.
     """
-    if status_code == 200 and isinstance(body, dict):
-        rsc = body.get("required_status_checks") or {}
+    if status_code == 200:
+        if not isinstance(body, dict) or not (_PROTECTION_KEYS & set(body)):
+            return ("unknown", {"required_checks": []})
         checks: list[str] = []
-        if isinstance(rsc, dict):
+        if "required_status_checks" in body:
+            rsc = body["required_status_checks"]
+            if not isinstance(rsc, dict):
+                return ("unknown", {"required_checks": []})
             if isinstance(rsc.get("checks"), list):
                 checks = [c.get("context") for c in rsc["checks"]
                           if isinstance(c, dict) and isinstance(c.get("context"), str)]
             elif isinstance(rsc.get("contexts"), list):
                 checks = [c for c in rsc["contexts"] if isinstance(c, str)]
+            elif "checks" in rsc or "contexts" in rsc:
+                return ("unknown", {"required_checks": []})  # present but wrong type
         reviews = body.get("required_pull_request_reviews")
         return ("protected", {
             "required_checks": checks,
             "required_reviews": isinstance(reviews, dict),
         })
-    if status_code == 404:
+    if status_code == 404 and isinstance(body, dict) \
+            and "not protected" in str(body.get("message", "")).lower():
         return ("unprotected", {"required_checks": []})
-    # 403/401 (forbidden/not visible) or any other status -> fail-open unknown.
+    # 403/401 (forbidden/not visible), a non-"not protected" 404, or any other
+    # status -> fail-open unknown.
     return ("unknown", {"required_checks": []})
 
 

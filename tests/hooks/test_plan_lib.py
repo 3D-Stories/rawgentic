@@ -1593,3 +1593,48 @@ class TestBranchProtection:
     def test_no_contradiction_when_no_required_checks(self):
         mod = _reload_plan_lib()
         assert mod.quarantine_protection_contradiction(True, "protected", []) is None
+
+
+class TestBranchProtectionHardening:
+    """Codex Step-11 folds (#139)."""
+
+    def test_404_only_unprotected_for_not_protected_message(self):
+        mod = _reload_plan_lib()
+        # genuine "branch not protected"
+        st, _ = mod.classify_branch_protection(404, {"message": "Branch not protected"})
+        assert st == "unprotected"
+
+    def test_404_generic_not_found_is_unknown(self):
+        """A 404 for a wrong repo/branch/inaccessible resource is NOT proof of
+        an unprotected branch — must be unknown, not a false 'no protection'."""
+        mod = _reload_plan_lib()
+        st, _ = mod.classify_branch_protection(404, {"message": "Not Found"})
+        assert st == "unknown"
+
+    def test_404_non_dict_body_is_unknown(self):
+        mod = _reload_plan_lib()
+        st, _ = mod.classify_branch_protection(404, "Not Found")
+        assert st == "unknown"
+
+    def test_200_non_dict_body_is_unknown(self):
+        mod = _reload_plan_lib()
+        st, _ = mod.classify_branch_protection(200, "surprise")
+        assert st == "unknown"
+
+    def test_200_unrecognized_body_is_unknown(self):
+        """A 200 whose body is not a protection object must not read as protected."""
+        mod = _reload_plan_lib()
+        st, _ = mod.classify_branch_protection(200, {"foo": "bar"})
+        assert st == "unknown"
+
+    def test_200_malformed_required_checks_is_unknown(self):
+        mod = _reload_plan_lib()
+        st, _ = mod.classify_branch_protection(200, {"required_status_checks": "nope"})
+        assert st == "unknown"
+
+    def test_200_enforce_admins_only_is_protected_no_checks(self):
+        """A valid protection object with no required checks is still protected."""
+        mod = _reload_plan_lib()
+        st, details = mod.classify_branch_protection(200, {"enforce_admins": {"enabled": True}})
+        assert st == "protected"
+        assert details["required_checks"] == []
