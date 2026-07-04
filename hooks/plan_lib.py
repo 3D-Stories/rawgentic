@@ -1481,6 +1481,88 @@ def _file_lock(path: str):
             os.close(fd)
 
 
+# --- Goal-guard text assembly (#156) ---
+
+_GOAL_ESCAPE_DISJUNCT: Final[str] = (
+    " — or a blocker is posted to the issue via the ERROR protocol"
+)
+_GOAL_CAP: Final[int] = 4000
+_AC_STRIP_RE = re.compile(r"^\s*(?:\d+[.):]\s*|[-*•]\s*)")
+
+
+def _strip_ac_numbering(line: str) -> str:
+    """Strip leading list numbering/bullets from one AC line.
+
+    Handles "1. Foo", "2) Bar", "- Baz" (and "*"/"•" bullets). Anything not
+    matching that shape is returned trimmed, unchanged otherwise.
+    """
+    return _AC_STRIP_RE.sub("", line).strip()
+
+
+def build_goal_text(
+    issue_number: int,
+    ac_lines: list[str],
+    variant: str = "wf2",
+    headless: bool = False,
+) -> str:
+    """Build the goal-guard clear-condition text posted at workflow start.
+
+    The ESCAPE DISJUNCT (AC2) is always appended so the goal can clear even
+    when the happy path is blocked: the workflow is done either when the
+    primary condition is met, or when a blocker has been posted to the
+    issue via the ERROR protocol.
+
+    `headless` currently produces identical wording in both modes — both
+    wf2 and wf3 always say "PR open with green CI", never "merged" — because
+    the goal must clear at workflow *termination*; merge is owner-gated and
+    happens post-terminal. The param is kept so wording could diverge later
+    (e.g. a headless run that also confirms merge) without changing the
+    call signature.
+
+    ac_lines are compressed by stripping leading numbering/bullets and
+    joining with "; ". If the resulting wf2 text would exceed 4000 chars
+    (or ac_lines is empty/all-blank), the AC list is replaced with the
+    fixed phrase "all numbered acceptance criteria of issue #<N> as
+    written" instead — that fallback is guaranteed to stay under the cap.
+
+    wf3 (bug-fix/repro variant) has no numbered ACs, so ac_lines is
+    ignored entirely.
+
+    Pure function: deterministic, no I/O. Raises ValueError for any
+    variant other than "wf2"/"wf3" — this text is orchestrator-authored
+    input, so a typo'd variant should fail loudly rather than silently
+    fall back to one of the two templates.
+    """
+    if variant not in ("wf2", "wf3"):
+        raise ValueError(f"unknown goal-text variant: {variant!r}")
+
+    if variant == "wf3":
+        return (
+            f"Bug #{issue_number} fixed: repro documented, regression test "
+            f"red→green, PR open with green CI{_GOAL_ESCAPE_DISJUNCT}"
+        )
+
+    compressed = "; ".join(
+        stripped
+        for line in ac_lines
+        if (stripped := _strip_ac_numbering(line))
+    )
+    if compressed:
+        full = (
+            f"Issue #{issue_number} done: ACs met ({compressed}), "
+            f"PR open with green CI, run-record persisted"
+            f"{_GOAL_ESCAPE_DISJUNCT}"
+        )
+        if len(full) <= _GOAL_CAP:
+            return full
+
+    fallback_acs = f"all numbered acceptance criteria of issue #{issue_number} as written"
+    return (
+        f"Issue #{issue_number} done: ACs met ({fallback_acs}), "
+        f"PR open with green CI, run-record persisted{_GOAL_ESCAPE_DISJUNCT}"
+    )
+
+
 def consume_loopback(path: str, source: str) -> tuple[bool, dict]:
     """Attempt to consume one loop-back from the named source.
 
