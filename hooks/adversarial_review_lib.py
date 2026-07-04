@@ -147,7 +147,7 @@ CATEGORIES: Final[tuple[str, ...]] = (
     "internal-consistency", "security", "scope", "ambiguity",
 )
 ARTIFACT_TYPES: Final[tuple[str, ...]] = (
-    "design", "spec", "plan", "prd", "adr", "rfc", "readme", "generic",
+    "design", "spec", "plan", "prd", "adr", "rfc", "readme", "generic", "diff",
 )
 
 # Per-type emphasis appended to the adversarial prompt (the "lens").
@@ -160,6 +160,22 @@ _TYPE_LENS: Final[dict[str, str]] = {
     "rfc": "Focus on interoperability, migration/backward-compat, and protocol edge cases.",
     "readme": "Focus on accuracy versus the described system, completeness, and stale instructions.",
     "generic": "Apply correctness, completeness, consistency, security, and ambiguity lenses broadly.",
+    "diff": (
+        "This artifact is a unified git diff of a code change. Attack the CHANGE "
+        "itself: hunt fail-open paths — a guard that can be bypassed, an error "
+        "path that silently passes, a check that is vacuous on empty/corrupt/"
+        "absent input, 'no response' or 'not found' treated as success, a "
+        "security gate weakened or annotated away, and tenant/auth/session/token "
+        "boundary mistakes — plus behavior regressions the change's stated "
+        "intent does not admit. Evidence quotes must copy diff lines verbatim "
+        "including their leading +/- markers."
+    ),
+}
+
+# Maps the findings-schema `confidence` enum (high/medium/low) onto the numeric
+# SEVERITY_BANDED_CONFIDENCE scale consumed by WF2 Step 11 (issue #131).
+ADV_CONFIDENCE_TO_FLOAT: Final[dict[str, float]] = {
+    "high": 0.9, "medium": 0.7, "low": 0.4,
 }
 
 
