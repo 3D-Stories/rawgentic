@@ -81,13 +81,14 @@ code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui
 .big5 .row::before{content:counter(n);flex:0 0 30px;height:30px;border-radius:8px;background:var(--accent);
   color:var(--accent-ink);font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center}
 .big5 .row div{color:var(--ink-2);font-size:13.8px}
-.rail{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:14px 0}
+.rail{display:grid;gap:14px;margin:14px 0}
 .mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px}
-.mstone h3{margin:0;font-size:14px}
+.mstone h3{margin:0;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
 .mstone .v{color:var(--ink-3);font-size:12px;margin:2px 0 8px}
-.mstone ul{margin:0;padding-left:17px;color:var(--ink-2);font-size:13px}
-.mstone li{margin:3px 0}
 .mstone .metric{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line);font-size:12px;color:var(--ink-3)}
+.mstone .tscroll{margin:10px 0 0;border-radius:8px}
+.mstone table{min-width:560px;font-size:13px}
+.up{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:5px;padding:2px 7px;color:var(--accent);background:var(--accent-soft);white-space:nowrap}
 .note{background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:13px 16px;color:var(--ink-2);font-size:13.5px;margin:14px 0}
 .note b{color:var(--ink)}
 footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
@@ -307,21 +308,45 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
 
 <section id="roadmap">
   <h2>Roadmap — four independently shippable milestones</h2>
+  <p class="h2sub">All issues are <b>filed</b>: epics <b>M1 #167 · M2 #168 · M3 #169 · M4 #170</b> (label <code>epic:modernization</code>) track children via task lists. <span class="up">⬆ upgrade point</span> marks where refreshing the installed plugin unlocks the new capability.</p>
   <div class="rail">
-    <div class="mstone"><h3>M1 · Instrument + additive</h3><div class="v">v2.54–2.55</div>
-      <ul><li>modelRouting {model, effort} (S)</li><li>usage + reviewer-kind telemetry, commit the store (S–M, ext. #115/#116)</li><li>WF2/WF3 goal guard (S)</li></ul>
-      <div class="metric">Metric: 3 consecutive instrumented run-records; 0 goal false-blocks</div></div>
-    <div class="mstone"><h3>M2 · Restructure + deprecate</h3><div class="v">v3.0.0</div>
-      <ul><li>skill_corpus() test helper (S, first)</li><li>WF2 split ≤450 (L) · WF3 lane (M)</li><li>Deprecation stubs + /rawgentic:scan (M)</li><li>Review-gate switch, data-gated (M)</li><li>v3.0.0 + upgrade guide (S)</li></ul>
-      <div class="metric">Metric: load ≤450 lines; suite green; quality non-regressed over 5 runs</div></div>
-    <div class="mstone"><h3>M3 · Multi-issue autonomy</h3><div class="v">v3.1</div>
-      <ul><li>Dependency DAG on #148 queue (M)</li><li>Bundled agent definitions + worktree isolation (M, ext. #85)</li></ul>
-      <div class="metric">Metric: 5-issue dependency-ordered campaign, 0 violations, 0 interventions</div></div>
-    <div class="mstone"><h3>M4 · Headless platform</h3><div class="v">v3.2</div>
-      <ul><li>claude-code-action label-triggered pilot (L, folds #48/#51/#52)</li><li>claude-code-security-review CI lane (S)</li></ul>
-      <div class="metric">Metric: 1 issue label→PR with zero operator touches</div></div>
+    <div class="mstone"><h3>M1 · Instrument + additive <span class="chip c-conf">epic #167</span></h3><div class="v">v2.54–2.55 · all three additive &amp; independent — #155 first maximizes data before M2</div>
+      <div class="tscroll"><table>
+        <tr><th>Issue</th><th>What ships</th><th>Benefit you'll see</th></tr>
+        <tr><td><b>#154</b> routing objects (S)</td><td>modelRouting accepts {model, effort}; string shorthand preserved</td><td>Effort ladder becomes config, not prose — cheaper mechanical subagents (direct bucket/wall-clock stretch for subscribers) with zero migration <span class="up">⬆</span></td></tr>
+        <tr><td><b>#155</b> telemetry (S–M)</td><td>usage + reviewer-kind fields; run-record store committed (ext. #115/#116)</td><td>Cost &amp; reviewer-yield visible per run; telemetry survives host loss; <b>the data that gates M2's review switch</b> <span class="up">⬆</span></td></tr>
+        <tr><td><b>#156</b> goal guard (S)</td><td>WF2/WF3 Step 1b: AC-derived /goal text + escape disjunct</td><td>Runs can't silently stop before ACs are met — the overnight-safety primitive <span class="up">⬆</span></td></tr>
+      </table></div>
+      <div class="metric">Milestone metric: 3 consecutive instrumented run-records; 0 goal false-blocks · <b>Upgrade: after any merge, or once at milestone end</b></div></div>
+    <div class="mstone"><h3>M2 · Restructure + deprecate <span class="chip c-conf">epic #168</span></h3><div class="v">v3.0.0 · #157 must land first; #162 data-gated on #155's evidence</div>
+      <div class="tscroll"><table>
+        <tr><th>Issue</th><th>What ships</th><th>Benefit you'll see</th></tr>
+        <tr><td><b>#157</b> corpus helper (S)</td><td>drift guards assert over SKILL.md ∪ references/</td><td>No user-visible change — makes the restructure safe (suite can't go red from prose moves); no refresh needed</td></tr>
+        <tr><td><b>#158</b> WF2 split (L)</td><td>≤450-line spine + references/, gates verbatim</td><td>~70% less context loaded per WF2 invocation — faster starts, cheaper runs, more headroom before compaction <span class="up">⬆</span></td></tr>
+        <tr><td><b>#159</b> WF3 lane (M)</td><td>fix-bug over the shared spine; absorbs WF11</td><td>Same savings for bug fixes; one spine to maintain; incident checklist preserved <span class="up">⬆</span></td></tr>
+        <tr><td><b>#160</b> deprecation stubs (M)</td><td>WF4/7/8/9/10/12 → redirect stubs; /rawgentic:scan keeps WF9's scanner</td><td>44.8% smaller maintenance surface; nothing silently rots · <b>refresh promptly — the stub cycle's usage signal needs users on stubs</b> <span class="up">⬆</span></td></tr>
+        <tr><td><b>#162</b> review switch (M)</td><td>Step 4 reflect-only; Step 11 built-in /code-review + WF5 diff (data-gated)</td><td>Fewer review tokens per issue at equal finding yield — or the issue is abandoned with the data cited <span class="up">⬆</span></td></tr>
+        <tr><td><b>#161</b> v3.0.0 (S)</td><td>stub removal + docs/upgrade-3.0.md</td><td>One clean migration event · <b>follow the upgrade guide, not just a cache refresh</b> <span class="up">⬆</span></td></tr>
+      </table></div>
+      <div class="metric">Milestone metric: load ≤450 lines; suite green; quality non-regressed over 5 runs · <b>Upgrade: safe per-merge; v3.0.0 via upgrade guide</b></div></div>
+    <div class="mstone"><h3>M3 · Multi-issue autonomy <span class="chip c-conf">epic #169</span></h3><div class="v">v3.1 · builds on the v3 spine; #148 is the pre-existing foundation</div>
+      <div class="tscroll"><table>
+        <tr><th>Issue</th><th>What ships</th><th>Benefit you'll see</th></tr>
+        <tr><td><b>#148</b> driver build</td><td>queue state file + pattern doc (pre-existing issue)</td><td>Campaigns stop being hand-rolled — resumable, rollback-anchored, DEFER-aware <span class="up">⬆</span></td></tr>
+        <tr><td><b>#163</b> DAG + epic anchor (M)</td><td>depends_on parsing, topo-sort, one-way epic mirror; lockout→DEFER</td><td>Dependency-ordered campaigns with visible progress; headless runs get their comms channel <span class="up">⬆</span></td></tr>
+        <tr><td><b>#164</b> agent definitions (M)</td><td>bundled rawgentic-implementer/-reviewer with routed model+effort, worktree isolation (ext. #85)</td><td>Routing enforced by frontmatter, not prose; parallel tasks without file conflicts <span class="up">⬆</span></td></tr>
+      </table></div>
+      <div class="metric">Milestone metric: 5-issue dependency-ordered campaign, 0 violations, 0 interventions · <b>Upgrade: at milestone end (driver + agents work as a set)</b></div></div>
+    <div class="mstone"><h3>M4 · Headless platform <span class="chip c-conf">epic #170</span></h3><div class="v">v3.2 · rides on M1 goal guard + M3 driver</div>
+      <div class="tscroll"><table>
+        <tr><th>Issue</th><th>What ships</th><th>Benefit you'll see</th></tr>
+        <tr><td><b>#165</b> Action pilot (L)</td><td>label `rawgentic:auto` → headless WF2 → PR; folds #48/#51/#52; subscription-OAuth default</td><td><b>Label an issue, get a PR overnight — no laptop attached.</b> The Action pulls the plugin at run time; local refresh only matters for local headless</td></tr>
+        <tr><td><b>#166</b> security CI lane (S)</td><td>claude-code-security-review on PRs, non-blocking first</td><td>Semantic security review on every PR, complementing local scanners — repo workflow, no plugin refresh involved</td></tr>
+      </table></div>
+      <div class="metric">Milestone metric: 1 issue label→PR with zero operator touches · <b>Upgrade: repo-side workflows; no local refresh required</b></div></div>
   </div>
-  <div class="note"><b>Sequencing:</b> measure before switching · test-infra before restructure · restructure before driver · platform last. <b>Constraints held everywhere:</b> never-Haiku, PRs-only, no fail-closed gate weakened. Draft issue bodies (WF1-ready) live in the roadmap markdown — not filed without approval.</div>
+  <div class="note"><b>When to update the installed plugin:</b> viable after <i>every</i> merged PR — each ships green CI and is compat-classified (additive/transparent until v3.0.0). Sensible default cadence: <b>once per milestone boundary</b>, when the coherent capability lands. Exceptions: pick up <b>#160 promptly</b> (stub-cycle signal), take <b>#161/v3.0.0 via the upgrade guide</b>, and never reinstall mid-session (exit all sessions first: <code>claude plugin remove rawgentic@rawgentic &amp;&amp; claude plugin install rawgentic@rawgentic</code>).</div>
+  <div class="note"><b>Sequencing:</b> measure before switching · test-infra before restructure · restructure before driver · platform last. <b>Constraints held everywhere:</b> never-Haiku, PRs-only, no fail-closed gate weakened.</div>
 </section>
 
 <footer>
