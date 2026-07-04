@@ -18,7 +18,11 @@ capabilities object or exits non-zero — never a best-effort partial.
 """
 import argparse
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from datetime import datetime
 
 
@@ -293,6 +297,45 @@ def ci_quarantine_change(base_config, head_config) -> str | None:
     return None
 
 
+def probe_parallelism(repo_root: str) -> str:
+    """Probe whether the project supports git-worktree isolation (#136).
+
+    Returns 'worktree' when `repo_root` is a real git work tree AND a throwaway
+    worktree can be created (then removed), else 'serial-only'. So an orchestrator
+    learns up front instead of attempt-then-fail on an Agent-tool "not in a git
+    repository" error. Never raises — any failure degrades to 'serial-only'.
+
+    Steady-state non-mutating: the test worktree is created under the SYSTEM temp
+    dir and force-removed + pruned in a finally, so the repo is left unchanged.
+    (The parallel EXECUTION layer itself is #85; this only fronts it.)
+    """
+    def _git(args, cwd=repo_root):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+    try:
+        r = _git(["rev-parse", "--is-inside-work-tree"])
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return "serial-only"
+    if r.returncode != 0 or r.stdout.strip() != "true":
+        return "serial-only"
+
+    parent = None
+    wt = None
+    try:
+        parent = tempfile.mkdtemp(prefix="rawgentic-wt-probe-")
+        wt = os.path.join(parent, "wt")  # git worktree add requires a non-existent path
+        add = _git(["worktree", "add", "--detach", wt, "HEAD"])
+        return "worktree" if add.returncode == 0 else "serial-only"
+    except (OSError, subprocess.SubprocessError):
+        return "serial-only"
+    finally:
+        if wt is not None:
+            _git(["worktree", "remove", "--force", wt])
+        if parent is not None:
+            shutil.rmtree(parent, ignore_errors=True)
+        _git(["worktree", "prune"])
+
+
 def load_config(path: str) -> dict:
     """Read + parse + shape-check a `.rawgentic.json`. Fail-closed: a missing or
     corrupt file (or a valid-JSON-but-not-an-object file) raises rather than
@@ -340,8 +383,18 @@ def main(argv=None) -> int:
         help="load + validate config, emit {config, capabilities} JSON")
     p.add_argument("--config", required=True,
                    help="path to the resolved <activeProject.path>/.rawgentic.json")
+    pp = sub.add_parser(
+        "probe-parallelism",
+        help="probe git-worktree isolation availability (#136); prints "
+             "'worktree' or 'serial-only'")
+    pp.add_argument("--repo-root", required=True,
+                    help="the project's git repo root to probe")
 
     args = parser.parse_args(argv)
+
+    if args.cmd == "probe-parallelism":
+        print(probe_parallelism(args.repo_root))
+        return 0
 
     if args.cmd == "derive":
         try:

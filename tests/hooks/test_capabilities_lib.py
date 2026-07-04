@@ -476,3 +476,49 @@ class TestCiQuarantineHardening:
                                 "quarantineReason": "r"})
         head = _base_config(ci={"provider": "gh"})
         assert ci_quarantine_change(base, head) is None
+
+
+# --- #136: worktree-isolation availability probe ---
+
+def _init_git_repo(path, *, with_commit=True):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@e.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=path, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=path, check=True)
+    if with_commit:
+        (path / "f.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=path, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=path, check=True)
+
+
+class TestProbeParallelism:
+    def test_git_repo_with_commit_supports_worktree(self, tmp_path):
+        from capabilities_lib import probe_parallelism
+        _init_git_repo(tmp_path, with_commit=True)
+        assert probe_parallelism(str(tmp_path)) == "worktree"
+
+    def test_non_git_dir_is_serial_only(self, tmp_path):
+        from capabilities_lib import probe_parallelism
+        assert probe_parallelism(str(tmp_path)) == "serial-only"
+
+    def test_repo_without_commit_is_serial_only(self, tmp_path):
+        """Unborn HEAD — `git worktree add` fails; must degrade to serial, not raise."""
+        from capabilities_lib import probe_parallelism
+        _init_git_repo(tmp_path, with_commit=False)
+        assert probe_parallelism(str(tmp_path)) == "serial-only"
+
+    def test_probe_leaves_no_worktree_registered(self, tmp_path):
+        """AC1: the probe must clean up after itself — no lingering worktree."""
+        import subprocess
+        from capabilities_lib import probe_parallelism
+        _init_git_repo(tmp_path, with_commit=True)
+        assert probe_parallelism(str(tmp_path)) == "worktree"
+        out = subprocess.run(["git", "worktree", "list"], cwd=tmp_path,
+                             capture_output=True, text=True, check=True).stdout
+        # only the main worktree should remain (one line)
+        assert len([l for l in out.splitlines() if l.strip()]) == 1
+
+    def test_probe_nonexistent_path_is_serial_only(self, tmp_path):
+        from capabilities_lib import probe_parallelism
+        assert probe_parallelism(str(tmp_path / "nope")) == "serial-only"
