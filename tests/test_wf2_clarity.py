@@ -15,18 +15,22 @@ These assert content that should EXIST in SKILL.md; they fail before the edits l
 import re
 from pathlib import Path
 
+from tests.corpus import skill_corpus
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILL = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
 REFERENCES = REPO_ROOT / "skills" / "implement-feature" / "references"
 
 
 def _text() -> str:
-    return SKILL.read_text()
+    # Corpus, not SKILL.md alone: the #158 restructure may move pinned prose
+    # into references/ — these guards pin CONTENT, wherever it lives.
+    return skill_corpus("implement-feature")
 
 
 def _block(text: str, tag: str) -> str:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
-    assert m, f"<{tag}> block not found in SKILL.md"
+    assert m, f"<{tag}> block not found in skill corpus"
     return m.group(1)
 
 
@@ -74,14 +78,18 @@ class TestRunRecordReference:
             assert key in text, f"run-record reference is missing the {key} field"
 
     def test_step16_points_to_reference_and_keeps_invocation(self):
-        text = _text()
+        # LOCATION pin: the pointer + invocation must be in the SKILL.md BASE
+        # (not merely somewhere in the corpus) — reads SKILL.md directly.
+        text = SKILL.read_text()
         step16 = text[text.index("## Step 16:"):]
         assert "references/run-record.md" in step16, "Step 16 must point at the extracted schema reference"
         # The load-bearing CLI invocation + rc handling stay in the base (test_work_summary pins it too).
         assert "work_summary.py summarize" in step16
 
     def test_full_schema_not_reinlined_in_base(self):
-        text = _text()
+        # LOCATION pin: asserts the schema is ABSENT from the base — over the
+        # corpus this would be meaningless (references/ legitimately has it).
+        text = SKILL.read_text()
         step16 = text[text.index("## Step 16:"):text.index("<completion-gate>")]
         assert step16.count('"workflow_version"') == 0, (
             "the full run-record JSON schema should be in references/run-record.md, "

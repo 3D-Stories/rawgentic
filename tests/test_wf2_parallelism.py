@@ -10,10 +10,14 @@ Issue: WF2 phase-latency optimization (A = Step 2 fan-out, B = Step 4
 concurrent adversarial review).
 """
 import re
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
+from tests.corpus import skill_corpus
+
+
+def _text() -> str:
+    # Corpus, not SKILL.md alone — #158 may move these instructions into
+    # references/; the parallelism pins follow the prose.
+    return skill_corpus("implement-feature")
 
 
 def _section(text: str, header: str, next_header: str) -> str:
@@ -27,7 +31,7 @@ def test_step2_fans_out_independent_analyses():
     cost; they must be dispatched as concurrent subagents, with the
     authoritative complexity classification described as a synthesis step
     after the gather barrier (not interleaved with the reads)."""
-    step2 = _section(SKILL.read_text(encoding="utf-8"), "## Step 2:", "## Step 3:")
+    step2 = _section(_text(), "## Step 2:", "## Step 3:")
     assert re.search(r"concurrent|in parallel|fan.?out", step2, re.I), (
         "Step 2 must describe parallel/concurrent dispatch of its analyses"
     )
@@ -61,8 +65,7 @@ def test_step4_adversarial_runs_concurrent_with_judges():
     """The cross-model adversarial review reviews the same design doc as the
     three reflexion judges, so it must run concurrently with them rather than
     serially after, while preserving the existing opt-in gate."""
-    text = SKILL.read_text(encoding="utf-8")
-    step4 = _section(text, "## Step 4:", "## Step 5:")
+    step4 = _section(_text(), "## Step 4:", "## Step 5:")
     adv = step4[step4.index("Adversarial review sub-step"):]
     assert re.search(r"concurrent|alongside|in parallel with", adv, re.I), (
         "Step 4 adversarial review must run concurrently with the judges"

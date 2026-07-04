@@ -14,13 +14,16 @@ from pathlib import Path
 
 import pytest
 
+from tests.corpus import skill_corpus
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SKILL_PATH = REPO_ROOT / "skills" / "implement-feature" / "SKILL.md"
 PLAN_LIB_PATH = REPO_ROOT / "hooks" / "plan_lib.py"
 
 
 def _read_skill() -> str:
-    return SKILL_PATH.read_text(encoding="utf-8")
+    # Corpus (SKILL.md + references/): #158 may move step prose into
+    # references/ — helper-wiring pins follow the prose, wherever it lives.
+    return skill_corpus("implement-feature")
 
 
 def _step_section(skill_text: str, step_number: str) -> str:
