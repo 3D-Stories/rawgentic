@@ -357,15 +357,26 @@ Each value is one of `opus` / `sonnet` / `haiku` / `fable` / `inherit`. Resolved
 which is invoked by the dispatching skill's `<model-routing-resolve>` preamble
 (right after `<config-loading>`, before any subagent dispatch).
 
+rawgentic **never uses Haiku for routed work**: a `haiku` value is accepted (not
+rejected to `inherit`) but hard-bumped to `sonnet` with a warning, for every role.
+
 **Fail-open by design** — routing is an optimization knob, never a gate:
 a missing workspace file, malformed JSON, a non-dict `modelRouting` block, or an
 unknown/invalid model value all resolve to `inherit` with a stderr warning; the CLI
 always exits 0 and never blocks the calling workflow.
 
-**Soft opus floor (review only):** an explicit `sonnet` or `haiku` for the `review`
-role still applies (routing is honored, not overridden) but emits an advisory stderr
-warning that review quality may drop below the recommended `opus` floor. `analysis`
-and `implementation` have no such floor.
+**Soft opus floor (review only):** an explicit `sonnet` for the `review` role still
+applies (routing is honored, not overridden) but emits an advisory stderr warning
+that review quality may drop below the recommended `opus` floor. An explicit `haiku`
+for `review` does **not** merely warn-and-apply — it is bumped to `sonnet` by the
+never-Haiku rule above. `analysis` and `implementation` have no opus floor.
+
+**`implementation` is a ceiling, not a blanket assignment.** The resolved value is
+the *maximum* model WF2 Step 8 will use, not the model every task gets. Step 8 calls
+`model_routing_lib.select_impl_model(ceiling, riskLevel, complexity)` per task:
+high-risk or `complex_feature` tasks get the ceiling; standard/simple tasks
+down-route to `sonnet`, escalating to the ceiling if a down-routed task struggles.
+No schema change — same `modelRouting.implementation` key, clarified meaning.
 
 ### `peerConsult`
 

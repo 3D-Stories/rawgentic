@@ -268,10 +268,16 @@ This step runs on **every** setup invocation (including Sub-flow A re-runs).
 
 Offer per-project subagent model routing. Ask whether to route the three dispatch roles to specific models (skip any role = inherit the session model). Suggested defaults: `review: opus`, `analysis: sonnet`, `implementation: opus`.
 
-- If the user opts in, collect a model (`opus`/`sonnet`/`haiku`/`fable`) or "skip" per role, and stage:
+- If the user opts in, collect a model (`opus`/`sonnet`/`haiku`/`fable` — a `haiku`
+  choice is bumped to `sonnet` at resolve time, since rawgentic never routes work
+  to Haiku) or "skip" per role, and stage:
   `"modelRouting": { "<role>": "<model>", ... }` (omit skipped roles).
 - If the user declines, stage nothing (absent block = inherit everywhere; byte-identical default).
-- Note the soft opus floor: routing `review` below opus warns at run time but still applies.
+- Note the soft opus floor: routing `review` to `sonnet` warns at run time but still
+  applies (`haiku` is bumped to `sonnet` instead, per the never-Haiku rule).
+- Note that `implementation` acts as a per-task ceiling, not a blanket assignment:
+  WF2 Step 8 down-routes standard/simple tasks to `sonnet` and reserves the
+  configured model for high-risk or complex tasks.
 
 ## Step 2g: Peer Consult (WF13) Integration
 
