@@ -19,11 +19,12 @@ import sys
 from pathlib import Path
 
 BASE_REF = sys.argv[1] if len(sys.argv) > 1 else "origin/main"
+SKILL_NAME = sys.argv[2] if len(sys.argv) > 2 else "implement-feature"
 ROOT = Path(__file__).resolve().parent.parent
-SKILL_DIR = ROOT / "skills" / "implement-feature"
+SKILL_DIR = ROOT / "skills" / SKILL_NAME
 
 original = subprocess.run(
-    ["git", "show", f"{BASE_REF}:skills/implement-feature/SKILL.md"],
+    ["git", "show", f"{BASE_REF}:skills/{SKILL_NAME}/SKILL.md"],
     capture_output=True, text=True, cwd=ROOT, check=True,
 ).stdout
 
