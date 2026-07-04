@@ -52,3 +52,26 @@ def test_step8_documents_ceiling_downrouting():
     assert "Never dispatch an implementation subagent with `model: haiku`" in text
     # per-task audit log line
     assert "impl task <id>: model" in text
+
+
+def test_preambles_resolve_effort():
+    """#154 Task 2: both skills also resolve the role's effort tier via --effort."""
+    for rel in ("implement-feature/SKILL.md", "fix-bug/SKILL.md"):
+        text = (SKILLS / rel).read_text()
+        assert "--effort" in text, f"{rel} missing --effort resolution"
+
+
+def test_effort_dual_path_documented():
+    """#154 Task 2: the Agent tool has no per-invocation effort parameter, so effort
+    is carried dual-path (pass where supported, always log). Pin the literals."""
+    for rel in ("implement-feature/SKILL.md", "fix-bug/SKILL.md"):
+        text = (SKILLS / rel).read_text()
+        assert "dual-path" in text, f"{rel} missing dual-path marker"
+        assert "no per-invocation effort parameter" in text, f"{rel} missing effort-parameter marker"
+
+
+def test_impl_audit_line_carries_effort():
+    """#154 Task 2: Step 8's per-task audit line extends with the resolved effort."""
+    text = (SKILLS / "implement-feature" / "SKILL.md").read_text()
+    assert "impl task <id>: model" in text
+    assert "effort <effort|none>" in text

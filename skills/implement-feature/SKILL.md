@@ -177,6 +177,8 @@ python3 hooks/model_routing_lib.py resolve \
   --workspace .rawgentic_workspace.json --project <name> --role <analysis|review|implementation>
 ```
 Run once per role (three invocations total). Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry each resolved value as a literal into later steps (fresh-shell rule). When a value is `inherit`, dispatch that role's subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for that role. A stderr warning is advisory — never treat it as failure.
+
+For each role also resolve its effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. Effort is role-wide — it does not scale with any per-task down-route (e.g. `select_impl_model`'s ceiling logic below is unaffected). When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch <role>: model <model>, effort <effort>`) so the resolved tier stays observable even where delivery is definition-level only (bundled agent-definition files are an M3 follow-up, out of scope here).
 </model-routing-resolve>
 
 <learning-config>
@@ -494,7 +496,7 @@ This enables workflow resumption if context is lost.
 **Execution model — map first, then parallel gather, then synthesize.** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. So run item 1 first, then **fan out the remaining read-only analyses (items 2–6) as concurrent subagents** (Agent tool), passing each the component map from item 1 as **shared input**. One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one **sequential subagent** (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. This collapses ~5 sequential read passes into roughly one and loses no quality — each subagent goes deeper in its own lane. Items 7–8 (complexity classification, small-standard lane eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. The issue's complexity hint from Step 1 chooses only the *orchestration cost*, never the workflow path or which gates run — for a trivially small change, skip the subagent spin-up and run items 1–6 inline (the same analyses, in the same order, feeding the same synthesis); otherwise fan out. If a subagent errors, fall back to running that single analysis inline — the per-analysis failure modes below still apply.
 
 <!-- model-routing: role=analysis -->
-When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2 fan-out subagent with `model: <analysis>`.
+When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2 fan-out subagent with `model: <analysis>`; when the resolved `analysis` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it).
 
 1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts.
 
@@ -649,7 +651,7 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 **For full critique (`/reflexion:critique`):**
 
 <!-- model-routing: role=review -->
-Dispatch the judge sub-agents with `model: <review>` unless routing resolved `inherit`.
+Dispatch the judge sub-agents with `model: <review>` unless routing resolved `inherit`; when the resolved `review` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it).
 
 1. Launch three judge sub-agents in parallel. If any returns 429, retry that agent after 30s.
 
@@ -928,7 +930,7 @@ Execute the implementation plan task by task.
    ```
 
 <!-- model-routing: role=implementation -->
-**Optional implementation delegation (`implementation` role).** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent instead of inline, subject to a per-task **clean-state boundary**. The resolved `implementation` model is a **CEILING, not a blanket assignment** — pick the cheapest sufficient model per task (issue #132), so a well-specified mechanical task is not built on the ceiling model when a cheaper one suffices.
+**Optional implementation delegation (`implementation` role).** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent instead of inline, subject to a per-task **clean-state boundary**. The resolved `implementation` model is a **CEILING, not a blanket assignment** — pick the cheapest sufficient model per task (issue #132), so a well-specified mechanical task is not built on the ceiling model when a cheaper one suffices. When the resolved `implementation` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it) — effort is role-wide from `<model-routing-resolve>`, not part of `select_impl_model`'s ceiling logic.
 
 0. **Per-task model selection (ceiling semantics).** For each task, choose its dispatch model with:
    ```bash
@@ -938,7 +940,7 @@ Execute the implementation plan task by task.
    - `<riskLevel>` = this task's `riskLevel` (`high`|`standard`) from the Step 5 plan.
    - `<complexity>` = the **Step 2** authoritative complexity classification (`simple_change`|`standard_feature`|`complex_feature`) carried forward from Step 2 item 7; if it is unavailable/unknown in context, pass `standard_feature` (the conservative middle) and note that in the per-task log.
    `select_impl_model` returns `(model, reason)`: high-risk **or** `complex_feature` → the ceiling; otherwise → `sonnet` (down-routed); a `haiku`/unknown ceiling floors to `sonnet` (rawgentic never routes coding to Haiku). Dispatch this task's subagent with `model: <model>`. **Never dispatch an implementation subagent with `model: haiku`** — if the resolved model is `inherit` and the session model is Haiku, pass `model: sonnet` instead.
-   **Log per task** in session notes: `impl task <id>: model <model> (<reason>)` — makes over/under-routing auditable.
+   **Log per task** in session notes: `impl task <id>: model <model> (<reason>), effort <effort|none>` — makes over/under-routing auditable.
 1. **Before dispatch:** record the pre-task state — current `HEAD` and `git status --porcelain` (the tree must already be clean from the previous task's commit).
 2. **Dispatch one task-agent** (serial — one at a time; each task builds on the previous commit) with the per-task `model` from item 0 and the brief: the design doc, this plan task, the TDD requirement, project conventions, and the current test baseline. The agent implements the task test-first and commits it.
 3. **After it returns:** re-run the test suite and diff against the recorded baseline. On success (tests green, only expected paths changed, task committed) → proceed to the next task.
@@ -1004,7 +1006,7 @@ Promotion at the last task still triggers Step 8a (and any retroactive scan) bef
    git show --no-color --format= <sha>
    ```
 <!-- model-routing: role=review -->
-Dispatch these reviewers with `model: <review>` unless routing resolved `inherit`.
+Dispatch these reviewers with `model: <review>` unless routing resolved `inherit`; when the resolved `review` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it).
 
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (inline-defined prompt roles, same pattern as Step 11 — NOT registered subagents):
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
@@ -1107,7 +1109,7 @@ Implementation drift check with verification evidence.
 ### Instructions
 
 <!-- model-routing: role=analysis -->
-Dispatch the memorization sub-agent with `model: <analysis>` unless routing resolved `inherit`.
+Dispatch the memorization sub-agent with `model: <analysis>` unless routing resolved `inherit`; when the resolved `analysis` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it).
 
 **Runs in PARALLEL with Step 11** (dispatch with `run_in_background=true`).
 
@@ -1167,7 +1169,7 @@ Updated CLAUDE.md (if insights memorized) or no output.
      `### WF2 Step 11 — Adversarial Diff Review: findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
 
 <!-- model-routing: role=review -->
-Dispatch the 3 review agents with `model: <review>` unless routing resolved `inherit`.
+Dispatch the 3 review agents with `model: <review>` unless routing resolved `inherit`; when the resolved `review` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it).
 
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
 

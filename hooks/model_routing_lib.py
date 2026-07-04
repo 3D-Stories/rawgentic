@@ -17,6 +17,9 @@ from typing import Final
 VALID_MODELS: Final[frozenset[str]] = frozenset(
     {"opus", "sonnet", "haiku", "fable", "inherit"}
 )
+VALID_EFFORT: Final[frozenset[str]] = frozenset(
+    {"low", "medium", "high", "xhigh", "max"}
+)
 INHERIT: Final[str] = "inherit"
 # review-role soft floor: explicit models weaker than opus warn (but still apply)
 _BELOW_OPUS: Final[frozenset[str]] = frozenset({"sonnet", "haiku"})
@@ -60,8 +63,27 @@ def _load_block(workspace_path: str, project_name: str) -> dict:
     return block
 
 
-def resolve(workspace_path: str, project_name: str, role: str) -> str:
-    """Resolve a dispatch role to a model name (or 'inherit'). Never raises.
+def _resolve_effort(value: object, role: str) -> str | None:
+    """Validate a dict's 'effort' member. None passes through; anything else
+    invalid warns and degrades to None (fail-open, same spirit as the model path).
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in VALID_EFFORT:
+        _warn(
+            f"invalid effort {value!r} for role '{role}' "
+            f"(valid: {sorted(VALID_EFFORT)}); ignoring effort"
+        )
+        return None
+    return value
+
+
+def resolve(workspace_path: str, project_name: str, role: str) -> tuple[str, str | None]:
+    """Resolve a dispatch role to (model, effort). Never raises.
+
+    A configured value is either a plain model string (effort is always None —
+    equivalent to ``{"model": <str>, "effort": None}``) or a ``{model, effort}``
+    dict. The model member is validated identically in both shapes.
 
     rawgentic NEVER uses Haiku for any routed subagent role: a config value of
     ``haiku`` is accepted (not rejected to inherit) but hard-bumped to ``sonnet``
@@ -72,24 +94,28 @@ def resolve(workspace_path: str, project_name: str, role: str) -> str:
     """
     block = _load_block(workspace_path, project_name)
     value = block.get(role, INHERIT)
+    effort: str | None = None
+    if isinstance(value, dict):
+        effort = _resolve_effort(value.get("effort"), role)
+        value = value.get("model", INHERIT)
     if not isinstance(value, str) or value not in VALID_MODELS:
         _warn(
             f"invalid model {value!r} for role '{role}' "
             f"(valid: {sorted(VALID_MODELS)}); using inherit"
         )
-        return INHERIT
+        return INHERIT, effort
     if value == "haiku":
         _warn(
             f"role '{role}' configured to 'haiku' — rawgentic never uses Haiku for "
             f"routed work; using 'sonnet' instead"
         )
-        return "sonnet"
+        return "sonnet", effort
     if role == "review" and value in _BELOW_OPUS:
         _warn(
             f"review role resolved to '{value}', below recommended opus floor "
             f"— review quality may drop"
         )
-    return value
+    return value, effort
 
 
 def select_impl_model(ceiling: str, risk_level: str, complexity: str) -> tuple[str, str]:
@@ -133,9 +159,17 @@ def main(argv: list[str] | None = None) -> int:
     p_res.add_argument("--workspace", required=True)
     p_res.add_argument("--project", required=True)
     p_res.add_argument("--role", required=True)
+    p_res.add_argument(
+        "--effort", action="store_true",
+        help="print the resolved effort instead of the model (back-compat: default omits it)",
+    )
     args = parser.parse_args(argv)
     if args.cmd == "resolve":
-        print(resolve(args.workspace, args.project, args.role))
+        model, effort = resolve(args.workspace, args.project, args.role)
+        if args.effort:
+            print(effort if effort is not None else "none")
+        else:
+            print(model)
         return 0  # fail-open: always 0
     return 0
 

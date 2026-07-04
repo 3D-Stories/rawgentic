@@ -87,6 +87,8 @@ python3 hooks/model_routing_lib.py resolve \
   --workspace .rawgentic_workspace.json --project <name> --role review
 ```
 Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry the resolved value as a literal into later steps (fresh-shell rule). When the value is `inherit`, dispatch review subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for review. A stderr warning is advisory — never treat it as failure.
+
+Also resolve the `review` role's effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch review: model <model>, effort <effort>`) so the resolved tier stays observable even where delivery is definition-level only (bundled agent-definition files are an M3 follow-up, out of scope here).
 </model-routing-resolve>
 
 <learning-config>
@@ -446,7 +448,7 @@ Verification pass/fail.
 **Part A: Code Review**
 
 <!-- model-routing: role=review -->
-Dispatch these 2 review agents with `model: <review>` unless routing resolved `inherit`.
+Dispatch these 2 review agents with `model: <review>` unless routing resolved `inherit`; when the resolved `review` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it).
 
 Launch a focused 2-agent code review in parallel using Agent tool calls (subagent_type per the PR review toolkit):
 

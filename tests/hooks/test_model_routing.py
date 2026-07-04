@@ -18,70 +18,85 @@ def _ws(tmp_path, entry: dict) -> str:
 
 def test_absent_block_returns_inherit(tmp_path):
     ws = _ws(tmp_path, {"name": "app", "path": "./p"})
-    assert mr.resolve(ws, "app", "review") == "inherit"
+    assert mr.resolve(ws, "app", "review") == ("inherit", None)
 
 
 def test_configured_role_returns_model(tmp_path):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "opus", "analysis": "sonnet"}})
-    assert mr.resolve(ws, "app", "review") == "opus"
-    assert mr.resolve(ws, "app", "analysis") == "sonnet"
+    assert mr.resolve(ws, "app", "review") == ("opus", None)
+    assert mr.resolve(ws, "app", "analysis") == ("sonnet", None)
 
 
 def test_partial_config_absent_role_inherits(tmp_path):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "opus"}})
-    assert mr.resolve(ws, "app", "analysis") == "inherit"
+    assert mr.resolve(ws, "app", "analysis") == ("inherit", None)
 
 
 def test_explicit_inherit_value(tmp_path):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "inherit"}})
-    assert mr.resolve(ws, "app", "review") == "inherit"
+    assert mr.resolve(ws, "app", "review") == ("inherit", None)
 
 
 def test_invalid_model_value_falls_back_to_inherit_with_warning(tmp_path, capsys):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "gpt-9"}})
-    assert mr.resolve(ws, "app", "review") == "inherit"
+    assert mr.resolve(ws, "app", "review") == ("inherit", None)
     assert "gpt-9" in capsys.readouterr().err
+
+
+def test_invalid_value_type_list_falls_back_to_inherit_with_warning(tmp_path, capsys):
+    # fail-open: a non-str, non-dict value (list/int/etc) also degrades to inherit.
+    ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                        "modelRouting": {"review": ["opus"]}})
+    assert mr.resolve(ws, "app", "review") == ("inherit", None)
+    assert capsys.readouterr().err
+
+
+def test_invalid_value_type_int_falls_back_to_inherit_with_warning(tmp_path, capsys):
+    ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                        "modelRouting": {"review": 5}})
+    assert mr.resolve(ws, "app", "review") == ("inherit", None)
+    assert capsys.readouterr().err
 
 
 def test_malformed_block_falls_back_to_inherit(tmp_path, capsys):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": "not-an-object"})
-    assert mr.resolve(ws, "app", "review") == "inherit"
+    assert mr.resolve(ws, "app", "review") == ("inherit", None)
     assert capsys.readouterr().err  # warned
 
 
 def test_missing_project_returns_inherit(tmp_path):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "opus"}})
-    assert mr.resolve(ws, "other", "review") == "inherit"
+    assert mr.resolve(ws, "other", "review") == ("inherit", None)
 
 
 def test_missing_workspace_file_returns_inherit(tmp_path):
-    assert mr.resolve(str(tmp_path / "nope.json"), "app", "review") == "inherit"
+    assert mr.resolve(str(tmp_path / "nope.json"), "app", "review") == ("inherit", None)
 
 
 def test_malformed_workspace_json_returns_inherit(tmp_path, capsys):
     p = tmp_path / ".rawgentic_workspace.json"
     p.write_text("{ not json")
-    assert mr.resolve(str(p), "app", "review") == "inherit"
+    assert mr.resolve(str(p), "app", "review") == ("inherit", None)
     assert capsys.readouterr().err
 
 
 def test_invalid_utf8_workspace_file_returns_inherit(tmp_path, capsys):
     p = tmp_path / ".rawgentic_workspace.json"
     p.write_bytes(b'{"projects":[]}\xff')
-    assert mr.resolve(str(p), "app", "review") == "inherit"
+    assert mr.resolve(str(p), "app", "review") == ("inherit", None)
     assert capsys.readouterr().err  # warned
 
 
 def test_review_below_opus_floor_warns_sonnet(tmp_path, capsys):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "sonnet"}})
-    assert mr.resolve(ws, "app", "review") == "sonnet"  # resolves as configured
+    assert mr.resolve(ws, "app", "review") == ("sonnet", None)  # resolves as configured
     assert "opus floor" in capsys.readouterr().err
 
 
@@ -89,14 +104,14 @@ def test_review_haiku_bumped_to_sonnet(tmp_path, capsys):
     # rawgentic never uses Haiku for routed work: a haiku config bumps to sonnet.
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "haiku"}})
-    assert mr.resolve(ws, "app", "review") == "sonnet"
+    assert mr.resolve(ws, "app", "review") == ("sonnet", None)
     assert "never uses Haiku" in capsys.readouterr().err
 
 
 def test_review_inherit_and_fable_do_not_warn_floor(tmp_path, capsys):
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"review": "fable"}})
-    assert mr.resolve(ws, "app", "review") == "fable"
+    assert mr.resolve(ws, "app", "review") == ("fable", None)
     assert "opus floor" not in capsys.readouterr().err
 
 
@@ -105,7 +120,7 @@ def test_analysis_haiku_bumped_to_sonnet(tmp_path, capsys):
     # review-only opus floor.
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"analysis": "haiku"}})
-    assert mr.resolve(ws, "app", "analysis") == "sonnet"
+    assert mr.resolve(ws, "app", "analysis") == ("sonnet", None)
     err = capsys.readouterr().err
     assert "never uses Haiku" in err
     assert "opus floor" not in err
@@ -115,8 +130,70 @@ def test_analysis_sonnet_no_floor_warn(tmp_path, capsys):
     # a non-haiku sub-opus model on a non-review role warns nothing (floor is review-only).
     ws = _ws(tmp_path, {"name": "app", "path": "./p",
                         "modelRouting": {"analysis": "sonnet"}})
-    assert mr.resolve(ws, "app", "analysis") == "sonnet"
+    assert mr.resolve(ws, "app", "analysis") == ("sonnet", None)
     assert "opus floor" not in capsys.readouterr().err
+
+
+class TestEffortDict:
+    """modelRouting.<role> may be {model, effort} in addition to a plain string."""
+
+    def test_dict_model_and_effort(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "opus", "effort": "high"}}})
+        assert mr.resolve(ws, "app", "review") == ("opus", "high")
+
+    def test_dict_haiku_model_bumped_with_effort_kept(self, tmp_path, capsys):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"analysis": {"model": "haiku", "effort": "low"}}})
+        assert mr.resolve(ws, "app", "analysis") == ("sonnet", "low")
+        assert "never uses Haiku" in capsys.readouterr().err
+
+    def test_dict_missing_model_defaults_to_inherit(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"effort": "high"}}})
+        assert mr.resolve(ws, "app", "review") == ("inherit", "high")
+
+    def test_dict_invalid_effort_value_ignored_with_warning(self, tmp_path, capsys):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "opus", "effort": "turbo"}}})
+        assert mr.resolve(ws, "app", "review") == ("opus", None)
+        err = capsys.readouterr().err
+        assert "effort" in err
+        assert "turbo" in err
+
+    def test_dict_non_string_effort_ignored_with_warning(self, tmp_path, capsys):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "opus", "effort": 3}}})
+        assert mr.resolve(ws, "app", "review") == ("opus", None)
+        assert "effort" in capsys.readouterr().err
+
+    def test_dict_invalid_model_falls_back_to_inherit_effort_kept(self, tmp_path, capsys):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "gpt", "effort": "high"}}})
+        assert mr.resolve(ws, "app", "review") == ("inherit", "high")
+        assert "gpt" in capsys.readouterr().err
+
+    def test_dict_review_below_opus_floor_still_warns(self, tmp_path, capsys):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "sonnet"}}})
+        assert mr.resolve(ws, "app", "review") == ("sonnet", None)
+        assert "opus floor" in capsys.readouterr().err
+
+    def test_dict_unknown_keys_ignored(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "opus", "effort": "high",
+                                                        "bogus": "x"}}})
+        assert mr.resolve(ws, "app", "review") == ("opus", "high")
+
+    def test_dict_effort_none_stays_none(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": {"model": "opus", "effort": None}}})
+        assert mr.resolve(ws, "app", "review") == ("opus", None)
+
+    def test_string_value_equivalent_to_effort_null(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": "opus"}})
+        assert mr.resolve(ws, "app", "review") == ("opus", None)
 
 
 def test_cli_resolve_prints_value_exit_zero(tmp_path, capsys):
@@ -133,6 +210,37 @@ def test_cli_resolve_bad_config_still_exit_zero(tmp_path, capsys):
     rc = mr.main(["resolve", "--workspace", ws, "--project", "app", "--role", "review"])
     assert rc == 0  # fail-open: never non-zero
     assert capsys.readouterr().out.strip() == "inherit"
+
+
+def test_cli_resolve_default_omits_effort_even_when_configured(tmp_path, capsys):
+    # back-compat is critical: default stdout is the bare model, never a second
+    # line/value, even when the role resolves an effort.
+    ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                        "modelRouting": {"review": {"model": "opus", "effort": "high"}}})
+    rc = mr.main(["resolve", "--workspace", ws, "--project", "app", "--role", "review"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.strip() == "opus"
+    assert "\n" not in out.strip()
+    assert "high" not in out
+
+
+def test_cli_resolve_effort_flag_prints_effort_for_dict_role(tmp_path, capsys):
+    ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                        "modelRouting": {"review": {"model": "opus", "effort": "high"}}})
+    rc = mr.main(["resolve", "--workspace", ws, "--project", "app", "--role", "review",
+                  "--effort"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "high"
+
+
+def test_cli_resolve_effort_flag_prints_none_for_string_role(tmp_path, capsys):
+    ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                        "modelRouting": {"review": "opus"}})
+    rc = mr.main(["resolve", "--workspace", ws, "--project", "app", "--role", "review",
+                  "--effort"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "none"
 
 
 class TestSelectImplModel:
