@@ -14,7 +14,7 @@ Claude Code is powerful but unstructured. Complex tasks — building features, f
 **Rawgentic** provides 19 skills organized in three layers (6 of them deprecation stubs since v2.60.0, removed at v3.0.0 — #160):
 
 - **Workspace management** (4 skills) — Project registration, configuration, session binding, and guard exception management
-- **SDLC workflows** (12 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
+- **SDLC workflows** (6 active skills + 6 deprecated stubs, removal at v3.0.0) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.

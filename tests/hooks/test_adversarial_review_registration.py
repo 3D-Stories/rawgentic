@@ -209,16 +209,20 @@ def test_wf4_is_a_deprecation_stub():
 
 
 def test_setup_offers_surviving_workflows():
-    # #160: WF4 (refactor) deprecated to a stub, so setup no longer offers it as
-    # a configurable adversarial-review workflow — only the three survivors.
-    text = skill_corpus("setup")
-    step2d = _section(text, "## Step 2d:", "## Step 3:")
+    """#160: refactor (WF4) is deprecated — setup's Step 2d offer detail lives in
+    references/integrations.md (LOCATION pin: the corpus slice between the spine's
+    '## Step 2d:' and '## Step 3:' headings resolves to the spine SUMMARY only, so
+    this reads the reference file directly to guard the real offer list)."""
+    detail = (SKILLS_DIR / "setup" / "references" / "integrations.md").read_text()
     for name in ("implement-feature", "fix-bug", "create-issue"):
-        assert name in step2d, f"setup Step 2d must offer {name}"
-    assert "refactor" not in step2d, "setup Step 2d must not offer refactor (WF4 deprecated, #160)"
-
-
-# --- adversarial-review evals workspace (issue #79) ---
+        assert name in detail, f"setup Step 2d detail must offer {name}"
+    # the example config must not present refactor as a live workflow
+    assert '"workflows": ["implement-feature", "fix-bug"]' in detail
+    assert '"refactor"]' not in detail
+    # spine summary also names no refactor offer
+    spine = (SKILLS_DIR / "setup" / "SKILL.md").read_text()
+    step2d = _section(spine, "## Step 2d:", "## Step 3:")
+    assert "refactor" not in step2d
 
 def test_adversarial_review_evals_exist_and_valid():
     evals_path = SKILLS_DIR / "adversarial-review-workspace" / "evals" / "evals.json"
