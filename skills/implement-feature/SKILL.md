@@ -135,9 +135,9 @@ a mandatory step mid-run. Once you proceed past Step 2 into the workflow, every 
 above is non-negotiable.
 
 **Small-standard lane reconciliation (`<small-standard-lane>`):** in the small-standard lane,
-Steps 4, 5, and 9 run in their **COLLAPSED** form (Step 4 = `/reflexion:reflect`; Step 5 = a
-checklist plan; Step 9 = Part B evidence only) — they are **not skipped**, so the mandatory-step
-invariant still holds. Only **Step 6 (Plan Drift)** is skipped in the lane, and it is already a
+Steps 3, 4, 5, and 9 run in their **COLLAPSED** form (Step 3 = a brief design note, no
+multi-approach brainstorm; Step 4 = `/reflexion:reflect`; Step 5 = a checklist plan; Step 9 =
+Part B evidence only) — they are **not skipped**, so the mandatory-step invariant still holds. Only **Step 6 (Plan Drift)** is skipped in the lane, and it is already a
 conditional step. **Step 11 (code review), Step 11.5 (security scan), and Step 8a for any
 `riskLevel: high` task remain NON-NEGOTIABLE in the lane**, exactly as on the full spine — the
 lane is cheaper on design ceremony, never on review or security.
