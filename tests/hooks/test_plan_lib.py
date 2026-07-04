@@ -884,3 +884,80 @@ class TestScanPriorCommits:
         sha2 = _make_commit(repo, {"src/widgets.ts": "small"}, "small")
         flagged = mod.scan_prior_commits_for_trigger(str(repo), exclude_sha=sha2)
         assert sha1 in flagged
+
+
+# --- any_high_risk_path (plural public wrapper) ---
+
+class TestAnyHighRiskPath:
+    def test_match_returns_the_path_not_the_pattern(self):
+        mod = _reload_plan_lib()
+        # First matching path is returned (the PATH, not the matched pattern).
+        assert mod.any_high_risk_path(
+            ["src/ok.py", "src/auth/login.py"]
+        ) == "src/auth/login.py"
+
+    def test_boundary_nonmatch_returns_none(self):
+        """Anchored regex must NOT match 'author' from the 'auth' pattern."""
+        mod = _reload_plan_lib()
+        assert mod.any_high_risk_path(["src/author.ts"]) is None
+
+    def test_extra_patterns_respected(self):
+        mod = _reload_plan_lib()
+        assert mod.any_high_risk_path(
+            ["src/widgets.ts", "src/billing.ts"], extra_patterns=("billing",)
+        ) == "src/billing.ts"
+
+    def test_empty_list_returns_none(self):
+        mod = _reload_plan_lib()
+        assert mod.any_high_risk_path([]) is None
+
+
+# --- should_run_diff_review (pure WF2 Step 11 dispatch gate, #131) ---
+
+class TestShouldRunDiffReview:
+    HRP = "src/auth/login.py"  # a high-risk path
+    CLEAN = ["src/widgets.ts", "docs/README.md"]
+
+    def test_disabled_with_path(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(False, [self.HRP], False) == (False, "disabled")
+
+    def test_disabled_with_task(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(False, self.CLEAN, True) == (False, "disabled")
+
+    def test_disabled_with_both(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(False, [self.HRP], True) == (False, "disabled")
+
+    def test_disabled_with_neither(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(False, self.CLEAN, False) == (False, "disabled")
+
+    def test_enabled_empty_paths_with_task(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, [], True) == (False, "empty diff")
+
+    def test_enabled_path_only(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, [self.HRP], False) == (
+            True, f"high-risk path: {self.HRP}"
+        )
+
+    def test_enabled_task_only_clean_paths(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, self.CLEAN, True) == (
+            True, "high-risk task in plan"
+        )
+
+    def test_enabled_both_path_wins(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, [self.HRP], True) == (
+            True, f"high-risk path: {self.HRP}"
+        )
+
+    def test_enabled_neither(self):
+        mod = _reload_plan_lib()
+        assert mod.should_run_diff_review(True, self.CLEAN, False) == (
+            False, "no security surface"
+        )
