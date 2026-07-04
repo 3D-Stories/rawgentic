@@ -581,12 +581,19 @@ status, loop-backs, and the PR/CI/deploy outcome — and drives
 `hooks/work_summary.py`, which renders the standardized "WF*N* COMPLETE" block
 **and** appends the record as one JSON line to
 `<project>/docs/measurements/run_records.jsonl` (override via `--store` or
-`RAWGENTIC_RUN_RECORD_STORE`). The fields are a **uniform core** so the Tier-2 A/B
-measurement harness can aggregate across workflows, plus an optional `extra` list
-for workflow-specific lines (e.g. WF3's Root Cause / Fix). The store is
-**fail-closed** (a record failing validation is never persisted) while the human
-summary renders best-effort (a schema nit never costs the user their completion
-output). See [run-records.md](docs/run-records.md).
+`RAWGENTIC_RUN_RECORD_STORE`) — this rawgentic repo commits its own store at
+`docs/measurements/run_records.jsonl`. The fields are a **uniform core** so the
+Tier-2 A/B measurement harness can aggregate across workflows, plus an optional
+`extra` list for workflow-specific lines (e.g. WF3's Root Cause / Fix) and an
+optional `usage` object (input/output tokens, cost estimate, wall clock,
+per-model mix) for token/cost telemetry — backfilled from
+[`ccusage`](https://github.com/ryoppippi/ccusage) when not captured at run
+time. Each gate entry also carries an optional `reviewer_kind` (`inline` /
+`reflexion` / `builtin_code_review` / `codex` / `hand_rolled_multi`) recording
+which reviewer produced it. The store is **fail-closed** (a record failing
+validation is never persisted) while the human summary renders best-effort (a
+schema nit never costs the user their completion output). See
+[run-records.md](docs/run-records.md).
 
 Once runs accumulate, `work_summary.py aggregate --store <path>` rolls the store
 up into Tier-2 metrics — per-gate effectiveness (hit rate, findings caught vs
@@ -716,6 +723,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v2.54.0 (2026-07-04)
+- **Run-record usage telemetry + reviewer_kind (#155).** Run-records gain an optional `usage` object (input/output tokens, cost estimate, wall clock, per-model mix — nullable, backfilled via [`ccusage`](https://github.com/ryoppippi/ccusage) when not captured at assembly time) and an optional per-gate `reviewer_kind` enum (`inline`/`reflexion`/`builtin_code_review`/`codex`/`hand_rolled_multi`). `work_summary.py` renders a `- Usage:` line in the completion summary when present. The run-record store now lives at the committed `docs/measurements/run_records.jsonl` with a pristine-drift guard.
 
 ### v2.53.0 (2026-07-04)
 - **Worktree-isolation availability probe (#136, fronts #85).** `capabilities_lib.py probe-parallelism --repo-root <r>` reports `worktree` or `serial-only` — a non-mutating git probe (creates + force-removes a throwaway worktree under the system temp dir, prunes) that fails open to `serial-only`, so an orchestrator learns up front whether parallel issue/task builds can be isolated instead of attempt-then-fail on an Agent-tool "not in a git repository" error. WF2 Step 2 runs it and carries `capabilities.parallelism`; Step 8 consults it (serial-only → one clear notice, not an error; worktree → still waits on the #85 execution layer). Covers git-with-worktree / non-git / unborn-HEAD (worktree-add-fails) cases.

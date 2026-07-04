@@ -145,6 +145,58 @@ class TestValidateExtra:
         assert validate_record(rec) == []
 
 
+class TestValidateReviewerKind:
+    """`reviewer_kind` (#155, task 2) canonicalizes reviewer identity per #116's
+    controlled-vocabulary contract. OPTIONAL per gate — absent is valid (keeps
+    every legacy record valid); when present it must be a REVIEWER_KINDS member,
+    fail-closed on free text or null (omit the key instead of nulling it)."""
+
+    def test_gate_without_reviewer_kind_is_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        assert "reviewer_kind" not in rec["gates"][0]
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("kind", [
+        "inline", "reflexion", "builtin_code_review", "codex", "hand_rolled_multi",
+    ])
+    def test_each_canonical_value_is_valid(self, kind):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = kind
+        assert validate_record(rec) == []
+
+    def test_free_text_value_is_error(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = "3-agent panel"
+        errs = validate_record(rec)
+        assert any("gates[0].reviewer_kind" in e for e in errs)
+
+    def test_null_is_error(self):
+        """null is NOT a stand-in for absent — the caller must omit the key."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = None
+        errs = validate_record(rec)
+        assert any("gates[0].reviewer_kind" in e for e in errs)
+
+    @pytest.mark.parametrize("bad", [7, True, ["codex"]])
+    def test_non_string_value_is_error(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = bad
+        errs = validate_record(rec)
+        assert any("gates[0].reviewer_kind" in e for e in errs)
+
+    def test_mixed_gates_with_and_without_are_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["gates"][0]["reviewer_kind"] = "codex"
+        assert "reviewer_kind" not in rec["gates"][1]
+        assert validate_record(rec) == []
+
+
 # --- validate_record: fail-closed ------------------------------------------
 
 class TestValidateFailClosed:
@@ -1129,3 +1181,251 @@ class TestVerificationDeferred:
         out = render_summary(rec)
         assert "deferred" in out.lower()
         assert "no makensis in dev env" in out
+
+
+# --- #155 Task 1: optional top-level `usage` (strict-when-present) ---------
+
+class TestValidateUsage:
+    def _usage(self, **overrides):
+        base = {"input_tokens": 12345, "output_tokens": 6789,
+                "cost_estimate_usd": 1.23, "wall_clock_s": 42.5,
+                "model_mix": {"opus": {"input_tokens": 100, "output_tokens": 50}}}
+        base.update(overrides)
+        return base
+
+    def test_absent_is_valid_legacy_record(self):
+        from work_summary import validate_record
+        assert validate_record(_valid_record()) == []
+
+    def test_all_keys_null_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": None, "output_tokens": None,
+                         "cost_estimate_usd": None, "wall_clock_s": None,
+                         "model_mix": None}
+        assert validate_record(rec) == []
+
+    def test_happy_path_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage()
+        assert validate_record(rec) == []
+
+    def test_not_a_dict_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = "a lot"
+        assert any("usage must be an object" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("key", ["input_tokens", "output_tokens",
+                                      "cost_estimate_usd", "wall_clock_s",
+                                      "model_mix"])
+    def test_missing_key_rejected(self, key):
+        from work_summary import validate_record
+        rec = _valid_record()
+        u = self._usage()
+        del u[key]
+        rec["usage"] = u
+        assert any(key in e for e in validate_record(rec))
+
+    def test_input_tokens_bool_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(input_tokens=True)
+        assert any("input_tokens" in e for e in validate_record(rec))
+
+    def test_input_tokens_negative_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(input_tokens=-1)
+        assert any("input_tokens" in e for e in validate_record(rec))
+
+    def test_cost_estimate_bool_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=True)
+        assert any("cost_estimate_usd" in e for e in validate_record(rec))
+
+    def test_cost_estimate_negative_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=-0.01)
+        assert any("cost_estimate_usd" in e for e in validate_record(rec))
+
+    def test_cost_estimate_nan_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=float("nan"))
+        assert any("cost_estimate_usd" in e for e in validate_record(rec))
+
+    def test_cost_estimate_float_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=1.23)
+        assert validate_record(rec) == []
+
+    def test_model_mix_not_dict_or_null_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(model_mix=["opus"])
+        assert any("model_mix" in e for e in validate_record(rec))
+
+    def test_model_mix_empty_dict_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(model_mix={})
+        assert validate_record(rec) == []
+
+    def test_model_mix_value_missing_input_tokens_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(model_mix={"opus": {"output_tokens": 50}})
+        assert any("model_mix['opus']" in e and "input_tokens" in e
+                   for e in validate_record(rec))
+
+    def test_model_mix_inner_bool_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(
+            model_mix={"opus": {"input_tokens": True, "output_tokens": 50}})
+        assert any("model_mix['opus']" in e and "input_tokens" in e
+                   for e in validate_record(rec))
+
+    def test_model_mix_inner_negative_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(
+            model_mix={"opus": {"input_tokens": -1, "output_tokens": 50}})
+        assert any("model_mix['opus']" in e and "input_tokens" in e
+                   for e in validate_record(rec))
+
+
+# --- #155 Task 3: render_summary best-effort Usage line --------------------
+
+class TestRenderUsage:
+    def _usage(self, **overrides):
+        base = {"input_tokens": 12345, "output_tokens": 6789,
+                "cost_estimate_usd": 1.23, "wall_clock_s": 42.5,
+                "model_mix": {"opus": {"input_tokens": 100, "output_tokens": 50}}}
+        base.update(overrides)
+        return base
+
+    def test_no_usage_no_usage_line(self):
+        from work_summary import render_summary
+        text = render_summary(_valid_record())
+        assert "Usage:" not in text
+
+    def test_full_usage_renders_tokens_cost_wall_model_mix(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage()
+        text = render_summary(rec)
+        assert "- Usage: 12345 in / 6789 out tokens" in text
+        assert "~$1.23" in text
+        assert "42.5s wall" in text
+        assert "opus: 100/50" in text
+
+    def test_null_fields_render_placeholders_no_raise(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": None, "output_tokens": None,
+                        "cost_estimate_usd": None, "wall_clock_s": None,
+                        "model_mix": None}
+        text = render_summary(rec)
+        assert "- Usage: ? in / ? out tokens" in text
+        assert "~$" not in text
+        assert "wall" not in text
+
+    def test_malformed_usage_string_no_raise_no_line(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = "a lot of tokens"
+        text = render_summary(rec)
+        assert "Usage:" not in text
+
+    def test_malformed_usage_list_no_raise_no_line(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = ["opus"]
+        text = render_summary(rec)
+        assert "Usage:" not in text
+
+    def test_malformed_usage_int_no_raise_no_line(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = 42
+        text = render_summary(rec)
+        assert "Usage:" not in text
+
+    def test_model_mix_malformed_entry_skipped(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage(
+            model_mix={"opus": {"input_tokens": 100, "output_tokens": 50},
+                       "haiku": "not a dict"})
+        text = render_summary(rec)
+        assert "opus: 100/50" in text
+        assert "haiku" not in text
+
+    def test_cost_bool_true_not_rendered_as_cost(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage(cost_estimate_usd=True)
+        text = render_summary(rec)
+        assert "~$" not in text
+
+    def test_usage_line_before_deferred_and_ci(self):
+        """Placement: after Tests, before deferred block, and CI/Deploy stay last."""
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = self._usage()
+        rec["verification_deferred"] = [
+            {"task_id": "2", "reason": "no makensis in dev env",
+             "local_proxy": "unit tests", "target_check": "manual install"}]
+        text = render_summary(rec)
+        tests_i = text.index("- Tests:")
+        usage_i = text.index("- Usage:")
+        deferred_i = text.index("Verification deferred")
+        ci_i = text.index("- CI:")
+        deploy_i = text.index("- Deploy:")
+        assert tests_i < usage_i < deferred_i < ci_i < deploy_i
+
+
+class TestCommittedStorePristine:
+    """Drift guard for the committed run-record store (#155 Task 4): the store
+    is now checked in (docs/measurements/run_records.jsonl) and must stay a
+    clean, git-tracked, fully-valid JSONL file forever after.
+
+    Green-on-arrival by design — the RED state ("store missing/corrupt/
+    untracked") is the pre-commit state this same PR fixes, not something we
+    mutate the repo to reproduce. `test_a_corrupt_line_is_excluded_not_silent`
+    proves Test A is not vacuous: load_store DOES fail on a bad line, just not
+    on this one."""
+
+    REPO_ROOT = HOOKS_DIR.parent
+    STORE_PATH = REPO_ROOT / "docs" / "measurements" / "run_records.jsonl"
+
+    def test_committed_store_loads_clean(self):
+        from work_summary import load_store
+        records, excluded = load_store(str(self.STORE_PATH))
+        assert excluded == []
+        assert len(records) >= 12
+
+    def test_committed_store_is_tracked_by_git(self):
+        import subprocess
+        r = subprocess.run(
+            ["git", "ls-files", "--error-unmatch",
+             "docs/measurements/run_records.jsonl"],
+            cwd=str(self.REPO_ROOT), capture_output=True)
+        assert r.returncode == 0, r.stderr.decode()
+
+    def test_a_corrupt_line_is_excluded_not_silent(self, tmp_path):
+        """Non-vacuity proof for test_committed_store_loads_clean: load_store
+        does flag a bad line when there is one — the real store's clean
+        `excluded == []` is a genuine pass, not a check that can never fail."""
+        from work_summary import load_store
+        p = tmp_path / "run_records.jsonl"
+        p.write_text(json.dumps(_store_rec()) + "\n{not json\n")
+        records, excluded = load_store(str(p))
+        assert len(records) == 1
+        assert excluded != []

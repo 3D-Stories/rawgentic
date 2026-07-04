@@ -28,6 +28,7 @@ their Step 16 output. main() exits 1 in that case so the skill surfaces the gap.
 import argparse
 import copy
 import json
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -49,6 +50,10 @@ COMPLEXITIES = {"trivial", "standard", "complex"}  # None also allowed
 GATE_STATUSES = {"pass", "fail", "skipped", "fast_path"}
 CI_STATUSES = {"passed", "failed", "not_configured", "skipped"}
 DEPLOY_STATUSES = {"success", "manual", "failed", "not_applicable"}
+# Canonicalizes reviewer identity on a gate entry per #116's controlled-
+# vocabulary contract. Optional; free text is rejected by design.
+REVIEWER_KINDS = {"inline", "reflexion", "builtin_code_review", "codex",
+                   "hand_rolled_multi"}
 
 # Human-summary header label per workflow; falls back to the upper-cased name.
 _WF_LABELS = {"implement-feature": "WF2", "fix-bug": "WF3"}
@@ -64,6 +69,16 @@ def _is_int(x) -> bool:
     isinstance(x, int) would accept `findings: true` and corrupt the substrate —
     reject bool explicitly."""
     return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _is_num(x) -> bool:
+    """True only for a real, finite int or float. bool is a subclass of int in
+    Python, so a naive isinstance(x, (int, float)) would accept
+    `cost_estimate_usd: true` and corrupt aggregation — reject bool explicitly.
+    NaN/inf are rejected too (math.isfinite): a NaN cost or duration would
+    silently corrupt any downstream sum/average in the Tier-2 substrate."""
+    return (isinstance(x, (int, float)) and not isinstance(x, bool)
+            and math.isfinite(x))
 
 
 def _is_str(x) -> bool:
@@ -189,6 +204,10 @@ def validate_record(record) -> list:
                         f"gates[{i}].status must be one of {sorted(GATE_STATUSES)}")
                 if _is_int(fnd) and _is_int(rsv) and rsv > fnd:
                     errs.append(f"gates[{i}].resolved cannot exceed gates[{i}].findings")
+                if "reviewer_kind" in g and (not _is_str(g["reviewer_kind"])
+                                              or g["reviewer_kind"] not in REVIEWER_KINDS):
+                    errs.append(f"gates[{i}].reviewer_kind must be one of "
+                                f"{sorted(REVIEWER_KINDS)}")
             steps = [g.get("step") for g in gates if isinstance(g, dict)]
             dups = sorted({s for s in steps if _is_str(s) and steps.count(s) > 1})
             if dups:
@@ -298,6 +317,45 @@ def validate_record(record) -> list:
             if dups:
                 errs.append(f"verification_deferred has duplicate task_id(s) {dups}")
 
+    # `usage` (#155 Task 1) — OPTIONAL top-level telemetry: absent → old records
+    # stay valid, but present is strict (deliberate-null-vs-dropped-field, same
+    # philosophy as elsewhere in this validator). Rendering is _render_usage_line;
+    # aggregation lands with #115 (fleet rollups).
+    if "usage" in record:
+        usage = record["usage"]
+        if not isinstance(usage, dict):
+            errs.append("usage must be an object")
+        else:
+            _require_present(usage, "usage",
+                              ("input_tokens", "output_tokens", "cost_estimate_usd",
+                               "wall_clock_s", "model_mix"), errs)
+            for f in ("input_tokens", "output_tokens"):
+                v = usage.get(f)
+                if v is not None and (not _is_int(v) or v < 0):
+                    errs.append(f"usage.{f} must be a non-negative integer or null")
+            for f in ("cost_estimate_usd", "wall_clock_s"):
+                v = usage.get(f)
+                if v is not None and (not _is_num(v) or v < 0):
+                    errs.append(f"usage.{f} must be a non-negative number or null")
+            mix = usage.get("model_mix")
+            if mix is not None and not isinstance(mix, dict):
+                errs.append("usage.model_mix must be an object or null")
+            elif isinstance(mix, dict):
+                for model, counts in mix.items():
+                    if not (_is_str(model) and model.strip()):
+                        errs.append("usage.model_mix keys must be non-empty strings")
+                        continue
+                    if not isinstance(counts, dict):
+                        errs.append(f"usage.model_mix['{model}'] must be an object")
+                        continue
+                    _require_present(counts, f"usage.model_mix['{model}']",
+                                      ("input_tokens", "output_tokens"), errs)
+                    for f in ("input_tokens", "output_tokens"):
+                        v = counts.get(f)
+                        if v is not None and (not _is_int(v) or v < 0):
+                            errs.append(f"usage.model_mix['{model}'].{f} must be "
+                                        f"a non-negative integer or null")
+
     return errs
 
 
@@ -314,6 +372,43 @@ def normalize_record(record, *, now, schema_version=SCHEMA_VERSION) -> dict:
     out.setdefault("follow_ups", [])
     out.setdefault("extra", [])
     return out
+
+
+def _render_usage_line(usage: dict) -> str:
+    """Render the best-effort '- Usage: ...' line (#155 Task 3). `usage` is
+    already coerced by _as_dict and confirmed truthy by the caller. Every inner
+    value is isinstance-guarded (never trusted) since render_summary runs on
+    UNVALIDATED records: a wrong-typed field degrades to '?' or is dropped
+    rather than raising or leaking a dict/list repr."""
+    it = usage.get("input_tokens")
+    ot = usage.get("output_tokens")
+    it_str = str(it) if _is_int(it) else "?"
+    ot_str = str(ot) if _is_int(ot) else "?"
+    line = f"- Usage: {it_str} in / {ot_str} out tokens"
+
+    cost = usage.get("cost_estimate_usd")
+    if _is_num(cost):
+        line += f", ~${cost}"
+
+    wall = usage.get("wall_clock_s")
+    if _is_num(wall):
+        line += f", {wall}s wall"
+
+    mix = usage.get("model_mix")
+    if isinstance(mix, dict) and mix:
+        parts = []
+        for model, counts in mix.items():
+            if not isinstance(model, str) or not isinstance(counts, dict):
+                continue  # malformed entry: skip silently, best-effort
+            min_ = counts.get("input_tokens")
+            mout = counts.get("output_tokens")
+            min_str = str(min_) if _is_int(min_) else "?"
+            mout_str = str(mout) if _is_int(mout) else "?"
+            parts.append(f"{model}: {min_str}/{mout_str}")
+        if parts:
+            line += f" ({', '.join(parts)})"
+
+    return line
 
 
 # --- render_summary (pure, best-effort) ------------------------------------
@@ -387,6 +482,9 @@ def render_summary(record) -> str:
         lines.append(f"- Tests: {tests.get('added', 0)} added, {passing}/{total} passing")
     else:
         lines.append(f"- Tests: {tests.get('added', 0)} added")
+    usage = _as_dict(r.get("usage"))
+    if usage:
+        lines.append(_render_usage_line(usage))
     deferred = record.get("verification_deferred")
     if isinstance(deferred, list) and deferred:
         lines.append("- Verification deferred (must be checked on target):")

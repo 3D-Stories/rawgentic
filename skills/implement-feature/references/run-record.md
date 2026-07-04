@@ -18,7 +18,8 @@ non-negative integers and `resolved` may not exceed `findings`:
               "commits": N},
   "tests": {"added": N, "passing": N|null, "total": N|null},
   "gates": [
-    {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path"},
+    {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path",
+     "reviewer_kind": "inline|reflexion|builtin_code_review|codex|hand_rolled_multi"},
     {"step": "6",  "name": "Plan Drift",            "findings": N, "resolved": N, "status": "..."},
     {"step": "9",  "name": "Implementation Drift",  "findings": N, "resolved": N, "status": "..."},
     {"step": "11", "name": "Code Review",           "findings": N, "resolved": N, "status": "..."},
@@ -34,7 +35,10 @@ non-negative integers and `resolved` may not exceed `findings`:
   "lane": "small-standard|full",
   "verification_deferred": [{"task_id": "<id>", "reason": "<why the dev env can't exercise it>",
                             "local_proxy": "<what WAS run locally>",
-                            "target_check": "<exact manual check on the target>"}, ...]
+                            "target_check": "<exact manual check on the target>"}, ...],
+  "usage": {"input_tokens": N|null, "output_tokens": N|null, "cost_estimate_usd": N|null,
+            "wall_clock_s": N|null,
+            "model_mix": {"<model>": {"input_tokens": N|null, "output_tokens": N|null}, ...}|null}
 }
 ```
 
@@ -60,3 +64,37 @@ valid (same forward-compatible, no-version-bump rule as `lane`). A bare count is
 used — the completion gate reconciles each planned deferred task against this list via
 `plan_lib.assert_deferrals_recorded`, which needs the task ids, and the per-task evidence must be
 legible, not summed away. `task_id`s must be distinct.
+
+**`usage` (OPTIONAL, #155):** best-effort per-run token/cost/time telemetry. It follows the same
+*validated-optional* pattern as `verification_deferred` (NOT the unvalidated-passthrough pattern of
+`lane`, which `validate_record` never inspects at all): **absent** is fine — old records stay valid,
+no schema version bump — but **present is strict**. All five keys (`input_tokens`, `output_tokens`,
+`cost_estimate_usd`, `wall_clock_s`, `model_mix`) must be present, and `null` is an allowed *value*
+for any of them, same deliberate-null-vs-dropped-field rule as the rest of the schema; if supplied,
+`model_mix` maps each model name to its own `{input_tokens, output_tokens}` pair (also
+present-with-nullable-values). Tokens-by-model in `model_mix` is the **primary** metric — most runs
+are billed against a Claude subscription rather than metered per token, so `cost_estimate_usd` is a
+**derived, secondary** figure (a rate-card estimate, useful for cross-checking, not the number to
+trend on). Best-effort: when real numbers aren't available, **omit the whole `usage` object** rather
+than fabricate one — a missing object is honest telemetry, a guessed one corrupts the substrate.
+`npx ccusage@latest` is the local tool for reading actual token counts out of the Claude Code
+session logs when the harness itself doesn't surface them.
+
+Populate `usage` at Step 16 **assembly time**, before invoking `summarize` — the store is
+append-only, so if usage numbers surface only after the record has already been persisted,
+re-running `summarize` to add them would append a **second, duplicate** line for the same run
+rather than amend the first. A post-hoc backfill instead means hand-editing the run's existing
+JSONL line in place; after that edit, the pristine drift-guard test validates the whole committed
+store in CI, so a malformed hand-edit is caught the same way a bad writer output would be.
+
+**`reviewer_kind` (OPTIONAL, #155):** a per-gate entry, a **controlled vocabulary** per #116's
+canonicalization contract: `inline` / `reflexion` / `builtin_code_review` / `codex` /
+`hand_rolled_multi`. When present it must be a member of that set — free text is rejected
+(fail-closed), which is exactly the drift #116 documents and this field exists to kill. Omit the
+key rather than setting it to `null`: `validate_record` only checks membership when the key is
+present, it doesn't require the key or accept a null placeholder.
+
+For WF2 assembly, map the actual review mechanism used at each gate: Step 4 full critique (e.g.
+`reflexion:critique`) → `reflexion`; Step 4 lane-reflect via a subagent (small-standard lane) →
+`inline`; Step 11 three-agent panel → `hand_rolled_multi`; builtin `/code-review` →
+`builtin_code_review`; Codex adversarial review → `codex`.

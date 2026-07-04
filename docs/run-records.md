@@ -33,12 +33,13 @@ exceed `findings`, `passing` may not exceed `total`, `used` may not exceed
 | `issue` | object | `number` (int\|null), `type` (`feature`/`bug`/`chore`/`other`), `complexity` (`trivial`/`standard`/`complex`\|null). |
 | `changes` | object | `files_changed`, `commits` (ints); `insertions`, `deletions` (int\|null). |
 | `tests` | object | `added` (int); `passing`, `total` (int\|null). |
-| `gates` | array | Each `{step, name, findings, resolved, status}`; `status` ∈ `pass`/`fail`/`skipped`/`fast_path`. Step 11.5 is captured in `security_scan`, not here. |
+| `gates` | array | Each `{step, name, findings, resolved, status}`; `status` ∈ `pass`/`fail`/`skipped`/`fast_path`. Optional per-gate `reviewer_kind` (#155) ∈ `inline`/`reflexion`/`builtin_code_review`/`codex`/`hand_rolled_multi` when present — free text is rejected. Step 11.5 is captured in `security_scan`, not here. |
 | `security_scan` | object | `ran` (bool), `blocking_resolved`, `advisory` (ints), `skipped` (list of strings). Mirrors the [Step 11.5 gate](security-scan.md). |
 | `loop_backs` | object | `used`, `budget` (ints). |
 | `outcome` | object | `pr_number` (int\|null), `pr_url` (string\|null), `merged` (bool\|null), `ci` (`passed`/`failed`/`not_configured`/`skipped`), `deploy` (`success`/`manual`/`failed`/`not_applicable`). |
 | `follow_ups` | array | Optional list of strings; defaults to `[]`. |
 | `extra` | array | Optional ordered `{label, value}` (both strings) pairs for **workflow-specific** human lines that ride along in the render without bloating the uniform core (e.g. WF3's `Root Cause` / `Fix`). Defaults to `[]`. |
+| `usage` | object | Optional (#155). Best-effort telemetry: `input_tokens`, `output_tokens` (int\|null), `cost_estimate_usd`, `wall_clock_s` (number\|null), `model_mix` (object\|null, per-model `{input_tokens, output_tokens}`). Present is strict — all 5 keys required, nullable values; absent omits the object entirely rather than nulling it. |
 
 The fields above the line are the **uniform core** every workflow emits, so
 Tier-2 can aggregate across workflows; `extra` is the escape hatch for
@@ -71,6 +72,36 @@ One JSON line per run, appended to:
 Override with `--store <path>` or the `RAWGENTIC_RUN_RECORD_STORE` env var (env
 is configurable from v1). The default is committed and per-project, so the
 telemetry is versioned and reproducible alongside the code it measures.
+
+## Usage telemetry & ccusage backfill
+
+`usage` (#155) is optional per-run telemetry: `input_tokens`, `output_tokens`,
+`cost_estimate_usd`, `wall_clock_s`, and a per-model `model_mix` breakdown. Most
+runs are billed against a Claude subscription rather than metered per API call,
+so **tokens-by-model in `model_mix` is the primary metric** Tier-2 should trend
+on; `cost_estimate_usd` is a derived, secondary figure (a rate-card estimate,
+useful for cross-checking, not what a subscription user is actually paying).
+When present, `usage` is validated strictly (all five keys, nullable values);
+when the harness can't surface real numbers, the workflow **omits the whole
+object** rather than persist a fabricated one.
+
+Populate `usage` at completion-step assembly time, **before** invoking
+`work_summary.py summarize` — the store is append-only, so re-running
+`summarize` to attach usage after the fact would append a duplicate line for
+the same run rather than amend the original. If usage numbers only become
+available after a record has already been persisted, the backfill path is a
+**hand-edit of that run's existing JSONL line** in place; the pristine
+drift-guard test that validates the committed store in CI catches a malformed
+edit the same way it would catch a bad writer.
+
+[`ccusage`](https://github.com/ryoppippi/ccusage) (`npx ccusage@latest`) is the
+local tool for reading actual token counts out of the Claude Code session logs
+when the harness itself doesn't report them — the intended source for the
+numbers that populate `usage` at assembly time or during a hand-edit backfill.
+
+When present, `usage` renders as a `- Usage: <in> in / <out> out tokens[, ~$cost][,
+Ns wall][ (model: in/out, ...)]` line in the completion summary, immediately
+after the `- Tests:` line.
 
 ## Fail-closed for the store, best-effort for the human
 
