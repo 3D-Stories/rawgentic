@@ -38,6 +38,15 @@ MANIFEST = {
             "implement-feature", "fix-bug", "peer-consult", "scan",
         ],
     },
+    # #158 AC6: WF2's dispatch-routing and loop-back contracts single-sourced.
+    # Single-carrier today; WF3 joins via its own restructure issue (#159) —
+    # its current block text DIFFERS from WF2's, so no forced unification here.
+    "model-routing-resolve": {
+        "model-routing-resolve.md": ["implement-feature"],
+    },
+    "loop-back-budget": {
+        "loop-back-budget.md": ["implement-feature"],
+    },
 }
 
 
