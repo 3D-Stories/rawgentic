@@ -1389,3 +1389,43 @@ class TestRenderUsage:
         ci_i = text.index("- CI:")
         deploy_i = text.index("- Deploy:")
         assert tests_i < usage_i < deferred_i < ci_i < deploy_i
+
+
+class TestCommittedStorePristine:
+    """Drift guard for the committed run-record store (#155 Task 4): the store
+    is now checked in (docs/measurements/run_records.jsonl) and must stay a
+    clean, git-tracked, fully-valid JSONL file forever after.
+
+    Green-on-arrival by design — the RED state ("store missing/corrupt/
+    untracked") is the pre-commit state this same PR fixes, not something we
+    mutate the repo to reproduce. `test_a_corrupt_line_is_excluded_not_silent`
+    proves Test A is not vacuous: load_store DOES fail on a bad line, just not
+    on this one."""
+
+    REPO_ROOT = HOOKS_DIR.parent
+    STORE_PATH = REPO_ROOT / "docs" / "measurements" / "run_records.jsonl"
+
+    def test_committed_store_loads_clean(self):
+        from work_summary import load_store
+        records, excluded = load_store(str(self.STORE_PATH))
+        assert excluded == []
+        assert len(records) >= 12
+
+    def test_committed_store_is_tracked_by_git(self):
+        import subprocess
+        r = subprocess.run(
+            ["git", "ls-files", "--error-unmatch",
+             "docs/measurements/run_records.jsonl"],
+            cwd=str(self.REPO_ROOT), capture_output=True)
+        assert r.returncode == 0, r.stderr.decode()
+
+    def test_a_corrupt_line_is_excluded_not_silent(self, tmp_path):
+        """Non-vacuity proof for test_committed_store_loads_clean: load_store
+        does flag a bad line when there is one — the real store's clean
+        `excluded == []` is a genuine pass, not a check that can never fail."""
+        from work_summary import load_store
+        p = tmp_path / "run_records.jsonl"
+        p.write_text(json.dumps(_store_rec()) + "\n{not json\n")
+        records, excluded = load_store(str(p))
+        assert len(records) == 1
+        assert excluded != []
