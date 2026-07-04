@@ -1300,6 +1300,56 @@ class TestValidateUsage:
                    for e in validate_record(rec))
 
 
+class TestValidateGoalGuard:
+    """`goal_guard` (#156, AC6) is a top-level *validated-optional* scalar, same
+    pattern as `reviewer_kind`: absent is valid (old records unaffected); present
+    must be a member of {"set", "skipped", "fired"}, fail-closed on anything else
+    including non-strings."""
+
+    def test_absent_is_valid_legacy_record(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        assert "goal_guard" not in rec
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("value", ["set", "skipped", "fired"])
+    def test_each_canonical_value_is_valid(self, value):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["goal_guard"] = value
+        assert validate_record(rec) == []
+
+    def test_uppercase_is_error(self):
+        """Case-sensitive: 'SET' is not a stand-in for 'set'."""
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["goal_guard"] = "SET"
+        errs = validate_record(rec)
+        assert any("goal_guard" in e for e in errs)
+
+    def test_free_text_value_is_error(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["goal_guard"] = "yes"
+        errs = validate_record(rec)
+        assert any("goal_guard" in e for e in errs)
+
+    def test_empty_string_is_error(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["goal_guard"] = ""
+        errs = validate_record(rec)
+        assert any("goal_guard" in e for e in errs)
+
+    @pytest.mark.parametrize("bad", [1, None, {}])
+    def test_non_string_value_is_error(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["goal_guard"] = bad
+        errs = validate_record(rec)
+        assert any("goal_guard" in e for e in errs)
+
+
 # --- #155 Task 3: render_summary best-effort Usage line --------------------
 
 class TestRenderUsage:

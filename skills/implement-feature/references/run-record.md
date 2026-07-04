@@ -38,7 +38,8 @@ non-negative integers and `resolved` may not exceed `findings`:
                             "target_check": "<exact manual check on the target>"}, ...],
   "usage": {"input_tokens": N|null, "output_tokens": N|null, "cost_estimate_usd": N|null,
             "wall_clock_s": N|null,
-            "model_mix": {"<model>": {"input_tokens": N|null, "output_tokens": N|null}, ...}|null}
+            "model_mix": {"<model>": {"input_tokens": N|null, "output_tokens": N|null}, ...}|null},
+  "goal_guard": "set|skipped|fired"
 }
 ```
 
@@ -98,3 +99,15 @@ For WF2 assembly, map the actual review mechanism used at each gate: Step 4 full
 `reflexion:critique`) → `reflexion`; Step 4 lane-reflect via a subagent (small-standard lane) →
 `inline`; Step 11 three-agent panel → `hand_rolled_multi`; builtin `/code-review` →
 `builtin_code_review`; Codex adversarial review → `codex`.
+
+**`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
+pattern as `usage` — absent ⇒ old records stay valid, no schema version bump; present ⇒ strict
+membership in `{"set", "skipped", "fired"}`, fail-closed on anything else (including non-strings
+and case variants like `"SET"`). Semantics: `set` = `/goal` was invoked for this run; `skipped` =
+the guard was offered but declined, or the run predates the guard and the gap is being labeled
+rather than left silently absent; `fired` = the goal evaluator actually blocked a premature stop.
+`fired` is currently **MANUAL-ONLY**: no structured signal reaches the orchestrator when the
+Stop-hook's goal evaluator blocks a quit, so nothing sets this value automatically today — a human
+must recognize the block and record it by hand. This makes the premature-termination metric
+**aspirational** until an automated detection path exists; that is a named limitation of the
+current wiring, not a bug in this validator.
