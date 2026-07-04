@@ -144,6 +144,12 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
     <div class="card"><h3>Field data agrees <span class="chip c-conf">Confirmed</span></h3>
       <p>Campaign 131–140: strongest-model orchestration, Sonnet down-routing — 10/10 merged, green CI, <b>0 loop-backs, 0 budget overruns</b>. No weak-top counterfactual exists; the A/B is in the measurement plan.</p>
       <div class="ev">campaign-131-140.handoff.md</div></div>
+    <div class="card"><h3>Subscription users (the majority) <span class="chip c-conf">Confirmed</span></h3>
+      <p>Pro/Max currency = shared plan bucket, 5-hour window + weekly cap, <b>hard lockout</b>. Cache reads count at the same 0.1× — the 1.5× premium carries over in bucket units. Failure cost sharpens: a loop-back can bust the cap and <b>stall the whole campaign until reset</b>. Verdict unchanged, strengthened.</p>
+      <div class="ev">support.claude.com 11145838 · code.claude.com prompt-caching / authentication</div></div>
+    <div class="card"><h3>Subscriber guidance <span class="chip c-conf">Confirmed</span></h3>
+      <p><b>Opus 4.8 (in-plan) as session/orchestrator</b> — from 2026-07-08 Fable bills as usage credits at API rates even on Max. Thinking tokens count at full bucket weight → effort routing matters more. /fast is never in-plan. Headless on subscription OAuth (<code>claude setup-token</code>) is officially supported for Actions.</p>
+      <div class="ev">code.claude.com fast-mode · platform.claude.com extended-thinking</div></div>
   </div>
   <div class="tscroll"><table>
     <tr><th>Task class</th><th>Model</th><th>Effort</th><th>Why</th></tr>
@@ -176,6 +182,7 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
     <div class="card"><h3>Dependency-ordered execution</h3><p>Parse <code>depends on #N</code> / task-lists / GH relationships → <code>issues[].depends_on</code> in the queue file (schema v2) → topo-sort at campaign start → <b>halt fail-closed on cycles</b>. Advance only when deps are merged (policy knob for pr_open).</p></div>
     <div class="card"><h3>Deferred deps park dependents</h3><p><code>cross-issue-dependency</code> DEFER reason; the loop continues with independent issues — never stalls the backlog.</p></div>
     <div class="card"><h3>Campaign-level /goal + compaction</h3><p>One goal wraps the driver session (one goal per session); compaction between issues is the proven pattern from 131–140.</p></div>
+    <div class="card"><h3>Epic anchor — offered, not forced</h3><p>Epic issue = human-facing intent + progress mirror (task-list checkboxes, STATUS/QUESTION channel, DAG input); the state file stays the machine source of truth, mirrored one-way. <b>Optional interactively, mandatory headless</b> — an unattended run needs somewhere to talk to its humans.</p></div>
   </div>
 </section>
 
