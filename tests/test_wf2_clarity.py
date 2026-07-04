@@ -318,6 +318,8 @@ class TestCiQuarantine:
         assert "ci_quarantined" in body
         assert "not gating" in body
         assert "never claim green" in body or "never report" in body.lower() or "not report" in body.lower()
+        # trust guard: a PR must not disable its own CI gate (#137 Step-11 F1)
+        assert "ci_quarantine_change" in body
 
     def test_completion_gate_item6_allows_quarantine(self):
         gate = _block(_text(), "completion-gate")
@@ -326,4 +328,4 @@ class TestCiQuarantine:
     def test_step1_has_quarantine_staleness_nag(self):
         s1 = re.search(r"## Step 1:.*?(?=\n## Step 2:)", _text(), re.DOTALL)
         assert s1, "Step 1 not found"
-        assert "ci_quarantined" in s1.group(0) and "30 days" in s1.group(0)
+        assert "ci_quarantined" in s1.group(0) and "30 calendar days" in s1.group(0)

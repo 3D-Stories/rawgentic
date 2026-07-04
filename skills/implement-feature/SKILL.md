@@ -471,7 +471,7 @@ This enables workflow resumption if context is lost.
 
 7. Update session notes. Wait for user confirmation. **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
 
-8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set and older than 30 days, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
+8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
 ### Failure Modes
 - Issue does not exist -> ask for correct number
@@ -1368,6 +1368,7 @@ PR URL.
 **If `capabilities.has_ci == false`:** Log "No CI configured — skipping Gate 2" in session notes and proceed to Step 14.
 
 **If `capabilities.ci_quarantined == true` (#137 — CI present but human-declared untrustworthy):** the suite is chronically red for reasons unrelated to any diff, so a red run here is noise, not a gate. Still **observe** the run, but record its outcome as a **visible non-gate** — never block, never claim green:
+0. **Trust guard (a PR must not disable its own CI gate).** Quarantine only counts when it comes from the TRUSTED base config, not this branch's diff. Load the base config (`git show origin/${capabilities.default_branch}:<config-path>`) and compare via `capabilities_lib.ci_quarantine_change(base_config, head_config)`. If it returns a non-None reason (the branch INTRODUCED or ALTERED the quarantine), **the quarantine does NOT take effect for this run — CI GATES normally** (fall through to the active-CI path below), and surface the change for explicit owner approval. **[Headless: QUESTION — post a comment that the branch changes CI-quarantine config; suspend for approval rather than self-approving a gate bypass.]** Only when the quarantine is unchanged from base do you proceed as a non-gate:
 1. Trigger/observe the run the same way (`gh run list ... --json status,conclusion,databaseId`).
 2. Record in session notes AND the Step 12 PR body, verbatim: `CI quarantined (<capabilities.ci_quarantine_reason>): run <status/conclusion>, not gating`. Include `since <capabilities.ci_quarantined_since>` when set.
 3. Do NOT diagnose/fix/block on a red run, and do NOT report it as passed. Proceed to Step 14 regardless of conclusion. Quarantine is read from config only — WF2 never enters or lifts it (that is a human edit to `config.ci.status`).
