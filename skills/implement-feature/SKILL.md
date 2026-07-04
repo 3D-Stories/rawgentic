@@ -17,7 +17,7 @@ this is the sequence to return to:
 
   1 → 2 → 3 → 4 → 5 → (6) → 7 → 8 → (8a) → 9 → (10) → 11 → 11.5 → 12 → (13) → (14) → (15) → 16
 
-- (6) Plan Drift — fast; run unless time-critical
+- (6) Plan Drift — fast; run unless time-critical or in the small-standard lane
 - (8a) Per-task Review — only when a task is `riskLevel: high` (P15)
 - (10) Memorize — background, never blocks
 - (13) CI — only if `has_ci`
@@ -103,7 +103,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 1 | Receive Issue | Foundation — wrong issue = wrong implementation |
 | 2 | Analyze Codebase | Complexity classification drives all downstream decisions |
 | 3 | Design Solution | Architecture before code — always |
-| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. Full critique for complex_feature, reflect for fast path. |
+| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. Full critique for complex_feature, reflect for the small-standard lane (a.k.a. the fast-path alias). |
 | 5 | Implementation Plan | Task decomposition enables TDD and progress tracking |
 | 7 | Create Branch | Git isolation is non-negotiable |
 | 8 | Implementation | The actual work |
@@ -114,7 +114,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 16 | Completion Summary + run-record | WF2 terminates here. The run-record (`hooks/work_summary.py`) is the Tier-2 telemetry substrate — a dropped field is a measurement gap, so the step is not optional even when nothing deployed. |
 
 Conditional steps (skip ONLY when their condition is not met):
-- Step 6 (Plan Drift): lightweight, fast — run it unless time-critical
+- Step 6 (Plan Drift): lightweight, fast — run it unless time-critical **or in the small-standard lane** (`<small-standard-lane>`)
 - **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
@@ -133,6 +133,14 @@ skip a step to save time, checkpoint per `<resumption-protocol>` and resume — 
 are declining to run WF2 *at all* (no code has been written yet) — that is NOT skipping
 a mandatory step mid-run. Once you proceed past Step 2 into the workflow, every step
 above is non-negotiable.
+
+**Small-standard lane reconciliation (`<small-standard-lane>`):** in the small-standard lane,
+Steps 4, 5, and 9 run in their **COLLAPSED** form (Step 4 = `/reflexion:reflect`; Step 5 = a
+checklist plan; Step 9 = Part B evidence only) — they are **not skipped**, so the mandatory-step
+invariant still holds. Only **Step 6 (Plan Drift)** is skipped in the lane, and it is already a
+conditional step. **Step 11 (code review), Step 11.5 (security scan), and Step 8a for any
+`riskLevel: high` task remain NON-NEGOTIABLE in the lane**, exactly as on the full spine — the
+lane is cheaper on design ceremony, never on review or security.
 </mandatory-steps>
 
 <config-loading>
@@ -273,15 +281,88 @@ Before context compacts, document in session notes:
 - If in Step 8: current task index, implementation phase, and verification status
 </resumption-protocol>
 
-<fast-path-detection>
-Two fast path variants reduce Step 4 from full critique to lightweight reflect:
+<small-standard-lane>
+The small-standard lane is a **middle gear** between the `<trivial-work-check>` exit and the
+full 16-step spine. It is a **semantic replacement** of the old Step-4-only fast path,
+generalized to the whole spine: a 3–5-file UI feature or a 2-file hardening guard genuinely
+needs a **code review** but not a **pre-implementation design panel**. The lane is cheaper on
+**design ceremony**, never on **review or security**.
 
-1. **Simple change fast path:** Step 2 classifies as simple_change (1-3 files, no architecture change, no migration, no new deps). Step 4 uses /reflexion:reflect instead of /reflexion:critique.
+**Canonical predicate: `small_standard_lane_eligible`.** It replaces the old `fast_path_eligible`,
+which is kept as a **deprecated alias**:
 
-2. **WF1-validated fast path:** Step 1 detects the issue has the "wf1-created" label AND Step 2 classifies as standard_feature (not complex_feature). Step 4 uses /reflexion:reflect. Rationale: WF1 already ran a full 3-judge critique on the issue specification.
+    fast_path_eligible = small_standard_lane_eligible
 
-Neither fast path applies to complex_feature -- those always get full /reflexion:critique.
-</fast-path-detection>
+so every existing "Step-4 reflect vs. critique" reader keeps working unchanged — for that one
+decision the lane still selects reflect, so old Step-4-only callers see identical behavior. New
+code reads the canonical name. The flag now controls the **whole lane** (Steps 3/4/5/6/9
+collapse), not just Step 4.
+
+**Eligibility — `small_standard_lane_eligible == true` when ALL hold:**
+- complexity ∈ {`simple_change`, `standard_feature`} (never `complex_feature` — that is always the full spine), AND
+- **changed implementation source files ≤ 7** (`LANE_MAX_IMPL_FILES`) — the SAME counting rule `plan_lib.count_impl_files`/`lane_decision` apply: count non-test, non-doc **source** files the change creates/modifies; **exclude** test files (`test_*`, `*_test.*`, `tests/`), docs (`*.md`, `docs/`), and generated/lockfiles; a rename counts as **1**. Test+doc files are excluded because a small feature legitimately touches several without being "big," AND
+- no architecture change, no migration, no new cross-service surface, no new dependency (the signals Step 2 already gathers), AND
+- not `trivial_work` (that has its own exit at `<trivial-work-check>`, which takes precedence).
+
+This SUPERSEDES the old two-branch rule (simple_change unconditionally + standard_feature only if
+WF1-validated): a non-WF1 standard_feature of bounded size is exactly the field case the lane
+exists for. WF1 origin still *strengthens* confidence but is no longer required.
+
+**Decision call (mechanical — mirrors how Step 8 invokes `select_impl_model`).** Pass the Step-2
+authoritative complexity, the Step-2 ESTIMATED impl-file count (via `count_impl_files` over the
+estimated changed-file list from Step 2 item 1), and the arch/migration/dep/trivial booleans
+Step 2 gathered:
+```bash
+python3 -c "import sys; sys.path.insert(0,'hooks'); from plan_lib import lane_decision, count_impl_files; n=count_impl_files([<estimated changed file list>]); t,r=lane_decision('<complexity>', n, <has_arch_change>, <has_migration>, <has_new_dep>, <is_trivial>); print(t); print(r)"
+```
+`lane_decision` returns `(tier, reason)` with tier ∈ {`trivial`, `full`, `lane`}. **`tier == "lane"`
+→ `small_standard_lane_eligible = true`**; `trivial` defers to `<trivial-work-check>`; `full` runs
+the whole spine. Log the tier + reason in session notes.
+
+**Input-source honesty.** `lane_decision` is a pure, unit-tested function, but at Step 2
+(pre-implementation) `file_count` is an **estimate** from the Step-2 component map — there is no
+diff yet. So lane eligibility is "mechanically decided **given** the Step-2 estimates," not fully
+mechanical end-to-end. Guard: **Step 9 cross-checks the actual changed-file count** (see Step 9's
+lane cross-check); on a material overshoot it records a `lane-widened` note — it does NOT
+retroactively fail. A deterministic pre-diff detector is the AC5 follow-up.
+
+**Surfacing (suggested-never-silent; mirrors `<trivial-work-check>`).** When
+`small_standard_lane_eligible` and the lane is not already forced or declined, STOP and present:
+```
+Step 2 → SMALL-STANDARD detected (<N files, complexity>). Recommend the small-standard lane:
+  keeps TDD + code review + security scan + CI; skips the design panel + drift gates.
+  (a) Small-standard lane  [recommended]
+  (b) Full WF2 (design panel + all gates)
+```
+This is a **suggestion, never a hard gate** — the orchestrator must NOT silently pick the lane;
+continuing the full workflow is always valid. In **headless** mode there is no interactive user,
+so AUTO-RESOLVE the lane-vs-full choice: take the lane for eligible changes and the full spine for
+`complex_feature`, and log the choice in session notes. (Stated as inline prose, not a bracketed
+annotation, to keep the per-skill headless-annotation count stable.)
+
+### Keep / collapse table (the contract)
+
+| Step | Full WF2 | Small-standard lane | Why |
+|---|---|---|---|
+| 3 Design | inline 1-2 approaches + doc | **brief design note** (file list + failure modes + security), no multi-approach brainstorm | small work has one obvious approach |
+| 4 Design critique | 3-judge panel + peer consult + adversarial-on-design | **`/reflexion:reflect` only** — NO panel, NO peer consult, NO adversarial-on-design | field: panel reaffirms sound small designs |
+| 5 Plan | full task decomposition + drift-ready fields | **checklist plan**: ordered tasks, each with `riskLevel` + a verification line; parallel_group/files optional | keeps TDD + risk tagging; drops ceremony |
+| 6 Plan drift | reflect + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
+| 8 / 8a | TDD; 8a per high-risk task | **UNCHANGED** — TDD kept; **8a still fires for any `riskLevel: high` task** | security surface never loses per-task review |
+| 9 Impl drift | reflect (Part A) + evidence (Part B) | **evidence-only**: run the suite, record the delta, verify each AC has a covering test; skip the alignment reflect | evidence is the real gate |
+| 11 Code review | 3-agent (complex) | **≥1 reviewer** (existing minimum for simple/standard) + the opt-in diff adversarial sub-step (#131) still applies | **NON-NEGOTIABLE — this is where the value is** |
+| 11.5 Security scan | full | **UNCHANGED** | tool gate never skipped |
+| 12/13/14 PR/CI/merge | full | **UNCHANGED** | |
+| 16 run-record | full | **UNCHANGED shape**, `complexity` reflects lane; add `lane: "small-standard"` marker | lane runs stay measurable vs full |
+
+**Exact retained vs. removed gates** (no vague "every safety gate"):
+- **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).
+- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (`/reflexion:reflect` only — no 3-judge panel, no peer consult, no adversarial-on-design), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).
+- **REMOVED entirely:** Step 6 (plan drift).
+
+The RETAINED set is non-negotiable: Step 11 caught 2 Criticals on a run judged "too simple to
+review." **Step 11 (code review) and Step 11.5 (security scan) are never traded away in the lane.**
+</small-standard-lane>
 
 <trivial-work-check>
 Some changes are below even `simple_change` — genuinely **trivial**: a typo, a
@@ -322,9 +403,9 @@ Wait for the choice.
 take over a "do it directly" hand-off, and continuing is the conservative default. Log
 `### WF2 Step 2 — trivial-work suggestion (auto-continued in headless)`.]**
 
-This is distinct from `<fast-path-detection>`: the fast path makes a *non-trivial* change
-cheaper (reflect vs. critique) while staying in the workflow; the trivial-work check asks
-whether running the workflow is warranted *at all*.
+This is distinct from `<small-standard-lane>`: the lane makes a *non-trivial* change
+cheaper (collapses design ceremony, keeps review + security) while staying in the workflow;
+the trivial-work check asks whether running the workflow is warranted *at all*.
 </trivial-work-check>
 
 <ambiguity-circuit-breaker>
@@ -401,7 +482,7 @@ This enables workflow resumption if context is lost.
 
 ### Instructions
 
-**Execution model — map first, then parallel gather, then synthesize.** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. So run item 1 first, then **fan out the remaining read-only analyses (items 2–6) as concurrent subagents** (Agent tool), passing each the component map from item 1 as **shared input**. One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one **sequential subagent** (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. This collapses ~5 sequential read passes into roughly one and loses no quality — each subagent goes deeper in its own lane. Items 7–8 (complexity classification, fast-path eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. The issue's complexity hint from Step 1 chooses only the *orchestration cost*, never the workflow path or which gates run — for a trivially small change, skip the subagent spin-up and run items 1–6 inline (the same analyses, in the same order, feeding the same synthesis); otherwise fan out. If a subagent errors, fall back to running that single analysis inline — the per-analysis failure modes below still apply.
+**Execution model — map first, then parallel gather, then synthesize.** Step 2's wall-clock is dominated by its read analyses, but they are NOT all independent: **item 1 (component mapping) must run first**, because item 2 (dependency / blast-radius) and item 5 (existing-test inventory) operate on the mapped artifact list. So run item 1 first, then **fan out the remaining read-only analyses (items 2–6) as concurrent subagents** (Agent tool), passing each the component map from item 1 as **shared input**. One ordering constraint inside the fan-out: item 5 (existing-test inventory) should cover the *full* blast radius from item 2, not just item 1's initial map — so run items 2 → 5 as one **sequential subagent** (dependency analysis, then test inventory over its expanded surface), while items 3, 4, and 6 are fully independent and run concurrently alongside it. This collapses ~5 sequential read passes into roughly one and loses no quality — each subagent goes deeper in its own lane. Items 7–8 (complexity classification, small-standard lane eligibility) are **synthesis** steps that run only after the **gather barrier** (all fan-out subagents returned), over the merged findings; the classification stays authoritative and still overrides any issue label. The issue's complexity hint from Step 1 chooses only the *orchestration cost*, never the workflow path or which gates run — for a trivially small change, skip the subagent spin-up and run items 1–6 inline (the same analyses, in the same order, feeding the same synthesis); otherwise fan out. If a subagent errors, fall back to running that single analysis inline — the per-analysis failure modes below still apply.
 
 <!-- model-routing: role=analysis -->
 When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2 fan-out subagent with `model: <analysis>`.
@@ -441,10 +522,16 @@ When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2
 
    This classification is AUTHORITATIVE — it overrides any complexity label from the GitHub issue.
 
-8. **Fast path eligibility:**
-   - If `simple_change`: `fast_path_eligible = true`
-   - If `standard_feature` AND `is_wf1_created`: `fast_path_eligible = true`
-   - Otherwise: `fast_path_eligible = false`
+8. **Small-standard lane eligibility:** Decide the execution tier via `plan_lib.lane_decision`
+   per `<small-standard-lane>`. Estimate the changed-file count with `plan_lib.count_impl_files`
+   over the item-1 component map, then call the decision (see `<small-standard-lane>` for the
+   exact `python3 -c` invocation): `tier == "lane"` → `small_standard_lane_eligible = true`, else
+   `false`. When eligible and not already forced/declined, present the suggested-never-silent
+   surfacing block from `<small-standard-lane>` and WAIT for the choice (headless auto-resolves
+   per that block). `fast_path_eligible` remains a **deprecated alias**
+   (`fast_path_eligible = small_standard_lane_eligible`) so the Step-4 reflect-vs-critique
+   readers are unchanged. Trivial changes (item 9) exit via `<trivial-work-check>`, which takes
+   precedence over the lane.
 
 9. **Trivial-work check (the one Step 2 step that may surface to the user):** Apply
    `<trivial-work-check>`. If the change is `trivial_work == true`, present the
@@ -453,7 +540,7 @@ When routing resolves `analysis` to a non-`inherit` model, dispatch every Step 2
    items 1–8 still feeds Step 3 silently; only this suggestion interacts with the user.
 
 ### Output
-Codebase analysis with complexity classification, fast path eligibility, and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3.
+Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3 (the lane suggestion in item 8 is the one part that may interact with the user).
 
 ### Failure Modes
 - Serena MCP unavailable: fall back to Grep/Glob
@@ -534,9 +621,15 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 **Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
 
-**Determine gate type based on fast path eligibility:**
-- If `fast_path_eligible == true`: use `/reflexion:reflect` (lightweight)
-- If `fast_path_eligible == false`: use `/reflexion:critique` (full 3-judge)
+**Determine gate type based on lane eligibility** (`small_standard_lane_eligible`, a.k.a. the
+`fast_path_eligible` alias):
+- If `small_standard_lane_eligible == true` (i.e. `fast_path_eligible == true`): use
+  `/reflexion:reflect` (lightweight) and run **NO 3-judge panel, NO peer consult (the Step 3
+  peer-consult sub-step), and NO adversarial-on-design (item 7)** — the lane collapses Step 4 to
+  reflect only. (The Step 3 peer consult and this step's adversarial review are both design-stage
+  ceremony the lane deliberately drops.)
+- If `fast_path_eligible == false`: use `/reflexion:critique` (full 3-judge), plus the opt-in
+  peer consult (Step 3) and the opt-in adversarial-on-design sub-step (item 7) below.
 
 **For full critique (`/reflexion:critique`):**
 
@@ -631,6 +724,15 @@ Amended design document.
 
 ### Instructions
 
+**Small-standard lane variant (`<small-standard-lane>`).** In the lane, produce a
+**checklist plan** instead of the full decomposition: an ordered list of tasks where each carries a
+`- riskLevel: high|standard` line and a one-line verification. `parallel_group`/`files` are
+OPTIONAL in the lane. **riskLevel tagging is RETAINED** — the fail-closed `plan_lib.parse_tasks`
+contract and the Step 3a risk stratification still apply, because Step 8a fires on any
+`riskLevel: high` task. The branch-naming (item 1) and commit-message (item 8) items still apply;
+the full task decomposition, drift-ready fields, and multi-PR machinery below are the FULL-spine
+form (run them when not in the lane).
+
 1. **Branch naming:**
    - Features: `feature/<issue-number>-<kebab-case-summary>`
    - Bug fixes: `fix/<issue-number>-<kebab-case-summary>`
@@ -710,6 +812,10 @@ Implementation plan with ordered tasks, verification strategy, branch name, opti
 ## Step 6: Quality Gate — Plan Drift Check
 
 ### Instructions
+
+**Skip condition:** Step 6 is skipped when time-critical **or when running the
+small-standard lane** (`small_standard_lane_eligible` — the checklist plan is small enough to
+eyeball, and Step 9 still verifies acceptance-criteria coverage). Otherwise run it.
 
 Invoke `/reflexion:reflect` with check dimensions:
 - **Design-plan alignment:** Does every design component map to at least one task?
@@ -895,6 +1001,24 @@ These apply to the main Step 8 implementation loop above (Step 8a, the per-task 
 ## Step 9: Quality Gate — Implementation Drift Check
 
 ### Instructions
+
+**Small-standard lane variant (`<small-standard-lane>`).** In the lane, run **Part B (evidence)
+only** — i.e. **evidence-only**: run the suite, record the delta, and verify each acceptance
+criterion has a covering test. **Part A (the alignment reflect) is removed in the lane** (it adds
+little on a checklist plan; the evidence is the real gate). The P15 review-coverage assertion and
+the implausibility check below still run.
+
+**Lane cross-check (input-source honesty).** Because Step 2's file_count was an ESTIMATE,
+recompute the REAL impl-file count from the actual diff — `git diff --name-only
+origin/<default>..HEAD`, applying the same counting rule via `plan_lib.count_impl_files` — and
+compare against `LANE_MAX_IMPL_FILES`:
+```bash
+python3 -c "import sys,subprocess; sys.path.insert(0,'hooks'); from plan_lib import count_impl_files, LANE_MAX_IMPL_FILES; paths=subprocess.run(['git','diff','--name-only','origin/<default>..HEAD'],capture_output=True,text=True).stdout.split(); n=count_impl_files(paths); print(n, n > LANE_MAX_IMPL_FILES)"
+```
+If the real count materially exceeds `LANE_MAX_IMPL_FILES`, log a **`lane-widened`** note to
+session notes AND set a run-record note (the design panel was skipped on a change that turned out
+larger than estimated) — do **NOT** retroactively fail: the gates that DID run (Step 11, Step
+11.5, Step 8a) are still valid and load-bearing.
 
 **Part A: Drift check (invoke `/reflexion:reflect`):**
 - Plan-implementation alignment: does every task have a corresponding implementation?
@@ -1328,6 +1452,14 @@ measurable signal — not just a sentence the user reads once.
    In short: every documented key must be **present** (a dropped field is a
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
    `findings`, and `workflow` is `"implement-feature"`.
+
+2c. **Lane marker (small-standard lane):** the run-record carries a `lane` field —
+   `"small-standard"` when the run took the `<small-standard-lane>`, `"full"` otherwise — so lane
+   runs stay measurable against full runs (`complexity` still reflects the Step-2 classification).
+   If a Step-9 lane cross-check widened the lane, add the `lane-widened` note to `follow_ups`.
+   This is a prose note only for now: do NOT change `hooks/work_summary.py` here. If
+   `references/run-record.md` needs to formalize the `lane` field in the schema, that is a
+   Task-3/follow-up (extra keys pass the current validator, so a `lane` field is safe to emit).
 
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):
