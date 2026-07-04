@@ -165,7 +165,7 @@ Before executing any workflow steps, load the project configuration:
      --config <activeProject.path>/.rawgentic.json
    ```
    - **Non-zero exit** -> the config is missing, corrupt, or invalid. **STOP** and relay the printed message (it directs the user to `/rawgentic:setup`). A `config.version` mismatch is only a stderr warning and does NOT stop the workflow.
-   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
+   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
@@ -470,6 +470,8 @@ This enables workflow resumption if context is lost.
    ```
 
 7. Update session notes. Wait for user confirmation. **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
+
+8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set and older than 30 days, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
 ### Failure Modes
 - Issue does not exist -> ask for correct number
@@ -1365,7 +1367,12 @@ PR URL.
 
 **If `capabilities.has_ci == false`:** Log "No CI configured — skipping Gate 2" in session notes and proceed to Step 14.
 
-**If `capabilities.has_ci == true`:**
+**If `capabilities.ci_quarantined == true` (#137 — CI present but human-declared untrustworthy):** the suite is chronically red for reasons unrelated to any diff, so a red run here is noise, not a gate. Still **observe** the run, but record its outcome as a **visible non-gate** — never block, never claim green:
+1. Trigger/observe the run the same way (`gh run list ... --json status,conclusion,databaseId`).
+2. Record in session notes AND the Step 12 PR body, verbatim: `CI quarantined (<capabilities.ci_quarantine_reason>): run <status/conclusion>, not gating`. Include `since <capabilities.ci_quarantined_since>` when set.
+3. Do NOT diagnose/fix/block on a red run, and do NOT report it as passed. Proceed to Step 14 regardless of conclusion. Quarantine is read from config only — WF2 never enters or lifts it (that is a human edit to `config.ci.status`).
+
+**If `capabilities.has_ci == true` (and not quarantined):**
 
 1. Monitor CI:
    ```bash
@@ -1379,7 +1386,7 @@ PR URL.
 4. If CI times out (> CI_MAX_WAIT_MINUTES): ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If still not done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit.]**
 
 ### Output
-CI status or skip confirmation.
+CI status, quarantine notice, or skip confirmation.
 
 ---
 
@@ -1544,7 +1551,7 @@ Before declaring WF2 complete, verify the following. Items marked (conditional) 
 3. [ ] Session notes updated with completion summary
 4. [ ] PR URL documented
 5. [ ] All commits pushed
-6. [ ] (conditional: has_ci) CI passed
+6. [ ] (conditional: has_ci) CI passed — **OR** (`ci_quarantined`) the quarantine notice (reason + run status, "not gating") is recorded in session notes + PR body. A legible skip, never a silent one; a quarantined run is never reported as green.
 7. [ ] (conditional: has_deploy, NOT headless) Deployment verified or manual deploy confirmed — auto-satisfied in headless mode, where Steps 14/15 are skipped (PR is the terminal deliverable)
 8. [ ] (conditional: architecture changed) CLAUDE.md updated
 9. [ ] All Critical/High code review findings resolved
