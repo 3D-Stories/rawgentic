@@ -98,6 +98,10 @@ Sequencing rationale: **instrument before anything** (M1's telemetry gates M3's 
 - ACs: (1) WF3 SKILL ≤350 lines; bug-specific steps (repro-first, regression-test-red gate, complexity escalation) stay first-class; shared step detail read from WF2's references. (2) Suite green. (3) WF11's comms/post-mortem checklist lands as `references/incident.md` + a WF3 hotfix-lane pointer (the WF11 merge).
 - Risk: medium. Size: **M**. Metric: same non-regression window as #158.
 
+**Issue #174 (new) — `feat(docs): HTML design artifact lifecycle + render helper`** — slot 9.5, after #159 *(absorbs #122)*
+- Scope: create the design-doc HTML artifact at issue creation (WF1); create/update it pre-PR in WF2/WF3; embed run-record telemetry in the render.
+- Risk: low. Size: **S**.
+
 ---
 
 ## M3 — Autonomy + v3.0.0 (slots 10–12, v3.0.0)

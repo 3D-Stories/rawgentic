@@ -468,10 +468,14 @@ This enables workflow resumption if context is lost.
    1. [criterion 1]
    ...
 
-   Confirm this issue and capabilities are correct, or provide corrections.
+   Suggested goal guard — run this so the session can't quit before the ACs are met:
+   /goal <plan_lib.build_goal_text(issue_number, ac_lines, variant="wf2") output>
+
+   Confirm this issue and capabilities are correct, or provide corrections. Run the
+   /goal command above (or say "skip goal" to decline — declining is fine and never blocks).
    ```
 
-7. Update session notes. Wait for user confirmation. **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
+7. Update session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt). **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
 
 8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
@@ -486,6 +490,56 @@ This enables workflow resumption if context is lost.
 - Issue does not exist -> ask for correct number
 - Issue is closed -> ask if user wants to reopen or use different issue
 - Issue lacks acceptance criteria -> generate from description, ask user to confirm
+
+---
+
+## Step 1b: AC-Derived Goal Guard (/goal)
+
+### Instructions
+
+This is an optional guard, not a gate — it never blocks the workflow.
+
+1. **Why.** A skill cannot set a session goal itself; `/goal` is a session command
+   (see code.claude.com/docs/en/goal.md), not something a skill body can invoke. So
+   this step CONSTRUCTS the goal text and the user (or the headless driver) is the
+   one who runs it, giving the session's Stop-hook a concrete condition so the
+   workflow can't be silently abandoned before the ACs are met.
+
+2. **Build the text.** Call `plan_lib.build_goal_text(<issue_number>, <the numbered
+   AC lines gathered in Step 1>, variant="wf2")`. This is a pure, tested helper:
+   the result is guaranteed ≤4000 chars (falling back to "all numbered acceptance
+   criteria of issue #<N> as written" if the full AC list would overflow it), and
+   it always appends the escape disjunct ("or a blocker is posted to the issue via the ERROR protocol")
+   so a legitimately blocked run still clears the goal honestly instead of hanging
+   forever. The wording is PR-terminal ("PR open with green CI"), never "merged":
+   merge is owner-gated and happens after the workflow ends.
+
+3. **Fold into Step 1's confirmation — no second prompt.** The built text is shown
+   inside Step 1 item 6's display block; the user's single confirmation covers both
+   the issue/capabilities check and the `/goal` invocation (run it, or decline).
+   Declining is always a valid answer and never blocks progress (`goal_guard: skipped`).
+
+4. **Record the marker** (Step 16 reads this to populate the run-record `goal_guard`
+   field):
+   ```
+   ### WF2 Step 1b — Goal guard (set|skipped): <first 80 chars of text | decline reason>
+   ```
+
+5. This assumes a fresh session per issue. `/goal` re-invocation/overwrite semantics
+   across sequential runs in the *same* session are unverified — if a prior goal may
+   still be active, note that in the marker rather than assuming it was replaced.
+
+6. `fired` (the Stop-hook actually blocked a quit) is recorded manually only — no
+   structured signal reaches the orchestrator when that happens.
+
+**[Headless: AUTO-RESOLVE — for WF1-created issues, emit the built goal text
+verbatim into the headless checkpoint for the driver to set via
+`claude -p "/goal …"` (session 1 cannot self-set it — the goal text needs the
+fetched issue body, though the driver MAY pre-derive it at launch); for
+unlabeled/manual issues, skip the guard and log the marker with (skipped).]**
+
+### Failure Modes
+- User neither runs `/goal` nor says "skip" -> treat silence as decline, log `(skipped)`, proceed
 
 ---
 

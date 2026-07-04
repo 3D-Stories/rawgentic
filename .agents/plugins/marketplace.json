@@ -1,0 +1,20 @@
+{
+  "name": "rawgentic-private",
+  "interface": {
+    "displayName": "Rawgentic Private"
+  },
+  "plugins": [
+    {
+      "name": "rawgentic",
+      "source": {
+        "source": "local",
+        "path": "./plugins/rawgentic"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -228,16 +228,60 @@ Expected: <from issue or "blocked/mitigated">
 Actual: <from issue or "exploitable">
 Environment: <from issue>
 
-Confirm this is the bug to fix, or provide corrections.
+Suggested goal guard — run this so the session can't quit before the fix lands:
+/goal <plan_lib.build_goal_text(issue_number, [], variant="wf3") output>
+
+Confirm this is the bug to fix, or provide corrections. Run the /goal command above
+(or say "skip goal" to decline — declining is fine and never blocks).
 ```
 
-Wait for user confirmation before proceeding to Step 2. **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary, suspend.]**
+Wait for user confirmation before proceeding to Step 2 (and, in the same round-trip,
+whether they ran `/goal` or declined — see Step 1b; no second prompt). **[Headless: AUTO-RESOLVE for WF1-created issues. QUESTION for manual issues — post summary, suspend.]**
 
 ### Failure Modes
 
 - Issue not found → ask for correct number
 - Issue is not a bug → suggest WF2 (`/implement-feature`) instead
 - Missing reproduction steps (and not a security finding with STRIDE fields) → ask user to provide them before proceeding. **[Headless: QUESTION — post comment requesting details, suspend.]**
+
+---
+
+## Step 1b: AC-Derived Goal Guard (/goal)
+
+### Instructions
+
+This is an optional guard, not a gate — it never blocks the workflow.
+
+1. **Why.** A skill cannot set a session goal itself; `/goal` is a session command
+   (see code.claude.com/docs/en/goal.md), not something a skill body can invoke. So
+   this step CONSTRUCTS the goal text and the user (or the headless driver) is the
+   one who runs it, giving the session's Stop-hook a concrete condition so the
+   workflow can't be silently abandoned before the fix lands.
+
+2. **Build the text.** Call `plan_lib.build_goal_text(<issue_number>, [], variant="wf3")`
+   — the pure, tested helper. WF3 has no numbered ACs, so `ac_lines` is ignored
+   entirely; the text instead names: repro documented, regression test red→green,
+   PR open with green CI (never "merged" — merge is owner-gated and happens after
+   the workflow ends).
+
+3. **Fold into Step 1's confirmation — no second prompt.** The built text is shown
+   inside Step 1's existing confirmation block; the user's single confirmation
+   covers both the bug-report check and the `/goal` invocation (run it, or decline).
+   Declining is always a valid answer and never blocks progress (`goal_guard: skipped`).
+
+4. **Record the marker** (read by the run-record `goal_guard` field):
+   ```
+   ### WF3 Step 1b — Goal guard (set|skipped): <first 80 chars of text | decline reason>
+   ```
+
+**[Headless: AUTO-RESOLVE — for WF1-created issues, emit the built goal text
+verbatim into the headless checkpoint for the driver to set via
+`claude -p "/goal …"` (session 1 cannot self-set it — the goal text needs the
+fetched issue body, though the driver MAY pre-derive it at launch); for
+unlabeled/manual issues, skip the guard and log the marker with (skipped).]**
+
+### Failure Modes
+- User neither runs `/goal` nor says "skip" -> treat silence as decline, log `(skipped)`, proceed
 
 ---
 

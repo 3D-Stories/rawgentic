@@ -54,6 +54,9 @@ DEPLOY_STATUSES = {"success", "manual", "failed", "not_applicable"}
 # vocabulary contract. Optional; free text is rejected by design.
 REVIEWER_KINDS = {"inline", "reflexion", "builtin_code_review", "codex",
                    "hand_rolled_multi"}
+# `set`/`skipped` are recorded by the orchestrator; `fired` is MANUAL-ONLY (see
+# the goal_guard validation block below) — no code path detects it automatically.
+GOAL_GUARD_VALUES = {"set", "skipped", "fired"}
 
 # Human-summary header label per workflow; falls back to the upper-cased name.
 _WF_LABELS = {"implement-feature": "WF2", "fix-bug": "WF3"}
@@ -355,6 +358,18 @@ def validate_record(record) -> list:
                         if v is not None and (not _is_int(v) or v < 0):
                             errs.append(f"usage.model_mix['{model}'].{f} must be "
                                         f"a non-negative integer or null")
+
+    # `goal_guard` (#156, AC6) — OPTIONAL top-level field, same validated-optional
+    # pattern as `reviewer_kind`: absent → old records stay valid (forward-
+    # compatible addition, no schema version bump); present → strict membership
+    # in GOAL_GUARD_VALUES, fail-closed on anything else (including non-strings).
+    # `fired` is MANUAL-ONLY: no automated signal currently reaches the
+    # orchestrator when the Stop-hook's goal evaluator blocks a premature quit,
+    # so this validator can accept the value but nothing yet sets it on its own.
+    if "goal_guard" in record:
+        gg = record["goal_guard"]
+        if not _is_str(gg) or gg not in GOAL_GUARD_VALUES:
+            errs.append(f"goal_guard must be one of {sorted(GOAL_GUARD_VALUES)}")
 
     return errs
 
