@@ -147,9 +147,9 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
     <div class="card"><h3>Subscription users (the majority) <span class="chip c-conf">Confirmed</span></h3>
       <p>Pro/Max currency = shared plan bucket, 5-hour window + weekly cap, <b>hard lockout</b>. Cache reads count at the same 0.1× — the 1.5× premium carries over in bucket units. Failure cost sharpens: a loop-back can bust the cap and <b>stall the whole campaign until reset</b>. Verdict unchanged, strengthened.</p>
       <div class="ev">support.claude.com 11145838 · code.claude.com prompt-caching / authentication</div></div>
-    <div class="card"><h3>Subscriber guidance <span class="chip c-conf">Confirmed</span></h3>
-      <p><b>Opus 4.8 (in-plan) as session/orchestrator</b> — from 2026-07-08 Fable bills as usage credits at API rates even on Max. Thinking tokens count at full bucket weight → effort routing matters more. /fast is never in-plan. Headless on subscription OAuth (<code>claude setup-token</code>) is officially supported for Actions.</p>
-      <div class="ev">code.claude.com fast-mode · platform.claude.com extended-thinking</div></div>
+    <div class="card"><h3>Subscriber session-model ladder</h3>
+      <p>The rule: <b>strongest model your billing keeps in-plan (or deliberately funded) on top</b> — not "Opus" per se. Today: Opus 4.8 in-plan for routine runs (loop-backs already 0). <b>Credits-funded Fable</b> (2× Opus, orchestrator slot ≈ $5.50/run): dollars buy the judgment tier, bucket pays the volume tier — for high-stakes engagements. <b>If Fable returns in-plan</b>, the rule promotes it to the top slot by default; cap-constrained users check the rework delta via run-records. Thinking tokens count at full bucket weight → effort routing matters more; /fast is never in-plan; headless subscription OAuth is official.</p>
+      <div class="ev">code.claude.com fast-mode / authentication · platform.claude.com extended-thinking</div></div>
   </div>
   <div class="tscroll"><table>
     <tr><th>Task class</th><th>Model</th><th>Effort</th><th>Why</th></tr>
