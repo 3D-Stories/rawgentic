@@ -383,6 +383,8 @@ For each found: determine the run command (check package.json scripts, Makefile 
 - Check `.github/workflows/` for GitHub Actions
 - Check `.gitlab-ci.yml` for GitLab CI
 - Check `Jenkinsfile`, `.circleci/`, `bitbucket-pipelines.yml`
+- Write `ci.provider` when found (drives `has_ci`).
+- **CI quarantine (#137):** if the user reports the suite is chronically red for reasons unrelated to any diff (an incomplete port, a stale artifact check) and should NOT gate, offer to set `ci.status: "quarantined"` with a required `ci.quarantineReason` (a one-line why) and an optional `ci.quarantinedSince` (ISO date, so a staleness nag can fire after 30 days). Never set this automatically — quarantine is a human declaration (a chronically-red suite and a genuinely broken diff are mechanically indistinguishable). Omit `ci.status` (or set `"active"`) for a healthy suite. Example: `"ci": { "provider": "github-actions", "status": "quarantined", "quarantineReason": "incomplete Tauri port; build-path check stale", "quarantinedSince": "2026-07-01" }`.
 
 **11. Optional: Formatting**
 - Check for `.prettierrc*`, `.eslintrc*`, `biome.json`

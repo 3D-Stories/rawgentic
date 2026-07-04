@@ -19,6 +19,7 @@ capabilities object or exits non-zero — never a best-effort partial.
 import argparse
 import json
 import sys
+from datetime import datetime
 
 
 # Canonical capability field set. The docs table (docs/config-reference.md) and
@@ -32,6 +33,9 @@ CAPABILITY_FIELDS = (
     "has_tests",
     "test_commands",
     "has_ci",
+    "ci_quarantined",
+    "ci_quarantine_reason",
+    "ci_quarantined_since",
     "has_deploy",
     "deploy_method",
     "has_database",
@@ -147,6 +151,12 @@ def derive_capabilities(config) -> dict:
             caps["test_commands"] = commands
 
     # --- ci -> has_ci (keys on config.ci.provider) ---
+    # Quarantine (#137) is a HUMAN declaration read from config, never inferred:
+    # a chronically-red suite and a genuinely broken diff are mechanically
+    # indistinguishable, so the workflow must not decide this itself.
+    caps["ci_quarantined"] = False
+    caps["ci_quarantine_reason"] = None
+    caps["ci_quarantined_since"] = None
     ci = _optional_section(config, "ci")
     if ci is _MISSING:
         caps["has_ci"] = False
@@ -157,6 +167,35 @@ def derive_capabilities(config) -> dict:
         else:
             _require_nonempty_str(provider, "config.ci.provider")  # null/wrong/empty -> error
             caps["has_ci"] = True
+        status = ci.get("status", _MISSING)
+        if status is not _MISSING:
+            if status not in ("active", "quarantined"):
+                raise CapabilitiesError(
+                    f"config.ci.status must be 'active' or 'quarantined' "
+                    f"(got {status!r}). Run /rawgentic:setup.")
+            if status == "quarantined":
+                if not caps["has_ci"]:
+                    raise CapabilitiesError(
+                        "config.ci.status is 'quarantined' but no config.ci.provider "
+                        "is set — cannot quarantine CI that isn't declared. "
+                        "Run /rawgentic:setup.")
+                # A quarantine claim MUST carry its justification.
+                caps["ci_quarantine_reason"] = _require_nonempty_str(
+                    ci.get("quarantineReason", _MISSING), "config.ci.quarantineReason")
+                caps["ci_quarantined"] = True
+                since = ci.get("quarantinedSince", _MISSING)
+                if since is not _MISSING:
+                    since = _require_nonempty_str(since, "config.ci.quarantinedSince")
+                    # Must be an ISO YYYY-MM-DD date so the Step-1 staleness nag can
+                    # compare it deterministically; a nonempty-but-malformed value
+                    # would make the nag misfire or silently skip.
+                    try:
+                        datetime.strptime(since, "%Y-%m-%d")
+                    except ValueError:
+                        raise CapabilitiesError(
+                            f"config.ci.quarantinedSince must be an ISO date "
+                            f"(YYYY-MM-DD), got {since!r}. Run /rawgentic:setup.")
+                    caps["ci_quarantined_since"] = since
 
     # --- deploy -> has_deploy, deploy_method (method=="manual" is the carve-out) ---
     deploy = _optional_section(config, "deploy")
@@ -221,6 +260,37 @@ def derive_capabilities(config) -> dict:
                 caps["has_docker"] = len(compose) > 0
 
     return caps
+
+
+def _quarantine_fields(config) -> tuple:
+    """Extract the CI-quarantine-relevant fields (status, reason, since) from a
+    config, defensively (never raises — used to compare base vs head)."""
+    ci = config.get("ci") if isinstance(config, dict) else None
+    if not isinstance(ci, dict):
+        return (None, None, None)
+    return (ci.get("status"), ci.get("quarantineReason"), ci.get("quarantinedSince"))
+
+
+def ci_quarantine_change(base_config, head_config) -> str | None:
+    """Return a reason string iff `head_config` INTRODUCES or ALTERS a CI
+    quarantine relative to `base_config`, else None (#137 trust guard).
+
+    A quarantine disables the CI gate, so a PR must not be able to quarantine
+    CI in its own diff and thereby bypass its own failing CI. The caller loads
+    `base_config` from the trusted default branch and `head_config` from the
+    working tree; if the quarantine was introduced or changed on the branch,
+    the CI gate must stay ACTIVE for this run (pending explicit approval).
+    Removing a quarantine (head not quarantined) only makes CI stricter → safe → None.
+    """
+    head = _quarantine_fields(head_config)
+    if head[0] != "quarantined":
+        return None  # head does not claim quarantine — no bypass to guard
+    base = _quarantine_fields(base_config)
+    if base[0] != "quarantined":
+        return "CI quarantine is introduced on this branch (not present in the base config)"
+    if base != head:
+        return "CI quarantine fields differ from the base config (altered on this branch)"
+    return None
 
 
 def load_config(path: str) -> dict:

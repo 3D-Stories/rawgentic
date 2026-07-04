@@ -75,7 +75,7 @@ Before executing any workflow steps, load the project configuration:
      --config <activeProject.path>/.rawgentic.json
    ```
    - **Non-zero exit** -> the config is missing, corrupt, or invalid. **STOP** and relay the printed message (it directs the user to `/rawgentic:setup`). A `config.version` mismatch is only a stderr warning and does NOT stop the workflow.
-   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
+   - **Exit 0** -> stdout is `{"config": {...}, "capabilities": {...}}`. Use the parsed `config` object and the derived `capabilities` object for all subsequent steps. The `capabilities` fields are: `has_tests`, `test_commands`, `has_ci`, `ci_quarantined`, `ci_quarantine_reason`, `ci_quarantined_since`, `has_deploy`, `deploy_method`, `has_database`, `has_docker`, `project_type`, `repo`, `default_branch`, `migration_dir`. Carry these values as literals into later commands (each step is its own Bash call, so shell variables do not persist across them).
 
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
@@ -532,6 +532,8 @@ PR URL.
 ## Step 11: CI Verification
 
 ### Instructions
+
+**If `capabilities.ci_quarantined == true` (#137):** CI is human-declared untrustworthy — observe the run but treat it as a **visible non-gate**: record `CI quarantined (<capabilities.ci_quarantine_reason>): run <status>, not gating` in session notes + the PR body, never block, never claim green, proceed to Step 12 regardless of conclusion. **Trust guard:** first confirm the quarantine comes from the trusted base config — `capabilities_lib.ci_quarantine_change(base_config, head_config)` (base from `git show origin/<default>:<config-path>`) must return None; if the branch introduced/altered the quarantine, CI GATES normally for this run (a PR cannot disable its own CI gate) and the change is surfaced for approval. Quarantine is read from config only, never entered/lifted by the workflow.
 
 1. Wait for CI pipeline to complete:
    ```bash

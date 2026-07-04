@@ -306,3 +306,26 @@ class TestDeferredVerification:
         gate = _block(_text(), "completion-gate")
         assert "assert_deferrals_recorded" in gate
         assert "unrecorded" in gate.lower()
+
+
+# --- #137: CI quarantine handled as a visible non-gate ---
+
+class TestCiQuarantine:
+    def test_step13_handles_quarantine_as_non_gate(self):
+        s13 = re.search(r"## Step 13:.*?(?=\n## Step 14:)", _text(), re.DOTALL)
+        assert s13, "Step 13 not found"
+        body = s13.group(0)
+        assert "ci_quarantined" in body
+        assert "not gating" in body
+        assert "never claim green" in body or "never report" in body.lower() or "not report" in body.lower()
+        # trust guard: a PR must not disable its own CI gate (#137 Step-11 F1)
+        assert "ci_quarantine_change" in body
+
+    def test_completion_gate_item6_allows_quarantine(self):
+        gate = _block(_text(), "completion-gate")
+        assert "ci_quarantined" in gate or "quarantine recorded" in gate.lower()
+
+    def test_step1_has_quarantine_staleness_nag(self):
+        s1 = re.search(r"## Step 1:.*?(?=\n## Step 2:)", _text(), re.DOTALL)
+        assert s1, "Step 1 not found"
+        assert "ci_quarantined" in s1.group(0) and "30 calendar days" in s1.group(0)

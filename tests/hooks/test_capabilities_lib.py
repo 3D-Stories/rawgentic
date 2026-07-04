@@ -357,3 +357,122 @@ class TestDocsTableDriftGuard:
             "docs/config-reference.md capabilities table is out of sync with "
             "capabilities_lib.CAPABILITY_FIELDS — update the table (or the lib)."
         )
+
+
+# --- #137: CI quarantine state ---
+
+class TestCiQuarantine:
+    def test_no_ci_section_not_quarantined(self):
+        from capabilities_lib import derive_capabilities
+        caps = derive_capabilities(_base_config())
+        assert caps["has_ci"] is False
+        assert caps["ci_quarantined"] is False
+        assert caps["ci_quarantine_reason"] is None
+        assert caps["ci_quarantined_since"] is None
+
+    def test_active_ci_not_quarantined(self):
+        from capabilities_lib import derive_capabilities
+        caps = derive_capabilities(_base_config(ci={"provider": "github-actions"}))
+        assert caps["has_ci"] is True
+        assert caps["ci_quarantined"] is False
+        assert caps["ci_quarantine_reason"] is None
+
+    def test_explicit_active_status(self):
+        from capabilities_lib import derive_capabilities
+        caps = derive_capabilities(_base_config(
+            ci={"provider": "github-actions", "status": "active"}))
+        assert caps["has_ci"] is True and caps["ci_quarantined"] is False
+
+    def test_quarantined_with_reason(self):
+        from capabilities_lib import derive_capabilities
+        caps = derive_capabilities(_base_config(ci={
+            "provider": "github-actions", "status": "quarantined",
+            "quarantineReason": "incomplete Tauri port; build-path check stale",
+            "quarantinedSince": "2026-07-01"}))
+        assert caps["has_ci"] is True
+        assert caps["ci_quarantined"] is True
+        assert caps["ci_quarantine_reason"] == "incomplete Tauri port; build-path check stale"
+        assert caps["ci_quarantined_since"] == "2026-07-01"
+
+    def test_quarantined_without_since_is_ok(self):
+        from capabilities_lib import derive_capabilities
+        caps = derive_capabilities(_base_config(ci={
+            "provider": "github-actions", "status": "quarantined",
+            "quarantineReason": "red for unrelated reasons"}))
+        assert caps["ci_quarantined"] is True
+        assert caps["ci_quarantined_since"] is None
+
+    def test_quarantined_without_reason_errors(self):
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        with pytest.raises(CapabilitiesError):
+            derive_capabilities(_base_config(ci={
+                "provider": "github-actions", "status": "quarantined"}))
+
+    def test_quarantined_empty_reason_errors(self):
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        with pytest.raises(CapabilitiesError):
+            derive_capabilities(_base_config(ci={
+                "provider": "github-actions", "status": "quarantined",
+                "quarantineReason": "  "}))
+
+    def test_unknown_status_errors(self):
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        with pytest.raises(CapabilitiesError):
+            derive_capabilities(_base_config(ci={
+                "provider": "github-actions", "status": "paused"}))
+
+    def test_quarantine_without_provider_errors(self):
+        """Can't quarantine CI that isn't declared — contradictory config."""
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        with pytest.raises(CapabilitiesError):
+            derive_capabilities(_base_config(ci={
+                "status": "quarantined", "quarantineReason": "x"}))
+
+
+class TestCiQuarantineHardening:
+    """Codex Step-11 folds (#137)."""
+
+    def test_quarantined_since_must_be_iso_date(self):
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        for bad in ("July 1", "2026-13-99", "07/01/2026", "2026-7-1x"):
+            with pytest.raises(CapabilitiesError):
+                derive_capabilities(_base_config(ci={
+                    "provider": "gh", "status": "quarantined",
+                    "quarantineReason": "r", "quarantinedSince": bad}))
+
+    def test_quarantined_since_valid_iso_ok(self):
+        from capabilities_lib import derive_capabilities
+        caps = derive_capabilities(_base_config(ci={
+            "provider": "gh", "status": "quarantined",
+            "quarantineReason": "r", "quarantinedSince": "2026-07-01"}))
+        assert caps["ci_quarantined_since"] == "2026-07-01"
+
+    def test_quarantine_change_none_when_identical(self):
+        from capabilities_lib import ci_quarantine_change
+        ci = {"provider": "gh", "status": "quarantined", "quarantineReason": "r",
+              "quarantinedSince": "2026-07-01"}
+        base = _base_config(ci=dict(ci)); head = _base_config(ci=dict(ci))
+        assert ci_quarantine_change(base, head) is None
+
+    def test_quarantine_change_flags_introduced_in_head(self):
+        from capabilities_lib import ci_quarantine_change
+        base = _base_config(ci={"provider": "gh"})  # active in base
+        head = _base_config(ci={"provider": "gh", "status": "quarantined",
+                                "quarantineReason": "sneaky"})
+        assert ci_quarantine_change(base, head) is not None
+
+    def test_quarantine_change_flags_altered_reason(self):
+        from capabilities_lib import ci_quarantine_change
+        base = _base_config(ci={"provider": "gh", "status": "quarantined",
+                                "quarantineReason": "old"})
+        head = _base_config(ci={"provider": "gh", "status": "quarantined",
+                                "quarantineReason": "new"})
+        assert ci_quarantine_change(base, head) is not None
+
+    def test_quarantine_change_none_when_head_not_quarantined(self):
+        """Removing/never-having quarantine in head only makes CI stricter — safe."""
+        from capabilities_lib import ci_quarantine_change
+        base = _base_config(ci={"provider": "gh", "status": "quarantined",
+                                "quarantineReason": "r"})
+        head = _base_config(ci={"provider": "gh"})
+        assert ci_quarantine_change(base, head) is None
