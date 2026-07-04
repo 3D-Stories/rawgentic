@@ -246,3 +246,38 @@ def test_review_no_findings_json_flag_no_sidecar(tmp_path):
               "--date", "2026-06-14"], extra_path=tmp_path / "bin")
     assert r.returncode == 0
     assert list(root.rglob("*.findings.json")) == []
+
+
+def test_review_findings_json_collides_with_artifact_exit2_preserves_artifact(tmp_path):
+    # --findings-json pointing at the SAME file as --artifact must fail closed
+    # BEFORE the stale-sidecar os.remove() -- otherwise the input artifact is
+    # destroyed (data loss) and codex then fails on a missing file (#131 Step 8a).
+    marker = _codex_stub(tmp_path / "bin", exec_body=_valid_output())
+    root = tmp_path / "proj"; root.mkdir()
+    art = root / "d.md"; art.write_text("ORIGINAL ARTIFACT CONTENT")
+    r = _run(["review", "--artifact", str(art), "--project-root", str(root),
+              "--date", "2026-06-14", "--findings-json", str(art)],
+             extra_path=tmp_path / "bin")
+    assert r.returncode == 2
+    assert "collision" in r.stderr.lower()
+    assert not marker.exists()
+    assert art.exists()
+    assert art.read_text() == "ORIGINAL ARTIFACT CONTENT"
+
+
+def test_review_findings_json_collides_with_report_path_exit2(tmp_path):
+    # --findings-json pointing at the exact report path adversarial_review_lib
+    # would compute (docs/reviews/<slug>-<date>.md) must fail closed BEFORE
+    # codex, else the sidecar write clobbers the human-readable report (#131).
+    marker = _codex_stub(tmp_path / "bin", exec_body=_valid_output())
+    root = tmp_path / "proj"; root.mkdir()
+    art = root / "d.md"; art.write_text("x")
+    date = "2026-06-14"
+    report_path = arl.review_report_path(str(root), str(art), date)
+    r = _run(["review", "--artifact", str(art), "--project-root", str(root),
+              "--date", date, "--findings-json", report_path],
+             extra_path=tmp_path / "bin")
+    assert r.returncode == 2
+    assert "collision" in r.stderr.lower()
+    assert not marker.exists()
+    assert not Path(report_path).exists()

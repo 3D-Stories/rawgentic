@@ -286,6 +286,10 @@ def resolve_sidecar_path(path: str, project_root: str) -> str:
     file. Rejects NUL bytes; the resolved parent must equal project_root's
     realpath or start with it + os.sep (same sibling-prefix-safe check). Raises
     ArtifactError on violation. Returns the absolute sidecar path to write.
+
+    Caller contract: the returned path's final component is NOT resolved for
+    symlinks (only the parent dir is) -- the output must be unlinked before
+    write, or written via the atomic tmp-file + os.replace() pattern.
     """
     if "\x00" in path or "\x00" in project_root:
         raise ArtifactError("NUL byte in path")
@@ -1275,6 +1279,33 @@ def main(argv: list[str] | None = None) -> int:
             except ArtifactError as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
+            # Collision guards, BEFORE the stale-removal os.remove() below: the
+            # sidecar must never BE the artifact (os.remove would destroy the
+            # input before codex even runs) or the computed report path (the
+            # later sidecar write would clobber the human-readable report) (#131).
+            sidecar_real = os.path.realpath(sidecar_path)
+            try:
+                artifact_real = resolve_artifact_path(args.artifact, args.project_root)
+            except ArtifactError:
+                artifact_real = None
+            if artifact_real is not None and sidecar_real == artifact_real:
+                print(
+                    f"--findings-json collision: sidecar path is the same file as "
+                    f"--artifact ({sidecar_path!r}); refusing (would destroy the "
+                    "artifact before review)", file=sys.stderr,
+                )
+                return 2
+            date_str = args.date or "unknown-date"
+            report_path = os.path.normpath(
+                review_report_path(args.project_root, args.artifact, date_str)
+            )
+            if os.path.normpath(sidecar_path) == report_path:
+                print(
+                    f"--findings-json collision: sidecar path is the same as the "
+                    f"computed report path ({sidecar_path!r}); refusing (would "
+                    "clobber the report)", file=sys.stderr,
+                )
+                return 2
             try:
                 os.remove(sidecar_path)
             except FileNotFoundError:
@@ -1318,8 +1349,15 @@ def main(argv: list[str] | None = None) -> int:
         # mirroring the report-write contract) so a consumer never read-gates on a
         # missing/partial sidecar and misreads it as success (#131).
         if sidecar_path is not None:
+            # Atomic write: build the full sidecar in a tmp file, then os.replace()
+            # into place, so a crash/interrupt mid-write never leaves a partial
+            # sidecar at the canonical path (a reader either sees the old file, if
+            # any, or the complete new one). O_NOFOLLOW on the tmp path defends
+            # against a symlink planted at the tmp name between calls.
+            tmp_path = sidecar_path + ".tmp"
             try:
-                with open(sidecar_path, "w", encoding="utf-8") as f:
+                fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump({
                         "status": "success",
                         "summary": result.summary,
@@ -1327,7 +1365,12 @@ def main(argv: list[str] | None = None) -> int:
                         "secrets": list(result.secrets),
                         "findings": list(result.findings),
                     }, f)
+                os.replace(tmp_path, sidecar_path)
             except OSError as exc:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
                 print(f"failed to write findings sidecar: {exc}", file=sys.stderr)
                 return 3
         print(path)
