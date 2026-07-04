@@ -39,8 +39,10 @@ jobs:
           if [ -z "$KEY" ]; then
             echo "::warning::CLAUDE_API_KEY unset — security review SKIPPED, not a clean signal"
             echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "## Claude security review: executed=false (CLAUDE_API_KEY unset — does NOT count toward the 10-PR promotion tally)" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "## Claude security review: executed=true" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - uses: actions/checkout@v4

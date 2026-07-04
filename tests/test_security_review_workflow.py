@@ -36,11 +36,20 @@ def test_action_is_sha_pinned_not_ref_pinned():
 
 def test_permissions_are_least_privilege():
     text = _text()
-    assert "pull-requests: write" in text
-    assert "contents: read" in text
-    # nothing broader
-    for excessive in ("contents: write", "id-token", "actions: write", "packages:"):
-        assert excessive not in text, f"least-privilege violated: {excessive}"
+    # exactly ONE permissions block, and its full content is pinned — a substring
+    # check alone fails open (a broader grant added elsewhere would slip past)
+    blocks = re.findall(r"^permissions:\n((?:^[ \t]+\S.*\n)+)", text, re.M)
+    assert len(blocks) == 1, "exactly one permissions block (workflow level)"
+    perms = {ln.strip() for ln in blocks[0].splitlines()}
+    assert perms == {"pull-requests: write", "contents: read"}
+    assert "write-all" not in text
+
+
+def test_execution_status_is_durable_for_the_promotion_tally():
+    """The 10-PR tally must be countable from run summaries, not just annotations."""
+    text = _text()
+    assert "executed=false" in text and "executed=true" in text
+    assert "GITHUB_STEP_SUMMARY" in text
 
 
 def test_lane_is_non_blocking_initially():
