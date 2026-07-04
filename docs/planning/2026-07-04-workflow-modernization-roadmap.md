@@ -1,6 +1,8 @@
 # Workflow Modernization Roadmap
 
-Date: 2026-07-04 · Companion to [findings](2026-07-04-workflow-modernization-review.md) · **Draft issues are NOT filed — owner approval required first** (per the review engagement's terms).
+Date: 2026-07-04 · Companion to [findings](2026-07-04-workflow-modernization-review.md)
+
+> **Status 2026-07-04: approved and FILED.** Epics: **M1 #167 · M2 #168 · M3 #169 · M4 #170** (label `epic:modernization`). Draft-issue mapping: A→#154 B→#155 C→#156 D→#157 E→#158 F→#159 G→#160 H→#161 I→#162 J→#163 K→#164 L→#165 M→#166. The epics' task lists are the live tracking surface; this doc is the design record.
 
 Dedup policy: extends open issues #148 (driver build), #85 (worktree Step 8), #115/#116 (telemetry) rather than duplicating; #48/#51/#52 (headless) fold into M4's pilot; #143 and #122 are untouched by this roadmap and remain standalone.
 
