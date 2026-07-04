@@ -329,11 +329,19 @@ def probe_parallelism(repo_root: str) -> str:
     except (OSError, subprocess.SubprocessError):
         return "serial-only"
     finally:
-        if wt is not None:
-            _git(["worktree", "remove", "--force", wt])
-        if parent is not None:
-            shutil.rmtree(parent, ignore_errors=True)
-        _git(["worktree", "prune"])
+        # Cleanup must NEVER raise (that would override the return and crash the
+        # probe despite the "never raises" contract). `git worktree remove` both
+        # unregisters and deletes; rmtree clears the temp parent; prune then
+        # sweeps a registration whose path is already gone (covers a failed
+        # remove where the dir was nonetheless deleted).
+        try:
+            if wt is not None:
+                _git(["worktree", "remove", "--force", wt])
+            if parent is not None:
+                shutil.rmtree(parent, ignore_errors=True)
+            _git(["worktree", "prune"])
+        except (OSError, subprocess.SubprocessError):
+            pass
 
 
 def load_config(path: str) -> dict:

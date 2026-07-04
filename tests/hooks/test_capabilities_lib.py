@@ -522,3 +522,16 @@ class TestProbeParallelism:
     def test_probe_nonexistent_path_is_serial_only(self, tmp_path):
         from capabilities_lib import probe_parallelism
         assert probe_parallelism(str(tmp_path / "nope")) == "serial-only"
+
+
+class TestProbeParallelismCleanupSafety:
+    """Codex Step-11 fold (#136): cleanup failures must not escape the probe."""
+
+    def test_cleanup_rmtree_failure_does_not_crash(self, tmp_path, monkeypatch):
+        import capabilities_lib
+        _init_git_repo(tmp_path, with_commit=True)
+        def boom(*a, **k):
+            raise OSError("simulated cleanup failure")
+        monkeypatch.setattr(capabilities_lib.shutil, "rmtree", boom)
+        # The probe must still return a documented value, never raise.
+        assert capabilities_lib.probe_parallelism(str(tmp_path)) == "worktree"
