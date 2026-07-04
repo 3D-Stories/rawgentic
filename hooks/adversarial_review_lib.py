@@ -278,6 +278,27 @@ def resolve_artifact_path(artifact_path: str, project_root: str) -> str:
     return resolved
 
 
+def resolve_sidecar_path(path: str, project_root: str) -> str:
+    """Validate a findings-sidecar output path under project_root.
+
+    Unlike resolve_artifact_path, the sidecar file need not exist yet, so we
+    realpath the PARENT directory (resolving symlinks in the dir) rather than the
+    file. Rejects NUL bytes; the resolved parent must equal project_root's
+    realpath or start with it + os.sep (same sibling-prefix-safe check). Raises
+    ArtifactError on violation. Returns the absolute sidecar path to write.
+    """
+    if "\x00" in path or "\x00" in project_root:
+        raise ArtifactError("NUL byte in path")
+    root = os.path.realpath(project_root)
+    abs_path = os.path.abspath(path)
+    parent = os.path.realpath(os.path.dirname(abs_path))
+    if parent != root and not parent.startswith(root + os.sep):
+        raise ArtifactError(
+            f"sidecar path escapes project root: {path!r} -> {parent!r}"
+        )
+    return os.path.join(parent, os.path.basename(abs_path))
+
+
 def read_artifact(
     artifact_path: str, project_root: str, *, max_bytes: int | None = None
 ) -> tuple[str, bool]:
@@ -1218,6 +1239,9 @@ def main(argv: list[str] | None = None) -> int:
     p_review.add_argument("--project-root", required=True)
     p_review.add_argument("--date", default="")
     p_review.add_argument("--headless", action="store_true")
+    # Optional machine-readable sidecar for embedded consumers (WF2 Step 11).
+    # Fail-closed: written ONLY on success, AFTER the report write succeeds.
+    p_review.add_argument("--findings-json", default=None)
 
     p_consult = sub.add_parser("consult", help="run a peer-designer consult")
     p_consult.add_argument("--artifact", required=True)
@@ -1240,6 +1264,24 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "review":
         artifact_type = args.type if args.type in ARTIFACT_TYPES else "generic"
+        # Sidecar path validation + stale-removal happen BEFORE any codex/egress:
+        # a bad path fails-closed (exit 2, codex never invoked), and clearing the
+        # stale file up front means a failed run leaves NO sidecar behind (exit 0
+        # is the only path that writes a fresh one).
+        sidecar_path = None
+        if args.findings_json is not None:
+            try:
+                sidecar_path = resolve_sidecar_path(args.findings_json, args.project_root)
+            except ArtifactError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            try:
+                os.remove(sidecar_path)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                print(f"failed to clear stale findings sidecar: {exc}", file=sys.stderr)
+                return 2
         result = run_codex_review(
             args.artifact, artifact_type, args.project_root, headless=args.headless
         )
@@ -1271,6 +1313,23 @@ def main(argv: list[str] | None = None) -> int:
             # traceback that a caller could misread as success (#77 Step 8a F3).
             print(f"failed to write report: {exc}", file=sys.stderr)
             return 3
+        # Machine-readable sidecar for embedded consumers — written ONLY here,
+        # after the report write succeeded. A write OSError fails-closed (exit 3,
+        # mirroring the report-write contract) so a consumer never read-gates on a
+        # missing/partial sidecar and misreads it as success (#131).
+        if sidecar_path is not None:
+            try:
+                with open(sidecar_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "status": "success",
+                        "summary": result.summary,
+                        "truncated": result.truncated,
+                        "secrets": list(result.secrets),
+                        "findings": list(result.findings),
+                    }, f)
+            except OSError as exc:
+                print(f"failed to write findings sidecar: {exc}", file=sys.stderr)
+                return 3
         print(path)
         return 0
 
