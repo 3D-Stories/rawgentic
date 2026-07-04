@@ -20,8 +20,6 @@ def test_skill_dir_and_frontmatter_exist():
     assert skill.exists()
     text = skill.read_text()
     assert "name: rawgentic:adversarial-review" in text
-    # differentiated description: NOT-for-code-diffs clause
-    assert "NOT for" in text or "not for" in text.lower()
     assert "<config-loading>" in text
     assert "<completion-gate>" in text
 
@@ -62,6 +60,45 @@ def test_marketplace_skill_dirs_all_exist():
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     for rel in mp["plugins"][0]["skills"]:
         assert (REPO_ROOT / rel / "SKILL.md").exists(), f"missing {rel}/SKILL.md"
+
+
+# --- diff artifact type support in SKILL.md (issue #131, Task 4) ---
+
+def test_description_mentions_diff_review_and_drops_not_for_clause():
+    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    frontmatter = text.split("---")[1]
+    assert "diff" in frontmatter.lower()
+    assert "NOT for reviewing code diffs" not in text
+
+
+def test_constants_supported_artifact_types_includes_diff():
+    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    constants = _section(text, "<constants>", "</constants>")
+    line = next(l for l in constants.splitlines() if l.startswith("SUPPORTED_ARTIFACT_TYPES:"))
+    types = [t.strip() for t in line.split(":", 1)[1].split(",")]
+    assert "diff" in types
+
+
+def test_body_documents_findings_json_sidecar_flag():
+    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    assert "--findings-json" in text
+
+
+def test_step1_autodetect_mentions_patch_and_diff_globs():
+    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    step1 = _section(text, "## Step 1:", "## Step 2:")
+    assert "*.patch" in step1
+    assert "*.diff" in step1
+    assert "diff" in step1.lower()
+
+
+def test_data_handling_mentions_diff_secret_density_and_egress_classifier():
+    text = (SKILLS_DIR / "adversarial-review" / "SKILL.md").read_text()
+    dh = _section(text, "<data-handling>", "</data-handling>")
+    low = dh.lower()
+    assert "raw source code" in low
+    assert "egress classifier" in low
+    assert "non-blocking" in low
 
 
 # --- consolidation doc ---

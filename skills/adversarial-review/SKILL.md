@@ -1,7 +1,7 @@
 ---
 name: rawgentic:adversarial-review
-description: WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer via the Codex CLI. Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. NOT for reviewing code diffs (use /code-review or /rawgentic:security-audit) — this complements same-model critique (reflexion:critique) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path. Requires the Codex CLI to be installed and authenticated.
-argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type hint (design|spec|plan|prd|adr|rfc|readme)
+description: WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer via the Codex CLI. Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. Also reviews code DIFFS via the `diff` artifact type (refutation lens, report-only) — this complements same-model critique (reflexion:critique) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path. Requires the Codex CLI to be installed and authenticated.
+argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type hint (design|spec|plan|prd|adr|rfc|readme|diff)
 ---
 
 # WF5: Adversarial Review Workflow
@@ -11,11 +11,12 @@ You are the WF5 orchestrator. You run an independent, cross-model adversarial re
 </role>
 
 <constants>
-SUPPORTED_ARTIFACT_TYPES: design, spec, plan, prd, adr, rfc, readme, generic
+SUPPORTED_ARTIFACT_TYPES: design, spec, plan, prd, adr, rfc, readme, generic, diff
 FINDING_SEVERITIES: Critical, High, Medium, Low
 REVIEWER: Codex CLI (independent different-model reviewer; egress to OpenAI)
 OUTPUT: <activeProject.path>/docs/reviews/<slug>-<YYYY-MM-DD>.md  (report-only)
 ENGINE: hooks/adversarial_review_lib.py
+CLI: `review --findings-json <path>` (optional; embedded-consumer sidecar — written only on success, after the report; path must resolve under the project root)
 ENV (all optional, frozen at lib import):
   RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap truncates + warns
   RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — Codex invocation timeout (seconds); 600 gives high-effort reviews of large artifacts headroom
@@ -72,7 +73,7 @@ Per the shared invariant: STOP and ask the user when findings are ambiguous, con
 </ambiguity-circuit-breaker>
 
 <data-handling>
-This skill transmits the artifact's TEXT to OpenAI (Codex) for an independent model review — the artifact leaves the machine. This is **warn-only**: the skill prints a one-time egress notice before invoking Codex and proceeds. The engine additionally scans the artifact for obvious secrets (API keys, passwords, tokens, private keys) and, if any are found, names the detected categories in the notice. To make secret detection blocking instead of advisory, set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1`. Findings reports are written locally to `<project>/docs/reviews/` and never uploaded anywhere.
+This skill transmits the artifact's TEXT to OpenAI (Codex) for an independent model review — the artifact leaves the machine. This is **warn-only**: the skill prints a one-time egress notice before invoking Codex and proceeds. The engine additionally scans the artifact for obvious secrets (API keys, passwords, tokens, private keys) and, if any are found, names the detected categories in the notice. To make secret detection blocking instead of advisory, set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1`. Findings reports are written locally to `<project>/docs/reviews/` and never uploaded anywhere. A `diff` artifact is raw source code — the highest secret density of any supported type, so the egress warning above and the `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` hard-block matter most here. An agent-harness egress classifier may also block the Codex invocation entirely, independent of this skill's own warn-only policy — embedded callers (e.g. WF2 Step 11) must treat that as a failed review and continue non-blocking, while standalone runs surface the block to the user.
 </data-handling>
 
 <step-tracking>
@@ -90,7 +91,7 @@ This enables workflow resumption if context is lost.
 1. **Execute `<config-loading>`** to resolve the active project and its absolute path (`PROJECT_ROOT = <activeProject.path>`). Log the resolved project and repo in session notes.
 2. Parse the user argument into an artifact path and an optional type hint:
    - If the argument is a path to an existing file, use it.
-   - If a type hint (one of SUPPORTED_ARTIFACT_TYPES) is given, record it; otherwise auto-detect from the filename (e.g. `*spec*` → spec, `*plan*` → plan, `*adr*` → adr, `README*` → readme) and fall back to `generic`.
+   - If a type hint (one of SUPPORTED_ARTIFACT_TYPES) is given, record it; otherwise auto-detect from the filename (e.g. `*spec*` → spec, `*plan*` → plan, `*adr*` → adr, `README*` → readme, `*.patch`/`*.diff` → diff) and fall back to `generic`.
 3. Validate the artifact:
    - The path must resolve to a file **under** `PROJECT_ROOT` (the engine enforces this — traversal/absolute escape is rejected). If it is outside the project, STOP and tell the user the artifact must live inside the active project.
    - If the file does not exist, STOP: "Artifact not found: `<path>`."
@@ -168,8 +169,10 @@ The egress warning text (and any detected secret categories).
      --type "<resolved type>" \
      --project-root "<PROJECT_ROOT>" \
      --date "$(date -u +%Y-%m-%d)" \
-     [--headless]
+     [--headless] \
+     [--findings-json <path>]
    ```
+   Embedded callers (e.g. WF2 Step 11) may append `--findings-json <path>` to also receive a machine-readable sidecar of the findings; it is written only on success, after the report.
 2. Interpret the exit code (the contract is fail-closed):
    - `0` → success; the path of the written report is printed on stdout.
    - `2` → prerequisite failure (not installed / unauthenticated). STOP (should have been caught in Step 2).
