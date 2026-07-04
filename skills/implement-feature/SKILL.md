@@ -800,15 +800,24 @@ Execute the implementation plan task by task.
    ```
 
 <!-- model-routing: role=implementation -->
-**Optional implementation delegation (`implementation` role).** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent (`model: <implementation>`) instead of inline, subject to a per-task **clean-state boundary**:
+**Optional implementation delegation (`implementation` role).** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent instead of inline, subject to a per-task **clean-state boundary**. The resolved `implementation` model is a **CEILING, not a blanket assignment** — pick the cheapest sufficient model per task (issue #132), so a well-specified mechanical task is not built on the ceiling model when a cheaper one suffices.
 
+0. **Per-task model selection (ceiling semantics).** For each task, choose its dispatch model with:
+   ```bash
+   python3 -c "import sys; sys.path.insert(0,'hooks'); from model_routing_lib import select_impl_model; m,r=select_impl_model('<ceiling>','<riskLevel>','<complexity>'); print(m); print(r)"
+   ```
+   - `<ceiling>` = the resolved `implementation` value from `<model-routing-resolve>`.
+   - `<riskLevel>` = this task's `riskLevel` (`high`|`standard`) from the Step 5 plan.
+   - `<complexity>` = the **Step 2** authoritative complexity classification (`simple_change`|`standard_feature`|`complex_feature`) carried forward from Step 2 item 7; if it is unavailable/unknown in context, pass `standard_feature` (the conservative middle) and note that in the per-task log.
+   `select_impl_model` returns `(model, reason)`: high-risk **or** `complex_feature` → the ceiling; otherwise → `sonnet` (down-routed); a `haiku`/unknown ceiling floors to `sonnet` (rawgentic never routes coding to Haiku). Dispatch this task's subagent with `model: <model>`. **Never dispatch an implementation subagent with `model: haiku`** — if the resolved model is `inherit` and the session model is Haiku, pass `model: sonnet` instead.
+   **Log per task** in session notes: `impl task <id>: model <model> (<reason>)` — makes over/under-routing auditable.
 1. **Before dispatch:** record the pre-task state — current `HEAD` and `git status --porcelain` (the tree must already be clean from the previous task's commit).
-2. **Dispatch one task-agent** (serial — one at a time; each task builds on the previous commit) with the brief: the design doc, this plan task, the TDD requirement, project conventions, and the current test baseline. The agent implements the task test-first and commits it.
+2. **Dispatch one task-agent** (serial — one at a time; each task builds on the previous commit) with the per-task `model` from item 0 and the brief: the design doc, this plan task, the TDD requirement, project conventions, and the current test baseline. The agent implements the task test-first and commits it.
 3. **After it returns:** re-run the test suite and diff against the recorded baseline. On success (tests green, only expected paths changed, task committed) → proceed to the next task.
-4. **On failure or vacuous return:** **restore** the pre-task state first — `git reset --hard <recorded HEAD>` and `git clean -fd` to discard the agent's partial edits — then retry that task once inline in the main loop. Log the fallback. Because the restore runs first, the inline retry never operates on a half-mutated tree.
+4. **On failure or vacuous return:** **restore** the pre-task state first — `git reset --hard <recorded HEAD>` and `git clean -fd` to discard the agent's partial edits — then **retry that task once at the CEILING model** (escalate: a down-routed task that struggled gets the configured maximum, dispatched the same clean-state way, or inline if the ceiling is `inherit`). Log the escalation. Because the restore runs first, the retry never operates on a half-mutated tree.
 5. Delegation can never block Step 8: a second failure falls through to the normal Step 8 failure handling.
 
-When the `implementation` role is `inherit` (default), Step 8 runs inline exactly as today — no delegation, no behavior change.
+When the `implementation` role is `inherit` (default), Step 8 runs inline exactly as today — no delegation, no behavior change (and if the session model is Haiku, dispatch any implementation subagent with `model: sonnet`).
 
 **Parallel task execution (validated, currently serial):** Use the parallel-eligibility result from Step 5's `plan_lib.validate_parallel_groups(tasks)` to know which groups *could* run concurrently. **Until isolated concurrent execution lands (issue #85), execute ALL tasks sequentially in plan order**, including parallel-eligible groups. Do NOT dispatch concurrent Agent calls that write to the working tree: with no worktree isolation, concurrent edits to the shared tree can collide and corrupt commits — sequential execution is the safe floor. **Staging backstop:** the "stage ONLY this task's files, never `git add -A`" rule above applies to every task; when a task additionally declares `files`, that rule becomes machine-checkable — assert the staged set is a subset of the declared `files` and STOP to reconcile if not. (A task in a parallel_group that declared no `files` is already non-eligible and runs sequentially under the same stage-only-this-task's-files rule.)
 

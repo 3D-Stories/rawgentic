@@ -37,4 +37,17 @@ def test_step8_delegation_documents_clean_state_boundary():
     assert "clean-state boundary" in text
     assert "git status --porcelain" in text
     assert "restore" in text.lower()
-    assert "retries that task once inline" in text or "retry that task once inline" in text
+    # #132: a struggling down-routed task escalates — retry at the CEILING model
+    # (restore-first), not a flat inline retry.
+    assert "retry that task once at the CEILING model" in text
+
+
+def test_step8_documents_ceiling_downrouting():
+    """#132: implementation model is a per-task ceiling, selected via select_impl_model."""
+    text = (SKILLS / "implement-feature" / "SKILL.md").read_text()
+    assert "CEILING, not a blanket assignment" in text
+    assert "select_impl_model" in text
+    # never-Haiku guarantee is stated at the dispatch site (covers inherit→session-model)
+    assert "never" in text.lower() and "haiku" in text.lower()
+    # per-task audit log line
+    assert "impl task <id>: model" in text
