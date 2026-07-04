@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.corpus import skill_corpus
+
 # Import Python helper from hooks/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "hooks"))
 
@@ -1193,7 +1195,8 @@ class TestSkillCountCanary:
         count = 0
         for skill_dir in self.SKILLS_DIR.iterdir():
             skill_file = skill_dir / "SKILL.md"
-            if skill_file.exists() and "<config-loading>" in skill_file.read_text():
+            # corpus, not SKILL.md alone: #158 may move the preamble into references/
+            if skill_file.exists() and "<config-loading>" in skill_corpus(skill_dir.name):
                 count += 1
         assert count == self.EXPECTED_CONFIG_LOADING_COUNT, (
             f"Expected {self.EXPECTED_CONFIG_LOADING_COUNT} skills with <config-loading>, "
@@ -1270,21 +1273,22 @@ class TestHeadlessInteractionBlock:
 
     @pytest.mark.parametrize("skill_name", HEADLESS_SKILLS)
     def test_skill_has_correct_headless_annotation_count(self, skill_name: str):
-        """Annotation count must match expected — catches missing annotations on new steps."""
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
-        count = content.count("[Headless")  # matches [Headless: annotations
+        """Annotation count must match expected — catches missing annotations on new steps.
+
+        Counted over the CORPUS (SKILL.md + references/): #158 may move annotated
+        prose into references/, and the count must follow it. (references/ hold 0
+        occurrences today, so the pins are unchanged by the corpus switch.)"""
+        count = skill_corpus(skill_name).count("[Headless")  # matches [Headless: annotations
         expected = self.EXPECTED_COUNTS[skill_name]
         assert count == expected, (
-            f"{skill_name}/SKILL.md has {count} [Headless] annotations, "
+            f"{skill_name} corpus has {count} [Headless] annotations, "
             f"expected {expected}. If you added a new interaction point, "
             f"add a [Headless:] annotation and bump this count."
         )
 
     def test_headless_resume_in_resumption_protocol(self):
         """The resumption protocol must reference headless-resume as Step -1."""
-        skill_path = SKILLS_DIR / "implement-feature" / "SKILL.md"
-        content = skill_path.read_text()
+        content = skill_corpus("implement-feature")
         start = content.find("<resumption-protocol>")
         end = content.find("</resumption-protocol>")
         block = content[start:end]
@@ -1298,7 +1302,7 @@ class TestGoalGuardStep1b:
     to plan_lib.build_goal_text in both WF2 and WF3."""
 
     def test_implement_feature_has_step_1b_and_build_goal_text(self):
-        content = (SKILLS_DIR / "implement-feature" / "SKILL.md").read_text()
+        content = skill_corpus("implement-feature")
         assert "## Step 1b" in content, "implement-feature/SKILL.md missing '## Step 1b'"
         assert "build_goal_text" in content, (
             "implement-feature/SKILL.md Step 1b must reference plan_lib.build_goal_text"
@@ -1308,7 +1312,7 @@ class TestGoalGuardStep1b:
         )
 
     def test_fix_bug_has_step_1b_and_build_goal_text(self):
-        content = (SKILLS_DIR / "fix-bug" / "SKILL.md").read_text()
+        content = skill_corpus("fix-bug")
         assert "## Step 1b" in content, "fix-bug/SKILL.md missing '## Step 1b'"
         assert "build_goal_text" in content, (
             "fix-bug/SKILL.md Step 1b must reference plan_lib.build_goal_text"
@@ -1323,8 +1327,7 @@ class TestMandatoryStepsEnforcement:
 
     @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
     def test_skill_has_mandatory_steps_block(self, skill_name: str):
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
+        content = skill_corpus(skill_name)
         assert "<mandatory-steps>" in content and "</mandatory-steps>" in content, (
             f"{skill_name}/SKILL.md is missing the <mandatory-steps> enforcement block"
         )
@@ -1332,8 +1335,7 @@ class TestMandatoryStepsEnforcement:
     @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
     def test_mandatory_steps_marks_code_review_non_negotiable(self, skill_name: str):
         """Code review must be explicitly marked NON-NEGOTIABLE."""
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
+        content = skill_corpus(skill_name)
         start = content.find("<mandatory-steps>")
         end = content.find("</mandatory-steps>")
         block = content[start:end]
@@ -1344,8 +1346,7 @@ class TestMandatoryStepsEnforcement:
     @pytest.mark.parametrize("skill_name", ENFORCED_SKILLS)
     def test_mandatory_steps_lists_invalid_justifications(self, skill_name: str):
         """Block must include common invalid justifications to counter-program the LLM."""
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        content = skill_path.read_text()
+        content = skill_corpus(skill_name)
         start = content.find("<mandatory-steps>")
         end = content.find("</mandatory-steps>")
         block = content[start:end]
@@ -1362,7 +1363,7 @@ class TestCritiqueMethodPreamble:
         skill_path = SKILLS_DIR / skill_name / "SKILL.md"
         assert skill_path.exists(), f"SKILL.md not found at {skill_path}"
 
-        content = skill_path.read_text()
+        content = skill_corpus(skill_name)
         assert "critiqueMethod" in content, (
             f"{skill_name}/SKILL.md is missing the critiqueMethod preference "
             f"check near its /reflexion:critique invocation"

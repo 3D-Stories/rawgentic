@@ -11,6 +11,8 @@ accounted for as a separate "planning skill" in the count strings.
 import json
 from pathlib import Path
 
+from tests.corpus import skill_corpus
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "skills"
 SKILL = SKILLS_DIR / "interview" / "SKILL.md"
@@ -18,6 +20,7 @@ SKILL = SKILLS_DIR / "interview" / "SKILL.md"
 
 def test_skill_dir_and_frontmatter_exist():
     assert SKILL.exists(), "skills/interview/SKILL.md missing"
+    # LOCATION pin: frontmatter must be in SKILL.md itself (registration).
     text = SKILL.read_text()
     assert "name: rawgentic:interview" in text
     assert "description:" in text
@@ -25,13 +28,13 @@ def test_skill_dir_and_frontmatter_exist():
 
 
 def test_skill_is_lightweight_no_config_loading():
-    """interview must stay lightweight — no <config-loading>, so the 12-count canary holds."""
-    text = SKILL.read_text()
-    assert "<config-loading>" not in text
+    """interview must stay lightweight — no <config-loading> anywhere in its
+    corpus, so the 12-count canary holds."""
+    assert "<config-loading>" not in skill_corpus("interview")
 
 
 def test_skill_contains_verbatim_core_prompt():
-    text = SKILL.read_text()
+    text = skill_corpus("interview")
     assert "interview me about what we're trying to build" in text
     assert "who it is and isn't for" in text
     assert "work through any key decisions together" in text
@@ -40,7 +43,7 @@ def test_skill_contains_verbatim_core_prompt():
 
 def test_skill_offers_to_write_spec_file():
     """User decision: after summarizing, offer to persist the spec to a file."""
-    text = SKILL.read_text().lower()
+    text = skill_corpus("interview").lower()
     assert "offer to save" in text or "offer to write" in text
     assert "docs/" in text
 
