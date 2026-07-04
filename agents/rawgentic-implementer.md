@@ -26,6 +26,13 @@ Contract:
    test delta, and anything you could not verify. A blocker reported honestly
    beats a manufactured pass.
 
+Worktree hand-off: you run in an isolated git worktree that shares the main
+checkout's object store. Your commit does NOT land on the orchestrator's
+feature branch by itself — report the commit SHA in your final message; the
+orchestrator collects it (cherry-pick/fast-forward onto the feature branch)
+and verifies the branch actually advanced. A SHA you do not report is work
+that does not exist.
+
 Model routing: the orchestrator resolves the project's routed model and passes
 it per-invocation (that parameter overrides this definition's `inherit`).
 rawgentic NEVER routes implementation work to Haiku — if you are somehow

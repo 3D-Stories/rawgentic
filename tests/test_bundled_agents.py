@@ -25,7 +25,10 @@ REVIEWER = AGENTS_DIR / "rawgentic-reviewer.md"
 
 
 def _frontmatter(path: Path) -> dict:
-    """Parse the simple `key: value` YAML frontmatter block (no nesting used)."""
+    """Parse the simple `key: value` YAML frontmatter block.
+
+    ponytail: single-line values only — a folded/multi-line YAML value would be
+    dropped or mis-keyed; the shipped definitions use none."""
     text = path.read_text(encoding="utf-8")
     m = re.match(r"\A---\n(.*?)\n---\n", text, re.DOTALL)
     assert m, f"{path.name} missing YAML frontmatter"
@@ -51,8 +54,9 @@ def test_model_is_inherit_never_haiku(path):
     declares inherit and the per-invocation model param carries the routed value.
     A haiku frontmatter model would silently route coding/review to Haiku."""
     fm = _frontmatter(path)
+    # == "inherit" is strictly stronger than any not-haiku check, so it is the
+    # single assertion; the body-level never-Haiku prose is pinned separately.
     assert fm.get("model") == "inherit", f"{path.name} model must be inherit (routing overrides per-invocation)"
-    assert "haiku" not in fm.get("model", ""), f"{path.name} must never pin haiku"
 
 
 def test_implementer_is_worktree_isolated():
@@ -62,15 +66,21 @@ def test_implementer_is_worktree_isolated():
     )
 
 
-def test_implementer_body_states_never_haiku_contract():
-    body = IMPLEMENTER.read_text(encoding="utf-8")
+@pytest.mark.parametrize("path", [IMPLEMENTER, REVIEWER], ids=["implementer", "reviewer"])
+def test_body_states_never_haiku_contract(path):
+    body = path.read_text(encoding="utf-8")
     assert "never" in body.lower() and "haiku" in body.lower(), (
-        "the never-Haiku guarantee must be stated in the definition itself"
+        f"the never-Haiku guarantee must be stated in {path.name} itself"
     )
 
 
 def test_reviewer_tools_are_read_heavy():
-    """The reviewer reads and reports; it must not carry write tools."""
+    """The reviewer reads and reports; it must not carry file-editing tools.
+
+    Bash stays in the list (git log/show/diff, running the suite), so this list
+    alone does not prove read-only — the definition's prose therefore claims
+    "no file-editing tools", not "read-only", and instructs Bash be used for
+    inspection only. This guard pins the tool list; the prose pin is below."""
     fm = _frontmatter(REVIEWER)
     tools = [t.strip() for t in fm.get("tools", "").split(",") if t.strip()]
     assert tools, "reviewer must declare an explicit read-heavy tools list"
@@ -87,10 +97,34 @@ def test_reviewer_is_not_isolated():
 
 
 def test_wf2_references_both_agent_types():
-    """AC2: WF2 dispatch prose references the shipped types (namespaced form)."""
+    """AC2: WF2 dispatch prose references the shipped types (namespaced form).
+
+    Counts, not mere presence: the <model-routing-resolve> inventory alone must
+    not satisfy this — the per-step dispatch sites must reference the types too
+    (reviewer: inventory + Step 4 judges + Step 8a + Step 11 = >= 4;
+    implementer: inventory + Step 8 delegation + whole-issue build = >= 3)."""
     corpus = skill_corpus("implement-feature")
-    assert "rawgentic:rawgentic-implementer" in corpus
-    assert "rawgentic:rawgentic-reviewer" in corpus
+    assert corpus.count("rawgentic:rawgentic-implementer") >= 3
+    assert corpus.count("rawgentic:rawgentic-reviewer") >= 4
+
+
+def test_reviewer_prose_limits_bash_to_inspection():
+    """The Bash escape hatch is real; the definition must bound it explicitly."""
+    body = REVIEWER.read_text(encoding="utf-8")
+    assert "no file-editing tools" in body.lower()
+    assert "read-only inspection" in body.lower()
+    assert "never to mutate" in body.lower()
+
+
+def test_wf2_step8_reconciles_worktree_commit():
+    """A worktree commit does not land on the feature branch by itself; Step 8
+    must collect it and assert the branch advanced — otherwise the diff-scoped
+    gates (8a/11/secret scan) would run over an empty diff and pass vacuously."""
+    corpus = skill_corpus("implement-feature")
+    assert "cherry-pick or fast-forward" in corpus
+    assert "branch actually advanced" in corpus
+    impl = IMPLEMENTER.read_text(encoding="utf-8")
+    assert "does NOT land" in impl and "commit SHA" in impl
 
 
 def test_wf2_documents_worktree_fallback():
@@ -99,7 +133,7 @@ def test_wf2_documents_worktree_fallback():
     corpus = skill_corpus("implement-feature")
     assert "probe-parallelism" in corpus
     low = corpus.lower()
-    assert "fallback" in low and "serial-only" in corpus
+    assert "fallback" in low and "serial-only" in low
 
 
 def test_wf2_notes_85_config_gated_follow_up():
