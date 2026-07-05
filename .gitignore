@@ -28,3 +28,7 @@ claude_docs/
 # WF2 Step 11 diff-review temp files (crash-recovery backstop; normally cleaned on exit)
 .rawgentic-diff-review-*.patch
 .rawgentic-diff-findings-*.json
+
+# Vendored external command copies (#194): third-party prompt content — a durable
+# local copy, never committed (redistribution/licensing). See docs/external-references.md
+.rawgentic-vendored/
