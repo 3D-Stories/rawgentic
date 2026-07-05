@@ -261,7 +261,9 @@ class TestRoadmapStyle:
     def test_plain_has_no_cards_or_chips(self):
         md = "## Slot 1 — DONE\n\nbody"
         h = _render(md, style="plain")
-        assert "mstone" not in h and 'class="chip' not in h
+        # no card/chip MARKUP and no roadmap CSS leak (AC1: plain byte-identical)
+        assert '<section class="mstone">' not in h and 'class="chip' not in h
+        assert ".mstone" not in h and "--chip-c" not in h
 
     def test_roadmap_wraps_h2_sections_in_cards(self):
         md = "## Slot 1 — DONE\n\nbody one\n\n## Slot 2 — planned\n\nbody two"
@@ -288,10 +290,30 @@ class TestRoadmapStyle:
         assert render_artifact.status_chip("this is incomplete")[0] != "c-conf"
 
     def test_roadmap_chip_from_section_body(self):
-        # status keyword in the body (not the heading) still drives the chip
+        # status keyword in the body (not the heading) still drives the chip.
+        # Assert on the chip SPAN, not bare "c-conf" — the .c-conf CSS rule is
+        # always present in roadmap output, so "c-conf" in h would be vacuous.
         md = "## Slot 12 — telemetry\n\n**Status.** PR #198 merged, DONE."
         h = _render(md, style="roadmap")
-        assert "c-conf" in h
+        assert 'class="chip c-conf"' in h
+
+    def test_roadmap_fence_with_hash_not_split(self):
+        # a "## " line INSIDE a fenced code block is content, not a card boundary
+        md = ("## Real Section — DONE\n\n"
+              "```\n## not a heading (shell comment)\necho hi\n```\n\n"
+              "tail of section body")
+        h = _render(md, style="roadmap")
+        assert h.count('<section class="mstone">') == 1
+        assert "not a heading (shell comment)" in h
+        assert "tail of section body" in h
+
+    def test_roadmap_neutral_heading_does_not_suppress_done_body(self):
+        # "Next.js" heading (incidental \bnext\b) must not force PLANNED when the
+        # body is definitively DONE — definitive body beats a neutral heading.
+        md = "## Next.js frontend migration\n\nAll shipped and merged. DONE."
+        h = _render(md, style="roadmap")
+        assert 'class="chip c-conf"' in h
+        assert 'class="chip c-plan"' not in h
 
     def test_roadmap_heading_status_beats_body_keyword(self):
         # heading precedence: an ABANDONED slot whose body mentions a "merged"

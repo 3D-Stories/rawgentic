@@ -172,30 +172,39 @@ def _render_roadmap(markdown: str) -> str:
     does, the body goes through the plain renderer, and the chip label is fixed vocab."""
     lines = markdown.split("\n")
     h2 = re.compile(r"##(?!#)\s+(.*)")  # h2 only — ### and deeper stay in-card
-    out: list[str] = []
-    i, n = 0, len(lines)
 
-    pre: list[str] = []
-    while i < n and not h2.match(lines[i]):
-        pre.append(lines[i])
-        i += 1
+    # Section boundaries = h2 lines OUTSIDE fenced code blocks. Splitting must be
+    # fence-aware: a "## " line inside a ``` fence (e.g. a Makefile `## help`
+    # target or a doc quoting slot markdown) is content, not a new card.
+    boundaries: list[int] = []
+    in_fence = False
+    for idx, ln in enumerate(lines):
+        if ln.strip().startswith("```"):
+            in_fence = not in_fence
+        elif not in_fence and h2.match(ln):
+            boundaries.append(idx)
+
+    out: list[str] = []
+    first = boundaries[0] if boundaries else len(lines)
+    pre = lines[:first]
     if any(l.strip() for l in pre):
         out.append(_render_body_plain("\n".join(pre)))
 
-    while i < n:
-        heading = h2.match(lines[i]).group(1)
-        i += 1
-        sec: list[str] = []
-        while i < n and not h2.match(lines[i]):
-            sec.append(lines[i])
-            i += 1
-        # Heading takes precedence (that's where the author states status, e.g.
-        # "... — ABANDONED"); fall back to the body only when the heading has no
-        # keyword. Scanning the whole section at once would let an incidental
-        # "merged" in an ABANDONED slot's body outrank the heading's real status.
-        cls, label = status_chip(heading)
-        if (cls, label) == ("c-plan", "—"):
-            cls, label = status_chip("\n".join(sec))
+    for bi, start in enumerate(boundaries):
+        end = boundaries[bi + 1] if bi + 1 < len(boundaries) else len(lines)
+        heading = h2.match(lines[start]).group(1)
+        sec = lines[start + 1:end]
+        # A DEFINITIVE heading status (done/abandoned) wins — that's where the
+        # author states it. A neutral/weak heading (c-plan, e.g. an incidental
+        # "next" in "Next.js") does NOT suppress a definitive body status, so an
+        # actually-shipped section still reads DONE. Fall through to the heading's
+        # own neutral label only when the body is neutral too.
+        h_cls, h_label = status_chip(heading)
+        if h_cls in ("c-conf", "c-defer"):
+            cls, label = h_cls, h_label
+        else:
+            b_cls, b_label = status_chip("\n".join(sec))
+            cls, label = (b_cls, b_label) if b_cls in ("c-conf", "c-defer") else (h_cls, h_label)
         body_html = _render_body_plain("\n".join(sec))
         out.append(
             f'<section class="mstone"><h3>{_inline(html.escape(heading))} '
