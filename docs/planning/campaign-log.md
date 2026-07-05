@@ -116,6 +116,27 @@ a v3.4.0 line — fixed), everything else clean (cap enforced, no import cycle, 
 bool, escape-clause wording consistent across code/doc/changelog, RAWGENTIC_EPIC_GOAL honestly
 scoped as driver-set). red-first campaign + driver tests. Scan clean. Suite 1974/0 → 1984/0.
 
+**Status.** PR #209 squash-merged `1b3b3fd`, v3.5.0, issue closed.
+
+### #193 — WF1 decompose an over-large ask → epic + children · v3.6.0
+
+**Issue.** #193 (P6): WF1 only *suggested* splitting an over-large ask and filed one issue —
+enhance it to emit a driver-consumable epic + ordered children (the missing front-end for the
+#163 epic/driver machinery).
+
+**What shipped.** create-issue Step 1 detects over-large (≥3 shippable deliverables / many
+concerns) and OFFERS to decompose (new Step 2c): an epic (`epic:` label + `- [ ] #N` task-list)
++ children with `Depends on #N` edges (`driver_lib.parse_depends_on` reads them). Hard approval
+gate — the whole decomposition is presented and NOTHING is filed until "go"; children file in
+topo order, epic last. Threshold: ≥3 → epic, 2 → cross-linked, 1 → single issue. Lean single-pass
++ inline quality-bar; opt-in WF5 for architectural asks.
+
+**Reviews.** Small-standard lane (prose). 1 opus: 1 Medium (partial-decomposition resumption gap
+— <resumption> now records per-child + COMPLETE markers and resumes without re-filing) + 3 Low
+(pre-approval label creation moved to filing; threshold-seam clarified; test pins `- [ ] #N`) —
+all fixed. Driver-consumability verified against parse_depends_on + the epic task-list regex. Scan
+clean. Suite 1984/0 → 1990/0.
+
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
 Telemetry embedded below.
 
