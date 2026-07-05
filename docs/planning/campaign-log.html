@@ -48,9 +48,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 14:00 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 15:17 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
-<p class="sub">Autonomous campaign: rawgentic builds rawgentic · slots 10–15 + epic #188 fast-follow</p>
+
 </header>
 <main>
 <h1>Rawgentic modernization — campaign log</h1>
@@ -66,8 +66,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>(WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
 <section class="mstone"><h3>Epic #188 fast-follow (post-M4) <span class="chip c-conf">SHIPPED</span></h3><p>WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped</p>
-<p>(folded in as slot 12). Remaining ordered: #190 → #191 → #192 → #193 → #194 → #195</p>
-<p>→ #196 → #197.</p>
+<p>(folded in as slot 12). Ordered slots #190 → #191 → #192 → #193 → #194 → #195</p>
+<p>→ #196 → #197 (+ owner-added #205) — <strong>all shipped</strong>; epic #188 closes with #197.</p>
+<p>Follow-up #206 (memory migration) remains conditional, outside the ordered list.</p>
 <h3>#190 — retire WF2 Step 4 3-judge reflexion panel → reflect-only · v3.2.0</h3>
 <p><strong>Issue.</strong> #190 (epic #188 P2): the full-spine Step 4 still ran the same-model</p>
 <p>3-judge <code>/reflexion:critique</code> panel; owner telemetry measured ≈ 0 gain and the lean</p>
@@ -204,7 +205,29 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>trigger type (draft→ready transition wouldn&#x27;t fire) — fixed + guarded; everything else clean</p>
 <p>(additive verified, original ABANDONED record preserved, AC2/AC3 honestly scoped). Scan clean.</p>
 <p>Suite 2011/0 → 2020/0.</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention).</p>
+<p><strong>Status.</strong> PR #213 squash-merged <code>35413a7</code>, CI green, suite 2020/0, issue closed</p>
+<p>(backfilled by the #197 pass).</p>
+<p>---</p>
+<h3>#197 — official versioned workflow diagram · v3.10.0 — LAST epic-#188 slot</h3>
+<p><strong>Issue.</strong> #197: the canonical, versioned workflow diagram — workflow-only view,</p>
+<p>clickable per-phase drill-down, version history, committed to the repo. Separate from</p>
+<p>the health/proposals overlay. Owner: build with Fable, award-grade showcase visual.</p>
+<p><strong>What shipped.</strong> <code>docs/workflow-diagram.html</code> — self-contained hash-routed SPA styled</p>
+<p>as an engineering drafting document (title block, REV stamps as the version selector,</p>
+<p>revision triangles Δ, loop-back return arcs; colored-ink vellum light / luminous</p>
+<p>blueprint dark; embedded OFL fonts, zero external requests, DOM-builder rendering — no</p>
+<p><code>innerHTML</code>, test-enforced). Full 19-station WF2 drill-down (purpose, sub-steps, gate</p>
+<p>facts, lane behavior per station) at REV 3.10.0 + the pre-campaign 3.1.0 snapshot</p>
+<p>(SUPERSEDED stamp, per-station overrides incl. facts/lane); WF1 (7) / WF3 (15) / WF5</p>
+<p>(5) skeletal phase sheets from their pinned skills. README embeds theme-aware</p>
+<p>snapshots (<code>docs/assets/workflow-diagram-{light,dark}.png</code>, GitHub <code>&lt;picture&gt;</code></p>
+<p>pattern) linking to the interactive page; <code>docs/workflow-diagram.md</code> carries the</p>
+<p>append-a-revision + snapshot-regeneration recipes; GitHub Pages (main + <code>/docs</code>)</p>
+<p>serves it live once owner-enabled. Guarded by <code>tests/test_workflow_diagram.py</code>.</p>
+<p><strong>Process.</strong> Owner-gated design round: mockup approved after 3 rounds (drafting</p>
+<p>concept → color enrichment per &quot;too plain/too white-black&quot; → WF1 tab first); final</p>
+<p>artifact stored in <code>docs/</code> base per owner override of the AC4 <code>docs/planning/</code> path.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA recorded in the post-merge republish pass.</p>
 <p>Telemetry embedded below.</p>
 <p>---</p></section>
 <section class="mstone"><h3>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling</p>
@@ -470,9 +493,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#196 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>11 added · 2020/2020 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac (not applicable), sca (nothing to scan)</td></tr><tr><th>Outcome</th><td>PR pending · merged: pending · CI: pending</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design self-review (lane)</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>9</td><td>AC drift evidence</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code review (1 opus)</td><td>1</td><td>1</td><td>pass</td></tr><tr><td>11.5</td><td>security scan</td><td>0</td><td>0</td><td>pass</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#197 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>14 added · 2034/2034 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: passed</td></tr><tr><th>Usage</th><td>in 2215371806 / out 6941928 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>3</td><td>2</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 14:00 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 15:17 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

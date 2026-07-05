@@ -17,8 +17,9 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 ## Epic #188 fast-follow (post-M4)
 
 WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped
-(folded in as slot 12). Remaining ordered: #190 → #191 → #192 → #193 → #194 → #195
-→ #196 → #197.
+(folded in as slot 12). Ordered slots #190 → #191 → #192 → #193 → #194 → #195
+→ #196 → #197 (+ owner-added #205) — **all shipped**; epic #188 closes with #197.
+Follow-up #206 (memory migration) remains conditional, outside the ordered list.
 
 ### #190 — retire WF2 Step 4 3-judge reflexion panel → reflect-only · v3.2.0
 
@@ -197,7 +198,35 @@ trigger type (draft→ready transition wouldn't fire) — fixed + guarded; every
 (additive verified, original ABANDONED record preserved, AC2/AC3 honestly scoped). Scan clean.
 Suite 2011/0 → 2020/0.
 
-**Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
+**Status.** PR #213 squash-merged `35413a7`, CI green, suite 2020/0, issue closed
+(backfilled by the #197 pass).
+
+---
+
+### #197 — official versioned workflow diagram · v3.10.0 — LAST epic-#188 slot
+
+**Issue.** #197: the canonical, versioned workflow diagram — workflow-only view,
+clickable per-phase drill-down, version history, committed to the repo. Separate from
+the health/proposals overlay. Owner: build with Fable, award-grade showcase visual.
+
+**What shipped.** `docs/workflow-diagram.html` — self-contained hash-routed SPA styled
+as an engineering drafting document (title block, REV stamps as the version selector,
+revision triangles Δ, loop-back return arcs; colored-ink vellum light / luminous
+blueprint dark; embedded OFL fonts, zero external requests, DOM-builder rendering — no
+`innerHTML`, test-enforced). Full 19-station WF2 drill-down (purpose, sub-steps, gate
+facts, lane behavior per station) at REV 3.10.0 + the pre-campaign 3.1.0 snapshot
+(SUPERSEDED stamp, per-station overrides incl. facts/lane); WF1 (7) / WF3 (15) / WF5
+(5) skeletal phase sheets from their pinned skills. README embeds theme-aware
+snapshots (`docs/assets/workflow-diagram-{light,dark}.png`, GitHub `<picture>`
+pattern) linking to the interactive page; `docs/workflow-diagram.md` carries the
+append-a-revision + snapshot-regeneration recipes; GitHub Pages (main + `/docs`)
+serves it live once owner-enabled. Guarded by `tests/test_workflow_diagram.py`.
+
+**Process.** Owner-gated design round: mockup approved after 3 rounds (drafting
+concept → color enrichment per "too plain/too white-black" → WF1 tab first); final
+artifact stored in `docs/` base per owner override of the AC4 `docs/planning/` path.
+
+**Status.** PR + CI + merge SHA recorded in the post-merge republish pass.
 Telemetry embedded below.
 
 ---
