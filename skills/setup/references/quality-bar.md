@@ -51,4 +51,7 @@ Finding #N:
 
 The gate that invokes this rubric owns what happens next (volume thresholds, the
 ambiguity circuit breaker, loop-back budgets) — those live in the step, not here.
-This file supplies only the stance, the depth triage, and the finding shape.
+This file supplies the stance, the depth triage, and a **default** finding shape.
+A gate may override the finding shape with a domain-specific one (e.g. setup's
+config critique uses config-specific categories); the stance and depth triage
+still apply.

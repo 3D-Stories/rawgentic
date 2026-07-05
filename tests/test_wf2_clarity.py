@@ -98,7 +98,7 @@ def test_readme_wf2_gate_row_is_quality_bar_not_reflexion():
         if "WF2 Feature Implementation" in line and "|" in line:
             assert "/reflexion:" not in line, \
                 "README WF2 gate row still names a /reflexion:* skill (#205)"
-            assert "quality-bar" in line.lower() or "reflect" in line.lower(), \
+            assert "quality-bar" in line.lower(), \
                 "README WF2 gate row should name the in-repo quality-bar self-review (#205)"
 
 

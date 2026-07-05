@@ -434,7 +434,7 @@ Log in session notes: `### WF11 Step 12: Action Items — DONE (N issues created
 
 #### Instructions
 
-Incidents produce the MOST valuable learnings — for each pattern, curate it into memory: if a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), store it via `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note), scoped to this project; otherwise append it to the project `CLAUDE.md` / `MEMORY.md`:
+Incidents produce the MOST valuable learnings — for each pattern, curate it into memory: if a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), store it via `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note), scoped to this project; otherwise — or if the mempalace store call fails — append it to the project `CLAUDE.md` / `MEMORY.md`:
 
 - Save new pitfall patterns
 - Update recurring issue patterns if this is a known class of failure
