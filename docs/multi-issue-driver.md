@@ -240,6 +240,30 @@ inline list:
   epic body is queue-*derivation* input only; dependencies come from each child
   issue's own body.
 
+## Epic-level goal guard (kickoff)
+
+The `/goal` guard belongs at the **campaign level**, not per-issue: a per-issue
+goal lets the session quit after any single slot, and same-session `/goal`
+overwrite is documented-unverified (#192). At campaign kickoff the driver sets
+ONE goal over the epic's ordered child set:
+
+1. Build the campaign goal text: `driver_lib.campaign_goal_text(state)` — it
+   enumerates the `epic` anchor + the topo-ordered child queue via
+   `plan_lib.build_goal_text(epic, [], variant="campaign", child_issues=...)`,
+   with a **tolerant escape clause** ("a child closed not-planned per its own
+   acceptance criteria counts as satisfied, and the owner may pause the campaign
+   at any time") so a real campaign outcome clears the goal instead of firing
+   relentlessly against a stale condition.
+2. **Emit** that text for the owner to run — a skill cannot self-set `/goal`
+   (session-level, owner-run); the driver surfaces it at kickoff.
+3. **Export `RAWGENTIC_EPIC_GOAL=<epic>`** into the environment of each child
+   WF2/WF3 run. Their Step 1b sees it and **defers** (emits no per-issue `/goal`
+   that would clobber the campaign goal), logging `(deferred: epic #<N>)`.
+
+The known limitation stands: a skill still cannot set or refresh `/goal`
+mid-campaign — the tolerant escape clause is what keeps a stale goal from firing
+relentlessly, and the owner may pause at any time.
+
 ## Rate limits
 
 On a subscription-auth **rate-limit** lockout, map the current issue to a
