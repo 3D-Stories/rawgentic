@@ -199,3 +199,33 @@ parametrized over `implement-feature` and `fix-bug`) asserts each skill keeps
 invoking `work_summary.py summarize`, so the wiring can't silently rot. Adding a
 new workflow to the substrate is just: emit the uniform core (+ any `extra`
 lines), call the CLI, and add the skill to that parametrized guard.
+
+## Capturing an Action's built-in code review {#builtin-code-review-capture}
+
+The post-PR `/code-review` lane (`.github/workflows/claude-code-review.yml`, #196)
+runs the built-in reviewer as a **CI Action**, separate from the local WF2 run.
+To feed the #162 AC4 A/B (built-in vs hand-rolled findings-yield-per-token), its
+review is recorded as a run-record **gate entry** with `reviewer_kind:
+builtin_code_review` **and** a `usage` block:
+
+```json
+{
+  "step": "11",
+  "name": "code_review (builtin /code-review, CI Action)",
+  "reviewer_kind": "builtin_code_review",
+  "findings": <N>, "resolved": <M>, "status": "pass"
+}
+```
+
+with the run-level `usage.input_tokens` / `output_tokens` / `cost_estimate_usd`
+taken from the **Action run's reported usage** (`gh run view <run-id> --json ...`
+or the Action's step summary). The built-in lane is **additive** — it does not
+replace the hand-rolled `hand_rolled_multi` Step 11 entry; a run that used both
+records both gate entries, which is exactly what makes the two arms comparable.
+
+Because the tokens live in the CI run (not the local orchestrator's context),
+this capture is a **documented post-run step** (read the Action run's usage and
+add the entry), not auto-wired — and the first real captures are **owner-gated**
+on the live Action (the auth secret, #195). Until ≥10 accumulate, the #162
+decision stays "computable, pending data" (see
+`docs/measurements/2026-07-05-issue-162-data-gate-decision.md`).
