@@ -274,7 +274,7 @@ EVEN IF the Phase A fix is the permanent fix, Steps 11-14 are NEVER optional.
 After deployment verification (Step 5), you MUST eventually execute:
 - Step 11: Preventive measures (test gaps, .rawgentic.json, playbook, same-class bug scan)
 - Step 12: Action items (GitHub issues for systemic findings)
-- Step 13: Memorize (`/reflexion:memorize`)
+- Step 13: Memorize (mempalace / `CLAUDE.md`)
 - Step 14: Formal closure (WF11 COMPLETE template)
 
 When the Phase A fix IS the permanent fix:
@@ -344,7 +344,7 @@ Log in session notes: `### WF11 Step 7: RCA (5 Whys) — DONE (root cause: <summ
 
 #### Instructions
 
-Invoke `/reflexion:reflect` (lightweight):
+Apply the quality-bar rubric — a skeptical, lightweight self-review (cite evidence, don't rubber-stamp) — over:
 
 - Is the root cause actually the ROOT cause (not a symptom)?
 - Does the permanent fix address the root cause?
@@ -434,9 +434,9 @@ Log in session notes: `### WF11 Step 12: Action Items — DONE (N issues created
 
 #### Instructions
 
-Run `/reflexion:memorize` — incidents produce the MOST valuable learnings:
+Incidents produce the MOST valuable learnings — for each pattern, curate it into memory: if a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), store it via `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note), scoped to this project; otherwise — or if the mempalace store call fails — append it to the project `CLAUDE.md` / `MEMORY.md`:
 
-- Save new pitfall patterns via `/reflexion:memorize`
+- Save new pitfall patterns
 - Update recurring issue patterns if this is a known class of failure
 - Add to quick diagnostic playbook
 - Document root cause and fix approach
@@ -485,7 +485,7 @@ Phase B (Analyze):
 - Preventive measures: [N implemented, M as action items]
 - Action items: [N GitHub issues created]
 
-Memorized: [N patterns saved via /reflexion:memorize]
+Memorized: [N patterns saved to mempalace / CLAUDE.md]
 
 WF11 complete.
 ```
@@ -508,7 +508,7 @@ Before declaring WF11 complete, verify ALL of the following. Print the checklist
 3. [ ] Step 6 gate: user asked about Phase B timing
 4. [ ] Step 11: Preventive measures implemented (test gaps, same-class scan, .rawgentic.json or session notes)
 5. [ ] Step 12: Action items created as GitHub issues
-6. [ ] Step 13: Patterns memorized via `/reflexion:memorize`
+6. [ ] Step 13: Patterns memorized (mempalace / `CLAUDE.md`)
 7. [ ] Step 14: WF11 COMPLETE template printed to user
 8. [ ] Session notes updated with final incident report
 9. [ ] Incident tracking issue (created in Step 1) closed with final summary

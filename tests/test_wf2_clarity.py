@@ -67,42 +67,57 @@ def test_step4_has_single_breaker_decision_table():
     assert "SKIP" in step4
 
 
-def test_step4_is_reflect_only_no_three_judge_panel():
-    """#190: WF2 Step 4 retires the 3-judge `/reflexion:critique` panel — reflect
-    for ALL lanes. The opt-in cross-model adversarial-on-design (WF5) stays (AC2),
-    and the single ambiguity breaker + loop-back are retained (sourced from reflect
-    findings). Red before the §4 rewrite, which still runs the panel today."""
+def test_step4_is_quality_bar_no_reflexion():
+    """#190 retired the 3-judge panel; #205 removed the external reflexion
+    dependency entirely. WF2 Step 4 now applies the in-repo quality-bar rubric —
+    no /reflexion:* invocation, no 3-judge panel. The opt-in cross-model
+    adversarial-on-design (WF5) stays (AC2)."""
     text = _text()
     start = text.index("## Step 4: Quality Gate")
     end = text.index("## Step 5:")
     step4 = text[start:end]
-    # Panel gone: no /reflexion:critique invocation, no "three judge" launch.
-    assert "/reflexion:critique" not in step4, \
-        "Step 4 must not invoke the 3-judge /reflexion:critique panel (#190)"
+    # No reflexion dependency at all (#205), no panel (#190).
+    assert "/reflexion:" not in step4, \
+        "Step 4 must not invoke any /reflexion:* skill (#205)"
     assert "three judge" not in step4.lower() and "3-judge" not in step4, \
         "Step 4 must not describe a 3-judge panel (#190)"
-    # Reflect is the gate for all lanes.
-    assert "/reflexion:reflect" in step4, "Step 4 must use /reflexion:reflect (#190)"
+    # The in-repo quality-bar rubric is the gate for all lanes.
+    assert "quality-bar" in step4, "Step 4 must apply the in-repo quality-bar rubric (#205)"
     # AC2: the opt-in cross-model adversarial-on-design review stays available.
     assert "adversarial" in step4.lower(), \
         "Step 4 must keep the opt-in adversarial-on-design sub-step (AC2)"
-    # The critiqueMethod preamble existed only to gate /reflexion:critique; it goes.
     assert "critiqueMethod" not in step4, \
-        "the critiqueMethod preamble is removed from WF2 Step 4 (#190)"
+        "the critiqueMethod preamble is removed from WF2 Step 4 (#190/#205)"
 
 
-def test_readme_wf2_gate_row_is_reflect_not_critique():
-    """#190 leftover guard (Step-11 review Finding 1): the README feature-section
-    tables must not advertise WF2's design gate as the retired 3-judge
-    `/reflexion:critique` panel. WF1/setup legitimately keep critique — this pins
-    only the WF2 row."""
+def test_readme_wf2_gate_row_is_quality_bar_not_reflexion():
+    """#205 leftover guard: the README feature-section tables must not advertise
+    WF2's design gate as any /reflexion:* skill."""
     readme = (REPO_ROOT / "README.md").read_text()
     for line in readme.splitlines():
         if "WF2 Feature Implementation" in line and "|" in line:
-            assert "/reflexion:critique" not in line, \
-                "README WF2 gate row still advertises the retired critique panel (#190)"
-            assert "/reflexion:reflect" in line, \
-                "README WF2 gate row should name /reflexion:reflect (#190)"
+            assert "/reflexion:" not in line, \
+                "README WF2 gate row still names a /reflexion:* skill (#205)"
+            assert "quality-bar" in line.lower(), \
+                "README WF2 gate row should name the in-repo quality-bar self-review (#205)"
+
+
+def test_active_skills_are_reflexion_free():
+    """#205: no active skill may invoke a /reflexion:* skill or read the
+    critiqueMethod preference. Historical docs under docs/ may still mention
+    reflexion; only the active skill corpus is held clean."""
+    import re
+    skills_dir = REPO_ROOT / "skills"
+    pat = re.compile(r"/reflexion:\w+|reflexion:(?:reflect|critique|memorize)|\bcritiqueMethod\b")
+    offenders = []
+    for md in skills_dir.rglob("*.md"):
+        # eval workspaces are fixtures, not the active corpus
+        if "-workspace" in md.parts[len(skills_dir.parts)]:
+            continue
+        hits = sorted(set(pat.findall(md.read_text(encoding="utf-8", errors="replace"))))
+        if hits:
+            offenders.append((str(md.relative_to(REPO_ROOT)), hits))
+    assert not offenders, f"active skills still reference reflexion: {offenders}"
 
 
 def test_fast_path_table_step4_full_and_lane_both_reflect():

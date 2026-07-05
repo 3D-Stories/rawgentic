@@ -122,11 +122,12 @@ canonicalization contract: `inline` / `reflexion` / `builtin_code_review` / `cod
 key rather than setting it to `null`: `validate_record` only checks membership when the key is
 present, it doesn't require the key or accept a null placeholder.
 
-For WF2 assembly, map the actual review mechanism used at each gate: Step 4 design reflect
-(`/reflexion:reflect`, all lanes since #190 — the 3-judge panel was retired) → `reflexion` when
-run via the reflexion skill/subagent, or `inline` when the orchestrator reflects inline; Step 11
-three-agent panel → `hand_rolled_multi`; builtin `/code-review` → `builtin_code_review`; Codex
-adversarial review (Step 4 adversarial-on-design or Step 11 diff) → `codex`.
+For WF2 assembly, map the actual review mechanism used at each gate: Step 4 design self-review
+(the in-repo quality-bar rubric, all lanes since #190/#205 — the 3-judge panel and the external
+reflexion dependency were retired) → `inline`; Step 11 three-agent panel → `hand_rolled_multi`;
+builtin `/code-review` → `builtin_code_review`; Codex adversarial review (Step 4 adversarial-on-design
+or Step 11 diff) → `codex`. (The `reflexion` vocab member remains valid for legacy records but is
+no longer produced by WF2.)
 
 **`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
 pattern as `usage` — absent ⇒ old records stay valid, no schema version bump; present ⇒ strict

@@ -48,8 +48,34 @@ follow-up issue to migrate existing rawgentic memories to mempalace if required.
 Sequenced as the next slot after #190 (kept out of #190 to preserve its narrow,
 reviewed scope).
 
-**Status.** PR + CI + merge SHA filled by the next slot's pass (established
-convention). Telemetry embedded below.
+**Status.** PR #204 squash-merged `cd1fe1b`, v3.2.0, issue closed.
+
+### #205 — remove the reflexion plugin dependency · v3.3.0 (owner-expanded from #190 P3)
+
+**Issue.** Mid-#190 the owner asked: why still depend on reflexion at all? Investigation:
+`/reflexion:reflect|critique|memorize` are prompt-only (a rubric behind a slash command;
+no code we called) and fail open to *unreviewed* when the plugin is absent. Decision: full
+removal + use mempalace for memory.
+
+**What shipped.** An in-repo **quality-bar rubric** (`skills/*/references/quality-bar.md` —
+skeptical-gatekeeper stance + depth triage + finding shape) replaces reflect/critique at every
+gate: WF2 Steps 4/6/9/15, WF3, incident, and setup's config critique. Memorize (WF2 Step 10,
+WF3, incident) curates into **mempalace** (`mcp__mempalace__*`) when available, falling back
+to `CLAUDE.md`/`MEMORY.md` on absence **or store failure**. `critiqueMethod` deprecated/inert;
+reflexion prerequisite, add-on row, and troubleshooting entry removed. No active skill invokes
+`/reflexion:*` (drift-guarded).
+
+**Reviews.** 2 opus reviewers (leftover + logic lenses), converging independently on the same
+Medium: "reflect" was the retired skill's own name, so keeping it as the replacement's name
+undercut the removal — swept WF2 §4/§6/§9 to "self-review" (WF3 keeps its consistent
+"Lightweight Reflect" gate name). Also fixed: SKILL.md mandatory-steps stale "full critique"
+tier, memorize store-failure fallback, and the quality-bar finding-shape override contract.
+Security scan clean. Suite 1972/0 (2 red-first guards: reflexion-freedom + §4 quality-bar).
+
+**Follow-up.** #206 — migrate existing rawgentic memories into mempalace if warranted.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
+Telemetry embedded below.
 
 ---
 

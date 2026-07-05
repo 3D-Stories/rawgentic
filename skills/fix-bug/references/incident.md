@@ -73,7 +73,7 @@ Phase B (Analyze):
 - Preventive measures: [N implemented, M as action items]
 - Action items: [N GitHub issues created]
 
-Memorized: [N patterns saved via /reflexion:memorize]
+Memorized: [N patterns saved to mempalace / CLAUDE.md]
 ```
 
 ---
@@ -131,7 +131,7 @@ prioritize by severity and defer the rest.
 
 ## Memorize the pattern (copied from WF11 Step 13)
 
-Incidents produce the MOST valuable learnings. Run `/reflexion:memorize`:
+Incidents produce the MOST valuable learnings. For each, curate it into memory: if a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), store it via `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note), scoped to this project; otherwise — or if the mempalace store call fails — append it to the project `CLAUDE.md` / `MEMORY.md`:
 
 - Save new pitfall patterns
 - Update recurring-issue patterns if this is a known class of failure

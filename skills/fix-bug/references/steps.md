@@ -210,7 +210,7 @@ RCA document (internal working artifact):
 
 ### Instructions
 
-Invoke `/reflexion:reflect` with focus on root cause correctness. Single-pass reflection checking:
+Apply the quality-bar rubric (`references/quality-bar.md`) with focus on root cause correctness. Single-pass self-review checking:
 
 1. Does the identified root cause actually explain ALL symptoms in the bug report?
 2. Is the fix in the right layer (not a band-aid when the real issue is upstream)?
@@ -218,7 +218,7 @@ Invoke `/reflexion:reflect` with focus on root cause correctness. Single-pass re
 4. Does the fix handle edge cases mentioned in the bug report?
 5. Is the fix backward-compatible (especially for API/DB changes)?
 
-**Critique level:** Lightweight reflect ONLY. RATIONALE: Bug fixes have lower reversal cost than new features. A full 3-judge critique adds 2-3 minutes of latency for diminishing returns on small-scope changes.
+**Quality-gate level:** Lightweight reflect ONLY. RATIONALE: Bug fixes have lower reversal cost than new features. A heavier multi-pass critique adds latency for diminishing returns on small-scope changes.
 
 **Adversarial review sub-step (opt-in, DEFAULT-OFF, cross-model).** WF3 is deliberately lightweight; an external cross-model review is therefore **off by default** and must be explicitly opted in per project. After the lightweight reflect above, check:
 ```bash
@@ -363,7 +363,7 @@ Apply findings automatically. Circuit breaker on ambiguity.
 
 **Part B: Conditional Memorize**
 
-If the bug fix reveals a pattern worth remembering (new pitfall, gotcha, or recurring issue), invoke `/reflexion:memorize` to curate insights into project knowledge. Skip if the fix is routine.
+If the bug fix reveals a pattern worth remembering (new pitfall, gotcha, or recurring issue), curate it into memory: if a mempalace MCP server is available (`mcp__mempalace__*` tools loaded), store it via `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note), scoped to this project; otherwise — or if the mempalace store call fails — append it to the project `CLAUDE.md` / `MEMORY.md`. Skip if the fix is routine.
 
 Memorize triggers:
 
@@ -643,4 +643,4 @@ After completing the bug fix, check if the fix revealed patterns worth memorizin
 - Environment-specific behavior (dev vs prod differences)
 - Third or more instance of a similar bug category
 
-If insights are found, they are curated via `/reflexion:memorize` in Step 9. This is conditional — skip for routine, one-off fixes.
+If insights are found, they are curated into memory (mempalace if available, else `CLAUDE.md` / `MEMORY.md`) in Step 9. This is conditional — skip for routine, one-off fixes.

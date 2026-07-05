@@ -20,8 +20,8 @@ which is kept as a **deprecated alias**:
 
     fast_path_eligible = small_standard_lane_eligible
 
-so every existing "Step-4 reflect vs. critique" reader keeps working unchanged — for that one
-decision the lane still selects reflect, so old Step-4-only callers see identical behavior. New
+so every existing "Step-4 self-review vs. critique" reader keeps working unchanged — for that one
+decision the lane still selects the self-review, so old Step-4-only callers see identical behavior. New
 code reads the canonical name. The flag now controls the **whole lane** (Steps 3/4/5/6/9
 collapse), not just Step 4.
 
@@ -72,11 +72,11 @@ annotation, to keep the per-skill headless-annotation count stable.)
 | Step | Full WF2 | Small-standard lane | Why |
 |---|---|---|---|
 | 3 Design | inline 1-2 approaches + doc | **brief design note** (file list + failure modes + security), no multi-approach brainstorm | small work has one obvious approach |
-| 4 Design critique | **`/reflexion:reflect`** + peer consult + opt-in adversarial-on-design | **`/reflexion:reflect` only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
+| 4 Design critique | **quality-bar rubric** + peer consult + opt-in adversarial-on-design | **quality-bar rubric only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
 | 5 Plan | full task decomposition + drift-ready fields | **checklist plan**: ordered tasks, each with `riskLevel` + a verification line; parallel_group/files optional | keeps TDD + risk tagging; drops ceremony |
-| 6 Plan drift | reflect + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
+| 6 Plan drift | self-review + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
 | 8 / 8a | TDD; 8a per high-risk task | **UNCHANGED** — TDD kept; **8a still fires for any `riskLevel: high` task** | security surface never loses per-task review |
-| 9 Impl drift | reflect (Part A) + evidence (Part B) | **evidence-only**: run the suite, record the delta, verify each AC has a covering test; skip the alignment reflect | evidence is the real gate |
+| 9 Impl drift | self-review (Part A) + evidence (Part B) | **evidence-only**: run the suite, record the delta, verify each AC has a covering test; skip the alignment self-review | evidence is the real gate |
 | 11 Code review | 3-agent (complex) | **≥1 reviewer** (existing minimum for simple/standard) + the opt-in diff adversarial sub-step (#131) still applies | **NON-NEGOTIABLE — this is where the value is** |
 | 11.5 Security scan | full | **UNCHANGED** | tool gate never skipped |
 | 12/13/14 PR/CI/merge | full | **UNCHANGED** | |
@@ -84,7 +84,7 @@ annotation, to keep the per-skill headless-annotation count stable.)
 
 **Exact retained vs. removed gates** (no vague "every safety gate"):
 - **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).
-- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (`/reflexion:reflect` only — no peer consult, no adversarial-on-design; WF2's Step 4 uses reflect on the full spine too since #190, so the lane differs only by dropping the opt-in cross-model layers), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).
+- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (quality-bar rubric only — no peer consult, no adversarial-on-design; WF2's Step 4 uses the same rubric on the full spine too, so the lane differs only by dropping the opt-in cross-model layers), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment self-review removed).
 - **REMOVED entirely:** Step 6 (plan drift).
 
 The RETAINED set is non-negotiable: Step 11 caught 2 Criticals on a run judged "too simple to
@@ -312,7 +312,7 @@ Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contrac
    `false`. When eligible and not already forced/declined, present the suggested-never-silent
    surfacing block from `<small-standard-lane>` and WAIT for the choice (headless auto-resolves
    per that block). `fast_path_eligible` remains a **deprecated alias**
-   (`fast_path_eligible = small_standard_lane_eligible`) so the Step-4 reflect-vs-critique
+   (`fast_path_eligible = small_standard_lane_eligible`) so the Step-4 self-review-vs-critique
    readers are unchanged. Trivial changes (item 9) exit via `<trivial-work-check>`, which takes
    precedence over the lane.
 
@@ -408,7 +408,7 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Instructions
 
-Step 4 runs `/reflexion:reflect` over the design for **all** lanes. The same-model
+Step 4 applies the in-repo **quality-bar rubric** (`references/quality-bar.md`) to the design for **all** lanes. The same-model
 multi-judge design panel (WF2's old full-critique gate) was retired from WF2 (#190): owner
 telemetry showed ≈ 0 measured gain from it, and the lean spine shipped 10/10 campaign issues
 with 0 loop-backs. High-stakes design scrutiny stays available — cross-model and opt-in —
@@ -417,18 +417,18 @@ catching now lives on the full spine.
 
 **Determine gate shape based on lane eligibility** (`small_standard_lane_eligible`, a.k.a.
 the `fast_path_eligible` alias):
-- If `fast_path_eligible == true` (lane): run `/reflexion:reflect` only — **NO peer consult
+- If `fast_path_eligible == true` (lane): apply the quality-bar rubric only — **NO peer consult
   (the Step 3 sub-step) and NO adversarial-on-design (item 7)**. The lane drops all
   design-stage cross-model ceremony.
-- If `fast_path_eligible == false` (full spine): run `/reflexion:reflect`, **plus** the opt-in
+- If `fast_path_eligible == false` (full spine): apply the quality-bar rubric, **plus** the opt-in
   Step 3 peer consult and the opt-in adversarial-on-design sub-step (item 7) below.
 
-**Reflect (`/reflexion:reflect`) — all lanes:**
+**Design self-review (quality-bar rubric, `references/quality-bar.md`) — all lanes:**
 
 <!-- model-routing: role=review -->
 When run as a subagent, dispatch it as a `rawgentic:rawgentic-reviewer` per the
 `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort
-dual-path, always logged). Reflect is a single-pass, same-model check over the design:
+dual-path, always logged). The quality-bar self-review is a single-pass, same-model check over the design:
 - Does the design respect existing patterns and project conventions, with appropriate
   dependencies (prefer existing libraries)?
 - Are all acceptance criteria addressed, edge cases and failure modes identified, and the
@@ -437,7 +437,7 @@ dual-path, always logged). Reflect is a single-pass, same-model check over the d
   backward-compatibility or a migration plan, acceptable performance?
 - For WF1-validated issues: does the design align with the WF1-critiqued spec?
 
-Reflect produces findings in the shape the gate consumes:
+The self-review produces findings in the shape the gate consumes:
    ```
    Finding #N:
    - Severity: Critical | High | Medium | Low
@@ -456,21 +456,21 @@ Reflect produces findings in the shape the gate consumes:
    - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with findings summary, add rawgentic:ai-error label, exit.]**
    - **If the adversarial review sub-step (item 7) is enabled and still in flight when this loop-back fires:** do NOT wait for it and do NOT run the ambiguity breaker (thresholds did not pass). **Discard the in-flight adversarial result as stale** — it reviewed a design that is now being revised (this is the documented one-wasted-call tradeoff) — and log `### WF2 Step 4 — Adversarial Review (discarded: superseded by volume loop-back)`. Return to Step 3; the next Step 4 pass dispatches a fresh adversarial review against the revised design.
 
-6. **If thresholds pass:** Apply the ambiguity circuit breaker over the reflect findings — **unless** the adversarial review sub-step (item 7) is enabled for this run. When it is enabled, do NOT run the breaker here; **defer** it to the single merged-findings join barrier in item 7, so the breaker runs **exactly once** over the combined reflect + adversarial findings rather than twice. (The volume/loop-back checks in items 4–5 still run on the reflect findings as soon as reflect returns; only the breaker is deferred.)
+6. **If thresholds pass:** Apply the ambiguity circuit breaker over the self-review findings — **unless** the adversarial review sub-step (item 7) is enabled for this run. When it is enabled, do NOT run the breaker here; **defer** it to the single merged-findings join barrier in item 7, so the breaker runs **exactly once** over the combined self-review + adversarial findings rather than twice. (The volume/loop-back checks in items 4–5 still run on the self-review findings as soon as the self-review returns; only the breaker is deferred.)
 
-7. **Adversarial review sub-step (opt-in, cross-model — runs concurrently with reflect).** Evaluate the two gate conditions UP FRONT, before running reflect, so the cross-model adversarial review of the design document can be dispatched **concurrently with reflect** rather than serially after it. Both review the same design document, so there is no ordering dependency, and overlapping them removes a serial round-trip from the critical path of every gated run. Gate it on BOTH conditions:
-   - `fast_path_eligible == false` (skip cheap-path designs — this is additive to the reflect gate, never a replacement), AND
+7. **Adversarial review sub-step (opt-in, cross-model — runs concurrently with the self-review).** Evaluate the two gate conditions UP FRONT, before running the self-review, so the cross-model adversarial review of the design document can be dispatched **concurrently with the self-review** rather than serially after it. Both review the same design document, so there is no ordering dependency, and overlapping them removes a serial round-trip from the critical path of every gated run. Gate it on BOTH conditions:
+   - `fast_path_eligible == false` (skip cheap-path designs — this is additive to the self-review gate, never a replacement), AND
    - the active project opts in:
      ```bash
      python3 hooks/adversarial_review_lib.py is-enabled \
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
      The command exits `0` when the review is enabled for this skill and `1` (or any non-zero) otherwise. If it exits non-zero, or `fast_path_eligible == true`, **skip silently** — behavior is byte-for-byte unchanged.
-   When both gates pass, dispatch `/rawgentic:adversarial-review <design-doc-path>` **in parallel with reflect** (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate at the **join barrier** described next:
-   - **Join barrier (single breaker):** once both reflect and the review have returned, merge adversarial findings with the reflect findings into ONE list, tagging each with `source: reflect | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, reflect-only breaker.
-   - If the merged list contains one or more Critical/High design flaws, consume **exactly one** `design` loop-back via `plan_lib.consume_loopback(<counters>, "design")` (the existing counter, NOT a new source) regardless of how many such findings there are, and return to Step 3 once with the unified constraint set. Do not consume per-finding and do not double-count against the reflect loop-back.
-   - **Codex failure is non-blocking (the review is additive — the reflect gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the reflect result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the reflect-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
-   - **Concurrency tradeoff (accepted):** because the review now overlaps reflect instead of waiting for it, a design that reflect sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
+   When both gates pass, dispatch `/rawgentic:adversarial-review <design-doc-path>` **in parallel with the self-review** (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate at the **join barrier** described next:
+   - **Join barrier (single breaker):** once both the self-review and the review have returned, merge adversarial findings with the self-review findings into ONE list, tagging each with `source: self-review | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, self-review-only breaker.
+   - If the merged list contains one or more Critical/High design flaws, consume **exactly one** `design` loop-back via `plan_lib.consume_loopback(<counters>, "design")` (the existing counter, NOT a new source) regardless of how many such findings there are, and return to Step 3 once with the unified constraint set. Do not consume per-finding and do not double-count against the self-review loop-back.
+   - **Codex failure is non-blocking (the review is additive — the self-review gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the self-review result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the self-review-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
+   - **Concurrency tradeoff (accepted):** because the review now overlaps the self-review instead of waiting for it, a design that the self-review sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
    - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
 
 **Breaker decision — run the ambiguity circuit breaker EXACTLY ONCE (items 4–7, summarized).**
@@ -481,22 +481,22 @@ the single breaker runs over. It runs in exactly one row, never twice:
 | Volume loop-back fired (item 5)? | Adversarial sub-step (item 7) state | Breaker runs over |
 |---|---|---|
 | **yes** | (any) | **SKIP** — return to Step 3 now; discard any in-flight adversarial result as stale (item 5). The breaker runs on the *next* Step 4 pass. |
-| no | disabled / not opted-in / fast-path | **reflect-only** findings |
-| no | enabled AND returned | **merged** reflect + adversarial (the join barrier, item 7) |
-| no | enabled BUT non-success (not installed / timeout / error / parse error) | **reflect-only** findings — skipping the adversarial layer must NOT skip the breaker, **else it runs zero times** (item 7) |
+| no | disabled / not opted-in / fast-path | **self-review-only** findings |
+| no | enabled AND returned | **merged** self-review + adversarial (the join barrier, item 7) |
+| no | enabled BUT non-success (not installed / timeout / error / parse error) | **self-review-only** findings — skipping the adversarial layer must NOT skip the breaker, **else it runs zero times** (item 7) |
 
 The only path on which the breaker does not run is the volume-loop-back row, and that is
 because it returns to Step 3 *before* the breaker point — not because the breaker was skipped.
 
 **Lane note:** on the fast path the adversarial review sub-step (item 7) and the Step 3 peer
-consult do NOT run — reflect alone is the gate. The reflect dimensions above are unchanged;
+consult do NOT run — the self-review alone is the gate. The dimensions above are unchanged;
 only the opt-in cross-model layers are dropped.
 
 ### Output
 Amended design document.
 
 ### Failure Modes
-- Zero findings from reflect: verify reflect actually analyzed the design (not a rubber-stamp)
+- Zero findings from the self-review: verify it actually analyzed the design (not a rubber-stamp)
 - Ambiguity circuit breaker triggers on >50% of findings: design may be underspecified
 
 ---
@@ -599,7 +599,7 @@ Implementation plan with ordered tasks, verification strategy, branch name, opti
 small-standard lane** (`small_standard_lane_eligible` — the checklist plan is small enough to
 eyeball, and Step 9 still verifies acceptance-criteria coverage). Otherwise run it.
 
-Invoke `/reflexion:reflect` with check dimensions:
+Apply the quality-bar rubric (`references/quality-bar.md`) over these check dimensions:
 - **Design-plan alignment:** Does every design component map to at least one task?
 - **Verification completeness:** Does every implementation task have a corresponding verification step?
 - **Acceptance criteria coverage:** Does the plan, if executed, satisfy all acceptance criteria?
@@ -608,12 +608,12 @@ Invoke `/reflexion:reflect` with check dimensions:
 
 Apply ambiguity circuit breaker on findings. If clear: apply automatically.
 
-**Adversarial review sub-step (opt-in, cross-model).** After the reflect above, optionally run a cross-model adversarial review of the **implementation plan**. Gate on project opt-in only (Step 6 has no fast-path branch):
+**Adversarial review sub-step (opt-in, cross-model).** After the self-review above, optionally run a cross-model adversarial review of the **implementation plan**. Gate on project opt-in only (Step 6 has no fast-path branch):
 ```bash
 python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
 ```
-The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the reflect result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
+The command exits `0` when enabled and non-zero otherwise; if non-zero, **skip silently**. When enabled, write the plan to a temp file under the project and invoke `/rawgentic:adversarial-review <plan-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the self-review findings and apply the circuit breaker over the **merged** list (do not run two separate breakers). If the merged list contains one or more Critical/High design-level flaws, consume **exactly one** existing `design` loop-back counter and return to Step 3 once with the unified constraints. **Codex failure is non-blocking** (additive review): on any non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the self-review result; never ERROR or block WF2. Log: `### WF2 Step 6 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
 
 ### Output
 Plan drift check result.
@@ -819,7 +819,7 @@ These apply to the main Step 8 implementation loop above (Step 8a, the per-task 
 
 **Small-standard lane variant (`<small-standard-lane>`).** In the lane, run **Part B (evidence)
 only** — i.e. **evidence-only**: run the suite, record the delta, and verify each acceptance
-criterion has a covering test. **Part A (the alignment reflect) is removed in the lane** (it adds
+criterion has a covering test. **Part A (the alignment self-review) is removed in the lane** (it adds
 little on a checklist plan; the evidence is the real gate). The P15 review-coverage assertion and
 the implausibility check below still run.
 
@@ -835,7 +835,7 @@ session notes AND set a run-record note (the design panel was skipped on a chang
 larger than estimated) — do **NOT** retroactively fail: the gates that DID run (Step 11, Step
 11.5, Step 8a) are still valid and load-bearing.
 
-**Part A: Drift check (invoke `/reflexion:reflect`):**
+**Part A: Drift check (apply the quality-bar rubric, `references/quality-bar.md`):**
 - Plan-implementation alignment: does every task have a corresponding implementation?
 - Design-implementation alignment: does implementation follow the critiqued design?
 - Acceptance criteria verification: for each criterion, identify the test/verification that covers it
@@ -880,11 +880,15 @@ Dispatch the memorization sub-agent per the `<model-routing-resolve>` contract f
 
 1. Review quality gate findings from Steps 4, 6, and 9.
 2. Identify reusable insights — patterns applicable beyond this specific issue.
-3. If memorizable insights exist: check for duplication against CLAUDE.md and MEMORY.md, append if novel.
+3. If memorizable insights exist, curate each into memory: if a mempalace MCP
+   server is available (`mcp__mempalace__*` tools loaded), store it via
+   `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note),
+   scoped to this project; otherwise — or if the mempalace store call fails —
+   check for duplication against CLAUDE.md and MEMORY.md and append if novel.
 4. If no reusable patterns: skip entirely.
 
 ### Output
-Updated CLAUDE.md (if insights memorized) or no output.
+Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized), or no output.
 
 ---
 
@@ -1270,7 +1274,7 @@ Deployed (or manual deployment instructions provided and confirmed).
 
 **If deployment was performed:**
 
-Invoke `/reflexion:reflect` with check dimensions adapted to what was deployed:
+Apply the quality-bar rubric (`references/quality-bar.md`) over check dimensions adapted to what was deployed:
 
 - **Health check verification:** For each affected service, verify it responds correctly. Generate health check commands from the implementation context (not hardcoded URLs).
 - **Acceptance criteria spot-check:** For each criterion, verify evidence of correct behavior using the verification commands from the plan.

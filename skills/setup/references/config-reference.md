@@ -1,8 +1,7 @@
 # Setup config presentation + critique — Step 4 and Step 4b detail
 
 Read this file before executing Step 4 (present detected config) and the
-optional Step 4b (multi-agent critique, including the `critiqueMethod`
-preference check).
+optional Step 4b (an in-repo quality-bar review of the detected config).
 
 ## Step 4: Present Detected Config
 
@@ -63,29 +62,25 @@ If the user declines (or score is 0), proceed to Step 5 with the config unchange
 
 ### Critique Execution
 
-**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
+If the user accepts, apply the in-repo **quality-bar rubric** (`references/quality-bar.md` — skeptical single-pass review: cite evidence, don't rubber-stamp) to the detected `.rawgentic.json` as the work product, over these config-specific dimensions:
 
-If the user accepts, invoke `/reflexion:critique` with the detected `.rawgentic.json` as the work product.
-
-**Three judges evaluate in parallel:**
-
-**Judge 1: Requirements Validator**
+**Requirements coverage**
 - For each schema section, check whether the detected config missed capabilities that exist in the actual project files
 - Look for: test frameworks with config files but not detected, services with port mappings not captured, database references in `.env*` not reflected in config
 - Check: are all Docker Compose services represented? Are all CI workflows captured?
 
-**Judge 2: Solution Architect**
+**Structure & environment**
 - Evaluate structural decisions: should services be split (e.g., frontend + backend vs monolith)?
 - Check environment awareness: does the database config cover all environments?
 - Validate infrastructure topology: do host assignments match actual deployment targets?
 - Check service dependencies and port consistency across compose files
 
-**Judge 3: Code Quality Reviewer**
+**Concrete-value verification**
 - Verify every concrete value against source files: ports in config match ports in compose/code, paths exist on disk, container names match compose service names
 - Check test commands actually work (correct binary, correct config file reference)
-- Validate framework detection: does the detected framework version/type match the actual config file?
+- Validate framework detection: does the detected framework version/type match the actual config file
 
-Each judge produces findings:
+The review produces findings:
 ```
 Finding #N:
 - Severity: Critical | High | Medium | Low

@@ -1373,16 +1373,12 @@ class TestSkillCountCanary:
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 
-# Skills that invoke /reflexion:critique and carry the critiqueMethod preference check.
-# create-issue (WF1) was slimmed and no longer runs a multi-agent critique, so it is
-# intentionally absent.
-# implement-feature (WF2) retired its 3-judge Step-4 panel (#190) — it now runs
-# /reflexion:reflect for all lanes and carries no critiqueMethod preamble, so it is
-# intentionally absent too.
-# WF4/WF9/WF10 deprecated to stubs (#160) — no critique preamble on a redirect.
-CRITIQUE_SKILLS = [
-    "setup",
-]
+# NOTE (#205): the external reflexion plugin dependency was removed entirely — no
+# active skill invokes /reflexion:critique or carries a critiqueMethod preference
+# check anymore (WF2 #190 → reflect-only → #205 in-repo quality-bar rubric; setup's
+# config critique is now the same in-repo rubric). The former TestCritiqueMethodPreamble
+# guard and its CRITIQUE_SKILLS list are gone; reflexion-freedom of the active skill
+# corpus is now asserted by tests/test_wf2_clarity.py::test_active_skills_are_reflexion_free.
 
 
 class TestHeadlessStatusCorpus:
@@ -1563,16 +1559,6 @@ class TestMandatoryStepsEnforcement:
         )
 
 
-class TestCritiqueMethodPreamble:
-    """Lint: the critique-invoking skills contain the critiqueMethod preference check."""
-
-    @pytest.mark.parametrize("skill_name", CRITIQUE_SKILLS)
-    def test_skill_contains_critique_method_check(self, skill_name: str):
-        skill_path = SKILLS_DIR / skill_name / "SKILL.md"
-        assert skill_path.exists(), f"SKILL.md not found at {skill_path}"
-
-        content = skill_corpus(skill_name)
-        assert "critiqueMethod" in content, (
-            f"{skill_name}/SKILL.md is missing the critiqueMethod preference "
-            f"check near its /reflexion:critique invocation"
-        )
+# TestCritiqueMethodPreamble removed at #205 — no active skill carries a
+# critiqueMethod preference check now that the reflexion dependency is gone.
+# See tests/test_wf2_clarity.py::test_active_skills_are_reflexion_free.

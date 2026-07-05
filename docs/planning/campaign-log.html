@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 11:35 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 12:13 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 <p class="sub">Autonomous campaign: rawgentic builds rawgentic · slots 10–15 + epic #188 fast-follow</p>
 </header>
@@ -91,8 +91,28 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>follow-up issue to migrate existing rawgentic memories to mempalace if required.</p>
 <p>Sequenced as the next slot after #190 (kept out of #190 to preserve its narrow,</p>
 <p>reviewed scope).</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below.</p>
+<p><strong>Status.</strong> PR #204 squash-merged <code>cd1fe1b</code>, v3.2.0, issue closed.</p>
+<h3>#205 — remove the reflexion plugin dependency · v3.3.0 (owner-expanded from #190 P3)</h3>
+<p><strong>Issue.</strong> Mid-#190 the owner asked: why still depend on reflexion at all? Investigation:</p>
+<p><code>/reflexion:reflect|critique|memorize</code> are prompt-only (a rubric behind a slash command;</p>
+<p>no code we called) and fail open to *unreviewed* when the plugin is absent. Decision: full</p>
+<p>removal + use mempalace for memory.</p>
+<p><strong>What shipped.</strong> An in-repo <strong>quality-bar rubric</strong> (<code>skills/*/references/quality-bar.md</code> —</p>
+<p>skeptical-gatekeeper stance + depth triage + finding shape) replaces reflect/critique at every</p>
+<p>gate: WF2 Steps 4/6/9/15, WF3, incident, and setup&#x27;s config critique. Memorize (WF2 Step 10,</p>
+<p>WF3, incident) curates into <strong>mempalace</strong> (<code>mcp__mempalace__*</code>) when available, falling back</p>
+<p>to <code>CLAUDE.md</code>/<code>MEMORY.md</code> on absence <strong>or store failure</strong>. <code>critiqueMethod</code> deprecated/inert;</p>
+<p>reflexion prerequisite, add-on row, and troubleshooting entry removed. No active skill invokes</p>
+<p><code>/reflexion:*</code> (drift-guarded).</p>
+<p><strong>Reviews.</strong> 2 opus reviewers (leftover + logic lenses), converging independently on the same</p>
+<p>Medium: &quot;reflect&quot; was the retired skill&#x27;s own name, so keeping it as the replacement&#x27;s name</p>
+<p>undercut the removal — swept WF2 §4/§6/§9 to &quot;self-review&quot; (WF3 keeps its consistent</p>
+<p>&quot;Lightweight Reflect&quot; gate name). Also fixed: SKILL.md mandatory-steps stale &quot;full critique&quot;</p>
+<p>tier, memorize store-failure fallback, and the quality-bar finding-shape override contract.</p>
+<p>Security scan clean. Suite 1972/0 (2 red-first guards: reflexion-freedom + §4 quality-bar).</p>
+<p><strong>Follow-up.</strong> #206 — migrate existing rawgentic memories into mempalace if warranted.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention).</p>
+<p>Telemetry embedded below.</p>
 <p>---</p></section>
 <section class="mstone"><h3>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling</p>
 <p>(claude-code-action v1), folding #48 (STATUS comments), #51 (large-PR warning),</p>
@@ -357,9 +377,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#190 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>3 added · 1972/1972 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac (not applicable), sca (nothing to scan)</td></tr><tr><th>Outcome</th><td>PR pending · merged: pending · CI: pending</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design reflect (lane)</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>9</td><td>AC drift evidence</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code review (1 opus, 2 lenses)</td><td>1</td><td>1</td><td>pass</td></tr><tr><td>11.5</td><td>security scan</td><td>0</td><td>0</td><td>pass</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#205 (feature, standard)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>2 added · 1972/1972 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac (not applicable), sca (nothing to scan)</td></tr><tr><th>Outcome</th><td>PR pending · merged: pending · CI: pending</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design self-review (quality-bar)</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>9</td><td>AC drift evidence</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code review (2 opus, leftover+logic)</td><td>6</td><td>6</td><td>pass</td></tr><tr><td>11.5</td><td>security scan</td><td>0</td><td>0</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 11:35 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 12:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

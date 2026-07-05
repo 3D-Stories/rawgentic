@@ -71,7 +71,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 1 | Receive Issue | Foundation — wrong issue = wrong implementation |
 | 2 | Analyze Codebase | Complexity classification drives all downstream decisions |
 | 3 | Design Solution | Architecture before code — always |
-| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. Full critique for complex_feature, reflect for the small-standard lane (a.k.a. the fast-path alias). |
+| 4 | Quality Gate (Design) | Catches design flaws BEFORE implementation. The in-repo quality-bar rubric runs for all lanes; the full spine adds the opt-in adversarial-on-design + peer consult. |
 | 5 | Implementation Plan | Task decomposition enables TDD and progress tracking |
 | 7 | Create Branch | Git isolation is non-negotiable |
 | 8 | Implementation | The actual work |
@@ -104,7 +104,7 @@ above is non-negotiable.
 
 **Small-standard lane reconciliation (`<small-standard-lane>`):** in the small-standard lane,
 Steps 3, 4, 5, and 9 run in their **COLLAPSED** form (Step 3 = a brief design note, no
-multi-approach brainstorm; Step 4 = `/reflexion:reflect`; Step 5 = a checklist plan; Step 9 =
+multi-approach brainstorm; Step 4 = the quality-bar rubric; Step 5 = a checklist plan; Step 9 =
 Part B evidence only) — they are **not skipped**, so the mandatory-step invariant still holds. Only **Step 6 (Plan Drift)** is skipped in the lane, and it is already a
 conditional step. **Step 11 (code review), Step 11.5 (security scan), and Step 8a for any
 `riskLevel: high` task remain NON-NEGOTIABLE in the lane**, exactly as on the full spine — the
@@ -244,13 +244,13 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 1b — AC-derived goal guard (`/goal`).** Build the goal text via `plan_lib.build_goal_text` and fold it into Step 1's confirmation; optional, never blocks. (read references/steps.md §1b before executing)
 - **Step 2 — Analyze codebase & classify complexity.** Map-first then parallel gather then synthesize; set the authoritative complexity, small-standard-lane eligibility, trivial-work check, and the parallelism probe. (read references/steps.md §2 before executing)
 - **Step 3 — Design solution architecture.** Produce the design doc (optional cross-model peer consult, blind both ways); collapses to a brief note in the lane. (read references/steps.md §3 before executing)
-- **Step 4 — Quality gate: design critique.** `/reflexion:reflect` for all lanes (#190 retired the 3-judge panel) + opt-in adversarial-on-design on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
+- **Step 4 — Quality gate: design critique.** the in-repo quality-bar rubric for all lanes (#190 retired the 3-judge panel; #205 replaced the reflexion dependency) + opt-in adversarial-on-design on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
 - **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), parallel-group/files validation, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
-- **Step 6 — Quality gate: plan drift (conditional).** `/reflexion:reflect` + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
+- **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
 - **Step 7 — Create feature branch.** Branch from a freshly-fetched `origin/<default>` and assert the base; never pull into the current checkout. (read references/steps.md §7 before executing)
 - **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; optional per-task or whole-issue delegation, mid-flight risk promotion. (read references/steps.md §8 before executing)
 - **Step 8a — Per-task review (conditional).** Fires for any `riskLevel: high` task: 2 reviewers over that commit's diff, deferrals persisted, review log + committed status pointer updated. (read references/steps.md §8a before executing)
-- **Step 9 — Quality gate: implementation drift.** Alignment reflect (Part A) + evidence (Part B); P15 review-coverage assertion; lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
+- **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage assertion; lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
 - **Step 10 — Conditional memorization (background).** Runs in parallel with Step 11; never blocks. (read references/steps.md §10 before executing)
 - **Step 11 — Pre-PR code review.** 3-agent review (≥1 in the lane) + opt-in adversarial diff review; severity-banded confidence, deferred-resolution exit gate. NON-NEGOTIABLE. (read references/steps.md §11 before executing)
 - **Step 11.5 — Tool-based security scan (pre-PR gate).** `hooks/security_scan.py` for secrets/SCA/SAST/IaC; fail-closed on real findings; visible skips, never a silent pass. (read references/steps.md §11.5 before executing)
