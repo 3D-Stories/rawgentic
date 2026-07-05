@@ -307,11 +307,11 @@ artifact text to OpenAI, so it is never force-enabled). Shape:
 a removed name like `refactor` is accepted but inert — see `docs/upgrade-3.0.md`).
 When enabled and the running skill is listed:
 
-- **WF2** (`implement-feature`): after the normal design critique (Step 4) and plan
-  reflect (Step 6), if `fast_path_eligible == false`, it additionally invokes
-  `/rawgentic:adversarial-review`. Findings merge with the in-process critique (tagged
-  by source); a Critical/High design flaw consumes the existing `design` loop-back
-  counter (no new budget).
+- **WF2** (`implement-feature`): alongside the Step 4 design reflect (`/reflexion:reflect`
+  — the 3-judge panel was retired at #190) and after plan reflect (Step 6), if
+  `fast_path_eligible == false`, it additionally invokes `/rawgentic:adversarial-review`.
+  Findings merge with the in-process reflect findings (tagged by source); a Critical/High
+  design flaw consumes the existing `design` loop-back counter (no new budget).
 - **WF3** (`fix-bug`): default-OFF even when WF2 is on (must be explicitly listed).
   When enabled, Step 4 adds a cross-model review on top of the lightweight reflect,
   accepting the documented latency tradeoff.

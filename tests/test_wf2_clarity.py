@@ -67,6 +67,58 @@ def test_step4_has_single_breaker_decision_table():
     assert "SKIP" in step4
 
 
+def test_step4_is_reflect_only_no_three_judge_panel():
+    """#190: WF2 Step 4 retires the 3-judge `/reflexion:critique` panel — reflect
+    for ALL lanes. The opt-in cross-model adversarial-on-design (WF5) stays (AC2),
+    and the single ambiguity breaker + loop-back are retained (sourced from reflect
+    findings). Red before the §4 rewrite, which still runs the panel today."""
+    text = _text()
+    start = text.index("## Step 4: Quality Gate")
+    end = text.index("## Step 5:")
+    step4 = text[start:end]
+    # Panel gone: no /reflexion:critique invocation, no "three judge" launch.
+    assert "/reflexion:critique" not in step4, \
+        "Step 4 must not invoke the 3-judge /reflexion:critique panel (#190)"
+    assert "three judge" not in step4.lower() and "3-judge" not in step4, \
+        "Step 4 must not describe a 3-judge panel (#190)"
+    # Reflect is the gate for all lanes.
+    assert "/reflexion:reflect" in step4, "Step 4 must use /reflexion:reflect (#190)"
+    # AC2: the opt-in cross-model adversarial-on-design review stays available.
+    assert "adversarial" in step4.lower(), \
+        "Step 4 must keep the opt-in adversarial-on-design sub-step (AC2)"
+    # The critiqueMethod preamble existed only to gate /reflexion:critique; it goes.
+    assert "critiqueMethod" not in step4, \
+        "the critiqueMethod preamble is removed from WF2 Step 4 (#190)"
+
+
+def test_readme_wf2_gate_row_is_reflect_not_critique():
+    """#190 leftover guard (Step-11 review Finding 1): the README feature-section
+    tables must not advertise WF2's design gate as the retired 3-judge
+    `/reflexion:critique` panel. WF1/setup legitimately keep critique — this pins
+    only the WF2 row."""
+    readme = (REPO_ROOT / "README.md").read_text()
+    for line in readme.splitlines():
+        if "WF2 Feature Implementation" in line and "|" in line:
+            assert "/reflexion:critique" not in line, \
+                "README WF2 gate row still advertises the retired critique panel (#190)"
+            assert "/reflexion:reflect" in line, \
+                "README WF2 gate row should name /reflexion:reflect (#190)"
+
+
+def test_fast_path_table_step4_full_and_lane_both_reflect():
+    """#190: the keep/collapse table's Step-4 row no longer contrasts a panel
+    (full) against reflect (lane) — both use reflect; the full spine's only extra
+    is the opt-in adversarial-on-design."""
+    text = _text()
+    # The Step 4 row of the keep/collapse table.
+    for marker in ("4 Design critique",):
+        assert marker in text
+    # No table cell may still advertise the retired panel.
+    table_region = text[text.index("Keep / collapse table"):text.index("Exact retained vs. removed gates")]
+    assert "3-judge panel" not in table_region, \
+        "keep/collapse table still advertises the retired 3-judge panel (#190)"
+
+
 # --- Tier 1 (progressive disclosure): run-record schema extracted to references/ ---
 
 class TestRunRecordReference:
