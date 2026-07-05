@@ -54,9 +54,12 @@ DEPLOY_STATUSES = {"success", "manual", "failed", "not_applicable"}
 # vocabulary contract. Optional; free text is rejected by design.
 REVIEWER_KINDS = {"inline", "reflexion", "builtin_code_review", "codex",
                    "hand_rolled_multi"}
-# `set`/`skipped` are recorded by the orchestrator; `fired` is MANUAL-ONLY (see
-# the goal_guard validation block below) — no code path detects it automatically.
-GOAL_GUARD_VALUES = {"set", "skipped", "fired"}
+# `set`/`skipped`/`deferred` are recorded by the orchestrator; `fired` is
+# MANUAL-ONLY (see the goal_guard validation block below) — no code path detects
+# it automatically. `deferred` (#191): Step 1b deferred the per-issue /goal to an
+# already-active epic-level campaign goal (RAWGENTIC_EPIC_GOAL set) rather than
+# emitting one that would clobber it.
+GOAL_GUARD_VALUES = {"set", "skipped", "fired", "deferred"}
 # `usage.capture_status` (#189) — how the token/cost numbers were obtained.
 # `captured` = live-parsed from the session log (REQUIRES real non-null tokens
 # summing > 0 — the schema-level backstop against the #155 null-forever state);

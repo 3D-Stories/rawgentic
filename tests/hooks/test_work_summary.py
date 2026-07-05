@@ -1386,8 +1386,9 @@ class TestValidateUsage:
 class TestValidateGoalGuard:
     """`goal_guard` (#156, AC6) is a top-level *validated-optional* scalar, same
     pattern as `reviewer_kind`: absent is valid (old records unaffected); present
-    must be a member of {"set", "skipped", "fired"}, fail-closed on anything else
-    including non-strings."""
+    must be a member of {"set", "skipped", "fired", "deferred"}, fail-closed on
+    anything else including non-strings. `deferred` added at #191 (Step 1b defers
+    the per-issue goal to the epic-level goal under a campaign)."""
 
     def test_absent_is_valid_legacy_record(self):
         from work_summary import validate_record
@@ -1395,7 +1396,7 @@ class TestValidateGoalGuard:
         assert "goal_guard" not in rec
         assert validate_record(rec) == []
 
-    @pytest.mark.parametrize("value", ["set", "skipped", "fired"])
+    @pytest.mark.parametrize("value", ["set", "skipped", "fired", "deferred"])
     def test_each_canonical_value_is_valid(self, value):
         from work_summary import validate_record
         rec = _valid_record()
