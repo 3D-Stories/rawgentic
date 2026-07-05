@@ -248,3 +248,113 @@ def test_empty_dict_telemetry_shows_placeholder_not_absent():
 def test_none_telemetry_has_no_section():
     html = _render("# Doc", telemetry=None)
     assert "Run telemetry" not in html
+
+
+# --- #199: opt-in card/chip "roadmap" style matching the dashboard ---
+
+class TestRoadmapStyle:
+    def test_default_is_plain_unchanged(self):
+        # Backward-compat: no style arg == plain == byte-identical to today.
+        md = "# Title\n\n## Slot 1 — DONE\n\nbody text\n"
+        assert _render(md) == _render(md, style="plain")
+
+    def test_plain_has_no_cards_or_chips(self):
+        md = "## Slot 1 — DONE\n\nbody"
+        h = _render(md, style="plain")
+        # no card/chip MARKUP and no roadmap CSS leak (AC1: plain byte-identical)
+        assert '<section class="mstone">' not in h and 'class="chip' not in h
+        assert ".mstone" not in h and "--chip-c" not in h
+
+    def test_roadmap_wraps_h2_sections_in_cards(self):
+        md = "## Slot 1 — DONE\n\nbody one\n\n## Slot 2 — planned\n\nbody two"
+        h = _render(md, style="roadmap")
+        assert h.count('<section class="mstone">') == 2
+        assert 'class="chip' in h
+
+    def test_roadmap_default_style_still_plain(self):
+        # roadmap must be OPT-IN — the CLI/lib default stays plain
+        md = "## Slot 1 — DONE\n\nbody"
+        assert "mstone" not in _render(md)
+
+    def test_status_chip_mapping(self):
+        sc = render_artifact.status_chip
+        assert sc("Slot 12 DONE")[0] == "c-conf"
+        assert sc("shipped v2.65.0")[0] == "c-conf"
+        assert sc("ABANDONED per AC4")[0] == "c-defer"
+        assert sc("blocked on X")[0] == "c-defer"
+        assert sc("planned, next up")[0] == "c-plan"
+        assert sc("no keyword here")[0] == "c-plan"   # fail-safe neutral
+
+    def test_status_chip_no_substring_false_positive(self):
+        # word-boundary: "incomplete" must NOT match "complete" -> c-conf
+        assert render_artifact.status_chip("this is incomplete")[0] != "c-conf"
+
+    def test_roadmap_chip_from_section_body(self):
+        # status keyword in the body (not the heading) still drives the chip.
+        # Assert on the chip SPAN, not bare "c-conf" — the .c-conf CSS rule is
+        # always present in roadmap output, so "c-conf" in h would be vacuous.
+        md = "## Slot 12 — telemetry\n\n**Status.** PR #198 merged, DONE."
+        h = _render(md, style="roadmap")
+        assert 'class="chip c-conf"' in h
+
+    def test_roadmap_fence_with_hash_not_split(self):
+        # a "## " line INSIDE a fenced code block is content, not a card boundary
+        md = ("## Real Section — DONE\n\n"
+              "```\n## not a heading (shell comment)\necho hi\n```\n\n"
+              "tail of section body")
+        h = _render(md, style="roadmap")
+        assert h.count('<section class="mstone">') == 1
+        assert "not a heading (shell comment)" in h
+        assert "tail of section body" in h
+
+    def test_roadmap_neutral_heading_does_not_suppress_done_body(self):
+        # "Next.js" heading (incidental \bnext\b) must not force PLANNED when the
+        # body is definitively DONE — definitive body beats a neutral heading.
+        md = "## Next.js frontend migration\n\nAll shipped and merged. DONE."
+        h = _render(md, style="roadmap")
+        assert 'class="chip c-conf"' in h
+        assert 'class="chip c-plan"' not in h
+
+    def test_roadmap_heading_status_beats_body_keyword(self):
+        # heading precedence: an ABANDONED slot whose body mentions a "merged"
+        # decision PR must render amber c-defer, not green c-conf.
+        md = ("## Slot 11 — #162 review switch — ABANDONED per AC4\n\n"
+              "Decision-record PR #187 squash-merged e7aadf7.")
+        h = _render(md, style="roadmap")
+        assert 'class="chip c-defer"' in h
+        assert 'class="chip c-conf"' not in h
+
+    def test_roadmap_escapes_heading_injection(self):
+        md = "## <script>alert(1)</script> DONE\n\nbody"
+        h = _render(md, style="roadmap")
+        assert "<script>alert(1)</script>" not in h
+        assert "&lt;script&gt;" in h
+
+    def test_roadmap_chip_label_is_fixed_vocab_not_raw(self):
+        # a raw-text injection in the status position cannot reach the chip label
+        md = "## Slot <img src=x onerror=y> planned\n\nbody"
+        h = _render(md, style="roadmap")
+        assert "onerror=y>" not in h   # escaped, never live markup
+
+    def test_roadmap_preamble_before_first_h2_rendered(self):
+        md = "intro paragraph\n\n## Slot 1 — DONE\n\nbody"
+        h = _render(md, style="roadmap")
+        assert "intro paragraph" in h
+
+    def test_roadmap_css_present(self):
+        h = _render("## Slot 1 — DONE\n\nbody", style="roadmap")
+        assert ".mstone" in h and ".c-conf" in h and ".chip" in h
+
+    def test_cli_style_flag(self, tmp_path):
+        md = tmp_path / "in.md"; md.write_text("## Slot 1 — DONE\n\nbody")
+        out = tmp_path / "out.html"
+        rc = render_artifact.main(["--md", str(md), "--out", str(out),
+                                   "--title", "T", "--style", "roadmap"])
+        assert rc == 0
+        assert '<section class="mstone">' in out.read_text()
+
+    def test_cli_default_style_plain(self, tmp_path):
+        md = tmp_path / "in.md"; md.write_text("## Slot 1 — DONE\n\nbody")
+        out = tmp_path / "out.html"
+        render_artifact.main(["--md", str(md), "--out", str(out), "--title", "T"])
+        assert "mstone" not in out.read_text()

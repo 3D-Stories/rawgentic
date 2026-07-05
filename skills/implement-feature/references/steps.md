@@ -1111,9 +1111,15 @@ recorded for the PR body and session notes.
    ```bash
    python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
      --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
-     --telemetry /tmp/wf2-run-record.json
+     --telemetry /tmp/wf2-run-record.json --style <style>
    git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
    ```
+   **Style (#199):** resolve `<style>` via
+   `adversarial_review_lib.design_artifact_style('.rawgentic_workspace.json', '<name>')`
+   → `roadmap` (h2 sections rendered as dashboard-style bubble cards with completion
+   chips — for a campaign/roadmap doc) or `plain` (the default document style,
+   byte-identical to pre-#199). Pass it as `--style <style>`; omitting the flag also
+   yields `plain`, so an unconfigured project is unchanged.
    Fields not knowable pre-PR (PR #, CI, merge SHA) follow the established
    convention: filled by the next slot's pass. Log
    `### WF2 Step 12 — design artifact (updated|skipped)`.
