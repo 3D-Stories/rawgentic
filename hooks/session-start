@@ -748,7 +748,13 @@ if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
                     HEADLESS_ALLOWED=true
                     ;;
                 trigger)
-                    CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' allows headless mode but not for this trigger ('${RAWGENTIC_HEADLESS_TRIGGER:-unset}' is not in the headlessEnabled.triggers allowlist). Refusing to execute workflow skills — exit immediately.")
+                    # Deliberately do NOT echo the trigger env value: it is
+                    # attacker-shaped input (on an Actions runner it may derive
+                    # from event data) and this message lands in
+                    # additionalContext — the model's instruction channel. Any
+                    # echo, even charset-stripped, hands the deny path a
+                    # rider for injected text (8a F1).
+                    CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' allows headless mode, but the current RAWGENTIC_HEADLESS_TRIGGER value is not in the headlessEnabled.triggers allowlist (or is unset). Refusing to execute workflow skills — exit immediately.")
                     ;;
                 *)
                     CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' does not have headless mode enabled. Set headlessEnabled: true in .rawgentic_workspace.json for this project (via /rawgentic:setup) to allow autonomous agent execution. Refusing to execute workflow skills — exit immediately.")
