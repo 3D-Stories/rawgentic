@@ -58,9 +58,47 @@ def test_job_timeout_bounded():
     assert 0 < job["timeout-minutes"] <= 180
 
 
-def test_uses_v1_major_tag():
+def test_uses_sha_pinned_v1():
+    """8a T3: the action receives a live OAuth token + write GITHUB_TOKEN, so
+    it must be SHA-pinned (repo convention — claude-code-security-review in
+    ci.yml is SHA-pinned too), with the human-readable tag in a comment."""
+    import re
     step = _action_step(_job(_wf()))
-    assert step["uses"] == "anthropics/claude-code-action@v1"
+    assert re.fullmatch(r"anthropics/claude-code-action@[0-9a-f]{40}",
+                        step["uses"]), \
+        f"must be SHA-pinned, got {step['uses']!r}"
+    assert "# v1" in WF_PATH.read_text()
+
+
+def test_concurrency_group_per_issue():
+    """8a T3 F1: re-applying the label must queue, not fan out parallel
+    write-token runs."""
+    wf = _wf()
+    conc = wf["concurrency"]
+    assert "${{ github.event.issue.number }}" in conc["group"]
+    assert conc["cancel-in-progress"] is False
+
+
+def test_no_run_step_references_secrets():
+    """8a T3 F4: the OAuth token may only ever appear in the action's `with:`
+    input — a `run:` body referencing secrets.* would hand it to a shell."""
+    job = _job(_wf())
+    for step in job["steps"]:
+        assert "secrets." not in step.get("run", ""), \
+            f"run step {step.get('name')!r} references a secret"
+
+
+def test_no_issue_template_carries_auto_label():
+    """8a T3 F2: an issue template auto-applying rawgentic:auto would fire
+    `labeled` with the drive-by AUTHOR as sender — converting the maintainer
+    approval gate into an unauthenticated trigger. Freeze that door shut."""
+    tmpl_dir = REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
+    if not tmpl_dir.exists():
+        return  # no templates at all — gate intact
+    for f in tmpl_dir.iterdir():
+        if f.suffix in (".md", ".yml", ".yaml"):
+            assert "rawgentic:auto" not in f.read_text(), \
+                f"issue template {f.name} must not auto-apply rawgentic:auto"
 
 
 def test_oauth_secret_referenced_by_name_never_value():

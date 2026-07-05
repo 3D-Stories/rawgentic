@@ -23,9 +23,23 @@ permissions:
   pull-requests: write
   issues: write
 
+# One run per issue: re-applying the label queues instead of fanning out
+# parallel write-token runs (8a T3 F1).
+concurrency:
+  group: rawgentic-auto-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   headless-wf2:
     # Job-level gate: no runner spins up for any other label.
+    #
+    # LABELING IS THE APPROVAL GATE (8a T3 F2): applying rawgentic:auto
+    # requires triage+ on this repo, and doing so hands the ISSUE BODY to an
+    # autonomous agent holding a write token — read the issue body as if it
+    # were a command you are authorizing, because it is. Never configure an
+    # issue template that auto-applies this label (a template's labels fire
+    # `labeled` with the drive-by author as sender — that would make this an
+    # unauthenticated trigger; a test pins templates label-free).
     if: ${{ github.event.label.name == 'rawgentic:auto' }}
     runs-on: ubuntu-latest
     # AC4/#52: hard guardrail. A healthy WF2 run posts STATUS heartbeats at
@@ -39,8 +53,8 @@ jobs:
       # root, and this checkout is the PROJECT repo, not the owner's
       # workspace. Write a minimal runner-local workspace: the repo root is
       # itself the project (path "."), with the object-shape headless grant
-      # scoped to exactly this trigger. Ephemeral runner state — never
-      # committed (the repo has no .rawgentic_workspace.json in git).
+      # scoped to exactly this trigger. Ephemeral runner state — not staged by
+      # WF2's stage-only-declared-files rule, and gitignored as backstop.
       - name: Bootstrap runner workspace
         run: |
           cat > .rawgentic_workspace.json << 'EOF'
@@ -65,7 +79,11 @@ jobs:
           mkdir -p claude_docs
 
       - name: Run headless WF2
-        uses: anthropics/claude-code-action@v1
+        # SHA-pinned (repo convention, matches claude-code-security-review in
+        # ci.yml): this action receives the subscription OAuth token + a write
+        # GITHUB_TOKEN, so a mutable tag is a supply-chain vector. SHA below is
+        # the v1 tag as of 2026-07-05.
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: |

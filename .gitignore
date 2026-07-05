@@ -23,6 +23,7 @@ __pycache__/
 # Claude Code local state (should not be in the plugin repo)
 .claude/settings.local.json
 claude_docs/
+.rawgentic_workspace.json
 
 # WF2 Step 11 diff-review temp files (crash-recovery backstop; normally cleaned on exit)
 .rawgentic-diff-review-*.patch
