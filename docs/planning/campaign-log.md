@@ -94,6 +94,28 @@ across steps.md/run-record.md/work_summary.py/README, forward-declaration honest
 fail-closed). red-first: goal_guard `deferred` + Step-1b always-emit drift guard. Scan clean.
 Suite 1972/0 → 1974/0.
 
+**Status.** PR #208 squash-merged `b132c51`, v3.4.0, issue closed.
+
+### #192 — driver epic-level goal guard + tolerant escape clause · v3.5.0
+
+**Issue.** #192 (P5, depends on #191): the `/goal` guard belongs at the epic/campaign
+level, not per-issue — a per-issue goal lets the session quit after any single slot, and
+same-session `/goal` overwrite is documented-unverified. And this campaign hit the stale-goal
+failure directly (the goal fired relentlessly after each slot).
+
+**What shipped.** `plan_lib.build_goal_text` gains a `campaign` variant enumerating an epic's
+topo-ordered children into ONE goal (≤4000-char fallback), with a **tolerant escape clause**:
+"a child closed not-planned per its own acceptance criteria counts as satisfied, and the owner
+may pause the campaign at any time." `driver_lib.campaign_goal_text(state)` is the kickoff seam
+(epic anchor + topo children; raises on missing epic / dependency cycle). The driver emits the
+goal (owner-run — a skill can't self-set `/goal`) and exports `RAWGENTIC_EPIC_GOAL=<epic>`,
+which WF2 **and** WF3 Step 1b defer to (the #191 contract, extended to fix-bug per its review).
+
+**Reviews.** Small-standard lane (2 impl .py). 1 opus: 1 Medium (my changelog insertion garbled
+a v3.4.0 line — fixed), everything else clean (cap enforced, no import cycle, epic guard rejects
+bool, escape-clause wording consistent across code/doc/changelog, RAWGENTIC_EPIC_GOAL honestly
+scoped as driver-set). red-first campaign + driver tests. Scan clean. Suite 1974/0 → 1984/0.
+
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
 Telemetry embedded below.
 

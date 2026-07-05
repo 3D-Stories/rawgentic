@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 12:28 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 12:48 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 <p class="sub">Autonomous campaign: rawgentic builds rawgentic · slots 10–15 + epic #188 fast-follow</p>
 </header>
@@ -126,6 +126,23 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>across steps.md/run-record.md/work_summary.py/README, forward-declaration honest, validation</p>
 <p>fail-closed). red-first: goal_guard <code>deferred</code> + Step-1b always-emit drift guard. Scan clean.</p>
 <p>Suite 1972/0 → 1974/0.</p>
+<p><strong>Status.</strong> PR #208 squash-merged <code>b132c51</code>, v3.4.0, issue closed.</p>
+<h3>#192 — driver epic-level goal guard + tolerant escape clause · v3.5.0</h3>
+<p><strong>Issue.</strong> #192 (P5, depends on #191): the <code>/goal</code> guard belongs at the epic/campaign</p>
+<p>level, not per-issue — a per-issue goal lets the session quit after any single slot, and</p>
+<p>same-session <code>/goal</code> overwrite is documented-unverified. And this campaign hit the stale-goal</p>
+<p>failure directly (the goal fired relentlessly after each slot).</p>
+<p><strong>What shipped.</strong> <code>plan_lib.build_goal_text</code> gains a <code>campaign</code> variant enumerating an epic&#x27;s</p>
+<p>topo-ordered children into ONE goal (≤4000-char fallback), with a <strong>tolerant escape clause</strong>:</p>
+<p>&quot;a child closed not-planned per its own acceptance criteria counts as satisfied, and the owner</p>
+<p>may pause the campaign at any time.&quot; <code>driver_lib.campaign_goal_text(state)</code> is the kickoff seam</p>
+<p>(epic anchor + topo children; raises on missing epic / dependency cycle). The driver emits the</p>
+<p>goal (owner-run — a skill can&#x27;t self-set <code>/goal</code>) and exports <code>RAWGENTIC_EPIC_GOAL=&lt;epic&gt;</code>,</p>
+<p>which WF2 <strong>and</strong> WF3 Step 1b defer to (the #191 contract, extended to fix-bug per its review).</p>
+<p><strong>Reviews.</strong> Small-standard lane (2 impl .py). 1 opus: 1 Medium (my changelog insertion garbled</p>
+<p>a v3.4.0 line — fixed), everything else clean (cap enforced, no import cycle, epic guard rejects</p>
+<p>bool, escape-clause wording consistent across code/doc/changelog, RAWGENTIC_EPIC_GOAL honestly</p>
+<p>scoped as driver-set). red-first campaign + driver tests. Scan clean. Suite 1974/0 → 1984/0.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention).</p>
 <p>Telemetry embedded below.</p>
 <p>---</p></section>
@@ -392,9 +409,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#191 (bug, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>2 added · 1974/1974 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac (not applicable), sca (nothing to scan)</td></tr><tr><th>Outcome</th><td>PR pending · merged: pending · CI: pending</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design self-review (lane)</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>9</td><td>AC drift evidence</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code review (1 opus)</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11.5</td><td>security scan</td><td>0</td><td>0</td><td>pass</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#192 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>10 added · 1984/1984 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac (not applicable), sca (nothing to scan)</td></tr><tr><th>Outcome</th><td>PR pending · merged: pending · CI: pending</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design self-review (lane)</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>9</td><td>AC drift evidence</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code review (1 opus)</td><td>1</td><td>1</td><td>pass</td></tr><tr><td>11.5</td><td>security scan</td><td>0</td><td>0</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 12:28 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 12:48 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
