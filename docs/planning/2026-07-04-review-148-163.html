@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rawgentic · Review — #148/#163 Multi-Issue Driver</title>
+</head>
+<body>
+
+<style>
+:root{
+  --bg:#f6f7f8;--surface:#ffffff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+  --line:#dde3e6;--accent:#0f766e;--accent-ink:#ffffff;--accent-soft:#e6f2f0;
+  --keep:#15803d;--keep-bg:#e9f5ec;--dep:#b4553a;--dep-bg:#f8ece7;
+  --defer:#a16207;--defer-bg:#f8f2e2;--merge:#1d4ed8;--merge-bg:#e8eefb;
+  --chip-c:#0f766e;--chip-c-bg:#e6f2f0;--chip-i:#7c3aed;--chip-i-bg:#f1eafd;
+  --code:#eef1f3;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#71808a;
+  --line:#2a353c;--accent:#2dd4bf;--accent-ink:#06211e;--accent-soft:#123531;
+  --keep:#4ade80;--keep-bg:#122a1c;--dep:#f0a58c;--dep-bg:#33201a;
+  --defer:#fbbf24;--defer-bg:#302a14;--merge:#93b4f5;--merge-bg:#17223a;
+  --chip-c:#2dd4bf;--chip-c-bg:#123531;--chip-i:#c4a5f7;--chip-i-bg:#2a2140;
+  --code:#232d34;
+}}
+:root[data-theme="dark"]{
+  --bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#71808a;
+  --line:#2a353c;--accent:#2dd4bf;--accent-ink:#06211e;--accent-soft:#123531;
+  --keep:#4ade80;--keep-bg:#122a1c;--dep:#f0a58c;--dep-bg:#33201a;
+  --defer:#fbbf24;--defer-bg:#302a14;--merge:#93b4f5;--merge-bg:#17223a;
+  --chip-c:#2dd4bf;--chip-c-bg:#123531;--chip-i:#c4a5f7;--chip-i-bg:#2a2140;
+  --code:#232d34;
+}
+:root[data-theme="light"]{
+  --bg:#f6f7f8;--surface:#ffffff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+  --line:#dde3e6;--accent:#0f766e;--accent-ink:#ffffff;--accent-soft:#e6f2f0;
+  --keep:#15803d;--keep-bg:#e9f5ec;--dep:#b4553a;--dep-bg:#f8ece7;
+  --defer:#a16207;--defer-bg:#f8f2e2;--merge:#1d4ed8;--merge-bg:#e8eefb;
+  --chip-c:#0f766e;--chip-c-bg:#e6f2f0;--chip-i:#7c3aed;--chip-i-bg:#f1eafd;
+  --code:#eef1f3;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px 80px}
+header.hero{padding:44px 0 20px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase}
+h1{font-size:clamp(24px,4vw,34px);line-height:1.15;margin:.35em 0 .3em;font-weight:750;letter-spacing:-.02em;text-wrap:balance}
+.sub{color:var(--ink-2);max-width:70ch;margin:0}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.meta span{background:var(--surface);border:1px solid var(--line);border-radius:99px;padding:3px 11px;font-size:12.5px;color:var(--ink-2)}
+section{padding-top:34px}
+h2{font-size:20px;font-weight:720;letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.h2sub{color:var(--ink-2);margin:0 0 16px;max-width:78ch}
+.chip{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  border-radius:5px;padding:2.5px 8px;vertical-align:1px}
+.c-keep{color:var(--keep);background:var(--keep-bg)}
+.c-dep{color:var(--dep);background:var(--dep-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-merge{color:var(--merge);background:var(--merge-bg)}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-inf{color:var(--chip-i);background:var(--chip-i-bg)}
+.cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:14px 0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h3{margin:0 0 6px;font-size:15px;font-weight:700;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.card p{margin:0;color:var(--ink-2);font-size:13.8px}
+.card p+p{margin-top:8px}
+.tscroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--surface);margin:14px 0}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:640px}
+th{white-space:nowrap;text-align:left;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);
+  padding:11px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink-2)}
+tr:last-child td{border-bottom:none}
+td b,.card b,.note b,.find b{color:var(--ink);font-weight:650}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow-x:auto;margin:10px 0 0}
+pre code{background:none;padding:0;font-size:12px;line-height:1.5}
+.note{background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:13px 16px;color:var(--ink-2);font-size:13.5px;margin:14px 0}
+.find{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--defer);border-radius:12px;padding:14px 16px;margin:12px 0}
+.find.sev-high{border-left-color:var(--dep)}
+.find.sev-low{border-left-color:var(--ink-3)}
+.find h3{margin:0 0 6px;font-size:14.5px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.find p{margin:6px 0 0;color:var(--ink-2);font-size:13.6px}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 0}
+footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+
+<div class="wrap">
+<header class="hero">
+  <div class="eyebrow">rawgentic · post-merge design + code review · fable 5 · 2026-07-04</div>
+  <h1>Review: #148 + #163 — Multi-Issue Driver</h1>
+  <p class="sub">Fresh-eyes review of the merged slot-10 work (PR #185, squash <code>d7ea584</code>, v2.64.0): the driver pattern doc, the DAG helper, the state schema, and the tests — checked against design #134 and both issues' acceptance criteria. Every code finding below was <b>confirmed by executing the merged module</b>, not by reading alone.</p>
+  <div class="meta">
+    <span>base <code>d7ea584</code> (main)</span>
+    <span>suite at merge: 1856/0</span>
+    <span>7 findings · 0 Critical · 1 High</span>
+    <span>read-only — no code changed</span>
+  </div>
+  <div class="legend">
+    <span class="chip c-conf">Confirmed (executed)</span>
+    <span class="chip c-dep">High</span>
+    <span class="chip c-defer">Medium</span>
+    <span class="chip c-inf">Owner fork</span>
+  </div>
+</header>
+
+<section id="verdict">
+  <h2>Verdict</h2>
+  <p class="h2sub"><b>The architecture holds.</b> Pattern-not-skill was the right cut — the driver structurally <i>cannot</i> weaken WF2 because it never owns a WF2 step; the committed-contract vs disk-persisted-state split is honest about the gitignored <code>claude_docs/</code>; and the narrow-helper scope discipline (ship only what the ACs make testable, defer the state-machine validator) is exactly the restraint #134 asked for. The defects are at the <b>edges</b>: one genuine design contradiction inherited from #134's own ambiguity (F1), a dependency parser whose in-slot review fixes traded over-capture for a common-phrasing under-capture (F2/F3), and three spec gaps a first real campaign would trip on (F4–F6). Nothing here invalidates the merge; F1 needs an owner call before the first <code>pr_open</code>-knob campaign runs.</p>
+</section>
+
+<section id="findings">
+  <h2>Findings <span class="chip c-conf">all executed against d7ea584</span></h2>
+
+  <div class="find sev-high">
+    <h3>F1 · Serial-active invariant contradicts the <code>deps_satisfied_by="pr_open"</code> knob <span class="chip c-dep">High · design consistency</span> <span class="chip c-inf">Owner fork</span></h3>
+    <p><code>validate_driver_state</code> rejects any state with more than one issue in <code>{in_progress, pr_open}</code> — but the #163-AC3 knob exists precisely to let a dependent <b>start</b> while its dependency sits <code>pr_open</code> (headless stacked-PR flow: "advance the queue on PR creation"). The moment a knob-enabled campaign starts issue B with issue A at <code>pr_open</code>, the state is invalid. Both sides are <b>test-locked</b>: <code>test_validate_driver_state_serial_active_invariant</code> asserts the combo fails while <code>test_next_ready_issue_pr_open_knob</code> asserts the advance that creates it.</p>
+    <pre><code># executed probe — the state the knob is designed to produce:
+state = {issues: [#1 pr_open, #2 in_progress (deps [1]), #3 queued]}
+validate_driver_state(state)
+→ (False, ['at most one issue may be in_progress/pr_open (serial driver); found 2: [1, 2]'])</code></pre>
+    <p><b>Root cause:</b> design #134 itself is torn — L58 calls <code>pr_open</code> "the terminal state for a headless driver," L97 says the headless driver "advances the queue on PR creation." The in-slot Codex F2 fix codified L58; the #163 knob codifies L97.</p>
+    <p><b>Recommendation:</b> relax the invariant to <code>in_progress ≤ 1</code> (one <i>build</i> at a time; <code>pr_open</code> may accumulate awaiting human merge) — that matches the knob and the "advance on PR creation" prose. Alternative: keep the strict invariant and document the knob as resumption-reconciliation-only. Either is a two-line change + doc sentence; the fork is the owner's.</p>
+  </div>
+
+  <div class="find">
+    <h3>F2 · Parser silently drops the most common natural phrasing <span class="chip c-defer">Medium · correctness</span></h3>
+    <p><code>_DEP_LIST_RE</code> demands <code>#N</code> immediately after the phrase (modulo colon/whitespace), so any interposed noun kills the whole capture — a <b>missing ordering edge</b>, i.e. the premature-start mis-ordering the DAG exists to prevent, and silent (empty list, no error).</p>
+    <pre><code>parse_depends_on("Depends on issue #10.")            → []   # expected [10]
+parse_depends_on("Blocked by issues #10 and #20.")   → []   # expected [10, 20]
+parse_depends_on("depends on the epic #30")          → []   # expected [30]</code></pre>
+    <p><b>Root cause:</b> the in-slot Codex High fix (sentence-boundary grammar) correctly killed prose <i>over</i>-capture ("Depends on #10. See #20" → [10]) but traded it for this <i>under</i>-capture, unmitigated. <b>Fix:</b> allow an optional <code>(?:the\s+)?(?:issues?|prs?|epics?)\s+</code> before the <code>#N</code> list; add the three probes above as regression tests.</p>
+  </div>
+
+  <div class="find">
+    <h3>F3 · Grammatical negations are dead letters — modal negations over-capture <span class="chip c-defer">Med-Low · correctness</span></h3>
+    <p><code>_NEG_BEFORE_RE</code> requires the negation word <i>immediately</i> before the phrase, so its modal entries (<code>cannot</code>, <code>can't</code>, <code>won't</code>, <code>never</code>) only fire on ungrammatical text — real English puts "be" between them and the phrase.</p>
+    <pre><code>parse_depends_on("cannot be blocked by #5")          → [5]  # a statement of NON-dependency
+parse_depends_on("This will never be blocked by #5") → [5]
+parse_depends_on("This is not really blocked by #5") → [5]  # "immediate-only" is documented, but…</code></pre>
+    <p><b>Fix:</b> permit an optional <code>(?:be|get)\s+</code> between negation and phrase. The "not really" case can stay (documented immediate-negation scope) — the modals are the actual bug, since they're listed in the regex yet can practically never match.</p>
+  </div>
+
+  <div class="find">
+    <h3>F4 · String-typed <code>depends_on</code> silently drops the edge <span class="chip c-defer">Med-Low · robustness</span></h3>
+    <p>A hand-edited live state file (the resumption substrate is hand-maintained JSON by design) with <code>"depends_on": ["148"]</code> imposes <b>no edge</b> in either <code>topo_sort_issues</code> or <code>next_ready_issue</code> — the string is filtered as "external" and assumed satisfied. Executed: <code>next_ready_issue</code> returned the dependent <b>before</b> its dependency. <code>validate_driver_state</code> catches the type — but nothing in code or doc mandates validating on state-file <i>load</i>; <code>validate_campaign_start</code> is start-only.</p>
+    <p><b>Fix:</b> one doc sentence in §Resumption ("validate on every load, not just start") — or harden <code>_in_queue_deps</code> to raise on non-int, matching the module's fail-closed posture.</p>
+  </div>
+
+  <div class="find">
+    <h3>F5 · The "ledger" is referenced twice, defined nowhere <span class="chip c-defer">Med-Low · spec gap</span></h3>
+    <p>Doc L124 ("park, surface in ledger") and L224 ("note the resume-after-window-reset time in the ledger") both route information to a ledger with <b>no location, format, or owner</b>. Design #134 listed the "alignment ledger" as one of the hand-rolled artifacts the pattern was meant to formalize — it lost its definition in the build. First campaign to DEFER something has nowhere specified to surface it.</p>
+    <p><b>Fix:</b> define it — simplest honest answer: the ledger <i>is</i> the state file's per-issue fields + a dated <code>notes[]</code> array (schema already tolerates extra keys via <code>additionalProperties: true</code>), or the campaign's session-notes section; one paragraph either way.</p>
+  </div>
+
+  <div class="find sev-low">
+    <h3>F6 · "Parked" is two different states <span class="chip c-defer">Low · spec ambiguity</span></h3>
+    <p>The DEFER table says a dependent of a deferred issue is parked with <code>deferred_reason: cross-issue-dependency</code> (status → <code>deferred</code>); the advance rule + code treat parking as <b>skip-while-queued</b> (status untouched, no reason ever recorded — <code>next_ready_issue</code> just passes over it). Same event, two contradictory state outcomes. If the orchestrator follows the table, the dependent leaves <code>queued</code> and the skip logic is dead code; if it follows the code, the taxonomy row's reason is never set.</p>
+    <p><b>Fix:</b> pick one — recommend transient skip (code behavior) with the taxonomy row reworded to "implicitly parked while queued; mark <code>deferred</code> only if the dependency is abandoned."</p>
+  </div>
+
+  <div class="find sev-low">
+    <h3>F7 · Epic body through <code>parse_depends_on</code> = all children become "dependencies" <span class="chip c-defer">Low · footgun</span></h3>
+    <p>The same <code>- [ ] #N</code> syntax serves two roles: epic queue derivation and dependency declaration. Executed: an epic body with two task-list children returns <code>[201, 202]</code> as <i>dependencies</i>. The doc never warns that the epic body must not be dependency-parsed — a driver that naively parses every issue body inverts the epic into a self-dependency knot.</p>
+    <p><b>Fix:</b> one doc sentence in §Epic anchor: "never run <code>parse_depends_on</code> on the epic body itself."</p>
+  </div>
+</section>
+
+<section id="ac">
+  <h2>AC coverage</h2>
+  <p class="h2sub">Checked criterion-by-criterion against the merged tree.</p>
+  <div class="tscroll"><table>
+    <thead><tr><th>AC</th><th>Status</th><th>Note</th></tr></thead>
+    <tbody>
+      <tr><td><b>#148-1</b> pattern doc: loop, policies, resumption</td><td><span class="chip c-keep">met</span></td><td>All present; drift-guard tested</td></tr>
+      <tr><td><b>#148-2</b> committed queue schema at <code>claude_docs/.driver-state/</code></td><td><span class="chip c-defer">met, path deviated</span></td><td><code>claude_docs/</code> is gitignored — contract moved to <code>docs/driver-state/</code>, live state disk-persisted; deviation Decision-logged in-slot. Justified.</td></tr>
+      <tr><td><b>#148-3</b> DEFER taxonomy + branch preservation</td><td><span class="chip c-keep">met</span></td><td>F6 ambiguity on the parked-dependent row</td></tr>
+      <tr><td><b>#148-4</b> reconciliation table, resume via <code>resume_lib</code></td><td><span class="chip c-keep">met</span></td><td>Matches #134's table; F4 wants validate-on-load added</td></tr>
+      <tr><td><b>#148-5</b> does not weaken WF2</td><td><span class="chip c-keep">met</span></td><td>Structural (driver owns no WF2 step) — strongest part of the design</td></tr>
+      <tr><td><b>#163-1</b> <code>depends_on</code> parsed from bodies + gh api</td><td><span class="chip c-defer">met, weakened</span></td><td>F2 under-capture; gh-api supplement is one prose line</td></tr>
+      <tr><td><b>#163-2</b> topo-sort, cycles fail-closed w/ cycle printed</td><td><span class="chip c-keep">met</span></td><td>Kahn + cycle extraction verified incl. self-cycle <code>#5 → #5</code></td></tr>
+      <tr><td><b>#163-3</b> advance rule + <code>deps_satisfied_by</code> knob</td><td><span class="chip c-dep">met, conflicted</span></td><td>F1 — the knob's use collides with the serial-active invariant</td></tr>
+      <tr><td><b>#163-4</b> deferred dep parks dependents, loop continues</td><td><span class="chip c-keep">met</span></td><td>F6 wording split between table and code semantics</td></tr>
+      <tr><td><b>#163-5</b> epic anchor, one-way mirror, headless refuses</td><td><span class="chip c-keep">met</span></td><td><code>validate_campaign_start</code> makes the refuse executable; mirror is procedural (fine for a pattern); F7 footgun</td></tr>
+      <tr><td><b>#163-6</b> rate-limit → budget DEFER</td><td><span class="chip c-keep">met</span></td><td>References the undefined ledger (F5)</td></tr>
+      <tr><td><b>#163-7</b> v1 state files still readable</td><td><span class="chip c-keep">met</span></td><td>v1 example validates under v2 schema + pure validator; test-locked</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>Honest gap on the success metric:</b> "5-issue dependency-ordered campaign, 0 ordering violations" is proven only by unit tests as proxy — no real dependency-ordered campaign has run yet. The M3 tail (#162 → #161) was designed to be that proving run; it is currently paused.</div>
+</section>
+
+<section id="clean">
+  <h2>Verified clean</h2>
+  <div class="cardgrid">
+    <div class="card"><h3>Kahn + cycle machinery <span class="chip c-conf">executed</span></h3><p>Deterministic tie-break (min-heap, lowest number first); duplicate deps in one <code>depends_on</code> don't corrupt in-degrees; self-dependency raises with <code>#5 → #5</code> printed; <code>_find_cycle</code> terminates (every remaining node keeps an in-set dep, so the walk must revisit); duplicate issue numbers rejected in both entry points.</p></div>
+    <div class="card"><h3>In-slot review fixes held <span class="chip c-conf">executed</span></h3><p>Word-boundary phrase match ("unblocked by" ignored), immediate negation, sentence-boundary list grammar, task-list + keyword same-line union, case-insensitive raw-line match, bool-as-int rejection, missing-<code>number</code> → typed <code>DriverStateError</code> — all re-verified against the merged module.</p></div>
+    <div class="card"><h3>Schema ↔ validator ↔ examples <span class="chip c-conf">executed</span></h3><p>Both committed examples pass jsonschema (draft-07, hard import — no silent skip) and the pure validator; enums match <code>VALID_STATUSES</code> / <code>_SATISFIED_BY</code>; validator documented as a lenient structural subset of the schema. No drift.</p></div>
+    <div class="card"><h3>Test non-vacuity</h3><p>Parse/topo/advance tests assert exact values; validator tests assert both verdict and error substring; the not-markdown-aware limitation is <i>locked as documented behavior</i> rather than hidden — good honesty pattern.</p></div>
+  </div>
+</section>
+
+<section id="recs">
+  <h2>Recommended follow-up</h2>
+  <p class="h2sub">All small; none blocks the pause. Bundle as one "driver hardening" issue when the campaign resumes — natural rider for slot 11.</p>
+  <div class="tscroll"><table>
+    <thead><tr><th>#</th><th>Action</th><th>Size</th></tr></thead>
+    <tbody>
+      <tr><td><b>F1</b></td><td><b>Owner fork first:</b> relax invariant to <code>in_progress ≤ 1</code> (recommended) or scope the knob to reconciliation-only; then 2-line code + doc + flip the locking test</td><td>S</td></tr>
+      <tr><td><b>F2+F3</b></td><td>Widen list grammar (<code>issues?/prs?/epics?</code> noun) + negation <code>be|get</code> bridge; +6 regression tests from this review's probes</td><td>S</td></tr>
+      <tr><td><b>F4</b></td><td>Mandate validate-on-load in §Resumption (or raise on non-int deps)</td><td>XS</td></tr>
+      <tr><td><b>F5</b></td><td>Define the ledger (state-file <code>notes[]</code> or session-notes section)</td><td>XS</td></tr>
+      <tr><td><b>F6</b></td><td>Reword parked-dependent row to match code (transient skip)</td><td>XS</td></tr>
+      <tr><td><b>F7</b></td><td>One-line epic-body warning in §Epic anchor</td><td>XS</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer>Post-merge review of PR #185 (<code>d7ea584</code>, v2.64.0) · Fable 5, xhigh effort · all code findings executed against the merged module · 2026-07-04 · self-contained, no external resources.</footer>
+</div>
+
+</body>
+</html>
