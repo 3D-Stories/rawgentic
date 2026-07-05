@@ -29,9 +29,30 @@ All workflow skills share a **config-loading protocol** that reads project confi
 
 ---
 
+## Workflow Diagram
+
+The **official, versioned workflow diagram** — every workflow's spine with clickable
+per-station drill-down, a REV selector over historical WF2 spines, and loop-back
+budgets drawn as return arcs. Click through to the interactive version.
+
+<a href="docs/workflow-diagram.html">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/workflow-diagram-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/workflow-diagram-light.png">
+    <img alt="rawgentic official workflow diagram — WF2 Implement Feature, REV 3.10.0" src="docs/assets/workflow-diagram-light.png">
+  </picture>
+</a>
+
+*Snapshot of the WF2 sheet. The [interactive diagram](docs/workflow-diagram.html) covers
+WF1 / WF2 / WF3 / WF5 with per-station detail and version history — see
+[docs/workflow-diagram.md](docs/workflow-diagram.md) for the update recipe (it renders
+live via GitHub Pages when enabled for `main` + `/docs`).*
+
+---
+
 ## Contents
 
-- [Quick Start](#quick-start) · [Prerequisites](#prerequisites)
+- [Workflow Diagram](#workflow-diagram) · [Quick Start](#quick-start) · [Prerequisites](#prerequisites)
 - [Skills](#skills) — [Workspace Management](#workspace-management) · [Planning](#planning) · [SDLC Workflows](#sdlc-workflows) · [Security & Infrastructure](#security--infrastructure) · [Multi-Project Concurrent Sessions](#multi-project-concurrent-sessions)
 - [Configuration](#configuration) — [`.rawgentic.json`](#project-config-rawgenticjson) · [Protection Levels](#protection-levels) · [Workspace File](#workspace-file-rawgentic_workspacejson) · [Config-Loading Protocol](#config-loading-protocol)
 - [Architecture](#architecture) · [How It Works](#how-it-works) (Principles · Quality Gates · Run-Record Telemetry · Invariants)
@@ -674,6 +695,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v3.10.0 (2026-07-05)
+- **Official versioned workflow diagram (#197, closes epic #188).** New `docs/workflow-diagram.html` — a self-contained, hash-routed drafting-document SPA rendering every workflow's spine: full per-station drill-down for WF2 (all 19 stations: purpose, sub-steps, gate facts, lane behavior), skeletal phase sheets for WF1/WF3/WF5, a REV selector with the pre-campaign 3.1.0 spine vs 3.10.0 (revision triangles Δ mark what the epic changed; old revs render SUPERSEDED), loop-back budgets as return arcs, both themes (colored-ink vellum / luminous blueprint), embedded OFL fonts, zero external requests, DOM-builder rendering (no `innerHTML`, test-enforced). README now embeds theme-aware snapshots (`docs/assets/`) linking to the interactive page; `docs/workflow-diagram.md` carries the append-a-revision + snapshot-regeneration recipes. Guarded by `tests/test_workflow_diagram.py` (15 tests).
 
 ### v3.9.0 (2026-07-05)
 - **Reopened #162 — post-PR code-review via the Action (#196, epic #188).** New `.github/workflows/claude-code-review.yml` runs the built-in `/code-review` through `claude-code-action@v1` (OAuth-first, draft-gated, SHA-pinned, non-blocking) as the **candidate `builtin_code_review` arm** the #162 data gate needed — running **additively** to WF2's hand-rolled Step 11 panel, so coverage never drops and the circular gate is broken. With #189's token telemetry now in place, the AC4 A/B (built-in vs hand-rolled findings-yield-per-token over ≥10 runs) is **computable**; the #162 decision record is reopened as "computable, pending owner-gated data" (the ≥10 runs need the live Action's auth secret). Capture mechanism (`reviewer_kind: builtin_code_review` + `usage`) documented at `docs/run-records.md#builtin-code-review-capture`. WF5's Codex diff pass is unchanged.
