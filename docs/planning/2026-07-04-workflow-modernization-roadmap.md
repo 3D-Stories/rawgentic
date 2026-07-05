@@ -6,6 +6,8 @@ Date: 2026-07-04 · Companion to [findings](2026-07-04-workflow-modernization-re
 >
 > **Re-scoped 2026-07-04 (owner-approved): milestones ARE the execution phases.** The original capability grouping (instrument / restructure / autonomy / headless) was re-cut so milestone membership matches the dogfood execution order — no cross-milestone execution, no confusion. Moves from the original cut: #166 M4→M1 · #164 M3→M2 · #162+#161 M2→M3 (v3.0.0 now ships in M3).
 >
+> **Status 2026-07-04 (owner directive): #184 (version-aware setup prompt, epic #169) inserted into the campaign as slot 12, BEFORE #161** — the v3.0.0 upgrade guide can then point at the shipped prompt. Tail order is now #162 → #184 → #161 → #165 (slots 11–14).
+>
 > **Status 2026-07-05: #162 (slot 11) ABANDONED per its own AC4 data gate** — the candidate arm (`builtin_code_review`) had 0 recorded runs vs ≥10 required, and token telemetry was null in all 23 run-records. Row 25's assumption ("the program is its own A/B") was circular: campaign runs could only generate candidate-arm data *after* the switch this gate blocks. Decision record + reopen conditions: [2026-07-05-issue-162-data-gate-decision.md](../measurements/2026-07-05-issue-162-data-gate-decision.md).
 
 ## The dogfood program
