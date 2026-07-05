@@ -57,7 +57,7 @@ def _inline(escaped: str) -> str:
     return escaped
 
 
-def _render_body(markdown: str) -> str:
+def _render_body_plain(markdown: str) -> str:
     """Escape-first block renderer. Every line is escaped before classification;
     transforms only wrap escaped text in whitelisted tags."""
     lines = markdown.split("\n")
@@ -137,6 +137,80 @@ def _render_body(markdown: str) -> str:
 
     close_list()
     return "\n".join(out)
+
+
+# --- #199: opt-in "roadmap" style — bubble cards + completion chips ---
+
+# Completion status → chip class, in PRECEDENCE order. The chip LABEL is always the
+# matched keyword from THIS fixed vocabulary (never raw section text), so it is
+# escape-safe by construction — an injection in the status position can never reach
+# the label. Word-boundary matched so "incomplete" does not match "complete".
+_STATUS_VOCAB: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("done", "shipped", "merged", "complete"), "c-conf"),
+    (("abandoned", "blocked", "dropped", "halted", "reverted"), "c-defer"),
+    (("planned", "next", "not started", "in progress", "pending", "todo"), "c-plan"),
+)
+
+
+def status_chip(text: str) -> tuple[str, str]:
+    """Return (css_class, label) for a section's completion status. Scans by
+    category precedence (done > attention > planned), word-boundary matched.
+    Fail-safe neutral ``("c-plan", "—")`` when no keyword is found. The label is
+    drawn from the fixed vocab above, never the raw input — see the note there."""
+    low = text.lower()
+    for words, cls in _STATUS_VOCAB:
+        for w in words:
+            if re.search(rf"\b{re.escape(w)}\b", low):
+                return (cls, w.upper())
+    return ("c-plan", "—")
+
+
+def _render_roadmap(markdown: str) -> str:
+    """Render each ``## `` (h2) section as a dashboard-style ``.mstone`` bubble card
+    titled with a completion chip. Preamble before the first h2 renders plain. All
+    text stays escape-first: the heading is escaped exactly as the plain renderer
+    does, the body goes through the plain renderer, and the chip label is fixed vocab."""
+    lines = markdown.split("\n")
+    h2 = re.compile(r"##(?!#)\s+(.*)")  # h2 only — ### and deeper stay in-card
+    out: list[str] = []
+    i, n = 0, len(lines)
+
+    pre: list[str] = []
+    while i < n and not h2.match(lines[i]):
+        pre.append(lines[i])
+        i += 1
+    if any(l.strip() for l in pre):
+        out.append(_render_body_plain("\n".join(pre)))
+
+    while i < n:
+        heading = h2.match(lines[i]).group(1)
+        i += 1
+        sec: list[str] = []
+        while i < n and not h2.match(lines[i]):
+            sec.append(lines[i])
+            i += 1
+        # Heading takes precedence (that's where the author states status, e.g.
+        # "... — ABANDONED"); fall back to the body only when the heading has no
+        # keyword. Scanning the whole section at once would let an incidental
+        # "merged" in an ABANDONED slot's body outrank the heading's real status.
+        cls, label = status_chip(heading)
+        if (cls, label) == ("c-plan", "—"):
+            cls, label = status_chip("\n".join(sec))
+        body_html = _render_body_plain("\n".join(sec))
+        out.append(
+            f'<section class="mstone"><h3>{_inline(html.escape(heading))} '
+            f'<span class="chip {cls}">{html.escape(label)}</span></h3>'
+            f'{body_html}</section>'
+        )
+    return "\n".join(out)
+
+
+def _render_body(markdown: str, style: str = "plain") -> str:
+    """Dispatch on style. ``plain`` (default) is byte-for-byte the pre-#199 renderer;
+    ``roadmap`` wraps h2 sections in bubble cards with completion chips."""
+    if style == "roadmap":
+        return _render_roadmap(markdown)
+    return _render_body_plain(markdown)
 
 
 # --- telemetry (read-only consumer of the run-record shape) ---
@@ -234,27 +308,46 @@ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);verti
 footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
 """
 
+# #199: injected ONLY in roadmap style, so plain output stays byte-identical to
+# pre-#199. Adds the chip/card color tokens (dashboard values, light + dark) plus
+# the .mstone / .chip / completion-color component rules the dashboard uses.
+_ROADMAP_STYLE = """
+:root{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+@media(prefers-color-scheme:dark){:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+"""
+
 
 def render_artifact(markdown: str, *, title: str, subtitle: str = "",
-                    telemetry: dict | None = None, generated_at: str | None = None) -> str:
+                    telemetry: dict | None = None, generated_at: str | None = None,
+                    style: str = "plain") -> str:
     """Render `markdown` to a self-contained CSP-safe HTML string. All text is
     HTML-escaped before rendering (see module docstring). `generated_at` defaults
-    to the current mountain-time stamp."""
+    to the current mountain-time stamp. `style` is `plain` (default, unchanged) or
+    `roadmap` (#199 — h2 sections become dashboard-style bubble cards with chips)."""
     stamp = generated_at or _mountain_now()
     etitle = html.escape(title)
     esub = html.escape(subtitle)
-    body = _render_body(markdown)
+    body = _render_body(markdown, style=style)
     # `telemetry is not None` (not truthiness): an explicit empty {} means "record
     # present but empty" → the placeholder, distinct from None ("no telemetry").
     tel = _telemetry_html(telemetry) if telemetry is not None else ""
     sub_html = f'<p class="sub">{esub}</p>' if subtitle else ""
+    css = _STYLE + (_ROADMAP_STYLE if style == "roadmap" else "")
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{etitle}</title>
-<style>{_STYLE}</style>
+<style>{css}</style>
 </head>
 <body>
 <div class="wrap">
@@ -282,6 +375,8 @@ def main(argv=None) -> int:
     ap.add_argument("--subtitle", default="")
     ap.add_argument("--telemetry", help="run-record JSON file to embed (optional)")
     ap.add_argument("--generated-at", dest="generated_at", help="datetime stamp (default: mountain time now)")
+    ap.add_argument("--style", choices=("plain", "roadmap"), default="plain",
+                    help="plain (default) or roadmap (h2 sections -> bubble cards + chips)")
     args = ap.parse_args(argv)
 
     try:
@@ -297,7 +392,8 @@ def main(argv=None) -> int:
             print(f"render_artifact: could not read telemetry {args.telemetry}: {e}", file=sys.stderr)
             return 2
     html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
-                               telemetry=tel, generated_at=args.generated_at)
+                               telemetry=tel, generated_at=args.generated_at,
+                               style=args.style)
     open(args.out, "w", encoding="utf-8").write(html_out)
     return 0
 
