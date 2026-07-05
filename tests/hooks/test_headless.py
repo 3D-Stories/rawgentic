@@ -1376,9 +1376,11 @@ SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
 # Skills that invoke /reflexion:critique and carry the critiqueMethod preference check.
 # create-issue (WF1) was slimmed and no longer runs a multi-agent critique, so it is
 # intentionally absent.
+# implement-feature (WF2) retired its 3-judge Step-4 panel (#190) — it now runs
+# /reflexion:reflect for all lanes and carries no critiqueMethod preamble, so it is
+# intentionally absent too.
 # WF4/WF9/WF10 deprecated to stubs (#160) — no critique preamble on a redirect.
 CRITIQUE_SKILLS = [
-    "implement-feature",
     "setup",
 ]
 

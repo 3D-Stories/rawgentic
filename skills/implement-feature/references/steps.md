@@ -72,7 +72,7 @@ annotation, to keep the per-skill headless-annotation count stable.)
 | Step | Full WF2 | Small-standard lane | Why |
 |---|---|---|---|
 | 3 Design | inline 1-2 approaches + doc | **brief design note** (file list + failure modes + security), no multi-approach brainstorm | small work has one obvious approach |
-| 4 Design critique | 3-judge panel + peer consult + adversarial-on-design | **`/reflexion:reflect` only** — NO panel, NO peer consult, NO adversarial-on-design | field: panel reaffirms sound small designs |
+| 4 Design critique | **`/reflexion:reflect`** + peer consult + opt-in adversarial-on-design | **`/reflexion:reflect` only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
 | 5 Plan | full task decomposition + drift-ready fields | **checklist plan**: ordered tasks, each with `riskLevel` + a verification line; parallel_group/files optional | keeps TDD + risk tagging; drops ceremony |
 | 6 Plan drift | reflect + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
 | 8 / 8a | TDD; 8a per high-risk task | **UNCHANGED** — TDD kept; **8a still fires for any `riskLevel: high` task** | security surface never loses per-task review |
@@ -84,7 +84,7 @@ annotation, to keep the per-skill headless-annotation count stable.)
 
 **Exact retained vs. removed gates** (no vague "every safety gate"):
 - **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).
-- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (`/reflexion:reflect` only — no 3-judge panel, no peer consult, no adversarial-on-design), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).
+- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (`/reflexion:reflect` only — no peer consult, no adversarial-on-design; WF2's Step 4 uses reflect on the full spine too since #190, so the lane differs only by dropping the opt-in cross-model layers), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).
 - **REMOVED entirely:** Step 6 (plan drift).
 
 The RETAINED set is non-negotiable: Step 11 caught 2 Criticals on a run judged "too simple to
@@ -408,43 +408,36 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Instructions
 
-**Critique method preference:** Before running the critique, check the active project entry's `critiqueMethod` field in `.rawgentic_workspace.json`. `reflexion` (the default, also used when the field is missing) is the supported method — proceed with the critique below.
+Step 4 runs `/reflexion:reflect` over the design for **all** lanes. The same-model
+multi-judge design panel (WF2's old full-critique gate) was retired from WF2 (#190): owner
+telemetry showed ≈ 0 measured gain from it, and the lean spine shipped 10/10 campaign issues
+with 0 loop-backs. High-stakes design scrutiny stays available — cross-model and opt-in —
+via the WF5 **adversarial-on-design** sub-step (item 7), which is where genuine design-flaw
+catching now lives on the full spine.
 
-**Determine gate type based on lane eligibility** (`small_standard_lane_eligible`, a.k.a. the
-`fast_path_eligible` alias):
-- If `small_standard_lane_eligible == true` (i.e. `fast_path_eligible == true`): use
-  `/reflexion:reflect` (lightweight) and run **NO 3-judge panel, NO peer consult (the Step 3
-  peer-consult sub-step), and NO adversarial-on-design (item 7)** — the lane collapses Step 4 to
-  reflect only. (The Step 3 peer consult and this step's adversarial review are both design-stage
-  ceremony the lane deliberately drops.)
-- If `fast_path_eligible == false`: use `/reflexion:critique` (full 3-judge), plus the opt-in
-  peer consult (Step 3) and the opt-in adversarial-on-design sub-step (item 7) below.
+**Determine gate shape based on lane eligibility** (`small_standard_lane_eligible`, a.k.a.
+the `fast_path_eligible` alias):
+- If `fast_path_eligible == true` (lane): run `/reflexion:reflect` only — **NO peer consult
+  (the Step 3 sub-step) and NO adversarial-on-design (item 7)**. The lane drops all
+  design-stage cross-model ceremony.
+- If `fast_path_eligible == false` (full spine): run `/reflexion:reflect`, **plus** the opt-in
+  Step 3 peer consult and the opt-in adversarial-on-design sub-step (item 7) below.
 
-**For full critique (`/reflexion:critique`):**
+**Reflect (`/reflexion:reflect`) — all lanes:**
 
 <!-- model-routing: role=review -->
-Dispatch the judges as `rawgentic:rawgentic-reviewer` agents per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
+When run as a subagent, dispatch it as a `rawgentic:rawgentic-reviewer` per the
+`<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort
+dual-path, always logged). Reflect is a single-pass, same-model check over the design:
+- Does the design respect existing patterns and project conventions, with appropriate
+  dependencies (prefer existing libraries)?
+- Are all acceptance criteria addressed, edge cases and failure modes identified, and the
+  implementation verifiable (tests if available, otherwise manual checks or scripts)?
+- Input validation at boundaries, credential handling (no hardcoded secrets),
+  backward-compatibility or a migration plan, acceptable performance?
+- For WF1-validated issues: does the design align with the WF1-critiqued spec?
 
-1. Launch three judge sub-agents in parallel. If any returns 429, retry that agent after 30s.
-
-   **Judge 1: Architecture & Patterns Reviewer**
-   - Does the design respect existing patterns in the codebase and project conventions?
-   - Is the architecture consistent with project conventions?
-   - Are dependencies appropriate (prefer existing libraries per project conventions)?
-
-   **Judge 2: Completeness & Testability Reviewer**
-   - Are all acceptance criteria addressed?
-   - Are edge cases handled?
-   - Are failure modes identified?
-   - Can the implementation be verified? (tests if available, otherwise manual checks or scripts)
-
-   **Judge 3: Security & Risk Reviewer**
-   - Input validation at system boundaries?
-   - Credential handling (no hardcoded secrets)?
-   - Are changes backward-compatible or is a migration plan in place?
-   - Performance implications acceptable?
-
-2. Each judge produces findings:
+Reflect produces findings in the shape the gate consumes:
    ```
    Finding #N:
    - Severity: Critical | High | Medium | Low
@@ -455,8 +448,6 @@ Dispatch the judges as `rawgentic:rawgentic-reviewer` agents per the `<model-rou
    - Ambiguity reason: [why, if ambiguous]
    ```
 
-3. Synthesize findings. Debate round if judges disagree.
-
 4. **Volume threshold check** (per-tier independent): thresholds per `VOLUME_THRESHOLDS`.
 
 5. **If loop-back triggered:**
@@ -465,21 +456,21 @@ Dispatch the judges as `rawgentic:rawgentic-reviewer` agents per the `<model-rou
    - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with findings summary, add rawgentic:ai-error label, exit.]**
    - **If the adversarial review sub-step (item 7) is enabled and still in flight when this loop-back fires:** do NOT wait for it and do NOT run the ambiguity breaker (thresholds did not pass). **Discard the in-flight adversarial result as stale** — it reviewed a design that is now being revised (this is the documented one-wasted-call tradeoff) — and log `### WF2 Step 4 — Adversarial Review (discarded: superseded by volume loop-back)`. Return to Step 3; the next Step 4 pass dispatches a fresh adversarial review against the revised design.
 
-6. **If thresholds pass:** Apply the ambiguity circuit breaker over the reflexion findings — **unless** the adversarial review sub-step (item 7) is enabled for this run. When it is enabled, do NOT run the breaker here; **defer** it to the single merged-findings join barrier in item 7, so the breaker runs **exactly once** over the combined reflexion + adversarial findings rather than twice. (The volume/loop-back checks in items 4–5 still run on the reflexion findings as soon as the judges return; only the breaker is deferred.)
+6. **If thresholds pass:** Apply the ambiguity circuit breaker over the reflect findings — **unless** the adversarial review sub-step (item 7) is enabled for this run. When it is enabled, do NOT run the breaker here; **defer** it to the single merged-findings join barrier in item 7, so the breaker runs **exactly once** over the combined reflect + adversarial findings rather than twice. (The volume/loop-back checks in items 4–5 still run on the reflect findings as soon as reflect returns; only the breaker is deferred.)
 
-7. **Adversarial review sub-step (opt-in, cross-model — runs concurrently with the judges).** Evaluate the two gate conditions UP FRONT, before launching the three reflexion judges, so the cross-model adversarial review of the design document can be dispatched **concurrently with the judges** rather than serially after them. Both review the same design document, so there is no ordering dependency, and overlapping them removes a serial round-trip from the critical path of every gated run. Gate it on BOTH conditions:
-   - `fast_path_eligible == false` (skip cheap-path designs — this is additive to the full critique, never a replacement), AND
+7. **Adversarial review sub-step (opt-in, cross-model — runs concurrently with reflect).** Evaluate the two gate conditions UP FRONT, before running reflect, so the cross-model adversarial review of the design document can be dispatched **concurrently with reflect** rather than serially after it. Both review the same design document, so there is no ordering dependency, and overlapping them removes a serial round-trip from the critical path of every gated run. Gate it on BOTH conditions:
+   - `fast_path_eligible == false` (skip cheap-path designs — this is additive to the reflect gate, never a replacement), AND
    - the active project opts in:
      ```bash
      python3 hooks/adversarial_review_lib.py is-enabled \
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
      The command exits `0` when the review is enabled for this skill and `1` (or any non-zero) otherwise. If it exits non-zero, or `fast_path_eligible == true`, **skip silently** — behavior is byte-for-byte unchanged.
-   When both gates pass, dispatch `/rawgentic:adversarial-review <design-doc-path>` **in parallel with the judges** (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate at the **join barrier** described next:
-   - **Join barrier (single breaker):** once both the judges and the review have returned, merge adversarial findings with the reflexion findings into ONE list, tagging each with `source: reflexion | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, reflexion-only breaker.
-   - If the merged list contains one or more Critical/High design flaws, consume **exactly one** `design` loop-back via `plan_lib.consume_loopback(<counters>, "design")` (the existing counter, NOT a new source) regardless of how many such findings there are, and return to Step 3 once with the unified constraint set. Do not consume per-finding and do not double-count against the reflexion loop-back.
-   - **Codex failure is non-blocking (the review is additive — the reflexion gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the reflexion result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the reflexion-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
-   - **Concurrency tradeoff (accepted):** because the review now overlaps the judges instead of waiting for them, a design that the judges send back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
+   When both gates pass, dispatch `/rawgentic:adversarial-review <design-doc-path>` **in parallel with reflect** (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate at the **join barrier** described next:
+   - **Join barrier (single breaker):** once both reflect and the review have returned, merge adversarial findings with the reflect findings into ONE list, tagging each with `source: reflect | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, reflect-only breaker.
+   - If the merged list contains one or more Critical/High design flaws, consume **exactly one** `design` loop-back via `plan_lib.consume_loopback(<counters>, "design")` (the existing counter, NOT a new source) regardless of how many such findings there are, and return to Step 3 once with the unified constraint set. Do not consume per-finding and do not double-count against the reflect loop-back.
+   - **Codex failure is non-blocking (the review is additive — the reflect gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the reflect result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the reflect-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
+   - **Concurrency tradeoff (accepted):** because the review now overlaps reflect instead of waiting for it, a design that reflect sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
    - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
 
 **Breaker decision — run the ambiguity circuit breaker EXACTLY ONCE (items 4–7, summarized).**
@@ -490,21 +481,22 @@ the single breaker runs over. It runs in exactly one row, never twice:
 | Volume loop-back fired (item 5)? | Adversarial sub-step (item 7) state | Breaker runs over |
 |---|---|---|
 | **yes** | (any) | **SKIP** — return to Step 3 now; discard any in-flight adversarial result as stale (item 5). The breaker runs on the *next* Step 4 pass. |
-| no | disabled / not opted-in / fast-path | **reflexion-only** findings |
-| no | enabled AND returned | **merged** reflexion + adversarial (the join barrier, item 7) |
-| no | enabled BUT non-success (not installed / timeout / error / parse error) | **reflexion-only** findings — skipping the adversarial layer must NOT skip the breaker, **else it runs zero times** (item 7) |
+| no | disabled / not opted-in / fast-path | **reflect-only** findings |
+| no | enabled AND returned | **merged** reflect + adversarial (the join barrier, item 7) |
+| no | enabled BUT non-success (not installed / timeout / error / parse error) | **reflect-only** findings — skipping the adversarial layer must NOT skip the breaker, **else it runs zero times** (item 7) |
 
 The only path on which the breaker does not run is the volume-loop-back row, and that is
 because it returns to Step 3 *before* the breaker point — not because the breaker was skipped.
 
-**For fast path (`/reflexion:reflect`):**
-Single-pass checking: does the solution address the issue, are there unintended side effects, is it in the right layer? For WF1-validated issues: does design align with WF1-critiqued spec? (The adversarial review sub-step above does NOT run on the fast path.)
+**Lane note:** on the fast path the adversarial review sub-step (item 7) and the Step 3 peer
+consult do NOT run — reflect alone is the gate. The reflect dimensions above are unchanged;
+only the opt-in cross-model layers are dropped.
 
 ### Output
 Amended design document.
 
 ### Failure Modes
-- Zero findings from full critique: verify judges actually analyzed the design
+- Zero findings from reflect: verify reflect actually analyzed the design (not a rubber-stamp)
 - Ambiguity circuit breaker triggers on >50% of findings: design may be underspecified
 
 ---
