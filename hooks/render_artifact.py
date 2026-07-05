@@ -183,6 +183,8 @@ def _telemetry_html(t: dict) -> str:
     gates = t.get("gates") or []
     gate_rows = ""
     for g in gates:
+        if not isinstance(g, dict):
+            continue  # drifted record: skip a non-dict gate entry rather than crash
         gate_rows += (f"<tr><td>{esc(g.get('step','?'))}</td><td>{esc(g.get('name','?'))}</td>"
                       f"<td>{esc(g.get('findings',0))}</td><td>{esc(g.get('resolved',0))}</td>"
                       f"<td>{esc(g.get('status','?'))}</td></tr>")
@@ -242,7 +244,9 @@ def render_artifact(markdown: str, *, title: str, subtitle: str = "",
     etitle = html.escape(title)
     esub = html.escape(subtitle)
     body = _render_body(markdown)
-    tel = _telemetry_html(telemetry) if telemetry else ""
+    # `telemetry is not None` (not truthiness): an explicit empty {} means "record
+    # present but empty" → the placeholder, distinct from None ("no telemetry").
+    tel = _telemetry_html(telemetry) if telemetry is not None else ""
     sub_html = f'<p class="sub">{esub}</p>' if subtitle else ""
     return f"""<!doctype html>
 <html lang="en">

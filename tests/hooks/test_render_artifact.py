@@ -226,3 +226,25 @@ def test_cli_missing_markdown_is_rc2(tmp_path):
     )
     assert rc.returncode == 2
     assert "could not read markdown" in rc.stderr
+
+
+# --- Codex Step-11 fixes: robust telemetry against drifted run-records ---
+
+def test_non_dict_gate_element_does_not_crash():
+    tel = {"issue": {"number": 1, "type": "feature", "complexity": "standard"},
+           "gates": ["not-a-dict", {"step": "11", "name": "Code Review", "findings": 0, "resolved": 0, "status": "pass"}],
+           "tests": {"added": 0, "passing": 1, "total": 1},
+           "security_scan": {"ran": True, "blocking_resolved": 0, "advisory": 0, "skipped": []},
+           "lane": "full", "usage": {}}
+    html = _render("# Doc", telemetry=tel)
+    assert "Code Review" in html   # the valid gate still renders; the bad one is skipped
+
+
+def test_empty_dict_telemetry_shows_placeholder_not_absent():
+    html = _render("# Doc", telemetry={})   # explicit empty record != None
+    assert "telemetry unavailable" in html
+
+
+def test_none_telemetry_has_no_section():
+    html = _render("# Doc", telemetry=None)
+    assert "Run telemetry" not in html
