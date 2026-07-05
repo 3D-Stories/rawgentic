@@ -113,6 +113,29 @@ def test_parse_depends_on_not_markdown_aware_documented_limitation():
     assert driver_lib.parse_depends_on("> reviewer said: depends on #666") == [666]
 
 
+def test_parse_depends_on_noun_phrasing_before_ref():
+    # F2: an optional "issue/PR/epic" noun before a #N must not block capture.
+    assert driver_lib.parse_depends_on("Depends on issue #10.") == [10]
+    assert driver_lib.parse_depends_on("Blocked by issues #10 and #20.") == [10, 20]
+    assert driver_lib.parse_depends_on("depends on the epic #30") == [30]
+    assert driver_lib.parse_depends_on("Blocked by PR #44") == [44]
+    # noun repeated before each subsequent #N in the list, too
+    assert driver_lib.parse_depends_on("depends on issue #10 and issue #11") == [10, 11]
+
+
+def test_parse_depends_on_negation_modal_be_get_bridge():
+    # F3: a modal negation with a "be"/"get" bridge still negates the phrase.
+    assert driver_lib.parse_depends_on("cannot be blocked by #5") == []
+    assert driver_lib.parse_depends_on("This will never be blocked by #5") == []
+    assert driver_lib.parse_depends_on("won't be blocked by #5") == []
+
+
+def test_parse_depends_on_negation_scoped_to_first_phrase_composite():
+    # F3 must-not-regress: negation applies only to the phrase it precedes; a
+    # later un-negated phrase on the same line still contributes its deps.
+    assert driver_lib.parse_depends_on("not blocked by #5, but blocked by #6") == [6]
+
+
 # --------------------------------------------------------------------------- #
 # topo_sort_issues
 # --------------------------------------------------------------------------- #
@@ -175,6 +198,18 @@ def test_topo_sort_missing_number_raises_driver_state_error():
     # (8a R1-F2 / R2-F5).
     with pytest.raises(driver_lib.DriverStateError):
         driver_lib.topo_sort_issues([{"status": "queued"}])
+
+
+def test_topo_sort_non_int_depends_on_entry_raises_driver_state_error():
+    # F4: a string dep entry ("148") would silently impose no edge (treated as
+    # external/satisfied). Fail closed instead, naming the offending issue.
+    issues = [
+        {"number": 163, "status": "queued", "depends_on": ["148"]},
+        {"number": 148, "status": "queued"},
+    ]
+    with pytest.raises(driver_lib.DriverStateError) as exc:
+        driver_lib.topo_sort_issues(issues)
+    assert "163" in str(exc.value)
 
 
 # --------------------------------------------------------------------------- #
@@ -244,6 +279,18 @@ def test_next_ready_issue_missing_number_raises_driver_state_error():
         driver_lib.next_ready_issue(state)
 
 
+def test_next_ready_issue_non_int_depends_on_entry_raises_driver_state_error():
+    # F4: a string dep entry must fail closed here too (both entry points route
+    # through _in_queue_deps), naming the offending issue.
+    state = {"schema_version": 2, "campaign": "c", "issues": [
+        {"number": 163, "status": "queued", "depends_on": ["148"]},
+        {"number": 148, "status": "queued"},
+    ]}
+    with pytest.raises(driver_lib.DriverStateError) as exc:
+        driver_lib.next_ready_issue(state)
+    assert "163" in str(exc.value)
+
+
 # --------------------------------------------------------------------------- #
 # validate_driver_state (v1/v2 readability)
 # --------------------------------------------------------------------------- #
@@ -306,13 +353,28 @@ def test_validate_driver_state_duplicate_number():
 
 
 def test_validate_driver_state_serial_active_invariant():
-    # At most one issue may be in_progress/pr_open (Codex diff-review F2).
+    # F1: the serial invariant is in_progress-ONLY — at most one build at a time,
+    # but pr_open may accumulate awaiting human merge (headless stacked-PR flow).
+    # (a) one in_progress + one pr_open -> VALID (was rejected before F1).
     ok, errors = driver_lib.validate_driver_state(
         {"schema_version": 2, "campaign": "c", "issues": [
             {"number": 1, "status": "in_progress"},
             {"number": 2, "status": "pr_open"}]})
+    assert ok, errors
+    # (b) two in_progress -> invalid; error names in_progress.
+    ok, errors = driver_lib.validate_driver_state(
+        {"schema_version": 2, "campaign": "c", "issues": [
+            {"number": 1, "status": "in_progress"},
+            {"number": 2, "status": "in_progress"}]})
     assert not ok
-    assert any("serial" in e or "in_progress" in e for e in errors)
+    assert any("in_progress" in e for e in errors)
+    # (c) two pr_open + one in_progress -> VALID (pr_open accumulates).
+    ok, errors = driver_lib.validate_driver_state(
+        {"schema_version": 2, "campaign": "c", "issues": [
+            {"number": 1, "status": "pr_open"},
+            {"number": 2, "status": "pr_open"},
+            {"number": 3, "status": "in_progress"}]})
+    assert ok, errors
 
 
 def test_validate_driver_state_single_active_ok():
