@@ -180,3 +180,78 @@ def test_find_session_file_resolves_direct():
 def test_find_session_file_missing_returns_none():
     assert uc.find_session_file("11111111-2222-3333-4444-555555555555",
                                 FIXTURES) is None
+
+
+# --- backfill against known-value fixtures (AC5c) ---
+
+def _rec(n, usage=None, session_id=None):
+    r = {"issue": {"number": n}}
+    if session_id:
+        r["session_id"] = session_id
+    if usage is not None:
+        r["usage"] = usage
+    return r
+
+
+def _null_usage(wall=None):
+    return {"input_tokens": None, "output_tokens": None, "cost_estimate_usd": None,
+            "wall_clock_s": wall, "model_mix": None}
+
+
+def test_backfill_recovers_marks_and_skips(tmp_path):
+    store = tmp_path / "recs.jsonl"
+    recs = [
+        _rec(1, _null_usage(wall=42), session_id=SAMPLE_SID),   # recoverable
+        _rec(2, _null_usage(wall=10)),                          # no correlator
+        _rec(3, {"input_tokens": 500, "output_tokens": 9, "cost_estimate_usd": 0.1,
+                 "wall_clock_s": 5, "model_mix": None}),        # already has data
+        _rec(4),                                                # no usage object
+    ]
+    store.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+    stats = uc.backfill_store(store, projects_dir=FIXTURES)
+    assert stats == {"recovered": 1, "unrecoverable": 1, "skip-has-data": 1,
+                     "skip-no-usage": 1, "malformed": 0}
+    out = [json.loads(l) for l in store.read_text().splitlines() if l.strip()]
+    # rec1: recovered to KNOWN hand-computed values, wall_clock preserved
+    assert out[0]["usage"]["input_tokens"] == EXP_INPUT
+    assert out[0]["usage"]["output_tokens"] == EXP_OUTPUT
+    assert out[0]["usage"]["capture_status"] == "captured"
+    assert out[0]["usage"]["wall_clock_s"] == 42
+    # rec2: unrecoverable marker, tokens stay null
+    assert out[1]["usage"]["capture_status"] == "unrecoverable"
+    assert out[1]["usage"]["input_tokens"] is None
+    # rec3 + rec4: untouched
+    assert out[2]["usage"]["input_tokens"] == 500 and "capture_status" not in out[2]["usage"]
+    assert "usage" not in out[3]
+
+
+def test_backfill_preserves_malformed_lines(tmp_path):
+    store = tmp_path / "r.jsonl"
+    store.write_text("not json at all\n"
+                     + json.dumps(_rec(1, _null_usage())) + "\n")
+    stats = uc.backfill_store(store)
+    assert stats["malformed"] == 1 and stats["unrecoverable"] == 1
+    assert store.read_text().splitlines()[0] == "not json at all"
+
+
+# --- AC3 drift-guard: the anti-#155 invariant over the committed store ---
+
+RUN_RECORDS = (Path(__file__).resolve().parent.parent.parent
+               / "docs" / "measurements" / "run_records.jsonl")
+
+
+def test_committed_store_no_null_usage_without_marker():
+    """No record may carry a usage object with null tokens AND no capture_status
+    marker — that is exactly the #155 null-forever state. Backfill removes it for
+    historical rows; live capture prevents it for new rows."""
+    recs = [json.loads(l) for l in RUN_RECORDS.read_text().splitlines() if l.strip()]
+    usage_objs = [r for r in recs if isinstance(r.get("usage"), dict)]
+    assert usage_objs, "no usage objects in the store — this guard would be vacuous"
+    offenders = [
+        r.get("issue") for r in usage_objs
+        if r["usage"].get("input_tokens") is None
+        and r["usage"].get("capture_status") not in {"unrecoverable", "unavailable"}
+    ]
+    assert not offenders, (
+        f"{len(offenders)} usage object(s) with null tokens and no capture_status "
+        f"marker (the #155 null-forever state): {offenders}")

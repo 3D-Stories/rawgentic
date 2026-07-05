@@ -189,12 +189,67 @@ def capture_usage(session_id: str, projects_dir=None) -> Optional[dict]:
     return usage
 
 
+def backfill_record(rec: dict, projects_dir=None) -> str:
+    """Backfill one run-record's usage in place. Returns the action taken:
+    ``skip-no-usage`` (no usage object) / ``skip-has-data`` (already captured or
+    non-null) / ``recovered`` (re-captured from a session id the record carries) /
+    ``unrecoverable`` (null usage with no correlator — the honest marker per AC2).
+
+    Historical records carry no session id, so they mark unrecoverable. A record
+    that DOES carry ``session_id`` (or ``usage.session_id``) can be re-captured —
+    this is the recoverable path the known-value backfill test exercises."""
+    usage = rec.get("usage")
+    if not isinstance(usage, dict):
+        return "skip-no-usage"
+    if usage.get("capture_status") == "captured" or usage.get("input_tokens") is not None:
+        return "skip-has-data"
+    sid = rec.get("session_id") or usage.get("session_id")
+    if sid:
+        cap = capture_usage(sid, projects_dir=projects_dir)
+        if cap is not None:
+            # preserve an existing wall_clock_s (capture doesn't know wall time)
+            if usage.get("wall_clock_s") is not None:
+                cap["wall_clock_s"] = usage["wall_clock_s"]
+            rec["usage"] = cap
+            return "recovered"
+    usage["capture_status"] = "unrecoverable"
+    return "unrecoverable"
+
+
+def backfill_store(records_path, projects_dir=None) -> dict:
+    """Backfill every record in a JSONL store IN PLACE (hand-edit each line, per the
+    append-only store's amend rule). Returns action counts. Non-record lines are
+    preserved verbatim so a malformed line is never silently dropped."""
+    path = Path(records_path)
+    out_lines: list[str] = []
+    stats = {"recovered": 0, "unrecoverable": 0, "skip-has-data": 0,
+             "skip-no-usage": 0, "malformed": 0}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            out_lines.append(line)
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            stats["malformed"] += 1
+            out_lines.append(line)  # preserve, don't drop
+            continue
+        action = backfill_record(rec, projects_dir=projects_dir)
+        stats[action] += 1
+        out_lines.append(json.dumps(rec, separators=(",", ":")))
+    path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    return stats
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Capture run-record usage from session logs (#189)")
     sub = parser.add_subparsers(dest="cmd", required=True)
     pc = sub.add_parser("capture", help="print the usage JSON for a session id")
     pc.add_argument("--session-id", required=True)
     pc.add_argument("--projects-dir", default=None)
+    pb = sub.add_parser("backfill", help="backfill usage in a run-records JSONL store")
+    pb.add_argument("--records", required=True)
+    pb.add_argument("--projects-dir", default=None)
     args = parser.parse_args(argv)
     if args.cmd == "capture":
         usage = capture_usage(args.session_id, projects_dir=args.projects_dir)
@@ -202,6 +257,10 @@ def main(argv=None) -> int:
             print(json.dumps({"capture_status": "unavailable"}))
             return 0
         print(json.dumps(usage))
+        return 0
+    if args.cmd == "backfill":
+        stats = backfill_store(args.records, projects_dir=args.projects_dir)
+        print(json.dumps(stats))
         return 0
     return 2
 
