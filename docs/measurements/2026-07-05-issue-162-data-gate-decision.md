@@ -18,7 +18,7 @@ Success metric: *"Findings-yield per token by reviewer_kind before vs after; Cri
 | Fact | Measured | Gate requirement |
 |---|---|---|
 | `builtin_code_review` reviewer_kind | **0 gate-instances** in 23 records — the candidate arm has never run | ≥10 runs |
-| Token/cost telemetry (`usage.input_tokens` / `output_tokens` / `cost_estimate_usd`) | **null in all 23 records** (11 carry only `wall_clock_s`) | needed to compute yield-per-token for *any* arm |
+| Token/cost telemetry (`usage.input_tokens` / `output_tokens` / `cost_estimate_usd`) | **null in all 23 records** (11 carry a `usage` block, 10 of those with only `wall_clock_s` populated) | needed to compute yield-per-token for *any* arm |
 | `hand_rolled_multi` | 41 findings / 11 gate-instances | incumbent baseline exists |
 | `codex` | 16 findings / 4 gate-instances | WF5 arm exists |
 | `inline` | 19 findings / 13 gate-instances | reflect arm exists |
@@ -28,8 +28,8 @@ the success metric is incomputable because no run-record ever captured token usa
 
 ## Design flaw in the gate (named, not laundered)
 
-The modernization roadmap (docs/planning/2026-07-04-workflow-modernization-roadmap.md, execution-order
-row 25) assumed *"data gate satisfied by the program's own ≥10 reviewer_kind runs — the program is its
+The modernization roadmap (docs/planning/2026-07-04-workflow-modernization-roadmap.md, the
+execution-order table's slot-11 `#162 review switch` row) assumed *"data gate satisfied by the program's own ≥10 reviewer_kind runs — the program is its
 own A/B."* That assumption was **circular**: the campaign's runs could only generate `builtin_code_review`
 data *after* switching Step 11 to the built-in reviewer — which is precisely the change this gate blocks.
 As designed, the gate could only ever fail. The abandon branch firing is therefore the gate working as

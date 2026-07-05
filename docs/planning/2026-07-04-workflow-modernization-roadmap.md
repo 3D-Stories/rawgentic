@@ -8,7 +8,7 @@ Date: 2026-07-04 · Companion to [findings](2026-07-04-workflow-modernization-re
 >
 > **Status 2026-07-04 (owner directive): #184 (version-aware setup prompt, epic #169) inserted into the campaign as slot 12, BEFORE #161** — the v3.0.0 upgrade guide can then point at the shipped prompt. Tail order is now #162 → #184 → #161 → #165 (slots 11–14).
 >
-> **Status 2026-07-05: #162 (slot 11) ABANDONED per its own AC4 data gate** — the candidate arm (`builtin_code_review`) had 0 recorded runs vs ≥10 required, and token telemetry was null in all 23 run-records. Row 25's assumption ("the program is its own A/B") was circular: campaign runs could only generate candidate-arm data *after* the switch this gate blocks. Decision record + reopen conditions: [2026-07-05-issue-162-data-gate-decision.md](../measurements/2026-07-05-issue-162-data-gate-decision.md).
+> **Status 2026-07-05: #162 (slot 11) ABANDONED per its own AC4 data gate** — the candidate arm (`builtin_code_review`) had 0 recorded runs vs ≥10 required, and token telemetry was null in all 23 run-records. The #162 execution-order row's assumption ("the program is its own A/B") was circular: campaign runs could only generate candidate-arm data *after* the switch this gate blocks. Decision record + reopen conditions: [2026-07-05-issue-162-data-gate-decision.md](../measurements/2026-07-05-issue-162-data-gate-decision.md).
 
 ## The dogfood program
 
