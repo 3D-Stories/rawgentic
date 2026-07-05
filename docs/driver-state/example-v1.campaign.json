@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "campaign": "issues-131-140",
+  "policy": {
+    "order": "impact",
+    "deploy": "none",
+    "has_deploy": false,
+    "smoke_gate": null,
+    "review_budget": 3,
+    "never_haiku": true
+  },
+  "base_default_branch_sha": "5591174000000000000000000000000000000000",
+  "issues": [
+    {
+      "number": 133,
+      "status": "merged",
+      "pr": 145,
+      "merge_sha": "ab650ac",
+      "rollback_anchor": "5591174",
+      "deferred_reason": null,
+      "deferred_branch": null,
+      "branch_preservation": null
+    },
+    {
+      "number": 137,
+      "status": "merged",
+      "pr": 150,
+      "merge_sha": "f6e5629",
+      "rollback_anchor": "ab650ac",
+      "deferred_reason": null,
+      "deferred_branch": null,
+      "branch_preservation": null
+    }
+  ]
+}
