@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 01:13 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 09:25 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -63,6 +63,44 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
 <p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
 <p>---</p>
+<section class="mstone"><h3>Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0</p>
+<p>boundary — one migration event for consumers instead of a drip.</p>
+<p><strong>What shipped.</strong></p>
+<ul>
+<li><strong>BREAKING:</strong> the six workflows deprecated at v2.60.0 (#160) are <strong>removed</strong> —</li>
+</ul>
+<p>  <code>refactor</code> (WF4), <code>update-docs</code> (WF7), <code>update-deps</code> (WF8), <code>security-audit</code></p>
+<p>  (WF9), <code>optimize-perf</code> (WF10), <code>create-tests</code> (WF12) — plus their eval</p>
+<p>  workspaces and their Codex-mirror symlinks; the marketplace <code>skills</code> whitelist</p>
+<p>  drops 19 → 13. Zero STUB-FIRED telemetry across the deprecation cycle backed</p>
+<p>  the verdict.</p>
+<ul>
+<li><code>docs/upgrade-3.0.md</code> (AC1): replacement table (verified verbatim against the</li>
+</ul>
+<p>  deleted stubs&#x27; own redirects), what-moved recap, cache-refresh steps, config</p>
+<p>  notes — a removed name left in <code>adversarialReview.workflows</code> is inert</p>
+<p>  (code-verified fail-closed membership matching).</p>
+<ul>
+<li><code>tests/test_v3_removals.py</code> (23 red-first guards) replaces the stub drift</li>
+</ul>
+<p>  guards: gone-stays-gone in BOTH trees, whitelist/description scrub, README</p>
+<p>  body reference-freedom, guide presence.</p>
+<ul>
+<li>CHANGELOG: v3.0.0 entry <strong>plus the missing v2.57.0–v2.66.0 backfill</strong></li>
+</ul>
+<p>  (slot-13 follow-up closed; all 12 entries spot-checked against git by a</p>
+<p>  reviewer — no drift).</p>
+<p><strong>Reviews.</strong> Small-standard lane, <strong>lane-widened</strong> honestly logged (real impl</p>
+<p>count 146 vs estimate 4 — deletion mass, not new logic). Step 11 (2 opus):</p>
+<p><strong>1 Critical, independently found by both reviewers</strong> — the README&#x27;s main SDLC</p>
+<p>catalog table still advertised all six removed skills as invocable commands</p>
+<p>(the removal sweep missed it and no test covered it); fixed + a red-first README</p>
+<p>guard added. 2 Medium + 3 Low doc/manifest fixes. Adversarial diff review</p>
+<p>mechanically skipped (no security surface). Security scan clean. Suite</p>
+<p>1941/0 → 1936/0 (stub tests replaced by removal guards).</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry embedded below.</p>
+<p>---</p></section>
 <section class="mstone"><h3>Slot 13 — #184: version-aware setup prompt · v2.67.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because</p>
 <p>nothing tells users to re-run <code>/rawgentic:setup</code> after an upgrade — while the</p>
 <p>existing post-update nudge re-nagged about the *same* unconfigured features on</p>
@@ -110,8 +148,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>is now pinned). All 5 <code>since</code> values independently re-verified against git</p>
 <p>history by reviewer 2. Adversarial diff review mechanically skipped (no security</p>
 <p>surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below.</p>
+<p><strong>Status.</strong> *(backfilled by slot 14&#x27;s pass)* PR #201 squash-merged <code>6c375b1</code>,</p>
+<p>CI green, v2.67.0, issue closed. Telemetry embedded below.</p>
 <p>---</p></section>
 <section class="mstone"><h3>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
 <p>object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> —</p>
@@ -227,9 +265,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#184 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>14 added · 1941/1941 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design_critique</td><td>2</td><td>2</td><td>passed</td></tr><tr><td>6</td><td>plan_drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>implementation_drift</td><td>0</td><td>0</td><td>passed</td></tr><tr><td>11</td><td>code_review</td><td>3</td><td>3</td><td>passed</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#161 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>23 added · 1936/1936 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design_critique</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>6</td><td>plan_drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>implementation_drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code_review</td><td>7</td><td>7</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 01:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 09:25 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

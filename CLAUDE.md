@@ -16,6 +16,12 @@ Every PR must include these updates. Do NOT create the PR until all are done:
 4. **Run tests** — `pytest tests/ -v` must pass with 0 failures
    - Drift-guard tests over a doc corpus: anchor to one canonical source sentence, not a whole-corpus regex — the latter false-positives on stray matches in unrelated reference files
 
+## Gotchas
+
+- `plugins/rawgentic/skills/<name>` is a **symlink** to `skills/<name>/` — content edits auto-sync, but adding/removing a skill still means creating/deleting that symlink entry *and* the whitelist entry in `.claude-plugin/marketplace.json` (`tests/test_codex_plugin_packaging.py` asserts `is_symlink()`, catching a missed symlink but not a missed whitelist entry).
+- `git rm -r <dir>` leaves untracked files behind (e.g. eval outputs) — a "dir no longer exists" removal check can pass in CI but fail locally until you also `rm -rf` the leftovers.
+- To find which PR shipped a given version, walk `git log -- .claude-plugin/plugin.json` and read the `version` field at each commit — no separate version→PR map is kept.
+
 ## Updating the Plugin
 
 After a PR is merged to main, the plugin cache must be updated separately. See the workspace CLAUDE.md for the full update workflow. Do NOT reinstall the plugin during an active session.

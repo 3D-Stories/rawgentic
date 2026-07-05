@@ -1,6 +1,6 @@
 # rawgentic
 
-**6 SDLC workflow skills (+6 deprecated stubs, removal at v3.0.0) + 4 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**6 SDLC workflow skills + 4 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 19 skills organized in three layers (6 of them deprecation stubs since v2.60.0, removed at v3.0.0 — #160):
+**Rawgentic** provides 13 skills organized in three layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
 - **Workspace management** (4 skills) — Project registration, configuration, session binding, and guard exception management
-- **SDLC workflows** (6 active skills + 6 deprecated stubs, removal at v3.0.0) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
+- **SDLC workflows** (6 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
@@ -150,14 +150,8 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Issue Creation           | `/rawgentic:create-issue`      | 5     | Planning a feature or reporting a bug               |
 | Feature Implementation   | `/rawgentic:implement-feature` | 16    | Building a new feature from a GitHub issue          |
 | Bug Fix                  | `/rawgentic:fix-bug`           | 14    | Fixing a bug with reproduce-first TDD               |
-| Refactoring              | `/rawgentic:refactor`          | 14    | Restructuring code while preserving behavior        |
 | Adversarial Review       | `/rawgentic:adversarial-review`| 5     | Cross-model critique of a design/spec/plan/PRD/ADR/RFC/README artifact |
-| Documentation            | `/rawgentic:update-docs`       | 10    | Creating or updating project documentation          |
-| Dependency Update        | `/rawgentic:update-deps`       | 12    | Updating npm/pip/Docker dependencies                |
-| Security Audit           | `/rawgentic:security-audit`    | 14    | STRIDE threat modeling and vulnerability assessment |
-| Performance Optimization | `/rawgentic:optimize-perf`     | 15    | Benchmark-driven performance improvements           |
 | Incident Response        | `/rawgentic:incident`          | 14    | Production incident: stabilize first, then RCA      |
-| Test Suite Creation      | `/rawgentic:create-tests`      | 14    | Bootstrap tests or fill coverage gaps across any language |
 | Peer Consult             | `/rawgentic:peer-consult`      | 5     | Independent cross-model design proposal for a problem/spec artifact |
 
 <details>
@@ -216,12 +210,6 @@ Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-de
 </details>
 
 <details>
-<summary><strong>Refactoring (WF4)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
-
-File a typed issue and use `/rawgentic:implement-feature` instead.
-</details>
-
-<details>
 <summary><strong>Adversarial Review (WF5)</strong> — 5 steps</summary>
 
 **Purpose:** Cross-model adversarial critique of a TEXT artifact (design, spec, plan, PRD, ADR, RFC, README) — or, opt-in, a code DIFF — using an independent reviewer via the Codex CLI. Report-only.
@@ -235,33 +223,9 @@ File a typed issue and use `/rawgentic:implement-feature` instead.
 - **Grounded, high-precision findings** — each carries a verbatim `evidence` quote from the artifact plus a `confidence`; an explicit severity rubric curbs inflation, so reports stay short and verifiable instead of padded with generic best-practice nitpicks
 - **Reproducible reviewer** — pins reasoning effort high (`RAWGENTIC_ADV_REVIEW_EFFORT`) instead of silently inheriting whatever `~/.codex/config.toml` defaults to (gpt-5.5 defaults to *medium*); runs ephemeral and independent of the project's `AGENTS.md`
 - **Injection-hardened** — the artifact is wrapped in a per-run unforgeable nonce fence and treated strictly as data; embedded steering text (e.g. "rate this flawless") is reported as a finding, not obeyed
-- Optionally wired into WF2 (design/plan gates), WF3, WF1 (issue spec), and WF4 (refactor design) per-project (all opt-in; WF3/WF1/WF4 default-off)
+- Optionally wired into WF2 (design/plan gates), WF3, and WF1 (issue spec) per-project (all opt-in; WF3/WF1 default-off)
 - Warn-only egress with secret scanning; fail-closed on any Codex error
 - Requires the Codex CLI installed + authenticated. See [Data Handling](#cross-model-review-data-handling-codex).
-</details>
-
-<details>
-<summary><strong>Documentation (WF7)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
-
-File a typed issue and use `/rawgentic:implement-feature` instead.
-</details>
-
-<details>
-<summary><strong>Dependency Update (WF8)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
-
-File a typed issue and use `/rawgentic:implement-feature` instead.
-</details>
-
-<details>
-<summary><strong>Security Audit (WF9)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use built-in /security-review + /rawgentic:scan.</summary>
-
-Use the built-in `/security-review` plus `/rawgentic:scan` instead.
-</details>
-
-<details>
-<summary><strong>Performance Optimization (WF10)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use file a typed issue + /rawgentic:implement-feature.</summary>
-
-File a typed issue and use `/rawgentic:implement-feature` instead.
 </details>
 
 <details>
@@ -277,12 +241,6 @@ File a typed issue and use `/rawgentic:implement-feature` instead.
 - SEV-1 through SEV-4 classification drives response urgency
 - Incident tracking issue created at start, closed at completion
 - Step 5 verification mandatory with evidence for SEV-1/SEV-2
-</details>
-
-<details>
-<summary><strong>Test Suite Creation (WF12)</strong> — DEPRECATED stub since v2.60.0 (#160); removal at v3.0.0. Use superpowers TDD skills + WF2.</summary>
-
-Use the superpowers TDD skills plus WF2 instead.
 </details>
 
 <details>
@@ -449,7 +407,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 7 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step (the 6 deprecation stubs carry none):
+All 7 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`
@@ -521,14 +479,8 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | WF1 Issue Creation         | Full critique      | `/reflexion:critique` | After brainstorming          |
 | WF2 Feature Implementation | Full critique      | `/reflexion:critique` | After design                 |
 | WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
-| WF4 Refactoring (DEPRECATED #160) | Category-based     | Full or Reflect       | Full for extract/restructure |
-| WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF1–WF4 |
-| WF7 Documentation (DEPRECATED #160) | Reflect only       | `/reflexion:reflect`  | After draft                  |
-| WF8 Dependency Update (DEPRECATED #160) | None (audit-based) | `npm audit` + tests   | Automated                    |
-| WF9 Security Audit (DEPRECATED #160) | Full (on audit)    | `/reflexion:critique` | Critique the findings        |
-| WF10 Performance (DEPRECATED #160) | Full critique      | `/reflexion:critique` | After optimization design    |
+| WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF1–WF3 |
 | WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
-| WF12 Test Suite Creation (DEPRECATED #160) | Brainstorm-driven  | `/superpowers:brainstorming` | Before writing any tests |
 | WF13 Peer Consult          | Independent peer   | Codex CLI             | Standalone; opt-in in WF2 Step 3 |
 
 ### Cross-Model Review Data Handling (Codex)
@@ -674,7 +626,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (15/19 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception` and `interview` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring).
+Skills are tested via the `/skill-creator` eval pipeline (9/13 skills have evals.json files in their `skills/<skill>-workspace/evals/` directories; the lightweight `add-exception`, `interview`, `scan`, and `sync-security-patterns` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring).
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -723,8 +675,47 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.0.0 (2026-07-05)
+- **BREAKING — six deprecated workflow skills removed (#161).** The WF4/WF7/WF8/WF9/WF10/WF12 deprecation stubs (`refactor`, `update-docs`, `update-deps`, `security-audit`, `optimize-perf`, `create-tests`) are deleted, along with their eval workspaces and their entries in the marketplace `skills` whitelist (19 → 13 skills). Replacements: file a typed issue + `/rawgentic:implement-feature` (WF4/WF7/WF8/WF10), built-in `/security-review` + `/rawgentic:scan` (WF9), superpowers TDD skills + WF2 (WF12). Full migration steps — including the plugin cache refresh (`claude plugin remove` / `install`) and config notes (a removed skill left in `adversarialReview.workflows` is inert) — in **`docs/upgrade-3.0.md`**. Also backfills the missing v2.57.0–v2.66.0 changelog entries below.
+
 ### v2.67.0 (2026-07-05)
 - **Version-aware setup prompt (#184).** `hooks/post_update_reconcile.py` manifest entries gain `since` (the plugin version that introduced each setup-requiring feature, from git history: headlessEnabled 2.18.0, adversarialReview 2.24.0, modelRouting 2.46.0, peerConsult 2.46.0, designArtifact 2.63.0); the post-update `/rawgentic:setup` nudge now fires only when the upgrade jump actually crossed a feature's `since` — an upgrade shipping no new setup-requiring feature bumps the reconciled-version marker silently (no more re-nagging every version about features you already declined). Numeric tuple version compare (never string compare); a missing marker is a fresh install (version zero); unparseable versions fail open toward prompting. Workspace-level `"setupPrompt": false` silences the notices entirely (marker still advances, so lifting the opt-out prompts only on the next upgrade). The prompt now names the new feature(s), the affected projects, that setup preserves existing config, the no-re-nag guarantee, and the opt-out. Drift guard: the manifest must list exactly the workspace fields setup stages (SKILL.md write-back sentence), each with a valid `since` ≤ the installed version. Note: changelog entries v2.57.0–v2.66.0 are a known backfill gap (tracked as a campaign follow-up).
+
+### v2.66.0 (2026-07-05)
+- **render_artifact opt-in roadmap style (#199, PR #200).** `--style roadmap` renders `##` sections as dashboard-style bubble cards with completion chips; `designArtifact.style` config opts a project in; default `plain` byte-identical.
+
+### v2.65.0 (2026-07-04)
+- **Usage token/cost capture in run-records (#189, PR #198).** `hooks/usage_capture.py` parses the session transcript (capture + backfill subcommands); `capture_status` controlled vocab with non-vacuity validator guards; 12 historical rows marked `unrecoverable`; first run-record with real captured tokens.
+
+### v2.64.2 (2026-07-04)
+- **#162 data-gate decision record (PR #187).** Review-switch abandoned per its own AC4 (candidate arm 0 gate-instances in 23 records; token telemetry null) — deferral pending telemetry, not a rejection; evidence-recomputing drift guards.
+
+### v2.64.1 (2026-07-04)
+- **Multi-issue driver post-merge hardening (PR #186).** All 7 review findings on #148/#163 applied (sentence-boundary `parse_depends_on`, serial-active invariant, `validate_campaign_start`, honest prompt-injection wording).
+
+### v2.64.0 (2026-07-04)
+- **Multi-issue driver pattern + dependency-DAG (#148 + #163, PR #185).** `docs/multi-issue-driver.md` loop/policy/DEFER taxonomy; `hooks/driver_lib.py` (topo-sort fail-closed on cycles, deps-satisfied advance); `docs/driver-state/` schema v1/v2.
+
+### v2.63.0 (2026-07-04)
+- **HTML design-artifact lifecycle (#174, PR #183).** WF1/WF2/WF3 create-or-update a committed `.md`+`.html` design artifact via `hooks/render_artifact.py` (escape-first), per-issue or `sharedDoc` rolling-doc mode, embedded run-record telemetry; setup Step 2h opt-in.
+
+### v2.62.0 (2026-07-04)
+- **WF3 spine split (#159, PR #181).** fix-bug SKILL.md → 224-line spine + `references/`; WF11 incident lane preserved.
+
+### v2.61.0 (2026-07-04)
+- **WF2 spine split (#158, PR #180).** implement-feature SKILL.md → 295-line spine + `references/steps.md` et al., verbatim and machine-gated.
+
+### v2.60.0 (2026-07-04)
+- **WF4/WF7/WF8/WF9/WF10/WF12 deprecation stubs + `/rawgentic:scan` (#160, PR #179).** Six unused workflows became redirect stubs with STUB-FIRED telemetry (evidence: 12/12 run-records WF2-only); WF9's tool-based scanning survived as the standalone `scan` skill; setup restructured.
+
+### v2.59.0 (2026-07-04)
+- **Bundled subagent definitions (#164, PR #178).** `rawgentic:rawgentic-implementer` (worktree isolation) + `rawgentic:rawgentic-reviewer` (read-only tools), dispatched with routed model+effort; never-Haiku enforced twice.
+
+### v2.58.0 (2026-07-04)
+- **`skill_corpus()` test helper (#157, PR #177).** Drift guards assert over SKILL.md + `references/` as one corpus so spine splits can't hide prose.
+
+### v2.57.0 (2026-07-04)
+- **claude-code-security-review CI lane (#166, PR #176).** Security review runs on every PR alongside the test lane.
 
 ### v2.56.0 (2026-07-04)
 - **AC-derived `/goal` guard — WF2/WF3 Step 1b (#156).** After issue validation, WF2/WF3 extract the issue's numbered ACs into a compact goal text (`plan_lib.build_goal_text`: 4,000-char cap with a fallback to "all numbered ACs of issue #N as written" on overflow, and the escape disjunct "…or a blocker is posted to the issue via the ERROR protocol" so a legitimately-blocked run still clears honestly) and fold it into the existing Step 1 confirmation — no new user prompt, never blocks. Headless: `wf1-created`-labeled issues use their pre-approved ACs verbatim; unlabeled issues skip the guard; wording is always PR-terminal ("PR open with green CI"), never "merged". The run-record gains an optional `goal_guard: set|skipped|fired` field (`fired` is manual-only — the workflow never claims it fired on the user's behalf).

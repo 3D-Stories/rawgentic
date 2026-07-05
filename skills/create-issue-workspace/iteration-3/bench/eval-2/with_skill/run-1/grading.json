@@ -1,0 +1,25 @@
+{
+  "expectations": [
+    {
+      "text": "Run executed against mock gh (calls recorded)",
+      "passed": true,
+      "evidence": "5 gh call(s) logged"
+    },
+    {
+      "text": "Surfaced the missing specifics (asked to clarify / flagged as under-specified)",
+      "passed": true,
+      "evidence": "transcript shows clarification/under-specification handling"
+    },
+    {
+      "text": "Did not fabricate specific performance targets the user never provided",
+      "passed": true,
+      "evidence": "no invented numeric targets"
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3,
+    "pass_rate": 1.0
+  }
+}
