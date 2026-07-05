@@ -38,7 +38,8 @@ non-negative integers and `resolved` may not exceed `findings`:
                             "target_check": "<exact manual check on the target>"}, ...],
   "usage": {"input_tokens": N|null, "output_tokens": N|null, "cost_estimate_usd": N|null,
             "wall_clock_s": N|null,
-            "model_mix": {"<model>": {"input_tokens": N|null, "output_tokens": N|null}, ...}|null},
+            "model_mix": {"<model>": {"input_tokens": N|null, "output_tokens": N|null}, ...}|null,
+            "capture_status": "captured|unrecoverable|unavailable"},
   "goal_guard": "set|skipped|fired"
 }
 ```
@@ -76,17 +77,40 @@ for any of them, same deliberate-null-vs-dropped-field rule as the rest of the s
 present-with-nullable-values). Tokens-by-model in `model_mix` is the **primary** metric — most runs
 are billed against a Claude subscription rather than metered per token, so `cost_estimate_usd` is a
 **derived, secondary** figure (a rate-card estimate, useful for cross-checking, not the number to
-trend on). Best-effort: when real numbers aren't available, **omit the whole `usage` object** rather
-than fabricate one — a missing object is honest telemetry, a guessed one corrupts the substrate.
-`npx ccusage@latest` is the local tool for reading actual token counts out of the Claude Code
-session logs when the harness itself doesn't surface them.
+trend on).
+
+**`capture_status` (OPTIONAL sixth key, #189):** how the numbers were obtained — a controlled
+vocab `{captured, unrecoverable, unavailable}`, fail-closed like `goal_guard`/`reviewer_kind`
+(a typo, case-variant, or null is rejected). Absent → old records unchanged (no schema bump).
+It is the **schema-level backstop against the #155 null-forever state**: when it is `"captured"`,
+`validate_record` REQUIRES `input_tokens` + `output_tokens` to be non-null and **sum > 0** — a
+captured claim over a null/zero measurement can no longer be persisted. `"unrecoverable"` = a
+historical row with no session-id correlator; `"unavailable"` = capture was attempted for this run
+but failed (session file missing / no usage blocks). The two non-captured markers still allow null
+tokens (that IS the honest telemetry for a row we cannot fill).
+
+**Live capture — `hooks/usage_capture.py`.** #155 added the field but nothing populated it, so it
+was null in all 24 records. Capture now parses the Claude Code session transcript directly (the same
+source `npx ccusage` reads) — stdlib-only, deterministic, no network. At Step 16 assembly, capture
+the current session's usage and embed it:
+```bash
+python3 hooks/usage_capture.py capture --session-id "$CLAUDE_CODE_SESSION_ID"
+# -> {"input_tokens":N,"output_tokens":N,"cost_estimate_usd":N,"wall_clock_s":null,
+#     "model_mix":{...},"capture_status":"captured"}   (or {"capture_status":"unavailable"})
+```
+Merge that object into the record's `usage` (set `wall_clock_s` from the orchestrator's own timing).
+If capture returns `{"capture_status":"unavailable"}` (session file not found / mid-write / no usage),
+record it as-is with null tokens rather than fabricating numbers. `ccusage` remains a manual
+cross-check only — it is deliberately NOT in the capture path (network/npx would make it flaky).
 
 Populate `usage` at Step 16 **assembly time**, before invoking `summarize` — the store is
 append-only, so if usage numbers surface only after the record has already been persisted,
 re-running `summarize` to add them would append a **second, duplicate** line for the same run
-rather than amend the first. A post-hoc backfill instead means hand-editing the run's existing
-JSONL line in place; after that edit, the pristine drift-guard test validates the whole committed
-store in CI, so a malformed hand-edit is caught the same way a bad writer output would be.
+rather than amend the first. A post-hoc backfill instead means editing the run's existing JSONL
+line in place — use `python3 hooks/usage_capture.py backfill --records docs/measurements/run_records.jsonl`
+(recovers a row with a session-id correlator, else marks it `unrecoverable`); after that edit, the
+pristine drift-guard test validates the whole committed store in CI, so a malformed hand-edit is
+caught the same way a bad writer output would be.
 
 **`reviewer_kind` (OPTIONAL, #155):** a per-gate entry, a **controlled vocabulary** per #116's
 canonicalization contract: `inline` / `reflexion` / `builtin_code_review` / `codex` /

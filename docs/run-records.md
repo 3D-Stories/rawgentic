@@ -39,7 +39,7 @@ exceed `findings`, `passing` may not exceed `total`, `used` may not exceed
 | `outcome` | object | `pr_number` (int\|null), `pr_url` (string\|null), `merged` (bool\|null), `ci` (`passed`/`failed`/`not_configured`/`skipped`), `deploy` (`success`/`manual`/`failed`/`not_applicable`). |
 | `follow_ups` | array | Optional list of strings; defaults to `[]`. |
 | `extra` | array | Optional ordered `{label, value}` (both strings) pairs for **workflow-specific** human lines that ride along in the render without bloating the uniform core (e.g. WF3's `Root Cause` / `Fix`). Defaults to `[]`. |
-| `usage` | object | Optional (#155). Best-effort telemetry: `input_tokens`, `output_tokens` (int\|null), `cost_estimate_usd`, `wall_clock_s` (number\|null), `model_mix` (object\|null, per-model `{input_tokens, output_tokens}`). Present is strict — all 5 keys required, nullable values; absent omits the object entirely rather than nulling it. |
+| `usage` | object | Optional (#155). Best-effort telemetry: `input_tokens`, `output_tokens` (int\|null), `cost_estimate_usd`, `wall_clock_s` (number\|null), `model_mix` (object\|null, per-model `{input_tokens, output_tokens}`). Present is strict — all 5 keys required, nullable values; absent omits the object entirely rather than nulling it. Optional 6th key `capture_status` (#189): controlled vocab `{captured, unrecoverable, unavailable}`, fail-closed; when `captured`, `input_tokens`+`output_tokens` MUST be non-null and sum > 0 (the schema-level backstop against #155's null-forever state). Populated live by `hooks/usage_capture.py` (parses the session transcript); historical rows backfilled to `unrecoverable`. |
 
 The fields above the line are the **uniform core** every workflow emits, so
 Tier-2 can aggregate across workflows; `extra` is the escape hatch for
@@ -84,6 +84,17 @@ useful for cross-checking, not what a subscription user is actually paying).
 When present, `usage` is validated strictly (all five keys, nullable values);
 when the harness can't surface real numbers, the workflow **omits the whole
 object** rather than persist a fabricated one.
+
+Since #189, `usage` is populated live by `hooks/usage_capture.py`, which parses
+the current session's Claude Code transcript (the same source `ccusage` reads —
+stdlib-only, no network) and stamps `capture_status: "captured"` with real
+per-model token totals. The optional `capture_status` key is fail-closed
+(`{captured, unrecoverable, unavailable}`), and a `captured` claim REQUIRES
+non-null tokens summing > 0 — so the #155 state (a `usage` object null forever)
+can no longer be persisted. Rows we cannot fill are marked `unrecoverable`
+(historical, no session-id correlator) or `unavailable` (capture attempted,
+session file missing / no usage), never left as bare nulls; a drift-guard test
+fails on any `usage` object with null tokens and no marker.
 
 Populate `usage` at completion-step assembly time, **before** invoking
 `work_summary.py summarize` — the store is append-only, so re-running
