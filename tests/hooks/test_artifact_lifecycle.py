@@ -94,6 +94,42 @@ def test_shared_doc_fail_safe_on_malformed(tmp_path):
     assert arl.design_artifact_shared_doc(str(tmp_path / "nope.json"), "p") is None
 
 
+# --- designArtifact.style reader (#199 opt-in roadmap style) ---
+
+def test_style_roadmap_when_set(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"enabled": True, "style": "roadmap"}}]}))
+    assert arl.design_artifact_style(str(ws), "p") == "roadmap"
+
+
+def test_style_defaults_plain_when_unset(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"enabled": True}}]}))
+    assert arl.design_artifact_style(str(ws), "p") == "plain"
+
+
+def test_style_fail_safe_on_bad_value_or_malformed(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"style": "fancy"}}]}))
+    assert arl.design_artifact_style(str(ws), "p") == "plain"   # unknown -> plain
+    ws.write_text("{not json")
+    assert arl.design_artifact_style(str(ws), "p") == "plain"
+    assert arl.design_artifact_style(str(tmp_path / "nope.json"), "p") == "plain"
+
+
+def test_style_wired_into_wf2():
+    """WF2 artifact step must read the configured style and pass it to render_artifact."""
+    c = skill_corpus("implement-feature")
+    assert "design_artifact_style" in c
+    assert "--style" in c
+
+
 # --- shared-doc mode wired into WF1/WF2/WF3 prose (#174) ---
 
 def test_shared_doc_mode_documented_in_all_three_skills():

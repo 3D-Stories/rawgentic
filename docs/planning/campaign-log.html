@@ -32,12 +32,23 @@ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);verti
 .telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
 .telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
 footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+@media(prefers-color-scheme:dark){:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-04 23:44 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 00:23 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -52,8 +63,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
 <p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
 <p>---</p>
-<h2>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0</h2>
-<p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
+<section class="mstone"><h3>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
 <p>object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> —</p>
 <p>so #162&#x27;s yield-per-token gate was incomputable. Fix: capture real numbers + backfill,</p>
 <p>with <strong>non-vacuous</strong> tests (AC5, explicitly &quot;better than #155&#x27;s schema-only tests&quot;).</p>
@@ -90,9 +100,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.</p>
 <p><strong>Status.</strong> PR #198, CI green; <code>merged</code> filled on campaign resume (owner paused after this</p>
 <p>slot). Telemetry embedded below.</p>
-<p>---</p>
-<h2>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2</h2>
-<p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
+<p>---</p></section>
+<section class="mstone"><h3>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2 <span class="chip c-defer">ABANDONED</span></h3><p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
 <p>pass) was <strong>data-gated</strong> by its own header (&quot;no A/B evidence, no switch&quot;) and</p>
 <p>AC4 (&quot;matched hand-rolled yield over ≥10 runs at lower cost … otherwise abandon</p>
 <p>this issue with the data cited&quot;).</p>
@@ -122,9 +131,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry embedded below. Issue closed as *not planned*, data</p>
 <p>cited.</p>
-<p>---</p>
-<h2>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)*</h2>
-<p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
+<p>---</p></section>
+<section class="mstone"><h3>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)* <span class="chip c-conf">MERGED</span></h3><p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
 <p>state schema, from design #134) and #163 (dependency-DAG + epic anchor,</p>
 <p>schema v2) — implemented together in one PR (#163 extends #148&#x27;s queue).</p>
 <p><strong>What shipped.</strong></p>
@@ -168,10 +176,10 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>&quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan</p>
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry for this slot is embedded below.</p>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#189 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>41 added · 1907/1907 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR 198 · merged: None · CI: passed</td></tr><tr><th>Usage</th><td>in 1442305293 / out 4754567 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<p>convention). Telemetry for this slot is embedded below.</p></section>
+
 </main>
-<footer>Last updated: 2026-07-04 23:44 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 00:23 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

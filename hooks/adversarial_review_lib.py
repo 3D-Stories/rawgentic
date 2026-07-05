@@ -294,6 +294,31 @@ def design_artifact_shared_doc(workspace_path: str, project_name: str):
     return None
 
 
+def design_artifact_style(workspace_path: str, project_name: str) -> str:
+    """Return the project's `designArtifact.style` (#199): `"roadmap"` or `"plain"`.
+
+    `roadmap` renders h2 sections as dashboard-style bubble cards with completion
+    chips (render_artifact `--style roadmap`); `plain` (the default) is the
+    byte-identical document style. Fail-safe to `"plain"` on ANY problem (missing
+    file/project/block, malformed JSON, unknown value) — a bad config never
+    silently changes rendering. Never raises.
+    """
+    try:
+        with open(workspace_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return "plain"
+    if not isinstance(data, dict):
+        return "plain"
+    for proj in data.get("projects", []) or []:
+        if isinstance(proj, dict) and proj.get("name") == project_name:
+            block = proj.get("designArtifact")
+            if isinstance(block, dict) and block.get("style") == "roadmap":
+                return "roadmap"
+            return "plain"
+    return "plain"
+
+
 # ============================================================================
 # Artifact IO + safety
 # ============================================================================
