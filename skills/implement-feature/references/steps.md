@@ -237,21 +237,35 @@ This is an optional guard, not a gate — it never blocks the workflow.
    the issue/capabilities check and the `/goal` invocation (run it, or decline).
    Declining is always a valid answer and never blocks progress (`goal_guard: skipped`).
 
-4. **Record the marker** (Step 16 reads this to populate the run-record `goal_guard`
-   field):
+4. **ALWAYS emit the constructed `/goal` prompt** (#191). Because `/goal` is a
+   session command the skill cannot observe or set, the skill has no reliable way
+   to know whether a prior goal is still active — so it must not *suppress*
+   emission on the guess that one might be. Emit the built text every run and let
+   the user/driver decide whether to run it (declining stays valid). Do NOT skip
+   emitting just because a previous run in the same session may have set a goal.
+
+5. **Epic-campaign exception (defer, don't clobber) (#191 AC2).** When this run is
+   part of an epic campaign — signaled by the `RAWGENTIC_EPIC_GOAL` environment
+   variable being set (to the driving epic's issue number; the driver sets it,
+   #192) — an epic-level goal is already in force for the whole campaign. Emitting
+   a per-issue `/goal` would clobber it, so **defer**: do NOT emit the per-issue
+   prompt, and log the marker as `(deferred: epic #<N> goal active)` (never
+   silently skip — the defer must be visible).
+
+6. **Record the marker** (Step 16 reads this to populate the run-record
+   `goal_guard` field — `set` when emitted, `deferred` under an epic campaign,
+   `skipped` when the user declines / an unlabeled headless run):
    ```
-   ### WF2 Step 1b — Goal guard (set|skipped): <first 80 chars of text | decline reason>
+   ### WF2 Step 1b — Goal guard (set|deferred|skipped): <first 80 chars of text | epic #N | decline reason>
    ```
 
-5. This assumes a fresh session per issue. `/goal` re-invocation/overwrite semantics
-   across sequential runs in the *same* session are unverified — if a prior goal may
-   still be active, note that in the marker rather than assuming it was replaced.
-
-6. `fired` (the Stop-hook actually blocked a quit) is recorded manually only — no
+7. `fired` (the Stop-hook actually blocked a quit) is recorded manually only — no
    structured signal reaches the orchestrator when that happens.
 
-**[Headless: AUTO-RESOLVE — for WF1-created issues, emit the built goal text
-verbatim into the headless checkpoint for the driver to set via
+**[Headless: AUTO-RESOLVE — when `RAWGENTIC_EPIC_GOAL` is set (epic campaign),
+DEFER: the epic-level goal already guards the run, so emit nothing and log
+`(deferred: epic #<N> goal active)`. Otherwise, for WF1-created issues, emit the
+built goal text verbatim into the headless checkpoint for the driver to set via
 `claude -p "/goal …"` (session 1 cannot self-set it — the goal text needs the
 fetched issue body, though the driver MAY pre-derive it at launch); for
 unlabeled/manual issues, skip the guard and log the marker with (skipped).]**

@@ -131,10 +131,12 @@ no longer produced by WF2.)
 
 **`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
 pattern as `usage` — absent ⇒ old records stay valid, no schema version bump; present ⇒ strict
-membership in `{"set", "skipped", "fired"}`, fail-closed on anything else (including non-strings
-and case variants like `"SET"`). Semantics: `set` = `/goal` was invoked for this run; `skipped` =
-the guard was offered but declined, or the run predates the guard and the gap is being labeled
-rather than left silently absent; `fired` = the goal evaluator actually blocked a premature stop.
+membership in `{"set", "skipped", "fired", "deferred"}`, fail-closed on anything else (including
+non-strings and case variants like `"SET"`). Semantics: `set` = `/goal` was invoked for this run;
+`skipped` = the guard was offered but declined, or the run predates the guard and the gap is being
+labeled rather than left silently absent; `deferred` (#191) = Step 1b deferred the per-issue goal to
+an already-active epic-level campaign goal (`RAWGENTIC_EPIC_GOAL` set) rather than emitting one that
+would clobber it; `fired` = the goal evaluator actually blocked a premature stop.
 `fired` is currently **MANUAL-ONLY**: no structured signal reaches the orchestrator when the
 Stop-hook's goal evaluator blocks a quit, so nothing sets this value automatically today — a human
 must recognize the block and record it by hand. This makes the premature-termination metric

@@ -1522,6 +1522,19 @@ class TestGoalGuardStep1b:
             "fix-bug/SKILL.md Step 1b must reference plan_lib.build_goal_text"
         )
 
+    def test_wf2_step_1b_always_emits_with_epic_defer(self):
+        """#191: Step 1b ALWAYS emits the /goal prompt (a prior goal it can't
+        observe must not suppress emission), except under an epic campaign
+        (RAWGENTIC_EPIC_GOAL set) where it DEFERS to the epic-level goal — logged,
+        never silent."""
+        content = skill_corpus("implement-feature")
+        assert "ALWAYS emit" in content, \
+            "Step 1b must state it ALWAYS emits the /goal prompt (#191 AC1)"
+        assert "RAWGENTIC_EPIC_GOAL" in content, \
+            "Step 1b must key the epic-campaign defer on RAWGENTIC_EPIC_GOAL (#191 AC2)"
+        assert "deferred" in content.lower(), \
+            "Step 1b must record a deferred marker under an epic campaign (#191 AC3)"
+
 
 class TestMandatoryStepsEnforcement:
     """Lint: workflow skills with code review steps must have <mandatory-steps> block."""
