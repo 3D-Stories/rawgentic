@@ -177,6 +177,26 @@ action's default App-OIDC auth needs it) + `executed=true` emitted from secret-p
 review-success — both fixed; 1 Low (inline posting doc-verified, owner-gated). AC3 honesty
 confirmed. Scan clean. Suite 2007/0 → 2011/0.
 
+**Status.** PR #212 squash-merged `36aa09a`, v3.8.0, issue closed.
+
+### #196 — reopen #162: post-PR code-review via the Action · v3.9.0
+
+**Issue.** #196 (P9, depends on #189 ✓ + #195 ✓): reopen the #162 review-switch with a mechanism
+that works. `/code-review` can't be called from a skill, but claude-code-action@v1 can run it
+post-PR (OAuth), capturing findings as `builtin_code_review` for the A/B #162 couldn't run.
+
+**What shipped.** `.github/workflows/claude-code-review.yml`: post-PR built-in `/code-review` via
+claude-code-action@v1 (OAuth-first, draft-gated + `ready_for_review`, SHA-pinned, non-blocking) —
+the candidate `builtin_code_review` arm running **additively** to WF2's hand-rolled Step 11 (coverage
+never drops), which breaks #162's circular gate. With #189's telemetry, the AC4 A/B is now
+**computable**; the #162 decision doc is reopened as "computable, pending owner-gated data." Capture
+mechanism documented (run-records.md). WF5 diff pass unchanged.
+
+**Reviews.** Small-standard lane (CI yml). 1 opus: 1 Medium — draft-gate missing `ready_for_review`
+trigger type (draft→ready transition wouldn't fire) — fixed + guarded; everything else clean
+(additive verified, original ABANDONED record preserved, AC2/AC3 honestly scoped). Scan clean.
+Suite 2011/0 → 2020/0.
+
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
 Telemetry embedded below.
 
