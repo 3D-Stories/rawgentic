@@ -87,6 +87,13 @@ rather than guessing:
    ```
    If a listed issue plausibly covers the request, show it to the user and ask whether
    it already covers their need before proceeding.
+4. **Over-large check → offer to decompose (#193).** Reuse the existing over-broad
+   signals from the `<quality-bar>` and Step 2's draft-length heuristic: the ask spans
+   many distinct concerns, reads as "do everything," or would decompose into **≥3**
+   separately-shippable deliverables. When it trips, do NOT file one sprawling issue —
+   OFFER to decompose into an **epic + child issues** (Step 2c). If the user declines,
+   fall back to a single issue with an explicit out-of-scope list (the existing behavior).
+   Two deliverables → skip the epic; file two plain cross-linked issues instead (AC4).
 
 ## Step 2: Draft the issue
 
@@ -111,6 +118,56 @@ rather than guessing:
    - Bugs also: steps to reproduce, expected vs actual, environment, logs if any.
    - Cross-reference related issues found in the dedup search.
    If the draft exceeds ~2000 words, it's probably several issues — suggest splitting.
+
+## Step 2c: Decompose an over-large ask into an epic + children (optional, #193)
+
+Runs only when Step 1 item 4 tripped AND the user accepted decomposition. This is
+the front-end for the driver/epic machinery (#163 shipped the epic anchor,
+`depends_on` parsing, and topo-sort; this produces input it can consume).
+
+1. **Decompose (lean default).** Single-pass: break the ask into the smallest set of
+   independently-shippable child issues, applying the `<quality-bar>` to each (no
+   hallucinated components, testable ACs, bounded scope). For a genuinely
+   architectural ask, offer the opt-in WF5 escalation — write the decomposition plan
+   to a temp file and run `/rawgentic:adversarial-review <plan-path> plan` (report-only,
+   non-blocking on Codex failure); otherwise the single-pass decomposition stands (AC5).
+
+2. **Shape it driver-consumable (AC2).**
+   - Each **child** is a normal WF1 issue draft (conventional title, testable ACs,
+     scope, verified components).
+   - Encode ordering as **`depends_on` edges** in each child body — the exact phrasing
+     `driver_lib.parse_depends_on` reads: `Depends on #<n>` (issue/PR/epic noun + `#N`,
+     comma/and-separated for multiple). A child with no prerequisites gets none.
+   - The **epic** is an issue with the **`epic:` label** and a body whose task-list
+     enumerates the children in order: `- [ ] #<child1>` / `- [ ] #<child2>` … (the
+     driver derives the queue from this exact `- [ ] #N` checkbox shape). The
+     `epic:` label is created (if absent) at filing time in step 4, NOT here — nothing
+     mutates the repo before the approval gate.
+
+3. **HARD approval gate (AC3).** Present the WHOLE decomposition — the epic (title +
+   task-list) AND every child (title, ACs, scope) AND the `depends_on` edges between
+   them — in one readable block. **File NOTHING until the user says "go"** (/"approved"
+   /"lgtm"). Any edit → re-present the whole set. Silence/cancel → file nothing.
+
+4. **File in dependency order, then the epic last (AC2).** Only after approval:
+   - Topologically order the children (a child is filed after everything it depends on),
+     so each `Depends on #<n>` can reference an already-filed number. File each child
+     with `gh issue create` (Step 4's mechanics — temp body file, existing labels),
+     capturing its number, and log a resume marker per child:
+     `### WF1 decompose <epic-slug> — filed child #<n> (<k>/<M>)`.
+   - File the **epic** last: create the `epic:` label if absent (`gh label create`),
+     then `gh issue create` with that label and the task-list referencing the real
+     child numbers (`- [ ] #<n>`). Log `### WF1 decompose <epic-slug> — epic #<n> filed (COMPLETE)`.
+   - Threshold guard (AC4), applied to the ACTUAL post-decomposition child count (Step 1
+     item 4's "≥3" is only the estimate that decides whether to *offer* decomposition;
+     this is the real count that decides the *shape*): **≥3 children ⇒ epic**; exactly
+     **2 ⇒ no epic**, just two plain issues that cross-link each other (`Related: #<n>`),
+     no `epic:` label; **1 ⇒** it wasn't over-large after all — file a single issue via
+     the normal Step 3/Step 4 path.
+
+5. **Report** the epic URL + every child URL and the dependency edges, then Step 5.
+   (Skip the single-issue Step 3/Step 4 path — this section replaces it for a
+   decomposed ask.)
 
 ## Step 3: User review
 
@@ -206,4 +263,18 @@ Do NOT offer to start implementation. To implement, the user invokes WF2
 If invoked mid-task: issue already created → just report it (Step 5). Draft approved
 → create it (Step 4). Draft exists, not yet approved → user review (Step 3). Otherwise
 start at Step 1.
+
+**Decomposition path (Step 2c) is multi-file and needs its own resume state.** An
+approved decomposition files several children then the epic across separate
+`gh issue create` calls, so it can die partway (N of M children filed, epic not).
+Do NOT let the "issue already created → report it" clause above fire on a *partial*
+decomposition — that would declare an epic-less, incomplete set complete, leaving a
+dangling `Depends on #N` edge and no driver-derivable queue. To make this resumable,
+Step 2c step 4 records a marker in `claude_docs/session_notes.md` as it goes:
+`### WF1 decompose <epic-slug> — filed child #<n> (<k>/<M>)` per child and
+`### WF1 decompose <epic-slug> — epic #<n> filed (COMPLETE)` at the end. On resume,
+if a decompose marker exists WITHOUT its COMPLETE line: read the filed child numbers
+from the markers, file only the remaining children (topo order) and then the epic —
+never re-file a child that already has a marker, and never report the decomposition
+complete until the epic is filed.
 </resumption>
