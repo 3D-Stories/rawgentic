@@ -263,10 +263,9 @@ actually detected.
 
 ## Step 4b: Critique Detected Config (Optional)
 
-Compute a complexity score from the detected config and, above threshold, offer a
-multi-agent `/reflexion:critique` (three parallel judges) to validate completeness
-before the user reviews. Includes the `critiqueMethod` preference check. Skip when
-the score is 0 or the user declines.
+Compute a complexity score from the detected config and, above threshold, offer an
+in-repo **quality-bar review** (`references/quality-bar.md`) to validate completeness
+before the user reviews. Skip when the score is 0 or the user declines.
 
 **Read `references/config-reference.md` before executing Step 4b.**
 

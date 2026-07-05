@@ -43,7 +43,7 @@ All workflow skills share a **config-loading protocol** that reads project confi
 ## Quick Start
 
 > **Prerequisites:** Ensure you have Claude Code CLI, **Python 3.10+**, GitHub CLI (`gh`), Git, and jq installed.
-> Optional add-ons (reflexion, superpowers, Codex CLI, security scanners) unlock specific features — see [Prerequisites](#prerequisites) for the required/optional split and what each one gets you.
+> Optional add-ons (superpowers, Codex CLI, security scanners) unlock specific features — see [Prerequisites](#prerequisites) for the required/optional split and what each one gets you.
 
 ### 1. Install
 
@@ -117,9 +117,8 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 
 | Add-on | Check | Install | What it unlocks — and what you lose without it |
 | ------ | ----- | ------- | ---------------------------------------------- |
-| **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF1 (`/reflexion:critique`) and the lightweight **reflect** in WF2/WF3 (`/reflexion:reflect`; WF2 retired its 3-judge panel at #190). **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
 | **superpowers** plugin | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official` | Structured **brainstorming / design exploration** (WF12 test-strategy design; complex-feature design). **Without it:** rawgentic falls back to lighter inline brainstorming — still works, less rigorous. |
-| **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review + peer consult** — an independent, *different-model* second opinion (WF5) or design proposal (WF13) via OpenAI: the `/rawgentic:adversarial-review` and `/rawgentic:peer-consult` skills, plus the opt-in cross-model gates in WF1–WF4 and WF2 Step 3. **Without it:** WF5/WF13 error out and any opt-in cross-model gate is skipped; you still get the same-model reflexion critique. |
+| **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review + peer consult** — an independent, *different-model* second opinion (WF5) or design proposal (WF13) via OpenAI: the `/rawgentic:adversarial-review` and `/rawgentic:peer-consult` skills, plus the opt-in cross-model gates in WF1–WF4 and WF2 Step 3. **Without it:** WF5/WF13 error out and any opt-in cross-model gate is skipped; you still get the same-model in-repo quality-bar self-review. |
 | **Security scanners** (gitleaks, semgrep, osv-scanner, trivy) | `bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner trivy` | Auto-provisioned by `/rawgentic:setup` and once in the background on first plugin use (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1`) | The **tool-based security scan** in WF2 Step 11.5 and WF9 (secrets / dependency-CVE / SAST / IaC misconfig). **Without them:** each missing scanner is a *visible skip* (never a silent pass) — the LLM security review still runs, but concrete known-pattern issues (leaked tokens, CVE'd deps) aren't caught. |
 
 > **Contributing / running the tests** also needs `pip install pytest` (plus `jsonschema` for the adversarial-review schema tests, which otherwise skip). These are dev-only — not needed to *use* the plugin. See [Testing](#testing).
@@ -217,7 +216,7 @@ Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-de
 **Invocation:** `/rawgentic:adversarial-review docs/design/feature.md`
 
 **Key Features:**
-- Different-model second opinion (complements same-model reflexion critique)
+- Different-model second opinion (complements the same-model in-repo quality-bar self-review)
 - **`diff` artifact type** — reviews a unified git diff with a refutation lens (hunts fail-open guards, silently-passing error paths, weakened security checks); same fail-closed engine, plus an optional `--findings-json` sidecar for embedded consumers like WF2 Step 11
 - Report-only — writes `docs/reviews/<slug>-<date>.md`, never edits the artifact
 - **Grounded, high-precision findings** — each carries a verbatim `evidence` quote from the artifact plus a `confidence`; an explicit severity rubric curbs inflation, so reports stay short and verifiable instead of padded with generic best-practice nitpicks
@@ -475,12 +474,12 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 
 | Workflow                   | Critique Level     | Gate                  | When                         |
 | -------------------------- | ------------------ | --------------------- | ---------------------------- |
-| Setup (config detection)   | Optional critique  | `/reflexion:critique` | After detection, if complex  |
-| WF1 Issue Creation         | Full critique      | `/reflexion:critique` | After brainstorming          |
-| WF2 Feature Implementation | Reflect (+ opt-in adversarial-on-design) | `/reflexion:reflect` | After design                 |
-| WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
+| Setup (config detection)   | Optional quality-bar review | in-repo rubric | After detection, if complex  |
+| WF1 Issue Creation         | Inline quality-bar | while drafting | During draft                 |
+| WF2 Feature Implementation | Quality-bar rubric (+ opt-in adversarial-on-design) | in-repo rubric | After design |
+| WF3 Bug Fix                | Quality-bar rubric | in-repo rubric | After RCA                    |
 | WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF1–WF3 |
-| WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
+| WF11 Incident              | Quality-bar rubric | in-repo rubric | Phase B only                 |
 | WF13 Peer Consult          | Independent peer   | Codex CLI             | Standalone; opt-in in WF2 Step 3 |
 
 ### Cross-Model Review Data Handling (Codex)
@@ -551,7 +550,6 @@ count, never silently averaged in.
 | "No rawgentic workspace found"   | First-time user                                | Run `/rawgentic:new-project` to register your first project   |
 | "Config missing — run setup"     | Project registered but not configured          | Run `/rawgentic:setup` on the active project                  |
 | Config version mismatch          | `.rawgentic.json` has wrong version            | Run `/rawgentic:setup` to regenerate config                   |
-| Quality gate blocks workflow     | reflexion plugin not installed                 | `claude plugin add reflexion@context-engineering-kit`         |
 | Workflow resumes at wrong step   | Context compacted mid-workflow                 | Re-invoke the skill — resumption protocol detects state       |
 | CI verification hangs            | `gh pr checks` doesn't work with fine-grained PATs | Skills use `gh run list` instead (already handled)        |
 | Ambiguity circuit breaker fires  | Quality gate found conflicting findings        | Expected — review findings, tell Claude how to proceed        |
@@ -676,6 +674,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v3.3.0 (2026-07-05)
+- **Removed the external reflexion plugin dependency entirely (#205, epic #188).** The reflexion skills were prompt-only (a rubric behind a slash command; no code we called) and failed open to *unreviewed* when the plugin was absent. Replaced with an **in-repo quality-bar rubric** (`skills/*/references/quality-bar.md` — the skeptical-gatekeeper stance + depth triage + finding shape) applied at every design/RCA gate: WF2 Steps 4/6/9/15, WF3, incident, and setup's config critique. Step 10 memorize (WF2) and the WF3/incident memorize steps now curate learnings into **mempalace** (`mcp__mempalace__*`) when available, falling back to `CLAUDE.md`/`MEMORY.md`. `critiqueMethod` is deprecated/ignored (leftover values inert); the reflexion prerequisite, add-on row, and troubleshooting entry are gone. No active skill invokes `/reflexion:*` (drift-guarded). Follow-up #206: migrate existing rawgentic memories into mempalace if warranted.
 
 ### v3.2.0 (2026-07-05)
 - **WF2 Step 4 retires the same-model 3-judge critique panel → reflect-only (#190, epic #188).** WF2's design gate now runs `/reflexion:reflect` for all lanes; the full-spine keeps its opt-in cross-model **adversarial-on-design** sub-step (WF5) — that is where high-stakes design scrutiny now lives. Owner telemetry showed ≈ 0 measured gain from the same-model panel, and the lean spine shipped 10/10 campaign issues with 0 loop-backs. The ambiguity circuit breaker, volume thresholds, and `design` loop-back budget are retained (sourced from reflect, or merged reflect+adversarial when the opt-in review runs); the `critiqueMethod` preamble is removed from WF2 (`setup` keeps it for its own config critique). Follow-up (not this issue): replace the reflect dependency at Steps 4/9 with an inline quality-bar checklist (P3).

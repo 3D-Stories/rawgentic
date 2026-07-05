@@ -267,7 +267,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `critiqueMethod` | `string` | Critique tool used at quality gates. `"reflexion"` (the default, also used when the field is absent) is the supported value. |
+| `critiqueMethod` | `string` | **Deprecated / ignored (#205).** Formerly selected the critique tool; the external reflexion dependency was removed and quality gates now use the in-repo quality-bar rubric. A leftover value in a workspace file is inert. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`, or a `{model, effort}` object; string shorthand ≡ `{model, effort: null}`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown model or effort values warn and resolve to `inherit`/`null`, never block. See [`modelRouting`](#modelrouting). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
@@ -278,9 +278,11 @@ to any project repo — and are set by `/rawgentic:setup`.
 
 ### `critiqueMethod`
 
-The critique-invoking skills (implement-feature and setup; formerly also the
-workflows removed at v3.0.0, #161) check the project's `critiqueMethod` field before running the critique. `reflexion`
-(the default, also used when the field is absent) is the supported method.
+**Deprecated / ignored (#205).** The external reflexion plugin dependency was
+removed; WF2/WF3 design self-review and setup's config critique now apply the
+in-repo **quality-bar rubric** (`skills/*/references/quality-bar.md`). No skill
+reads `critiqueMethod` anymore — a leftover value in a workspace file is inert
+(nothing errors).
 
 ### `adversarialReview`
 
@@ -307,8 +309,9 @@ artifact text to OpenAI, so it is never force-enabled). Shape:
 a removed name like `refactor` is accepted but inert — see `docs/upgrade-3.0.md`).
 When enabled and the running skill is listed:
 
-- **WF2** (`implement-feature`): alongside the Step 4 design reflect (`/reflexion:reflect`
-  — the 3-judge panel was retired at #190) and after plan reflect (Step 6), if
+- **WF2** (`implement-feature`): alongside the Step 4 design self-review (the in-repo
+  quality-bar rubric — the 3-judge panel was retired at #190, the reflexion dependency
+  at #205) and after the Step 6 plan self-review, if
   `fast_path_eligible == false`, it additionally invokes `/rawgentic:adversarial-review`.
   Findings merge with the in-process reflect findings (tagged by source); a Critical/High
   design flaw consumes the existing `design` loop-back counter (no new budget).

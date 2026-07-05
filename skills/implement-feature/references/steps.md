@@ -72,7 +72,7 @@ annotation, to keep the per-skill headless-annotation count stable.)
 | Step | Full WF2 | Small-standard lane | Why |
 |---|---|---|---|
 | 3 Design | inline 1-2 approaches + doc | **brief design note** (file list + failure modes + security), no multi-approach brainstorm | small work has one obvious approach |
-| 4 Design critique | **`/reflexion:reflect`** + peer consult + opt-in adversarial-on-design | **`/reflexion:reflect` only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
+| 4 Design critique | **quality-bar rubric** + peer consult + opt-in adversarial-on-design | **quality-bar rubric only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
 | 5 Plan | full task decomposition + drift-ready fields | **checklist plan**: ordered tasks, each with `riskLevel` + a verification line; parallel_group/files optional | keeps TDD + risk tagging; drops ceremony |
 | 6 Plan drift | reflect + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
 | 8 / 8a | TDD; 8a per high-risk task | **UNCHANGED** — TDD kept; **8a still fires for any `riskLevel: high` task** | security surface never loses per-task review |
@@ -84,7 +84,7 @@ annotation, to keep the per-skill headless-annotation count stable.)
 
 **Exact retained vs. removed gates** (no vague "every safety gate"):
 - **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).
-- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (`/reflexion:reflect` only — no peer consult, no adversarial-on-design; WF2's Step 4 uses reflect on the full spine too since #190, so the lane differs only by dropping the opt-in cross-model layers), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).
+- **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (quality-bar rubric only — no peer consult, no adversarial-on-design; WF2's Step 4 uses the same rubric on the full spine too, so the lane differs only by dropping the opt-in cross-model layers), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment reflect removed).
 - **REMOVED entirely:** Step 6 (plan drift).
 
 The RETAINED set is non-negotiable: Step 11 caught 2 Criticals on a run judged "too simple to
@@ -408,7 +408,7 @@ Design document. NOT presented to user — goes to Step 4 for critique.
 
 ### Instructions
 
-Step 4 runs `/reflexion:reflect` over the design for **all** lanes. The same-model
+Step 4 applies the in-repo **quality-bar rubric** (`references/quality-bar.md`) to the design for **all** lanes. The same-model
 multi-judge design panel (WF2's old full-critique gate) was retired from WF2 (#190): owner
 telemetry showed ≈ 0 measured gain from it, and the lean spine shipped 10/10 campaign issues
 with 0 loop-backs. High-stakes design scrutiny stays available — cross-model and opt-in —
@@ -417,13 +417,13 @@ catching now lives on the full spine.
 
 **Determine gate shape based on lane eligibility** (`small_standard_lane_eligible`, a.k.a.
 the `fast_path_eligible` alias):
-- If `fast_path_eligible == true` (lane): run `/reflexion:reflect` only — **NO peer consult
+- If `fast_path_eligible == true` (lane): apply the quality-bar rubric only — **NO peer consult
   (the Step 3 sub-step) and NO adversarial-on-design (item 7)**. The lane drops all
   design-stage cross-model ceremony.
-- If `fast_path_eligible == false` (full spine): run `/reflexion:reflect`, **plus** the opt-in
+- If `fast_path_eligible == false` (full spine): apply the quality-bar rubric, **plus** the opt-in
   Step 3 peer consult and the opt-in adversarial-on-design sub-step (item 7) below.
 
-**Reflect (`/reflexion:reflect`) — all lanes:**
+**Design self-review (quality-bar rubric, `references/quality-bar.md`) — all lanes:**
 
 <!-- model-routing: role=review -->
 When run as a subagent, dispatch it as a `rawgentic:rawgentic-reviewer` per the
@@ -599,7 +599,7 @@ Implementation plan with ordered tasks, verification strategy, branch name, opti
 small-standard lane** (`small_standard_lane_eligible` — the checklist plan is small enough to
 eyeball, and Step 9 still verifies acceptance-criteria coverage). Otherwise run it.
 
-Invoke `/reflexion:reflect` with check dimensions:
+Apply the quality-bar rubric (`references/quality-bar.md`) over these check dimensions:
 - **Design-plan alignment:** Does every design component map to at least one task?
 - **Verification completeness:** Does every implementation task have a corresponding verification step?
 - **Acceptance criteria coverage:** Does the plan, if executed, satisfy all acceptance criteria?
@@ -835,7 +835,7 @@ session notes AND set a run-record note (the design panel was skipped on a chang
 larger than estimated) — do **NOT** retroactively fail: the gates that DID run (Step 11, Step
 11.5, Step 8a) are still valid and load-bearing.
 
-**Part A: Drift check (invoke `/reflexion:reflect`):**
+**Part A: Drift check (apply the quality-bar rubric, `references/quality-bar.md`):**
 - Plan-implementation alignment: does every task have a corresponding implementation?
 - Design-implementation alignment: does implementation follow the critiqued design?
 - Acceptance criteria verification: for each criterion, identify the test/verification that covers it
@@ -880,11 +880,15 @@ Dispatch the memorization sub-agent per the `<model-routing-resolve>` contract f
 
 1. Review quality gate findings from Steps 4, 6, and 9.
 2. Identify reusable insights — patterns applicable beyond this specific issue.
-3. If memorizable insights exist: check for duplication against CLAUDE.md and MEMORY.md, append if novel.
+3. If memorizable insights exist, curate each into memory: if a mempalace MCP
+   server is available (`mcp__mempalace__*` tools loaded), store it via
+   `mempalace_kg_add` (a fact/decision) or `mempalace_add_drawer` (a note),
+   scoped to this project; otherwise check for duplication against CLAUDE.md and
+   MEMORY.md and append if novel.
 4. If no reusable patterns: skip entirely.
 
 ### Output
-Updated CLAUDE.md (if insights memorized) or no output.
+Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized), or no output.
 
 ---
 
@@ -1270,7 +1274,7 @@ Deployed (or manual deployment instructions provided and confirmed).
 
 **If deployment was performed:**
 
-Invoke `/reflexion:reflect` with check dimensions adapted to what was deployed:
+Apply the quality-bar rubric (`references/quality-bar.md`) over check dimensions adapted to what was deployed:
 
 - **Health check verification:** For each affected service, verify it responds correctly. Generate health check commands from the implementation context (not hardcoded URLs).
 - **Acceptance criteria spot-check:** For each criterion, verify evidence of correct behavior using the verification commands from the plan.

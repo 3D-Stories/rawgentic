@@ -74,8 +74,8 @@ issue spec (WF1), design / implementation plan (WF2), root-cause analysis (WF3),
 design artifacts. (WF4 refactoring removed at v3.0.0, #161.) WF5 is **on by default for the applicable workflows**
 — the only thing it needs is an OpenAI account for the Codex CLI, so setup ASKS
 about that account rather than asking you to opt in. The setting lives in the
-active project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled`
-/ `critiqueMethod`), NOT in `.rawgentic.json` — it is workspace-scoped, not
+active project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled`),
+NOT in `.rawgentic.json` — it is workspace-scoped, not
 committed to the project repo. (It does send artifact text to OpenAI; declining
 the account question keeps it fully off.)
 
@@ -97,9 +97,9 @@ Check the active project's entry for the `adversarialReview` field.
     `"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }`
     Tell the user it's now on for implement-feature (WF2), fix-bug (WF3), and
     `create-issue` (WF1) is intentionally **left off** by default
-    because WF1 already runs a full same-model 3-judge critique, so a cross-model
-    pass there is redundant — offer it as an opt-in add ("also enable for
-    create-issue? (y/n) [default: n]"). Remind them the Codex CLI must be installed
+    because WF1 is a lean drafting workflow (no multi-agent critique), so most
+    projects don't need a cross-model pass on issue specs — offer it as an opt-in
+    add ("also enable for create-issue? (y/n) [default: n]"). Remind them the Codex CLI must be installed
     and authenticated (`curl -fsSL https://codex.openai.com/install.sh | bash`
     then `codex login`); if Codex is absent at run time the gate fails closed and
     is skipped (no error, just no cross-model pass). WF4 (refactor) was removed at v3.0.0 (#161); a configured refactor entry is inert and only fires on
