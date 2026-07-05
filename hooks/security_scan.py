@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shared tool-based security scanner for rawgentic workflows.
 
-WF2 (implement-feature) Step 11.5 and WF9 (security-audit) both shell out to this
+WF2 (implement-feature) Step 11.5 and /rawgentic:scan both shell out to this
 one tested lib so the *tool-based* part of a security review — running actual
 scanners and turning their output into a gate decision — lives in a single
 fail-closed place instead of being re-derived in fragile prose. The LLM-reasoning

@@ -66,6 +66,17 @@ def test_active_skills_do_not_reference_removed_skills():
     assert not offenders, f"active skills still reference removed skills: {offenders}"
 
 
+def test_readme_does_not_advertise_removed_skills():
+    """README body (outside the Changelog history) must not present a removed
+    skill as invocable — the Step 11 Critical this guard pins: the SDLC catalog
+    table survived the first removal sweep."""
+    text = (REPO_ROOT / "README.md").read_text()
+    body = text[:text.index("## Changelog")]
+    pat = re.compile(r"/rawgentic:(?:%s)\b" % "|".join(REMOVED))
+    hits = sorted(set(pat.findall(body)))
+    assert not hits, f"README body still advertises removed skills: {hits}"
+
+
 def test_upgrade_guide_exists_with_replacement_table():
     guide = REPO_ROOT / "docs" / "upgrade-3.0.md"
     assert guide.exists(), "AC1: docs/upgrade-3.0.md must ship with v3.0.0"

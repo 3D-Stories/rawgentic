@@ -43,7 +43,7 @@ The `/rawgentic:adversarial-review` skill (WF5) runs a cross-model review of a
 text artifact via the Codex CLI. It can also be wired into the WF1, WF2, WF3, and
 WF4 quality gates so they automatically run a cross-model second opinion on the
 issue spec (WF1), design / implementation plan (WF2), root-cause analysis (WF3),
-design artifacts. (WF4 refactoring removed — deprecated to a stub, #160.) WF5 is **on by default for the applicable workflows**
+design artifacts. (WF4 refactoring removed at v3.0.0, #161.) WF5 is **on by default for the applicable workflows**
 — the only thing it needs is an OpenAI account for the Codex CLI, so setup ASKS
 about that account rather than asking you to opt in. The setting lives in the
 active project's entry in `.rawgentic_workspace.json` (sibling to `headlessEnabled`
@@ -74,7 +74,7 @@ Check the active project's entry for the `adversarialReview` field.
     create-issue? (y/n) [default: n]"). Remind them the Codex CLI must be installed
     and authenticated (`curl -fsSL https://codex.openai.com/install.sh | bash`
     then `codex login`); if Codex is absent at run time the gate fails closed and
-    is skipped (no error, just no cross-model pass). WF4 (refactor) is deprecated (#160); a configured refactor entry is inert and only fires on
+    is skipped (no error, just no cross-model pass). WF4 (refactor) was removed at v3.0.0 (#161); a configured refactor entry is inert and only fires on
     the Extract/Restructure path (Rename/Simplify skips it).
   - **If no →** disable it:
     `"adversarialReview": { "enabled": false, "workflows": [] }`
@@ -82,7 +82,7 @@ Check the active project's entry for the `adversarialReview` field.
     this only controls the workflow-embedded gates.
 
   Write the result to the project's entry using **bare skill names** in `workflows`
-  (valid names: `implement-feature`, `fix-bug`, `create-issue`; `refactor` accepted for back-compat but inert — WF4 deprecated, #160).
+  (valid names: `implement-feature`, `fix-bug`, `create-issue`; `refactor` accepted for back-compat but inert — WF4 removed at v3.0.0, #161).
 
 - **If `adversarialReview` is already set** (re-configuration): show current
   status and allow changing:
@@ -93,7 +93,7 @@ Check the active project's entry for the `adversarialReview` field.
   "none", or "all" [default: keep current]
   ```
 
-  (refactor removed — WF4 deprecated to a stub, #160)
+  (refactor removed at v3.0.0, #161)
 
 ---
 

@@ -1,6 +1,6 @@
 """Tests for hooks/security_scan.py — the shared tool-based security scanner.
 
-WF2 (implement-feature) Step 11.5 and WF9 (security-audit) both call this one
+WF2 (implement-feature) Step 11.5 and /rawgentic:scan both call this one
 tested lib so the actual *tool-based* scanning (secrets / dependency-CVE / SAST /
 IaC) lives in a single fail-closed place instead of being re-derived in prose.
 

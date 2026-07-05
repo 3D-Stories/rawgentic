@@ -150,14 +150,8 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Issue Creation           | `/rawgentic:create-issue`      | 5     | Planning a feature or reporting a bug               |
 | Feature Implementation   | `/rawgentic:implement-feature` | 16    | Building a new feature from a GitHub issue          |
 | Bug Fix                  | `/rawgentic:fix-bug`           | 14    | Fixing a bug with reproduce-first TDD               |
-| Refactoring              | `/rawgentic:refactor`          | 14    | Restructuring code while preserving behavior        |
 | Adversarial Review       | `/rawgentic:adversarial-review`| 5     | Cross-model critique of a design/spec/plan/PRD/ADR/RFC/README artifact |
-| Documentation            | `/rawgentic:update-docs`       | 10    | Creating or updating project documentation          |
-| Dependency Update        | `/rawgentic:update-deps`       | 12    | Updating npm/pip/Docker dependencies                |
-| Security Audit           | `/rawgentic:security-audit`    | 14    | STRIDE threat modeling and vulnerability assessment |
-| Performance Optimization | `/rawgentic:optimize-perf`     | 15    | Benchmark-driven performance improvements           |
 | Incident Response        | `/rawgentic:incident`          | 14    | Production incident: stabilize first, then RCA      |
-| Test Suite Creation      | `/rawgentic:create-tests`      | 14    | Bootstrap tests or fill coverage gaps across any language |
 | Peer Consult             | `/rawgentic:peer-consult`      | 5     | Independent cross-model design proposal for a problem/spec artifact |
 
 <details>
@@ -229,7 +223,7 @@ Since v2.62.0 (#159), the WF3 skill itself loads as a ~224-line spine with on-de
 - **Grounded, high-precision findings** — each carries a verbatim `evidence` quote from the artifact plus a `confidence`; an explicit severity rubric curbs inflation, so reports stay short and verifiable instead of padded with generic best-practice nitpicks
 - **Reproducible reviewer** — pins reasoning effort high (`RAWGENTIC_ADV_REVIEW_EFFORT`) instead of silently inheriting whatever `~/.codex/config.toml` defaults to (gpt-5.5 defaults to *medium*); runs ephemeral and independent of the project's `AGENTS.md`
 - **Injection-hardened** — the artifact is wrapped in a per-run unforgeable nonce fence and treated strictly as data; embedded steering text (e.g. "rate this flawless") is reported as a finding, not obeyed
-- Optionally wired into WF2 (design/plan gates), WF3, WF1 (issue spec), and WF4 (refactor design) per-project (all opt-in; WF3/WF1/WF4 default-off)
+- Optionally wired into WF2 (design/plan gates), WF3, and WF1 (issue spec) per-project (all opt-in; WF3/WF1 default-off)
 - Warn-only egress with secret scanning; fail-closed on any Codex error
 - Requires the Codex CLI installed + authenticated. See [Data Handling](#cross-model-review-data-handling-codex).
 </details>
@@ -413,7 +407,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 7 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step (the 6 deprecation stubs carry none):
+All 7 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`

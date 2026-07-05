@@ -73,17 +73,17 @@ project information during execution:
 |---------|---------|-------------------|
 | `project` | Name, type (`application`, `library`, `infrastructure`, etc.), description. | All skills (for project-type-specific behavior). |
 | `repo` | Provider, full name, default branch. | All skills (for `gh` CLI commands and branching). |
-| `techStack` | Array of technologies (languages, frameworks, databases). | setup, create-issue, implement-feature, optimize-perf, update-deps. |
-| `testing` | Test frameworks with commands, config files, and test directories. | implement-feature, fix-bug, refactor, optimize-perf, update-deps, update-docs, security-audit, incident. |
-| `database` | DB type, CLI tool, name, user, container, migrations directory and pattern. | implement-feature, fix-bug, optimize-perf, incident, security-audit. |
-| `services` | Array of service objects (name, type, framework, port, entry point, health check). | create-issue, implement-feature, fix-bug, incident, security-audit, optimize-perf, update-docs. |
-| `infrastructure` | Hosts (SSH targets) and Docker compose files. | implement-feature, fix-bug, refactor, incident, optimize-perf, update-deps, security-audit. |
+| `techStack` | Array of technologies (languages, frameworks, databases). | setup, create-issue, implement-feature. |
+| `testing` | Test frameworks with commands, config files, and test directories. | implement-feature, fix-bug, incident. |
+| `database` | DB type, CLI tool, name, user, container, migrations directory and pattern. | implement-feature, fix-bug, incident. |
+| `services` | Array of service objects (name, type, framework, port, entry point, health check). | create-issue, implement-feature, fix-bug, incident. |
+| `infrastructure` | Hosts (SSH targets) and Docker compose files. | implement-feature, fix-bug, incident. |
 | `deploy` | Method (`compose`, `ssh`, `script`, `manual`), command, target host. | All SDLC skills (for merge-and-deploy steps). |
-| `security` | Auth mechanisms, validation library, data channels. | security-audit (primary), create-issue, implement-feature. |
+| `security` | Auth mechanisms, validation library, data channels. | scan, create-issue, implement-feature. |
 | `ci` | Provider and workflow directory. | All SDLC skills (for CI verification gate). |
-| `formatting` | Tool, config file, and format command. | implement-feature, fix-bug, refactor (for code style compliance). |
-| `documentation` | Primary doc files and format. | update-docs (primary), setup. |
-| `custom` | Free-form object for project-specific metadata (e.g., security debt). | Any skill; security-audit checks for known debt items. |
+| `formatting` | Tool, config file, and format command. | implement-feature, fix-bug (for code style compliance). |
+| `documentation` | Primary doc files and format. | setup. |
+| `custom` | Free-form object for project-specific metadata (e.g., security debt). | Any skill. |
 
 ## Versioning
 
@@ -278,8 +278,8 @@ to any project repo — and are set by `/rawgentic:setup`.
 
 ### `critiqueMethod`
 
-The critique-invoking skills (implement-feature, refactor, security-audit, optimize-perf,
-setup) check the project's `critiqueMethod` field before running the critique. `reflexion`
+The critique-invoking skills (implement-feature and setup; formerly also the
+workflows removed at v3.0.0, #161) check the project's `critiqueMethod` field before running the critique. `reflexion`
 (the default, also used when the field is absent) is the supported method.
 
 ### `adversarialReview`
@@ -292,7 +292,7 @@ the project repo.
 **Default (setup):** WF5 is **on by default for the applicable workflows** — its
 only dependency is an OpenAI account for the Codex CLI, so `/rawgentic:setup`
 Step 2d asks the account question instead of asking you to opt in: "yes" enables
-it for `implement-feature`, `fix-bug`, and `refactor` (create-issue stays off —
+it for `implement-feature` and `fix-bug` (create-issue stays off —
 WF1 already runs a same-model 3-judge critique); "no" leaves it off. When the
 field is **absent** the loader still resolves to disabled (fail-closed), and the
 SessionStart post-update reconcile (`hooks/post_update_reconcile.py`) nudges you
@@ -303,8 +303,9 @@ artifact text to OpenAI, so it is never force-enabled). Shape:
 "adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }
 ```
 
-`workflows` uses bare skill names (`implement-feature`, `fix-bug`, `create-issue`,
-`refactor`). When enabled and the running skill is listed:
+`workflows` uses bare skill names (`implement-feature`, `fix-bug`, `create-issue`;
+a removed name like `refactor` is accepted but inert — see `docs/upgrade-3.0.md`).
+When enabled and the running skill is listed:
 
 - **WF2** (`implement-feature`): after the normal design critique (Step 4) and plan
   reflect (Step 6), if `fast_path_eligible == false`, it additionally invokes
