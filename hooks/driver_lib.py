@@ -345,6 +345,33 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def campaign_goal_text(state: dict) -> str:
+    """Build the ONE epic-level `/goal` text for a campaign kickoff (#192).
+
+    The driver runs this at campaign start (the `validate_campaign_start` seam):
+    it enumerates the epic anchor + the topo-ordered child queue into a single
+    goal with a tolerant escape clause, so the session's Stop-hook guards the
+    WHOLE campaign rather than a per-issue goal that lets the run quit after any
+    one slot. The driver then (a) emits this text for the owner to run (a skill
+    cannot self-set `/goal`) and (b) exports `RAWGENTIC_EPIC_GOAL=<epic>` so each
+    child WF2 run's Step 1b defers to it instead of emitting a clobbering
+    per-issue goal.
+
+    Raises ``DriverStateError`` if the state has no integer ``epic`` (a campaign
+    goal is meaningless without the epic anchor), and ``DependencyCycleError``
+    if the child queue has a dependency cycle (surfaced, never silently mis-ordered).
+    """
+    epic = state.get("epic")
+    if not _is_int(epic):
+        raise DriverStateError(
+            "campaign_goal_text requires an integer 'epic' anchor")
+    ordered = topo_sort_issues(state.get("issues", []))
+    # Local import keeps driver_lib importable without plan_lib for its pure DAG
+    # helpers; both functions are side-effect-free.
+    from plan_lib import build_goal_text
+    return build_goal_text(epic, [], variant="campaign", child_issues=ordered)
+
+
 def validate_campaign_start(state: dict, headless: bool = False) -> tuple[bool, list[str]]:
     """Validate a driver state is fit to *start* a campaign, else return errors.
 

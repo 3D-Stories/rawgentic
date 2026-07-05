@@ -127,13 +127,26 @@ This is an optional guard, not a gate — it never blocks the workflow.
    covers both the bug-report check and the `/goal` invocation (run it, or decline).
    Declining is always a valid answer and never blocks progress (`goal_guard: skipped`).
 
-4. **Record the marker** (read by the run-record `goal_guard` field):
+4. **ALWAYS emit the constructed `/goal` prompt** (#191). A skill can't observe or
+   set the session goal, so it must not suppress emission on the guess that a prior
+   goal is active — emit every run and let the user/driver decide whether to run it.
+
+5. **Epic-campaign exception (defer, don't clobber) (#192).** When this run is part
+   of an epic campaign — signaled by the `RAWGENTIC_EPIC_GOAL` environment variable
+   being set (the driver sets it) — an epic-level goal already guards the whole
+   campaign. Emitting a per-issue `/goal` would clobber it, so **defer**: do NOT
+   emit, and log `(deferred: epic #<N> goal active)` (never silently skip).
+
+6. **Record the marker** (read by the run-record `goal_guard` field — `set` when
+   emitted, `deferred` under an epic campaign, `skipped` when declined):
    ```
-   ### WF3 Step 1b — Goal guard (set|skipped): <first 80 chars of text | decline reason>
+   ### WF3 Step 1b — Goal guard (set|deferred|skipped): <first 80 chars of text | epic #N | decline reason>
    ```
 
-**[Headless: AUTO-RESOLVE — for WF1-created issues, emit the built goal text
-verbatim into the headless checkpoint for the driver to set via
+**[Headless: AUTO-RESOLVE — when `RAWGENTIC_EPIC_GOAL` is set (epic campaign),
+DEFER: the epic-level goal already guards the run, so emit nothing and log
+`(deferred: epic #<N> goal active)`. Otherwise, for WF1-created issues, emit the
+built goal text verbatim into the headless checkpoint for the driver to set via
 `claude -p "/goal …"` (session 1 cannot self-set it — the goal text needs the
 fetched issue body, though the driver MAY pre-derive it at launch); for
 unlabeled/manual issues, skip the guard and log the marker with (skipped).]**

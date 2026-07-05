@@ -1486,6 +1486,13 @@ def _file_lock(path: str):
 _GOAL_ESCAPE_DISJUNCT: Final[str] = (
     " — or a blocker is posted to the issue via the ERROR protocol"
 )
+# Campaign (epic-level) escape clause (#192): tolerant of the real outcomes a
+# multi-issue campaign actually produces, so the ONE campaign goal clears honestly
+# instead of firing relentlessly against a stale condition (as it did this campaign).
+_GOAL_CAMPAIGN_ESCAPE: Final[str] = (
+    " — a child closed not-planned per its own acceptance criteria counts as "
+    "satisfied, and the owner may pause the campaign at any time"
+)
 _GOAL_CAP: Final[int] = 4000
 _AC_STRIP_RE = re.compile(r"^\s*(?:\d+[.):]\s*|[-*•]\s*)")
 
@@ -1504,6 +1511,7 @@ def build_goal_text(
     ac_lines: list[str],
     variant: str = "wf2",
     headless: bool = False,
+    child_issues: list[int] | None = None,
 ) -> str:
     """Build the goal-guard clear-condition text posted at workflow start.
 
@@ -1533,8 +1541,26 @@ def build_goal_text(
     input, so a typo'd variant should fail loudly rather than silently
     fall back to one of the two templates.
     """
-    if variant not in ("wf2", "wf3"):
+    if variant not in ("wf2", "wf3", "campaign"):
         raise ValueError(f"unknown goal-text variant: {variant!r}")
+
+    if variant == "campaign":
+        # ONE goal over the epic's ordered child issues (#192). `child_issues`
+        # is campaign-only; `ac_lines` is ignored. The tolerant campaign escape
+        # clause replaces the per-issue ERROR-protocol disjunct.
+        if child_issues:
+            nums = ", ".join(f"#{n}" for n in child_issues)
+            full = (
+                f"Epic #{issue_number} campaign done: all ordered child issues "
+                f"({nums}) merged with green CI{_GOAL_CAMPAIGN_ESCAPE}"
+            )
+            if len(full) <= _GOAL_CAP:
+                return full
+        # empty/None children, or a child list that would overflow the cap.
+        return (
+            f"Epic #{issue_number} campaign done: all ordered child issues of "
+            f"epic #{issue_number} merged with green CI{_GOAL_CAMPAIGN_ESCAPE}"
+        )
 
     if variant == "wf3":
         return (

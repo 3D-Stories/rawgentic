@@ -440,3 +440,42 @@ def test_committed_examples_pass_pure_python_validator():
         data = json.loads((DRIVER_STATE_DIR / name).read_text())
         ok, errors = driver_lib.validate_driver_state(data)
         assert ok, f"{name}: {errors}"
+
+
+class TestCampaignGoalText:
+    """#192: the driver seam that builds ONE epic-level /goal at campaign kickoff
+    from the epic anchor + the topo-ordered child queue."""
+
+    def _state(self):
+        return {
+            "schema_version": 2,
+            "campaign": "epic-188",
+            "epic": 188,
+            "issues": [
+                {"number": 192, "depends_on": [191]},
+                {"number": 190},
+                {"number": 191},
+            ],
+        }
+
+    def test_builds_epic_goal_with_topo_ordered_children(self):
+        text = driver_lib.campaign_goal_text(self._state())
+        assert "Epic #188" in text
+        # topo order: 190, 191, then 192 (depends on 191)
+        assert text.index("#190") < text.index("#191") < text.index("#192")
+        assert "pause" in text.lower()  # tolerant escape clause carried through
+
+    def test_missing_epic_raises(self):
+        state = self._state()
+        del state["epic"]
+        with pytest.raises(driver_lib.DriverStateError):
+            driver_lib.campaign_goal_text(state)
+
+    def test_cycle_in_queue_raises(self):
+        state = self._state()
+        state["issues"] = [
+            {"number": 1, "depends_on": [2]},
+            {"number": 2, "depends_on": [1]},
+        ]
+        with pytest.raises(driver_lib.DependencyCycleError):
+            driver_lib.campaign_goal_text(state)

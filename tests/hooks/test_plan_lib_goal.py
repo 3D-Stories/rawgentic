@@ -123,3 +123,45 @@ class TestInvalidVariant:
     def test_unknown_variant_raises(self):
         with pytest.raises(ValueError):
             plan_lib.build_goal_text(1, ["A"], variant="wf9")
+
+
+class TestCampaignVariant:
+    """#192: the campaign variant sets ONE goal over an epic's ordered child
+    issues, with a tolerant escape clause so real campaign outcomes clear it."""
+
+    def test_enumerates_ordered_children(self):
+        text = plan_lib.build_goal_text(
+            188, [], variant="campaign", child_issues=[190, 191, 192])
+        assert "Epic #188" in text
+        assert "#190" in text and "#191" in text and "#192" in text
+        # order preserved
+        assert text.index("#190") < text.index("#191") < text.index("#192")
+
+    def test_tolerant_escape_clause(self):
+        text = plan_lib.build_goal_text(
+            188, [], variant="campaign", child_issues=[190])
+        # a data-gated not-planned close counts as satisfied; owner may pause
+        assert "not-planned" in text.lower()
+        assert "pause" in text.lower()
+
+    def test_empty_children_falls_back(self):
+        text = plan_lib.build_goal_text(188, [], variant="campaign", child_issues=[])
+        assert "all ordered child issues of epic #188" in text
+        assert "pause" in text.lower()  # escape clause still present
+
+    def test_none_children_falls_back(self):
+        text = plan_lib.build_goal_text(188, [], variant="campaign")
+        assert "all ordered child issues of epic #188" in text
+
+    def test_many_children_stays_under_cap_via_fallback(self):
+        many = list(range(1000, 1000 + 900))  # would overflow 4000 chars
+        text = plan_lib.build_goal_text(
+            188, [], variant="campaign", child_issues=many)
+        assert len(text) <= 4000
+        assert "all ordered child issues of epic #188" in text
+
+    def test_child_issues_ignored_for_wf2(self):
+        # child_issues is campaign-only; wf2 behavior unchanged when it's passed
+        a = plan_lib.build_goal_text(5, ["A"], variant="wf2")
+        b = plan_lib.build_goal_text(5, ["A"], variant="wf2", child_issues=[9, 9])
+        assert a == b
