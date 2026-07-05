@@ -12,6 +12,43 @@ Milestones: **M1** instrument+guard (done) · **M2** enable+restructure (done) �
 
 ---
 
+## Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped
+
+**Issue.** #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0
+boundary — one migration event for consumers instead of a drip.
+
+**What shipped.**
+- **BREAKING:** the six workflows deprecated at v2.60.0 (#160) are **removed** —
+  `refactor` (WF4), `update-docs` (WF7), `update-deps` (WF8), `security-audit`
+  (WF9), `optimize-perf` (WF10), `create-tests` (WF12) — plus their eval
+  workspaces and their Codex-mirror symlinks; the marketplace `skills` whitelist
+  drops 19 → 13. Zero STUB-FIRED telemetry across the deprecation cycle backed
+  the verdict.
+- `docs/upgrade-3.0.md` (AC1): replacement table (verified verbatim against the
+  deleted stubs' own redirects), what-moved recap, cache-refresh steps, config
+  notes — a removed name left in `adversarialReview.workflows` is inert
+  (code-verified fail-closed membership matching).
+- `tests/test_v3_removals.py` (23 red-first guards) replaces the stub drift
+  guards: gone-stays-gone in BOTH trees, whitelist/description scrub, README
+  body reference-freedom, guide presence.
+- CHANGELOG: v3.0.0 entry **plus the missing v2.57.0–v2.66.0 backfill**
+  (slot-13 follow-up closed; all 12 entries spot-checked against git by a
+  reviewer — no drift).
+
+**Reviews.** Small-standard lane, **lane-widened** honestly logged (real impl
+count 146 vs estimate 4 — deletion mass, not new logic). Step 11 (2 opus):
+**1 Critical, independently found by both reviewers** — the README's main SDLC
+catalog table still advertised all six removed skills as invocable commands
+(the removal sweep missed it and no test covered it); fixed + a red-first README
+guard added. 2 Medium + 3 Low doc/manifest fixes. Adversarial diff review
+mechanically skipped (no security surface). Security scan clean. Suite
+1941/0 → 1936/0 (stub tests replaced by removal guards).
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry embedded below.
+
+---
+
 ## Slot 13 — #184: version-aware setup prompt · v2.67.0
 
 **Issue.** #184 (M3, epic #169): shipped opt-in features sit dark because
@@ -55,8 +92,8 @@ is now pinned). All 5 `since` values independently re-verified against git
 history by reviewer 2. Adversarial diff review mechanically skipped (no security
 surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.
 
-**Status.** PR + CI + merge SHA filled by the next slot's pass (established
-convention). Telemetry embedded below.
+**Status.** *(backfilled by slot 14's pass)* PR #201 squash-merged `6c375b1`,
+CI green, v2.67.0, issue closed. Telemetry embedded below.
 
 ---
 
