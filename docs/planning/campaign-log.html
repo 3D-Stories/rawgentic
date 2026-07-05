@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rawgentic modernization — campaign log</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-04 19:27 MDT</div>
+<h1>Rawgentic modernization — campaign log</h1>
+
+</header>
+<main>
+<h1>Rawgentic modernization — campaign log</h1>
+<p>Rolling design-artifact log for the autonomous workflow-modernization campaign</p>
+<p>(dogfood: rawgentic builds rawgentic). One section per implemented slot, updated</p>
+<p>in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives</p>
+<p>separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this</p>
+<p>log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded</p>
+<p>run-record telemetry.</p>
+<p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
+<p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
+<p>---</p>
+<h2>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0</h2>
+<p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
+<p>state schema, from design #134) and #163 (dependency-DAG + epic anchor,</p>
+<p>schema v2) — implemented together in one PR (#163 extends #148&#x27;s queue).</p>
+<p><strong>What shipped.</strong></p>
+<ul>
+<li><code>docs/multi-issue-driver.md</code> — the documented driver <strong>pattern</strong>: the loop</li>
+</ul>
+<p>  (WF2 fresh per issue; advance on merge / <code>pr_open</code> when headless; park on</p>
+<p>  DEFER), policy (order / deploy / review-budget / never-Haiku), the DEFER</p>
+<p>  taxonomy + deterministic branch-preservation rule, the rollback-anchor</p>
+<p>  protocol, the dependency-DAG ordering, the epic anchor, and the resumption</p>
+<p>  reconciliation table (intra-WF2 resume delegated to <code>resume_lib</code>). Explicitly</p>
+<p>  does <strong>not</strong> weaken WF2 — each iteration is a full run terminating at Step 16.</p>
+<ul>
+<li><code>hooks/driver_lib.py</code> — the narrow, unit-tested DAG surface: <code>parse_depends_on</code></li>
+</ul>
+<p>  (word-boundary, negation-aware, sentence-bounded), <code>topo_sort_issues</code> (Kahn,</p>
+<p>  fail-closed on cycle), <code>next_ready_issue</code> (deps-satisfied advance rule +</p>
+<p>  <code>deps_satisfied_by</code> knob), <code>validate_driver_state</code> (v1/v2 readability +</p>
+<p>  serial-active invariant), <code>validate_campaign_start</code> (headless-requires-epic).</p>
+<p>  The fuller state-transition validator stays deferred (design #134 follow-up #2).</p>
+<ul>
+<li><code>docs/driver-state/</code> — the git-tracked schema (<code>queue.schema.json</code>) + v1/v2</li>
+</ul>
+<p>  example campaign files (live per-campaign state is disk-persisted under the</p>
+<p>  gitignored <code>claude_docs/.driver-state/</code>).</p>
+<p><strong>Decisions (this slot).</strong></p>
+<ul>
+<li>#163 DAG fork (Codex-consulted → option C): #148 stays pure-doc; #163 ships the</li>
+</ul>
+<p>  *narrow* DAG helper only. Its algorithmic ACs (&quot;cycles halt fail-closed&quot;,</p>
+<p>  &quot;0 ordering violations&quot;, &quot;v1 readable&quot;) can&#x27;t be verified as prose.</p>
+<ul>
+<li>&quot;Committed&quot; queue state reconciled with the gitignored <code>claude_docs/</code>: the</li>
+</ul>
+<p>  live state file is *durably persisted to disk* (the resumption substrate); the</p>
+<p>  git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
+<p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed</p>
+<p>number guards. Step-11 Codex diff review (owner-directed) applied 4 findings</p>
+<p>(sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>,</p>
+<p>persist-topo-order-in-doc); concurrent Claude review reworded the overstated</p>
+<p>&quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan</p>
+<p>clean.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry for this slot is embedded below.</p>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#148 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>56 added · 1856/1856 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: pending</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>6</td><td>6</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+</main>
+<footer>Last updated: 2026-07-04 19:27 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
