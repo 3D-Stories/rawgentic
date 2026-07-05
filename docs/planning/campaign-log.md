@@ -157,6 +157,26 @@ pick (3.10.0<3.9.0) → numeric sort; path-traversal via `name` → bare-name gu
 — both fixed with tests. Also caught + fixed two spliced changelog headings from earlier slots
 and added a permanent garble drift guard. Scan clean. Suite 1990/0 → 2007/0.
 
+**Status.** PR #211 squash-merged `f8d2252`, v3.7.0, issue closed.
+
+### #195 — OAuth-first authenticated Action reviews; migrate #166 · v3.8.0
+
+**Issue.** #195 (P12, folds P11): run reviews as GitHub Actions authenticated by subscription
+OAuth first, API-key fallback. The dedicated `claude-code-security-review` action is API-key-only,
+so route security review through `claude-code-action@v1` too.
+
+**What shipped.** `.github/workflows/claude-security-review.yml` migrated off the API-key-only
+action to `claude-code-action@v1` (SHA-pinned) running `/security-review`. Auth resolves
+OAuth-first: `CLAUDE_CODE_OAUTH_TOKEN` → `ANTHROPIC_API_KEY` → visible skip (`executed=false`).
+Non-blocking + 10-PR tally preserved; `executed=true` gated on the review actually succeeding.
+Output shape doc-verified (inline PR comments via `classify_inline_comments`); live run
+owner-gated. Owner setup + self-hosted zero-secret alternative in `docs/config-reference.md`.
+
+**Reviews.** Small-standard lane (CI yml). 1 opus: 2 Medium — missing `id-token: write` (the
+action's default App-OIDC auth needs it) + `executed=true` emitted from secret-presence not
+review-success — both fixed; 1 Low (inline posting doc-verified, owner-gated). AC3 honesty
+confirmed. Scan clean. Suite 2007/0 → 2011/0.
+
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
 Telemetry embedded below.
 

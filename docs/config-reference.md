@@ -838,3 +838,27 @@ function exposed as a CLI:
   and Claude host must have synchronized clocks (NTP) for the 24h TTL-based
   stale file cleanup to work correctly. Clock skew may cause premature or
   delayed cleanup.
+
+## CI review auth {#ci-review-auth}
+
+The CI review lanes — the security-review lane (`.github/workflows/claude-security-review.yml`,
+#166/#195) and the headless Action pilot (`.github/workflows/rawgentic-auto.yml`, #165) — run
+through `anthropics/claude-code-action@v1`, which authenticates one of two ways, in priority
+order (#195 AC1):
+
+1. **Subscription OAuth (first choice)** — mint a token with `claude setup-token` on a Pro/Max
+   account and save it as the repo secret **`CLAUDE_CODE_OAUTH_TOKEN`**. Runs bill against the
+   owner's plan bucket (schedule off-hours; a plan lockout maps to a skipped run, not a failure).
+2. **API key (fallback)** — save **`ANTHROPIC_API_KEY`** as a repo secret; runs bill at API
+   prices against an isolated dollar budget.
+3. **Neither → visible skip.** The lane reports `executed=false` in its step summary and emits a
+   `::warning::` — it never reports a clean pass with no auth (the #166 pattern). A skipped run
+   does not count toward the 10-PR promotion tally.
+
+Both secrets are referenced by **name** in the workflow yml, never by value. The OAuth token is
+still a repo secret (subscription-billed, not secret-free); treat it like any credential.
+
+**Zero-secret alternative (AC4).** Run a review lane on a **self-hosted runner** that is already
+logged in to Claude Code (`claude` authenticated in the runner's environment) — then no repo
+secret is needed at all, at the cost of operating a runner. Prefer this when you'd rather not
+store a long-lived token in repo secrets.
