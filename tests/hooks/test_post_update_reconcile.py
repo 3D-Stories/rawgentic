@@ -344,6 +344,8 @@ class TestPromptWording:
         assert "preserv" in out.lower()                  # setup preserves existing config
         assert "2.66.0" in out                           # names the version
         assert "setupPrompt" in out                      # names the opt-out
+        assert "won't repeat" in out                     # the no-re-nag guarantee (AC4)
+        assert "any time later" in out                   # run-it-later instruction (AC4)
 
 
 class TestManifestDriftGuard:
