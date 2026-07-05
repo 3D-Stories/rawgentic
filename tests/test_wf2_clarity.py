@@ -91,6 +91,20 @@ def test_step4_is_reflect_only_no_three_judge_panel():
         "the critiqueMethod preamble is removed from WF2 Step 4 (#190)"
 
 
+def test_readme_wf2_gate_row_is_reflect_not_critique():
+    """#190 leftover guard (Step-11 review Finding 1): the README feature-section
+    tables must not advertise WF2's design gate as the retired 3-judge
+    `/reflexion:critique` panel. WF1/setup legitimately keep critique — this pins
+    only the WF2 row."""
+    readme = (REPO_ROOT / "README.md").read_text()
+    for line in readme.splitlines():
+        if "WF2 Feature Implementation" in line and "|" in line:
+            assert "/reflexion:critique" not in line, \
+                "README WF2 gate row still advertises the retired critique panel (#190)"
+            assert "/reflexion:reflect" in line, \
+                "README WF2 gate row should name /reflexion:reflect (#190)"
+
+
 def test_fast_path_table_step4_full_and_lane_both_reflect():
     """#190: the keep/collapse table's Step-4 row no longer contrasts a panel
     (full) against reflect (lane) — both use reflect; the full spine's only extra

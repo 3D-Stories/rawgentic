@@ -117,7 +117,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 
 | Add-on | Check | Install | What it unlocks — and what you lose without it |
 | ------ | ----- | ------- | ---------------------------------------------- |
-| **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF2/WF4/WF9/WF10 (`/reflexion:critique`) and the lightweight reflect in WF3. **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
+| **reflexion** plugin | `/reflexion:reflect` | `claude plugin add reflexion@context-engineering-kit` | The **quality-gate critique** in WF1 (`/reflexion:critique`) and the lightweight **reflect** in WF2/WF3 (`/reflexion:reflect`; WF2 retired its 3-judge panel at #190). **Without it:** those gate steps can't run, so workflows lose their shift-left critique and proceed unreviewed. **Strongly recommended.** |
 | **superpowers** plugin | `/superpowers:brainstorming` | `claude plugin add superpowers@claude-plugins-official` | Structured **brainstorming / design exploration** (WF12 test-strategy design; complex-feature design). **Without it:** rawgentic falls back to lighter inline brainstorming — still works, less rigorous. |
 | **Codex CLI** | `codex login status` | [install + authenticate ↓](#cross-model-review-data-handling-codex) | **Cross-model adversarial review + peer consult** — an independent, *different-model* second opinion (WF5) or design proposal (WF13) via OpenAI: the `/rawgentic:adversarial-review` and `/rawgentic:peer-consult` skills, plus the opt-in cross-model gates in WF1–WF4 and WF2 Step 3. **Without it:** WF5/WF13 error out and any opt-in cross-model gate is skipped; you still get the same-model reflexion critique. |
 | **Security scanners** (gitleaks, semgrep, osv-scanner, trivy) | `bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner trivy` | Auto-provisioned by `/rawgentic:setup` and once in the background on first plugin use (opt-out: `RAWGENTIC_SKIP_SCANNER_INSTALL=1`) | The **tool-based security scan** in WF2 Step 11.5 and WF9 (secrets / dependency-CVE / SAST / IaC misconfig). **Without them:** each missing scanner is a *visible skip* (never a silent pass) — the LLM security review still runs, but concrete known-pattern issues (leaked tokens, CVE'd deps) aren't caught. |
@@ -477,7 +477,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | -------------------------- | ------------------ | --------------------- | ---------------------------- |
 | Setup (config detection)   | Optional critique  | `/reflexion:critique` | After detection, if complex  |
 | WF1 Issue Creation         | Full critique      | `/reflexion:critique` | After brainstorming          |
-| WF2 Feature Implementation | Full critique      | `/reflexion:critique` | After design                 |
+| WF2 Feature Implementation | Reflect (+ opt-in adversarial-on-design) | `/reflexion:reflect` | After design                 |
 | WF3 Bug Fix                | Reflect only       | `/reflexion:reflect`  | After RCA                    |
 | WF5 Adversarial Review     | Cross-model        | Codex CLI             | Standalone; opt-in in WF1–WF3 |
 | WF11 Incident              | Phase-dependent    | `/reflexion:reflect`  | Phase B only                 |
