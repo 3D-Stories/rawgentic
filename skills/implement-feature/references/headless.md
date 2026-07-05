@@ -114,6 +114,52 @@ ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 - `rawgentic:ai-in-progress` — set/removed by orchestrator (NOT by the skill)
 </headless-interaction>
 
+<headless-status>
+STATUS comments are the headless run's progress surface (#48, folded into #165).
+A STATUS comment is NON-BLOCKING: no question, no options, no
+`rawgentic:ai-waiting` label, no suspend file, and the workflow does NOT exit —
+post it and continue. Its metadata block carries no question_id, so the resume
+path can never mistake it for a pending question.
+
+**Post a STATUS comment at these step boundaries:**
+- after Step 2 (complexity + lane decided)
+- after Step 5 (plan written — include task count)
+- in Step 8, after each task's commit (include task id + sha)
+- after Step 11 (review verdict — findings count)
+- after Step 12 (PR URL — the terminal deliverable)
+
+```bash
+STATUS_BODY=$(python3 hooks/headless_interaction.py format-comment \
+  --step STEP_NUMBER \
+  --title "SHORT_MILESTONE_TITLE" \
+  --context "ONE_LINE_OF_PROGRESS_DETAIL" \
+  --type status)
+gh issue comment ISSUE_NUMBER --repo ${capabilities.repo} --body "$STATUS_BODY"
+```
+
+A failed STATUS post is never fatal — log it to session notes and continue (the
+run's correctness does not depend on its progress surface).
+
+**Heartbeat semantics (#52):** the step-boundary STATUS cadence doubles as the
+run's heartbeat. The progress guardrail pair is: GitHub-native
+`timeout-minutes` on the Action job as the hard wall, STATUS comments as the
+liveness signal a human can read mid-run. A run that posts no STATUS for a long
+stretch is wedged or in a very long step; the timeout — not the skill — is what
+kills it.
+
+**Large-PR warning (#51):** at Step 12, immediately after `gh pr create`, count
+the files in the PR diff (`gh pr view <n> --json files --jq '.files | length'`).
+If the count exceeds `RAWGENTIC_LARGE_PR_FILES` (default 25, env-configurable
+per the house threshold rule), post a PR comment warning the reviewer:
+
+```bash
+gh pr comment PR_NUMBER --repo ${capabilities.repo} --body \
+  "⚠️ Large PR: FILE_COUNT files changed (threshold: THRESHOLD). Headless runs cannot ask for scope guidance mid-flight — consider whether this should split before merging."
+```
+
+Non-fatal on failure, same as STATUS.
+</headless-status>
+
 <headless-checkpoint>
 Before exiting in headless mode (either QUESTION suspend or ERROR), write a rich
 checkpoint to session notes. This checkpoint must contain enough context for a

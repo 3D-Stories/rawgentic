@@ -1379,6 +1379,54 @@ CRITIQUE_SKILLS = [
 ]
 
 
+class TestHeadlessStatusCorpus:
+    """#165 drift guards for the folded #48/#51/#52 prose. Anchored to one
+    canonical sentence per artifact (house rule: never whole-corpus regex)."""
+
+    HEADLESS_MD = SKILLS_DIR / "implement-feature" / "references" / "headless.md"
+
+    def test_status_block_present_and_wired_to_cli(self):
+        content = self.HEADLESS_MD.read_text()
+        assert "<headless-status>" in content and "</headless-status>" in content
+        # canonical anchor sentence
+        assert "STATUS comments are the headless run's progress surface" in content
+        block = content.split("<headless-status>")[1].split("</headless-status>")[0]
+        # must drive the tested CLI contract, not an ad-hoc python3 -c
+        assert "--type status" in block
+        # the five step boundaries (#48)
+        for marker in ("after Step 2", "after Step 5", "in Step 8",
+                       "after Step 11", "after Step 12"):
+            assert marker in block, f"missing STATUS boundary: {marker}"
+        # non-blocking property is stated
+        assert "question_id" in block
+
+    def test_large_pr_warning_threshold_env_configurable(self):
+        """#51: threshold must be env-configurable (house rule), default 25."""
+        block = self.HEADLESS_MD.read_text().split("<headless-status>")[1]
+        assert "RAWGENTIC_LARGE_PR_FILES" in block
+        assert "default 25" in block
+
+    def test_heartbeat_pairs_status_with_job_timeout(self):
+        """#52 folded design: timeout = hard wall, STATUS = liveness signal."""
+        block = self.HEADLESS_MD.read_text().split("<headless-status>")[1]
+        assert "timeout-minutes" in block
+        assert "heartbeat" in block.lower()
+
+    def test_switch_skill_knows_object_shape(self):
+        content = (SKILLS_DIR / "switch" / "SKILL.md").read_text()
+        assert "apply the SAME verdict the session-start gate computes" in content
+        assert "RAWGENTIC_HEADLESS_TRIGGER" in content
+        assert "fails CLOSED" in content
+
+    def test_setup_step_2c_surfaces_triggers_and_auth(self):
+        """AC5: setup offers the per-trigger allowlist and records auth-mode."""
+        content = (SKILLS_DIR / "setup" / "references" /
+                   "integrations.md").read_text()
+        assert "`headlessEnabled` accepts two shapes" in content
+        assert "subscription-oauth" in content
+        assert "RAWGENTIC_HEADLESS_TRIGGER" in content
+
+
 class TestHeadlessInteractionBlock:
     """Lint: the headless protocol lives in references/headless.md (loaded on demand),
     with a <headless-mode> pointer + the per-step [Headless:] annotations in the body."""

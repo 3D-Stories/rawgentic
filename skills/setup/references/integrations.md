@@ -10,6 +10,18 @@ This step runs on **every** setup invocation (including Sub-flow A re-runs).
 
 Check the active project's entry in `.rawgentic_workspace.json` for the `headlessEnabled` field.
 
+`headlessEnabled` accepts two shapes (#165):
+
+- **bool** (legacy): `true` allows headless via ANY trigger; `false` denies.
+- **object**: `{"enabled": true, "triggers": ["issue-label"], "auth": "subscription-oauth"}` —
+  `triggers` is a per-trigger allowlist matched against the orchestrator's
+  `RAWGENTIC_HEADLESS_TRIGGER` env (absent list = any trigger; the
+  session-start gate fails CLOSED on a non-member or unset trigger).
+  `auth` records the repo's Action auth-mode decision:
+  `"subscription-oauth"` (default — `claude setup-token` →
+  `CLAUDE_CODE_OAUTH_TOKEN` repo secret, shares the owner's plan bucket) or
+  `"api-key"` (isolated dollar budget via `ANTHROPIC_API_KEY`).
+
 - **If `headlessEnabled` is not set** (first-time configuration): prompt the user:
 
   ```
@@ -22,14 +34,30 @@ Check the active project's entry in `.rawgentic_workspace.json` for the `headles
   Enable headless mode for [project-name]? (y/n) [default: n]
   ```
 
-  Write `headlessEnabled: true` or `headlessEnabled: false` to the project's
-  entry in `.rawgentic_workspace.json` based on the user's choice.
-
-- **If `headlessEnabled` is already set** (re-configuration): show current
-  status and allow toggling:
+  On **n**: write `headlessEnabled: false`. On **y**, follow up with the
+  trigger allowlist and auth mode:
 
   ```
-  Headless mode: [ENABLED / DISABLED]
+  Restrict which triggers may start a headless run? (recommended)
+  - issue-label   — GitHub Actions run from a rawgentic:auto label
+  - (blank)       — allow any trigger
+  Triggers [issue-label]:
+
+  Auth mode for Action runs:
+  - subscription-oauth — claude setup-token → CLAUDE_CODE_OAUTH_TOKEN secret (default)
+  - api-key            — ANTHROPIC_API_KEY secret, isolated budget
+  Auth [subscription-oauth]:
+  ```
+
+  Write the object shape with the chosen values (or bare `true` if the user
+  explicitly wants no restrictions).
+
+- **If `headlessEnabled` is already set** (re-configuration): show current
+  status — including triggers/auth when it is the object shape — and allow
+  toggling or editing:
+
+  ```
+  Headless mode: [ENABLED / DISABLED] (triggers: [...], auth: [...])
   Change? (y/n) [default: keep current]
   ```
 
