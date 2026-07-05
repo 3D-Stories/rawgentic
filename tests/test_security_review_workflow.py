@@ -1,14 +1,16 @@
-"""Drift guards for the claude-code-security-review CI lane (#166).
+"""Drift guards for the security-review CI lane (#166, migrated to
+anthropics/claude-code-action@v1 with OAuth-first auth at #195).
 
-The Action is a CI-side semantic security review on PRs — a complement to the
-local Step 11.5 scanners, never a replacement. These tests pin the properties
-that make the lane safe to run non-blocking with a third-party action:
-SHA-pinning (supply chain), least-privilege permissions, and the
-non-blocking contract (AC1: advisory until promoted after 10 clean PRs).
+The lane is a CI-side semantic security review on PRs — a complement to the local
+Step 11.5 scanners, never a replacement. These tests pin the properties that keep
+it safe to run non-blocking with a third-party action that receives an auth token:
+SHA-pinning (supply chain), least-privilege permissions, the non-blocking
+contract (advisory until promoted after 10 clean PRs), the OAuth-first auth
+priority (#195), and the visible-skip signal (a missing secret is never a clean
+pass — the #166 pattern).
 
-Text-based pins, not YAML parsing: the CI env installs only pytest+jsonschema,
-and the workflow file is small and authored in this repo, so exact-line pins
-are the cheaper drift guard.
+Text-based pins, not YAML parsing: the workflow is small and authored here, so
+exact-line pins are the cheaper drift guard.
 """
 
 import re
@@ -26,18 +28,39 @@ def test_workflow_triggers_on_pull_request():
     assert re.search(r"^on:\n  pull_request:", _text(), re.M)
 
 
-def test_action_is_sha_pinned_not_ref_pinned():
-    uses = re.findall(r"uses:\s*anthropics/claude-code-security-review@(\S+)", _text())
-    assert len(uses) == 1, "exactly one review-action step"
-    assert re.fullmatch(r"[0-9a-f]{40}", uses[0]), (
-        f"third-party action with API-key access must be SHA-pinned, got @{uses[0]}"
-    )
+def test_migrated_off_api_key_only_action():
+    """#195 AC3: no `uses:` step invokes the API-key-only
+    claude-code-security-review action (a comment may still name it to explain
+    the migration)."""
+    assert not re.search(r"uses:\s*anthropics/claude-code-security-review", _text())
+
+
+def test_review_action_is_sha_pinned():
+    """#195 AC2: runs through claude-code-action, SHA-pinned (it receives an auth
+    token + write GITHUB_TOKEN — a mutable @v1 tag is a supply-chain vector)."""
+    uses = re.findall(r"uses:\s*anthropics/claude-code-action@(\S+)", _text())
+    assert uses, "the review must run through claude-code-action"
+    for u in uses:
+        assert re.fullmatch(r"[0-9a-f]{40}", u), f"must be SHA-pinned, got @{u}"
+    assert "# v1" in _text()
+
+
+def test_oauth_first_then_api_key_priority():
+    """#195 AC1: CLAUDE_CODE_OAUTH_TOKEN is resolved before ANTHROPIC_API_KEY."""
+    text = _text()
+    assert text.index("OAUTH") < text.index("APIKEY")
+    # the two action steps gate on the resolved mode
+    assert "mode == 'oauth'" in text and "mode == 'apikey'" in text
+    assert "claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" in text
+    assert "anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}" in text
+
+
+def test_prompt_runs_security_review():
+    assert _text().count('prompt: "/security-review"') == 2  # oauth + apikey steps
 
 
 def test_permissions_are_least_privilege():
     text = _text()
-    # exactly ONE permissions block, and its full content is pinned — a substring
-    # check alone fails open (a broader grant added elsewhere would slip past)
     blocks = re.findall(r"^permissions:\n((?:^[ \t]+\S.*\n)+)", text, re.M)
     assert len(blocks) == 1, "exactly one permissions block (workflow level)"
     perms = {ln.strip() for ln in blocks[0].splitlines()}
@@ -46,45 +69,44 @@ def test_permissions_are_least_privilege():
 
 
 def test_execution_status_is_durable_for_the_promotion_tally():
-    """The 10-PR tally must be countable from run summaries, not just annotations."""
     text = _text()
     assert "executed=false" in text and "executed=true" in text
     assert "GITHUB_STEP_SUMMARY" in text
 
 
 def test_lane_is_non_blocking_initially():
-    """AC1: advisory lane — a red review (or missing secret) must not gate the PR.
-
-    Pinned at JOB scope (4-space indent): step-level continue-on-error would
-    change the semantics (a failed later step could still fail the job).
-    """
     assert re.search(r"^    continue-on-error: true$", _text(), re.M)
 
 
-def test_missing_secret_is_legible_never_a_fake_clean_signal():
-    """A skipped review must be visibly distinct from a clean one — the 10-PR
-    promotion tally is measured off this signal."""
+def test_no_auth_is_a_visible_skip():
+    """A skipped review must be visibly distinct from a clean one (the tally
+    is measured off this). All three action-adjacent steps gate on present=true."""
     text = _text()
     assert "::warning::" in text
-    assert text.count("if: steps.key.outputs.present == 'true'") == 2, (
-        "checkout AND review step must both gate on the key being present"
+    assert "present=false" in text
+    assert text.count("steps.auth.outputs.present == 'true'") == 3, (
+        "checkout + both auth-mode review steps must gate on an auth secret present"
     )
 
 
-def test_api_key_comes_from_secrets_never_inline():
-    assert "claude-api-key: ${{ secrets.CLAUDE_API_KEY }}" in _text()
-    assert not re.search(r"sk-ant-", _text()), "no inline key material"
+def test_secrets_by_name_never_inline():
+    text = _text()
+    assert "sk-ant-" not in text and "oat01" not in text
+    # no run: step echoes a secret
+    for m in re.findall(r"run:\s*\|(.*?)(?=\n      -|\Z)", text, re.S):
+        assert "secrets." not in m
 
 
 def test_local_step_11_5_scanners_untouched():
-    """AC2: the lane complements hooks/security_scan.py; it must not touch it."""
     scan = (REPO_ROOT / "hooks" / "security_scan.py").read_text()
-    assert "claude-code-security-review" not in scan
+    assert "claude-code-action" not in scan and "claude-code-security-review" not in scan
     ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text()
-    assert "claude-code-security-review" not in ci, "lane lives in its own workflow file"
+    assert "claude-code-security-review" not in ci
 
 
-def test_promotion_contract_documented_in_workflow():
+def test_promotion_and_auth_setup_documented_in_workflow():
     text = _text()
     assert "non-blocking" in text
-    assert "10 clean" in text, "promotion-to-required contract must be stated in the file"
+    assert "10 clean" in text
+    assert "setup-token" in text  # owner-gated OAuth setup named
+    assert "self-hosted" in text  # zero-secret alternative named (AC4)

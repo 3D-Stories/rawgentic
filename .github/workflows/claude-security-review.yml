@@ -1,21 +1,33 @@
-# Semantic security review lane (#166) — anthropics/claude-code-security-review.
+# Semantic security review lane (#166, migrated at #195) — runs through
+# anthropics/claude-code-action@v1 (OAuth-capable), NOT the API-key-only
+# claude-code-security-review action.
 #
 # Complements the local Step 11.5 scanners (hooks/security_scan.py); replaces
-# nothing. Findings land as PR review comments on the affected lines.
+# nothing. Claude runs the built-in `/security-review` over the PR and posts
+# findings as inline PR review comments (the action's classify_inline_comments
+# mechanism buffers + posts confirmed comments).
 #
-# non-blocking contract (AC1): continue-on-error keeps this lane advisory —
-# a red review, a missing CLAUDE_API_KEY secret, or an action outage never
-# gates the PR. Promote to a required check only after 10 clean-signal PRs
-# (true/false-positive tally per the issue's success metric). PROMOTION MUST
-# ALSO REMOVE continue-on-error: true — a required check that can't fail is
-# vacuous and would silently defeat the gate.
+# AUTH — OAuth-first (#195 AC1), in priority order:
+#   1. CLAUDE_CODE_OAUTH_TOKEN  (subscription OAuth; `claude setup-token`, Pro/Max)
+#   2. ANTHROPIC_API_KEY        (API-key fallback; isolated dollar budget)
+#   3. neither -> VISIBLE SKIP (executed=false) — NOT a clean pass (the #166 pattern)
+# Both are referenced by SECRET NAME only, never a value.
 #
-# A run only counts toward the 10-PR tally if the review actually EXECUTED:
-# the check-key step emits a ::warning:: annotation when the secret is unset,
-# so "never ran" is legible and never mistaken for "reviewed clean".
+# non-blocking contract: continue-on-error keeps this lane advisory — a red
+# review, a missing auth secret, or an action outage never gates the PR. Promote
+# to a required check only after 10 clean-signal PRs (the issue's success metric).
+# PROMOTION MUST ALSO REMOVE continue-on-error: true — a required check that
+# can't fail is vacuous. A run counts toward the tally only if it EXECUTED
+# (executed=true in the step summary); "never ran" stays legible.
 #
-# Supply chain: the action is SHA-pinned (no releases/tags exist upstream as of
-# 2026-07-04; @main would float). Bump the pin deliberately, reviewing the diff.
+# Supply chain: claude-code-action is SHA-pinned (a mutable @v1 tag would float,
+# and this action receives an auth token + a write GITHUB_TOKEN). Bump the pin
+# deliberately, reviewing the diff. SHA below is the v1 tag as of 2026-07-05.
+#
+# Owner-gated setup (AC4): mint an OAuth token with `claude setup-token` (Pro/Max)
+# and save it as the repo secret CLAUDE_CODE_OAUTH_TOKEN, OR add ANTHROPIC_API_KEY.
+# Zero-secret alternative: run this lane on a self-hosted runner already logged in
+# to Claude (no repo secret needed) — see docs/config-reference.md#ci-review-auth.
 name: Claude Security Review
 
 on:
@@ -31,27 +43,40 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: Check CLAUDE_API_KEY is configured
-        id: key
+      - name: Resolve auth (OAuth-first, then API key, else visible skip)
+        id: auth
         env:
-          KEY: ${{ secrets.CLAUDE_API_KEY }}
+          OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          APIKEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          if [ -z "$KEY" ]; then
-            echo "::warning::CLAUDE_API_KEY unset — security review SKIPPED, not a clean signal"
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "## Claude security review: executed=false (CLAUDE_API_KEY unset — does NOT count toward the 10-PR promotion tally)" >> "$GITHUB_STEP_SUMMARY"
-          else
+          if [ -n "$OAUTH" ]; then
+            echo "mode=oauth" >> "$GITHUB_OUTPUT"
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "## Claude security review: executed=true" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Claude security review: executed=true (auth=subscription OAuth)" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -n "$APIKEY" ]; then
+            echo "mode=apikey" >> "$GITHUB_OUTPUT"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "## Claude security review: executed=true (auth=API key)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — security review SKIPPED, not a clean signal"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "## Claude security review: executed=false (no auth secret — does NOT count toward the 10-PR promotion tally)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-      - uses: actions/checkout@v4
-        if: steps.key.outputs.present == 'true'
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
+      - name: Checkout
+        if: steps.auth.outputs.present == 'true'
+        uses: actions/checkout@v4
 
-      - uses: anthropics/claude-code-security-review@0c6a49f1fa56a1d472575da86a94dbc1edb78eda
-        if: steps.key.outputs.present == 'true'
+      - name: Security review (subscription OAuth)
+        if: steps.auth.outputs.present == 'true' && steps.auth.outputs.mode == 'oauth'
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
         with:
-          claude-api-key: ${{ secrets.CLAUDE_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: "/security-review"
+
+      - name: Security review (API key)
+        if: steps.auth.outputs.present == 'true' && steps.auth.outputs.mode == 'apikey'
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "/security-review"
