@@ -74,6 +74,28 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _version_key(version: str) -> tuple:
+    """Sort key for a plugin version dir. Numeric dotted versions compare
+    NUMERICALLY ("3.10.0" > "3.9.0", which a raw string sort gets wrong), and
+    rank ABOVE any non-numeric dir (e.g. the literal "unknown" the cache uses):
+    ``(1, (3,10,0))`` beats ``(1, (3,9,0))`` beats ``(0, ())``."""
+    try:
+        return (1, tuple(int(p) for p in version.split(".")))
+    except (ValueError, AttributeError):
+        return (0, ())
+
+
+def _require_bare_name(name: str) -> None:
+    """Reject a name that isn't a bare filename — a `name` with path separators
+    or `..` could escape the vendored state dir (or the cache probe target). A
+    vendored file is third-party prompt content; its destination must never leave
+    the gitignored sandbox."""
+    if not name or name in (".", "..") or Path(name).name != name:
+        raise ExternalRefError(
+            f"invalid name {name!r}: must be a bare filename (no path separators "
+            f"or '..')")
+
+
 def probe(kind: str, name: str, cache_root: str | Path | None = None) -> dict:
     """Look for a skill/command/agent named ``name`` in the plugin cache.
 
@@ -87,6 +109,7 @@ def probe(kind: str, name: str, cache_root: str | Path | None = None) -> dict:
     if kind not in _KIND_SUBDIR:
         raise ExternalRefError(
             f"unknown kind {kind!r} (expected one of {sorted(_KIND_SUBDIR)})")
+    _require_bare_name(name)
     root = Path(cache_root) if cache_root is not None else _DEFAULT_CACHE_ROOT
     sub = _KIND_SUBDIR[kind]
     target = f"{name}.md" if kind == "command" else name
@@ -99,8 +122,7 @@ def probe(kind: str, name: str, cache_root: str | Path | None = None) -> dict:
     matches: list[tuple[str, str, str, Path]] = []  # (marketplace, plugin, version, path)
     for mp in sorted(p for p in root.iterdir() if p.is_dir()):
         for plugin in sorted(p for p in mp.iterdir() if p.is_dir()):
-            for version in sorted((p for p in plugin.iterdir() if p.is_dir()),
-                                  reverse=True):
+            for version in (p for p in plugin.iterdir() if p.is_dir()):
                 cand = version / sub / target
                 exists = cand.is_file() if kind == "command" else cand.is_dir()
                 if exists:
@@ -112,9 +134,10 @@ def probe(kind: str, name: str, cache_root: str | Path | None = None) -> dict:
                 "reason": (f"no {kind} named {name!r} found in the plugin cache — "
                            f"degrade to a VISIBLE skip, do not treat as a pass")}
 
-    # Prefer a trusted match if any exists; otherwise the first found.
-    trusted_matches = [m for m in matches if is_trusted(m[0])]
-    mp, plugin, version, path = (trusted_matches or matches)[0]
+    # Prefer a trusted marketplace, then the highest NUMERIC version (not a raw
+    # string sort — "3.10.0" must beat "3.9.0").
+    matches.sort(key=lambda m: (is_trusted(m[0]), _version_key(m[2])), reverse=True)
+    mp, plugin, version, path = matches[0]
     return {"exists": True, "path": str(path), "marketplace": mp,
             "plugin": plugin, "version": version, "trusted": is_trusted(mp),
             "reason": "found"}
@@ -155,6 +178,7 @@ def vendor_copy(src: str | Path, name: str, state_dir: str | Path,
     is an optional caller-supplied timestamp (this module does no clock I/O so it
     stays deterministic/testable); omit it and the manifest simply records "".
     """
+    _require_bare_name(name)
     if not is_trusted(marketplace):
         raise UntrustedSourceError(
             f"refusing to vendor {name!r} from untrusted marketplace "

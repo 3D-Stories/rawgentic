@@ -58,6 +58,25 @@ class TestProbe:
         r = erl.probe("skill", "implement-feature", cache_root=tmp_path)
         assert r["exists"] is True
 
+    def test_picks_highest_numeric_version_not_lexicographic(self, tmp_path):
+        # 3.10.0 must beat 3.9.0 — a raw string sort would pick 3.9.0 (Step-11 F1)
+        _make_cache(tmp_path, version="3.9.0", body="old")
+        _make_cache(tmp_path, version="3.10.0", body="new")
+        r = erl.probe("command", "code-review", cache_root=tmp_path)
+        assert r["version"] == "3.10.0"
+        assert Path(r["path"]).read_text() == "new"
+
+    def test_numeric_version_beats_unknown_dir(self, tmp_path):
+        _make_cache(tmp_path, version="unknown", body="u")
+        _make_cache(tmp_path, version="1.0.0", body="one")
+        r = erl.probe("command", "code-review", cache_root=tmp_path)
+        assert r["version"] == "1.0.0"
+
+    def test_traversal_name_rejected(self, tmp_path):
+        _make_cache(tmp_path)
+        with pytest.raises(erl.ExternalRefError):
+            erl.probe("command", "../../etc/passwd", cache_root=tmp_path)
+
 
 class TestVendorCopy:
     def _src(self, tmp_path, body="v1"):
@@ -107,6 +126,15 @@ class TestVendorCopy:
             erl.vendor_copy(str(src), "code-review", str(state),
                             marketplace="temp_git_junk")
         assert not (state / "code-review.md").exists()  # nothing vendored
+
+    def test_traversal_name_refused_before_write(self, tmp_path):
+        """Step-11 F2: a name with `..` must not escape the state dir."""
+        src = self._src(tmp_path)
+        state = tmp_path / "vendored"
+        outside = tmp_path / "pwned.md"
+        with pytest.raises(erl.ExternalRefError):
+            erl.vendor_copy(str(src), "../pwned", str(state), marketplace="rawgentic")
+        assert not outside.exists()
 
 
 class TestTrustGate:

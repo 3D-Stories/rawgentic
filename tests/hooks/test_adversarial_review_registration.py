@@ -61,6 +61,17 @@ def test_readme_count_strings_updated():
     assert "9/13 skills have evals.json" in readme
 
 
+def test_readme_changelog_has_no_spliced_headings():
+    """Guard against the recurring changelog-insertion garble (#192/#193/#194):
+    inserting a new entry above the previous heading spliced a `### vX.Y.Z`
+    into the middle of a bullet, e.g. `...goal guard### v3.5.0 (2026-07-05)`.
+    A lowercase letter immediately followed by `###` never occurs in clean prose."""
+    import re
+    readme = (REPO_ROOT / "README.md").read_text()
+    offenders = re.findall(r"[A-Za-z0-9]###", readme)
+    assert not offenders, f"spliced changelog heading(s) detected: {offenders}"
+
+
 def test_marketplace_skill_dirs_all_exist():
     """Every registered skill path must resolve to a real SKILL.md (no dangling entry)."""
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
