@@ -68,6 +68,27 @@ def test_parse_depends_on_empty_and_no_matches():
     assert driver_lib.parse_depends_on("No dependencies here.") == []
 
 
+def test_parse_depends_on_negation_not_taken():
+    # An explicitly negated phrase is a statement of NON-dependency (8a R1-F1).
+    assert driver_lib.parse_depends_on("This is not blocked by #5.") == []
+    assert driver_lib.parse_depends_on("It no longer depends on #7.") == []
+
+
+def test_parse_depends_on_word_boundary_ignores_substring_match():
+    # "blocked by" inside "unblocked by" must not match (8a R1-F1).
+    assert driver_lib.parse_depends_on("This was unblocked by #5.") == []
+
+
+def test_parse_depends_on_task_list_line_also_carrying_a_keyword():
+    # A checkbox line that also states a dependency keeps BOTH (8a R2-F1).
+    assert driver_lib.parse_depends_on("- [ ] #204 depends on #202") == [202, 204]
+
+
+def test_parse_depends_on_two_keywords_order_independent():
+    # A dep stated before the tuple-priority keyword must not be dropped (8a R2-F2).
+    assert driver_lib.parse_depends_on("Blocked by #2, depends on #1") == [1, 2]
+
+
 # --------------------------------------------------------------------------- #
 # topo_sort_issues
 # --------------------------------------------------------------------------- #
@@ -123,6 +144,13 @@ def test_topo_sort_duplicate_numbers_rejected():
 
 def test_topo_sort_empty():
     assert driver_lib.topo_sort_issues([]) == []
+
+
+def test_topo_sort_missing_number_raises_driver_state_error():
+    # A missing "number" fails closed with the typed error, not a bare KeyError
+    # (8a R1-F2 / R2-F5).
+    with pytest.raises(driver_lib.DriverStateError):
+        driver_lib.topo_sort_issues([{"status": "queued"}])
 
 
 # --------------------------------------------------------------------------- #
@@ -183,6 +211,13 @@ def test_next_ready_issue_none_when_nothing_queued():
         _issue(1, status="merged"),
     ]}
     assert driver_lib.next_ready_issue(state) is None
+
+
+def test_next_ready_issue_missing_number_raises_driver_state_error():
+    # Fail-closed with the typed error, not a bare KeyError (8a R1-F2 / R2-F5).
+    state = {"schema_version": 2, "campaign": "c", "issues": [{"status": "queued"}]}
+    with pytest.raises(driver_lib.DriverStateError):
+        driver_lib.next_ready_issue(state)
 
 
 # --------------------------------------------------------------------------- #
@@ -271,7 +306,10 @@ def test_committed_schema_and_examples_exist():
 
 
 def test_committed_examples_validate_against_json_schema():
-    jsonschema = pytest.importorskip("jsonschema")
+    # Hard import (not importorskip): jsonschema is a CI test dependency, and this
+    # is the ONLY check that the committed schema matches the examples — a silent
+    # skip would let schema/example drift pass unnoticed (8a R1-F3).
+    import jsonschema
     schema = json.loads((DRIVER_STATE_DIR / "queue.schema.json").read_text())
     for name in ("example-v2.campaign.json", "example-v1.campaign.json"):
         data = json.loads((DRIVER_STATE_DIR / name).read_text())

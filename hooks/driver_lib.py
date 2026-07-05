@@ -45,10 +45,17 @@ _SATISFIED_BY = {
     "pr_open": frozenset({"merged", "pr_open"}),
 }
 
-# Dependency-phrase keywords (matched case-insensitively). A line containing one
-# of these contributes every `#<digits>` that appears AFTER the keyword on that
-# line. Free-text numbers elsewhere are ignored.
-_DEP_KEYWORDS = ("depends on", "depends-on", "blocked by", "blocked-by")
+# A dependency phrase ("depends on" / "depends-on" / "blocked by" / "blocked-by"),
+# anchored at word boundaries so it is NOT matched inside another word
+# ("unblocked by" must not count). Each phrase contributes the `#<digits>` in its
+# own segment (up to the next phrase), so order on the line does not matter.
+_DEP_PHRASE_RE = re.compile(r"(?<![a-z])(?:depends?[ -]on|blocked[ -]by)(?![a-z])")
+# Immediate negation right before a phrase ("not blocked by", "no longer depends
+# on") — the phrase is then a statement of NON-dependency and is skipped. This
+# keeps ordinary issue-body prose from injecting a false dependency.
+_NEG_BEFORE_RE = re.compile(
+    r"\b(?:not|never|cannot|can't|won't|doesn't|isn't|no longer)\s+$"
+)
 # Task-list checkbox referencing an issue, e.g. "- [ ] #101" / "* [x] #102".
 _TASK_LIST_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*#(\d+)\b")
 _HASH_NUM_RE = re.compile(r"#(\d+)\b")
@@ -67,9 +74,13 @@ def parse_depends_on(body: str) -> list[int]:
 
     Only two forms are recognized, so untrusted issue-body prose cannot inject a
     spurious dependency:
-      * a dependency-keyword line ("depends on #N", "blocked by #N, #M", …) —
-        every ``#<num>`` AFTER the keyword on that line is taken; and
-      * a task-list checkbox line ("- [ ] #N") that references an issue.
+      * a dependency phrase ("depends on #N", "blocked by #N, #M", …) — the
+        phrase is matched at word boundaries (so "unblocked by" does NOT count)
+        and is skipped when immediately negated ("not blocked by", "no longer
+        depends on"); every ``#<num>`` in that phrase's segment is taken, so the
+        order of two phrases on one line does not drop deps; and
+      * a task-list checkbox line ("- [ ] #N") that references an issue — counted
+        even when the same line also carries a dependency phrase.
     A bare ``#N`` in ordinary prose is NOT a dependency.
     """
     if not body:
@@ -79,14 +90,14 @@ def parse_depends_on(body: str) -> list[int]:
         m = _TASK_LIST_RE.match(line)
         if m:
             deps.add(int(m.group(1)))
-            continue
         low = line.lower()
-        for kw in _DEP_KEYWORDS:
-            idx = low.find(kw)
-            if idx != -1:
-                tail = line[idx + len(kw):]
-                deps.update(int(n) for n in _HASH_NUM_RE.findall(tail))
-                break
+        phrases = list(_DEP_PHRASE_RE.finditer(low))
+        for i, ph in enumerate(phrases):
+            if _NEG_BEFORE_RE.search(low[: ph.start()]):
+                continue  # negated: a statement of non-dependency
+            end = phrases[i + 1].start() if i + 1 < len(phrases) else len(line)
+            segment = line[ph.end():end]
+            deps.update(int(n) for n in _HASH_NUM_RE.findall(segment))
     return sorted(deps)
 
 
@@ -101,7 +112,15 @@ def _in_queue_deps(issue: dict, numset: set[int]) -> list[int]:
 
 
 def _numbers(issues: list[dict]) -> list[int]:
-    nums = [i["number"] for i in issues]
+    """Issue numbers, fail-closed: a missing/non-int number or a duplicate raises
+    the typed ``DriverStateError`` (not a bare ``KeyError``) so the module's
+    fail-loudly contract holds even on un-validated input."""
+    nums: list[int] = []
+    for idx, issue in enumerate(issues):
+        n = issue.get("number") if isinstance(issue, dict) else None
+        if not _is_int(n):
+            raise DriverStateError(f"issues[{idx}] missing an integer 'number'")
+        nums.append(n)
     if len(set(nums)) != len(nums):
         raise DriverStateError("duplicate issue numbers in queue")
     return nums
@@ -177,6 +196,13 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged") -> int | No
     (``"merged"`` → only ``merged``; ``"pr_open"`` → ``merged`` or ``pr_open``).
     A deferred/abandoned dependency is NOT satisfied, so its dependents stay
     parked while independent issues still advance.
+
+    Precondition: run ``topo_sort_issues`` once at campaign start — that is the
+    fail-closed cycle gate (it raises ``DependencyCycleError`` on a cyclic
+    queue). This function does NOT re-detect cycles; it returns ``None`` (not an
+    error) whenever no queued issue is currently ready, which on an acyclic queue
+    means "wait for a dependency to advance." On a never-topo-sorted cyclic queue
+    it would return ``None`` forever — run the gate first.
     """
     if deps_satisfied_by not in _SATISFIED_BY:
         raise DriverStateError(
@@ -185,6 +211,7 @@ def next_ready_issue(state: dict, deps_satisfied_by: str = "merged") -> int | No
         )
     satisfied = _SATISFIED_BY[deps_satisfied_by]
     issues = state.get("issues", [])
+    _numbers(issues)  # fail-closed on missing/non-int/duplicate number
     by_num = {i["number"]: i for i in issues}
     numset = set(by_num)
     for issue in issues:
@@ -209,6 +236,10 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
     alone. The committed ``queue.schema.json`` is the fuller contract-of-record,
     validated against the example files in the test suite. ``depends_on`` is
     optional, so a v1 file (no dependency arrays) validates unchanged (#163 AC7).
+
+    Scope: structure only. It does NOT check acyclicity — ``topo_sort_issues`` is
+    the cycle gate, so a structurally-valid state can still contain a dependency
+    cycle. A caller must run ``topo_sort_issues`` before relying on the DAG order.
     """
     errors: list[str] = []
     if not isinstance(state, dict):

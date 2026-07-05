@@ -179,6 +179,9 @@ When `order: dependency`, the queue is a DAG.
    dependents are parked (`cross-issue-dependency`) while independent issues keep
    advancing. Dependencies outside the queue are external — the offline helper
    cannot verify them, so it treats them as satisfied for ordering/readiness.
+   `next_ready_issue` does **not** re-detect cycles — it returns `None` when
+   nothing is ready — so the campaign-start `topo_sort_issues` call above is the
+   fail-closed cycle gate this advance loop relies on; run it before the loop.
 
 ### v1 compatibility
 
