@@ -215,6 +215,169 @@ class TestMainIntegration:
         assert r.returncode == 0
 
 
+# --------------------------------------------------------------------------
+# #184 — version-aware gating, opt-out, prompt wording, drift guard
+# --------------------------------------------------------------------------
+
+OLD_FEAT = {"key": "featOld", "policy": "needs-question", "nudge": "old feature", "since": "2.10.0"}
+NEW_FEAT = {"key": "featNew", "policy": "needs-question", "nudge": "new feature", "since": "2.60.0"}
+NO_SINCE = {"key": "featAny", "policy": "needs-question", "nudge": "any feature"}
+
+
+def _seed_state(tmp_path, last):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir(exist_ok=True)
+    (state_dir / "rawgentic-reconciled-version").write_text(last + "\n")
+    return state_dir
+
+
+class TestVerTuple:
+    def test_basic(self):
+        assert pur._ver_tuple("2.66.0") == (2, 66, 0)
+
+    def test_numeric_not_string_compare(self):
+        # The classic semver-as-string bug: "2.9.0" > "2.10.0" lexically.
+        assert pur._ver_tuple("2.9.0") < pur._ver_tuple("2.10.0")
+
+    def test_unparseable_returns_none(self):
+        assert pur._ver_tuple("garbage") is None
+        assert pur._ver_tuple("") is None
+        assert pur._ver_tuple(None) is None
+
+
+class TestSinceGating:
+    """AC2: prompt only when the version jump crosses a feature's `since`;
+    otherwise bump the marker silently."""
+
+    def test_no_crossed_feature_is_silent_bump(self, tmp_path):
+        manifest = _write_manifest(tmp_path, [OLD_FEAT, NEW_FEAT])
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        state_dir = _seed_state(tmp_path, "2.63.0")
+        r, sd = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "", "no newly-shipped feature -> no prompt"
+        assert (sd / "rawgentic-reconciled-version").read_text().strip() == "2.66.0", \
+            "marker must still be bumped silently"
+
+    def test_crossed_feature_nudges_only_the_new_one(self, tmp_path):
+        manifest = _write_manifest(tmp_path, [OLD_FEAT, NEW_FEAT])
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        state_dir = _seed_state(tmp_path, "2.45.0")
+        r, _ = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        assert "new feature" in r.stdout, "since=2.60.0 crossed by 2.45.0->2.66.0"
+        assert "old feature" not in r.stdout, "since=2.10.0 predates the jump — no re-nag"
+
+    def test_missing_marker_treated_as_version_zero(self, tmp_path):
+        # Fresh install: nudge features that exist at the current version,
+        # never ones introduced later.
+        manifest = _write_manifest(tmp_path, [OLD_FEAT, NEW_FEAT])
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        r, _ = _run(tmp_path, ws, version="2.30.0", manifest=manifest)
+        assert "old feature" in r.stdout
+        assert "new feature" not in r.stdout, "since=2.60.0 > current=2.30.0 — not shipped yet"
+
+    def test_since_less_entry_is_always_eligible(self, tmp_path):
+        manifest = _write_manifest(tmp_path, [NO_SINCE])
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        state_dir = _seed_state(tmp_path, "2.63.0")
+        r, _ = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        assert "any feature" in r.stdout, "no `since` -> legacy always-eligible"
+
+    def test_unparseable_since_fails_open_to_eligible(self, tmp_path):
+        bad = dict(NEW_FEAT, since="garbage")
+        manifest = _write_manifest(tmp_path, [bad])
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        state_dir = _seed_state(tmp_path, "2.63.0")
+        r, _ = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        assert "new feature" in r.stdout, "unparseable version must never permanently silence"
+
+    def test_production_2_63_to_2_66_is_silent(self, tmp_path):
+        # The real-world nag this issue fixes: 2.63.0 -> 2.66.0 shipped no new
+        # setup-requiring feature, so an unconfigured project must NOT be nagged.
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        state_dir = _seed_state(tmp_path, "2.63.0")
+        r, sd = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir)
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
+        assert (sd / "rawgentic-reconciled-version").read_text().strip() == "2.66.0"
+
+
+class TestOptOut:
+    """AC5: workspace-level `setupPrompt: false` silences the prompt; the
+    marker is still bumped silently."""
+
+    def _write_ws_optout(self, tmp_path, value):
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"version": 1, "setupPrompt": value,
+                                  "projects": [_proj("p", active=True)]}, indent=2))
+        return ws
+
+    def test_optout_suppresses_output_but_bumps_marker(self, tmp_path):
+        manifest = _write_manifest(tmp_path, [NEW_FEAT])
+        ws = self._write_ws_optout(tmp_path, False)
+        state_dir = _seed_state(tmp_path, "2.45.0")
+        r, sd = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "", "opted out -> no prompt"
+        assert (sd / "rawgentic-reconciled-version").read_text().strip() == "2.66.0"
+
+    def test_optout_true_still_prompts(self, tmp_path):
+        manifest = _write_manifest(tmp_path, [NEW_FEAT])
+        ws = self._write_ws_optout(tmp_path, True)
+        state_dir = _seed_state(tmp_path, "2.45.0")
+        r, _ = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        assert "new feature" in r.stdout
+
+
+class TestPromptWording:
+    """AC3/AC4: the prompt names the feature(s), offers setup, and carries the
+    decline instructions (run later, preserves config, no re-nag, opt-out)."""
+
+    def test_message_carries_decline_instructions(self, tmp_path):
+        manifest = _write_manifest(tmp_path, [NEW_FEAT])
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        state_dir = _seed_state(tmp_path, "2.45.0")
+        r, _ = _run(tmp_path, ws, version="2.66.0", state_dir=state_dir, manifest=manifest)
+        out = r.stdout
+        assert "new feature" in out                      # names the feature
+        assert "/rawgentic:setup" in out                 # offers setup
+        assert "preserv" in out.lower()                  # setup preserves existing config
+        assert "2.66.0" in out                           # names the version
+        assert "setupPrompt" in out                      # names the opt-out
+
+
+class TestManifestDriftGuard:
+    """AC6: the manifest and setup's staged workspace fields must not drift."""
+
+    SETUP_SKILL = HOOKS_DIR.parent / "skills" / "setup" / "SKILL.md"
+
+    def _staged_fields(self):
+        import re
+        text = self.SETUP_SKILL.read_text()
+        anchor = "Apply any pending per-project field changes"
+        idx = text.index(anchor)  # missing anchor -> loud ValueError
+        sentence = text[idx:idx + 600]
+        fields = set(re.findall(r"`(\w+)` \(Step 2[a-z]\)", sentence))
+        assert fields, "write-back sentence found but no staged fields extracted"
+        return fields
+
+    def test_manifest_keys_match_setup_staged_fields(self):
+        manifest_keys = {f["key"] for f in pur.FEATURE_MANIFEST}
+        assert manifest_keys == self._staged_fields(), (
+            "hooks/post_update_reconcile.py FEATURE_MANIFEST must list exactly the "
+            "workspace fields setup stages (SKILL.md write-back sentence). A new "
+            "setup opt-in step must add a manifest entry with its `since` version.")
+
+    def test_production_entries_have_valid_since(self):
+        installed = json.loads(
+            (HOOKS_DIR.parent / ".claude-plugin" / "plugin.json").read_text())["version"]
+        cur = pur._ver_tuple(installed)
+        for f in pur.FEATURE_MANIFEST:
+            s = pur._ver_tuple(f.get("since"))
+            assert s is not None, f"{f['key']}: production entry needs a parseable `since`"
+            assert s <= cur, f"{f['key']}: since {f['since']} is newer than installed {installed}"
+
+
 class TestSessionStartWiring:
     """session-start must invoke the reconcile on startup|resume."""
 

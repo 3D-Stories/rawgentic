@@ -11,9 +11,16 @@ workspace config against the current feature manifest:
     HONORED and left alone,
   - opt-in features (headlessEnabled — grants external-orchestrator access) are
     never force-enabled,
-  - answer-required features (adversarialReview/WF5 — needs an OpenAI account for
-    Codex) are never silently enabled; instead the user is NUDGED to run
-    /rawgentic:setup,
+  - answer-required features (adversarialReview/WF5, modelRouting, peerConsult,
+    designArtifact — each needs setup answers) are never silently enabled;
+    instead the user is NUDGED to run /rawgentic:setup — but ONLY when the
+    version jump actually crossed the feature's `since` (the plugin version
+    that introduced it, #184). An upgrade that shipped no new setup-requiring
+    feature bumps the marker silently, with no output,
+  - a workspace-level `"setupPrompt": false` (top level of
+    .rawgentic_workspace.json) silences the prompt entirely; the marker is
+    still bumped silently so lifting the opt-out only prompts on the NEXT
+    upgrade, never retroactively (#184),
   - the reconciled version is recorded so this runs exactly ONCE per version.
 
 The version is read from the plugin's .claude-plugin/plugin.json (so it tracks
@@ -37,12 +44,60 @@ STATE_FILENAME = "rawgentic-reconciled-version"
 # on automatically after the next plugin update (honoring recorded opt-outs).
 # Today there are no auto-on entries: the security scanners are install-managed by
 # scanner_bootstrap.py rather than a per-project workspace flag, headless is opt-in,
-# and WF5 is answer-required. The framework exists so future features get this for free.
+# and the rest are answer-required. The framework exists so future features get
+# this for free.
+#
+# `since` = the plugin version whose release introduced the feature's setup step
+# (from git history of skills/setup/). needs-question nudges fire only when the
+# reconciled-version jump crosses `since` (#184). Every entry here must match a
+# workspace field staged by skills/setup/SKILL.md — a drift-guard test enforces
+# the two sets stay equal, so a new setup opt-in step MUST add an entry here.
 FEATURE_MANIFEST = [
+    {"key": "headlessEnabled", "policy": "opt-in", "since": "2.18.0"},
     {"key": "adversarialReview", "policy": "needs-question",
-     "nudge": "adversarial review (WF5)"},
-    {"key": "headlessEnabled", "policy": "opt-in"},
+     "nudge": "adversarial review (WF5)", "since": "2.24.0"},
+    {"key": "modelRouting", "policy": "needs-question",
+     "nudge": "model routing", "since": "2.46.0"},
+    {"key": "peerConsult", "policy": "needs-question",
+     "nudge": "peer consult (WF13)", "since": "2.46.0"},
+    {"key": "designArtifact", "policy": "needs-question",
+     "nudge": "HTML design-artifact lifecycle", "since": "2.63.0"},
 ]
+
+
+def _ver_tuple(v):
+    """Parse "2.66.0" -> (2, 66, 0) for NUMERIC comparison (string compare
+    orders "2.9.0" after "2.10.0"). None on anything unparseable."""
+    if not v or not isinstance(v, str):
+        return None
+    try:
+        return tuple(int(p) for p in v.strip().split("."))
+    except ValueError:
+        return None
+
+
+def _newly_crossed(manifest, last, current):
+    """Entries whose `since` lies in (last, current].
+
+    A missing marker (fresh install) counts as version zero, so only features
+    that exist at `current` qualify. No `since`, or any unparseable version,
+    -> eligible (fail-open toward prompting — a bad version string must never
+    permanently silence a nudge)."""
+    cur_t = _ver_tuple(current)
+    last_t = _ver_tuple(last) if last else (0,)
+    out = []
+    for feat in manifest:
+        since = feat.get("since")
+        if since is None:
+            out.append(feat)
+            continue
+        s_t = _ver_tuple(since)
+        if cur_t is None or last_t is None or s_t is None:
+            out.append(feat)
+            continue
+        if last_t < s_t <= cur_t:
+            out.append(feat)
+    return out
 
 
 def reconcile_projects(projects, manifest):
@@ -186,7 +241,12 @@ def main(argv=None):
         projects = []
 
     manifest = _load_manifest()
-    _, changes, needs_q = reconcile_projects(projects, manifest)
+    # #184: needs-question nudges fire only for features the version jump
+    # actually shipped; auto-on/opt-in policies are ungated (unchanged semantics).
+    newly_keys = {f.get("key") for f in _newly_crossed(manifest, last, current)}
+    gated = [f for f in manifest
+             if f.get("policy") != "needs-question" or f.get("key") in newly_keys]
+    _, changes, needs_q = reconcile_projects(projects, gated)
 
     persisted = True
     if changes:
@@ -207,6 +267,9 @@ def main(argv=None):
         except Exception:
             pass
 
+    if ws.get("setupPrompt", True) is False:
+        return 0  # #184 opt-out: marker already bumped silently above
+
     parts = []
     if changes and persisted:
         feats = ", ".join(sorted({c[1] for c in changes}))
@@ -218,8 +281,12 @@ def main(argv=None):
         labels = ", ".join(sorted({n[2] for n in needs_q}))
         projs = ", ".join(sorted({n[0] for n in needs_q}))
         parts.append(
-            f"rawgentic updated to {current}. Run /rawgentic:setup to configure new "
-            f"answer-required feature(s) ({labels}) for: {projs}."
+            f"rawgentic updated to {current}, which ships new setup-requiring "
+            f"feature(s): {labels}. Run /rawgentic:setup to configure them for: "
+            f"{projs} (setup preserves your existing config). If you skip it, run "
+            f"/rawgentic:setup any time later — this notice won't repeat for "
+            f"{current}. Silence these notices permanently with "
+            f'"setupPrompt": false at the top level of .rawgentic_workspace.json.'
         )
     if parts:
         print("\n\n".join(parts))
