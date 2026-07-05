@@ -9,7 +9,47 @@ run-record telemetry.
 
 Milestones: **M1** instrument+guard (done) · **M2** enable+restructure (done) ·
 **M3** multi-issue autonomy + v3.0.0 (done) · **M4** headless (done — pilot
-shipped; live run owner-gated). **CAMPAIGN COMPLETE.**
+shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follow**
+(WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.
+
+---
+
+## Epic #188 fast-follow (post-M4)
+
+WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped
+(folded in as slot 12). Remaining ordered: #190 → #191 → #192 → #193 → #194 → #195
+→ #196 → #197.
+
+### #190 — retire WF2 Step 4 3-judge reflexion panel → reflect-only · v3.2.0
+
+**Issue.** #190 (epic #188 P2): the full-spine Step 4 still ran the same-model
+3-judge `/reflexion:critique` panel; owner telemetry measured ≈ 0 gain and the lean
+spine shipped 10/10 with 0 loop-backs. Severed AC1 of the abandoned #162.
+
+**What shipped.** WF2 Step 4 runs `/reflexion:reflect` for all lanes; the panel is
+removed. Full spine keeps its opt-in cross-model adversarial-on-design sub-step
+(WF5, AC2) — high-stakes scrutiny lives there now. Ambiguity breaker, volume
+thresholds, and the `design` loop-back budget retained (sourced from reflect, or
+merged reflect+adversarial); `critiqueMethod` preamble removed from WF2 (`setup`
+keeps it). Fast-path table + SKILL spine one-liner + run-record reviewer_kind
+mapping + config-reference + README (feature tables + changelog) all updated.
+
+**Reviews.** Small-standard lane. 2 red-first §4 drift guards (no panel / table
+both-reflect) + a README regression guard. Step 11 (1 opus, both lenses): logic
+NO FINDINGS (item-numbering resolves, breaker-runs-once holds across all 4 rows);
+1 Medium leftover — README feature tables still listed WF2 under
+`/reflexion:critique` (the #161-class miss) — FIXED + guarded. Security scan clean.
+Suite 1970/0 → 1972/0.
+
+**Owner decision (mid-slot).** Go further than #190: **full reflexion removal** —
+replace reflect (WF2 4/9 + WF3), critique (WF1 + setup), and memorize (Step 10)
+with in-repo prompts; use **mempalace** for memory instead of `reflexion:memorize`;
+follow-up issue to migrate existing rawgentic memories to mempalace if required.
+Sequenced as the next slot after #190 (kept out of #190 to preserve its narrow,
+reviewed scope).
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry embedded below.
 
 ---
 
