@@ -160,6 +160,27 @@ acceptance criteria, scope, affected components, risk, related issues). Then:
    file manually; rate limit → wait and retry.
 5. Clean up: `rm -f /tmp/wf1-issue-body.md`.
 
+## Step 4b: HTML design artifact (opt-in, #174)
+
+Give the new issue a living **HTML design artifact** so its spec is browsable. This
+is config-gated — skip silently unless the project opts in:
+```bash
+python3 -c "import sys; sys.path.insert(0,'hooks'); from adversarial_review_lib import is_enabled_for; sys.exit(0 if is_enabled_for('.rawgentic_workspace.json','<name>','create-issue',key='designArtifact') else 1)"
+```
+Exit 0 → enabled; non-zero → skip (default; behavior byte-identical for opted-out
+projects). When enabled:
+1. Write the issue spec markdown to `<activeProject.path>/docs/planning/<issue>-<slug>.md`.
+2. Render it to a self-contained, CSP-safe HTML artifact with the shared helper —
+   never hand-roll HTML:
+   ```bash
+   python3 hooks/render_artifact.py --md <doc>.md --out <doc>.html --title "#<issue> <title>"
+   ```
+   (The helper escape-first-renders the markdown and stamps a mountain-time datetime.)
+3. Publish the `.html` with the Artifact tool and post the artifact URL as an issue
+   comment (`gh issue comment`). WF1 has no branch, so the DURABLE `.md`+`.html`
+   commit lands via the implementing PR (WF2/WF3 Step 12) — a claude.ai link alone
+   is not sufficient. Log `### WF1 Step 4b — design artifact (published|skipped)`.
+
 ## Step 5: Wrap up
 
 Append one line to `claude_docs/session_notes.md`:

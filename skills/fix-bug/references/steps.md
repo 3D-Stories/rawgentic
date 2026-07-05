@@ -389,6 +389,25 @@ Review-clean code + optional project knowledge updates.
 ### Instructions
 
 1. Stage all changes: `git add <specific files>` (never `git add -A`)
+
+1b. **HTML design artifact — create-or-update BEFORE the PR (opt-in, #174).**
+   Config-gated — skip silently unless the project opts in
+   (`is_enabled_for(..., 'fix-bug', key='designArtifact')`; exit 0 = enabled). When
+   enabled: create or update the bug's design artifact
+   `docs/planning/<issue>-<slug>.{md,html}` and commit BOTH inside THIS fix PR (one
+   PR per issue). Render with the shared helper — never hand-roll HTML — embedding
+   this run's **telemetry** read from the run-record structure (the Step 14
+   run-record; gates, tests + suite delta, security-scan, lane, `usage`), never
+   hand-retyped:
+   ```bash
+   python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
+     --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
+     --telemetry /tmp/wf3-run-record.json
+   git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
+   ```
+   Fields not knowable pre-PR (PR #, CI, merge SHA) fill on the next slot's pass.
+   Log `### WF3 Step 10 — design artifact (updated|skipped)`.
+
 2. Create final commit with conventional format:
    ```bash
    git commit -m "fix(scope): description (closes #<issue>)"

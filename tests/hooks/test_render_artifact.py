@@ -93,7 +93,7 @@ def test_generated_at_defaults_to_real_mountain_timestamp():
     """Without an explicit stamp the helper uses a real mountain-time datetime
     (owner preference, #174) with a timezone label — not a placeholder."""
     html = render_artifact.render_artifact("# Doc", title="T")
-    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (MST|MDT)", html), "a real mountain datetime must be stamped"
+    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (MST|MDT|UTC)", html), "a real datetime must be stamped (mountain, or honest UTC fallback if tzdata absent)"
 
 
 # --- minimal markdown rendering (escape-first, whitelist transforms) ---
@@ -188,3 +188,41 @@ def test_cli_with_telemetry(tmp_path):
     )
     assert rc.returncode == 0, rc.stderr
     assert "small-standard" in out.read_text()
+
+
+# --- 8a fixes: unclosed fence must not swallow the doc tail; robust telemetry ---
+
+def test_unclosed_fence_does_not_swallow_following_headings():
+    md = "# Intro\n\n```\ncode line\n\n## Real Section\n\nimportant paragraph"
+    html = _render(md)
+    # the heading after the unclosed fence must still render as a heading, not be
+    # buried inside one <pre> block
+    assert "<h2" in html and ">Real Section<" in html
+    assert "important paragraph" in html
+
+
+def test_closed_fence_still_renders_as_code():
+    html = _render("```\nx = 1\n```")
+    assert "<pre><code>x = 1</code></pre>" in html
+
+
+def test_non_dict_telemetry_does_not_crash():
+    html = _render("# Doc", telemetry=[1, 2, 3])   # wrong shape, truthy
+    assert "telemetry unavailable" in html
+    assert "<h1" in html   # rest of doc still renders
+
+
+def test_unrecognized_telemetry_shows_placeholder():
+    html = _render("# Doc", telemetry={"bogus": "key"})
+    assert "telemetry unavailable" in html
+
+
+def test_cli_missing_markdown_is_rc2(tmp_path):
+    out = tmp_path / "o.html"
+    rc = subprocess.run(
+        [sys.executable, str(HOOKS / "render_artifact.py"),
+         "--md", str(tmp_path / "nope.md"), "--out", str(out), "--title", "X"],
+        capture_output=True, text=True,
+    )
+    assert rc.returncode == 2
+    assert "could not read markdown" in rc.stderr

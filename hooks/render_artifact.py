@@ -79,11 +79,24 @@ def _render_body(markdown: str) -> str:
             close_list()
             i += 1
             code: list[str] = []
-            while i < len(lines) and not lines[i].strip().startswith("```"):
+            closed = False
+            while i < len(lines):
+                if lines[i].strip().startswith("```"):
+                    closed = True
+                    i += 1
+                    break
                 code.append(lines[i])
                 i += 1
-            i += 1  # skip closing fence (or run off end — harmless)
-            out.append("<pre><code>" + html.escape("\n".join(code)) + "</code></pre>")
+            if closed:
+                out.append("<pre><code>" + html.escape("\n".join(code)) + "</code></pre>")
+            else:
+                # Unclosed fence: do NOT swallow the rest of the doc into one code
+                # block (that silently drops every heading/section after it — a real
+                # hazard for spec docs, which routinely contain fences). Render the
+                # captured lines as normal blocks and warn.
+                print("render_artifact: WARNING unclosed ``` fence — rendering the "
+                      "remainder as normal text, not code", file=sys.stderr)
+                out.append(_render_body("\n".join(code)))
             continue
 
         stripped = raw.strip()
@@ -131,6 +144,12 @@ def _render_body(markdown: str) -> str:
 def _telemetry_html(t: dict) -> str:
     """Render a run-record dict as an escaped telemetry table. Tolerant of missing
     keys (partial records are valid mid-lifecycle); every value is escaped."""
+    if not isinstance(t, dict):
+        # A telemetry value that isn't an object (schema drift, wrong file) must
+        # not crash the render — surface it visibly instead of a raw traceback.
+        return "<section class='telemetry-section'><h2>Run telemetry</h2>" \
+               "<p><em>telemetry unavailable (not a run-record object)</em></p></section>"
+
     def esc(v):
         return html.escape(str(v))
 
@@ -175,7 +194,11 @@ def _telemetry_html(t: dict) -> str:
 
     summary = ("<table class='telemetry'><tbody>" + "".join(rows) + "</tbody></table>") if rows else ""
     if not summary and not gate_table:
-        return ""
+        # Passed a dict but nothing recognized (run-record schema drift) — a visible
+        # placeholder beats silently emitting no telemetry on a lifecycle artifact
+        # whose whole point is embedding the run data.
+        return "<section class='telemetry-section'><h2>Run telemetry</h2>" \
+               "<p><em>telemetry unavailable (no recognized run-record fields)</em></p></section>"
     return "<section class='telemetry-section'><h2>Run telemetry</h2>" + summary + gate_table + "</section>"
 
 
@@ -257,7 +280,11 @@ def main(argv=None) -> int:
     ap.add_argument("--generated-at", dest="generated_at", help="datetime stamp (default: mountain time now)")
     args = ap.parse_args(argv)
 
-    md = open(args.md, encoding="utf-8").read()
+    try:
+        md = open(args.md, encoding="utf-8").read()
+    except OSError as e:
+        print(f"render_artifact: could not read markdown {args.md}: {e}", file=sys.stderr)
+        return 2
     tel = None
     if args.telemetry:
         try:
