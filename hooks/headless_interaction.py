@@ -112,6 +112,27 @@ def format_comment(
     return "\n".join(parts)
 
 
+def format_status_comment(step: int | str, title: str, context: str) -> str:
+    """Format a NON-BLOCKING progress (STATUS) comment (#48/#165).
+
+    Posted at step boundaries as the headless run's progress surface. Unlike
+    format_comment it carries no question, no options, and no reply
+    instruction — and its metadata deliberately has NO question_id, so the
+    resume path can never mistake it for a pending question.
+    """
+    safe_title = _sanitize_for_html_comment(_sanitize_markdown(title))
+    safe_context = _sanitize_for_html_comment(_sanitize_markdown(context))
+    meta_json = json.dumps({"step": step, "type": "status"},
+                           separators=(",", ":"))
+    return "\n".join([
+        f"## [WF2 Step {step}] {safe_title}",
+        "",
+        f"**Status:** {safe_context}",
+        "",
+        f"<!-- rawgentic-headless: {meta_json} -->",
+    ])
+
+
 # --- Metadata parsing ---
 
 _METADATA_PATTERN = re.compile(
@@ -331,10 +352,13 @@ def main(argv=None) -> int:
     p_fmt.add_argument("--step", required=True)
     p_fmt.add_argument("--title", required=True)
     p_fmt.add_argument("--context", required=True)
-    p_fmt.add_argument("--question", required=True)
+    # --question/--question-id are required for every BLOCKING type but not for
+    # "--type status" (#48: non-blocking progress comment) — enforced at runtime
+    # below so the blocking contract still fails closed when they are absent.
+    p_fmt.add_argument("--question", default=None)
     p_fmt.add_argument("--option", action="append", help="repeatable")
     p_fmt.add_argument("--type", required=True, dest="type")
-    p_fmt.add_argument("--question-id", required=True, dest="question_id")
+    p_fmt.add_argument("--question-id", default=None, dest="question_id")
 
     p_sus = sub.add_parser("write-suspend", help="write the suspend state file")
     p_sus.add_argument("--path", required=True)
@@ -369,13 +393,21 @@ def main(argv=None) -> int:
         return 0
 
     if args.cmd == "format-comment":
-        if not args.question_id.strip():
-            print("--question-id must be a non-empty value", file=sys.stderr)
-            return 1
         try:
             step = _parse_step(args.step)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
+            return 1
+        if args.type == "status":
+            print(format_status_comment(step=step, title=args.title,
+                                         context=args.context))
+            return 0
+        if args.question is None or not args.question.strip():
+            print("--question is required for non-status comment types",
+                  file=sys.stderr)
+            return 1
+        if args.question_id is None or not args.question_id.strip():
+            print("--question-id must be a non-empty value", file=sys.stderr)
             return 1
         comment = format_comment(
             step=step,

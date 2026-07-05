@@ -8,7 +8,60 @@ log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded
 run-record telemetry.
 
 Milestones: **M1** instrument+guard (done) · **M2** enable+restructure (done) ·
-**M3** multi-issue autonomy + v3.0.0 (in progress) · **M4** headless.
+**M3** multi-issue autonomy + v3.0.0 (done) · **M4** headless (done — pilot
+shipped; live run owner-gated). **CAMPAIGN COMPLETE.**
+
+---
+
+## Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone
+
+**Issue.** #165 (M4): label-triggered headless WF2 on GA tooling
+(claude-code-action v1), folding #48 (STATUS comments), #51 (large-PR warning),
+#52 (progress guardrails). The overnight end-state: label an issue, get a PR.
+
+**What shipped.**
+- `.github/workflows/rawgentic-auto.yml`: `rawgentic:auto` label → headless
+  `/rawgentic:implement-feature <n>`, PR-terminal. Job-level label gate,
+  per-issue concurrency, `timeout-minutes: 120`, SHA-pinned action,
+  subscription-OAuth secret by NAME, runner-local workspace bootstrap (WF2
+  config-loading needs a workspace file; the checkout is the project repo),
+  `plugins`/`plugin_marketplaces` from the repo's own PUBLIC marketplace —
+  every external contract read from the action's own action.yml, not memory.
+- `headlessEnabled` object shape: `{"enabled", "triggers", "auth"}` — fail-closed
+  per-trigger allowlist against `RAWGENTIC_HEADLESS_TRIGGER` in session-start
+  (jq verdict, 9 exotic inputs probed fail-closed), mirrored in `/switch` +
+  setup Step 2c prose; auth-mode decision recorded per repo (AC5/AC7).
+- STATUS comment type (#48): `format_status_comment()` + CLI `--type status` —
+  non-blocking, metadata carries NO question_id so the resume path can never
+  mistake it for a pending question; five step-boundary posts in headless.md.
+- Large-PR warning (#51): Step-12 PR comment past `RAWGENTIC_LARGE_PR_FILES`
+  (default 50, the issue's own default). Guardrails (#52): job timeout as the
+  hard wall + STATUS heartbeat as the liveness signal.
+- Suite 1936/0 → 1970/0 (34 new: 12 yml-structural, 9 shape, 5 STATUS,
+  5 corpus drift guards proven red-on-old-prose, 3 hardening).
+
+**Decisions (this slot).**
+- Shape-extend `headlessEnabled` instead of adding a staged workspace field —
+  keeps #184's setup↔manifest drift guard green by construction.
+- Reduced fold scope named honestly: #48's machine-metadata AC descoped to
+  free text; #51 interactive warning + #52 self-diagnosis design deferred.
+- Never echo the trigger env value in the BLOCKED message (8a F1): the deny
+  path writes to the model's instruction channel; any echo is an injection rider.
+
+**Reviews.** Step 8a fired twice (T2 gate, T3 yml; 2 opus each): trigger-env
+prompt-injection High fixed, concurrency/SHA-pin/label-approval-contract
+hardening applied; **HIGH environmental finding — `main` had no branch
+protection** (verified 404 + empty rulesets): ruleset creation was
+permission-gated in-session, handed to owner as an exact command; **the pilot
+must not go live before it.** Step 11 (2 opus): 1 Medium config-reference
+field-table leftover (the #161 Critical's exact class — caught this time) +
+threshold 25→50 correction; runtime reviewer probed the jq gate and bootstrap
+end-to-end, no material findings. Security scan clean.
+
+**Status.** PR + CI + merge SHA recorded post-merge this session. Live
+end-to-end success metric (1 issue, zero touches) is owner-gated: repo secret
+`CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`), the main-branch ruleset, then
+label a real issue `rawgentic:auto`. Telemetry embedded below.
 
 ---
 
@@ -44,8 +97,9 @@ guard added. 2 Medium + 3 Low doc/manifest fixes. Adversarial diff review
 mechanically skipped (no security surface). Security scan clean. Suite
 1941/0 → 1936/0 (stub tests replaced by removal guards).
 
-**Status.** PR + CI + merge SHA filled by the next slot's pass (established
-convention). Telemetry embedded below.
+**Status.** PR #202 squash-merged `ea4e048`, v3.0.0, issue closed. CI green
+(68s); AC3 verified via Mirror-to-STARS Action success @ea4e048 (evidence
+comment on #161). **M3 COMPLETE.**
 
 ---
 

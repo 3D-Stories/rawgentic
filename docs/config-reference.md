@@ -273,7 +273,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
 | `designArtifact` | `object` \| `bool` | Opt-in HTML design-artifact lifecycle (#174): WF1 renders + publishes the issue spec artifact; WF2/WF3 create-or-update the `docs/planning/<issue>.{md,html}` artifact (with run telemetry embedded) inside the feature PR before `gh pr create`. Shape: `{ "enabled": bool, "workflows": ["create-issue", "implement-feature", "fix-bug"], "sharedDoc"?: "docs/planning/<name>.md", "style"?: "plain" \| "roadmap" }` — mirrors `adversarialReview` plus an optional `sharedDoc` and `style`. Default disabled (byte-identical behavior for opted-out projects). **Two distinct fail behaviors:** a missing/malformed `designArtifact` block fails **closed → disabled** (feature off); but an invalid `sharedDoc` *value* (absolute, `..`, or not a `docs/*.md` path) fails **safe → per-issue** (feature stays enabled, just doesn't use the bad shared path). **`sharedDoc` (optional, project-relative path):** when set, WF1/WF2/WF3 update that ONE rolling design doc across every issue — the multi-issue / campaign model, one program doc refreshed per slot (like this repo's modernization dashboard) — instead of a per-issue `<issue>-<slug>.{md,html}` file; unset = per-issue (default). Absolute paths or `..` traversal in `sharedDoc` fail safe to per-issue. **`style` (optional, #199): `"plain"` (default) or `"roadmap"`** — `roadmap` renders each `##` section as a dashboard-style bubble card with a completion chip (green (done/shipped) / amber (abandoned/blocked) / neutral (planned)), for a campaign/roadmap log that matches the modernization dashboard; any unknown/absent value fails safe to `plain` (byte-identical output). Rendering uses `hooks/render_artifact.py` (self-contained, CSP-safe, escape-first, mountain-time datetime stamp; `--style` flag). |
-| `headlessEnabled` | `bool` | Opt-in to headless (non-interactive) execution. Default `false`. See [Per-Project Access Control](#per-project-access-control). |
+| `headlessEnabled` | `object` \| `bool` | Opt-in to headless (non-interactive) execution. Default `false`. Bool `true` allows any trigger; object shape `{ "enabled": bool, "triggers": ["issue-label"], "auth": "subscription-oauth" \| "api-key" }` adds a per-trigger allowlist matched against `RAWGENTIC_HEADLESS_TRIGGER` (fail-closed on non-member/unset/malformed; absent `triggers` = any) plus the recorded Action auth mode (#165). See [Per-Project Access Control](#per-project-access-control). |
 | `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
 ### `critiqueMethod`
@@ -572,7 +572,8 @@ orchestrator resumes the session after the user replies.
 ### Per-Project Access Control
 
 Each project must explicitly opt in to headless mode via `headlessEnabled` in
-its workspace entry. Default is `false` (safe — must opt in).
+its workspace entry. Default is `false` (safe — must opt in). The field accepts
+two shapes (#165):
 
 ```json
 {
@@ -581,15 +582,47 @@ its workspace entry. Default is `false` (safe — must opt in).
       "name": "my-app",
       "headlessEnabled": true,
       "headlessAllowSSH": false
+    },
+    {
+      "name": "my-other-app",
+      "headlessEnabled": {
+        "enabled": true,
+        "triggers": ["issue-label"],
+        "auth": "subscription-oauth"
+      }
     }
   ]
 }
 ```
 
+- **bool** (legacy): `true` allows headless via any trigger.
+- **object**: `enabled` is the master switch; `triggers` is a per-trigger
+  allowlist matched against the orchestrator-set `RAWGENTIC_HEADLESS_TRIGGER`
+  env var (absent `triggers` = any trigger; a present list **fails closed** on
+  a non-member, an unset trigger env, or a malformed value); `auth` records the
+  repo's Action auth-mode decision (see below). The bundled
+  `.github/workflows/rawgentic-auto.yml` pilot sets
+  `RAWGENTIC_HEADLESS_TRIGGER=issue-label`.
+
 Set during `/rawgentic:setup` (Step 2c) or manually in `.rawgentic_workspace.json`.
 When `RAWGENTIC_HEADLESS=1` is set but the project has `headlessEnabled: false`
 (or missing), the session-start hook blocks headless execution and the agent
 is instructed to exit immediately.
+
+### Action Auth Mode (#165 AC7)
+
+Label-triggered Action runs authenticate one of two ways; the decision is
+recorded per repo in `headlessEnabled.auth`:
+
+- **`subscription-oauth`** (default — the majority case): owner runs
+  `claude setup-token` once and saves the output as the repo secret
+  `CLAUDE_CODE_OAUTH_TOKEN`. Runs share the owner's plan bucket — schedule
+  off-hours; a plan lockout maps to DEFER (the run simply fails and the label
+  can be re-applied later).
+- **`api-key`**: repo secret `ANTHROPIC_API_KEY` — an isolated dollar budget
+  instead of the plan bucket, at API prices.
+
+Secrets are referenced by NAME in the workflow yml, never by value (AC8).
 
 **`headlessAllowSSH`** (boolean, default `false`) — the SSH escape hatch for the
 headless remote-ops guard (issue #47). In headless mode the bot's job ends at PR

@@ -1,0 +1,119 @@
+# #165 — label-triggered headless WF2 pilot (claude-code-action@v1 GA).
+#
+# Contract: label an issue `rawgentic:auto` → Claude runs
+# /rawgentic:implement-feature <n> headless. PR-terminal: the run ends at PR
+# creation — no merge, no deploy, no SSH (wal-guard blocks it; runner-local
+# anyway). Progress surface = STATUS comments (#48); guardrails = job timeout
+# + STATUS heartbeat (#52); large-PR warning posts at Step 12 (#51).
+#
+# Auth (AC7): subscription OAuth. Owner one-time setup:
+#   claude setup-token   → save output as repo secret CLAUDE_CODE_OAUTH_TOKEN
+# The secret is referenced by NAME below, never a value (AC8). API-key
+# alternative: swap claude_code_oauth_token for
+# anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }} (isolated dollar budget
+# instead of the owner's plan bucket — see docs/config-reference.md).
+name: rawgentic auto (headless WF2)
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+# One run per issue: re-applying the label queues instead of fanning out
+# parallel write-token runs (8a T3 F1).
+concurrency:
+  group: rawgentic-auto-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  headless-wf2:
+    # Job-level gate: no runner spins up for any other label.
+    #
+    # LABELING IS THE APPROVAL GATE (8a T3 F2): applying rawgentic:auto
+    # requires triage+ on this repo, and doing so hands the ISSUE BODY to an
+    # autonomous agent holding a write token — read the issue body as if it
+    # were a command you are authorizing, because it is. Never configure an
+    # issue template that auto-applies this label (a template's labels fire
+    # `labeled` with the drive-by author as sender — that would make this an
+    # unauthenticated trigger; a test pins templates label-free).
+    if: ${{ github.event.label.name == 'rawgentic:auto' }}
+    runs-on: ubuntu-latest
+    # AC4/#52: hard guardrail. A healthy WF2 run posts STATUS heartbeats at
+    # step boundaries; a wedged one hits this wall instead of burning hours.
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # WF2 <config-loading> STOPs without a workspace file at the Claude
+      # root, and this checkout is the PROJECT repo, not the owner's
+      # workspace. Write a minimal runner-local workspace: the repo root is
+      # itself the project (path "."), with the object-shape headless grant
+      # scoped to exactly this trigger. Ephemeral runner state — not staged by
+      # WF2's stage-only-declared-files rule, and gitignored as backstop.
+      - name: Bootstrap runner workspace
+        run: |
+          cat > .rawgentic_workspace.json << 'EOF'
+          {
+            "version": "1.0",
+            "defaultProtectionLevel": "standard",
+            "projects": [
+              {
+                "name": "rawgentic",
+                "path": ".",
+                "active": true,
+                "configured": true,
+                "headlessEnabled": {
+                  "enabled": true,
+                  "triggers": ["issue-label"],
+                  "auth": "subscription-oauth"
+                }
+              }
+            ]
+          }
+          EOF
+          mkdir -p claude_docs
+
+      - name: Run headless WF2
+        # SHA-pinned (repo convention, matches claude-code-security-review in
+        # ci.yml): this action receives the subscription OAuth token + a write
+        # GITHUB_TOKEN, so a mutable tag is a supply-chain vector. SHA below is
+        # the v1 tag as of 2026-07-05.
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: |
+            https://github.com/3D-Stories/rawgentic
+          plugins: |
+            rawgentic@rawgentic
+          # settings.env is the documented way to reach the Claude process
+          # (claude_env is deprecated); hooks are child processes and inherit.
+          settings: |
+            {
+              "env": {
+                "RAWGENTIC_HEADLESS": "1",
+                "RAWGENTIC_HEADLESS_TRIGGER": "issue-label"
+              }
+            }
+          prompt: |
+            HEADLESS MODE active — you are running unattended from a
+            rawgentic:auto label. Execute:
+
+            /rawgentic:implement-feature ${{ github.event.issue.number }}
+
+            Ground rules for this run:
+            - The issue's acceptance criteria are your goal contract: derive
+              your working goal from them at session start, re-check every
+              deliverable against them before the PR, and treat any AC you
+              cannot satisfy as a QUESTION, not a silent skip.
+            - PR-terminal: your job ends at PR creation. Never merge, deploy,
+              or SSH.
+            - Post STATUS comments at step boundaries per the headless
+              protocol; use the QUESTION protocol (comment + rawgentic:ai-waiting
+              label + suspend + exit) for anything ambiguous.
+          claude_args: |
+            --max-turns 200

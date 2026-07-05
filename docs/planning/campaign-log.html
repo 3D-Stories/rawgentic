@@ -48,9 +48,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 09:25 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 10:42 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
-
+<p class="sub">Autonomous campaign: rawgentic builds rawgentic · slots 10–15</p>
 </header>
 <main>
 <h1>Rawgentic modernization — campaign log</h1>
@@ -61,8 +61,69 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded</p>
 <p>run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
-<p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
+<p><strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot</p>
+<p>shipped; live run owner-gated). <strong>CAMPAIGN COMPLETE.</strong></p>
 <p>---</p>
+<section class="mstone"><h3>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling</p>
+<p>(claude-code-action v1), folding #48 (STATUS comments), #51 (large-PR warning),</p>
+<p>#52 (progress guardrails). The overnight end-state: label an issue, get a PR.</p>
+<p><strong>What shipped.</strong></p>
+<ul>
+<li><code>.github/workflows/rawgentic-auto.yml</code>: <code>rawgentic:auto</code> label → headless</li>
+</ul>
+<p>  <code>/rawgentic:implement-feature &lt;n&gt;</code>, PR-terminal. Job-level label gate,</p>
+<p>  per-issue concurrency, <code>timeout-minutes: 120</code>, SHA-pinned action,</p>
+<p>  subscription-OAuth secret by NAME, runner-local workspace bootstrap (WF2</p>
+<p>  config-loading needs a workspace file; the checkout is the project repo),</p>
+<p>  <code>plugins</code>/<code>plugin_marketplaces</code> from the repo&#x27;s own PUBLIC marketplace —</p>
+<p>  every external contract read from the action&#x27;s own action.yml, not memory.</p>
+<ul>
+<li><code>headlessEnabled</code> object shape: <code>{&quot;enabled&quot;, &quot;triggers&quot;, &quot;auth&quot;}</code> — fail-closed</li>
+</ul>
+<p>  per-trigger allowlist against <code>RAWGENTIC_HEADLESS_TRIGGER</code> in session-start</p>
+<p>  (jq verdict, 9 exotic inputs probed fail-closed), mirrored in <code>/switch</code> +</p>
+<p>  setup Step 2c prose; auth-mode decision recorded per repo (AC5/AC7).</p>
+<ul>
+<li>STATUS comment type (#48): <code>format_status_comment()</code> + CLI <code>--type status</code> —</li>
+</ul>
+<p>  non-blocking, metadata carries NO question_id so the resume path can never</p>
+<p>  mistake it for a pending question; five step-boundary posts in headless.md.</p>
+<ul>
+<li>Large-PR warning (#51): Step-12 PR comment past <code>RAWGENTIC_LARGE_PR_FILES</code></li>
+</ul>
+<p>  (default 50, the issue&#x27;s own default). Guardrails (#52): job timeout as the</p>
+<p>  hard wall + STATUS heartbeat as the liveness signal.</p>
+<ul>
+<li>Suite 1936/0 → 1970/0 (34 new: 12 yml-structural, 9 shape, 5 STATUS,</li>
+</ul>
+<p>  5 corpus drift guards proven red-on-old-prose, 3 hardening).</p>
+<p><strong>Decisions (this slot).</strong></p>
+<ul>
+<li>Shape-extend <code>headlessEnabled</code> instead of adding a staged workspace field —</li>
+</ul>
+<p>  keeps #184&#x27;s setup↔manifest drift guard green by construction.</p>
+<ul>
+<li>Reduced fold scope named honestly: #48&#x27;s machine-metadata AC descoped to</li>
+</ul>
+<p>  free text; #51 interactive warning + #52 self-diagnosis design deferred.</p>
+<ul>
+<li>Never echo the trigger env value in the BLOCKED message (8a F1): the deny</li>
+</ul>
+<p>  path writes to the model&#x27;s instruction channel; any echo is an injection rider.</p>
+<p><strong>Reviews.</strong> Step 8a fired twice (T2 gate, T3 yml; 2 opus each): trigger-env</p>
+<p>prompt-injection High fixed, concurrency/SHA-pin/label-approval-contract</p>
+<p>hardening applied; **HIGH environmental finding — <code>main</code> had no branch</p>
+<p>protection** (verified 404 + empty rulesets): ruleset creation was</p>
+<p>permission-gated in-session, handed to owner as an exact command; **the pilot</p>
+<p>must not go live before it.** Step 11 (2 opus): 1 Medium config-reference</p>
+<p>field-table leftover (the #161 Critical&#x27;s exact class — caught this time) +</p>
+<p>threshold 25→50 correction; runtime reviewer probed the jq gate and bootstrap</p>
+<p>end-to-end, no material findings. Security scan clean.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA recorded post-merge this session. Live</p>
+<p>end-to-end success metric (1 issue, zero touches) is owner-gated: repo secret</p>
+<p><code>CLAUDE_CODE_OAUTH_TOKEN</code> (<code>claude setup-token</code>), the main-branch ruleset, then</p>
+<p>label a real issue <code>rawgentic:auto</code>. Telemetry embedded below.</p>
+<p>---</p></section>
 <section class="mstone"><h3>Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0</p>
 <p>boundary — one migration event for consumers instead of a drip.</p>
 <p><strong>What shipped.</strong></p>
@@ -98,8 +159,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>guard added. 2 Medium + 3 Low doc/manifest fixes. Adversarial diff review</p>
 <p>mechanically skipped (no security surface). Security scan clean. Suite</p>
 <p>1941/0 → 1936/0 (stub tests replaced by removal guards).</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below.</p>
+<p><strong>Status.</strong> PR #202 squash-merged <code>ea4e048</code>, v3.0.0, issue closed. CI green</p>
+<p>(68s); AC3 verified via Mirror-to-STARS Action success @ea4e048 (evidence</p>
+<p>comment on #161). <strong>M3 COMPLETE.</strong></p>
 <p>---</p></section>
 <section class="mstone"><h3>Slot 13 — #184: version-aware setup prompt · v2.67.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because</p>
 <p>nothing tells users to re-run <code>/rawgentic:setup</code> after an upgrade — while the</p>
@@ -265,9 +327,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#161 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>23 added · 1936/1936 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design_critique</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>6</td><td>plan_drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>implementation_drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code_review</td><td>7</td><td>7</td><td>pass</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#165 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>34 added · 1970/1970 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac (not applicable), sca (nothing to scan)</td></tr><tr><th>Outcome</th><td>PR pending · merged: pending · CI: pending</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>2</td><td>analyze + lane</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>4</td><td>design reflect (2 iterations)</td><td>2</td><td>2</td><td>pass</td></tr><tr><td>8a</td><td>per-task review x2 (T2 gate, T3 yml)</td><td>7</td><td>6</td><td>pass</td></tr><tr><td>9</td><td>AC drift evidence</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>code review (2 opus)</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>11.5</td><td>security scan</td><td>0</td><td>0</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 09:25 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 10:42 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

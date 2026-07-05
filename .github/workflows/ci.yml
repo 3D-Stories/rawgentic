@@ -42,7 +42,9 @@ jobs:
         run: bash scripts/install-scanners.sh --check gitleaks semgrep osv-scanner || true
 
       - name: Install test deps
-        run: pip install pytest jsonschema
+        # pyyaml: structural assertions on .github/workflows/rawgentic-auto.yml
+        # (tests/test_headless_action_workflow.py, #165)
+        run: pip install pytest jsonschema pyyaml
 
       - name: Run tests
         run: pytest tests/ -v

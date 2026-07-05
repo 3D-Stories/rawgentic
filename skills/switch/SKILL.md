@@ -174,10 +174,11 @@ Run `/rawgentic:setup` to update your config (existing values will be preserved)
 
 ### 3. Headless Access Check
 
-If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the target project's `headlessEnabled` field in `.rawgentic_workspace.json`.
+If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the target project's `headlessEnabled` field in `.rawgentic_workspace.json`. The field accepts a bool (legacy) or an object `{"enabled": bool, "triggers": [...], "auth": "..."}` (#165) — apply the SAME verdict the session-start gate computes:
 
-- **If `headlessEnabled` is `true`:** Silent pass — headless mode allowed.
-- **If `headlessEnabled` is `false` or missing:** STOP and tell user:
+- **If `headlessEnabled` is `true`:** Silent pass — headless mode allowed, any trigger.
+- **If it is an object with `enabled: true`:** allowed only when `triggers` is absent, OR `$RAWGENTIC_HEADLESS_TRIGGER` is a member of the `triggers` array. A non-member, an unset trigger env, or a malformed `triggers` value fails CLOSED — STOP and tell user: "Headless mode for **[project-name]** does not allow this trigger (RAWGENTIC_HEADLESS_TRIGGER is not in the headlessEnabled.triggers allowlist)."
+- **If `headlessEnabled` is `false`, `{"enabled": false, ...}`, missing, or any other shape:** STOP and tell user:
   "Headless mode is not enabled for **[project-name]**. Run `/rawgentic:setup` to enable it, or set `headlessEnabled: true` in the project's entry in `.rawgentic_workspace.json`."
 
 If not in headless mode: skip this check entirely.
