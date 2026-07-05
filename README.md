@@ -43,10 +43,11 @@ budgets drawn as return arcs. Click through to the interactive version.
   </picture>
 </a>
 
-*Snapshot of the WF2 sheet. The [interactive diagram](docs/workflow-diagram.html) covers
-WF1 / WF2 / WF3 / WF5 with per-station detail and version history — see
-[docs/workflow-diagram.md](docs/workflow-diagram.md) for the update recipe (it renders
-live via GitHub Pages when enabled for `main` + `/docs`).*
+*Snapshot of the WF2 sheet. The interactive diagram is **live** at
+**[3d-stories.github.io/rawgentic](https://3d-stories.github.io/rawgentic/)** (also
+[in-repo](docs/workflow-diagram.html)) — it covers WF1 / WF2 / WF3 / WF5 with per-station
+detail and version history. See [docs/workflow-diagram.md](docs/workflow-diagram.md) for
+the update recipe.*
 
 ---
 
@@ -695,6 +696,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v3.11.2 (2026-07-05)
+- **Workflow diagram is live on GitHub Pages.** Site is up at <https://3d-stories.github.io/rawgentic/>; added `docs/index.html` so the site root redirects to the diagram, and updated the README caption to link the live URL (was "when enabled"). No workflow-spine change → no diagram REV bump.
 
 ### v3.11.1 (2026-07-05)
 - **Fix GitHub Pages build (`docs/.nojekyll`).** The Pages site (main + `/docs`) failed to build under the legacy Jekyll processor because several committed docs contain `{{ }}` sequences Jekyll parses as Liquid. Adding `docs/.nojekyll` disables Jekyll so the hand-authored static HTML/markdown (incl. `workflow-diagram.html`) is served verbatim. No workflow-spine change → no diagram REV bump.
