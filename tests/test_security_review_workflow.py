@@ -61,10 +61,11 @@ def test_prompt_runs_security_review():
 
 def test_permissions_are_least_privilege():
     text = _text()
-    blocks = re.findall(r"^permissions:\n((?:^[ \t]+\S.*\n)+)", text, re.M)
+    blocks = re.findall(r"^permissions:\n((?:^[ \t]+(?:\S.*|#.*)\n)+)", text, re.M)
     assert len(blocks) == 1, "exactly one permissions block (workflow level)"
-    perms = {ln.strip() for ln in blocks[0].splitlines()}
-    assert perms == {"pull-requests: write", "contents: read"}
+    perms = {ln.strip() for ln in blocks[0].splitlines() if not ln.strip().startswith("#")}
+    # id-token: write is required for claude-code-action's default App-token OIDC path
+    assert perms == {"pull-requests: write", "contents: read", "id-token: write"}
     assert "write-all" not in text
 
 
@@ -84,9 +85,22 @@ def test_no_auth_is_a_visible_skip():
     text = _text()
     assert "::warning::" in text
     assert "present=false" in text
-    assert text.count("steps.auth.outputs.present == 'true'") == 3, (
-        "checkout + both auth-mode review steps must gate on an auth secret present"
+    assert text.count("steps.auth.outputs.present == 'true'") == 4, (
+        "checkout + both auth-mode review steps + the status step must gate on "
+        "an auth secret present"
     )
+
+
+def test_executed_true_gated_on_review_success_not_secret_presence():
+    """#195 Step-11 F2: the tally signal executed=true is written only when a
+    review step actually SUCCEEDED, not merely because an auth secret was set
+    (a plan lockout / outage / bad token must not read as a completed review)."""
+    text = _text()
+    assert "steps.review_oauth.outcome" in text and "steps.review_apikey.outcome" in text
+    # executed=true lives in the outcome-gated status step, not the auth pre-flight
+    auth_block = text.split("id: auth")[1].split("- name: Checkout")[0]
+    assert "executed=true" not in auth_block, \
+        "executed=true must NOT be emitted from the auth pre-flight (F2)"
 
 
 def test_secrets_by_name_never_inline():

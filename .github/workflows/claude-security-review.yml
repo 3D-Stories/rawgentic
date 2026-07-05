@@ -37,6 +37,10 @@ on:
 permissions:
   pull-requests: write
   contents: read
+  # claude-code-action's default auth mints a short-lived Claude GitHub-App token
+  # via OIDC token-exchange (no static PAT); the action's own PR-review example
+  # grants this even under API-key auth. Without it the App-token path can't run.
+  id-token: write
 
 jobs:
   security-review:
@@ -52,11 +56,9 @@ jobs:
           if [ -n "$OAUTH" ]; then
             echo "mode=oauth" >> "$GITHUB_OUTPUT"
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "## Claude security review: executed=true (auth=subscription OAuth)" >> "$GITHUB_STEP_SUMMARY"
           elif [ -n "$APIKEY" ]; then
             echo "mode=apikey" >> "$GITHUB_OUTPUT"
             echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "## Claude security review: executed=true (auth=API key)" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "::warning::No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — security review SKIPPED, not a clean signal"
             echo "present=false" >> "$GITHUB_OUTPUT"
@@ -68,6 +70,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Security review (subscription OAuth)
+        id: review_oauth
         if: steps.auth.outputs.present == 'true' && steps.auth.outputs.mode == 'oauth'
         uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
         with:
@@ -75,8 +78,23 @@ jobs:
           prompt: "/security-review"
 
       - name: Security review (API key)
+        id: review_apikey
         if: steps.auth.outputs.present == 'true' && steps.auth.outputs.mode == 'apikey'
         uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           prompt: "/security-review"
+
+      - name: Record execution status (tally signal — gated on the review SUCCEEDING)
+        # executed=true only when a review step actually succeeded, not merely
+        # because an auth secret was present — a plan lockout / outage / bad token
+        # must NOT read as a completed review in the 10-PR promotion tally.
+        if: always() && steps.auth.outputs.present == 'true'
+        run: |
+          if [ "${{ steps.review_oauth.outcome }}" = "success" ] || \
+             [ "${{ steps.review_apikey.outcome }}" = "success" ]; then
+            echo "## Claude security review: executed=true (auth=${{ steps.auth.outputs.mode }})" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::security review step did not succeed — not a clean signal"
+            echo "## Claude security review: executed=false (review step did not succeed — does NOT count toward the 10-PR promotion tally)" >> "$GITHUB_STEP_SUMMARY"
+          fi
