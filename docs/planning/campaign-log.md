@@ -226,8 +226,9 @@ serves it live once owner-enabled. Guarded by `tests/test_workflow_diagram.py`.
 concept → color enrichment per "too plain/too white-black" → WF1 tab first); final
 artifact stored in `docs/` base per owner override of the AC4 `docs/planning/` path.
 
-**Status.** PR + CI + merge SHA recorded in the post-merge republish pass.
-Telemetry embedded below.
+**Status.** PR #214 squash-merged `2fe2e0e`, CI green (incl. first live firing of the
+#195/#196 Action review lanes), suite 2034/0. Issues #197 AND epic #188 closed —
+**campaign complete, 9/9 slots.** Telemetry embedded below.
 
 ---
 
