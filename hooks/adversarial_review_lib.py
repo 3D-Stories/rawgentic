@@ -281,8 +281,14 @@ def design_artifact_shared_doc(workspace_path: str, project_name: str):
             if not isinstance(sd, str) or not sd.strip():
                 return None
             sd = sd.strip()
-            # project-relative only: reject absolute paths and traversal
+            # Constrain to a docs/*.md target: project-relative, no traversal, and
+            # under docs/ ending in .md (matches the documented shape). This stops a
+            # misconfigured sharedDoc from making the workflow render markdown/HTML
+            # over an arbitrary tracked file (README.md, a source file). Any miss
+            # fails safe to per-issue — never writes outside docs/.
             if os.path.isabs(sd) or ".." in sd.split("/"):
+                return None
+            if not (sd.startswith("docs/") and sd.endswith(".md")):
                 return None
             return sd
     return None

@@ -104,3 +104,27 @@ def test_shared_doc_mode_documented_in_all_three_skills():
         assert "sharedDoc" in c, f"{skill} must document the sharedDoc shared-rolling-doc mode"
         assert "design_artifact_shared_doc" in c, f"{skill} must read the shared-doc config"
         assert "per-issue" in c.lower(), f"{skill} must state the per-issue default"
+
+
+def test_shared_doc_requires_docs_md_target(tmp_path):
+    """Codex Medium: sharedDoc must be a docs/*.md path — an arbitrary tracked
+    file (README.md, a source file) must NOT be an accepted render target."""
+    import adversarial_review_lib as arl
+    for bad in ("README.md", ".github/workflows/ci.yml", "hooks/x.py", "docs/planning/x.html", "planning/x.md"):
+        ws = tmp_path / "ws.json"
+        ws.write_text(json.dumps({"projects": [{"name": "p", "designArtifact": {"sharedDoc": bad}}]}))
+        assert arl.design_artifact_shared_doc(str(ws), "p") is None, bad
+    ws = tmp_path / "ok.json"
+    ws.write_text(json.dumps({"projects": [{"name": "p", "designArtifact": {"sharedDoc": "docs/planning/prog.md"}}]}))
+    assert arl.design_artifact_shared_doc(str(ws), "p") == "docs/planning/prog.md"
+
+
+def test_setup_asks_about_design_artifact_and_shared_doc():
+    """AC5 UX (owner-requested): setup must offer the design-artifact lifecycle AND
+    the per-issue-vs-shared-doc choice, mirroring the 2c/2d/2f/2g opt-in steps."""
+    c = skill_corpus("setup")
+    assert "Step 2h" in c, "setup must have a Step 2h for the design-artifact lifecycle"
+    assert "designArtifact" in c
+    assert "sharedDoc" in c
+    assert "per-issue" in c.lower() and "shared-doc" in c.lower()
+    assert "render_artifact.py" in c
