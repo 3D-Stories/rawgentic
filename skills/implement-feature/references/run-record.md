@@ -77,7 +77,10 @@ for any of them, same deliberate-null-vs-dropped-field rule as the rest of the s
 present-with-nullable-values). Tokens-by-model in `model_mix` is the **primary** metric — most runs
 are billed against a Claude subscription rather than metered per token, so `cost_estimate_usd` is a
 **derived, secondary** figure (a rate-card estimate, useful for cross-checking, not the number to
-trend on).
+trend on). **Caveat for A/B use:** `model_mix.input_tokens` sums fresh + cache-creation + cache-read
+into one number, so it is a *volume/context-pressure* metric, NOT a cost proxy — cache-read is billed
+~1/10th of fresh input, so a version that caches better can show *more* input tokens at *lower* cost.
+For a cost comparison use `cost_estimate_usd`; do not rank versions by `input_tokens`.
 
 **`capture_status` (OPTIONAL sixth key, #189):** how the numbers were obtained — a controlled
 vocab `{captured, unrecoverable, unavailable}`, fail-closed like `goal_guard`/`reviewer_kind`

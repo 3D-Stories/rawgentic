@@ -1327,11 +1327,14 @@ measurable signal — not just a sentence the user reads once.
    ```bash
    python3 hooks/usage_capture.py capture --session-id "$CLAUDE_CODE_SESSION_ID"
    ```
-   It prints a `usage` object with `capture_status: "captured"` and real per-model
-   `model_mix` + totals, or `{"capture_status": "unavailable"}` when the session file is
-   missing / mid-write / has no usage. Merge the printed object into the record's `usage`
-   and set `wall_clock_s` from the orchestrator's own timing. Record whatever it returns —
-   `unavailable` with null tokens is honest; do NOT fabricate numbers. Because
+   It prints a full 5-key `usage` object with `capture_status: "captured"` and real
+   per-model `model_mix` + totals, OR just `{"capture_status": "unavailable"}` when the
+   session file is missing / mid-write / has no usage. On the `captured` object: set its
+   `wall_clock_s` from the orchestrator's own timing, then use it as the record's `usage`.
+   On `unavailable`: do NOT merge the bare one-key dict (the `usage` object is present-is-strict
+   — all five keys required); instead emit a full object with the five keys null and
+   `capture_status: "unavailable"` (null tokens are honest here; do NOT fabricate numbers).
+   Because
    `capture_status: "captured"` is fail-closed at the validator (`work_summary.py` REQUIRES
    non-null tokens summing > 0 when captured), you can never persist a captured-but-null
    record — the #155 state is now impossible. `ccusage` is a manual cross-check only, not

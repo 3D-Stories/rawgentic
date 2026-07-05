@@ -145,11 +145,13 @@ def parse_session_jsonl(path) -> dict:
                      + out * _rate(model, "output")) / 1_000_000
     total_in = sum(m["input_tokens"] for m in mix.values())
     total_out = sum(m["output_tokens"] for m in mix.values())
-    # Non-vacuity: guard on the token SUM, not the block count. A session with
-    # assistant turns whose usage blocks are all zero/null totals zero here and
-    # must NOT be blessed as a real measurement (the #155 failure mode).
-    if total_in + total_out == 0:
-        raise NoUsageData(f"no non-zero usage tokens in {path}")
+    # Non-vacuity: guard on input tokens being POSITIVE, not on block count. Every
+    # real inference turn processes input (the prompt, plus cache after turn 1), so
+    # total_in <= 0 means the parse found nothing real — it must NOT be blessed as a
+    # measurement (the #155 failure mode, and its zero-token variant). Guarding on
+    # input>0 (not just sum>0) also blocks a captured dict with input 0 / output N.
+    if total_in <= 0:
+        raise NoUsageData(f"no positive input tokens in {path}")
     return {
         "input_tokens": total_in,
         "output_tokens": total_out,
@@ -233,6 +235,12 @@ def backfill_store(records_path, projects_dir=None) -> dict:
         except ValueError:
             stats["malformed"] += 1
             out_lines.append(line)  # preserve, don't drop
+            continue
+        if not isinstance(rec, dict):
+            # valid JSON but not a record object (e.g. a bare list) — preserve
+            # verbatim rather than crash the whole rewrite on rec.get(...)
+            stats["malformed"] += 1
+            out_lines.append(line)
             continue
         action = backfill_record(rec, projects_dir=projects_dir)
         stats[action] += 1

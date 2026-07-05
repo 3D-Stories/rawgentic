@@ -240,18 +240,41 @@ RUN_RECORDS = (Path(__file__).resolve().parent.parent.parent
                / "docs" / "measurements" / "run_records.jsonl")
 
 
-def test_committed_store_no_null_usage_without_marker():
-    """No record may carry a usage object with null tokens AND no capture_status
-    marker — that is exactly the #155 null-forever state. Backfill removes it for
-    historical rows; live capture prevents it for new rows."""
+def _has_positive_input(usage):
+    it = usage.get("input_tokens")
+    return isinstance(it, int) and not isinstance(it, bool) and it > 0
+
+
+def test_committed_store_no_meaningless_usage_without_marker():
+    """No record may carry a usage object with meaningless tokens (null OR a
+    non-positive input) AND no capture_status marker — that is the #155 null-forever
+    state and its zero-token variant. A row is fine only if it has positive input
+    (a real capture) or an explicit {unrecoverable, unavailable} marker. Backfill
+    fixes historical rows; live capture prevents it for new rows."""
     recs = [json.loads(l) for l in RUN_RECORDS.read_text().splitlines() if l.strip()]
     usage_objs = [r for r in recs if isinstance(r.get("usage"), dict)]
     assert usage_objs, "no usage objects in the store — this guard would be vacuous"
     offenders = [
         r.get("issue") for r in usage_objs
-        if r["usage"].get("input_tokens") is None
+        if not _has_positive_input(r["usage"])
         and r["usage"].get("capture_status") not in {"unrecoverable", "unavailable"}
     ]
     assert not offenders, (
-        f"{len(offenders)} usage object(s) with null tokens and no capture_status "
-        f"marker (the #155 null-forever state): {offenders}")
+        f"{len(offenders)} usage object(s) with null/zero tokens and no capture_status "
+        f"marker (the #155 null-forever state or its zero variant): {offenders}")
+
+
+def test_drift_guard_catches_zero_token_no_marker(tmp_path):
+    """Red-before-green proof the drift guard's zero-variant fix is load-bearing:
+    a 0/0 usage object with no marker MUST be flagged (the old `is None` predicate
+    missed it because 0 is not None)."""
+    store = tmp_path / "s.jsonl"
+    store.write_text(json.dumps({"issue": {"number": 9}, "usage": {
+        "input_tokens": 0, "output_tokens": 0, "cost_estimate_usd": None,
+        "wall_clock_s": None, "model_mix": None}}) + "\n")
+    recs = [json.loads(l) for l in store.read_text().splitlines() if l.strip()]
+    usage_objs = [r for r in recs if isinstance(r.get("usage"), dict)]
+    offenders = [r.get("issue") for r in usage_objs
+                 if not _has_positive_input(r["usage"])
+                 and r["usage"].get("capture_status") not in {"unrecoverable", "unavailable"}]
+    assert offenders, "a 0/0 usage object with no marker must be flagged as an offender"

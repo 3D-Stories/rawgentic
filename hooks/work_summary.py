@@ -376,10 +376,12 @@ def validate_record(record) -> list:
                                 f"{sorted(CAPTURE_STATUS_VALUES)}")
                 elif cs == "captured":
                     it, ot = usage.get("input_tokens"), usage.get("output_tokens")
-                    if not _is_int(it) or not _is_int(ot) or it < 0 or ot < 0 \
-                            or (it + ot) <= 0:
+                    # captured claims a real measurement: input MUST be positive
+                    # (every real turn processes prompt/cache input), output non-negative.
+                    # input>0 (not just sum>0) also rejects a captured input=0/output=N dict.
+                    if not _is_int(it) or not _is_int(ot) or it <= 0 or ot < 0:
                         errs.append("usage.capture_status 'captured' requires "
-                                    "non-null input_tokens+output_tokens summing > 0")
+                                    "non-null input_tokens > 0 and output_tokens >= 0")
 
     # `goal_guard` (#156, AC6) — OPTIONAL top-level field, same validated-optional
     # pattern as `reviewer_kind`: absent → old records stay valid (forward-

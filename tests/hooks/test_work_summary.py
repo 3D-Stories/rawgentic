@@ -767,6 +767,19 @@ class TestWorkSummarySkillWiring:
             f"`work_summary.py summarize`; if you renamed it, update this guard."
         )
 
+    def test_wf2_completion_step_wires_usage_capture(self):
+        # #189: the whole feature exists to stop new run-records shipping null usage.
+        # Live capture is a manual orchestrator instruction in the Step 16 detail — if
+        # a future spine edit drops it, new runs silently regress to the #155
+        # null-forever state with nothing failing. Pin the capture call to the corpus
+        # so that regression goes red here. (WF2 only — WF3 wiring is a later follow-up.)
+        from tests.corpus import skill_corpus
+        content = skill_corpus("implement-feature")
+        assert "usage_capture.py capture" in content, (
+            "implement-feature Step 16 must invoke `usage_capture.py capture` to "
+            "populate run-record usage; if you renamed it, update this guard."
+        )
+
 
 # ===========================================================================
 # aggregate subcommand (#94) — Tier-2 run-record rollups
@@ -1347,6 +1360,16 @@ class TestValidateUsage:
         rec = _valid_record()
         rec["usage"] = self._usage(capture_status="captured",
                                    input_tokens=0, output_tokens=0)
+        assert any("capture_status" in e and "captured" in e
+                   for e in validate_record(rec))
+
+    def test_captured_with_zero_input_positive_output_rejected(self):
+        # F4: a captured claim with input_tokens=0 (output>0) is anomalous — every
+        # real inference turn processes input. input>0 (not just sum>0) is required.
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(capture_status="captured",
+                                   input_tokens=0, output_tokens=5)
         assert any("capture_status" in e and "captured" in e
                    for e in validate_record(rec))
 
