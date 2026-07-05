@@ -15,10 +15,17 @@ PRIMARY metric) and total across models, excluding the ``<synthetic>`` pseudo-mo
 SECONDARY rate-card estimate (most runs are subscription-billed, so cost is a
 cross-check, not the number to trend on).
 
-Non-vacuity is the whole point (see #189 AC5): a session with zero usage blocks
-raises ``NoUsageData`` and ``capture_usage`` returns ``None`` — capture can NEVER
-emit ``capture_status="captured"`` with null tokens. The paired validator change in
-work_summary.py enforces the same invariant at the schema level.
+Non-vacuity is the whole point (see #189 AC5): a session whose usage sums to zero
+tokens raises ``NoUsageData`` and ``capture_usage`` returns ``None`` — capture can
+NEVER emit ``capture_status="captured"`` with null/zero tokens. The guard is on the
+token SUM, not the block count: a real aborted/degenerate turn carries a usage dict
+whose fields are all zero, and blessing that as "captured 0/0" would be exactly the
+#155 meaningless-telemetry failure. The paired validator change in work_summary.py
+(same PR) enforces the same invariant at the schema level (rejects captured+null/zero).
+
+Best-effort, never crash: capture reads the CURRENT session's log, which may be
+mid-write, so parsing tolerates malformed and non-UTF-8 bytes and ``capture_usage``
+returns ``None`` on any failure rather than propagating to the Step 16 summary.
 """
 from __future__ import annotations
 
@@ -33,7 +40,7 @@ from typing import Final, Optional
 # hex + hyphen only. This is ALSO the path-traversal guard — anything with a
 # slash, "..", space, or punctuation is rejected before it ever touches the
 # filesystem (find_session_file globs on it).
-_SESSION_ID_RE: Final[re.Pattern] = re.compile(r"^[A-Za-z0-9-]+$")
+_SESSION_ID_RE: Final[re.Pattern] = re.compile(r"[A-Za-z0-9-]+")  # used with fullmatch
 
 # The pseudo-model for injected/system turns — not real inference, excluded from
 # both totals and model_mix.
@@ -59,8 +66,9 @@ class NoUsageData(Exception):
 
 
 def _validate_session_id(session_id: str) -> None:
-    """Reject anything that isn't a bare id token — this is the traversal guard."""
-    if not isinstance(session_id, str) or not _SESSION_ID_RE.match(session_id):
+    """Reject anything that isn't a bare id token — this is the traversal guard.
+    ``fullmatch`` (not ``match``) so a trailing newline can't slip through the ``$``."""
+    if not isinstance(session_id, str) or not _SESSION_ID_RE.fullmatch(session_id):
         raise ValueError(f"invalid session id: {session_id!r}")
 
 
@@ -101,8 +109,9 @@ def parse_session_jsonl(path) -> dict:
     with zero usable usage blocks raises NoUsageData (non-vacuity)."""
     mix: dict[str, dict[str, int]] = {}
     cost = 0.0
-    seen = 0
-    with open(path, encoding="utf-8") as fh:
+    # errors="replace": the current session's log may be read mid-write, so a
+    # split multibyte char at EOF must degrade gracefully, never raise.
+    with open(path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line:
@@ -134,12 +143,16 @@ def parse_session_jsonl(path) -> dict:
                      + cwrite * _rate(model, "cache_write")
                      + cread * _rate(model, "cache_read")
                      + out * _rate(model, "output")) / 1_000_000
-            seen += 1
-    if seen == 0:
-        raise NoUsageData(f"no assistant usage blocks in {path}")
+    total_in = sum(m["input_tokens"] for m in mix.values())
+    total_out = sum(m["output_tokens"] for m in mix.values())
+    # Non-vacuity: guard on the token SUM, not the block count. A session with
+    # assistant turns whose usage blocks are all zero/null totals zero here and
+    # must NOT be blessed as a real measurement (the #155 failure mode).
+    if total_in + total_out == 0:
+        raise NoUsageData(f"no non-zero usage tokens in {path}")
     return {
-        "input_tokens": sum(m["input_tokens"] for m in mix.values()),
-        "output_tokens": sum(m["output_tokens"] for m in mix.values()),
+        "input_tokens": total_in,
+        "output_tokens": total_out,
         "cost_estimate_usd": round(cost, 6),
         "wall_clock_s": None,
         "model_mix": mix,
@@ -147,7 +160,14 @@ def parse_session_jsonl(path) -> dict:
 
 
 def _int(v) -> int:
-    return v if isinstance(v, int) and not isinstance(v, bool) and v >= 0 else 0
+    """Coerce a token count to a non-negative int. Accepts int OR float (a JSON
+    number may be emitted as a float) — floats are truncated, not silently
+    dropped to 0, which would under-count. Rejects bools, negatives, non-numbers."""
+    if isinstance(v, bool):
+        return 0
+    if isinstance(v, (int, float)) and v >= 0:
+        return int(v)
+    return 0
 
 
 def capture_usage(session_id: str, projects_dir=None) -> Optional[dict]:

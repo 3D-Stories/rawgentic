@@ -22,7 +22,8 @@ FIXTURES = Path(__file__).resolve().parent.parent / "fixtures"
 import usage_capture as uc  # noqa: E402
 
 SAMPLE_SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"   # known-value fixture
-EMPTY_SID = "ffffffff-0000-1111-2222-333333333333"    # zero usage blocks
+EMPTY_SID = "ffffffff-0000-1111-2222-333333333333"    # no usage blocks at all
+ZERO_SID = "cccccccc-0000-0000-0000-000000000000"     # usage blocks present but zero/null
 
 # Hand-computed from tests/fixtures/<SAMPLE_SID>.jsonl, EXCLUDING <synthetic>:
 #   opus  input = (100+50+200)+(10+0+500) = 860 ; output = 30+40 = 70
@@ -89,15 +90,57 @@ def test_cost_unknown_model_contributes_zero(tmp_path):
 
 # --- non-vacuity guard: zero usage blocks must NOT masquerade as captured (AC5d) ---
 
-def test_parse_zero_usage_raises():
+def test_parse_no_usage_blocks_raises():
     with pytest.raises(uc.NoUsageData):
         uc.parse_session_jsonl(FIXTURES / f"{EMPTY_SID}.jsonl")
 
 
-def test_capture_zero_usage_returns_none_never_captured_null():
-    got = uc.capture_usage(EMPTY_SID, projects_dir=FIXTURES)
-    # MUST be None (orchestrator marks "unavailable") — never a captured-with-null dict
+def test_parse_present_but_zero_tokens_raises():
+    # Realistic aborted/degenerate turn: usage dict PRESENT but all fields zero/null.
+    # Guarding on block count instead of token sum would bless this as captured 0/0 —
+    # the #155 failure mode. This asserts red-before-green for that exact hole.
+    with pytest.raises(uc.NoUsageData):
+        uc.parse_session_jsonl(FIXTURES / f"{ZERO_SID}.jsonl")
+
+
+@pytest.mark.parametrize("sid", [EMPTY_SID, ZERO_SID])
+def test_capture_never_returns_captured_with_zero(sid):
+    got = uc.capture_usage(sid, projects_dir=FIXTURES)
+    # MUST be None (orchestrator marks "unavailable") — never captured-with-zero/null.
     assert got is None
+
+
+def test_capture_invalid_utf8_returns_none_not_crash(tmp_path):
+    # The current session log may be read mid-write; a split multibyte char at EOF
+    # must degrade to None, never propagate to the Step 16 summary. (UnicodeDecodeError
+    # is a ValueError, not OSError — capture must not let it escape.)
+    sid = "dddddddd-0000-0000-0000-000000000000"
+    p = tmp_path / f"{sid}.jsonl"
+    good = json.dumps({"type": "assistant", "message": {
+        "model": "claude-opus-4-8",
+        "usage": {"input_tokens": 100, "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0, "output_tokens": 50}}}).encode()
+    p.write_bytes(good + b"\n" + b"\xff\xfe garbage bytes\n")
+    got = uc.capture_usage(sid, projects_dir=tmp_path)
+    # valid line still recovered -> captured with the 100/50 from the good line
+    assert got is not None and got["capture_status"] == "captured"
+    assert got["input_tokens"] == 100 and got["output_tokens"] == 50
+
+
+def test_float_token_counts_are_counted_not_dropped(tmp_path):
+    sid = "eeeeeeee-0000-0000-0000-000000000000"
+    p = tmp_path / f"{sid}.jsonl"
+    p.write_text(json.dumps({"type": "assistant", "message": {
+        "model": "claude-opus-4-8",
+        "usage": {"input_tokens": 100.0, "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0, "output_tokens": 50.0}}}) + "\n")
+    u = uc.parse_session_jsonl(p)
+    assert u["input_tokens"] == 100 and u["output_tokens"] == 50
+
+
+def test_session_id_rejects_trailing_newline():
+    with pytest.raises(ValueError):
+        uc.find_session_file("abc\n", FIXTURES)
 
 
 # --- capture_usage end-to-end: resolve -> parse -> dict (AC5b) ---
