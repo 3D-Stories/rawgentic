@@ -89,6 +89,17 @@ def test_parse_depends_on_two_keywords_order_independent():
     assert driver_lib.parse_depends_on("Blocked by #2, depends on #1") == [1, 2]
 
 
+def test_parse_depends_on_stops_at_sentence_boundary():
+    # A following sentence must NOT inject a dep (Codex diff-review F1, High).
+    assert driver_lib.parse_depends_on("Depends on #10. See #20 for context") == [10]
+    # A trailing relative clause is not part of the dependency list either.
+    assert driver_lib.parse_depends_on("Depends on #10 which also fixes #20.") == [10]
+
+
+def test_parse_depends_on_colon_and_separators():
+    assert driver_lib.parse_depends_on("Depends on: #10, #20 & #30") == [10, 20, 30]
+
+
 # --------------------------------------------------------------------------- #
 # topo_sort_issues
 # --------------------------------------------------------------------------- #
@@ -279,6 +290,39 @@ def test_validate_driver_state_duplicate_number():
             {"number": 1, "status": "merged"}]})
     assert not ok
     assert any("duplicate" in e for e in errors)
+
+
+def test_validate_driver_state_serial_active_invariant():
+    # At most one issue may be in_progress/pr_open (Codex diff-review F2).
+    ok, errors = driver_lib.validate_driver_state(
+        {"schema_version": 2, "campaign": "c", "issues": [
+            {"number": 1, "status": "in_progress"},
+            {"number": 2, "status": "pr_open"}]})
+    assert not ok
+    assert any("serial" in e or "in_progress" in e for e in errors)
+
+
+def test_validate_driver_state_single_active_ok():
+    ok, errors = driver_lib.validate_driver_state(
+        {"schema_version": 2, "campaign": "c", "issues": [
+            {"number": 1, "status": "in_progress"},
+            {"number": 2, "status": "queued"}]})
+    assert ok, errors
+
+
+def test_validate_campaign_start_headless_requires_epic():
+    # #163 AC5: headless refuses to start without an epic (Codex diff-review F3).
+    base = {"schema_version": 2, "campaign": "c", "issues": [
+        {"number": 1, "status": "queued"}]}
+    ok, errors = driver_lib.validate_campaign_start(base, headless=True)
+    assert not ok
+    assert any("epic" in e for e in errors)
+    # with an epic, headless start is fine
+    ok2, _ = driver_lib.validate_campaign_start({**base, "epic": 200}, headless=True)
+    assert ok2
+    # non-headless start does not require an epic
+    ok3, _ = driver_lib.validate_campaign_start(base, headless=False)
+    assert ok3
 
 
 def test_validate_driver_state_bool_number_rejected():

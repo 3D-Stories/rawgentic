@@ -11,8 +11,8 @@ record: `docs/design/2026-07-04-multi-issue-driver.md` (#134); built by #148
 
 The small pieces whose behavior is worth testing rather than describing live in
 `hooks/driver_lib.py` (`parse_depends_on`, `topo_sort_issues`,
-`next_ready_issue`, `validate_driver_state`). Everything else here is procedure
-the orchestrator executes.
+`next_ready_issue`, `validate_driver_state`, `validate_campaign_start`).
+Everything else here is procedure the orchestrator executes.
 
 > **Scope.** The driver owns **only** the queue, deferrals, rollback anchors,
 > and inter-issue policy. It never re-enters or extends a WF2 run. The fuller
@@ -161,11 +161,19 @@ When `order: dependency`, the queue is a DAG.
 1. **Parse dependencies** with `parse_depends_on(body)` — it extracts issue
    numbers only from a recognized dependency phrase ("depends on #N", "blocked
    by #N") or a task-list checkbox ("- [ ] #N"). It is **prompt-injection-safe**:
-   a bare `#N` in ordinary prose (e.g. "see #999 for context", "does not depend
-   on anything") is *not* taken as a dependency. Supplement with
-   `gh api` issue relationships where available.
+   the phrase is matched at word boundaries (so "unblocked by" does not count),
+   negated phrases ("not blocked by", "no longer depends on") are ignored, and
+   only the *immediate* `#N` list right after the phrase (comma/"and"-separated)
+   is taken — parsing stops at a sentence boundary, so a following sentence
+   ("Depends on #10. See #20 for context" → `[10]`) cannot inject a dep. A bare
+   `#N` in ordinary prose is *not* a dependency. Supplement with `gh api` issue
+   relationships where available.
 2. **Topologically sort** at campaign start with `topo_sort_issues(issues)`
-   (Kahn's algorithm; deterministic tie-break = lowest issue number first).
+   (Kahn's algorithm; deterministic tie-break = lowest issue number first), then
+   **persist that order back into `state["issues"]`** so the advance loop's
+   list-order iteration IS the topological order — `next_ready_issue` returns the
+   first ready issue *in list order*, so the deterministic dependency order only
+   holds if the list is stored sorted.
    **Cycles halt fail-closed:** on a cycle the function raises
    `DependencyCycleError` with the offending cycle printed (e.g.
    `#1 -> #2 -> #1`) — the campaign stops loudly rather than silently
@@ -204,7 +212,9 @@ inline list:
   the machine queue.
 - **Headless runs refuse to start without an epic.** In headless mode the epic is
   the STATUS/QUESTION channel (the driver has no terminal), so a headless
-  campaign with no epic is a hard error at start, not a silent degrade.
+  campaign with no epic is a hard error at start, not a silent degrade. Enforced
+  by `validate_campaign_start(state, headless=True)`, which errors when `epic` is
+  null/missing under headless.
 
 ## Rate limits
 

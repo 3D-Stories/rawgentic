@@ -56,6 +56,13 @@ _DEP_PHRASE_RE = re.compile(r"(?<![a-z])(?:depends?[ -]on|blocked[ -]by)(?![a-z]
 _NEG_BEFORE_RE = re.compile(
     r"\b(?:not|never|cannot|can't|won't|doesn't|isn't|no longer)\s+$"
 )
+# The dependency LIST immediately following a phrase: "#10", "#10, #20 and #30",
+# "#10 & #20", optionally led by a colon. Anchored at the segment start and
+# stopping at the first token that is not a `#N` or a list separator — so it does
+# NOT swallow a following sentence ("Depends on #10. See #20" → only #10).
+_DEP_LIST_RE = re.compile(
+    r"\s*:?\s*(#\d+(?:\s*(?:,|and|&|or)\s*#\d+)*)", re.IGNORECASE
+)
 # Task-list checkbox referencing an issue, e.g. "- [ ] #101" / "* [x] #102".
 _TASK_LIST_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*#(\d+)\b")
 _HASH_NUM_RE = re.compile(r"#(\d+)\b")
@@ -77,8 +84,10 @@ def parse_depends_on(body: str) -> list[int]:
       * a dependency phrase ("depends on #N", "blocked by #N, #M", …) — the
         phrase is matched at word boundaries (so "unblocked by" does NOT count)
         and is skipped when immediately negated ("not blocked by", "no longer
-        depends on"); every ``#<num>`` in that phrase's segment is taken, so the
-        order of two phrases on one line does not drop deps; and
+        depends on"); only the immediate ``#N`` list right after the phrase
+        (comma/"and"/"&"-separated) is taken, stopping at a sentence boundary, so
+        a following sentence ("Depends on #10. See #20 for context") cannot
+        inject #20. Two phrases on one line each contribute their own list; and
       * a task-list checkbox line ("- [ ] #N") that references an issue — counted
         even when the same line also carries a dependency phrase.
     A bare ``#N`` in ordinary prose is NOT a dependency.
@@ -91,13 +100,12 @@ def parse_depends_on(body: str) -> list[int]:
         if m:
             deps.add(int(m.group(1)))
         low = line.lower()
-        phrases = list(_DEP_PHRASE_RE.finditer(low))
-        for i, ph in enumerate(phrases):
+        for ph in _DEP_PHRASE_RE.finditer(low):
             if _NEG_BEFORE_RE.search(low[: ph.start()]):
                 continue  # negated: a statement of non-dependency
-            end = phrases[i + 1].start() if i + 1 < len(phrases) else len(line)
-            segment = line[ph.end():end]
-            deps.update(int(n) for n in _HASH_NUM_RE.findall(segment))
+            lst = _DEP_LIST_RE.match(line[ph.end():])
+            if lst:
+                deps.update(int(n) for n in _HASH_NUM_RE.findall(lst.group(1)))
     return sorted(deps)
 
 
@@ -286,4 +294,36 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
         ):
             errors.append(f"issues[{idx}].depends_on must be a list of ints")
 
+    # Serial-active invariant: the driver runs one issue at a time, so at most one
+    # issue may be in_progress/pr_open. More than one is corrupt state that makes
+    # resumption ambiguous (which issue is "the" active one?).
+    active = [
+        i.get("number") for i in issues
+        if isinstance(i, dict) and i.get("status") in ("in_progress", "pr_open")
+    ]
+    if len(active) > 1:
+        errors.append(
+            f"at most one issue may be in_progress/pr_open (serial driver); "
+            f"found {len(active)}: {active}"
+        )
+
+    return len(errors) == 0, errors
+
+
+def validate_campaign_start(state: dict, headless: bool = False) -> tuple[bool, list[str]]:
+    """Validate a driver state is fit to *start* a campaign, else return errors.
+
+    Structural readability (``validate_driver_state``) plus the start-only rule
+    from #163 AC5: a **headless** campaign MUST be anchored to an ``epic`` issue,
+    because in headless mode the epic is the STATUS/QUESTION channel — a headless
+    run with no epic has no way to surface a blocker, so it must refuse to start
+    rather than silently degrade.
+    """
+    ok, errors = validate_driver_state(state)
+    errors = list(errors)
+    if headless and not _is_int(state.get("epic")):
+        errors.append(
+            "headless campaign requires an epic issue number "
+            "(the STATUS/QUESTION channel) — refusing to start"
+        )
     return len(errors) == 0, errors
