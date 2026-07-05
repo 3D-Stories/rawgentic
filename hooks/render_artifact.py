@@ -33,10 +33,17 @@ from datetime import datetime, timezone, timedelta
 
 
 def _mountain_now() -> str:
-    """Current wall-clock in mountain STANDARD time (UTC-7, matching the owner's
-    'MST' preference — a fixed offset, no DST ambiguity in the stamp)."""
-    now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=-7)))
-    return now.strftime("%Y-%m-%d %H:%M MST")
+    """Current wall-clock in Calgary/Alberta mountain time, with the CORRECT
+    seasonal label (MDT in summer, MST in winter) — owner is in Calgary, AB, so
+    use the real America/Edmonton zone rather than a fixed offset (a fixed UTC-7
+    would read an hour slow and mislabel 'MST' during daylight time)."""
+    try:
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("America/Edmonton"))
+        return now.strftime("%Y-%m-%d %H:%M %Z")
+    except Exception:
+        # Fallback if tzdata is unavailable: UTC, honestly labelled (never a wrong MST/MDT).
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 # --- inline markdown (escape-first: input here is ALREADY html.escape'd) ---
