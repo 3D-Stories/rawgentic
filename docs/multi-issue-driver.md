@@ -40,8 +40,12 @@ For each issue the campaign advances to:
    - **DEFER** → park with a typed reason and **continue** to the next issue (see
      *DEFER taxonomy*). A wall on one issue never stalls the whole backlog.
 
-Only one issue is `in_progress`/`pr_open` at a time (serial; parallel execution
-needs worktree isolation and is out of scope — #136/#85).
+Only one issue is `in_progress` at a time — one build at a time (serial; parallel
+execution needs worktree isolation and is out of scope — #136/#85). `pr_open`
+issues may **accumulate** awaiting human merge in a headless stacked-PR campaign
+(`deps_satisfied_by: pr_open`); a non-headless driver merges each PR before
+advancing, so at most one `pr_open` exists transiently. `validate_driver_state`
+enforces exactly this: at most one `in_progress`, unbounded `pr_open`.
 
 ### Policy
 
@@ -125,7 +129,7 @@ loop**:
 | `owner-reserved` | touches a surface the owner reserved | park, note the gate, next issue |
 | `cross-repo` | change spans another repo | park with the blocking dependency |
 | `budget` | campaign token/time budget exhausted | park remaining queued issues, stop cleanly |
-| `cross-issue-dependency` | an in-queue dependency was itself deferred/abandoned | park the dependent; independent issues keep going (#163) |
+| `cross-issue-dependency` | an in-queue dependency was itself deferred/abandoned | dependent stays `queued`, implicitly parked — the advance rule simply skips it; mark it `deferred` with this reason only if the dependency is `abandoned` or the campaign ends with it still blocked (#163) |
 
 ### Branch preservation on DEFER
 
@@ -143,6 +147,17 @@ The outcome is recorded deterministically in `branch_preservation` +
 
 `budget` deferrals of not-yet-started issues stay `queued` (no branch), not
 `deferred`.
+
+### The ledger
+
+The ledger **is the state file** — no separate document. It has two parts: the
+per-issue `deferred_reason` / `deferred_branch` / `branch_preservation` fields,
+and a top-level `notes[]` array of dated free-text strings for everything that
+isn't a per-issue field — DEFER surfacing ("2026-07-04: #162 deferred
+owner-decision — resume after data review"), rate-limit window-reset times, and
+mid-loop status changes discovered during reconciliation. A campaign with an
+epic anchor may mirror ledger highlights into an epic comment, but the state
+file remains the machine source of truth.
 
 ## Rollback-anchor protocol
 
@@ -186,8 +201,10 @@ When `order: dependency`, the queue is a DAG.
    counts as satisfied per the `deps_satisfied_by` policy knob:
    `merged` (default) → only `merged`; `pr_open` → `merged` or `pr_open`. A
    dependency that is `deferred`/`abandoned` is **not** satisfied, so its
-   dependents are parked (`cross-issue-dependency`) while independent issues keep
-   advancing. Dependencies outside the queue are external — the offline helper
+   dependents are implicitly parked — they stay `queued` and the advance rule
+   skips them (`cross-issue-dependency` is recorded only per the DEFER-table
+   rule) — while independent issues keep advancing. Dependencies outside the
+   queue are external — the offline helper
    cannot verify them, so it treats them as satisfied for ordering/readiness.
    `next_ready_issue` does **not** re-detect cycles — it returns `None` when
    nothing is ready — so the campaign-start `topo_sort_issues` call above is the
@@ -217,6 +234,11 @@ inline list:
   campaign with no epic is a hard error at start, not a silent degrade. Enforced
   by `validate_campaign_start(state, headless=True)`, which errors when `epic` is
   null/missing under headless.
+- **Never run `parse_depends_on` on the epic body itself.** The epic's task-list
+  children (`- [ ] #N`) use the same syntax a dependency checkbox does, so
+  dependency-parsing the epic would misread every child as a dependency. The
+  epic body is queue-*derivation* input only; dependencies come from each child
+  issue's own body.
 
 ## Rate limits
 
@@ -228,8 +250,11 @@ the queue records exactly where it stopped.
 ## Resumption
 
 The disk-persisted `<campaign>.json` is the resumption substrate. On resume:
-read it, find the single `in_progress`/`pr_open` issue (if any), and reconcile
-its recorded status against the real git/gh state. Precedence (observed remote
+**validate first** (`validate_driver_state` on every load, not only at campaign
+start — the file is hand-maintainable JSON, and the DAG helpers fail closed on
+mistyped fields such as string issue numbers in `depends_on`), then read it,
+find the `in_progress` issue and any `pr_open` issues, and reconcile their
+recorded status against the real git/gh state. Precedence (observed remote
 state wins over a stale queue value):
 
 | Real gh/git state | Reconciled driver action |

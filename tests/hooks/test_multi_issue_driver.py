@@ -112,3 +112,15 @@ def test_doc_references_committed_schema_and_state_location():
     assert "docs/driver-state/queue.schema.json" in text
     # live runtime state (disk-persisted, gitignored) — the honest "committed" note
     assert "claude_docs/.driver-state/" in text
+
+
+def test_doc_defines_the_ledger():
+    text = _doc()
+    assert "### The ledger" in text
+    assert "notes" in text
+    assert "state file" in text
+
+
+def test_doc_warns_against_parsing_epic_body():
+    text = _doc()
+    assert "Never run `parse_depends_on` on the epic body" in text

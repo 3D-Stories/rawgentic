@@ -57,16 +57,25 @@ _DEP_PHRASE_RE = re.compile(
 )
 # Immediate negation right before a phrase ("not blocked by", "no longer depends
 # on") — the phrase is then a statement of NON-dependency and is skipped. This
-# keeps ordinary issue-body prose from injecting a false dependency.
+# keeps ordinary issue-body prose from injecting a false dependency. An optional
+# "be"/"get" bridge is allowed so grammatical modal negations still match
+# ("cannot be blocked by", "won't be blocked by", "never be blocked by").
 _NEG_BEFORE_RE = re.compile(
-    r"\b(?:not|never|cannot|can't|won't|doesn't|isn't|no longer)\s+$", re.IGNORECASE
+    r"\b(?:not|never|cannot|can't|won't|doesn't|isn't|no longer)\s+"
+    r"(?:(?:be|get)\s+)?$",
+    re.IGNORECASE,
 )
 # The dependency LIST immediately following a phrase: "#10", "#10, #20 and #30",
-# "#10 & #20", optionally led by a colon. Anchored at the segment start and
-# stopping at the first token that is not a `#N` or a list separator — so it does
-# NOT swallow a following sentence ("Depends on #10. See #20" → only #10).
+# "#10 & #20", optionally led by a colon and by a noun ("issue"/"PR"/"epic",
+# optionally "the"). Anchored at the segment start and stopping at the first token
+# that is not a `#N`, a list separator, or such a noun — so it does NOT swallow a
+# following sentence ("Depends on #10. See #20" → only #10). The leading noun sits
+# OUTSIDE group 1 and inner nouns sit INSIDE it, but `_HASH_NUM_RE.findall` pulls
+# only the `#N` tokens either way, so every listed number is still captured.
 _DEP_LIST_RE = re.compile(
-    r"\s*:?\s*(#\d+(?:\s*(?:,|and|&|or)\s*#\d+)*)", re.IGNORECASE
+    r"\s*:?\s*(?:(?:the\s+)?(?:issues?|prs?|epics?)\s+)?"
+    r"(#\d+(?:\s*(?:,|and|&|or)\s*(?:(?:the\s+)?(?:issues?|prs?|epics?)\s+)?#\d+)*)",
+    re.IGNORECASE,
 )
 # Task-list checkbox referencing an issue, e.g. "- [ ] #101" / "* [x] #102".
 _TASK_LIST_RE = re.compile(r"^\s*[-*]\s*\[[ xX]\]\s*#(\d+)\b")
@@ -91,10 +100,13 @@ def parse_depends_on(body: str) -> list[int]:
       * a dependency phrase ("depends on #N", "blocked by #N, #M", …) — the
         phrase is matched at word boundaries (so "unblocked by" does NOT count)
         and is skipped when immediately negated ("not blocked by", "no longer
-        depends on"); only the immediate ``#N`` list right after the phrase
-        (comma/"and"/"&"-separated) is taken, stopping at a sentence boundary, so
-        a following sentence ("Depends on #10. See #20 for context") cannot
-        inject #20. Two phrases on one line each contribute their own list; and
+        depends on", and modal forms with a "be"/"get" bridge like "cannot be
+        blocked by"); only the immediate ``#N`` list right after the phrase
+        (comma/"and"/"&"-separated, each ``#N`` optionally led by an
+        "issue"/"PR"/"epic" noun, e.g. "depends on issue #10") is taken, stopping
+        at a sentence boundary, so a following sentence ("Depends on #10. See #20
+        for context") cannot inject #20. Two phrases on one line each contribute
+        their own list; and
       * a task-list checkbox line ("- [ ] #N") that references an issue — counted
         even when the same line also carries a dependency phrase.
     A bare ``#N`` in ordinary prose is NOT a dependency.
@@ -121,8 +133,23 @@ def _in_queue_deps(issue: dict, numset: set[int]) -> list[int]:
     Dependencies outside the queue are external — this pure helper cannot verify
     their state offline, so callers treat them as already satisfied for ordering
     and readiness (documented in ``docs/multi-issue-driver.md``).
+
+    Fail-closed on a malformed ``depends_on``: if it is present but not a list of
+    ints (``bool`` rejected), raise ``DriverStateError`` naming the issue. A
+    non-int entry (e.g. the string ``"148"``) would otherwise match nothing in
+    ``numset`` and silently impose no edge, dropping a real dependency. In-queue
+    ints impose an edge; ints not in the queue stay external/satisfied. Both
+    ``topo_sort_issues`` and ``next_ready_issue`` route through here, so both are
+    fail-closed on this.
     """
-    return [d for d in issue.get("depends_on", []) if d in numset]
+    deps = issue.get("depends_on")
+    if deps is None:
+        return []
+    if not isinstance(deps, list) or not all(_is_int(d) for d in deps):
+        raise DriverStateError(
+            f"issue #{issue.get('number')} depends_on must be a list of ints"
+        )
+    return [d for d in deps if d in numset]
 
 
 def _numbers(issues: list[dict]) -> list[int]:
@@ -300,17 +327,19 @@ def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
         ):
             errors.append(f"issues[{idx}].depends_on must be a list of ints")
 
-    # Serial-active invariant: the driver runs one issue at a time, so at most one
-    # issue may be in_progress/pr_open. More than one is corrupt state that makes
-    # resumption ambiguous (which issue is "the" active one?).
+    # Serial-active invariant: the driver builds one issue at a time, so at most
+    # one issue may be in_progress. pr_open is NOT counted — PRs may accumulate
+    # awaiting human merge (the headless stacked-PR flow, deps_satisfied_by=
+    # "pr_open"). More than one in_progress is corrupt state that makes resumption
+    # ambiguous (which issue is "the" active build?).
     active = [
         i.get("number") for i in issues
-        if isinstance(i, dict) and i.get("status") in ("in_progress", "pr_open")
+        if isinstance(i, dict) and i.get("status") == "in_progress"
     ]
     if len(active) > 1:
         errors.append(
-            f"at most one issue may be in_progress/pr_open (serial driver); "
-            f"found {len(active)}: {active}"
+            f"at most one issue may be in_progress (one build at a time; pr_open "
+            f"may accumulate awaiting merge); found {len(active)}: {active}"
         )
 
     return len(errors) == 0, errors
