@@ -113,7 +113,7 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
 
 <section id="roadmap">
   <h2>Roadmap — four independently shippable milestones</h2>
-  <p class="h2sub">All issues are <b>filed</b>: epics <b>M1 #167 · M2 #168 · M3 #169 · M4 #170</b> (label <code>epic:modernization</code>) track children via task lists. M1 COMPLETE — slots 1-4 merged. M2: slots 5-7 (PRs #177-#179) merged; slot 8 (#158 spine split) in flight. <span class="up">⬆ upgrade point</span> marks where refreshing the installed plugin unlocks the new capability.</p>
+  <p class="h2sub">All issues are <b>filed</b>: epics <b>M1 #167 · M2 #168 · M3 #169 · M4 #170</b> (label <code>epic:modernization</code>) track children via task lists. M1 COMPLETE — slots 1-4 merged. M2: slots 5-8 (PRs #177-#180) merged; slot 9 (#159 WF3 split) in flight — last M2 slot before 9.5. <span class="up">⬆ upgrade point</span> marks where refreshing the installed plugin unlocks the new capability.</p>
   <div class="note"><b>Dogfood program (approved 2026-07-04) — milestones ARE the execution phases.</b> rawgentic implements its own updates; the plugin is refreshed after each merge, so each issue's build runs on — and field-proves — the features shipped before it. Re-cut from the original capability grouping: #166 M4→M1 · #164 M3→M2 · #162+#161 M2→M3 (<b>v3.0.0 now ships in M3</b>). Full slot table, rationale + risks in the roadmap markdown.</div>
   <div class="rail">
     <div class="mstone"><h3>M1 · Instrument + guard <span class="chip c-conf">epic #167</span></h3><div class="v">slots 1–4 · v2.54–2.57 · instrument first: every later build is measured, guarded, and security-reviewed</div>
@@ -131,8 +131,8 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
         <tr><td><b>5 · #157</b> corpus helper (S) <span class="chip c-conf">slot 5 · PR #177 merged c857979 · v2.58.0 · DONE</span></td><td>drift guards assert over SKILL.md ∪ references/</td><td>No user-visible change — makes the restructure safe (suite can't go red from prose moves); no refresh needed</td></tr>
         <tr><td><b>6 · #164</b> agent definitions (M) <span class="chip c-conf">slot 6 · PR #178 merged 7b4e2a2 · v2.59.0 · DONE</span></td><td>bundled rawgentic-implementer/-reviewer with routed model+effort, worktree isolation (ext. #85)</td><td>Later dispatches on enforced routing + isolation; deletes the dispatch prose #158 would otherwise move <span class="up">⬆</span></td></tr>
         <tr><td><b>7 · #160</b> deprecation stubs + setup shrink (M–L) <span class="chip c-conf">slot 7 · PR #179 merged dd4180f · v2.60.0 · DONE</span></td><td>WF4/7/8/9/10/12 → redirect stubs; /rawgentic:scan keeps WF9's scanner; setup ≤400</td><td>44.8% smaller maintenance surface; <b>starts the stub-cycle clock early</b> so v3.0.0 isn't calendar-blocked · refresh promptly <span class="up">⬆</span></td></tr>
-        <tr><td><b>8 · #158</b> WF2 split (L) <span class="chip c-inf">slot 8 · #158 WF2 spine split · v2.61.0 · PR opening</span></td><td>≤450-line spine + references/, gates verbatim</td><td>~70% less context per WF2 invocation — every remaining build faster + cheaper; runs instrumented, guarded, agent-dispatched <span class="up">⬆</span></td></tr>
-        <tr><td><b>9 · #159</b> WF3 lane (M)</td><td>fix-bug over the shared spine; absorbs WF11</td><td>Same savings for bug fixes; one spine to maintain; incident checklist preserved <span class="up">⬆</span></td></tr>
+        <tr><td><b>8 · #158</b> WF2 split (L) <span class="chip c-conf">slot 8 · PR #180 merged beee16f · v2.61.0 · DONE</span></td><td>≤450-line spine + references/, gates verbatim</td><td>~70% less context per WF2 invocation — every remaining build faster + cheaper; runs instrumented, guarded, agent-dispatched <span class="up">⬆</span></td></tr>
+        <tr><td><b>9 · #159</b> WF3 lane (M) <span class="chip c-inf">slot 9 · #159 WF3 lane split · v2.62.0 · PR opening</span></td><td>fix-bug over the shared spine; absorbs WF11</td><td>Same savings for bug fixes; one spine to maintain; incident checklist preserved <span class="up">⬆</span></td></tr>
         <tr><td><b>9.5 · #174</b> design artifact lifecycle (S)</td><td>HTML design artifact created at issue creation (WF1), created/updated pre-PR in WF2/WF3, embeds run-record telemetry (absorbs #122)</td><td>Design docs &amp; dashboards stay current automatically — no manual redeploy step after each PR</td></tr>
       </table></div>
       <div class="metric">Milestone metric: load ≤450 lines; suite green; corpus −44%; stubs live; quality non-regressed over 5 runs · <b>Upgrade: after each merge</b></div></div>
@@ -352,6 +352,7 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
 </section>
 
 <footer>
+  <div><strong>Last updated: 2026-07-04 23:54 UTC</strong> · slot 9 (#159) in flight</div>
   Report-only review · rawgentic v2.53.0 @ 6b7d009 · Findings: docs/planning/2026-07-04-workflow-modernization-review.md · Roadmap: …-roadmap.md · Every claim tagged confirmed/inferred in the markdown; external sources live-fetched 2026-07-04.
 </footer>
 </div>

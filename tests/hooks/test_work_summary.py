@@ -756,7 +756,12 @@ class TestWorkSummarySkillWiring:
 
     @pytest.mark.parametrize("skill", ["implement-feature", "fix-bug"])
     def test_skill_invokes_work_summary_cli(self, skill):
-        content = (SKILLS_DIR / skill / "SKILL.md").read_text()
+        # #159: WF3's completion step (Step 14) detail moved to references/steps.md
+        # in the spine split, so this content pin reads the CORPUS (SKILL.md +
+        # references/) rather than SKILL.md alone. WF2's spine-location pin for the
+        # Step 16 stub lives in tests/test_wf2_clarity.py, unaffected by this.
+        from tests.corpus import skill_corpus
+        content = skill_corpus(skill)
         assert "work_summary.py summarize" in content, (
             f"{skill}/SKILL.md completion step must invoke "
             f"`work_summary.py summarize`; if you renamed it, update this guard."
