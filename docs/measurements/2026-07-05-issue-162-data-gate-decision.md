@@ -51,3 +51,38 @@ written, but the experiment it wanted was never actually runnable.
   **unchanged**. WF5 Codex diff-pass triggering is **unchanged** (AC3 holds trivially).
 - Issue #162 closed as *not planned*, with this record cited.
 - Drift guard: `tests/test_decision_records.py` pins this record and its load-bearing numbers.
+
+---
+
+## REOPENED at #196 (2026-07-05) — the reopen conditions are now met
+
+The two reopen conditions above are satisfied, so the AC4 comparison is now
+**computable** (it was not, when #162 was abandoned):
+
+1. **Candidate arm now generated (without trading away coverage).** The post-PR
+   code-review lane `.github/workflows/claude-code-review.yml` (#196) runs the
+   built-in `/code-review` through `anthropics/claude-code-action@v1` as an
+   **additional** reviewer alongside WF2's hand-rolled Step 11 panel — coverage
+   never drops, so Critical-miss risk stays bounded. Its findings are recorded as
+   `reviewer_kind: builtin_code_review` gate entries.
+2. **Token-telemetry gap closed.** #189 added the `usage` block (input/output
+   tokens + cost) to run-records, so yield-per-token is computable for both the
+   `builtin_code_review` and `hand_rolled_multi` arms.
+
+**Circularity resolved.** The original gate was circular (the campaign could only
+produce `builtin_code_review` data *after* switching Step 11 to it — the very
+change the gate blocked). #196 breaks the loop by running the built-in reviewer as
+a **parallel CI lane**, not a Step 11 replacement — so the candidate arm
+accumulates data with zero coverage risk and no switch required first.
+
+**Decision status: computable, pending data (honestly deferred).** The mechanism
+is in place; the AC4 rule itself was sound and is unchanged: *if built-in matches
+hand-rolled findings-yield at lower cost over ≥10 runs, delete the hand-rolled
+path; otherwise keep it.* The ≥10-run sample requires the **owner-gated** live
+Action (the `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` repo secret, #195) —
+until those runs accumulate, no switch is made and the hand-rolled Step 11 panel
+remains the incumbent. This is a deferral of the *decision*, not of the
+*mechanism*: the experiment #162 wanted is now actually runnable.
+
+**Capture (AC2).** Recording an Action review as a run-record gate entry with
+token/cost is documented at `docs/run-records.md#builtin-code-review-capture`.

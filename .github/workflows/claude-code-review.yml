@@ -1,0 +1,85 @@
+# Post-PR code-review lane (#196, reopens #162) — runs the built-in `/code-review`
+# through anthropics/claude-code-action@v1 (OAuth-capable). This is the CANDIDATE
+# `builtin_code_review` arm the #162 data gate needed: it runs as an ADDITIONAL
+# reviewer alongside WF2's hand-rolled Step 11 panel (coverage never drops), so
+# the AC4 A/B (built-in vs hand-rolled findings-yield-per-token over ≥10 runs)
+# becomes computable. WF5's Codex cross-model diff pass is unchanged (AC4).
+#
+# DRAFT-GATED (AC1): skips draft PRs (`if: !github.event.pull_request.draft`) —
+# review the code when it's proposed for merge, not every WIP push.
+#
+# AUTH — OAuth-first (same resolver as claude-security-review.yml, #195):
+#   CLAUDE_CODE_OAUTH_TOKEN → ANTHROPIC_API_KEY → VISIBLE SKIP (executed=false).
+# Secrets by NAME only. Non-blocking (advisory). SHA-pinned action (v1 as of
+# 2026-07-05). id-token: write for the action's default App-token OIDC path.
+#
+# Telemetry (AC2): the Action reports token usage per run; record its review as a
+# run-record gate entry `reviewer_kind: builtin_code_review` WITH the usage block
+# (input/output tokens, cost) so yield-per-token is comparable to the
+# `hand_rolled_multi` arm — see docs/run-records.md#builtin-code-review-capture.
+name: Claude Code Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  contents: read
+  id-token: write
+
+jobs:
+  code-review:
+    # AC1: draft-gated — only review PRs proposed for merge.
+    if: ${{ github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Resolve auth (OAuth-first, then API key, else visible skip)
+        id: auth
+        env:
+          OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          APIKEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "$OAUTH" ]; then
+            echo "mode=oauth" >> "$GITHUB_OUTPUT"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$APIKEY" ]; then
+            echo "mode=apikey" >> "$GITHUB_OUTPUT"
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — code review SKIPPED, not a clean signal"
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "## Claude code review: executed=false (no auth secret — does NOT count toward the #162 A/B sample)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Checkout
+        if: steps.auth.outputs.present == 'true'
+        uses: actions/checkout@v4
+
+      - name: Code review (subscription OAuth)
+        id: review_oauth
+        if: steps.auth.outputs.present == 'true' && steps.auth.outputs.mode == 'oauth'
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: "/code-review"
+
+      - name: Code review (API key)
+        id: review_apikey
+        if: steps.auth.outputs.present == 'true' && steps.auth.outputs.mode == 'apikey'
+        uses: anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: "/code-review"
+
+      - name: Record execution status (#162 A/B sample — gated on the review SUCCEEDING)
+        if: always() && steps.auth.outputs.present == 'true'
+        run: |
+          if [ "${{ steps.review_oauth.outcome }}" = "success" ] || \
+             [ "${{ steps.review_apikey.outcome }}" = "success" ]; then
+            echo "## Claude code review: executed=true (auth=${{ steps.auth.outputs.mode }}) — reviewer_kind=builtin_code_review" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::code review step did not succeed — not a clean signal"
+            echo "## Claude code review: executed=false (review step did not succeed — does NOT count toward the #162 A/B sample)" >> "$GITHUB_STEP_SUMMARY"
+          fi
