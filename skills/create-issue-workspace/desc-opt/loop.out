@@ -1,0 +1,120 @@
+Split: 12 train, 8 test (holdout=0.4)
+
+============================================================
+Iteration 1/5
+Description: Create a well-formed GitHub issue (feature request or bug report) for a rawgentic project — targets the repo from the project config, checks for duplicates, conforms to the issue template, and grounds every claim in the real codebase. Invoke with /create-issue followed by a description of the desired feature or observed bug.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (166.2s)
+  [FAIL] rate=0/3 expected=True: create-issue for adding rate limiting to the public API endp
+  [FAIL] rate=0/3 expected=True: i keep hitting this: the deploy action doesn't fail when the
+  [FAIL] rate=0/3 expected=True: log an issue for the OAuth callback 500ing when the state co
+  [FAIL] rate=0/3 expected=True: write up a feature request for letting admins bulk-reassign 
+  [FAIL] rate=0/3 expected=True: file a bug report — the price-zone scraper on grocusave sile
+  [FAIL] rate=0/3 expected=True: can you open a github issue for adding CSV export to the gro
+  [PASS] rate=0/3 expected=False: go ahead and fix the bug where the throttler drops connectio
+  [PASS] rate=0/3 expected=False: which github issues are assigned to me across all the repos?
+  [PASS] rate=0/3 expected=False: set up a new rawgentic project for the windrose game
+  [PASS] rate=0/3 expected=False: implement issue #137 — the websocket support feature
+  [PASS] rate=0/3 expected=False: add a bug_report.md issue template to the .github folder
+  [PASS] rate=0/3 expected=False: review this PR and tell me whether it actually closes issue 
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: the pdf export hangs on docs over 50 pages. i want to report
+  [FAIL] rate=0/3 expected=True: we should track this properly: the websocket reconnect logic
+  [FAIL] rate=0/3 expected=True: I need an issue created for supporting dark mode in the chor
+  [FAIL] rate=0/3 expected=True: can you draft and file a github issue requesting a /healthz 
+  [PASS] rate=0/3 expected=False: leave a comment on github issue #88 summarizing the root cau
+  [PASS] rate=0/3 expected=False: list all open issues on grocusave labeled 'enhancement'
+  [PASS] rate=0/3 expected=False: write a PRD for the new family-sharing feature in chorestory
+  [PASS] rate=0/3 expected=False: create the next story for the sprint from the epic
+
+Improving description...
+Proposed (39.6s): Use when the user wants to file, open, log, raise, or write up a NEW GitHub issue — a feature request, enhancement ask, or bug report — for a rawgentic project, however they phrase it ("open an issue for…", "log a bug…", "file a feature request…", "track this on github", "users keep asking for X"). Trigger whenever the goal is to capture a desired feature or an observed/reproducible bug as a tracked GitHub issue, even when "rawgentic" isn't named. The skill picks the right repo from project config, checks for duplicates, follows the issue template, and verifies referenced code exists. Do NOT use for: implementing, fixing, or coding the change itself; querying, listing, or reading existing issues; reviewing PRs against an issue; or editing issue-template files. Invoke via /create-issue with a description of the feature or bug.
+
+============================================================
+Iteration 2/5
+Description: Use when the user wants to file, open, log, raise, or write up a NEW GitHub issue — a feature request, enhancement ask, or bug report — for a rawgentic project, however they phrase it ("open an issue for…", "log a bug…", "file a feature request…", "track this on github", "users keep asking for X"). Trigger whenever the goal is to capture a desired feature or an observed/reproducible bug as a tracked GitHub issue, even when "rawgentic" isn't named. The skill picks the right repo from project config, checks for duplicates, follows the issue template, and verifies referenced code exists. Do NOT use for: implementing, fixing, or coding the change itself; querying, listing, or reading existing issues; reviewing PRs against an issue; or editing issue-template files. Invoke via /create-issue with a description of the feature or bug.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (162.2s)
+  [FAIL] rate=0/3 expected=True: write up a feature request for letting admins bulk-reassign 
+  [FAIL] rate=0/3 expected=True: create-issue for adding rate limiting to the public API endp
+  [FAIL] rate=0/3 expected=True: log an issue for the OAuth callback 500ing when the state co
+  [FAIL] rate=0/3 expected=True: i keep hitting this: the deploy action doesn't fail when the
+  [FAIL] rate=0/3 expected=True: can you open a github issue for adding CSV export to the gro
+  [FAIL] rate=0/3 expected=True: file a bug report — the price-zone scraper on grocusave sile
+  [PASS] rate=0/3 expected=False: go ahead and fix the bug where the throttler drops connectio
+  [PASS] rate=0/3 expected=False: which github issues are assigned to me across all the repos?
+  [PASS] rate=0/3 expected=False: set up a new rawgentic project for the windrose game
+  [PASS] rate=0/3 expected=False: implement issue #137 — the websocket support feature
+  [PASS] rate=0/3 expected=False: add a bug_report.md issue template to the .github folder
+  [PASS] rate=0/3 expected=False: review this PR and tell me whether it actually closes issue 
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: the pdf export hangs on docs over 50 pages. i want to report
+  [FAIL] rate=0/3 expected=True: we should track this properly: the websocket reconnect logic
+  [FAIL] rate=0/3 expected=True: I need an issue created for supporting dark mode in the chor
+  [FAIL] rate=0/3 expected=True: can you draft and file a github issue requesting a /healthz 
+  [PASS] rate=0/3 expected=False: leave a comment on github issue #88 summarizing the root cau
+  [PASS] rate=0/3 expected=False: create the next story for the sprint from the epic
+  [PASS] rate=0/3 expected=False: list all open issues on grocusave labeled 'enhancement'
+  [PASS] rate=0/3 expected=False: write a PRD for the new family-sharing feature in chorestory
+
+Improving description...
+Proposed (45.8s): Use to write up and file a NEW GitHub issue from a raw request — turning a desired feature or an observed/reproducible bug into a tracked, well-formed feature request or bug report. Trigger whenever the goal is to open, log, raise, file, draft, or "put on github" an issue, however phrased ("open an issue for…", "log a bug…", "file a feature request", "track this", "users keep asking for X"). Fire on that intent no matter which app, dashboard, service, or repo is named — and even when none is named at all; do not require the word "rawgentic." Do NOT trigger to implement/fix/code the change itself, to list/search/read existing issues, to review a PR against an issue, or to edit issue-template files. Invoke via /create-issue describing the feature or bug.
+
+============================================================
+Iteration 3/5
+Description: Use to write up and file a NEW GitHub issue from a raw request — turning a desired feature or an observed/reproducible bug into a tracked, well-formed feature request or bug report. Trigger whenever the goal is to open, log, raise, file, draft, or "put on github" an issue, however phrased ("open an issue for…", "log a bug…", "file a feature request", "track this", "users keep asking for X"). Fire on that intent no matter which app, dashboard, service, or repo is named — and even when none is named at all; do not require the word "rawgentic." Do NOT trigger to implement/fix/code the change itself, to list/search/read existing issues, to review a PR against an issue, or to edit issue-template files. Invoke via /create-issue describing the feature or bug.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (155.5s)
+  [FAIL] rate=0/3 expected=True: create-issue for adding rate limiting to the public API endp
+  [FAIL] rate=0/3 expected=True: log an issue for the OAuth callback 500ing when the state co
+  [FAIL] rate=0/3 expected=True: write up a feature request for letting admins bulk-reassign 
+  [FAIL] rate=0/3 expected=True: i keep hitting this: the deploy action doesn't fail when the
+  [FAIL] rate=0/3 expected=True: can you open a github issue for adding CSV export to the gro
+  [PASS] rate=0/3 expected=False: go ahead and fix the bug where the throttler drops connectio
+  [FAIL] rate=0/3 expected=True: file a bug report — the price-zone scraper on grocusave sile
+  [PASS] rate=0/3 expected=False: which github issues are assigned to me across all the repos?
+  [PASS] rate=0/3 expected=False: set up a new rawgentic project for the windrose game
+  [PASS] rate=0/3 expected=False: implement issue #137 — the websocket support feature
+  [PASS] rate=0/3 expected=False: add a bug_report.md issue template to the .github folder
+  [PASS] rate=0/3 expected=False: review this PR and tell me whether it actually closes issue 
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: the pdf export hangs on docs over 50 pages. i want to report
+  [FAIL] rate=0/3 expected=True: we should track this properly: the websocket reconnect logic
+  [FAIL] rate=0/3 expected=True: I need an issue created for supporting dark mode in the chor
+  [FAIL] rate=0/3 expected=True: can you draft and file a github issue requesting a /healthz 
+  [PASS] rate=0/3 expected=False: leave a comment on github issue #88 summarizing the root cau
+  [PASS] rate=0/3 expected=False: list all open issues on grocusave labeled 'enhancement'
+  [PASS] rate=0/3 expected=False: create the next story for the sprint from the epic
+  [PASS] rate=0/3 expected=False: write a PRD for the new family-sharing feature in chorestory
+
+Improving description...
+Proposed (56.1s): Open and file a brand-new GitHub issue. Trigger this whenever the user wants to capture a feature idea, an enhancement, or a bug as a tracked issue — phrasings like "open/log/raise/file an issue", "write up a bug report", "file a feature request", "put it on github", "open a tracked issue for…", "track this", or "users keep asking for X". Works for any codebase, app, service, dashboard, or repo — whether or not one is named, and without needing the word "rawgentic". It drafts a clean, template-conformant issue and creates it on the correct repo. Do NOT use it to actually implement, fix, or code the change; to list, search, or read existing issues; to review a PR against an issue; or to edit issue-template files.
+
+============================================================
+Iteration 4/5
+Description: Open and file a brand-new GitHub issue. Trigger this whenever the user wants to capture a feature idea, an enhancement, or a bug as a tracked issue — phrasings like "open/log/raise/file an issue", "write up a bug report", "file a feature request", "put it on github", "open a tracked issue for…", "track this", or "users keep asking for X". Works for any codebase, app, service, dashboard, or repo — whether or not one is named, and without needing the word "rawgentic". It drafts a clean, template-conformant issue and creates it on the correct repo. Do NOT use it to actually implement, fix, or code the change; to list, search, or read existing issues; to review a PR against an issue; or to edit issue-template files.
+============================================================
+Train: 18/36 correct, precision=100% recall=0% accuracy=50% (157.4s)
+  [FAIL] rate=0/3 expected=True: i keep hitting this: the deploy action doesn't fail when the
+  [FAIL] rate=0/3 expected=True: create-issue for adding rate limiting to the public API endp
+  [FAIL] rate=0/3 expected=True: log an issue for the OAuth callback 500ing when the state co
+  [FAIL] rate=0/3 expected=True: write up a feature request for letting admins bulk-reassign 
+  [FAIL] rate=0/3 expected=True: file a bug report — the price-zone scraper on grocusave sile
+  [FAIL] rate=0/3 expected=True: can you open a github issue for adding CSV export to the gro
+  [PASS] rate=0/3 expected=False: go ahead and fix the bug where the throttler drops connectio
+  [PASS] rate=0/3 expected=False: which github issues are assigned to me across all the repos?
+  [PASS] rate=0/3 expected=False: set up a new rawgentic project for the windrose game
+  [PASS] rate=0/3 expected=False: implement issue #137 — the websocket support feature
+  [PASS] rate=0/3 expected=False: add a bug_report.md issue template to the .github folder
+  [PASS] rate=0/3 expected=False: review this PR and tell me whether it actually closes issue 
+Test : 12/24 correct, precision=100% recall=0% accuracy=50% (0.0s)
+  [FAIL] rate=0/3 expected=True: the pdf export hangs on docs over 50 pages. i want to report
+  [FAIL] rate=0/3 expected=True: we should track this properly: the websocket reconnect logic
+  [FAIL] rate=0/3 expected=True: I need an issue created for supporting dark mode in the chor
+  [FAIL] rate=0/3 expected=True: can you draft and file a github issue requesting a /healthz 
+  [PASS] rate=0/3 expected=False: leave a comment on github issue #88 summarizing the root cau
+  [PASS] rate=0/3 expected=False: create the next story for the sprint from the epic
+  [PASS] rate=0/3 expected=False: list all open issues on grocusave labeled 'enhancement'
+  [PASS] rate=0/3 expected=False: write a PRD for the new family-sharing feature in chorestory
+
+Improving description...

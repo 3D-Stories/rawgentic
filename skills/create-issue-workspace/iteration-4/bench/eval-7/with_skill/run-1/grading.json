@@ -1,0 +1,25 @@
+{
+  "expectations": [
+    {
+      "text": "Run executed against mock gh (calls recorded)",
+      "passed": true,
+      "evidence": "11 gh call(s) logged"
+    },
+    {
+      "text": "Recognized the request is too broad for a single issue (suggested splitting / scoping down)",
+      "passed": true,
+      "evidence": "transcript proposes splitting or narrowing"
+    },
+    {
+      "text": "Issue defines explicit out-of-scope / deferred boundaries",
+      "passed": true,
+      "evidence": "explicit scope boundary in body = True"
+    }
+  ],
+  "summary": {
+    "passed": 3,
+    "failed": 0,
+    "total": 3,
+    "pass_rate": 1.0
+  }
+}

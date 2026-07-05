@@ -319,9 +319,9 @@ artifact text to OpenAI, so it is never force-enabled). Shape:
   already runs a full same-model 3-judge critique at Step 3, so the cross-model pass is
   additive/redundant. WF1 has no `plan_lib` loop-back; findings flow through the Step 4
   circuit breaker only.
-- **WF4** (`refactor`): runs at Step 4 over the refactoring design, **only on the
-  Extract/Restructure full-critique path** (Rename/Simplify skips it). Loop-back uses
-  WF4's own textual `LOOPBACK_BUDGET`, not `plan_lib`.
+- **WF4** (`refactor`): removed at v3.0.0 (#161). A `refactor` entry left in
+  `workflows` is inert (unknown names never match a running skill) — see
+  `docs/upgrade-3.0.md`.
 
 > **Diff-stage cross-model review (Step 11, #131):** opting `implement-feature` into
 > `workflows` now enables the cross-model pass at **Steps 4, 6, AND 11** — Step 11 is

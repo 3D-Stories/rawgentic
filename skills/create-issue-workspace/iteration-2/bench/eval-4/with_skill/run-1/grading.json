@@ -1,0 +1,45 @@
+{
+  "expectations": [
+    {
+      "text": "Run executed against mock gh (calls recorded)",
+      "passed": true,
+      "evidence": "5 gh call(s) logged"
+    },
+    {
+      "text": "Issue was actually created via gh (not simulated)",
+      "passed": true,
+      "evidence": "created-issue.json present"
+    },
+    {
+      "text": "Conventional title fix(scope): ...",
+      "passed": true,
+      "evidence": "title = 'fix(server): keep idle WebSocket connections alive past 30s'"
+    },
+    {
+      "text": "Labeled 'bug'",
+      "passed": true,
+      "evidence": "labels = ['bug', 'server']"
+    },
+    {
+      "text": "Steps to reproduce present",
+      "passed": true,
+      "evidence": "'reproduc' in body = True"
+    },
+    {
+      "text": "Expected AND actual behavior documented",
+      "passed": true,
+      "evidence": "expected=True actual=True"
+    },
+    {
+      "text": "Environment details present",
+      "passed": true,
+      "evidence": "'environment' in body = True"
+    }
+  ],
+  "summary": {
+    "passed": 7,
+    "failed": 0,
+    "total": 7,
+    "pass_rate": 1.0
+  }
+}

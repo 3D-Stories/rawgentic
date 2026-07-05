@@ -1,0 +1,30 @@
+{
+  "expectations": [
+    {
+      "text": "Run executed against mock gh (calls recorded)",
+      "passed": true,
+      "evidence": "5 gh call(s) logged"
+    },
+    {
+      "text": "Deduplication search ran",
+      "passed": true,
+      "evidence": "issue-list-with-search logged = True"
+    },
+    {
+      "text": "Existing matching issue (#42) surfaced to the user",
+      "passed": true,
+      "evidence": "'#42'/'42' in transcript = True"
+    },
+    {
+      "text": "Did not blindly create a duplicate",
+      "passed": true,
+      "evidence": "no new issue created (acknowledged existing) -- acceptable"
+    }
+  ],
+  "summary": {
+    "passed": 4,
+    "failed": 0,
+    "total": 4,
+    "pass_rate": 1.0
+  }
+}

@@ -1,7 +1,7 @@
 # Security Scan (`hooks/security_scan.py`)
 
 The shared, tool-based security scanner used by **WF2 Step 11.5** (pre-PR gate)
-and **WF9** (`/rawgentic:security-audit`). One tested lib so the actual scanning —
+and, until its removal at v3.0.0 (#161), WF9 security-audit. One tested lib so the actual scanning —
 running real tools and turning their output into a gate decision — lives in a
 single fail-closed place instead of being re-derived in each workflow's prose.
 

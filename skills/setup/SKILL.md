@@ -134,7 +134,7 @@ and fix-bug (WF3), with create-issue (WF1) offered as an opt-in add. Stores the
 
 This step runs on **every** setup invocation (including Sub-flow A re-runs).
 
-WF2 Step 11.5 (pre-PR gate) and WF9 (`/rawgentic:security-audit`) both run
+WF2 Step 11.5 (pre-PR gate) and the `/rawgentic:scan` utility both run
 `hooks/security_scan.py`, which shells out to real scanners (gitleaks, semgrep,
 osv-scanner, and — for Docker projects — trivy). The scanner degrades gracefully
 (a tool that isn't installed is a *visible skip*, never a silent "clean"), but a

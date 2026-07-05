@@ -38,17 +38,17 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "2.67.0"
+    assert plugin["version"] == "3.0.0"
 
 
 def test_descriptions_consistent_count():
-    """plugin.json + marketplace.json descriptions both reflect the #160 split:
-    6 active SDLC workflows + 6 deprecated stubs (removal at v3.0.0)."""
+    """plugin.json + marketplace.json descriptions reflect v3.0.0 (#161):
+    6 active SDLC workflows, stubs removed."""
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     for desc in (plugin["description"], mp["plugins"][0]["description"]):
         assert "6 SDLC workflow skills" in desc
-        assert "6 deprecated stubs" in desc
+        assert "deprecated stub" not in desc.lower()   # stubs removed at v3.0.0 (#161)
         assert "12 SDLC workflow skills" not in desc
 
 
@@ -56,9 +56,9 @@ def test_readme_count_strings_updated():
     readme = (REPO_ROOT / "README.md").read_text()
     assert "6 SDLC workflow skills" in readme
     assert "12 SDLC workflow skills" not in readme
-    assert "provides 19 skills" in readme
+    assert "provides 13 skills" in readme
     assert "All 7 config-driven skills" in readme
-    assert "15/19 skills have evals.json" in readme
+    assert "9/13 skills have evals.json" in readme
 
 
 def test_marketplace_skill_dirs_all_exist():
@@ -197,15 +197,11 @@ def test_wf1_uses_no_plan_lib_loopback():
     assert "consume_loopback(" not in step4
 
 
-def test_wf4_is_a_deprecation_stub():
-    """WF4 deprecated to a stub (#160): its Step 4 adversarial integration is
-    gone WITH the workflow — the stub carries no gates. Redirect + telemetry
-    are pinned in tests/test_deprecation_stubs.py; this asserts the old
-    integration didn't half-survive."""
-    text = skill_corpus("refactor")
-    assert "DEPRECATED" in text
-    assert "## Step 4:" not in text
-    assert "consume_loopback(" not in text
+def test_wf4_is_removed():
+    """WF4 removed at v3.0.0 (#161): the skill dir is gone entirely — its old
+    Step 4 adversarial integration cannot half-survive a resurrection either
+    (tests/test_v3_removals.py pins the removal)."""
+    assert not (REPO_ROOT / "skills" / "refactor").exists()
 
 
 def test_setup_offers_surviving_workflows():
