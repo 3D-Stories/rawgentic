@@ -40,16 +40,18 @@ WF2 is actively evolving. When a merged PR changes the WF2 spine:
 2. Add the new version key to `revs` (newest **first** — `revs[0]` is the default view)
    and a matching entry under `versions`.
 3. The new entry holds the **full** steps array; the now-previous version keeps its
-   snapshot. For small deltas, the `3.1.0` pattern shows the compact alternative: a
-   `steps:null` + `overrides:{<station id>: {sum, purpose, sub, facts, lane}}` entry
-   built from the newest steps at load time (overrides replace whole fields; `rev`
-   markers are stripped on old sheets).
+   snapshot. For small deltas use the compact form: `steps:null` +
+   `overrides:{<station id>: {sum, purpose, sub, facts, lane}}` — the loader builds
+   ANY `steps:null` entry from that workflow's newest rev (`revs[0]`) automatically
+   (overrides replace whole fields; `rev` markers are stripped on old sheets). The
+   "Revision Delta · since <prior>" panel title and the default landing rev are both
+   derived from the `revs` order — no code edits needed.
 4. Mark each changed station in the NEW version with
    `rev:{delta:"…", refs:["#NNN"]}` — that renders the red revision triangle and the
    "Revision Delta" panel.
 5. Set the old version's `superseded:"<new>"` so it renders the SUPERSEDED stamp.
-6. Update the provenance footer string (`@ plugin X.Y.Z`) and regenerate the README
-   snapshots (below). Run `pytest tests/test_workflow_diagram.py`.
+6. Manual updates that remain: the provenance footer string (`@ plugin X.Y.Z`) and the
+   README snapshots (below). Run `pytest tests/test_workflow_diagram.py`.
 
 Skeletal workflows follow the same shape with `skeletal:true` and phase-level steps.
 

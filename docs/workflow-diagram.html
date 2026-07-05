@@ -434,16 +434,23 @@ const DATA = {
   }
 };
 
-/* build 3.1.0 from 3.10.0 + overrides; the old sheet renders no rev triangles */
+/* Build override-based version sheets generically: any versions entry with
+   steps:null is derived from that workflow's newest rev (revs[0]) + its
+   overrides map; rev markers are stripped so old sheets render no triangles. */
 (function(){
-  const wf2 = DATA.workflows.wf2;
-  const cur = wf2.versions["3.10.0"].steps;
-  const old = wf2.versions["3.1.0"];
-  old.steps = cur.map(function(s){
-    const o = old.overrides[s.id];
-    const c = Object.assign({}, s, o || {});
-    c.rev = null;
-    return c;
+  Object.keys(DATA.workflows).forEach(function(k){
+    const w = DATA.workflows[k];
+    w.revs.forEach(function(ver){
+      const v = w.versions[ver];
+      if (!v || v.steps !== null) return;
+      const cur = w.versions[w.revs[0]].steps;
+      v.steps = cur.map(function(s){
+        const o = (v.overrides || {})[s.id];
+        const c = Object.assign({}, s, o || {});
+        c.rev = null;
+        return c;
+      });
+    });
   });
 })();
 
@@ -491,8 +498,8 @@ function nodeBadges(s){
   if(s.lane && s.lane!=='unchanged') out.push(badge('lane','lane: '+s.lane));
   return out;
 }
-function revTri(s, ver){
-  if(ver==='3.1.0' || !s.rev) return null;
+function revTri(s){
+  if(!s.rev) return null;
   return h('span',{class:'tri-w',title:s.rev.delta}, h('span',{class:'tri'}), s.rev.refs.join(' '));
 }
 
@@ -516,7 +523,7 @@ function renderOverview(r){
         style:'--i:'+i, 'data-sid':s.id, href:href(r.wf,r.ver,s.id)},
       h('span',{class:'num'},s.num),
       h('span',{class:'body'},
-        h('span',{class:'name'}, s.kind==='gate'?h('span',{class:'gatemark'}):null, s.name, revTri(s,r.ver)),
+        h('span',{class:'name'}, s.kind==='gate'?h('span',{class:'gatemark'}):null, s.name, revTri(s)),
         h('span',{class:'sum'},s.sum),
         h('span',{class:'badges'},nodeBadges(s)))));
   });
@@ -573,8 +580,9 @@ function renderDetail(r){
   } else if(s.pending){
     left.push(h('div',{class:'pending mt16'},'DETAIL SHEET PENDING — phase-level entry from the pinned skill; the full per-station sheet arrives in a later revision.'));
   }
-  if(s.rev && r.ver!=='3.1.0'){
-    left.push(h('div',{class:'mt16'},panel('Revision Delta · since 3.1.0','revd',[
+  if(s.rev){
+    const prior = w.revs[w.revs.indexOf(r.ver)+1];
+    left.push(h('div',{class:'mt16'},panel(prior ? 'Revision Delta · since '+prior : 'Revision Delta','revd',[
       h('p',null,s.rev.delta),
       h('p',{style:'font-family:var(--mono);font-size:11px'},s.rev.refs.join(' · '))])));
   }
@@ -589,7 +597,7 @@ function renderDetail(r){
     right.push(h('div',{class:right.length?'mt16':''},panel('Small-Standard Lane',null,
       h('p',null, s.lane==='unchanged' ? 'Unchanged — runs exactly as on the full spine.' : s.lane))));
   }
-  const tri = revTri(s,r.ver);
+  const tri = revTri(s);
   const sheet = h('section',{class:'sheet','aria-label':'Station detail'},
     h('div',{class:'crumb'},
       h('a',{href:href(r.wf,r.ver)}, w.code+' · REV '+r.ver), h('span',null,'/'),
@@ -644,6 +652,6 @@ themer.addEventListener('click', function(){
   themer.textContent = m.toUpperCase()+' ◐';
 });
 
-if(!location.hash) location.replace(href('wf2','3.10.0',null));
+if(!location.hash) location.replace(href('wf2', DATA.workflows.wf2.revs[0], null));
 render();
 </script>
