@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-04 19:27 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-04 20:56 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -52,7 +52,39 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
 <p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
 <p>---</p>
-<h2>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0</h2>
+<h2>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2</h2>
+<p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
+<p>pass) was <strong>data-gated</strong> by its own header (&quot;no A/B evidence, no switch&quot;) and</p>
+<p>AC4 (&quot;matched hand-rolled yield over ≥10 runs at lower cost … otherwise abandon</p>
+<p>this issue with the data cited&quot;).</p>
+<p><strong>The data (23 run-records as of 2026-07-04).</strong> The candidate arm</p>
+<p>(<code>builtin_code_review</code>) has <strong>0 gate-instances</strong> — it never ran (≥10 required).</p>
+<p>Token/cost telemetry (<code>usage.input_tokens</code>/<code>output_tokens</code>/<code>cost_estimate_usd</code>)</p>
+<p>is <strong>null in all 23 records</strong>, so the success metric (findings-yield per token)</p>
+<p>is incomputable for *any* arm. Incumbent arms: hand_rolled_multi 41 findings/11</p>
+<p>gates · codex 16/4 · inline 19/13.</p>
+<p><strong>Decision.</strong> Abandon per AC4&#x27;s explicit branch — a **deferral pending</p>
+<p>telemetry, not a rejection** of built-in <code>/code-review</code> (Codex peer-consult</p>
+<p>concurred). The roadmap&#x27;s &quot;the program is its own A/B&quot; assumption was circular:</p>
+<p>campaign runs could only generate candidate-arm data *after* the switch this</p>
+<p>gate blocks. Reopen conditions: pilot built-in <code>/code-review</code> as an *additional*</p>
+<p>Step 11 reviewer for ≥10 runs + backfill token telemetry. Full record:</p>
+<p><code>docs/measurements/2026-07-05-issue-162-data-gate-decision.md</code> (drift-guarded</p>
+<p>by <code>tests/test_decision_records.py</code>, which recomputes the evidence basis from</p>
+<p><code>run_records.jsonl</code> records[:23]).</p>
+<p><strong>What shipped.</strong> Decision record + 3 drift-guard tests (one recomputes the</p>
+<p>evidence from the store) · README/roadmap/dashboard annotations · v2.64.2.</p>
+<p><strong>Owner directives (mid-slot).</strong> #184 (version-aware setup prompt) inserted</p>
+<p>into the campaign as <strong>slot 12, before #161</strong> — slots renumbered 12=#184,</p>
+<p>13=#161, 14=#165; run doc, dashboard, roadmap updated.</p>
+<p><strong>Reviews.</strong> Step 11: opus reviewer (2 Low: citation + count fix, both applied)</p>
+<p>+ Codex adversarial diff pass (2 Medium: drift-guard vacuity — test now parses</p>
+<p>the store; applied). Security scan clean (iac/sca visible skips).</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry embedded below. Issue closed as *not planned*, data</p>
+<p>cited.</p>
+<p>---</p>
+<h2>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)*</h2>
 <p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
 <p>state schema, from design #134) and #163 (dependency-DAG + epic anchor,</p>
 <p>schema v2) — implemented together in one PR (#163 extends #148&#x27;s queue).</p>
@@ -98,9 +130,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#148 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>56 added · 1856/1856 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: pending</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>6</td><td>6</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#162 (feature, simple)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>3 added · 1866/1866 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: pending</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-04 19:27 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-04 20:56 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
