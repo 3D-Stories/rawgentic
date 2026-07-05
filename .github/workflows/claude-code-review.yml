@@ -21,6 +21,11 @@ name: Claude Code Review
 
 on:
   pull_request:
+    # `ready_for_review` is REQUIRED alongside the `draft == false` job gate: the
+    # default types (opened/synchronize/reopened) do NOT include it, so without it
+    # a PR marked "Ready for review" with no subsequent push would never get a
+    # builtin review (WF2 drafts + un-drafts PRs on the suspend/resume path).
+    types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
 
 permissions:

@@ -23,6 +23,14 @@ def test_draft_gated():
     assert "github.event.pull_request.draft == false" in _text()
 
 
+def test_ready_for_review_is_a_trigger_type():
+    """Step-11 F1: the `draft == false` job gate needs `ready_for_review` in the
+    trigger types, else the draft→ready transition never fires the lane (WF2
+    drafts/un-drafts PRs on suspend/resume)."""
+    assert "ready_for_review" in _text()
+    assert "types:" in _text()
+
+
 def test_runs_builtin_code_review_via_sha_pinned_action():
     """AC1: /code-review through claude-code-action@v1, SHA-pinned."""
     uses = re.findall(r"uses:\s*anthropics/claude-code-action@(\S+)", _text())
