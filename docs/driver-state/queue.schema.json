@@ -41,6 +41,11 @@
       "type": ["integer", "null"],
       "description": "Epic issue number whose task list anchors the queue (v2). null for an inline queue."
     },
+    "notes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Campaign ledger — dated free-text entries (DEFER surfacing, rate-limit window resets, mid-loop status changes). The state file IS the ledger."
+    },
     "issues": {
       "type": "array",
       "items": {
