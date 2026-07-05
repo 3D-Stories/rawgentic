@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "campaign": "example-dag-campaign",
+  "policy": {
+    "order": "dependency",
+    "deploy": "none",
+    "has_deploy": false,
+    "smoke_gate": null,
+    "review_budget": 3,
+    "never_haiku": true,
+    "deps_satisfied_by": "merged"
+  },
+  "base_default_branch_sha": "0000000000000000000000000000000000000000",
+  "epic": 200,
+  "issues": [
+    {
+      "number": 201,
+      "status": "merged",
+      "depends_on": [],
+      "pr": 301,
+      "merge_sha": "a1b2c3d",
+      "rollback_anchor": "0000000",
+      "deferred_reason": null,
+      "deferred_branch": null,
+      "branch_preservation": null
+    },
+    {
+      "number": 202,
+      "status": "in_progress",
+      "depends_on": [201],
+      "pr": null,
+      "merge_sha": null,
+      "rollback_anchor": "a1b2c3d",
+      "deferred_reason": null,
+      "deferred_branch": null,
+      "branch_preservation": null
+    },
+    {
+      "number": 203,
+      "status": "queued",
+      "depends_on": [201],
+      "pr": null,
+      "merge_sha": null,
+      "rollback_anchor": null,
+      "deferred_reason": null,
+      "deferred_branch": null,
+      "branch_preservation": null
+    },
+    {
+      "number": 204,
+      "status": "queued",
+      "depends_on": [202, 203],
+      "pr": null,
+      "merge_sha": null,
+      "rollback_anchor": null,
+      "deferred_reason": null,
+      "deferred_branch": null,
+      "branch_preservation": null
+    },
+    {
+      "number": 205,
+      "status": "deferred",
+      "depends_on": [],
+      "pr": null,
+      "merge_sha": null,
+      "rollback_anchor": null,
+      "deferred_reason": "owner-decision",
+      "deferred_branch": null,
+      "branch_preservation": "none"
+    }
+  ]
+}

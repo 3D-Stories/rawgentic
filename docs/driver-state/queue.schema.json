@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/3D-Stories/rawgentic/docs/driver-state/queue.schema.json",
+  "title": "rawgentic multi-issue driver campaign state",
+  "description": "Schema for a multi-issue driver campaign state file (design #134, #148, #163). The LIVE per-campaign instance is written at runtime to claude_docs/.driver-state/<campaign>.json (disk-persisted working state, gitignored); this schema + the example-*.campaign.json files are the git-tracked contract-of-record. schema_version 2 adds issues[].depends_on (v1 files, which omit it, still validate).",
+  "type": "object",
+  "required": ["schema_version", "campaign", "issues"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [1, 2],
+      "description": "1 = original queue; 2 = adds dependency DAG (issues[].depends_on) + epic anchor. A v2 reader must accept v1 files."
+    },
+    "campaign": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Campaign identifier; matches the <campaign>.json live-state filename."
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "order": {"type": "string", "description": "e.g. impact | dependency"},
+        "deploy": {"enum": ["per-issue", "batch", "none"]},
+        "has_deploy": {"type": "boolean"},
+        "smoke_gate": {"type": ["string", "null"]},
+        "review_budget": {"type": "integer", "minimum": 0},
+        "never_haiku": {"type": "boolean"},
+        "deps_satisfied_by": {
+          "enum": ["merged", "pr_open"],
+          "description": "When a dependency counts as satisfied for the advance rule (v2). Default merged."
+        }
+      }
+    },
+    "base_default_branch_sha": {
+      "type": ["string", "null"],
+      "description": "origin/<default> HEAD when the campaign started (rollback-anchor baseline)."
+    },
+    "epic": {
+      "type": ["integer", "null"],
+      "description": "Epic issue number whose task list anchors the queue (v2). null for an inline queue."
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["number", "status"],
+        "additionalProperties": true,
+        "properties": {
+          "number": {"type": "integer"},
+          "status": {
+            "enum": ["queued", "in_progress", "pr_open", "merged", "deferred", "abandoned"]
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "Issue numbers this issue depends on (v2). Absent on v1 files."
+          },
+          "pr": {"type": ["integer", "null"]},
+          "merge_sha": {"type": ["string", "null"]},
+          "rollback_anchor": {"type": ["string", "null"]},
+          "deferred_reason": {
+            "type": ["string", "null"],
+            "description": "DEFER taxonomy: owner-decision | owner-reserved | cross-repo | budget | cross-issue-dependency."
+          },
+          "deferred_branch": {"type": ["string", "null"]},
+          "branch_preservation": {
+            "enum": ["pushed", "discarded", "none", null],
+            "description": "Deterministic on DEFER: pushed (resumable, ≥1 commit) | discarded (approach abandoned) | none (no commits)."
+          }
+        }
+      }
+    }
+  }
+}

@@ -619,7 +619,9 @@ The `docs/` directory contains detailed design documentation for contributors:
 
 - **[Principles](docs/principles.md)** — P1-P15 definitions with rationale and enforcement mechanisms
 - **[Consolidation](docs/consolidation.md)** — Step archetype mappings, shared protocol, principle coverage matrix
+- **[Multi-Issue Driver](docs/multi-issue-driver.md)** — the documented pattern for running an autonomous backlog: loop WF2 fresh per issue over a durable queue, with a DEFER taxonomy, rollback anchors, dependency-DAG ordering (`hooks/driver_lib.py`), an epic anchor, and a resumption contract. State schema + examples in `docs/driver-state/`.
 - **Design documents** (in `docs/design/`):
+  - [Multi-Issue Driver design (#134)](docs/design/2026-07-04-multi-issue-driver.md)
   - [Issue Creation (WF1)](docs/design/workflow-issue-creation.md)
   - [Feature Implementation (WF2)](docs/design/workflow-feature-implementation.md)
   - [Bug Fix (WF3)](docs/design/workflow-bug-fix.md)
