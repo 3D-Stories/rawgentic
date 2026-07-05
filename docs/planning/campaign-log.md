@@ -74,6 +74,26 @@ Security scan clean. Suite 1972/0 (2 red-first guards: reflexion-freedom + §4 q
 
 **Follow-up.** #206 — migrate existing rawgentic memories into mempalace if warranted.
 
+**Status.** PR #207 squash-merged `f5786a3`, v3.3.0, issue closed.
+
+### #191 — WF2 Step 1b always emits the /goal prompt · v3.4.0
+
+**Issue.** #191 (P4): Step 1b skipped emitting the constructed `/goal` when a prior goal
+might be active (observed on #162) — but a skill can't observe or set the session goal, so
+the reliable behavior is to always emit.
+
+**What shipped.** Step 1b ALWAYS emits the per-issue `/goal` prompt; it no longer suppresses
+on the guess that a prior goal is active. Exception: under an epic campaign
+(`RAWGENTIC_EPIC_GOAL` env set — the driver sets it, forward-declared for #192) it **defers**
+to the active epic-level goal rather than clobbering it, logged `(deferred: epic #N)`. New
+`deferred` value in the run-record `goal_guard` vocab. Reviewer flagged WF3 parity as a #192
+follow-up (WF3 will need the same defer once epics drive its sub-issues).
+
+**Reviews.** Small-standard lane. 1 opus: NO FINDINGS (item-4/5 coherent, vocab consistent
+across steps.md/run-record.md/work_summary.py/README, forward-declaration honest, validation
+fail-closed). red-first: goal_guard `deferred` + Step-1b always-emit drift guard. Scan clean.
+Suite 1972/0 → 1974/0.
+
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
 Telemetry embedded below.
 
