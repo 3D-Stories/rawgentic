@@ -1320,6 +1320,26 @@ measurable signal — not just a sentence the user reads once.
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
    `findings`, and `workflow` is `"implement-feature"`.
 
+2b. **Capture usage (#189) — populate the `usage` object with REAL numbers.** #155 added
+   the `usage` field but nothing filled it, so it was null in all 24 records and #162's
+   yield-per-token gate was incomputable. Before assembling, capture this session's tokens
+   from its Claude Code transcript (stdlib-only parse, no network):
+   ```bash
+   python3 hooks/usage_capture.py capture --session-id "$CLAUDE_CODE_SESSION_ID"
+   ```
+   It prints a full 5-key `usage` object with `capture_status: "captured"` and real
+   per-model `model_mix` + totals, OR just `{"capture_status": "unavailable"}` when the
+   session file is missing / mid-write / has no usage. On the `captured` object: set its
+   `wall_clock_s` from the orchestrator's own timing, then use it as the record's `usage`.
+   On `unavailable`: do NOT merge the bare one-key dict (the `usage` object is present-is-strict
+   — all five keys required); instead emit a full object with the five keys null and
+   `capture_status: "unavailable"` (null tokens are honest here; do NOT fabricate numbers).
+   Because
+   `capture_status: "captured"` is fail-closed at the validator (`work_summary.py` REQUIRES
+   non-null tokens summing > 0 when captured), you can never persist a captured-but-null
+   record — the #155 state is now impossible. `ccusage` is a manual cross-check only, not
+   the capture path.
+
 2c. **Lane marker (small-standard lane):** the run-record carries a `lane` field —
    `"small-standard"` when the run took the `<small-standard-lane>`, `"full"` otherwise — so lane
    runs stay measurable against full runs (`complexity` still reflects the Step-2 classification).

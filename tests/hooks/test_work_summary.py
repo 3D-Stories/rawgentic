@@ -767,6 +767,19 @@ class TestWorkSummarySkillWiring:
             f"`work_summary.py summarize`; if you renamed it, update this guard."
         )
 
+    def test_wf2_completion_step_wires_usage_capture(self):
+        # #189: the whole feature exists to stop new run-records shipping null usage.
+        # Live capture is a manual orchestrator instruction in the Step 16 detail — if
+        # a future spine edit drops it, new runs silently regress to the #155
+        # null-forever state with nothing failing. Pin the capture call to the corpus
+        # so that regression goes red here. (WF2 only — WF3 wiring is a later follow-up.)
+        from tests.corpus import skill_corpus
+        content = skill_corpus("implement-feature")
+        assert "usage_capture.py capture" in content, (
+            "implement-feature Step 16 must invoke `usage_capture.py capture` to "
+            "populate run-record usage; if you renamed it, update this guard."
+        )
+
 
 # ===========================================================================
 # aggregate subcommand (#94) — Tier-2 run-record rollups
@@ -1303,6 +1316,71 @@ class TestValidateUsage:
             model_mix={"opus": {"input_tokens": -1, "output_tokens": 50}})
         assert any("model_mix['opus']" in e and "input_tokens" in e
                    for e in validate_record(rec))
+
+    # --- capture_status (#189): the schema-level backstop for non-vacuity. ---
+    # A usage object may carry an optional capture_status; when it claims
+    # "captured", the tokens MUST be real (non-null, sum > 0). This is what makes
+    # the #155 null-forever state impossible to launder as a real measurement.
+
+    def test_capture_status_absent_ok(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage()  # no capture_status -> unchanged behavior
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("status", ["captured", "unrecoverable", "unavailable"])
+    def test_capture_status_valid_vocab(self, status):
+        from work_summary import validate_record
+        rec = _valid_record()
+        # captured needs real tokens; the other two allow null (backfill/miss)
+        if status == "captured":
+            rec["usage"] = self._usage(capture_status=status)
+        else:
+            rec["usage"] = self._usage(capture_status=status, input_tokens=None,
+                                       output_tokens=None, model_mix=None)
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("bad", ["CAPTURED", "done", "", 123, None, True])
+    def test_capture_status_bad_value_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(capture_status=bad)
+        assert any("capture_status" in e for e in validate_record(rec))
+
+    def test_captured_with_null_tokens_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(capture_status="captured", input_tokens=None)
+        assert any("capture_status" in e and "captured" in e
+                   for e in validate_record(rec))
+
+    def test_captured_with_zero_tokens_rejected(self):
+        # the exact #155 failure mode — captured claim, zero measurement
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(capture_status="captured",
+                                   input_tokens=0, output_tokens=0)
+        assert any("capture_status" in e and "captured" in e
+                   for e in validate_record(rec))
+
+    def test_captured_with_zero_input_positive_output_rejected(self):
+        # F4: a captured claim with input_tokens=0 (output>0) is anomalous — every
+        # real inference turn processes input. input>0 (not just sum>0) is required.
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(capture_status="captured",
+                                   input_tokens=0, output_tokens=5)
+        assert any("capture_status" in e and "captured" in e
+                   for e in validate_record(rec))
+
+    def test_unrecoverable_with_null_tokens_ok(self):
+        # backfill of a historical row with no session-id correlator
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["usage"] = self._usage(capture_status="unrecoverable",
+                                   input_tokens=None, output_tokens=None,
+                                   model_mix=None)
+        assert validate_record(rec) == []
 
 
 class TestValidateGoalGuard:

@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-04 20:56 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-04 23:44 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -51,6 +51,45 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
 <p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
+<p>---</p>
+<h2>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0</h2>
+<p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
+<p>object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> —</p>
+<p>so #162&#x27;s yield-per-token gate was incomputable. Fix: capture real numbers + backfill,</p>
+<p>with <strong>non-vacuous</strong> tests (AC5, explicitly &quot;better than #155&#x27;s schema-only tests&quot;).</p>
+<p><strong>What shipped.</strong></p>
+<ul>
+<li><code>hooks/usage_capture.py</code> — parses the Claude Code session transcript directly (same</li>
+</ul>
+<p>  source as <code>ccusage</code>; stdlib-only, deterministic, no network). Sums per-model tokens</p>
+<p>  into <code>model_mix</code> + totals + a rate-card cost, excludes the <code>&lt;synthetic&gt;</code> pseudo-model.</p>
+<p>  <code>capture</code> (live, Step 16) + <code>backfill</code> (historical) subcommands, with a path-traversal</p>
+<p>  guard on the session id and UTF-8-resilient reads (the current log may be mid-write).</p>
+<ul>
+<li><strong>Validator backstop</strong> (<code>hooks/work_summary.py</code>) — <code>usage.capture_status</code> controlled</li>
+</ul>
+<p>  vocab <code>{captured, unrecoverable, unavailable}</code>; a <code>captured</code> claim REQUIRES positive</p>
+<p>  input + non-negative output, so the #155 null/zero-forever state can no longer persist.</p>
+<ul>
+<li><strong>Backfill applied</strong> — the 12 historical usage rows carry no session-id correlator, so</li>
+</ul>
+<p>  they are marked <code>unrecoverable</code> (honest per AC2; never silently null).</p>
+<ul>
+<li>Step 16 capture wiring documented + <strong>pinned by a corpus drift-guard</strong>; AC3 store</li>
+</ul>
+<p>  drift-guard forbids any usage object with null/zero tokens and no marker.</p>
+<p><strong>Non-vacuity (AC5).</strong> Tests assert real-fixture known-value totals (865/90), end-to-end</p>
+<p>capture, backfill against known values, and <strong>red-before-green</strong> guards for the</p>
+<p>present-but-zero and zero-token-no-marker paths — the #155 failure mode in its new forms.</p>
+<p><strong>Reviews.</strong> Step 8a on both high-risk tasks caught <strong>2 empirically-confirmed High</strong> bugs</p>
+<p>(non-vacuity guard checked block-count not token-sum = the #155 mode recurring; UTF-8</p>
+<p>crash on a mid-write log) — both fixed. Step 11 (2 opus reviewers) caught <strong>3 Medium</strong></p>
+<p>(drift-guard zero-token blind spot; unpinned wiring; captured input=0) + 1 Low — all</p>
+<p>fixed. Security scan clean (iac/sca visible skips).</p>
+<p><strong>First real telemetry.</strong> This slot&#x27;s own run-record is the **first with non-null captured</p>
+<p>tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.</p>
+<p><strong>Status.</strong> PR #198, CI green; <code>merged</code> filled on campaign resume (owner paused after this</p>
+<p>slot). Telemetry embedded below.</p>
 <p>---</p>
 <h2>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2</h2>
 <p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
@@ -130,9 +169,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#162 (feature, simple)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>3 added · 1866/1866 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: pending</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#189 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>41 added · 1907/1907 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR 198 · merged: None · CI: passed</td></tr><tr><th>Usage</th><td>in 1442305293 / out 4754567 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-04 20:56 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-04 23:44 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

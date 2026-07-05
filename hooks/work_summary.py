@@ -57,6 +57,12 @@ REVIEWER_KINDS = {"inline", "reflexion", "builtin_code_review", "codex",
 # `set`/`skipped` are recorded by the orchestrator; `fired` is MANUAL-ONLY (see
 # the goal_guard validation block below) — no code path detects it automatically.
 GOAL_GUARD_VALUES = {"set", "skipped", "fired"}
+# `usage.capture_status` (#189) — how the token/cost numbers were obtained.
+# `captured` = live-parsed from the session log (REQUIRES real non-null tokens
+# summing > 0 — the schema-level backstop against the #155 null-forever state);
+# `unrecoverable` = a historical row with no session-id correlator; `unavailable`
+# = capture was attempted for this run but failed (file missing / no usage).
+CAPTURE_STATUS_VALUES = {"captured", "unrecoverable", "unavailable"}
 
 # Human-summary header label per workflow; falls back to the upper-cased name.
 _WF_LABELS = {"implement-feature": "WF2", "fix-bug": "WF3"}
@@ -358,6 +364,24 @@ def validate_record(record) -> list:
                         if v is not None and (not _is_int(v) or v < 0):
                             errs.append(f"usage.model_mix['{model}'].{f} must be "
                                         f"a non-negative integer or null")
+            # capture_status (#189): OPTIONAL, but present-is-strict — membership in
+            # CAPTURE_STATUS_VALUES, fail-closed on anything else (non-strings, case
+            # variants, null). When it claims "captured", the tokens MUST be real
+            # (non-null and summing > 0) — this is what makes a captured claim with a
+            # null/zero measurement (the #155 failure mode) impossible to persist.
+            if "capture_status" in usage:
+                cs = usage.get("capture_status")
+                if not _is_str(cs) or cs not in CAPTURE_STATUS_VALUES:
+                    errs.append("usage.capture_status must be one of "
+                                f"{sorted(CAPTURE_STATUS_VALUES)}")
+                elif cs == "captured":
+                    it, ot = usage.get("input_tokens"), usage.get("output_tokens")
+                    # captured claims a real measurement: input MUST be positive
+                    # (every real turn processes prompt/cache input), output non-negative.
+                    # input>0 (not just sum>0) also rejects a captured input=0/output=N dict.
+                    if not _is_int(it) or not _is_int(ot) or it <= 0 or ot < 0:
+                        errs.append("usage.capture_status 'captured' requires "
+                                    "non-null input_tokens > 0 and output_tokens >= 0")
 
     # `goal_guard` (#156, AC6) — OPTIONAL top-level field, same validated-optional
     # pattern as `reviewer_kind`: absent → old records stay valid (forward-

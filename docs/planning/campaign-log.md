@@ -12,6 +12,45 @@ Milestones: **M1** instrument+guard (done) · **M2** enable+restructure (done) �
 
 ---
 
+## Slot 12 — #189: capture usage token/cost in run-records · v2.65.0
+
+**Issue.** #189 (owner-promoted from fast-follow epic #188): the run-record `usage`
+object existed (#155/#172) but nothing populated it — **null in all 24 records** —
+so #162's yield-per-token gate was incomputable. Fix: capture real numbers + backfill,
+with **non-vacuous** tests (AC5, explicitly "better than #155's schema-only tests").
+
+**What shipped.**
+- `hooks/usage_capture.py` — parses the Claude Code session transcript directly (same
+  source as `ccusage`; stdlib-only, deterministic, no network). Sums per-model tokens
+  into `model_mix` + totals + a rate-card cost, excludes the `<synthetic>` pseudo-model.
+  `capture` (live, Step 16) + `backfill` (historical) subcommands, with a path-traversal
+  guard on the session id and UTF-8-resilient reads (the current log may be mid-write).
+- **Validator backstop** (`hooks/work_summary.py`) — `usage.capture_status` controlled
+  vocab `{captured, unrecoverable, unavailable}`; a `captured` claim REQUIRES positive
+  input + non-negative output, so the #155 null/zero-forever state can no longer persist.
+- **Backfill applied** — the 12 historical usage rows carry no session-id correlator, so
+  they are marked `unrecoverable` (honest per AC2; never silently null).
+- Step 16 capture wiring documented + **pinned by a corpus drift-guard**; AC3 store
+  drift-guard forbids any usage object with null/zero tokens and no marker.
+
+**Non-vacuity (AC5).** Tests assert real-fixture known-value totals (865/90), end-to-end
+capture, backfill against known values, and **red-before-green** guards for the
+present-but-zero and zero-token-no-marker paths — the #155 failure mode in its new forms.
+
+**Reviews.** Step 8a on both high-risk tasks caught **2 empirically-confirmed High** bugs
+(non-vacuity guard checked block-count not token-sum = the #155 mode recurring; UTF-8
+crash on a mid-write log) — both fixed. Step 11 (2 opus reviewers) caught **3 Medium**
+(drift-guard zero-token blind spot; unpinned wiring; captured input=0) + 1 Low — all
+fixed. Security scan clean (iac/sca visible skips).
+
+**First real telemetry.** This slot's own run-record is the **first with non-null captured
+tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.
+
+**Status.** PR #198, CI green; `merged` filled on campaign resume (owner paused after this
+slot). Telemetry embedded below.
+
+---
+
 ## Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2
 
 **Issue.** #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff
