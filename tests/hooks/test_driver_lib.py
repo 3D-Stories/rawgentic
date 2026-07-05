@@ -100,6 +100,19 @@ def test_parse_depends_on_colon_and_separators():
     assert driver_lib.parse_depends_on("Depends on: #10, #20 & #30") == [10, 20, 30]
 
 
+def test_parse_depends_on_case_insensitive_on_raw_line():
+    # Matches on the raw line case-insensitively (no lowercase-then-slice), so
+    # offsets can't drift (8a Claude-review hardening note).
+    assert driver_lib.parse_depends_on("BLOCKED BY #5") == [5]
+    assert driver_lib.parse_depends_on("This is NOT blocked by #5.") == []
+
+
+def test_parse_depends_on_not_markdown_aware_documented_limitation():
+    # DOCUMENTED, not a hard boundary: a phrase quoted in a blockquote IS taken.
+    # Locked so the limitation stays honest (Codex/Claude review Cl-F2).
+    assert driver_lib.parse_depends_on("> reviewer said: depends on #666") == [666]
+
+
 # --------------------------------------------------------------------------- #
 # topo_sort_issues
 # --------------------------------------------------------------------------- #

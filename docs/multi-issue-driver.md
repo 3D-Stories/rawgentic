@@ -160,14 +160,16 @@ When `order: dependency`, the queue is a DAG.
 
 1. **Parse dependencies** with `parse_depends_on(body)` — it extracts issue
    numbers only from a recognized dependency phrase ("depends on #N", "blocked
-   by #N") or a task-list checkbox ("- [ ] #N"). It is **prompt-injection-safe**:
-   the phrase is matched at word boundaries (so "unblocked by" does not count),
-   negated phrases ("not blocked by", "no longer depends on") are ignored, and
-   only the *immediate* `#N` list right after the phrase (comma/"and"-separated)
-   is taken — parsing stops at a sentence boundary, so a following sentence
-   ("Depends on #10. See #20 for context" → `[10]`) cannot inject a dep. A bare
-   `#N` in ordinary prose is *not* a dependency. Supplement with `gh api` issue
-   relationships where available.
+   by #N") or a task-list checkbox ("- [ ] #N"). It is a **narrow best-effort
+   filter** (not a hard security boundary — it is not markdown-aware, so a phrase
+   quoted in a blockquote/code fence is still taken): the phrase is matched at
+   word boundaries (so "unblocked by" does not count), negated phrases ("not
+   blocked by", "no longer depends on") are ignored, and only the *immediate*
+   `#N` list right after the phrase (comma/"and"-separated) is taken — parsing
+   stops at a sentence boundary, so a following sentence ("Depends on #10. See
+   #20 for context" → `[10]`) does not inject a dep. A bare `#N` in ordinary
+   prose is *not* a dependency. Supplement with `gh api` issue relationships
+   where available.
 2. **Topologically sort** at campaign start with `topo_sort_issues(issues)`
    (Kahn's algorithm; deterministic tie-break = lowest issue number first), then
    **persist that order back into `state["issues"]`** so the advance loop's

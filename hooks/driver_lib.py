@@ -8,8 +8,11 @@ issue's acceptance criteria make worth unit-testing rather than describing in
 prose:
 
 - ``parse_depends_on(body)`` — extract issue-number dependencies from an issue
-  body (strict, prompt-injection-safe: only ``#<digits>`` under a recognized
-  dependency phrase or task-list checkbox is taken; free-text numbers are not).
+  body: only ``#<digits>`` in the immediate list under a recognized dependency
+  phrase (not negated, word-boundary matched) or a task-list checkbox is taken;
+  free-text numbers are not. It is NOT markdown-aware (a phrase quoted in a
+  blockquote/code fence is still taken), so it is a best-effort filter, not a
+  hard security boundary.
 - ``topo_sort_issues(issues)`` — Kahn topological sort of the campaign queue by
   ``depends_on``; deterministic tie-break (lowest issue number first);
   **fail-closed** on a cycle (raises ``DependencyCycleError`` with the cycle in
@@ -47,14 +50,16 @@ _SATISFIED_BY = {
 
 # A dependency phrase ("depends on" / "depends-on" / "blocked by" / "blocked-by"),
 # anchored at word boundaries so it is NOT matched inside another word
-# ("unblocked by" must not count). Each phrase contributes the `#<digits>` in its
-# own segment (up to the next phrase), so order on the line does not matter.
-_DEP_PHRASE_RE = re.compile(r"(?<![a-z])(?:depends?[ -]on|blocked[ -]by)(?![a-z])")
+# ("unblocked by" must not count). Matched case-insensitively on the raw line
+# (not a lowercased copy), so offsets can't drift on case-length-changing Unicode.
+_DEP_PHRASE_RE = re.compile(
+    r"(?<![a-z])(?:depends?[ -]on|blocked[ -]by)(?![a-z])", re.IGNORECASE
+)
 # Immediate negation right before a phrase ("not blocked by", "no longer depends
 # on") — the phrase is then a statement of NON-dependency and is skipped. This
 # keeps ordinary issue-body prose from injecting a false dependency.
 _NEG_BEFORE_RE = re.compile(
-    r"\b(?:not|never|cannot|can't|won't|doesn't|isn't|no longer)\s+$"
+    r"\b(?:not|never|cannot|can't|won't|doesn't|isn't|no longer)\s+$", re.IGNORECASE
 )
 # The dependency LIST immediately following a phrase: "#10", "#10, #20 and #30",
 # "#10 & #20", optionally led by a colon. Anchored at the segment start and
@@ -79,8 +84,10 @@ class DependencyCycleError(DriverStateError):
 def parse_depends_on(body: str) -> list[int]:
     """Return the sorted, de-duplicated issue numbers this body depends on.
 
-    Only two forms are recognized, so untrusted issue-body prose cannot inject a
-    spurious dependency:
+    Recognition is narrow so ordinary prose is unlikely to inject a spurious
+    dependency — but it is NOT markdown-aware, so a dependency phrase quoted
+    inside a blockquote or code fence IS still taken (do not treat this as a
+    hard security boundary). Two forms are recognized:
       * a dependency phrase ("depends on #N", "blocked by #N, #M", …) — the
         phrase is matched at word boundaries (so "unblocked by" does NOT count)
         and is skipped when immediately negated ("not blocked by", "no longer
@@ -99,9 +106,8 @@ def parse_depends_on(body: str) -> list[int]:
         m = _TASK_LIST_RE.match(line)
         if m:
             deps.add(int(m.group(1)))
-        low = line.lower()
-        for ph in _DEP_PHRASE_RE.finditer(low):
-            if _NEG_BEFORE_RE.search(low[: ph.start()]):
+        for ph in _DEP_PHRASE_RE.finditer(line):
+            if _NEG_BEFORE_RE.search(line[: ph.start()]):
                 continue  # negated: a statement of non-dependency
             lst = _DEP_LIST_RE.match(line[ph.end():])
             if lst:
