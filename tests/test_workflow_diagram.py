@@ -50,6 +50,17 @@ def test_versioned_with_both_snapshots():
     assert "superseded" in text  # old revs render a superseded stamp
 
 
+def test_rev_selector_is_a_dropdown():
+    """The REV selector is a <select> dropdown (scales to many revisions), not
+    one button per revision — built in renderChrome from the workflow's revs."""
+    text = _html()
+    assert "rev-select" in text
+    assert "h('select'," in text
+    assert "h('option'," in text
+    # charset declared so em-dashes / × / → render when served standalone
+    assert '<meta charset="utf-8">' in text
+
+
 def test_extensible_registry_covers_other_workflows():
     """AC5: WF1/WF3/WF5 registry entries exist (skeletal phase sheets)."""
     text = _html()

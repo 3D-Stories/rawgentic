@@ -3,12 +3,19 @@
 `docs/workflow-diagram.html` is rawgentic's **official, versioned workflow diagram**
 (#197, epic #188): a self-contained, hash-routed single-file page rendering every
 workflow's spine as a drafting document — clickable per-station drill-down, a REV
-selector over historical WF2 spines, drafting-convention revision triangles (Δ) on
-stations changed since the prior rev, and loop-back budgets drawn as return arcs.
+**dropdown** over historical WF2 spines (a `<select>`, so it scales to many
+revisions), drafting-convention revision triangles (Δ) on stations changed since the
+prior rev, and loop-back budgets drawn as return arcs.
 
 It is the **canonical workflow reference** — separate from the WF2 *health/proposals*
 review artifact (`docs/planning/2026-07-04-workflow-modernization-review.html`), which
 is a point-in-time review overlay.
+
+**Keeping it current is a standing pre-PR requirement**, exactly like the README:
+any PR that alters a documented workflow spine (WF1/WF2/WF3/WF5 steps, gates,
+loop-backs, lane behavior) must append a new REV here before merge. See the Pre-PR
+Checklist in the repo-root `CLAUDE.md` (item 4). A PR that touches no workflow spine
+needs no diagram edit — confirm that deliberately rather than skipping silently.
 
 ## Viewing it
 

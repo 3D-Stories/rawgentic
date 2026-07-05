@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>rawgentic — Official Workflow Diagram</title>
 <!--
   rawgentic — Official Workflow Diagram (#197). Single-file, self-contained SPA:
@@ -77,11 +78,13 @@ a{color:var(--blue)}
 .tb-title em{font-style:normal;color:var(--accent)}
 .tb-val{font-family:var(--mono);font-size:13px;font-weight:600}
 .revs{display:flex;gap:8px;align-items:center}
-.rev{font-family:var(--mono);font-size:12px;font-weight:600;padding:7px 12px;border:1.5px solid var(--hair2);
-  background:transparent;color:var(--soft);cursor:pointer;letter-spacing:.05em;border-radius:2px}
-.rev[aria-pressed="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);
-  box-shadow:inset 0 0 0 1px var(--accent)}
-.rev:focus-visible,.tab:focus-visible,.themer:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.rev-select{font-family:var(--mono);font-size:12px;font-weight:600;padding:7px 34px 7px 12px;cursor:pointer;
+  letter-spacing:.05em;border-radius:2px;border:1.5px solid var(--accent);color:var(--accent);
+  background:var(--accent-soft);box-shadow:inset 0 0 0 1px var(--accent);appearance:none;-webkit-appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--accent) 50%),linear-gradient(135deg,var(--accent) 50%,transparent 50%);
+  background-position:right 16px top 55%,right 11px top 55%;background-size:5px 5px,5px 5px;background-repeat:no-repeat}
+.rev-select option{font-weight:400;background:var(--card);color:var(--ink)}
+.rev-select:focus-visible,.tab:focus-visible,.themer:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .themer{font-family:var(--mono);font-size:11px;border:1px solid var(--hair2);background:transparent;color:var(--soft);
   padding:6px 10px;cursor:pointer;border-radius:2px}
 .tabs{display:flex;gap:0;margin-top:-1.5px;padding-left:14px}
@@ -617,10 +620,16 @@ function renderDetail(r){
 function renderChrome(r){
   const w = DATA.workflows[r.wf];
   const revs = document.getElementById('revs');
-  revs.replaceChildren.apply(revs, w.revs.map(function(v){
-    return h('button',{class:'rev','aria-pressed':String(v===r.ver),
-      onclick:function(){ location.hash = href(r.wf, v, null); }},'REV '+v);
-  }));
+  const sel = h('select',{class:'rev-select','aria-label':'Revision',
+    onchange:function(){ location.hash = href(r.wf, this.value, null); }},
+    w.revs.map(function(v){
+      const superseded = w.versions[v] && w.versions[v].superseded;
+      const o = h('option',{value:v},'REV '+v+(superseded?' · superseded':''));
+      if(v===r.ver) o.setAttribute('selected','');
+      return o;
+    }));
+  sel.value = r.ver;
+  revs.replaceChildren(sel);
   const tabs = document.getElementById('tabs');
   tabs.replaceChildren.apply(tabs, DATA.order.map(function(k){
     const x = DATA.workflows[k];
