@@ -61,6 +61,7 @@ h2 .no{color:var(--ink-3);font-weight:600;font-size:13px;letter-spacing:.08em}
 .c-merge{color:var(--merge);background:var(--merge-bg)}
 .c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
 .c-inf{color:var(--chip-i);background:var(--chip-i-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
 .cardgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin:14px 0}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
 .card h3{margin:0 0 6px;font-size:15px;font-weight:700;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
@@ -97,7 +98,7 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
 
 <div class="wrap">
 <header class="hero">
-  <div class="eyebrow">rawgentic v2.53.0 · report-only review 2026-07-04 · updated 2026-07-04 20:43 MDT</div>
+  <div class="eyebrow">rawgentic v2.64.2 · report-only review 2026-07-04 · updated 2026-07-05 (slot 12 #189 merged)</div>
   <h1>Workflow Modernization Review</h1>
   <p class="sub">Evidence-backed findings across 12 acceptance criteria, a definitive model-topology verdict, plugin dispositions, and a four-milestone roadmap. Full detail lives in the committed markdown docs; this dashboard is the navigable summary.</p>
   <div class="meta">
@@ -136,22 +137,36 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
         <tr><td><b>9.5 · #174</b> design artifact lifecycle (S) <span class="chip c-conf">slot 9.5 · PR #183 merged 500fd94 · v2.63.0 · DONE</span></td><td>HTML design artifact created at issue creation (WF1), created/updated pre-PR in WF2/WF3, embeds run-record telemetry (absorbs #122)</td><td>Design docs &amp; dashboards stay current automatically — no manual redeploy step after each PR</td></tr>
       </table></div>
       <div class="metric">Milestone metric: load ≤450 lines; suite green; corpus −44%; stubs live; quality non-regressed over 5 runs · <b>Upgrade: after each merge</b></div></div>
-    <div class="mstone"><h3>M3 · Autonomy + v3.0.0 <span class="chip c-conf">epic #169</span></h3><div class="v">slots 10–13 · <b>v3.0.0 ships here</b> · the tail (#162, #184, #161) runs as the first driver campaign · <b>#184 inserted before #161 (owner, 2026-07-04)</b></div>
+    <div class="mstone"><h3>M3 · Autonomy + v3.0.0 <span class="chip c-conf">epic #169</span></h3><div class="v">slots 10–14 · <b>v3.0.0 ships here</b> · the tail (#162, #189, #184, #161) runs as the first driver campaign · <b>#189 token-telemetry (slot 12) DONE — first run-record with real captured tokens; campaign paused after this slot per owner</b></div>
       <div class="tscroll"><table>
         <tr><th>Slot · Issue</th><th>What ships</th><th>Benefit you'll see</th></tr>
         <tr><td><b>10 · #148</b> driver build <span class="chip c-conf">slot 10 · PR #185 merged d7ea584 · v2.64.0 · DONE</span> <span class="chip c-conf">post-merge review: 7 findings fixed · v2.64.1</span></td><td>queue state file + pattern doc (pre-existing issue)</td><td>Campaigns stop being hand-rolled — resumable, rollback-anchored, DEFER-aware <span class="up">⬆</span></td></tr>
         <tr><td><b>10 · #163</b> DAG + epic anchor (M) <span class="chip c-conf">slot 10 · PR #185 merged d7ea584 · v2.64.0 · DONE</span> <span class="chip c-conf">post-merge review: 7 findings fixed · v2.64.1</span></td><td>depends_on parsing, topo-sort, one-way epic mirror; lockout→DEFER</td><td>Dependency-ordered campaigns with visible progress; headless runs get their comms channel — <b>then the flagship proves itself on the program's own tail</b> <span class="up">⬆</span></td></tr>
-        <tr><td><b>11 · #162</b> review switch (M) <span class="chip c-defer">slot 11 · ABANDONED per AC4 data gate · v2.64.2</span></td><td>Step 4 reflect-only; Step 11 built-in /code-review + WF5 diff</td><td>Fewer review tokens at equal yield — data gate satisfied by the program's own ≥10 runs, or abandoned with the data cited <span class="up">⬆</span> · <b>Outcome: abandoned</b> — candidate arm 0 runs vs ≥10 required, token telemetry null in all 23 run-records; decision record in docs/measurements/2026-07-05-issue-162-data-gate-decision.md</td></tr>
-        <tr><td><b>12 · #184</b> version-aware setup prompt (S) <span class="chip c-conf">filed 2026-07-04 · slot 12 (owner-inserted before #161)</span></td><td>setup nag when a new version ships setup-requiring features + decline instructions</td><td>Upgrades stop silently missing their opt-in config; pairs with the #161 upgrade guide — <b>lands before v3.0.0 so the guide can point at it</b></td></tr>
-        <tr><td><b>13 · #161</b> v3.0.0 (S)</td><td>stub removal + docs/upgrade-3.0.md</td><td>One clean migration event; stub cycle (slot 7) already elapsed — no waiting · <b>follow the upgrade guide, not just a refresh</b> <span class="up">⬆</span></td></tr>
+        <tr><td><b>11 · #162</b> review switch (M) <span class="chip c-defer">slot 11 · SWITCH ABANDONED per AC4 data gate (feature not shipped)</span> <span class="chip c-conf">decision-record PR #187 merged e7aadf7 · v2.64.2 · issue closed not-planned</span></td><td>Step 4 reflect-only; Step 11 built-in /code-review + WF5 diff</td><td>Fewer review tokens at equal yield — data gate satisfied by the program's own ≥10 runs, or abandoned with the data cited <span class="up">⬆</span> · <b>Outcome: abandoned</b> — candidate arm 0 runs vs ≥10 required, token telemetry null in all 23 run-records; decision record in docs/measurements/2026-07-05-issue-162-data-gate-decision.md</td></tr>
+        <tr><td><b>12 · #189</b> token telemetry (S) <span class="chip c-conf">slot 12 · PR #198 merged · v2.65.0 · DONE</span></td><td>capture usage token/cost in run-records — hooks/usage_capture.py parses session transcript (stdlib, no network); validator backstop (capture_status vocab, captured requires real tokens); 12 historical rows backfilled unrecoverable; <b>first run-record with real captured tokens</b>. PR #198, v2.65.0, suite 1907/0.</td><td><b>Measure before more autonomy</b> — fills the null fields that made #162 unmeasurable; every later run then generates cost/yield data <span class="up">⬆</span></td></tr>
+        <tr><td><b>13 · #184</b> version-aware setup prompt (S) <span class="chip c-plan">planned · slot 13</span></td><td>setup nag when a new version ships setup-requiring features + decline instructions</td><td>Upgrades stop silently missing their opt-in config; pairs with the #161 upgrade guide — <b>lands before v3.0.0 so the guide can point at it</b></td></tr>
+        <tr><td><b>14 · #161</b> v3.0.0 (S) <span class="chip c-plan">planned · slot 14</span></td><td>stub removal + docs/upgrade-3.0.md</td><td>One clean migration event; stub cycle (slot 7) already elapsed — no waiting · <b>follow the upgrade guide, not just a refresh</b> <span class="up">⬆</span></td></tr>
       </table></div>
       <div class="metric">Milestone metric: tail campaign dependency-ordered, 0 interventions; v3.0.0 published via upgrade guide</div></div>
-    <div class="mstone"><h3>M4 · Headless platform <span class="chip c-conf">epic #170</span></h3><div class="v">slot 14 · v3.1 · rides on M1 goal guard + M3 driver, on stable v3</div>
+    <div class="mstone"><h3>M4 · Headless platform <span class="chip c-conf">epic #170</span></h3><div class="v">slot 15 · v3.1 · rides on M1 goal guard + M3 driver, on stable v3</div>
       <div class="tscroll"><table>
         <tr><th>Slot · Issue</th><th>What ships</th><th>Benefit you'll see</th></tr>
-        <tr><td><b>14 · #165</b> Action pilot (L)</td><td>label `rawgentic:auto` → headless WF2 → PR; folds #48/#51/#52; subscription-OAuth default</td><td><b>Label an issue, get a PR overnight — no laptop attached.</b> Crown move: run the pilot by labeling a final issue. The Action pulls the plugin at run time; local refresh only matters for local headless</td></tr>
+        <tr><td><b>15 · #165</b> Action pilot (L)</td><td>label `rawgentic:auto` → headless WF2 → PR; folds #48/#51/#52; subscription-OAuth default</td><td><b>Label an issue, get a PR overnight — no laptop attached.</b> Crown move: run the pilot by labeling a final issue. The Action pulls the plugin at run time; local refresh only matters for local headless</td></tr>
       </table></div>
       <div class="metric">Milestone metric: 1 issue label→PR with zero operator touches · <b>Upgrade: repo-side workflows; no local refresh required</b></div></div>
+    <div class="mstone"><h3>Fast-follow · WF2 hardening + epic-native + OAuth reviews <span class="chip c-conf">epic #188</span></h3><div class="v">filed 2026-07-04 from the WF2 health review + #162 investigation · runs after the campaign · <b>#189 promoted into the campaign as M3 slot 12</b></div>
+      <div class="tscroll"><table>
+        <tr><th>Issue</th><th>What ships</th><th>Why</th></tr>
+        <tr><td><b>#189</b> P1 token telemetry <span class="chip c-plan">→ promoted to M3 slot 12</span></td><td>populate <code>usage</code> token/cost in run-records (backfill + live)</td><td>dead field today <b>and</b> the blocker that made #162 unmeasurable — pulled into the campaign to measure sooner</td></tr>
+        <tr><td><b>#190</b> P2 retire Step 4 panel</td><td>drop the 3-judge <code>/reflexion:critique</code>; reflect-only</td><td>severed AC1 of #162, lost when it was abandoned wholesale</td></tr>
+        <tr><td><b>#191</b> P4 Step 1b always-emit</td><td>always hand back the constructed <code>/goal</code> prompt</td><td>stops the goal going stale (as on #162)</td></tr>
+        <tr><td><b>#192</b> P5 epic-level goal</td><td>driver sets one goal over the epic's child set + tolerant escape clause (dep #191)</td><td>fixes the relentless Stop-hook friction</td></tr>
+        <tr><td><b>#193</b> P6 WF1 → epic + children</td><td>decompose an over-large ask into a driver-consumable epic</td><td>the missing front-end for the driver/epic machinery</td></tr>
+        <tr><td><b>#194</b> P8 reliable external commands</td><td>probe existence + vendored-copy-with-refresh + trust-gate</td><td>would have caught the #162 uninstalled-plugin trap</td></tr>
+        <tr><td><b>#195</b> P12 OAuth Action reviews</td><td>OAuth-first auth resolver; both lanes via <code>claude-code-action@v1</code>; migrate #166</td><td>subscription-billed reviews; unifies code-review + security</td></tr>
+        <tr><td><b>#196</b> P9 reopen #162</td><td>post-PR <code>/code-review</code> via the OAuth Action, captured for the A/B (dep #189 + #195)</td><td>the reopen path #162's own AC asked for</td></tr>
+      </table></div>
+      <div class="metric">P7 (headless merge/deploy policy) folded into #165, not a separate issue. Owner-gated: OAuth token / API key for #195–#196 are the owner's to provision.</div></div>
   </div>
   <div class="note"><b>When to update the installed plugin:</b> viable after <i>every</i> merged PR — each ships green CI and is compat-classified (additive/transparent until v3.0.0). Sensible default cadence: <b>once per milestone boundary</b>, when the coherent capability lands. Exceptions: pick up <b>#160 promptly</b> (stub-cycle signal), take <b>#161/v3.0.0 via the upgrade guide</b>, and never reinstall mid-session (exit all sessions first: <code>claude plugin remove rawgentic@rawgentic &amp;&amp; claude plugin install rawgentic@rawgentic</code>).</div>
   <div class="note"><b>Sequencing:</b> measure before switching · test-infra before restructure · restructure before driver · platform last. <b>Constraints held everywhere:</b> never-Haiku, PRs-only, no fail-closed gate weakened.</div>
@@ -353,7 +368,7 @@ footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);color:v
 </section>
 
 <footer>
-  <div><strong>Last updated: 2026-07-04 20:43 MDT</strong> · M3: slot 10 done, slot 11 (#162) abandoned per data gate; slot 12 (#184 setup prompt) next, then #161 v3.0.0, then #165</div>
+  <div><strong>Last updated: 2026-07-05</strong> · M3: slot 10 done, slot 11 (#162) abandoned per data gate, slot 12 (#189 token telemetry) done — PR #198, v2.65.0; slot 13 (#184 setup prompt) next, then #161 v3.0.0 (14), then #165 (15) · Fast-follow epic #188 (#190–#197)</div>
   Report-only review · rawgentic v2.53.0 @ 6b7d009 · Findings: docs/planning/2026-07-04-workflow-modernization-review.md · Roadmap: …-roadmap.md · Every claim tagged confirmed/inferred in the markdown; external sources live-fetched 2026-07-04.
 </footer>
 </div>
