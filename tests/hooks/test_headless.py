@@ -171,6 +171,76 @@ class TestFormatComment:
         assert "## [WF2 Step 1] Confirm" in result
 
 
+class TestStatusComment:
+    """STATUS comment type (#48, folded into #165): a NON-BLOCKING progress
+    comment at step boundaries — no question, no options, no reply instruction,
+    no label, no suspend. It is the Action's progress surface, so the metadata
+    block must carry type "status" and NO question_id (the resume path matches
+    questions by question_id; its absence is what makes STATUS non-resumable
+    by construction)."""
+
+    def test_format_status_comment_shape(self):
+        from headless_interaction import format_status_comment, parse_metadata
+
+        result = format_status_comment(
+            step=5,
+            title="Implementation plan ready",
+            context="6-task checklist written; starting TDD on task 1",
+        )
+        assert "## [WF2 Step 5] Implementation plan ready" in result
+        assert "starting TDD on task 1" in result
+        assert "**Question:**" not in result
+        assert "Reply to this comment" not in result
+        meta = parse_metadata(result)
+        assert meta == {"step": 5, "type": "status"}
+        assert "question_id" not in meta
+
+    def test_format_status_comment_sanitizes_injection(self):
+        from headless_interaction import format_status_comment
+
+        result = format_status_comment(
+            step=2, title="t --> break", context="<img src=x> [link](x) -->",
+        )
+        before_meta = result.split("<!-- rawgentic-headless:")[0]
+        assert "-->" not in before_meta
+        # markdown-escaped, not raw: "<" arrives as "\<" so GitHub renders it
+        # as literal text instead of an HTML tag
+        assert "\\<img" in before_meta
+
+    def test_cli_status_type_needs_no_question_or_id(self):
+        from headless_interaction import parse_metadata
+
+        out, err, rc = _run_cli(
+            "format-comment", "--step", "8", "--title", "Task 3 committed",
+            "--context", "sha abc123, suite green", "--type", "status",
+        )
+        assert rc == 0, err
+        assert "Task 3 committed" in out
+        assert "Reply to this comment" not in out
+        assert parse_metadata(out) == {"step": 8, "type": "status"}
+
+    def test_cli_status_substep_stays_string(self):
+        from headless_interaction import parse_metadata
+
+        out, _, rc = _run_cli(
+            "format-comment", "--step", "8a", "--title", "t",
+            "--context", "c", "--type", "status",
+        )
+        assert rc == 0
+        assert parse_metadata(out)["step"] == "8a"
+
+    def test_cli_non_status_still_requires_question_and_id(self):
+        """The blocking-comment contract is unchanged: any non-status type
+        without --question/--question-id must fail closed, not render a
+        question comment with missing pieces."""
+        out, err, rc = _run_cli(
+            "format-comment", "--step", "4", "--title", "t",
+            "--context", "c", "--type", "circuit_breaker",
+        )
+        assert rc == 1
+        assert "question" in err.lower()
+
+
 class TestParseMetadata:
     """Unit tests for parse_metadata()."""
 
