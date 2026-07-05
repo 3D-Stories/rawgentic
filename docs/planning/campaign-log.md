@@ -12,6 +12,54 @@ Milestones: **M1** instrument+guard (done) · **M2** enable+restructure (done) �
 
 ---
 
+## Slot 13 — #184: version-aware setup prompt · v2.67.0
+
+**Issue.** #184 (M3, epic #169): shipped opt-in features sit dark because
+nothing tells users to re-run `/rawgentic:setup` after an upgrade — while the
+existing post-update nudge re-nagged about the *same* unconfigured features on
+**every** version bump. Fix: prompt only when the upgrade actually shipped a
+setup-requiring feature.
+
+**What shipped.**
+- `hooks/post_update_reconcile.py` (the existing SECTION 2f mechanism — extended,
+  not duplicated): `FEATURE_MANIFEST` entries gain `since` (the plugin version
+  that introduced each setup step, verified against git history: headlessEnabled
+  2.18.0 · adversarialReview 2.24.0 · modelRouting 2.46.0 · peerConsult 2.46.0 ·
+  designArtifact 2.63.0) and the manifest expands 2 → 5 entries. needs-question
+  nudges fire only when the reconciled-version jump crosses a `since`; an upgrade
+  shipping nothing new bumps the marker **silently**.
+- Numeric tuple version compare (never string compare); missing marker = fresh
+  install = version zero; unparseable versions fail **open** toward prompting;
+  `since`-less override entries keep legacy always-eligible semantics.
+- Workspace top-level `"setupPrompt": false` opt-out — suppresses all output,
+  still bumps the marker (lifting the opt-out prompts only on the next upgrade).
+- Prompt now names the new feature(s) + affected projects, that setup preserves
+  existing config, the no-re-nag guarantee, and the opt-out.
+- **Drift guard (AC6):** manifest keys must equal the fields staged by setup
+  SKILL.md's write-back sentence (anchored extraction, fail-loud), each with a
+  valid `since` ≤ installed — a new setup opt-in step cannot ship without its
+  manifest entry.
+
+**Decisions (this slot).** Record-at-print marker semantics (a SessionStart hook
+cannot observe accept/decline — the AC4 intent "same version never nags twice"
+holds identically); workspace-level opt-out only (AC5's "per-project/workspace"
+read as either-granularity; one kill-switch is the meaningful UX). Pre-existing
+flaw named: README Changelog was missing v2.57.0–v2.66.0 entries — backfill
+logged as a campaign follow-up. Between slots: #199 (PR #200, v2.66.0) shipped
+the roadmap card style this log now renders with.
+
+**Reviews.** Small-standard lane (1 impl file). Step 11: 2 opus reviewers, **0
+Critical/High/Medium**; 3 Low (strict-boolean opt-out ruled working-as-designed
+by both; one advisory test-completeness fix applied — the "won't repeat" wording
+is now pinned). All 5 `since` values independently re-verified against git
+history by reviewer 2. Adversarial diff review mechanically skipped (no security
+surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry embedded below.
+
+---
+
 ## Slot 12 — #189: capture usage token/cost in run-records · v2.65.0
 
 **Issue.** #189 (owner-promoted from fast-follow epic #188): the run-record `usage`
@@ -46,8 +94,8 @@ fixed. Security scan clean (iac/sca visible skips).
 **First real telemetry.** This slot's own run-record is the **first with non-null captured
 tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.
 
-**Status.** PR #198, CI green; `merged` filled on campaign resume (owner paused after this
-slot). Telemetry embedded below.
+**Status.** *(backfilled by slot 13's pass)* PR #198 squash-merged `f6e2682`, CI
+green, v2.65.0, issue closed. Telemetry embedded below.
 
 ---
 
@@ -86,9 +134,9 @@ into the campaign as **slot 12, before #161** — slots renumbered 12=#184,
 + Codex adversarial diff pass (2 Medium: drift-guard vacuity — test now parses
 the store; applied). Security scan clean (iac/sca visible skips).
 
-**Status.** PR + CI + merge SHA filled by the next slot's pass (established
-convention). Telemetry embedded below. Issue closed as *not planned*, data
-cited.
+**Status.** *(backfilled by slot 13's pass)* decision-record PR #187
+squash-merged `e7aadf7`, CI green, v2.64.2. Telemetry embedded below. Issue
+closed as *not planned*, data cited.
 
 ---
 

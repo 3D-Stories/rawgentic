@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 00:23 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 01:13 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -63,6 +63,56 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
 <p><strong>M3</strong> multi-issue autonomy + v3.0.0 (in progress) · <strong>M4</strong> headless.</p>
 <p>---</p>
+<section class="mstone"><h3>Slot 13 — #184: version-aware setup prompt · v2.67.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because</p>
+<p>nothing tells users to re-run <code>/rawgentic:setup</code> after an upgrade — while the</p>
+<p>existing post-update nudge re-nagged about the *same* unconfigured features on</p>
+<p><strong>every</strong> version bump. Fix: prompt only when the upgrade actually shipped a</p>
+<p>setup-requiring feature.</p>
+<p><strong>What shipped.</strong></p>
+<ul>
+<li><code>hooks/post_update_reconcile.py</code> (the existing SECTION 2f mechanism — extended,</li>
+</ul>
+<p>  not duplicated): <code>FEATURE_MANIFEST</code> entries gain <code>since</code> (the plugin version</p>
+<p>  that introduced each setup step, verified against git history: headlessEnabled</p>
+<p>  2.18.0 · adversarialReview 2.24.0 · modelRouting 2.46.0 · peerConsult 2.46.0 ·</p>
+<p>  designArtifact 2.63.0) and the manifest expands 2 → 5 entries. needs-question</p>
+<p>  nudges fire only when the reconciled-version jump crosses a <code>since</code>; an upgrade</p>
+<p>  shipping nothing new bumps the marker <strong>silently</strong>.</p>
+<ul>
+<li>Numeric tuple version compare (never string compare); missing marker = fresh</li>
+</ul>
+<p>  install = version zero; unparseable versions fail <strong>open</strong> toward prompting;</p>
+<p>  <code>since</code>-less override entries keep legacy always-eligible semantics.</p>
+<ul>
+<li>Workspace top-level <code>&quot;setupPrompt&quot;: false</code> opt-out — suppresses all output,</li>
+</ul>
+<p>  still bumps the marker (lifting the opt-out prompts only on the next upgrade).</p>
+<ul>
+<li>Prompt now names the new feature(s) + affected projects, that setup preserves</li>
+</ul>
+<p>  existing config, the no-re-nag guarantee, and the opt-out.</p>
+<ul>
+<li><strong>Drift guard (AC6):</strong> manifest keys must equal the fields staged by setup</li>
+</ul>
+<p>  SKILL.md&#x27;s write-back sentence (anchored extraction, fail-loud), each with a</p>
+<p>  valid <code>since</code> ≤ installed — a new setup opt-in step cannot ship without its</p>
+<p>  manifest entry.</p>
+<p><strong>Decisions (this slot).</strong> Record-at-print marker semantics (a SessionStart hook</p>
+<p>cannot observe accept/decline — the AC4 intent &quot;same version never nags twice&quot;</p>
+<p>holds identically); workspace-level opt-out only (AC5&#x27;s &quot;per-project/workspace&quot;</p>
+<p>read as either-granularity; one kill-switch is the meaningful UX). Pre-existing</p>
+<p>flaw named: README Changelog was missing v2.57.0–v2.66.0 entries — backfill</p>
+<p>logged as a campaign follow-up. Between slots: #199 (PR #200, v2.66.0) shipped</p>
+<p>the roadmap card style this log now renders with.</p>
+<p><strong>Reviews.</strong> Small-standard lane (1 impl file). Step 11: 2 opus reviewers, **0</p>
+<p>Critical/High/Medium**; 3 Low (strict-boolean opt-out ruled working-as-designed</p>
+<p>by both; one advisory test-completeness fix applied — the &quot;won&#x27;t repeat&quot; wording</p>
+<p>is now pinned). All 5 <code>since</code> values independently re-verified against git</p>
+<p>history by reviewer 2. Adversarial diff review mechanically skipped (no security</p>
+<p>surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry embedded below.</p>
+<p>---</p></section>
 <section class="mstone"><h3>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
 <p>object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> —</p>
 <p>so #162&#x27;s yield-per-token gate was incomputable. Fix: capture real numbers + backfill,</p>
@@ -98,8 +148,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>fixed. Security scan clean (iac/sca visible skips).</p>
 <p><strong>First real telemetry.</strong> This slot&#x27;s own run-record is the **first with non-null captured</p>
 <p>tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.</p>
-<p><strong>Status.</strong> PR #198, CI green; <code>merged</code> filled on campaign resume (owner paused after this</p>
-<p>slot). Telemetry embedded below.</p>
+<p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* PR #198 squash-merged <code>f6e2682</code>, CI</p>
+<p>green, v2.65.0, issue closed. Telemetry embedded below.</p>
 <p>---</p></section>
 <section class="mstone"><h3>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2 <span class="chip c-defer">ABANDONED</span></h3><p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
 <p>pass) was <strong>data-gated</strong> by its own header (&quot;no A/B evidence, no switch&quot;) and</p>
@@ -128,9 +178,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Reviews.</strong> Step 11: opus reviewer (2 Low: citation + count fix, both applied)</p>
 <p>+ Codex adversarial diff pass (2 Medium: drift-guard vacuity — test now parses</p>
 <p>the store; applied). Security scan clean (iac/sca visible skips).</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below. Issue closed as *not planned*, data</p>
-<p>cited.</p>
+<p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* decision-record PR #187</p>
+<p>squash-merged <code>e7aadf7</code>, CI green, v2.64.2. Telemetry embedded below. Issue</p>
+<p>closed as *not planned*, data cited.</p>
 <p>---</p></section>
 <section class="mstone"><h3>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)* <span class="chip c-conf">MERGED</span></h3><p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
 <p>state schema, from design #134) and #163 (dependency-DAG + epic anchor,</p>
@@ -177,9 +227,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#184 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>14 added · 1941/1941 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>design_critique</td><td>2</td><td>2</td><td>passed</td></tr><tr><td>6</td><td>plan_drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>implementation_drift</td><td>0</td><td>0</td><td>passed</td></tr><tr><td>11</td><td>code_review</td><td>3</td><td>3</td><td>passed</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 00:23 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-05 01:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

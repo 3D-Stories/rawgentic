@@ -512,11 +512,36 @@ reviewed project's `AGENTS.md` so the cross-model reviewer stays independent). E
 finding must carry a verbatim `evidence` quote and a `confidence`; severity follows an
 explicit rubric to curb inflation.
 
+### `setupPrompt` (workspace-level) and the version-aware setup prompt
+
+When a plugin update ships a feature that needs setup answers to turn on
+(`adversarialReview`, `modelRouting`, `peerConsult`, `designArtifact` — the
+fields `/rawgentic:setup` stages into workspace entries), the SessionStart
+post-update reconcile (`hooks/post_update_reconcile.py`) prints a one-time
+notice naming the new feature(s) and the active projects missing them, and
+offers `/rawgentic:setup` (which preserves existing config). The notice is
+**version-aware** (#184): each manifest entry carries a `since` (the plugin
+version that introduced its setup step), and the nudge fires only when the
+upgrade jump actually crossed a feature's `since`. An upgrade that shipped no
+new setup-requiring feature records the version silently — no output, no
+re-nag about features you already declined. A drift-guard test keeps the
+manifest in lockstep with the fields setup stages, so a new setup opt-in step
+cannot ship without its `since` entry.
+
+`"setupPrompt": false` at the **top level** of `.rawgentic_workspace.json`
+(sibling to `defaultProtectionLevel`) silences these notices entirely; default
+is on. The reconciled-version marker still advances silently while opted out,
+so removing the opt-out later prompts only on the *next* upgrade — never
+retroactively for versions that passed while silenced. The marker records at
+notification time (a SessionStart hook cannot observe an accept/decline), which
+is what guarantees the same version never nags twice.
+
 ### Example Configuration
 
 ```json
 {
   "defaultProtectionLevel": "standard",
+  "setupPrompt": true,
   "projects": [
     {
       "name": "chorestory",
