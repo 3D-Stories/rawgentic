@@ -52,5 +52,5 @@ def test_setup_has_modelrouting_and_peerconsult_steps():
     )
     assert match, "Step 8 finalize read-modify-write sentence not found"
     finalize_sentence = match.group(0)
-    for field in ("headlessEnabled", "adversarialReview", "modelRouting", "peerConsult"):
+    for field in ("headlessEnabled", "adversarialReview", "modelRouting", "peerConsult", "designArtifact"):
         assert field in finalize_sentence, f"{field!r} missing from finalize sentence"

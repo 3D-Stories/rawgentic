@@ -22,7 +22,7 @@ The full annotated schema lives at `templates/rawgentic-json-schema.json` in the
 This spine carries every step heading in order with a short summary; the detailed
 prose for the heavier steps lives in `references/`. Read the pointed-to reference
 file **before executing** that step:
-- **Steps 2c, 2d, 2f, 2g** → `references/integrations.md` (Step 2e stays in this spine)
+- **Steps 2c, 2d, 2f, 2g, 2h** → `references/integrations.md` (Step 2e stays in this spine)
 - **Step 3** → `references/detect-flows.md`
 - **Steps 4, 4b** → `references/config-reference.md`
 </references>
@@ -225,6 +225,18 @@ The standalone `/rawgentic:peer-consult` works regardless.
 
 **Read `references/integrations.md` before executing Step 2g.**
 
+## Step 2h: HTML Design-Artifact Lifecycle (#174)
+
+Runs on **every** setup invocation (including Sub-flow A re-runs). Mirrors Step 2d:
+asks whether to enable the opt-in HTML design-artifact lifecycle (WF1 publishes the
+issue artifact; WF2/WF3 create-or-update it in the feature PR with run telemetry),
+and — when enabled — whether to use **per-issue** artifacts (default) or **shared-doc
+mode** (one rolling `docs/*.md` program doc updated per slot, like a campaign
+dashboard). Stages the `designArtifact` field (with optional `sharedDoc`) in the
+project's `.rawgentic_workspace.json` entry.
+
+**Read `references/integrations.md` before executing Step 2h.**
+
 ---
 
 ## Step 3: Detect or Brainstorm
@@ -342,7 +354,7 @@ All suggestions require explicit user approval. If the user declines, leave Laye
 
 ## Step 8: Update Workspace
 
-Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c), `adversarialReview` (Step 2d), `modelRouting` (Step 2f), and `peerConsult` (Step 2g) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
+Read `.rawgentic_workspace.json`, find the active project entry, and set `"configured": true`. Apply any pending per-project field changes collected earlier in this run — `headlessEnabled` (Step 2c), `adversarialReview` (Step 2d), `modelRouting` (Step 2f), `peerConsult` (Step 2g), and `designArtifact` (Step 2h) — in a single read-modify-write so no step clobbers another's field. Write the file back once.
 
 ### Step 8b: Ensure Session Notes Infrastructure
 

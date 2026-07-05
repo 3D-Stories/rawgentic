@@ -389,6 +389,29 @@ Review-clean code + optional project knowledge updates.
 ### Instructions
 
 1. Stage all changes: `git add <specific files>` (never `git add -A`)
+
+1b. **HTML design artifact — create-or-update BEFORE the PR (opt-in, #174).**
+   Config-gated — skip silently unless the project opts in
+   (`is_enabled_for(..., 'fix-bug', key='designArtifact')`; exit 0 = enabled).
+   **Target doc — shared vs per-issue:** read the `designArtifact.sharedDoc` config via
+   `design_artifact_shared_doc('.rawgentic_workspace.json', '<name>')`. A returned path →
+   **shared-doc mode** (update THAT single rolling doc — the multi-issue / campaign model,
+   one program doc updated per slot like this repo's modernization dashboard — refresh
+   this issue's section, no per-issue file). None → **per-issue** default
+   `docs/planning/<issue>-<slug>.{md,html}`. Either way create or update the `.md`+`.html`
+   and commit BOTH inside THIS fix PR (one PR per issue). Render with the shared helper — never hand-roll HTML — embedding
+   this run's **telemetry** read from the run-record structure (the Step 14
+   run-record; gates, tests + suite delta, security-scan, lane, `usage`), never
+   hand-retyped:
+   ```bash
+   python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
+     --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
+     --telemetry /tmp/wf3-run-record.json
+   git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
+   ```
+   Fields not knowable pre-PR (PR #, CI, merge SHA) fill on the next slot's pass.
+   Log `### WF3 Step 10 — design artifact (updated|skipped)`.
+
 2. Create final commit with conventional format:
    ```bash
    git commit -m "fix(scope): description (closes #<issue>)"

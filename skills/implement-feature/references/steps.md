@@ -1093,6 +1093,31 @@ recorded for the PR body and session notes.
    body's Summary rather than silently skipping. Stale or omitted docs are a
    recurring miss — make the call deliberately every time.
 
+2b. **HTML design artifact — create-or-update BEFORE the PR (opt-in, #174).** Same
+   slot as the dashboard-before-PR rule. Config-gated — skip silently unless the
+   project opts in (`is_enabled_for(..., 'implement-feature', key='designArtifact')`;
+   exit 0 = enabled). **Target doc — shared vs per-issue:** read the `designArtifact.sharedDoc` config via
+   `design_artifact_shared_doc('.rawgentic_workspace.json', '<name>')`. When it returns
+   a path, use **shared-doc mode** — update THAT single rolling doc (the multi-issue /
+   campaign model: one program doc updated per slot, like this repo's modernization
+   dashboard), refreshing this issue's section, and do NOT create a per-issue file. When
+   it returns None (default), use **per-issue** mode:
+   `docs/planning/<issue>-<slug>.{md,html}`. Either way, create or update the `.md`+`.html`
+   and commit BOTH inside THIS feature PR (one PR per issue; no trailing artifact commits).
+   Render with the shared helper —
+   never hand-roll HTML — embedding this run's **telemetry** read from the run-record
+   structure (Step 16's `/tmp/wf2-run-record.json`; gate findings/resolved, tests +
+   suite delta, security-scan, lane, `usage`), never hand-retyped:
+   ```bash
+   python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
+     --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
+     --telemetry /tmp/wf2-run-record.json
+   git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
+   ```
+   Fields not knowable pre-PR (PR #, CI, merge SHA) follow the established
+   convention: filled by the next slot's pass. Log
+   `### WF2 Step 12 — design artifact (updated|skipped)`.
+
 3. **Final push:**
    ```bash
    git push origin <branch_name>

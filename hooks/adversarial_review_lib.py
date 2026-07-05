@@ -252,6 +252,48 @@ def is_enabled_for(
     return cfg.enabled and skill_name in cfg.workflows
 
 
+def design_artifact_shared_doc(workspace_path: str, project_name: str):
+    """Return the project's `designArtifact.sharedDoc` path (str), or None (#174).
+
+    When set, the WF1/WF2/WF3 artifact step updates ONE rolling design doc across
+    every issue (the multi-issue / campaign model — one program dashboard updated
+    per slot, like this repo's modernization dashboard) instead of a per-issue
+    `<issue>-<slug>.{md,html}` file. When unset, the per-issue default applies.
+
+    Returns a non-empty relative path string or None. Fail-safe: any problem
+    (missing file/project/block, malformed JSON, wrong type, absolute path, or a
+    `..` traversal segment) → None, so a bad value silently falls back to
+    per-issue rather than writing outside the repo. Never raises.
+    """
+    try:
+        with open(workspace_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    for proj in data.get("projects", []) or []:
+        if isinstance(proj, dict) and proj.get("name") == project_name:
+            block = proj.get("designArtifact")
+            if not isinstance(block, dict):
+                return None
+            sd = block.get("sharedDoc")
+            if not isinstance(sd, str) or not sd.strip():
+                return None
+            sd = sd.strip()
+            # Constrain to a docs/*.md target: project-relative, no traversal, and
+            # under docs/ ending in .md (matches the documented shape). This stops a
+            # misconfigured sharedDoc from making the workflow render markdown/HTML
+            # over an arbitrary tracked file (README.md, a source file). Any miss
+            # fails safe to per-issue — never writes outside docs/.
+            if os.path.isabs(sd) or ".." in sd.split("/"):
+                return None
+            if not (sd.startswith("docs/") and sd.endswith(".md")):
+                return None
+            return sd
+    return None
+
+
 # ============================================================================
 # Artifact IO + safety
 # ============================================================================
