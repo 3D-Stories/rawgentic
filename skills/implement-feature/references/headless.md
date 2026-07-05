@@ -149,7 +149,7 @@ kills it.
 
 **Large-PR warning (#51):** at Step 12, immediately after `gh pr create`, count
 the files in the PR diff (`gh pr view <n> --json files --jq '.files | length'`).
-If the count exceeds `RAWGENTIC_LARGE_PR_FILES` (default 25, env-configurable
+If the count exceeds `RAWGENTIC_LARGE_PR_FILES` (default 50 — issue #51's specified default — env-configurable
 per the house threshold rule), post a PR comment warning the reviewer:
 
 ```bash

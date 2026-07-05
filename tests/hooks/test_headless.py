@@ -36,6 +36,10 @@ def _run_hook(hook_name, stdin_dict, *, cwd=None, env_override=None, timeout=10)
     else:
         cmd = ["bash", str(hook_path)]
     env = dict(os.environ)
+    # A polluted developer shell exporting headless vars must not flip
+    # "env absent" test cases — the override dict is the only source of them.
+    env.pop("RAWGENTIC_HEADLESS", None)
+    env.pop("RAWGENTIC_HEADLESS_TRIGGER", None)
     if env_override:
         env.update(env_override)
     result = subprocess.run(
@@ -1401,10 +1405,11 @@ class TestHeadlessStatusCorpus:
         assert "question_id" in block
 
     def test_large_pr_warning_threshold_env_configurable(self):
-        """#51: threshold must be env-configurable (house rule), default 25."""
+        """#51: threshold must be env-configurable (house rule), default 50
+        (issue #51 AC2's specified default)."""
         block = self.HEADLESS_MD.read_text().split("<headless-status>")[1]
         assert "RAWGENTIC_LARGE_PR_FILES" in block
-        assert "default 25" in block
+        assert "default 50" in block
 
     def test_heartbeat_pairs_status_with_job_timeout(self):
         """#52 folded design: timeout = hard wall, STATUS = liveness signal."""
