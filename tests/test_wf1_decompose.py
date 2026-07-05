@@ -30,9 +30,20 @@ def test_decomposition_is_driver_consumable():
     """AC2: epic anchor (epic: label + task-list) + depends_on edges children."""
     s = _step2c()
     assert "epic:" in s, "the epic must carry the epic: label"
-    assert "task-list" in s.lower()
+    # pin the actual driver-parseable checkbox shape, not just the word "task-list"
+    assert "- [ ]" in s, "epic task-list must use the driver-parseable `- [ ] #N` checkbox shape"
     assert "parse_depends_on" in s, "children must use the depends_on phrasing the driver reads"
     assert "Depends on #" in s
+
+
+def test_partial_decomposition_is_resumable():
+    """#193 Step-11 F1: a partial decomposition (some children filed, epic not) must
+    not be mistaken for a completed single issue — the resumption contract records
+    filed children and refuses to report complete until the epic is filed."""
+    text = skill_corpus("create-issue")
+    assert "COMPLETE" in text and "decompose" in text.lower()
+    assert "never re-file a child" in text.lower() or "do not re-file" in text.lower() \
+        or "never re-file" in text.lower()
 
 
 def test_hard_approval_gate_files_nothing_first():
