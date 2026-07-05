@@ -137,6 +137,26 @@ topo order, epic last. Threshold: ≥3 → epic, 2 → cross-linked, 1 → singl
 all fixed. Driver-consumability verified against parse_depends_on + the epic task-list regex. Scan
 clean. Suite 1984/0 → 1990/0.
 
+**Status.** PR #210 squash-merged `4a54482`, v3.6.0, issue closed.
+
+### #194 — reliable external skill/command use (probe + vendored-copy) · v3.7.0
+
+**Issue.** #194 (P8+P10): nothing verified a built-in/plugin skill existed before a gate
+relied on it (the #162 trap), and running an external command by hard cache path is brittle.
+Build ONE primitive.
+
+**What shipped.** `hooks/external_ref_lib.py`: `probe(kind, name)` (version-independent cache
+lookup — numeric version sort, not lexicographic — reports exists/trusted; a miss is a VISIBLE
+skip), `vendor_copy(...)` (durable gitignored copy + sha256-manifest refresh + retained
+`vanished` alert), and a trust-gate (`is_trusted` + `RAWGENTIC_TRUSTED_MARKETPLACES`) because
+an external command is third-party prompt content. CLI probe/vendor/is-trusted;
+`docs/external-references.md`; `.rawgentic-vendored/` gitignored. First real consumer is #196.
+
+**Reviews.** Small-standard lane (new .py primitive). 1 opus: 2 Medium — lexicographic version
+pick (3.10.0<3.9.0) → numeric sort; path-traversal via `name` → bare-name guard on probe+vendor
+— both fixed with tests. Also caught + fixed two spliced changelog headings from earlier slots
+and added a permanent garble drift guard. Scan clean. Suite 1990/0 → 2007/0.
+
 **Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
 Telemetry embedded below.
 
