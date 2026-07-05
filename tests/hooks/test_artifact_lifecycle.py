@@ -3,7 +3,13 @@ WF1/WF2/WF3, and the shared render helper stays referenced (pattern mirrors
 tests/hooks/test_model_routing_dispatch.py). Corpus-based (SKILL.md + references/)
 so the #158/#159 spine splits don't hide the prose.
 """
+import json
+import sys
+from pathlib import Path
+
 from tests.corpus import skill_corpus
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "hooks"))
 
 
 def test_render_helper_referenced_by_all_three_skills():
@@ -43,3 +49,58 @@ def test_telemetry_embed_documented_in_wf2_wf3():
         c = skill_corpus(skill)
         assert "telemetry" in c.lower()
         assert "run-record" in c.lower() or "run_record" in c.lower()
+
+
+# --- designArtifact.sharedDoc reader (#174 shared-doc mode) ---
+
+def test_shared_doc_returns_path_when_set(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"enabled": True, "workflows": ["implement-feature"],
+                                          "sharedDoc": "docs/planning/program.md"}}]}))
+    assert arl.design_artifact_shared_doc(str(ws), "p") == "docs/planning/program.md"
+
+
+def test_shared_doc_none_when_unset(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"enabled": True, "workflows": ["implement-feature"]}}]}))
+    assert arl.design_artifact_shared_doc(str(ws), "p") is None
+
+
+def test_shared_doc_none_when_no_block(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [{"name": "p"}]}))
+    assert arl.design_artifact_shared_doc(str(ws), "p") is None
+
+
+def test_shared_doc_rejects_absolute_and_traversal(tmp_path):
+    import adversarial_review_lib as arl
+    for bad in ("/etc/evil.md", "../../escape.md", "docs/../../x.md"):
+        ws = tmp_path / "ws.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "p", "designArtifact": {"sharedDoc": bad}}]}))
+        assert arl.design_artifact_shared_doc(str(ws), "p") is None, bad
+
+
+def test_shared_doc_fail_safe_on_malformed(tmp_path):
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text("{not json")
+    assert arl.design_artifact_shared_doc(str(ws), "p") is None
+    assert arl.design_artifact_shared_doc(str(tmp_path / "nope.json"), "p") is None
+
+
+# --- shared-doc mode wired into WF1/WF2/WF3 prose (#174) ---
+
+def test_shared_doc_mode_documented_in_all_three_skills():
+    """Multi-issue/campaign model: the artifact step must branch on a configured
+    shared rolling doc (one doc updated per slot, like this session) vs per-issue."""
+    for skill in ("create-issue", "implement-feature", "fix-bug"):
+        c = skill_corpus(skill)
+        assert "sharedDoc" in c, f"{skill} must document the sharedDoc shared-rolling-doc mode"
+        assert "design_artifact_shared_doc" in c, f"{skill} must read the shared-doc config"
+        assert "per-issue" in c.lower(), f"{skill} must state the per-issue default"

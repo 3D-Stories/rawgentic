@@ -169,7 +169,14 @@ python3 -c "import sys; sys.path.insert(0,'hooks'); from adversarial_review_lib 
 ```
 Exit 0 → enabled; non-zero → skip (default; behavior byte-identical for opted-out
 projects). When enabled:
-1. Write the issue spec markdown to `<activeProject.path>/docs/planning/<issue>-<slug>.md`.
+1. Choose the target doc. Read the shared-doc config —
+   `python3 -c "import sys; sys.path.insert(0,'hooks'); from adversarial_review_lib import design_artifact_shared_doc; print(design_artifact_shared_doc('.rawgentic_workspace.json','<name>') or '')"`:
+   - **shared-doc mode** (a `designArtifact.sharedDoc` path is set — the multi-issue /
+     campaign model: ONE rolling program doc updated across every issue, exactly like
+     this repo's modernization dashboard): add/refresh THIS issue's entry in that single
+     `<sharedDoc>` markdown, do NOT create a per-issue file.
+   - **per-issue** (default, sharedDoc unset): write the issue spec markdown to
+     `<activeProject.path>/docs/planning/<issue>-<slug>.md`.
 2. Render it to a self-contained, CSP-safe HTML artifact with the shared helper —
    never hand-roll HTML:
    ```bash
