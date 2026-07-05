@@ -572,7 +572,8 @@ orchestrator resumes the session after the user replies.
 ### Per-Project Access Control
 
 Each project must explicitly opt in to headless mode via `headlessEnabled` in
-its workspace entry. Default is `false` (safe — must opt in).
+its workspace entry. Default is `false` (safe — must opt in). The field accepts
+two shapes (#165):
 
 ```json
 {
@@ -581,15 +582,47 @@ its workspace entry. Default is `false` (safe — must opt in).
       "name": "my-app",
       "headlessEnabled": true,
       "headlessAllowSSH": false
+    },
+    {
+      "name": "my-other-app",
+      "headlessEnabled": {
+        "enabled": true,
+        "triggers": ["issue-label"],
+        "auth": "subscription-oauth"
+      }
     }
   ]
 }
 ```
 
+- **bool** (legacy): `true` allows headless via any trigger.
+- **object**: `enabled` is the master switch; `triggers` is a per-trigger
+  allowlist matched against the orchestrator-set `RAWGENTIC_HEADLESS_TRIGGER`
+  env var (absent `triggers` = any trigger; a present list **fails closed** on
+  a non-member, an unset trigger env, or a malformed value); `auth` records the
+  repo's Action auth-mode decision (see below). The bundled
+  `.github/workflows/rawgentic-auto.yml` pilot sets
+  `RAWGENTIC_HEADLESS_TRIGGER=issue-label`.
+
 Set during `/rawgentic:setup` (Step 2c) or manually in `.rawgentic_workspace.json`.
 When `RAWGENTIC_HEADLESS=1` is set but the project has `headlessEnabled: false`
 (or missing), the session-start hook blocks headless execution and the agent
 is instructed to exit immediately.
+
+### Action Auth Mode (#165 AC7)
+
+Label-triggered Action runs authenticate one of two ways; the decision is
+recorded per repo in `headlessEnabled.auth`:
+
+- **`subscription-oauth`** (default — the majority case): owner runs
+  `claude setup-token` once and saves the output as the repo secret
+  `CLAUDE_CODE_OAUTH_TOKEN`. Runs share the owner's plan bucket — schedule
+  off-hours; a plan lockout maps to DEFER (the run simply fails and the label
+  can be re-applied later).
+- **`api-key`**: repo secret `ANTHROPIC_API_KEY` — an isolated dollar budget
+  instead of the plan bucket, at API prices.
+
+Secrets are referenced by NAME in the workflow yml, never by value (AC8).
 
 **`headlessAllowSSH`** (boolean, default `false`) — the SSH escape hatch for the
 headless remote-ops guard (issue #47). In headless mode the bot's job ends at PR
