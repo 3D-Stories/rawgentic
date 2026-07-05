@@ -549,6 +549,76 @@ class TestSessionStartHeadless:
 # wal-stop — SUSPEND guard tests
 # =========================================================================
 
+class TestHeadlessEnabledShape:
+    """#165 AC5: headlessEnabled accepts the extended OBJECT shape
+    {"enabled": bool, "triggers": [...], "auth": "..."} alongside the legacy
+    bool. Trigger gating: an absent `triggers` list allows any trigger; a
+    present list requires RAWGENTIC_HEADLESS_TRIGGER membership — with the
+    trigger env unset or the list malformed, the gate fails CLOSED."""
+
+    @staticmethod
+    def _ctx(stdout):
+        output = json.loads(stdout) if stdout.strip() else {}
+        return output.get("hookSpecificOutput", {}).get("additionalContext", "")
+
+    def _run(self, make_workspace, headless_enabled, trigger=None):
+        ws = make_workspace(
+            projects=[_headless_project(enabled=headless_enabled)])
+        env = {"RAWGENTIC_HEADLESS": "1"}
+        if trigger is not None:
+            env["RAWGENTIC_HEADLESS_TRIGGER"] = trigger
+        stdout, _, rc = _run_hook(
+            "session-start",
+            {"session_id": "test-sess", "hook_event_name": "startup"},
+            cwd=ws.root, env_override=env,
+        )
+        assert rc == 0
+        return self._ctx(stdout)
+
+    def test_object_enabled_no_triggers_allows(self, make_workspace):
+        ctx = self._run(make_workspace, {"enabled": True})
+        assert "HEADLESS MODE active" in ctx
+
+    def test_object_enabled_trigger_member_allows(self, make_workspace):
+        ctx = self._run(make_workspace,
+                        {"enabled": True, "triggers": ["issue-label"]},
+                        trigger="issue-label")
+        assert "HEADLESS MODE active" in ctx
+
+    def test_object_enabled_trigger_nonmember_blocks(self, make_workspace):
+        ctx = self._run(make_workspace,
+                        {"enabled": True, "triggers": ["issue-label"]},
+                        trigger="cron")
+        assert "HEADLESS MODE BLOCKED" in ctx
+        assert "trigger" in ctx.lower()
+
+    def test_object_enabled_trigger_env_absent_blocks(self, make_workspace):
+        """Allowlist present but no RAWGENTIC_HEADLESS_TRIGGER → fail closed."""
+        ctx = self._run(make_workspace,
+                        {"enabled": True, "triggers": ["issue-label"]})
+        assert "HEADLESS MODE BLOCKED" in ctx
+
+    def test_object_disabled_blocks(self, make_workspace):
+        ctx = self._run(make_workspace, {"enabled": False}, trigger="issue-label")
+        assert "HEADLESS MODE BLOCKED" in ctx
+
+    def test_object_malformed_triggers_blocks(self, make_workspace):
+        """triggers as a string (not array) must fail closed, not crash open."""
+        ctx = self._run(make_workspace,
+                        {"enabled": True, "triggers": "issue-label"},
+                        trigger="issue-label")
+        assert "HEADLESS MODE BLOCKED" in ctx
+
+    def test_legacy_bool_true_ignores_trigger_env(self, make_workspace):
+        """Back-compat: bool true allows ANY trigger — env var irrelevant."""
+        ctx = self._run(make_workspace, True, trigger="anything-at-all")
+        assert "HEADLESS MODE active" in ctx
+
+    def test_legacy_bool_false_blocks(self, make_workspace):
+        ctx = self._run(make_workspace, False, trigger="issue-label")
+        assert "HEADLESS MODE BLOCKED" in ctx
+
+
 class TestWalStopSuspend:
     """wal-stop hook writes SUSPENDED when headless + suspend file."""
 

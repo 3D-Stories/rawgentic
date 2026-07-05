@@ -720,14 +720,40 @@ if [ "${RAWGENTIC_HEADLESS:-}" = "1" ]; then
         fi
 
         if [ -n "$_HEADLESS_PROJECT" ]; then
-            _HEADLESS_ENABLED=$("$JQ" -r --arg name "$_HEADLESS_PROJECT" \
-                '[.projects[] | select(.name == $name)][0].headlessEnabled // false' \
-                "$WORKSPACE_FILE" 2>/dev/null || echo "false")
-            if [ "$_HEADLESS_ENABLED" = "true" ]; then
-                HEADLESS_ALLOWED=true
-            else
-                CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' does not have headless mode enabled. Set headlessEnabled: true in .rawgentic_workspace.json for this project (via /rawgentic:setup) to allow autonomous agent execution. Refusing to execute workflow skills — exit immediately.")
-            fi
+            # headlessEnabled accepts two shapes (#165 AC5):
+            #   bool  — legacy: true allows any trigger
+            #   object— {"enabled": bool, "triggers": [..], "auth": ".."}
+            #           absent `triggers` = any trigger; a present list requires
+            #           $RAWGENTIC_HEADLESS_TRIGGER membership (fail closed on
+            #           unset env or malformed list)
+            # Verdict is one of: allowed | trigger | disabled
+            _HEADLESS_VERDICT=$("$JQ" -r --arg name "$_HEADLESS_PROJECT" \
+                --arg trigger "${RAWGENTIC_HEADLESS_TRIGGER:-}" '
+                [.projects[] | select(.name == $name)][0].headlessEnabled as $h
+                | if $h == true then "allowed"
+                  elif ($h | type) == "object" then
+                      if ($h.enabled // false) != true then "disabled"
+                      elif ($h | has("triggers") | not) then "allowed"
+                      elif (($h.triggers | type) == "array"
+                            and $trigger != ""
+                            and ($h.triggers | index($trigger)) != null)
+                          then "allowed"
+                      else "trigger"
+                      end
+                  else "disabled"
+                  end' \
+                "$WORKSPACE_FILE" 2>/dev/null || echo "disabled")
+            case "$_HEADLESS_VERDICT" in
+                allowed)
+                    HEADLESS_ALLOWED=true
+                    ;;
+                trigger)
+                    CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' allows headless mode but not for this trigger ('${RAWGENTIC_HEADLESS_TRIGGER:-unset}' is not in the headlessEnabled.triggers allowlist). Refusing to execute workflow skills — exit immediately.")
+                    ;;
+                *)
+                    CONTEXT_PARTS+=("HEADLESS MODE BLOCKED: Project '${_HEADLESS_PROJECT}' does not have headless mode enabled. Set headlessEnabled: true in .rawgentic_workspace.json for this project (via /rawgentic:setup) to allow autonomous agent execution. Refusing to execute workflow skills — exit immediately.")
+                    ;;
+            esac
         fi
     fi
 
