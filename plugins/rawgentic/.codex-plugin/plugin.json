@@ -1,6 +1,6 @@
 {
   "name": "rawgentic",
-  "version": "2.63.0",
+  "version": "2.64.0",
   "description": "SDLC workflow skills for Codex and Claude Code: project setup, issue creation, feature implementation, bug fixing, refactoring, documentation, dependency updates, security audits, performance optimization, incident response, test suite creation, and cross-model adversarial review.",
   "author": {
     "name": "3D-Stories",
