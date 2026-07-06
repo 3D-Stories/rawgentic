@@ -49,7 +49,7 @@ are used, one block per API:
 ```md
 platform_apis:
 - api: <exact API> on <exact object/runtime surface>
-  feasibility: verified via <capabilities-file|existing-call-site|spike|docs> — <citation>
+  feasibility: verified via <capabilities-file|existing-call-site|spike> — <citation>
   failure: fail-loud | fail-silent
   surface: <assertion|log|observable check> — <where>   # REQUIRED when failure: fail-silent
 ```
@@ -57,12 +57,13 @@ platform_apis:
 Rules:
 - `feasibility: assumed` may appear as an **interim Step-3 drafting marker**, but is explicitly
   **Step-4-blocking** (peer decision — draft, then resolve before the gate).
-- **Evidence credibility (Adv#5):** `docs` proves the API *exists*, not that this project's
-  config *permits* it. For a **permission/capability-gated** API, `docs` alone is insufficient —
-  cite `capabilities-file`, an exact `existing-call-site`, or a `spike`. The validator accepts
-  all four kinds syntactically; the Step-4 lens + WF5 review judge whether `docs` is credible
-  for *this* API (peer principle: automation enforces the risk was named + evidenced, review
-  judges credibility).
+- **`docs` is NOT an accepted evidence kind (adversarial-diff review, hardened from Adv#5).**
+  Docs prove an API *exists*, not that this project's config *permits* it — accepting
+  `verified via docs` for a permission/capability-gated API is the exact silent gap #226
+  targets (docs say `setSize` exists; the capability file denies it). `assert_feasibility_declared`
+  rejects `docs`; cite a `capabilities-file`, an exact `existing-call-site`, or a `spike`. (The
+  first draft accepted docs and deferred credibility to review; a cross-model diff review flagged
+  that as a fail-open — closed mechanically instead.)
 - **Working-precedent (AC3):** an `existing-call-site` counts only for the **exact** API on the
   **exact** object kind + target surface (the main-window-has-it/overlay-doesn't asymmetry);
   otherwise spike or cite config.
@@ -77,15 +78,19 @@ block whose `feasibility:`/`failure:`/`surface:` fields belong to that block unt
 
 - `parse_feasibility_block(text) -> FeasibilityDecl | None` — returns `None` when NO
   `platform_apis:` declaration is present (so the caller can distinguish "no declaration" from
-  "declared none"); otherwise a `FeasibilityDecl(present=True, none=<bool>, apis=[ApiFeasibility...])`.
-  - `ApiFeasibility(api, status: Literal["verified","assumed"], kind, citation, failure: Literal["fail-loud","fail-silent"] | None, surface)`.
+  "declared none"); code-fence aware (both ` ``` ` and `~~~`, so a doc quoting the contract is
+  not mis-parsed); collects ALL non-fenced declarations — **>1 sets `ambiguous=True`** so an
+  early stray `platform_apis: none` can't shadow a later real one (review finding).
+  - `ApiFeasibility(api, status, kind, citation, failure, surface)`; `FeasibilityDecl(present, none, apis, ambiguous)`.
 - `assert_feasibility_declared(decl) -> (ok, errors)` — the mechanical Step-4 gate, **fail-closed**:
-  - `decl is None` (**declaration absent**) → error "every design must declare `platform_apis:`" (Adv#1/#2 — omission caught).
+  - `decl is None` (**declaration absent**) → error (Adv#1/#2 — omission caught).
+  - `decl.ambiguous` (>1 declaration) → error.
   - `decl.none` → ok.
-  - else per api block: `assumed` → error; `verified` with kind ∉ {capabilities-file, existing-call-site, spike, docs} or empty citation → error (peer graft); `failure: fail-silent` with empty `surface` → error (Adv#4 — AC4 mechanical); missing `failure` → error.
+  - else per api block: `assumed` → error; `verified` with kind ∉ {capabilities-file, existing-call-site, spike} (docs excluded) or empty citation → error; `failure: fail-silent` with empty `surface` → error (AC4 mechanical); missing `failure` → error.
 
-Separator tolerance (self-review #3): the `— <citation>` / `- <citation>` split accepts em-dash,
-hyphen, or `:` (the WF3 guard hit this en/em-dash bug before); unit tests cover both.
+Separator tolerance: the `verified via <kind> <sep> <citation>` split accepts em-dash, en-dash,
+minus, hyphen, and colon (editor smart-punctuation); dashless-indented fields only (a `- field`
+line is a new item, not a bleeding sibling); unit tests cover each.
 
 No new dataclass field is needed for AC5 — the existing `deferral_reason` (free text) and the
 run-record's `verification_deferred[].target_check` already carry "the claim most likely to
@@ -108,12 +113,14 @@ pins the requirement rather than a validator.
 | 7 | `tests/test_feasibility_gate.py` (new) | Unit tests for the two helpers (verified ok / assumed fails / verified-no-evidence fails / empty ok) + corpus drift guards asserting the §3 note requirement, §4 + `_TYPE_LENS` lens, §9 runtime-surface rule, quality-bar `platform_feasibility`, and the WF3 mirror are all present. |
 
 ## Failure modes / over-gating traps (the main risk)
-- **Over-gating** (issue's stated risk): the requirement is scoped to APIs **not already
-  proven in-repo the same way** — a precedented exact call site is sufficient proof, so
-  well-worn APIs never trip it. The validator only fires when `feasibility:` notes exist;
-  the prose requires notes only for *unproven platform* APIs, not every function call.
-- **False "verified"**: `assert_feasibility_proven` requires a non-empty `via <evidence>`
-  clause, so `feasibility: verified` with no cited evidence fails closed.
+- **Over-gating** (issue's stated risk): feasibility *proof* is scoped to APIs **not already
+  proven in-repo the same way** — a precedented exact call site is sufficient, so well-worn
+  APIs never trip it. The mandatory declaration is one line (`platform_apis: none`) when no
+  platform API is used — symmetric with the always-required "Security implications" section,
+  not proof-for-everything.
+- **False "verified"**: `assert_feasibility_declared` requires an allowed evidence **kind**
+  (`docs` excluded) AND a non-empty citation, so `verified via docs`, an unknown kind, or a
+  citation-less `verified` all fail closed.
 - **Silent skip of the mirror**: the drift guard pins the WF3 §3/§4 text so a later prose
   edit can't quietly drop it.
 
@@ -138,6 +145,23 @@ the **single-canonical-block + pointer** (DRY) placement for WF3/lens, and **sta
 `quality-bar.md` edit, so the `platform_feasibility` category + one stance bullet are added to
 all three identical copies (inert in setup) to preserve the byte-identical invariant, kept to
 2 lines to honor the peer's blast-radius caution.
+
+## Step-11 review hardening (provenance)
+The pre-PR review round (a cross-model adversarial diff review + two `rawgentic:rawgentic-reviewer`
+agents, each confirming findings by executing the parser) closed five issues the first cut left
+open — all corroborating the "close it mechanically, don't defer to review" direction:
+- **`docs` fail-open (High):** the first cut accepted `verified via docs` and deferred credibility
+  to the review lens; the diff review flagged that a permission-gated API could pass on docs alone
+  (the exact #226 failure). Fix: `docs` removed from the accepted evidence kinds.
+- **first-`none`-wins fail-open (Med):** an early stray `platform_apis: none` shadowed a later real
+  declaration. Fix: >1 non-fenced declaration → `ambiguous`, fails closed.
+- **`~~~` fences (Med):** only ` ``` ` was skipped. Fix: skip `~~~` too (4-space-indent noted as a
+  residual, fail-*closed* gap).
+- **en-dash separator (Low):** the "en/em-dash" comment omitted U+2013/U+2212. Fix: added.
+- **`-?` sibling-field bleed (Low):** a stray `- feasibility:` bled into the prior block. Fix:
+  dashless-indented fields only.
+- **vacuous lens guard (Low):** the WF5-lens drift guard was file-scoped (phrase also in the plan
+  lens). Fix: assert on `_TYPE_LENS["design"]` specifically.
 
 ## Pre-PR
 Version minor 3.11.5 → 3.12.0; README + Changelog; this design md + html; **workflow-diagram

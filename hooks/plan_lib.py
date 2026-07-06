@@ -318,8 +318,13 @@ def _is_nonempty_str(v) -> bool:
 # The declaration being ABSENT is itself a Step-4 blocker: an omitted note is the
 # silent-gap class #226 exists to kill, so it must fail closed, not pass by default.
 
+# `docs` is deliberately NOT an accepted kind (#226 review): docs prove an API
+# *exists*, not that THIS project's config *permits* it — accepting `verified via
+# docs` for a permission/capability-gated API is the exact silent gap #226 targets
+# (the motivating Tauri case: docs say setSize exists; the capability file denies it).
+# Cite the capabilities/manifest file, an exact existing call site, or a spike.
 FEASIBILITY_EVIDENCE_KINDS: Final[tuple[str, ...]] = (
-    "capabilities-file", "existing-call-site", "spike", "docs",
+    "capabilities-file", "existing-call-site", "spike",
 )
 
 
@@ -338,17 +343,22 @@ class FeasibilityDecl:
     present: bool                  # a `platform_apis:` line exists
     none: bool                    # the declaration is exactly `none`
     apis: tuple[ApiFeasibility, ...] = ()
+    ambiguous: bool = False       # >1 non-fenced `platform_apis:` line — fail closed
 
 
 _PLATFORM_APIS_RE = re.compile(r"^\s*platform_apis\s*:\s*(.*)$", re.IGNORECASE)
 _FEAS_API_RE = re.compile(r"^\s*-\s*api\s*:\s*(.+?)\s*$", re.IGNORECASE)
-_FEAS_FEASIBILITY_RE = re.compile(r"^\s*-?\s*feasibility\s*:\s*(.+?)\s*$", re.IGNORECASE)
-_FEAS_FAILURE_RE = re.compile(r"^\s*-?\s*failure\s*:\s*(.+?)\s*$", re.IGNORECASE)
-_FEAS_SURFACE_RE = re.compile(r"^\s*-?\s*surface\s*:\s*(.+?)\s*$", re.IGNORECASE)
-# `verified via <kind> <sep> <citation>` — sep is em-dash, hyphen, or colon (the
-# WF3 drift guard hit exactly this en/em-dash bug, so tolerate all three).
+# Fields are dashless + indented under `- api:` (per the contract). No leading `-?`:
+# a `- feasibility:` line is a NEW (malformed) list item, not a field of the prior
+# block, and must NOT bleed its value into it (#226 review, finding 4).
+_FEAS_FEASIBILITY_RE = re.compile(r"^\s+feasibility\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_FEAS_FAILURE_RE = re.compile(r"^\s+failure\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_FEAS_SURFACE_RE = re.compile(r"^\s+surface\s*:\s*(.+?)\s*$", re.IGNORECASE)
+# `verified via <kind> <sep> <citation>` — sep tolerates em-dash (U+2014), en-dash
+# (U+2013), minus (U+2212), hyphen, and colon (editor smart-punctuation produces all
+# of these; the WF3 drift guard hit exactly this dash-variant bug).
 _FEAS_VERIFIED_RE = re.compile(
-    r"^verified\s+via\s+([a-z][a-z-]*)\s*(?:[—\-:]\s*(.*\S))?\s*$", re.IGNORECASE
+    r"^verified\s+via\s+([a-z][a-z-]*)\s*(?:[—–−\-:]\s*(.*\S))?\s*$", re.IGNORECASE
 )
 _MD_HEADING_RE = re.compile(r"^\s*#{1,6}\s")
 
@@ -373,36 +383,41 @@ def parse_feasibility_block(text: str) -> "FeasibilityDecl | None":
 
     Returns None when NO `platform_apis:` line is present, so the caller can tell
     "declaration absent" (an omission → Step-4 error) from "declared none". The
-    grammar: the first `platform_apis:` line starts the declaration; `none` on that
-    line means no platform APIs; otherwise each following `- api:` opens a block
-    whose `feasibility:`/`failure:`/`surface:` fields belong to it until the next
-    `- api:` or the next markdown heading (or EOF).
+    grammar: exactly ONE non-fenced `platform_apis:` line is the declaration (>1 is
+    ambiguous → `ambiguous=True`, fails closed); `none` on that line means no platform
+    APIs; otherwise each following `- api:` opens a block whose dashless-indented
+    `feasibility:`/`failure:`/`surface:` fields belong to it until the next `- api:`
+    or the next markdown heading (or EOF).
     """
     lines = text.splitlines()
-    # Mark fenced (```) lines so a design doc that *quotes* the contract in a code
-    # block (this very feature's design doc does) is not mis-parsed as a real
-    # declaration — the prose declaration is what counts, not a quoted example.
+    # Mark fenced lines so a design doc that *quotes* the contract in a code block
+    # (this very feature's design doc does) is not mis-parsed as a real declaration —
+    # the prose declaration is what counts, not a quoted example. Both ``` and ~~~
+    # fences are handled. (A 4-space-indented code block is a residual gap — rare in
+    # these docs, and a false-reject if ever hit, not a fail-open.)
     fenced = [False] * len(lines)
     in_fence = False
     for i, ln in enumerate(lines):
-        if re.match(r"^\s*```", ln):
+        if re.match(r"^\s*(?:```|~~~)", ln):
             in_fence = not in_fence
             fenced[i] = True  # the fence marker line itself is skipped
             continue
         fenced[i] = in_fence
 
-    decl_idx = None
-    decl_rest = ""
-    for i, ln in enumerate(lines):
-        if fenced[i]:
-            continue
-        m = _PLATFORM_APIS_RE.match(ln)
-        if m:
-            decl_idx = i
-            decl_rest = m.group(1).strip()
-            break
-    if decl_idx is None:
+    # Collect ALL non-fenced declarations. Exactly one is required: >1 is ambiguous
+    # and fails closed, so an early stray `platform_apis: none` (e.g. in a summary)
+    # cannot shadow a later real declaration whose APIs are unproven (#226 review,
+    # finding 1 — the first-`none`-wins fail-open).
+    decl_indices = [
+        i for i, ln in enumerate(lines)
+        if not fenced[i] and _PLATFORM_APIS_RE.match(ln)
+    ]
+    if not decl_indices:
         return None
+    if len(decl_indices) > 1:
+        return FeasibilityDecl(present=True, none=False, apis=(), ambiguous=True)
+    decl_idx = decl_indices[0]
+    decl_rest = _PLATFORM_APIS_RE.match(lines[decl_idx]).group(1).strip()
     if decl_rest.lower() == "none":
         return FeasibilityDecl(present=True, none=True, apis=())
 
@@ -450,6 +465,7 @@ def assert_feasibility_declared(decl: "FeasibilityDecl | None") -> tuple[bool, l
 
     - `decl is None` (declaration absent) → error: an omitted `platform_apis:`
       declaration must not pass, else the silent-gap failure class returns.
+    - `decl.ambiguous` (>1 declaration) → error: exactly one is required.
     - `decl.none` → ok.
     - else per api block: `assumed` blocks; a verified note needs an allowed evidence
       kind AND a non-empty citation; a `fail-silent` API needs a `surface:` (AC4);
@@ -460,6 +476,11 @@ def assert_feasibility_declared(decl: "FeasibilityDecl | None") -> tuple[bool, l
             "design must declare `platform_apis:` (either `none` or one block per "
             "material platform/external API) — an omitted declaration cannot pass "
             "Step 4 (#226)"
+        ])
+    if decl.ambiguous:
+        return (False, [
+            "multiple `platform_apis:` declarations found — a design must have exactly "
+            "one, else an early stray `none` can shadow a real declaration (#226)"
         ])
     if decl.none:
         return (True, [])

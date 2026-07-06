@@ -27,8 +27,9 @@ work *earn* a pass. Specifically:
   platform/framework/external API (window ops, permission-gated calls, GPU/audio, native
   features, an external service), an unproven dependency is a blocker — require cited proof it
   runs under *this project's* config (a capabilities/manifest file, an exact existing call
-  site, a spike; `docs` alone never suffices for a permission-gated API), not the mere
-  existence of the API. A dependency marked "assumed" does not pass. (#226)
+  site, or a spike; `docs` are not accepted — they prove the API exists, not that this project
+  permits it), not the mere existence of the API. A dependency marked "assumed" does not
+  pass. (#226)
 
 ## Depth triage (match effort to blast radius)
 

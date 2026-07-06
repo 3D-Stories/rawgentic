@@ -75,7 +75,7 @@
 </div>
 <h1>Platform / external-dependency feasibility gate (#226)</h1>
 <p>WF2 Step 3 design of record · Complexity: standard_feature · Blast: low code, prose-heavy · plugin 3.12.0</p>
-<blockquote><p>Design shaped by a blind cross-model peer consult (converged on Approach A) and a cross-model adversarial-on-design pass (2 High folded → the mechanical omission-catch). Dogfooded: this feature's own design declares <code>platform_apis: none</code> and passes its own Step-4 gate.</p></blockquote>
+<blockquote><p>Design shaped by a blind cross-model peer consult (converged on Approach A) and a cross-model adversarial-on-design pass (2 High folded → the mechanical omission-catch). The pre-PR review round (a cross-model diff review + two reviewer agents) then closed five more fail-opens — chiefly <strong>docs removed from accepted evidence kinds</strong> and <strong>duplicate declarations rejected as ambiguous</strong>. Dogfooded: this feature's own design declares <code>platform_apis: none</code> and passes its own Step-4 gate.</p></blockquote>
 
 <h2>Problem</h2>
 <p>A design can commit to a platform/framework API the project's own configuration does not permit and still pass <strong>every</strong> current gate, because the gates are test-centric and the failure only manifests at runtime on a surface CI never exercises. Motivating real run: a Tauri&nbsp;2 overlay used <code>window.setSize</code>; that window's capability file lacked <code>allow-set-size</code> (the main window had it — a visible asymmetry in the repo). The call was silently denied (error only in the webview console); <code>cargo</code> compile, <code>tsc</code>, and unit tests were all green. Three build-and-UAT cycles to catch.</p>
@@ -94,12 +94,12 @@ platform_apis: none        # the whole declaration when no material platform/ext
 <p>or, per <strong>material</strong> platform/framework/external API not already proven in-repo the same way, one block per API:</p>
 <pre><code>platform_apis:
 - api: &lt;exact API&gt; on &lt;exact object/runtime surface&gt;
-  feasibility: verified via &lt;capabilities-file|existing-call-site|spike|docs&gt; — &lt;citation&gt;
+  feasibility: verified via &lt;capabilities-file|existing-call-site|spike&gt; — &lt;citation&gt;
   failure: fail-loud | fail-silent
   surface: &lt;assertion|log|observable check&gt; — &lt;where&gt;   # REQUIRED when failure: fail-silent</code></pre>
 <ul>
 <li><code>feasibility: assumed</code> may appear as an interim Step-3 drafting marker, but is explicitly <strong>Step-4-blocking</strong>.</li>
-<li><strong>Evidence credibility:</strong> <code>docs</code> proves the API <em>exists</em>, not that this project's config <em>permits</em> it — for a permission/capability-gated API, <code>docs</code> alone is insufficient; cite the capabilities file, an exact call site, or a spike.</li>
+<li><strong><code>docs</code> is NOT an accepted evidence kind:</strong> docs prove the API <em>exists</em>, not that this project's config <em>permits</em> it — accepting docs is the exact #226 failure (docs say <code>setSize</code> exists; the capability file denies it). Cite a capabilities/manifest file, an exact call site, or a spike. (A cross-model diff review flagged docs-accepted as a fail-open; closed mechanically.)</li>
 <li><strong>Working-precedent:</strong> an <code>existing-call-site</code> counts only for the <strong>exact</strong> API on the <strong>exact</strong> object kind + target surface (the main-window-has-it / overlay-doesn't asymmetry); otherwise spike or cite config.</li>
 <li>The full contract lives <strong>once</strong> in WF2 §3; WF3 and the lens carry a short checklist + pointer, not a duplicate.</li>
 </ul>
@@ -107,8 +107,8 @@ platform_apis: none        # the whole declaration when no material platform/ext
 <h2>Mechanism</h2>
 <h3>1. <code>plan_lib</code> feasibility validator (the only new code)</h3>
 <ul>
-<li><code>parse_feasibility_block(text) → FeasibilityDecl | None</code> — returns <code>None</code> when NO <code>platform_apis:</code> declaration is present (so the caller can distinguish "declaration absent" from "declared none"); code-fence aware, so a design that <em>quotes</em> the contract in a <code>```</code> block is not mis-parsed. Separator-tolerant (em-dash / hyphen / colon).</li>
-<li><code>assert_feasibility_declared(decl) → (ok, errors)</code> — the mechanical Step-4 gate, fail-closed: <code>None</code> (absent) errors; <code>none</code> passes; else per block <code>assumed</code>, a bad evidence-kind, an empty citation, a missing <code>failure:</code>, or <code>fail-silent</code> without <code>surface:</code> all error.</li>
+<li><code>parse_feasibility_block(text) → FeasibilityDecl | None</code> — returns <code>None</code> when NO <code>platform_apis:</code> declaration is present (so the caller can distinguish "declaration absent" from "declared none"); code-fence aware (both ``` and ~~~); collects ALL non-fenced declarations — &gt;1 sets <code>ambiguous=True</code> so an early stray <code>none</code> can't shadow a later real one. Separator-tolerant (em/en-dash, minus, hyphen, colon).</li>
+<li><code>assert_feasibility_declared(decl) → (ok, errors)</code> — the mechanical Step-4 gate, fail-closed: <code>None</code> (absent) errors; <code>ambiguous</code> (&gt;1 declaration) errors; <code>none</code> passes; else per block <code>assumed</code>, a bad evidence-kind (docs excluded), an empty citation, a missing <code>failure:</code>, or <code>fail-silent</code> without <code>surface:</code> all error.</li>
 </ul>
 <p>No new dataclass field is needed for the runtime-surface rule — the existing <code>deferral_reason</code> and the run-record's <code>verification_deferred[].target_check</code> already carry "the claim most likely to be wrong." A mechanical "is this the <em>most</em> likely wrong claim?" check is impossible; the drift guard pins the requirement and review judges the naming.</p>
 
@@ -132,7 +132,7 @@ platform_apis: none        # the whole declaration when no material platform/ext
 <h2>Failure modes / over-gating traps (the main risk)</h2>
 <ul>
 <li><strong>Over-gating</strong> (the issue's stated #1 risk): the feasibility <em>proof</em> requirement is scoped to APIs not already proven in-repo the same way — a precedented exact call site is sufficient, so well-worn APIs never trip it. The mandatory declaration is one line (<code>platform_apis: none</code>), symmetric with the existing "Security implications" section — not proof-for-everything.</li>
-<li><strong>False "verified":</strong> the validator requires an allowed evidence kind AND a non-empty citation, so <code>verified via docs</code> with no doc fails closed.</li>
+<li><strong>False "verified":</strong> the validator requires an allowed evidence kind (<code>docs</code> excluded) AND a non-empty citation, so <code>verified via docs</code>, an unknown kind, or a citation-less <code>verified</code> all fail closed.</li>
 <li><strong>Silent skip of the mirror:</strong> the drift guard pins the WF3 §3/§4 text (and every other surface) so a later prose edit can't quietly drop it.</li>
 </ul>
 

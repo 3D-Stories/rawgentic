@@ -409,7 +409,7 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      ```md
      platform_apis:
      - api: <exact API> on <exact object/runtime surface>
-       feasibility: verified via <capabilities-file|existing-call-site|spike|docs> — <citation>
+       feasibility: verified via <capabilities-file|existing-call-site|spike> — <citation>
        failure: fail-loud | fail-silent
        surface: <assertion|log|observable check> — <where>   # REQUIRED when failure: fail-silent
      ```
@@ -422,10 +422,12 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
      - **Working-precedent (AC3):** an `existing-call-site` proves feasibility ONLY for the
        **exact** API on the **exact** object kind and target surface (e.g. `window.setSize`
        proven on the main window does NOT prove it on an overlay window whose capability file
-       differs). Otherwise cite `capabilities-file`/`docs` or run a `spike`.
-     - **Evidence credibility (AC4 context):** `docs` proves the API *exists*, not that this
-       project's config *permits* it — for a permission/capability-gated API, `docs` alone is
-       insufficient; cite the capabilities file, an exact call site, or a spike.
+       differs). Otherwise cite a `capabilities-file` or run a `spike`.
+     - **`docs` is not an accepted evidence kind.** Documentation proves an API *exists*, not
+       that THIS project's config *permits* it — accepting docs is the exact #226 failure (docs
+       say `setSize` exists; the capability file denies it). `assert_feasibility_declared`
+       rejects `verified via docs`; cite the capabilities/manifest file, an exact call site, or
+       a spike instead.
      - **Silent-failure gate (AC4):** classify each external call `fail-loud` vs `fail-silent`
        on the target. A `fail-silent` call (denied/failed with the error only in a console CI
        never sees) MUST carry a `surface:` assertion/log that makes build #1 reveal the
@@ -493,12 +495,12 @@ dual-path, always logged). The quality-bar self-review is a single-pass, same-mo
   `python3 -c "import sys;sys.path.insert(0,'hooks');from plan_lib import parse_feasibility_block,assert_feasibility_declared as A;ok,errs=A(parse_feasibility_block(open('<design-doc>').read()));print(ok,errs)"`.
   A non-`ok` result is a **blocking** finding (Critical/High): an absent `platform_apis:`
   declaration, an `assumed` dependency, weak/uncited evidence, or a `fail-silent` API with no
-  `surface:`. Beyond the mechanical check, judge credibility the parser cannot: does each API
-  actually work under THIS project's real config (capability/manifest files, feature flags,
-  sandbox, OS/CI limits)? Is `docs` evidence credible for a permission-gated API (usually not)?
-  And — the parser cannot see this — does the design **use** a platform API it failed to
-  declare (a `platform_apis: none` that is actually false)? A used-but-undeclared API is itself
-  the finding.
+  `surface:`. Beyond the mechanical check, judge credibility the parser cannot: does the cited
+  evidence actually prove the API works under THIS project's real config (does the named
+  capability/manifest file truly grant it; is the call site the exact API on the exact object
+  kind; did the spike exercise the real surface)? And — the parser cannot see this — does the
+  design **use** a platform API it failed to declare (a `platform_apis: none` that is actually
+  false)? A used-but-undeclared API is itself the finding.
 - For WF1-validated issues: does the design align with the WF1-critiqued spec?
 
 The self-review produces findings in the shape the gate consumes:

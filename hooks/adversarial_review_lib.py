@@ -157,9 +157,9 @@ _TYPE_LENS: Final[dict[str, str]] = {
         "Platform feasibility (#226): for every external/platform/framework API the design "
         "relies on, ask whether it actually works under this project's real config (capability/"
         "manifest files, feature flags, sandbox, OS/CI limits) — flag any dependency assumed "
-        "rather than proven by a cited capabilities file, exact-object-kind call site, spike, or "
-        "docs (docs alone do not prove a permission-gated API is permitted), and flag a "
-        "silent-failure call that lacks a surfacing assertion/log."
+        "rather than proven by a cited capabilities file, exact-object-kind call site, or spike "
+        "(docs are NOT sufficient — they prove the API exists, not that this project permits "
+        "it), and flag a silent-failure call that lacks a surfacing assertion/log."
     ),
     "spec": "Focus on testability, edge cases, ambiguous requirements, and internal contradictions.",
     "plan": (

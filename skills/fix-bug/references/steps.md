@@ -207,8 +207,8 @@ Bug analysis (internal working artifact):
    GPU/audio, native features, an external service) **not already proven in-repo the same way**,
    carry a short feasibility note — the canonical contract is WF2
    `skills/implement-feature/references/steps.md` §3 (`platform_apis:` / `feasibility: verified
-   via <capabilities-file|existing-call-site|spike|docs> — <citation>` / `failure:
-   fail-loud|fail-silent` + `surface:` when silent). Prove it against this project's real config
+   via <capabilities-file|existing-call-site|spike> — <citation>` / `failure:
+   fail-loud|fail-silent` + `surface:` when silent; `docs` are not accepted). Prove it against this project's real config
    (exact-object-kind precedent or a spike, not the API's mere existence); `assumed` does not
    pass Step 4. When the fix uses no such API, this is one line: `platform_apis: none`.
 

@@ -65,18 +65,18 @@ def test_single_verified_block_emdash():
     assert a.surface is None
 
 
-def test_separator_tolerance_hyphen_and_colon():
-    """The `via <kind> <sep> <citation>` split must accept em-dash, hyphen, and colon
-    (the WF3 drift guard hit exactly this en/em-dash bug)."""
-    for sep in ("—", "-", ":"):
+def test_separator_tolerance_all_dashes_and_colon():
+    """The `via <kind> <sep> <citation>` split must accept em-dash, en-dash, minus,
+    hyphen, and colon (editor smart-punctuation produces all of these)."""
+    for sep in ("—", "–", "−", "-", ":"):
         text = (
             "platform_apis:\n"
-            f"- api: X\n  feasibility: verified via docs {sep} https://d/ok\n  failure: fail-loud\n"
+            f"- api: X\n  feasibility: verified via spike {sep} ran-it\n  failure: fail-loud\n"
         )
         decl = plan_lib.parse_feasibility_block(text)
         a = decl.apis[0]
-        assert a.kind == "docs", sep
-        assert a.citation == "https://d/ok", sep
+        assert a.kind == "spike", sep
+        assert a.citation == "ran-it", sep
 
 
 def test_multi_api_block_scoping():
@@ -163,13 +163,60 @@ def test_bad_evidence_kind_blocks():
 
 
 def test_empty_citation_blocks():
-    """`verified via docs` with no citation must fail (peer graft)."""
+    """`verified via <kind>` with no citation must fail (peer graft)."""
     decl = plan_lib.parse_feasibility_block(
-        "platform_apis:\n- api: A\n  feasibility: verified via docs\n  failure: fail-loud\n"
+        "platform_apis:\n- api: A\n  feasibility: verified via spike\n  failure: fail-loud\n"
     )
     ok, errors = plan_lib.assert_feasibility_declared(decl)
     assert ok is False
     assert any("citation" in e.lower() or "evidence" in e.lower() for e in errors)
+
+
+def test_docs_evidence_kind_rejected():
+    """`docs` is NOT an accepted evidence kind (#226 review): docs prove existence,
+    not that this project's config permits the API — the motivating failure."""
+    decl = plan_lib.parse_feasibility_block(
+        "platform_apis:\n- api: A\n  feasibility: verified via docs — https://x/ok\n  failure: fail-loud\n"
+    )
+    ok, errors = plan_lib.assert_feasibility_declared(decl)
+    assert ok is False
+    assert any("docs" in e or "evidence" in e.lower() or "kind" in e.lower() for e in errors)
+
+
+def test_multiple_declarations_ambiguous_blocks():
+    """An early stray `platform_apis: none` must NOT shadow a later real declaration
+    (#226 review, finding 1 — the first-none-wins fail-open)."""
+    text = (
+        "## Summary\nplatform_apis: none\n\n"
+        "## Detail\nplatform_apis:\n- api: window.setSize\n  feasibility: assumed\n  failure: fail-loud\n"
+    )
+    decl = plan_lib.parse_feasibility_block(text)
+    assert decl is not None and decl.ambiguous is True
+    ok, errors = plan_lib.assert_feasibility_declared(decl)
+    assert ok is False
+    assert any("multiple" in e.lower() or "one" in e.lower() for e in errors)
+
+
+def test_tilde_fence_skipped():
+    """A contract quoted in a ~~~ fence must be skipped, like ``` (#226 review, finding 2)."""
+    text = "## deps\n~~~\nplatform_apis:\n- api: A\n  feasibility: assumed\n~~~\nplatform_apis: none\n"
+    decl = plan_lib.parse_feasibility_block(text)
+    assert decl is not None and decl.none is True
+    ok, _ = plan_lib.assert_feasibility_declared(decl)
+    assert ok is True
+
+
+def test_dashed_sibling_field_not_bled():
+    """A `- feasibility:` line is a new (malformed) list item, not a field of the prior
+    block — its value must NOT bleed into an api that had none (#226 review, finding 4)."""
+    text = (
+        "platform_apis:\n"
+        "- api: A\n  failure: fail-loud\n"
+        "- feasibility: verified via spike — x\n"
+    )
+    decl = plan_lib.parse_feasibility_block(text)
+    ok, errors = plan_lib.assert_feasibility_declared(decl)
+    assert ok is False  # api A has no feasibility of its own -> unrecognized/missing status
 
 
 def test_fail_silent_without_surface_blocks():
@@ -264,8 +311,12 @@ def test_quality_bar_platform_feasibility_in_all_three_identical():
 
 
 def test_wf5_design_lens_has_platform_constraints():
-    lens = (REPO_ROOT / "hooks" / "adversarial_review_lib.py").read_text()
-    assert "Platform feasibility (#226)" in lens, "the WF5 _TYPE_LENS design lens must carry the platform-constraints emphasis (#226 AC2)"
+    # Assert on the design lens SPECIFICALLY (the phrase also appears in the plan lens,
+    # so a whole-file check would pass even if the design lens dropped it) — B#2.
+    import adversarial_review_lib
+    assert "Platform feasibility (#226)" in adversarial_review_lib._TYPE_LENS["design"], (
+        "the WF5 _TYPE_LENS['design'] lens must carry the platform-constraints emphasis (#226 AC2)"
+    )
 
 
 def test_wf3_mirror_in_step3_and_step4():
