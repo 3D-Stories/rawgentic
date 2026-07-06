@@ -1583,19 +1583,31 @@ class TestCanonicalGateRegistry:
         assert canonical_gate_name("nope", "4") is None
         assert set(CANONICAL_GATE_NAMES) == {"implement-feature", "fix-bug"}
 
+    @staticmethod
+    def _doc_binds_step_to_name(doc, step, name):
+        # Anchor to the step->name PAIRING (a JSON row `"step": "<s>" ... "name": "<n>"`),
+        # not the bare name — a common phrase like "Code Review" appears in prose, so a bare
+        # membership check is near-vacuous (review F1). Fails if the mapping row is removed.
+        import re
+        return re.search(
+            rf'"step":\s*"{re.escape(step)}"[^\n]*"name":\s*"{re.escape(name)}"', doc
+        ) is not None
+
     def test_wf2_registry_matches_schema_doc(self):
-        # drift guard (AC4): WF2's run-record schema doc documents each canonical name
+        # drift guard (AC4): WF2's run-record schema doc binds each step to its canonical name
         from work_summary import CANONICAL_GATE_NAMES
         doc = (SKILLS_DIR / "implement-feature" / "references" / "run-record.md").read_text()
         for step, name in CANONICAL_GATE_NAMES["implement-feature"].items():
-            assert name in doc, f"WF2 gate name {name!r} (step {step}) missing from run-record.md"
+            assert self._doc_binds_step_to_name(doc, step, name), \
+                f"WF2 run-record.md does not bind step {step} -> {name!r}"
 
     def test_wf3_registry_matches_assembly_doc(self):
-        # drift guard (AC4): WF3's Step-14 run-record assembly documents each canonical name
+        # drift guard (AC4): WF3's Step-14 run-record assembly binds each step to its name
         from work_summary import CANONICAL_GATE_NAMES
         doc = (SKILLS_DIR / "fix-bug" / "references" / "steps.md").read_text()
         for step, name in CANONICAL_GATE_NAMES["fix-bug"].items():
-            assert name in doc, f"WF3 gate name {name!r} (step {step}) missing from fix-bug steps.md"
+            assert self._doc_binds_step_to_name(doc, step, name), \
+                f"WF3 fix-bug steps.md does not bind step {step} -> {name!r}"
 
 
 class TestScannerKindVocab:
