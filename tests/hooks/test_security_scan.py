@@ -470,6 +470,10 @@ class TestRunScanOrchestration:
                               "database_specific": {"severity": "HIGH"}}]}]}]})
         semgrep_out = json.dumps({"results": [], "errors": []})
         runner = _fake_runner_from({
+            # AC1 (#230): SCA is diff-scoped — the branch changed package-lock.json,
+            # so its advisory is in-scope and blocks (a pre-existing advisory in an
+            # unchanged manifest would not; see TestDiffScopeSca).
+            "git": _proc(0, "package-lock.json\n"),
             "gitleaks": _proc(1, gitleaks_out),  # rc=1 means leaks found, not error
             "osv-scanner": _proc(1, osv_out),
             "semgrep": _proc(0, semgrep_out),
@@ -652,6 +656,7 @@ class TestRunScanOrchestration:
                           "vulnerabilities": [{"id": "G",
                               "database_specific": {"severity": "HIGH"}}]}]}]})
         runner = _fake_runner_from({
+            "git": _proc(0, "package-lock.json\n"),  # in-scope: branch touched it
             "gitleaks": _proc(0, "[]"),
             "osv-scanner": _proc(1, osv_out),
             "semgrep": _proc(0, '{"results": [], "errors": []}')})
@@ -687,6 +692,7 @@ class TestRunScanOrchestration:
                           "vulnerabilities": [{"id": "G",
                               "database_specific": {"severity": "HIGH"}}]}]}]})
         runner = _fake_runner_from({
+            "git": _proc(0, "package-lock.json\n"),  # in-scope: branch touched it
             "gitleaks": _proc(0, "[]"),
             "osv-scanner": _proc(1, osv_out),
             "semgrep": _proc(0, '{"results": [], "errors": []}'),
@@ -998,6 +1004,175 @@ class TestRunScanCwdIndependence:
         # target handed to each builder is the same normalized absolute path
         assert all(expected in cmd for cmd, _ in calls), \
             f"expected absolute target {expected} in every scanner cmd"
+
+    # --- AC1 (#230): diff-scoped SCA ---------------------------------------
+
+    def _osv_high(self, source_path):
+        return json.dumps({"results": [{
+            "source": {"path": source_path},
+            "packages": [{"package": {"name": "lodash", "version": "1"},
+                          "vulnerabilities": [{"id": "G1",
+                              "database_specific": {"severity": "HIGH"}}]}]}]})
+
+    def test_preexisting_advisory_in_unchanged_manifest_does_not_block(self):
+        # The reported failure: a zero-dep-change PR blocked by the repo's whole
+        # pre-existing advisory set. The branch changed no manifest -> no SCA block.
+        from security_scan import run_scan
+        runner = _fake_runner_from({
+            "git": _proc(0, "README.md\nsrc/app.py\n"),   # no manifest changed
+            "gitleaks": _proc(0, "[]"),
+            "osv-scanner": _proc(1, self._osv_high("package-lock.json")),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        result = run_scan("/proj", project_type="node", base_ref="origin/main",
+                          which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                          runner=runner, env={})
+        assert result["gate"]["blocked"] is False
+        assert all(f["kind"] != "sca" for f in result["findings"])
+
+    def test_introduced_advisory_in_changed_manifest_blocks(self):
+        from security_scan import run_scan
+        runner = _fake_runner_from({
+            "git": _proc(0, "package-lock.json\n"),        # manifest changed
+            "gitleaks": _proc(0, "[]"),
+            "osv-scanner": _proc(1, self._osv_high("package-lock.json")),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        result = run_scan("/proj", project_type="node", base_ref="origin/main",
+                          which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                          runner=runner, env={})
+        assert result["gate"]["blocked"] is True
+        assert any(f["kind"] == "sca" for f in result["findings"])
+
+    def test_git_failure_keeps_all_findings_failclosed(self):
+        # Cannot determine what changed -> keep every SCA finding (fail-closed).
+        from security_scan import run_scan
+        runner = _fake_runner_from({
+            "git": _proc(128, "", stderr="fatal: bad revision"),
+            "gitleaks": _proc(0, "[]"),
+            "osv-scanner": _proc(1, self._osv_high("package-lock.json")),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        result = run_scan("/proj", project_type="node", base_ref="origin/main",
+                          which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                          runner=runner, env={})
+        assert result["gate"]["blocked"] is True
+        assert any(f["kind"] == "sca" for f in result["findings"])
+
+    def test_full_mode_is_not_diff_scoped(self):
+        # WF9 whole-tree audit keeps the whole advisory set and makes no git call.
+        from security_scan import run_scan
+        runner = _fake_runner_from({
+            "git": _proc(0, ""),
+            "gitleaks": _proc(0, "[]"),
+            "osv-scanner": _proc(1, self._osv_high("package-lock.json")),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        result = run_scan("/proj", project_type="node", base_ref="origin/main",
+                          full=True,
+                          which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                          runner=runner, env={})
+        assert result["gate"]["blocked"] is True
+        assert any(f["kind"] == "sca" for f in result["findings"])
+        assert all(c[0] != "git" for c in runner.calls)
+
+    def test_no_git_call_when_no_sca_scanner_selected(self):
+        from security_scan import run_scan
+        runner = _fake_runner_from({
+            "gitleaks": _proc(0, "[]"),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        run_scan("/proj", project_type="node", base_ref="origin/main",
+                 which=_which_from({"gitleaks", "semgrep"}),  # no SCA tool
+                 runner=runner, env={})
+        assert all(c[0] != "git" for c in runner.calls)
+
+    def test_absolute_osv_source_path_matches_repo_relative_change(self):
+        # Codex-flagged risk: osv source.path may be absolute (project_root-joined);
+        # it must still match a repo-relative `git diff --name-only` path.
+        from security_scan import run_scan
+        abs_root = os.path.abspath("/proj")
+        runner = _fake_runner_from({
+            "git": _proc(0, "src-tauri/Cargo.lock\n"),
+            "gitleaks": _proc(0, "[]"),
+            "osv-scanner": _proc(1, self._osv_high(
+                os.path.join(abs_root, "src-tauri", "Cargo.lock"))),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        result = run_scan("/proj", project_type="rust", base_ref="origin/main",
+                          which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                          runner=runner, env={})
+        assert result["gate"]["blocked"] is True
+        assert any(f["kind"] == "sca" for f in result["findings"])
+
+    # --- AC2 (#230): cargo-workspace canonical-lock awareness ---------------
+
+    def _mk_cargo_workspace(self, tmp_path, member_lock="root", root_lock="root"):
+        (tmp_path / "Cargo.toml").write_text("[workspace]\nmembers=[\"src-tauri\"]\n")
+        (tmp_path / "Cargo.lock").write_text(root_lock + "\n")
+        member = tmp_path / "src-tauri"
+        member.mkdir()
+        (member / "Cargo.toml").write_text("[package]\nname=\"app\"\n")
+        (member / "Cargo.lock").write_text(member_lock + "\n")
+        return member
+
+    def test_cargo_workspace_root_found_above_member(self, tmp_path):
+        from security_scan import cargo_workspace_root
+        member = self._mk_cargo_workspace(tmp_path)
+        assert cargo_workspace_root(str(member)) == str(tmp_path)
+
+    def test_plain_cargo_package_is_not_a_workspace(self, tmp_path):
+        from security_scan import cargo_workspace_root
+        (tmp_path / "Cargo.toml").write_text("[package]\nname=\"solo\"\n")
+        assert cargo_workspace_root(str(tmp_path)) is None
+
+    def test_non_cargo_dir_has_no_workspace(self, tmp_path):
+        from security_scan import cargo_workspace_root
+        assert cargo_workspace_root(str(tmp_path)) is None
+
+    def test_canonical_lock_flagged_above_when_scanning_member(self, tmp_path):
+        from security_scan import canonical_cargo_lock
+        member = self._mk_cargo_workspace(tmp_path)
+        lock, is_above = canonical_cargo_lock(str(member))
+        assert lock == str(tmp_path / "Cargo.lock")
+        assert is_above is True
+
+    def test_canonical_lock_not_above_when_scanning_root(self, tmp_path):
+        from security_scan import canonical_cargo_lock
+        self._mk_cargo_workspace(tmp_path)
+        lock, is_above = canonical_cargo_lock(str(tmp_path))
+        assert lock == str(tmp_path / "Cargo.lock")
+        assert is_above is False
+
+    def test_build_osv_adds_canonical_lock_when_scanning_member(self, tmp_path):
+        from security_scan import _build_osv
+        member = self._mk_cargo_workspace(tmp_path)
+        cmd = _build_osv(str(member), "origin/main", False)
+        assert "--lockfile" in cmd
+        assert str(tmp_path / "Cargo.lock") in cmd
+
+    def test_build_osv_unchanged_for_non_workspace(self, tmp_path):
+        from security_scan import _build_osv
+        cmd = _build_osv(str(tmp_path), "origin/main", False)
+        assert cmd == ["osv-scanner", "--format", "json",
+                       "--recursive", str(tmp_path)]
+
+    def test_divergent_member_lock_detected(self, tmp_path):
+        from security_scan import divergent_member_locks
+        self._mk_cargo_workspace(tmp_path, member_lock="DRIFTED", root_lock="root")
+        div = divergent_member_locks(str(tmp_path), str(tmp_path / "Cargo.lock"))
+        assert str(tmp_path / "src-tauri" / "Cargo.lock") in div
+
+    def test_identical_member_lock_not_flagged(self, tmp_path):
+        from security_scan import divergent_member_locks
+        self._mk_cargo_workspace(tmp_path, member_lock="root", root_lock="root")
+        assert divergent_member_locks(
+            str(tmp_path), str(tmp_path / "Cargo.lock")) == []
+
+    def test_run_scan_warns_on_divergent_locks(self, tmp_path):
+        # A cargo workspace whose member lock diverged from the canonical root lock
+        # surfaces a non-blocking warning, even with no scanner installed.
+        from security_scan import run_scan
+        self._mk_cargo_workspace(tmp_path, member_lock="DRIFTED", root_lock="root")
+        result = run_scan(str(tmp_path), project_type="rust",
+                          which=_which_from(set()), runner=_fake_runner_from({}),
+                          env={})
+        assert result.get("warnings")
+        assert any("lock" in w["message"].lower() for w in result["warnings"])
 
     def test_semgrep_not_failclosed_when_cwd_is_threaded(self):
         # Behavioral regression mirroring the #101 repro: a cwd-sensitive semgrep
