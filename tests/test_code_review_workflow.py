@@ -56,7 +56,10 @@ def test_records_reviewer_kind_builtin_code_review():
 
 def test_non_blocking_least_privilege_and_idtoken():
     text = _text()
-    assert re.search(r"^    continue-on-error: true$", text, re.M)
+    # #233: advisory is now a NON-required check + honest-RED, NOT a
+    # continue-on-error mask (which hid a failed/errored review as green).
+    assert "continue-on-error: true" not in text
+    assert re.search(r"^\s+exit 1$", text, re.M), "no-auth must fail RED, not exit 0 green"
     blocks = re.findall(r"^permissions:\n((?:^[ \t]+\S.*\n)+)", text, re.M)
     assert len(blocks) == 1
     perms = {ln.strip() for ln in blocks[0].splitlines()}

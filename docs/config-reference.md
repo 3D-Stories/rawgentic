@@ -841,6 +841,11 @@ function exposed as a CLI:
 
 ## CI review auth {#ci-review-auth}
 
+> **Activation walkthrough:** for a step-by-step "turn the review lanes on" guide
+> (mint a token → org-wide secret → verify green), see
+> [docs/ci-review-lanes.md](./ci-review-lanes.md). The lanes are **advisory** and now
+> fail **RED when no auth secret is present** (never a misleading green — #233).
+
 The CI review lanes — the security-review lane (`.github/workflows/claude-security-review.yml`,
 #166/#195) and the headless Action pilot (`.github/workflows/rawgentic-auto.yml`, #165) — run
 through `anthropics/claude-code-action@v1`, which authenticates one of two ways, in priority
