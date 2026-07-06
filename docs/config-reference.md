@@ -84,6 +84,7 @@ project information during execution:
 | `formatting` | Tool, config file, and format command. | implement-feature, fix-bug (for code style compliance). |
 | `documentation` | Primary doc files and format. | setup. |
 | `custom` | Free-form object for project-specific metadata (e.g., security debt). | Any skill. |
+| `laneImplExtensions` | **Optional** array of file extensions (e.g. `[".md"]`) that a **prompt/skill repo** counts as *implementation* toward the small-standard lane's `LANE_MAX_IMPL_FILES` ceiling — the "markdown-is-product" opt-in (#143). Default (unset) = exclude `.md`/`docs/` (unchanged for app repos). A `docs/` dir stays docs even when opted in; tests stay excluded. Normalized via `plan_lib.lane_impl_extensions`. | implement-feature (`<small-standard-lane>` eligibility + Step 9 reconcile). |
 
 ## Versioning
 

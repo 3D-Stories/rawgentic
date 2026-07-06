@@ -1166,6 +1166,63 @@ class TestCountImplFiles:
         mod = _reload_plan_lib()
         assert mod.count_impl_files(["src/renamed.py"]) == 1
 
+    # --- #143: markdown-is-product opt-in (laneImplExtensions) ---
+
+    def test_default_still_excludes_skill_markdown(self):
+        # default (no opt-in) is byte-for-byte the old behavior
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["skills/foo/SKILL.md"]) == 0
+
+    def test_opt_in_counts_skill_markdown(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["skills/foo/SKILL.md"], impl_extensions=[".md"]) == 1
+
+    def test_opt_in_counts_top_level_markdown(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["README.md"], impl_extensions=[".md"]) == 1
+
+    def test_opt_in_still_excludes_docs_dir_markdown(self):
+        # a genuine docs/ dir stays docs even in markdown-is-product mode
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["docs/x.md"], impl_extensions=[".md"]) == 0
+
+    def test_opt_in_still_excludes_test_markdown(self):
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["tests/fixtures/test_x.md"], impl_extensions=[".md"]) == 0
+
+    def test_opt_in_mixed_counts_product_md_plus_code(self):
+        mod = _reload_plan_lib()
+        paths = ["skills/a/SKILL.md", "hooks/b.py", "docs/c.md", "README.md", "tests/test_d.py"]
+        # SKILL.md + b.py + README.md = 3; docs/c.md and the test excluded
+        assert mod.count_impl_files(paths, impl_extensions=[".md"]) == 3
+
+
+class TestLaneImplExtensions:
+    def test_default_empty(self):
+        mod = _reload_plan_lib()
+        assert mod.lane_impl_extensions({}) == ()
+        assert mod.lane_impl_extensions({"laneImplExtensions": []}) == ()
+
+    def test_normalizes_leading_dot_and_case(self):
+        mod = _reload_plan_lib()
+        assert mod.lane_impl_extensions({"laneImplExtensions": ["md", ".MD"]}) == (".md",)
+
+    def test_preserves_multiple_distinct(self):
+        mod = _reload_plan_lib()
+        assert mod.lane_impl_extensions({"laneImplExtensions": [".md", "txt"]}) == (".md", ".txt")
+
+    def test_malformed_config_fails_closed_to_empty(self):
+        # a non-list value must not crash lane sizing — default to current behavior
+        mod = _reload_plan_lib()
+        assert mod.lane_impl_extensions({"laneImplExtensions": "md"}) == ()
+        assert mod.lane_impl_extensions(None) == ()
+
+    def test_wired_end_to_end(self):
+        # the config helper feeds count_impl_files: a skill-md repo counts its product
+        mod = _reload_plan_lib()
+        exts = mod.lane_impl_extensions({"laneImplExtensions": ["md"]})
+        assert mod.count_impl_files(["skills/x/SKILL.md"], impl_extensions=exts) == 1
+
 
 class TestLaneDecision:
     def test_trivial_short_circuits_regardless_of_other_args(self):

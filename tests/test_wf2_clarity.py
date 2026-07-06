@@ -643,3 +643,19 @@ class TestAppendOnlySessionNotes:
         assert "Update session notes with WF2 results" not in text
         assert "Document verification evidence in session notes" not in text
         assert "Before context compacts, document in session notes" not in text
+
+
+# --- #143: markdown-is-product lane counting config surface ---
+
+class TestLaneMarkdownIsProduct:
+    def test_lane_block_documents_config_surface(self):
+        text = _text()
+        assert "laneImplExtensions" in text, "lane block must document the markdown-is-product config"
+        assert "markdown-is-product" in text.lower()
+
+    def test_lane_invocations_thread_impl_extensions(self):
+        # both the entry decision and the Step-9 reconcile must pass impl_extensions
+        text = _text()
+        assert text.count("lane_impl_extensions(") >= 2, \
+            "entry + Step-9 reconcile must both resolve laneImplExtensions"
+        assert "impl_extensions=exts" in text
