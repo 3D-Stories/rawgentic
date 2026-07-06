@@ -379,9 +379,23 @@ def parse_feasibility_block(text: str) -> "FeasibilityDecl | None":
     `- api:` or the next markdown heading (or EOF).
     """
     lines = text.splitlines()
+    # Mark fenced (```) lines so a design doc that *quotes* the contract in a code
+    # block (this very feature's design doc does) is not mis-parsed as a real
+    # declaration — the prose declaration is what counts, not a quoted example.
+    fenced = [False] * len(lines)
+    in_fence = False
+    for i, ln in enumerate(lines):
+        if re.match(r"^\s*```", ln):
+            in_fence = not in_fence
+            fenced[i] = True  # the fence marker line itself is skipped
+            continue
+        fenced[i] = in_fence
+
     decl_idx = None
     decl_rest = ""
     for i, ln in enumerate(lines):
+        if fenced[i]:
+            continue
         m = _PLATFORM_APIS_RE.match(ln)
         if m:
             decl_idx = i
@@ -403,6 +417,8 @@ def parse_feasibility_block(text: str) -> "FeasibilityDecl | None":
 
     for j in range(decl_idx + 1, len(lines)):
         ln = lines[j]
+        if fenced[j]:
+            continue
         if _MD_HEADING_RE.match(ln):
             break
         am = _FEAS_API_RE.match(ln)

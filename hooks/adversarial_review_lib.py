@@ -152,9 +152,21 @@ ARTIFACT_TYPES: Final[tuple[str, ...]] = (
 
 # Per-type emphasis appended to the adversarial prompt (the "lens").
 _TYPE_LENS: Final[dict[str, str]] = {
-    "design": "Focus on architectural soundness, coupling, hidden dependencies, and failure modes.",
+    "design": (
+        "Focus on architectural soundness, coupling, hidden dependencies, and failure modes. "
+        "Platform feasibility (#226): for every external/platform/framework API the design "
+        "relies on, ask whether it actually works under this project's real config (capability/"
+        "manifest files, feature flags, sandbox, OS/CI limits) — flag any dependency assumed "
+        "rather than proven by a cited capabilities file, exact-object-kind call site, spike, or "
+        "docs (docs alone do not prove a permission-gated API is permitted), and flag a "
+        "silent-failure call that lacks a surfacing assertion/log."
+    ),
     "spec": "Focus on testability, edge cases, ambiguous requirements, and internal contradictions.",
-    "plan": "Focus on task sequencing, missing steps, risk, and unverifiable acceptance criteria.",
+    "plan": (
+        "Focus on task sequencing, missing steps, risk, and unverifiable acceptance criteria. "
+        "Platform feasibility (#226): flag any task that relies on an external/platform API "
+        "without proving it works under this project's real config."
+    ),
     "prd": "Focus on measurability of success criteria, scope creep, and unstated assumptions.",
     "adr": "Focus on whether alternatives were fairly considered and consequences fully stated.",
     "rfc": "Focus on interoperability, migration/backward-compat, and protocol edge cases.",

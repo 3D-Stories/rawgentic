@@ -114,6 +114,11 @@ pins the requirement rather than a validator.
 - **Silent skip of the mirror**: the drift guard pins the WF3 §3/§4 text so a later prose
   edit can't quietly drop it.
 
+## Platform / external dependencies
+platform_apis: none
+<!-- Dogfood: this feature is pure Python stdlib (re/dataclasses) + workflow prose — no
+     platform/framework/external API. It satisfies its own new Step-4 gate. -->
+
 ## Security / backward-compat
 - Additive: the validator returns ok on the empty-note case, so every existing design/plan
   with no `feasibility:` lines is unaffected. No change to `parse_tasks`, the deferral

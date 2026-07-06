@@ -390,6 +390,46 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
    - Configuration changes (env vars, YAML, Docker compose)
    - Error handling and failure modes
    - Security implications
+   - **Platform / external dependencies (`platform_apis:` — MANDATORY, #226).** Every design
+     MUST carry this declaration, exactly like "Security implications" is required on every
+     design regardless of whether there is a concern. It is one line when there are no
+     material platform APIs — so this is NOT feasibility-proof-for-everything over-gating; it
+     only forces the *risk to be named*. A design can commit to a platform/framework API the
+     project's own config does not permit and still pass every test-centric gate (the real
+     call is silently denied on a surface CI never exercises) — this declaration closes that
+     silent gap. An **omitted** declaration is a Step-4 blocker
+     (`plan_lib.assert_feasibility_declared(None)` fails), so the omission cannot pass silently.
+
+     ```md
+     ## Platform / external dependencies
+     platform_apis: none        # the whole declaration when no material platform/external API is used
+     ```
+     or, per **material** platform/framework/external API **not already proven in-repo the same
+     way** (an already-precedented exact call site needs no block), one block each:
+     ```md
+     platform_apis:
+     - api: <exact API> on <exact object/runtime surface>
+       feasibility: verified via <capabilities-file|existing-call-site|spike|docs> — <citation>
+       failure: fail-loud | fail-silent
+       surface: <assertion|log|observable check> — <where>   # REQUIRED when failure: fail-silent
+     ```
+     Rules (this is the **canonical** contract; WF3 and the WF5 lens point here, they do not
+     re-state it):
+     - **`assumed` is Step-4-blocking.** `feasibility: assumed` may appear as an interim
+       drafting marker, but `assert_feasibility_declared` rejects it — a dependency assumed
+       from the API's mere existence is exactly the #226 failure. Prove it against this
+       project's real config before Step 4.
+     - **Working-precedent (AC3):** an `existing-call-site` proves feasibility ONLY for the
+       **exact** API on the **exact** object kind and target surface (e.g. `window.setSize`
+       proven on the main window does NOT prove it on an overlay window whose capability file
+       differs). Otherwise cite `capabilities-file`/`docs` or run a `spike`.
+     - **Evidence credibility (AC4 context):** `docs` proves the API *exists*, not that this
+       project's config *permits* it — for a permission/capability-gated API, `docs` alone is
+       insufficient; cite the capabilities file, an exact call site, or a spike.
+     - **Silent-failure gate (AC4):** classify each external call `fail-loud` vs `fail-silent`
+       on the target. A `fail-silent` call (denied/failed with the error only in a console CI
+       never sees) MUST carry a `surface:` assertion/log that makes build #1 reveal the
+       failure — not UAT cycle #3.
 
    **Additional for `application` projects:**
    - Data flow changes (routes, queries, message flows)
@@ -449,6 +489,16 @@ dual-path, always logged). The quality-bar self-review is a single-pass, same-mo
   implementation verifiable (tests if available, otherwise manual checks or scripts)?
 - Input validation at boundaries, credential handling (no hardcoded secrets),
   backward-compatibility or a migration plan, acceptable performance?
+- **Platform / external-dependency feasibility (#226):** run the mechanical gate —
+  `python3 -c "import sys;sys.path.insert(0,'hooks');from plan_lib import parse_feasibility_block,assert_feasibility_declared as A;ok,errs=A(parse_feasibility_block(open('<design-doc>').read()));print(ok,errs)"`.
+  A non-`ok` result is a **blocking** finding (Critical/High): an absent `platform_apis:`
+  declaration, an `assumed` dependency, weak/uncited evidence, or a `fail-silent` API with no
+  `surface:`. Beyond the mechanical check, judge credibility the parser cannot: does each API
+  actually work under THIS project's real config (capability/manifest files, feature flags,
+  sandbox, OS/CI limits)? Is `docs` evidence credible for a permission-gated API (usually not)?
+  And — the parser cannot see this — does the design **use** a platform API it failed to
+  declare (a `platform_apis: none` that is actually false)? A used-but-undeclared API is itself
+  the finding.
 - For WF1-validated issues: does the design align with the WF1-critiqued spec?
 
 The self-review produces findings in the shape the gate consumes:
@@ -765,6 +815,16 @@ Either trigger fires Step 8a on the just-committed commit AND triggers a **retro
 
 Promotion at the last task still triggers Step 8a (and any retroactive scan) before Step 9.
 
+**Mid-flight feasibility check (#226 AC6).** If, while implementing (or iterating on a fix during
+UAT), you introduce a **new** platform/framework/external API that the Step-3 `platform_apis:`
+declaration did NOT cover — a change that bypasses the design gate — apply the lightweight
+feasibility check inline **before committing** that task: prove the API works under this
+project's real config (an exact-object-kind precedent or a quick spike, not the API's mere
+existence), classify `fail-loud`/`fail-silent`, and add a `surface:` assertion/log if silent.
+Record a `platform_apis:` block for it in session notes and fold it into the design doc so
+Step 9 and the run-record stay honest. This is AC1/AC3/AC4 in miniature for the exact place the
+original failure lived — a mid-UAT fix that never went back through Step 3/4.
+
 **Debugging:** If stuck after 3 manual fix attempts, escalate to systematic debugging.
 
 **Design flaw discovery:** If implementation reveals a fundamental design flaw:
@@ -870,6 +930,18 @@ If NOT `capabilities.has_tests`:
 - Document verification evidence in session notes
 
 **Deferred-to-target tasks (#138):** for every task in `plan_lib.deferred_tasks(tasks)`, list it explicitly with (a) its deferral reason and (b) the **local proxy that WAS run** (compile/typecheck/extractable-unit-tests). A deferred task **never counts as verified** and **never fails the gate by itself** — but a deferred task with NO local-proxy evidence recorded is NOT satisfied (the proxy is still required; deferral is not a pass). It is impossible to silently convert deferred → passed: the deferred surface is tracked separately in the Step 16 run-record `verification_deferred` list, and `<completion-gate>` reconciles the plan's deferred tasks against that list via `plan_lib.assert_deferrals_recorded`.
+
+**Runtime-surface feasibility (#226 AC5).** For changes whose behavior only manifests at
+runtime — UI, platform/permission-gated APIs (Tauri capabilities, iOS entitlements, browser
+permissions), GPU/audio, native features — a green suite is **not sufficient**: the test env
+does not exercise the real surface, so a call the config silently denies still passes every
+test. Require EITHER (a) a **real-surface spike** that exercises the exact call on the exact
+object kind and records the observed result, OR (b) a `verification: deferred-to-target
+(<reason>)` whose recorded entry NAMES, in its `target_check`, the **single feasibility claim
+most likely to be wrong** — the on-device claim build #1 must check first. "Deferred,
+unspecified" does not satisfy this: naming the likeliest-wrong claim is the whole point, so the
+first thing exercised on the target is the thing that silently broke last time. (This reuses
+the existing deferral machinery — `deferral_reason` + the run-record `verification_deferred[].target_check` — no new field; a mechanical "is this the *most* likely wrong claim?" check is impossible, so the drift guard pins the requirement and review judges the naming.)
 
 Apply ambiguity circuit breaker on combined findings.
 

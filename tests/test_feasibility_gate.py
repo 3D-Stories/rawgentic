@@ -93,6 +93,26 @@ def test_multi_api_block_scoping():
     assert decl.apis[1].api == "B" and decl.apis[1].kind == "capabilities-file"
 
 
+def test_fenced_contract_example_is_skipped():
+    """A design doc that QUOTES the contract in a ``` code fence (this feature's own
+    design doc does) must not have the example parsed as a real declaration — the
+    real prose declaration below the fence is what counts. Regression: dogfooding."""
+    text = (
+        "## Platform / external dependencies\n"
+        "```md\n"
+        "platform_apis:\n"
+        "- api: <exact API> on <exact object/runtime surface>\n"
+        "  feasibility: verified via <capabilities-file|docs> — <citation>\n"
+        "  failure: fail-loud | fail-silent\n"
+        "```\n"
+        "platform_apis: none\n"
+    )
+    decl = plan_lib.parse_feasibility_block(text)
+    assert decl is not None and decl.none is True, "fenced example must be skipped"
+    ok, errors = plan_lib.assert_feasibility_declared(decl)
+    assert ok is True, errors
+
+
 def test_assumed_status_parsed():
     text = "platform_apis:\n- api: Z\n  feasibility: assumed\n  failure: fail-loud\n"
     decl = plan_lib.parse_feasibility_block(text)
