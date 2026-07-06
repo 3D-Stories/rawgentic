@@ -12,6 +12,7 @@
   },
   "protectionLevel": "sandbox",
   "techStack": ["bash", "markdown", "python"],
+  "laneImplExtensions": [".md"],
   "testing": {
     "frameworks": [
       {

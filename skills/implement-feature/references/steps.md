@@ -27,7 +27,7 @@ collapse), not just Step 4.
 
 **Eligibility — `small_standard_lane_eligible == true` when ALL hold:**
 - complexity ∈ {`simple_change`, `standard_feature`} (never `complex_feature` — that is always the full spine), AND
-- **changed implementation source files ≤ 7** (`LANE_MAX_IMPL_FILES`) — the SAME counting rule `plan_lib.count_impl_files`/`lane_decision` apply: count non-test, non-doc **source** files the change creates/modifies; **exclude** test files (`test_*`, `*_test.*`, `tests/`), docs (`*.md`, `docs/`), and generated/lockfiles; a rename counts as **1**. Test+doc files are excluded because a small feature legitimately touches several without being "big," AND
+- **changed implementation source files ≤ 7** (`LANE_MAX_IMPL_FILES`) — the SAME counting rule `plan_lib.count_impl_files`/`lane_decision` apply: count non-test, non-doc **source** files the change creates/modifies; **exclude** test files (`test_*`, `*_test.*`, `tests/`), docs (`*.md`, `docs/`), and generated/lockfiles; a rename counts as **1**. Test+doc files are excluded because a small feature legitimately touches several without being "big." **Markdown-is-product opt-in (#143):** for a prompt/skill repo whose *product* is markdown (rawgentic itself — `skills/*/SKILL.md`), a `.md`-only change would otherwise count as ~0 impl files and always slip under the ceiling. Set `laneImplExtensions` in the project's `.rawgentic.json` (e.g. `[".md"]`) and `count_impl_files` counts those extensions toward the ceiling — a `docs/` dir still stays docs (genuine project docs are never product), and tests stay excluded. Default (unset) = current behavior, so app repos never regress. AND
 - no architecture change, no migration, no new cross-service surface, no new dependency (the signals Step 2 already gathers), AND
 - not `trivial_work` (that has its own exit at `<trivial-work-check>`, which takes precedence).
 
@@ -40,8 +40,11 @@ authoritative complexity, the Step-2 ESTIMATED impl-file count (via `count_impl_
 estimated changed-file list from Step 2 item 1), and the arch/migration/dep/trivial booleans
 Step 2 gathered:
 ```bash
-python3 -c "import sys; sys.path.insert(0,'hooks'); from plan_lib import lane_decision, count_impl_files; n=count_impl_files([<estimated changed file list>]); t,r=lane_decision('<complexity>', n, <has_arch_change>, <has_migration>, <has_new_dep>, <is_trivial>); print(t); print(r)"
+python3 -c "import sys,json; sys.path.insert(0,'hooks'); from plan_lib import lane_decision, count_impl_files, lane_impl_extensions; cfg=json.load(open('<activeProject.path>/.rawgentic.json')); exts=lane_impl_extensions(cfg); n=count_impl_files([<estimated changed file list>], impl_extensions=exts); t,r=lane_decision('<complexity>', n, <has_arch_change>, <has_migration>, <has_new_dep>, <is_trivial>); print(t); print(r)"
 ```
+`lane_impl_extensions(cfg)` reads the optional `laneImplExtensions` markdown-is-product config
+(#143; empty by default → the historical exclude-`.md` behavior). Pass the SAME `impl_extensions`
+to the Step-9 `count_impl_files` reconcile so entry and reconcile count identically.
 `lane_decision` returns `(tier, reason)` with tier ∈ {`trivial`, `full`, `lane`}. **`tier == "lane"`
 → `small_standard_lane_eligible = true`**; `trivial` defers to `<trivial-work-check>`; `full` runs
 the whole spine. Log the tier + reason in session notes.
@@ -49,7 +52,8 @@ the whole spine. Log the tier + reason in session notes.
 **Secondary signal — bounded multi-defect election (#225).** When the Step-2 analysis
 identifies the change as **2..`MAX_LANE_DEFECTS` (3) separately-understood, bounded defects**
 (e.g. the same fix pattern across native-core + host + frontend) with no architecture
-change, pass their per-defect impl-file estimates (same `count_impl_files` exclusions) as
+change, pass their per-defect impl-file estimates (same `count_impl_files` exclusions,
+including the same `impl_extensions` from `lane_impl_extensions(cfg)` — #143) as
 `defect_file_counts=[...]` on the `lane_decision` call. The lane is then electable even when
 the TOTAL exceeds 7, provided each defect is ≤ `LANE_MAX_IMPL_FILES` AND the total is ≤
 `MAX_LANE_DEFECTS × LANE_MAX_IMPL_FILES` (21) — a multi-defect change is lane-eligible iff
@@ -1022,9 +1026,10 @@ the implausibility check below still run.
 **Lane cross-check (input-source honesty).** Because Step 2's file_count was an ESTIMATE,
 recompute the REAL impl-file count from the actual diff — `git diff --name-only
 origin/<default>..HEAD`, applying the same counting rule via `plan_lib.count_impl_files` — and
-compare against `LANE_MAX_IMPL_FILES`:
+compare against `LANE_MAX_IMPL_FILES`. Pass the SAME `impl_extensions` the entry decision used
+(`lane_impl_extensions(cfg)`, #143) so a markdown-is-product repo reconciles on the same basis:
 ```bash
-python3 -c "import sys,subprocess; sys.path.insert(0,'hooks'); from plan_lib import count_impl_files, LANE_MAX_IMPL_FILES; paths=subprocess.run(['git','diff','--name-only','origin/<default>..HEAD'],capture_output=True,text=True).stdout.split(); n=count_impl_files(paths); print(n, n > LANE_MAX_IMPL_FILES)"
+python3 -c "import sys,json,subprocess; sys.path.insert(0,'hooks'); from plan_lib import count_impl_files, lane_impl_extensions, LANE_MAX_IMPL_FILES; exts=lane_impl_extensions(json.load(open('<activeProject.path>/.rawgentic.json'))); paths=subprocess.run(['git','diff','--name-only','origin/<default>..HEAD'],capture_output=True,text=True).stdout.split(); n=count_impl_files(paths, impl_extensions=exts); print(n, n > LANE_MAX_IMPL_FILES)"
 ```
 If the real count materially exceeds the run's **comparison figure** — the **sanctioned
 elected count** logged by a #225 secondary-signal/override lane election when one exists,

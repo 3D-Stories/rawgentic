@@ -918,41 +918,107 @@ LANE_MAX_IMPL_FILES: Final[int] = 7
 MAX_LANE_DEFECTS: Final[int] = 3
 
 
-def _is_excluded_impl_file(path: str) -> bool:
+# Well-known project docs are NEVER product, even in markdown-is-product mode (#143):
+# a repo's README/CHANGELOG/etc. are documentation regardless of where they live, so the
+# `laneImplExtensions` opt-in must not sweep them into the impl count. Matched case-insensitively.
+_ALWAYS_DOC_BASENAMES: Final[frozenset[str]] = frozenset({
+    "readme.md", "changelog.md", "contributing.md", "security.md",
+    "code_of_conduct.md", "codeofconduct.md",
+})
+
+
+def _normalize_impl_extensions(raw) -> tuple[str, ...]:
+    """Normalize an iterable of extensions to lowercase leading-dot form, order-preserving
+    dedupe. Non-str / blank items are skipped; a non-iterable (or str) yields ()."""
+    if raw is None or isinstance(raw, str):
+        return ()
+    try:
+        items = list(raw)
+    except TypeError:
+        return ()
+    out: list[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        ext = item.strip().lower()
+        if not ext.startswith("."):
+            ext = "." + ext
+        if ext not in out:
+            out.append(ext)
+    return tuple(out)
+
+
+def _is_excluded_impl_file(path: str, impl_extensions: tuple[str, ...] = ()) -> bool:
     """True if `path` should NOT count toward LANE_MAX_IMPL_FILES.
 
     Excludes test files, docs, and lockfiles/generated build output. Paths
     are expected POSIX-separated (git diff output form), matching the same
     convention as any_high_risk_path/should_run_diff_review.
+
+    `impl_extensions` (#143 — markdown-is-product opt-in, ALREADY normalized to
+    lowercase leading-dot form): extensions a project declares as *implementation*
+    even though they'd normally be excluded as docs (e.g. `.md` for a prompt/skill
+    repo whose product IS `skills/*/SKILL.md`). Never product regardless of the
+    opt-in: a `docs/` dir, well-known project docs (README/CHANGELOG/…), test files,
+    and generated/lock artifacts.
     """
     segments = path.split("/")
     basename = segments[-1]
+    low = basename.lower()
     if "tests" in segments or basename.startswith("test_") or "_test." in basename:
         return True
-    if "docs" in segments or basename.endswith(".md"):
-        return True
+    if "docs" in segments:
+        return True  # a docs/ dir is always docs, even when .md is declared impl
+    if low.endswith(".md"):
+        if low in _ALWAYS_DOC_BASENAMES:
+            return True  # README/CHANGELOG/… are docs even in markdown-is-product mode
+        if not any(low.endswith(e) for e in impl_extensions):
+            return True  # markdown excluded unless the project declares it product
     if (
         basename in ("package-lock.json", "poetry.lock")
-        or basename.endswith(".lock")
+        or low.endswith(".lock")
         or ".min." in basename
     ):
         return True
     return False
 
 
-def count_impl_files(paths) -> int:
+def count_impl_files(paths, *, impl_extensions=None) -> int:
     """Count implementation source files for the small-standard lane (#135).
 
     Excludes test files, docs, and lockfiles/generated artifacts — see
     `_is_excluded_impl_file`. `None` -> 0 (no files is a valid pre-diff
     state). A bare str raises TypeError (same fail-closed precedent as
     `should_run_diff_review`) so a single path isn't iterated char-wise.
+
+    `impl_extensions` (#143): a project's declared markdown-is-product extensions.
+    Normalized here defensively (so a bare `"md"` or `".MD"` works even for a direct
+    caller that skipped `lane_impl_extensions`). `None`/empty keeps the default
+    behavior (exclude `.md`/`docs/`), so ordinary app repos are unaffected.
     """
     if paths is None:
         return 0
     if isinstance(paths, str):
         raise TypeError("paths must be an iterable of path strings, not str")
-    return sum(1 for p in paths if not _is_excluded_impl_file(p))
+    exts = _normalize_impl_extensions(impl_extensions)
+    return sum(1 for p in paths if not _is_excluded_impl_file(p, exts))
+
+
+def lane_impl_extensions(config) -> tuple[str, ...]:
+    """Normalize a project's `laneImplExtensions` config into a tuple of extensions
+    (#143 — markdown-is-product opt-in).
+
+    Reads `config["laneImplExtensions"]` (a list like `["md"]` or `[".md"]`),
+    normalizes each to a lowercase leading-dot extension, dedupes preserving order.
+    Fail-closed: a missing key, a non-dict config, or a non-list value all yield
+    `()` (the default = current behavior, so app repos never regress).
+    """
+    if not isinstance(config, dict):
+        return ()
+    raw = config.get("laneImplExtensions")
+    if not isinstance(raw, list):
+        return ()
+    return _normalize_impl_extensions(raw)
 
 
 _LANE_ELIGIBLE_COMPLEXITIES: Final[tuple[str, ...]] = ("simple_change", "standard_feature")
