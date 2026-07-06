@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#119 double-block loop — REFUTED</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-06 14:36 MDT</div>
+<h1>#119 double-block loop — REFUTED</h1>
+
+</header>
+<main>
+<h1>#119 — Verify (or refute) the security-guidance &quot;double-block loop&quot; claim</h1>
+<p><strong>Issue:</strong> [#119](https://github.com/3D-Stories/rawgentic/issues/119) · epic #247 · <strong>Verdict: REFUTED</strong></p>
+<h2>The claim under test</h2>
+<p><code>hooks/security-guard-check.sh</code> recommended disabling <code>security-guidance@claude-plugins-official</code>, asserting:</p>
+<blockquote>&quot;Both check the same patterns, and the official one uses a broken blocking mechanism that <strong>auto-retries</strong>, so running both causes a confusing <strong>double-block loop</strong>.&quot;</blockquote>
+<p>Filed as a follow-up to PR #117: the claim was never empirically verified. Three sub-questions:</p>
+<p>1. Does Claude Code auto-retry when a PreToolUse hook denies / exits non-zero?</p>
+<p>2. Do BOTH PreToolUse hooks fire in sequence, or does rawgentic&#x27;s <code>permissionDecision: deny</code> prevent the official hook&#x27;s second attempt?</p>
+<p>3. Is the double-block loop observed in practice, or theoretical?</p>
+<h2>Method</h2>
+<p>The issue&#x27;s acceptance criterion asked for a live dual-plugin hook trace. That turned out to be <strong>unnecessary</strong> — a static inspection of the two plugins&#x27; hook registrations is <strong>dispositive</strong>, and it is stronger than a trace (a trace shows one run; the registration shows what is structurally possible). The official plugin (v2.0.6) is present in the local plugin cache, so its real hook config was read directly. (A live re-enable trace was also out of reach this session: the plugin is disabled on this machine and the project forbids reinstalling/enabling plugins mid-session.)</p>
+<h2>Evidence (primary source — files read, not inferred)</h2>
+<p><strong>1. The two plugins hook DIFFERENT lifecycle events.</strong> CONFIRMED by reading each <code>hooks.json</code>:</p>
+<p>| Plugin | Registered hook events | Blocks an edit… |</p>
+<p>|---|---|---|</p>
+<p>| <strong>rawgentic</strong> (<code>hooks/hooks.json</code>) | SessionStart, <strong>PreToolUse</strong>, PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop | <strong>Pre-edit</strong> — <code>security-guard.py</code> is a PreToolUse hook emitting <code>permissionDecision: deny</code> (<code>hooks/security-guard.py:5</code>) |</p>
+<p>| <strong>security-guidance</strong> v2.0.6 (<code>…/2.0.6/hooks/hooks.json</code>) | SessionStart, UserPromptSubmit, <strong>PostToolUse</strong>, Stop | <strong>Post-edit</strong> — reviews AFTER the write; <code>PreToolUse</code> is <strong>not registered</strong> (<code>json.load(...)[&#x27;hooks&#x27;].keys()</code> → no <code>PreToolUse</code>) |</p>
+<p><strong>2. The official plugin has NO PreToolUse hook.</strong> CONFIRMED: <code>PreToolUse in hooks[&#x27;hooks&#x27;]</code> → <code>False</code>. It cannot participate in a *PreToolUse* double-block, because it does not run at PreToolUse at all.</p>
+<p><strong>3. The official plugin&#x27;s block is a PostToolUse/Stop supplementary review, not a tool-call retry.</strong> CONFIRMED by reading <code>security_reminder_hook.py</code>: it uses <code>exit(2)</code> / <code>decision:&quot;block&quot;</code> on PostToolUse/Stop as an <strong><code>asyncRewake</code> auto-turn</strong>, and appends a <code>CONTINUATION_SUFFIX</code> that literally states: *&quot;…this review is supplementary feedback, not a replacement for your previous …&quot;* and tells the model to continue the user&#x27;s original request. That is by-design guidance to address a finding on the next turn — not a retry loop of a blocked operation.</p>
+<h2>Analysis — why there is no double-block loop</h2>
+<ul>
+<li>rawgentic denies an edit at <strong>PreToolUse</strong>, *before* it happens. When it denies, the edit never executes, so <strong>no PostToolUse fires</strong> for that edit — the official plugin never even sees it. No interaction.</li>
+<li>When rawgentic *allows* an edit (pattern not matched), the edit executes and the official plugin&#x27;s <strong>PostToolUse</strong> review may then flag it — at a different point in the lifecycle, as supplementary feedback. Redundant coverage, not a competing block.</li>
+<li>A &quot;both PreToolUse hooks fire and one auto-retries&quot; loop is <strong>structurally impossible</strong>: there is only one PreToolUse hook between them (rawgentic&#x27;s).</li>
+</ul>
+<p><strong>Sub-question answers:</strong></p>
+<p>1. rawgentic&#x27;s <code>permissionDecision: deny</code> is the documented non-retried PreToolUse block; the official plugin&#x27;s auto-turn (<code>asyncRewake</code>) is a PostToolUse/Stop review mechanism, not a PreToolUse retry. The premise conflates two different mechanisms at two different events.</p>
+<p>2. Moot — the two PreToolUse hooks don&#x27;t both exist; only rawgentic&#x27;s does.</p>
+<p>3. The described double-block loop is <strong>theoretical and, on this evidence, cannot occur</strong> with these two plugins as shipped (v2.0.6).</p>
+<h2>Confirmed vs inferred</h2>
+<ul>
+<li><strong>CONFIRMED (files read):</strong> the event registrations, the absence of a PreToolUse hook in security-guidance, rawgentic&#x27;s PreToolUse-deny mechanism, and the official plugin&#x27;s PostToolUse/Stop <code>exit(2)</code> asyncRewake + <code>CONTINUATION_SUFFIX</code>.</li>
+<li><strong>INFERRED (from mechanism, not a live trace):</strong> that no confusing loop is observed in practice. This is a *structural* inference (a plugin with no PreToolUse hook cannot cause a PreToolUse double-block), not a behavioral guess — but it was not observed via a live dual-plugin run this session.</li>
+<li><strong>Residual, if ever wanted:</strong> a live re-enable trace would additionally show the PostToolUse asyncRewake UX (extra turns / duplicate warnings), which is the real, benign cost of running both — noise, not a loop.</li>
+</ul>
+<h2>Outcome — recommendation relaxed (not dropped)</h2>
+<p>Per the issue&#x27;s own guidance (&quot;refutes it → relax / drop&quot;), the <code>security-guard-check.sh</code> SessionStart notice is <strong>relaxed</strong>: it no longer claims a &quot;broken blocking mechanism that auto-retries / double-block loop.&quot; It now states the accurate mechanism — the two hook different lifecycle events, running both is <strong>redundant not conflicting</strong>, and disabling security-guidance is <strong>optional</strong> (to cut duplicate warnings) rather than required. The record-once machinery and the &quot;keep both&quot; opt-out are unchanged. The notice is kept (not dropped) because redundant duplicate security warnings are still a real, if minor, UX cost worth a one-time heads-up.</p>
+<p>A drift guard (<code>tests/hooks/test_security_guard_check.py</code>) pins the corrected wording: the notice must NOT reassert &quot;double-block loop&quot; / &quot;auto-retries,&quot; and MUST describe the redundant-not-conflicting reality.</p>
+
+</main>
+<footer>Last updated: 2026-07-06 14:36 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

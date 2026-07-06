@@ -54,7 +54,7 @@ if [ "$CONFLICT" = "yes" ]; then
   mkdir -p "$(dirname "$DECISION_FILE")" 2>/dev/null || true
   if printf 'surfaced\n' > "$DECISION_FILE" 2>/dev/null && [ -f "$DECISION_FILE" ]; then
     cat <<'JSONEOF'
-{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The official security-guidance plugin is enabled alongside rawgentic's own security guard. Both check the same patterns, and the official one uses a broken blocking mechanism that auto-retries, so running both causes a confusing double-block loop. Recommended: run `claude plugin disable security-guidance@claude-plugins-official`. This notice is shown ONCE and will not repeat. If you would rather KEEP both enabled, tell me and I will record that choice (write 'kept' to ~/.rawgentic/security-guidance-decision) so it stays silent."}}
+{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"The official security-guidance plugin is enabled alongside rawgentic's own security guard. They overlap on pattern coverage but hook DIFFERENT lifecycle events — rawgentic blocks pre-edit (PreToolUse permissionDecision:deny) while security-guidance reviews post-edit (PostToolUse/Stop). Running both is therefore redundant, not a conflict: they cannot both block the same pre-edit decision, because security-guidance registers no PreToolUse hook (verified in #119). Optional: run `claude plugin disable security-guidance@claude-plugins-official` to cut duplicate security warnings, or keep both (harmless). This notice is shown ONCE and will not repeat. If you would rather KEEP both enabled, tell me and I will record that choice (write 'kept' to ~/.rawgentic/security-guidance-decision) so it stays silent."}}
 JSONEOF
   fi
 fi
