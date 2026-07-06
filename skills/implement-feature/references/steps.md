@@ -1292,11 +1292,13 @@ PR URL.
    gh run list --repo ${capabilities.repo} --branch <branch_name> --limit 1 --json status,conclusion,databaseId
    ```
 
+1a. **CI structurally unavailable → visible non-gate (#232 AC3).** If, after waiting up to CI_MAX_WAIT_MINUTES, **no run has spawned** for this branch (`gh run list` returns empty) OR a run cannot execute (Actions disabled / minutes exhausted — the platform, not this diff), then "PR open with green CI" is structurally **unsatisfiable** — this is NOT a red run to diagnose and NOT an ERROR condition. Record a **visible non-gate**, exactly like the quarantine path: session notes AND the Step 12 PR body, verbatim: `CI unavailable (no run spawned | Actions unavailable): not gating`. Then proceed to Step 14/16 — never force the ERROR protocol and never claim green. This is the interactive+headless answer to the live-run dead-end where CI simply never ran. **[Headless: AUTO-RESOLVE — record the non-gate note and proceed; do NOT ERROR just because CI never ran.]** (Distinguish from item 4: item 4 is a run that STARTED but hasn't finished; this is a run that never started.)
+
 2. If CI passes: proceed to Step 14.
 
 3. If CI fails: diagnose with `gh run view <id> --log-failed`, fix, push, CI re-runs.
 
-4. If CI times out (> CI_MAX_WAIT_MINUTES): ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If still not done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit.]**
+4. If CI times out (> CI_MAX_WAIT_MINUTES) on a run that DID start: ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If a run started but still isn't done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit. If NO run ever spawned, use item 1a's visible non-gate instead of ERROR.]**
 
 ### Output
 CI status, quarantine notice, or skip confirmation.

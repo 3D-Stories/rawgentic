@@ -99,12 +99,19 @@ ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 3. **EXIT the workflow cleanly.** Do NOT continue to the next step. The orchestrator
    will re-invoke the skill in a fresh session after the user replies.
 
-**ERROR protocol (post error → exit WITHOUT label):**
+**ERROR protocol (post error → exit WITHOUT the ai-waiting label; the ai-error label IS added):**
 
 1. Post an error comment to the issue describing what went wrong and what the
    user needs to do to unblock.
 2. Do NOT add `rawgentic:ai-waiting` label (errors don't expect a reply).
-3. Add `rawgentic:ai-error` label instead (create if missing, color "D93F0B").
+3. **Create the `rawgentic:ai-error` label if it does not exist, then add it** — the
+   first error in a fresh repo otherwise fails with "label not found" (#232 AC2,
+   confirmed). `gh label create` is idempotent-safe here via `|| true`:
+   ```bash
+   gh label create "rawgentic:ai-error" --repo ${capabilities.repo} \
+     --color "D93F0B" --description "WF2/WF3 terminal error — needs human" 2>/dev/null || true
+   gh issue edit ISSUE --repo ${capabilities.repo} --add-label "rawgentic:ai-error"
+   ```
 4. Write session notes with the error state.
 5. EXIT the workflow.
 
