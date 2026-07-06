@@ -204,3 +204,73 @@ def test_present_but_empty_declaration_blocks():
     decl = plan_lib.parse_feasibility_block("platform_apis:\n\n## Next\n")
     ok, errors = plan_lib.assert_feasibility_declared(decl)
     assert ok is False
+
+
+# --------------------------------------------------------------------------
+# Corpus drift guards (AC7) — pin the prose requirement + the WF5 lens so a later
+# edit can't silently drop them. Each anchor is a distinctive phrase (contains
+# `platform_apis`/`feasibility`/`#226`) so a stray match elsewhere cannot make the
+# guard vacuous; step-scoped where location matters. Non-vacuity verified by probe.
+# --------------------------------------------------------------------------
+
+SKILLS = REPO_ROOT / "skills"
+WF2_STEPS = (SKILLS / "implement-feature" / "references" / "steps.md").read_text()
+WF3_STEPS = (SKILLS / "fix-bug" / "references" / "steps.md").read_text()
+
+
+def _section(text: str, header: str, next_header: str) -> str:
+    start = text.index(header)
+    return text[start:text.index(next_header, start)]
+
+
+def test_wf2_step3_requires_platform_apis_declaration():
+    s3 = _section(WF2_STEPS, "## Step 3:", "## Step 4:")
+    assert "platform_apis:" in s3, "Step 3 must define the mandatory platform_apis: declaration (#226 AC1)"
+    assert "feasibility: verified via" in s3, "Step 3 must carry the feasibility contract"
+    assert "Working-precedent" in s3, "Step 3 must state the exact-object-kind working-precedent rule (AC3)"
+    assert "Silent-failure gate" in s3, "Step 3 must carry the fail-loud/fail-silent classification (AC4)"
+    assert "surface:" in s3, "Step 3 must require a surface: for a fail-silent call (AC4)"
+
+
+def test_wf2_step4_runs_validator_and_lens():
+    s4 = _section(WF2_STEPS, "## Step 4:", "## Step 5:")
+    assert "assert_feasibility_declared" in s4, "Step 4 must run the mechanical feasibility gate (#226 AC2)"
+    assert "Platform / external-dependency feasibility" in s4, "Step 4 must carry the platform-feasibility critique dimension"
+    # the human-judgment lens the parser cannot do: a used-but-undeclared API
+    assert "undeclared" in s4.lower() or "not declare" in s4.lower(), "Step 4 lens must flag a used-but-undeclared API"
+
+
+def test_wf2_step8_midflight_feasibility():
+    s8 = _section(WF2_STEPS, "## Step 8:", "## Step 9:")
+    assert "Mid-flight feasibility check" in s8, "Step 8 must carry the mid-flight/UAT feasibility check (#226 AC6)"
+
+
+def test_wf2_step9_runtime_surface_names_likeliest_wrong_claim():
+    s9 = _section(WF2_STEPS, "## Step 9:", "## Step 10:")
+    assert "Runtime-surface feasibility" in s9, "Step 9 must carry the runtime-surface rule (#226 AC5)"
+    assert "most likely to be wrong" in s9, "Step 9 must require naming the single likeliest-wrong claim (AC5)"
+    assert "target_check" in s9, "Step 9 must reuse the deferred-to-target target_check field (AC5)"
+
+
+def test_quality_bar_platform_feasibility_in_all_three_identical():
+    copies = [
+        (SKILLS / n / "references" / "quality-bar.md").read_text()
+        for n in ("implement-feature", "fix-bug", "setup")
+    ]
+    assert copies[0] == copies[1] == copies[2], "the three quality-bar.md copies must stay byte-identical"
+    for qb in copies:
+        assert "platform_feasibility" in qb, "quality-bar Category enum must include platform_feasibility (#226 AC2)"
+        assert "Platform feasibility is evidence, not assumption" in qb, "quality-bar must carry the platform-feasibility stance"
+
+
+def test_wf5_design_lens_has_platform_constraints():
+    lens = (REPO_ROOT / "hooks" / "adversarial_review_lib.py").read_text()
+    assert "Platform feasibility (#226)" in lens, "the WF5 _TYPE_LENS design lens must carry the platform-constraints emphasis (#226 AC2)"
+
+
+def test_wf3_mirror_in_step3_and_step4():
+    s3 = _section(WF3_STEPS, "## Step 3:", "## Step 4:")
+    s4 = _section(WF3_STEPS, "## Step 4:", "## Step 5:")
+    assert "Platform-feasibility check (#226" in s3, "WF3 Step 3 must mirror the feasibility check (#226 AC6)"
+    assert "platform_apis" in s3, "WF3 Step 3 must point at the platform_apis contract"
+    assert "Platform feasibility (#226)" in s4, "WF3 Step 4 reflect must carry the platform-feasibility dimension (#226 AC6)"
