@@ -10,8 +10,15 @@
 #
 # AUTH — OAuth-first (same resolver as claude-security-review.yml, #195):
 #   CLAUDE_CODE_OAUTH_TOKEN → ANTHROPIC_API_KEY → VISIBLE SKIP (executed=false).
-# Secrets by NAME only. Non-blocking (advisory). SHA-pinned action (v1 as of
-# 2026-07-05). id-token: write for the action's default App-token OIDC path.
+# Secrets by NAME only. SHA-pinned action (v1 as of 2026-07-05). id-token: write for
+# the action's default App-token OIDC path.
+#
+# HONEST-SIGNAL contract (#233 AC1): ADVISORY — NOT a required check, so a red result
+# never blocks the merge (non-blocking / does not block). But no continue-on-error
+# mask: a green check means the review actually ran AND succeeded; no auth secret, a
+# bad token, a plan lockout, or an action outage fail the job RED ("not reviewed"),
+# never a misleading green. To gate, make it a required check (owner opt-in).
+# Activation: docs/ci-review-lanes.md.
 #
 # Telemetry (AC2): the Action reports token usage per run; record its review as a
 # run-record gate entry `reviewer_kind: builtin_code_review` WITH the usage block
@@ -38,9 +45,11 @@ jobs:
     # AC1: draft-gated — only review PRs proposed for merge.
     if: ${{ github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # No continue-on-error (#233 AC1): the job's real outcome IS the signal. Green
+    # only when the review ran + succeeded; RED on no-auth / bad token / outage.
+    # Advisory = this check is NOT required, so red never blocks the merge.
     steps:
-      - name: Resolve auth (OAuth-first, then API key, else visible skip)
+      - name: Resolve auth (OAuth-first, then API key, else RED skip)
         id: auth
         env:
           OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -53,9 +62,10 @@ jobs:
             echo "mode=apikey" >> "$GITHUB_OUTPUT"
             echo "present=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — code review SKIPPED, not a clean signal"
+            echo "::error::No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY — code review did NOT run. This ADVISORY check is RED (not green) so it never reads as 'reviewed'; it does not block the merge. Activate per docs/ci-review-lanes.md (org-wide: gh secret set CLAUDE_CODE_OAUTH_TOKEN --org <org> --visibility all)."
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "## Claude code review: executed=false (no auth secret — does NOT count toward the #162 A/B sample)" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Claude code review: executed=false (no auth secret) — check is RED to signal 'not reviewed', never green. Advisory / non-blocking. Activate: docs/ci-review-lanes.md" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
 
       - name: Checkout

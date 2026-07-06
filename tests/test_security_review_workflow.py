@@ -76,7 +76,12 @@ def test_execution_status_is_durable_for_the_promotion_tally():
 
 
 def test_lane_is_non_blocking_initially():
-    assert re.search(r"^    continue-on-error: true$", _text(), re.M)
+    # #233: advisory via a NON-required check + honest-RED skip, not a
+    # continue-on-error mask. Green = actually reviewed; no-auth/error = red.
+    text = _text()
+    assert "continue-on-error: true" not in text
+    assert re.search(r"^\s+exit 1$", text, re.M), "no-auth must fail RED, not exit 0 green"
+    assert "advisory" in text.lower()
 
 
 def test_no_auth_is_a_visible_skip():

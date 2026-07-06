@@ -401,3 +401,22 @@ Next steps:
 - Try a workflow: /rawgentic:implement-feature, /rawgentic:fix-bug, etc.
 - Skills will update .rawgentic.json as they discover new project capabilities
 ```
+
+**Review-lane activation nudge (#233 AC2).** If the project ships the GitHub Action
+review lanes (`.github/workflows/claude-{security,code}-review.yml`) but **no
+`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` secret is configured**, those lanes
+now go **RED ("not reviewed")** on every PR instead of a misleading green — they are
+advisory (non-blocking), but they won't do anything until activated. Tell the user
+how to turn them on and point them at the guide:
+
+```
+The Claude review lanes are present but inactive (no auth secret) — every PR's
+security-review / code-review will show RED until you activate them:
+  claude setup-token
+  gh secret set CLAUDE_CODE_OAUTH_TOKEN --org <org> --visibility all   # org-wide
+(or ANTHROPIC_API_KEY as a fallback). The Claude Code GitHub App must also be
+installed on the repo/org. Full guide: docs/ci-review-lanes.md
+```
+
+Advisory only — never block setup on this. Skip silently if the lane workflows are
+absent or a secret is already set.
