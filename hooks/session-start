@@ -620,6 +620,26 @@ _do_post_update_reconcile() {
 }
 _do_post_update_reconcile 2>/dev/null || true
 
+# --- #234: per-project config-staleness nudge -----------------------------------
+# The reconcile above nudges only when the plugin version JUST crossed a feature's
+# `since` (once per workspace per version). A project left behind and first seen AFTER
+# the plugin already updated stays silent. This surfaces each ACTIVE project's own
+# unconfigured-feature gaps once per (project, version) — independent of the reconcile
+# marker. Advisory, non-blocking, fail-open.
+_do_config_staleness_check() {
+    case "$EVENT_TYPE" in startup|resume) ;; *) return 0 ;; esac
+    command -v python3 &>/dev/null || return 0
+    [ -n "$WORKSPACE_FILE" ] || return 0
+    [ -n "$CLAUDE_DOCS" ] || return 0
+    local reconcile="$SCRIPT_DIR/post_update_reconcile.py"
+    [ -f "$reconcile" ] || return 0
+
+    local _out
+    _out=$(python3 "$reconcile" --staleness-active --workspace "$WORKSPACE_FILE" --state-dir "$CLAUDE_DOCS" 2>/dev/null || true)
+    [ -n "$_out" ] && CONTEXT_PARTS+=("$_out")
+}
+_do_config_staleness_check 2>/dev/null || true
+
 # =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
 # =========================================================================

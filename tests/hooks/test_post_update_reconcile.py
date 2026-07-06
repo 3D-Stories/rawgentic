@@ -20,7 +20,8 @@ from pathlib import Path
 
 import pytest
 
-HOOKS_DIR = Path(__file__).resolve().parent.parent.parent / "hooks"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+HOOKS_DIR = REPO_ROOT / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
 
 import post_update_reconcile as pur  # noqa: E402
@@ -112,7 +113,8 @@ def _write_manifest(tmp_path, manifest):
     return mf
 
 
-def _run(tmp_path, ws, *, version, state_dir=None, manifest=None, extra_env=None):
+def _run(tmp_path, ws, *, version, state_dir=None, manifest=None, extra_env=None,
+         extra_args=None):
     state_dir = state_dir or (tmp_path / "state")
     env = dict(os.environ)
     env["HOME"] = str(tmp_path)
@@ -122,6 +124,8 @@ def _run(tmp_path, ws, *, version, state_dir=None, manifest=None, extra_env=None
         env.update(extra_env)
     cmd = ["python3", str(SCRIPT), "--workspace", str(ws),
            "--state-dir", str(state_dir), "--version", version]
+    if extra_args:
+        cmd += list(extra_args)
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
     return r, Path(state_dir)
 
@@ -396,3 +400,99 @@ class TestSessionStartWiring:
         # the guard is inside _do_post_update_reconcile
         seg = t[t.index("_do_post_update_reconcile()"):]
         assert "startup|resume" in seg[:400]
+
+
+# --------------------------------------------------------------------------
+# #234: per-project config-staleness nudge (independent of the reconcile marker)
+# --------------------------------------------------------------------------
+
+class TestProjectFeatureGaps:
+    """Pure: needs-question features a project has NOT configured that EXIST at the
+    current version — surfaces a stale project even after the plugin already updated."""
+
+    def test_absent_needs_question_is_a_gap(self):
+        gaps = pur.project_feature_gaps(_proj("p"), MANIFEST, "9.9.9")
+        assert ("adversarialReview", "adversarial review (WF5)") in gaps
+
+    def test_configured_feature_is_not_a_gap(self):
+        gaps = pur.project_feature_gaps(_proj("p", adversarialReview=True),
+                                        MANIFEST, "9.9.9")
+        assert gaps == []
+
+    def test_auto_on_and_opt_in_are_not_gaps(self):
+        # only needs-question (answer-required) features count as a setup gap
+        gaps = pur.project_feature_gaps(_proj("p"), MANIFEST, "9.9.9")
+        keys = {k for k, _ in gaps}
+        assert "fancyFeature" not in keys and "headlessEnabled" not in keys
+
+    def test_feature_newer_than_current_is_not_yet_a_gap(self):
+        future = [{"key": "adversarialReview", "policy": "needs-question",
+                   "nudge": "WF5", "since": "99.0.0"}]
+        assert pur.project_feature_gaps(_proj("p"), future, "3.14.0") == []
+
+
+class TestStalenessCLI:
+    def test_staleness_project_nudges_when_behind(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        r, _ = _run(tmp_path, ws, version="9.9.9", manifest=_write_manifest(tmp_path, MANIFEST),
+                    extra_args=["--staleness-project", "p"])
+        assert r.returncode == 0, r.stderr
+        assert "setup" in r.stdout.lower()
+        assert "p" in r.stdout
+
+    def test_staleness_project_silent_when_configured(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj("p", active=True, adversarialReview=True)])
+        r, _ = _run(tmp_path, ws, version="9.9.9", manifest=_write_manifest(tmp_path, MANIFEST),
+                    extra_args=["--staleness-project", "p"])
+        assert r.stdout.strip() == ""
+
+    def test_staleness_project_always_shows_no_marker_gate(self, tmp_path):
+        # /switch is an explicit action — the gap surfaces every switch (no once-gate)
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        mf = _write_manifest(tmp_path, MANIFEST)
+        r1, _ = _run(tmp_path, ws, version="9.9.9", manifest=mf, extra_args=["--staleness-project", "p"])
+        r2, _ = _run(tmp_path, ws, version="9.9.9", manifest=mf, extra_args=["--staleness-project", "p"])
+        assert "setup" in r1.stdout.lower() and "setup" in r2.stdout.lower()
+
+    def test_staleness_active_nudges_once_per_version(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        mf = _write_manifest(tmp_path, MANIFEST)
+        r1, sd = _run(tmp_path, ws, version="9.9.9", manifest=mf, extra_args=["--staleness-active"])
+        assert "setup" in r1.stdout.lower()
+        r2, _ = _run(tmp_path, ws, version="9.9.9", state_dir=sd, manifest=mf,
+                     extra_args=["--staleness-active"])
+        assert r2.stdout.strip() == "", "must not re-nag the same project for the same version"
+
+    def test_staleness_active_skips_inactive(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj("p", active=False)])
+        r, _ = _run(tmp_path, ws, version="9.9.9", manifest=_write_manifest(tmp_path, MANIFEST),
+                    extra_args=["--staleness-active"])
+        assert r.stdout.strip() == ""
+
+    def test_staleness_respects_setupprompt_optout(self, tmp_path):
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"version": 1, "setupPrompt": False,
+                                  "projects": [_proj("p", active=True)]}))
+        r, _ = _run(tmp_path, ws, version="9.9.9", manifest=_write_manifest(tmp_path, MANIFEST),
+                    extra_args=["--staleness-project", "p"])
+        assert r.stdout.strip() == ""
+
+    def test_default_invocation_unchanged_no_staleness(self, tmp_path):
+        # regression: without a staleness flag, same-version stays SILENT (#184 contract)
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        sd = tmp_path / "state"
+        sd.mkdir()
+        (sd / "rawgentic-reconciled-version").write_text("9.9.9\n")
+        r, _ = _run(tmp_path, ws, version="9.9.9", state_dir=sd,
+                    manifest=_write_manifest(tmp_path, MANIFEST))
+        assert r.stdout.strip() == "", "default same-version run must stay silent"
+
+
+class TestStalenessWiring:
+    def test_session_start_runs_staleness_active(self):
+        t = (HOOKS_DIR / "session-start").read_text()
+        assert "--staleness-active" in t
+
+    def test_switch_skill_references_staleness_project(self):
+        sw = (REPO_ROOT / "skills" / "switch" / "SKILL.md").read_text()
+        assert "--staleness-project" in sw

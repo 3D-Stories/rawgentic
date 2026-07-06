@@ -172,6 +172,28 @@ Run `/rawgentic:setup` to update your config (existing values will be preserved)
 
 **If no fields are missing:** Silent pass — print nothing.
 
+### 2b. Feature-gap staleness nudge (#234)
+
+The universal-field check above only catches a *malformed/old-shape* config. It does
+NOT catch a project that predates newer **setup-requiring features** (adversarial
+review, model routing, peer consult, design artifact, …) — that project has a valid
+config, it's just behind. `hooks/post_update_reconcile.py`'s SessionStart pass nudges
+these once per plugin version, but switching to a project is the moment to surface
+*its own* gap. Run the per-project staleness check for the project you just bound
+(`<name>` = the target project's name; resolve the workspace + `claude_docs` paths as
+in Step 5):
+
+```bash
+python3 hooks/post_update_reconcile.py --staleness-project <name> \
+  --workspace .rawgentic_workspace.json --state-dir claude_docs
+```
+
+It prints an advisory line (or nothing) — surface any output to the user verbatim.
+This is **advisory, never blocking**: it always shows the gap on an explicit switch
+(no once-per-version gate, unlike the SessionStart `--staleness-active` pass), and it
+respects the workspace-level `"setupPrompt": false` opt-out. Fail-open: a non-zero
+exit or empty output means "nothing to nudge" — continue.
+
 ### 3. Headless Access Check
 
 If the current session has `RAWGENTIC_HEADLESS=1` set (headless mode), check the target project's `headlessEnabled` field in `.rawgentic_workspace.json`. The field accepts a bool (legacy) or an object `{"enabled": bool, "triggers": [...], "auth": "..."}` (#165) — apply the SAME verdict the session-start gate computes:
