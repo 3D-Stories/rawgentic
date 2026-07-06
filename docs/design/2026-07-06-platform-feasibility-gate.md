@@ -1,5 +1,8 @@
 # Design — Platform / external-dependency feasibility gate (issue #226)
 
+<!-- Visual artifact (hosted): https://claude.ai/code/artifact/f616b97a-c4bf-47e8-b1ff-7081356624d2 · committed standalone render: 2026-07-06-platform-feasibility-gate.html -->
+
+
 **Workflow:** WF2 Step 3 · Status: design (Step 4 pending) · Complexity: standard_feature · Blast: low code, prose-heavy
 
 ## Problem
