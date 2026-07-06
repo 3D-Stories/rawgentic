@@ -117,6 +117,26 @@ The handler uses `fcntl.flock()` for concurrent safety, atomic writes via
 `tempfile` + `os.replace()`, and validates project names against
 `^[a-zA-Z0-9_-]+$`.
 
+## Session Registry Housekeeping (`/rawgentic:housekeeping`, #7)
+
+`claude_docs/session_registry.jsonl` is append-only — session-start dedups by
+`session_id` (keeping the latest) but never prunes by age, so it accumulates one
+entry per bound session forever. The opt-in **`/rawgentic:housekeeping`** skill (via
+the tested `hooks/registry_prune.py`) prunes entries whose `started` timestamp is
+older than a TTL:
+
+- **Threshold:** default **30 days**, configurable via `--ttl-days` or the
+  `RAWGENTIC_REGISTRY_TTL_DAYS` env var (a missing / non-int / `< 1` value falls back
+  to 30 — never prunes with a bogus TTL).
+- **Fail-safe:** a malformed line, or one with no datable `started`, is **kept** — the
+  prune never silently drops data it can't age. Blank lines are dropped.
+- **Reports** `kept / removed / undatable-kept`, previews with `--dry-run`, and only
+  rewrites the file when something was actually removed.
+
+WAL files are **not** pruned by this skill — they are already capped by the >5000-line
+rotation above (#7 rescope: WAL growth was already bounded; registry pruning was the
+real gap).
+
 ## WAL Guard (`hooks/wal-guard`)
 
 The WAL Guard is a separate PreToolUse hook (matcher: Bash) that blocks dangerous
