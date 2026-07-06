@@ -1665,3 +1665,127 @@ class TestWritePathIsStrict:
             capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         assert store.exists() and store.read_text().strip()
+
+
+# --- #115: multi-store / workspace fleet aggregation ---
+# Reuses the module's existing `_store_rec()` (valid record + generated_at) and
+# `_write_store(path, records)` (writes JSONL, returns str(path)) helpers.
+
+
+class TestLoadStores:
+    def test_pools_and_origin_tags(self, tmp_path):
+        from work_summary import load_stores
+        a = tmp_path / "a.jsonl"; b = tmp_path / "b.jsonl"
+        _write_store(a, [_store_rec(), _store_rec()])
+        _write_store(b, [_store_rec()])
+        records, excluded, missing = load_stores(
+            [(str(a), "proj-a"), (str(b), "proj-b")], tolerate_missing=True)
+        assert len(records) == 3
+        assert missing == []
+        srcs = sorted(r["_source"] for r in records)
+        assert srcs == ["proj-a", "proj-a", "proj-b"]
+
+    def test_missing_among_several_is_skipped_with_count(self, tmp_path):
+        from work_summary import load_stores
+        a = tmp_path / "a.jsonl"
+        _write_store(a, [_store_rec()])
+        records, excluded, missing = load_stores(
+            [(str(a), "a"), (str(tmp_path / "nope.jsonl"), "gone")], tolerate_missing=True)
+        assert len(records) == 1
+        assert len(missing) == 1 and "gone" in missing[0]
+
+    def test_single_missing_raises_when_not_tolerated(self, tmp_path):
+        from work_summary import load_stores, WorkSummaryError
+        with pytest.raises(WorkSummaryError):
+            load_stores([(str(tmp_path / "nope.jsonl"), "x")], tolerate_missing=False)
+
+    def test_excluded_lines_carry_origin(self, tmp_path):
+        from work_summary import load_stores
+        a = tmp_path / "a.jsonl"
+        a.write_text('{"not":"valid record"}\n', encoding="utf-8")
+        records, excluded, missing = load_stores([(str(a), "proj-a")], tolerate_missing=True)
+        assert records == []
+        assert excluded and "proj-a" in excluded[0]
+
+
+class TestStoresFromWorkspace:
+    def test_resolves_active_projects_only(self, tmp_path):
+        from work_summary import stores_from_workspace
+        (tmp_path / "projects" / "app").mkdir(parents=True)
+        (tmp_path / "projects" / "off").mkdir(parents=True)
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "app", "path": "./projects/app", "active": True},
+            {"name": "off", "path": "./projects/off", "active": False},
+        ]}), encoding="utf-8")
+        stores = stores_from_workspace(str(ws))
+        assert len(stores) == 1
+        path, origin = stores[0]
+        assert origin == "app"
+        assert path.endswith("projects/app/docs/measurements/run_records.jsonl")
+
+    def test_malformed_workspace_raises(self, tmp_path):
+        from work_summary import stores_from_workspace, WorkSummaryError
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text("{ not json", encoding="utf-8")
+        with pytest.raises(WorkSummaryError):
+            stores_from_workspace(str(ws))
+
+
+class TestSourceGroupBy:
+    def test_source_is_a_group_key(self):
+        from work_summary import _GROUP_KEYS
+        assert "source" in _GROUP_KEYS
+
+    def test_group_by_source_partitions(self, tmp_path):
+        from work_summary import load_stores, aggregate_grouped
+        a = tmp_path / "a.jsonl"; b = tmp_path / "b.jsonl"
+        _write_store(a, [_store_rec(), _store_rec()])
+        _write_store(b, [_store_rec()])
+        records, _, _ = load_stores([(str(a), "a"), (str(b), "b")], tolerate_missing=True)
+        grouped = aggregate_grouped(records, "source")
+        assert grouped["a"]["n"] == 2
+        assert grouped["b"]["n"] == 1
+
+
+class TestFleetCLI:
+    REPO_ROOT = HOOKS_DIR.parent
+
+    def _run(self, tmp_path, *extra):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "aggregate", "--json", *extra],
+            capture_output=True, text=True)
+
+    def test_repeatable_store_pools(self, tmp_path):
+        a = tmp_path / "a.jsonl"; b = tmp_path / "b.jsonl"
+        _write_store(a, [_store_rec(), _store_rec()])
+        _write_store(b, [_store_rec()])
+        r = self._run(tmp_path, "--store", str(a), "--store", str(b))
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        assert out["aggregate"]["n"] == 3
+
+    def test_missing_among_several_warns_not_fatal(self, tmp_path):
+        a = tmp_path / "a.jsonl"
+        _write_store(a, [_store_rec()])
+        r = self._run(tmp_path, "--store", str(a), "--store", str(tmp_path / "gone.jsonl"))
+        assert r.returncode == 0, r.stderr
+        assert "gone.jsonl" in r.stderr  # visible warning
+        assert json.loads(r.stdout)["aggregate"]["n"] == 1
+
+    def test_single_missing_store_exits_2(self, tmp_path):
+        r = self._run(tmp_path, "--store", str(tmp_path / "nope.jsonl"))
+        assert r.returncode == 2
+
+    def test_workspace_mode_pools(self, tmp_path):
+        (tmp_path / "projects" / "app" / "docs" / "measurements").mkdir(parents=True)
+        _write_store(tmp_path / "projects" / "app" / "docs" / "measurements" / "run_records.jsonl",
+                     [_store_rec(), _store_rec()])
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "app", "path": "./projects/app", "active": True},
+        ]}), encoding="utf-8")
+        r = self._run(tmp_path, "--workspace", str(ws))
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["aggregate"]["n"] == 2

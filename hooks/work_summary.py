@@ -686,6 +686,64 @@ def load_store(path) -> tuple:
     return records, excluded
 
 
+def load_stores(store_specs, *, tolerate_missing=True) -> tuple:
+    """Pool multiple run-record stores into one record list (#115 — fleet view).
+
+    `store_specs` is a list of `(store_path, origin)` pairs; each loaded record is
+    origin-tagged with `_source = origin` at load time (read-side only, never persisted,
+    so no schema change) — this is what a `--group-by source` fleet slice keys on.
+
+    Returns `(records, excluded, missing)`:
+    - `records`  — pooled, origin-tagged records from every readable store.
+    - `excluded` — per-line fail-closed exclusions (from each store's `load_store`),
+      each prefixed with its origin so a bad line is traceable to its store.
+    - `missing`  — stores that could not be read at all. When `tolerate_missing` (the
+      fleet default), an unreadable store is appended here (skip-with-visible-count),
+      NOT fatal — the store-level analog of the per-line fail-closed reader. When
+      `tolerate_missing=False` (a single explicitly-named `--store`), the first
+      unreadable store re-raises `WorkSummaryError` (single-store parity, exit 2)."""
+    records, excluded, missing = [], [], []
+    for path, origin in store_specs:
+        try:
+            recs, exc = load_store(path)
+        except WorkSummaryError as e:
+            if tolerate_missing:
+                missing.append(f"{origin} ({path}): {e}")
+                continue
+            raise
+        for r in recs:
+            r["_source"] = origin
+        records.extend(recs)
+        excluded.extend(f"[{origin}] {x}" for x in exc)
+    return records, excluded, missing
+
+
+def stores_from_workspace(workspace_path) -> list:
+    """Resolve each ACTIVE project's default run-record store from a
+    `.rawgentic_workspace.json` (#115 — `--workspace` fleet mode). Returns a list of
+    `(store_path, project_name)` pairs (origin = project name). Inactive projects and
+    entries without a `path` are skipped. A relative project path resolves against the
+    workspace file's directory. Fail-closed: an unreadable/malformed workspace raises
+    `WorkSummaryError`."""
+    try:
+        data = json.loads(Path(workspace_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise WorkSummaryError(f"cannot read workspace {workspace_path}: {e}")
+    root = Path(workspace_path).resolve().parent
+    out = []
+    for proj in _as_list(data.get("projects")):
+        if not isinstance(proj, dict) or not proj.get("active"):
+            continue
+        ppath = proj.get("path")
+        if not _is_str(ppath) or not ppath:
+            continue
+        base = Path(ppath)
+        if not base.is_absolute():
+            base = root / base
+        out.append((str(base.joinpath(*DEFAULT_STORE_RELPATH)), proj.get("name") or ppath))
+    return out
+
+
 def filter_since(records, since):
     """Keep records whose `generated_at` >= `since` (lexical ISO compare —
     correct for the writer's Zulu format vs a bare YYYY-MM-DD, where the full
@@ -831,6 +889,10 @@ _GROUP_KEYS = {
     "version": lambda r: r.get("workflow_version"),
     "type": lambda r: _as_dict(r.get("issue")).get("type"),
     "complexity": lambda r: _as_dict(r.get("issue")).get("complexity"),
+    # #115: origin store/project, tagged at load by load_stores (read-side, no schema
+    # change). Only meaningful for a pooled fleet aggregate; single-store runs bucket
+    # all records under one source.
+    "source": lambda r: r.get("_source"),
 }
 
 
@@ -957,13 +1019,19 @@ def main(argv=None) -> int:
     pa = sub.add_parser(
         "aggregate",
         help="roll a JSONL run-record store up into aggregate Tier-2 metrics")
-    pa.add_argument("--store", default=None,
-                    help=f"run-record store path (falls back to ${STORE_ENV})")
+    pa.add_argument("--store", action="append", default=None,
+                    help=f"run-record store path; repeatable to pool multiple stores "
+                         f"(#115). Falls back to ${STORE_ENV} when neither --store nor "
+                         f"--workspace is given")
+    pa.add_argument("--workspace", default=None,
+                    help="pool the default store of every ACTIVE project in a "
+                         "`.rawgentic_workspace.json` (#115 fleet view)")
     pa.add_argument("--json", action="store_true",
                     help="emit the metric object as JSON instead of Markdown")
     pa.add_argument("--group-by", choices=sorted(_GROUP_KEYS), default=None,
                     help="partition every metric by this dimension "
-                         "(version is the cross-skill A/B slice)")
+                         "(version is the cross-skill A/B slice; source is the "
+                         "per-project fleet slice)")
     pa.add_argument("--since", default=None,
                     help="only records whose generated_at is on/after this ISO date")
     args = parser.parse_args(argv)
@@ -1000,16 +1068,38 @@ def main(argv=None) -> int:
         return 0
 
     if args.cmd == "aggregate":
-        store = args.store or os.environ.get(STORE_ENV)
-        if not store:
-            print(f"aggregate requires --store or ${STORE_ENV}", file=sys.stderr)
-            return 2
         if args.since is not None and not _looks_iso(args.since):
             print(f"--since must be an ISO-8601 date (YYYY-MM-DD); got: {args.since}",
                   file=sys.stderr)
             return 2
+        # Resolve the store spec list (#115): --workspace pools active projects;
+        # --store is repeatable; else fall back to the env store. A SINGLE explicitly
+        # named store keeps single-store parity (missing -> exit 2); a fleet of >1
+        # stores (or --workspace) tolerates a missing store with a visible warning.
+        if args.workspace:
+            try:
+                store_specs = stores_from_workspace(args.workspace)
+            except WorkSummaryError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            if not store_specs:
+                print(f"no active projects with stores in {args.workspace}",
+                      file=sys.stderr)
+                return 2
+            tolerate = True
+        elif args.store:
+            store_specs = [(s, s) for s in args.store]
+            tolerate = len(store_specs) > 1
+        else:
+            env_store = os.environ.get(STORE_ENV)
+            if not env_store:
+                print(f"aggregate requires --store, --workspace, or ${STORE_ENV}",
+                      file=sys.stderr)
+                return 2
+            store_specs = [(env_store, env_store)]
+            tolerate = False
         try:
-            records, excluded = load_store(store)
+            records, excluded, missing = load_stores(store_specs, tolerate_missing=tolerate)
         except WorkSummaryError as exc:
             print(str(exc), file=sys.stderr)
             return 2
@@ -1020,10 +1110,14 @@ def main(argv=None) -> int:
             print(json.dumps(
                 {"group_by": args.group_by, "since": args.since,
                  "excluded": excluded, "excluded_count": len(excluded),
+                 "missing_stores": missing, "missing_store_count": len(missing),
                  "aggregate": agg}, separators=(",", ":")))
         else:
             print(render_aggregate_markdown(
                 agg, group_by=args.group_by, excluded=excluded, since=args.since))
+            if missing:
+                print(f"\n> {len(missing)} store(s) skipped (unreadable): "
+                      f"{', '.join(m.split(' (')[0] for m in missing)}")
         # AC8: corrupt/excluded lines are ALSO surfaced on stderr with a count,
         # so a fail-closed exclusion is never invisible.
         if excluded:
@@ -1031,6 +1125,11 @@ def main(argv=None) -> int:
                   file=sys.stderr)
             for e in excluded:
                 print(f"  - {e}", file=sys.stderr)
+        # #115: a store skipped entirely (fleet fail-closed) is surfaced too.
+        if missing:
+            print(f"{len(missing)} store(s) skipped (unreadable):", file=sys.stderr)
+            for m in missing:
+                print(f"  - {m}", file=sys.stderr)
         return 0
 
     return 2
