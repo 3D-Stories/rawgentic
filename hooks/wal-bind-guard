@@ -142,7 +142,7 @@ if [ -n "$VIOLATION" ]; then
     # resolve under the target project's dir, so a symlink or `../` can't escape it.
     ALLOWLIST=$("$JQ" -r '.crossProjectAllowedPaths // [] | .[]' "$WORKSPACE_FILE" 2>/dev/null || true)
     if [ -n "$ALLOWLIST" ]; then
-        TARGET_PATH=$("$JQ" -r --arg v "$VIOLATION" '.projects[] | select(.name == $v) | .path' "$WORKSPACE_FILE" 2>/dev/null | head -1 || true)
+        TARGET_PATH=$("$JQ" -r --arg v "$VIOLATION" '.projects[] | select(.name == $v and .active == true) | .path' "$WORKSPACE_FILE" 2>/dev/null | head -1 || true)
         TARGET_ABS=$(realpath -m "$WORKSPACE_ROOT/${TARGET_PATH#./}" 2>/dev/null || true)
         FILE_REAL=$(realpath -m "$FILE_PATH" 2>/dev/null || true)
         # AC4: resolved file must still be under the (resolved) target project dir.
@@ -152,8 +152,9 @@ if [ -n "$VIOLATION" ]; then
             while IFS= read -r _pat; do
                 [ -z "$_pat" ] && continue
                 # AC5: bash glob match. In `case`, `*` spans `/`, so "docs/**" matches
-                # nested paths; anchoring on the literal prefix means "docs/**" never
-                # matches "docs-extra/…" (AC8 — trailing-slash false-match prevented).
+                # nested paths. AC8 (no "docs-extra/…" false match) holds because the
+                # pattern's OWN literal prefix ("docs/") anchors it — a bare "*"/"**"
+                # matches everything (documented footgun), so patterns must be specific.
                 case "$REL" in
                     $_pat) MATCHED=1; break ;;
                 esac

@@ -320,3 +320,29 @@ class TestCrossProjectAllowlist:
         stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
         stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
         assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_dotdot_traversal_blocked(self, make_workspace) -> None:
+        # AC4: a plain ../ escape (no symlink) must not be allowed by the list
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / ".." / ".." / ".." / "escaped.md")
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_edit_tool_allowed(self, make_workspace) -> None:
+        # AC2: Edit (not just Write/Read) is relaxed by the allowlist
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / "notes.md")
+        stdin = _make_stdin("Edit", "s1", str(ws.root), {"file_path": fp})
+        stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "allow"
+        assert "write" in stderr
+
+    def test_notebookedit_tool_allowed(self, make_workspace) -> None:
+        # AC2: NotebookEdit shares the same relaxed path (reads notebook_path, not file_path)
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / "nb.ipynb")
+        stdin = _make_stdin("NotebookEdit", "s1", str(ws.root), {"notebook_path": fp})
+        stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "allow"
+        assert "crossProjectAllowedPaths" in stderr  # non-vacuous: allowed by list, not empty-path
