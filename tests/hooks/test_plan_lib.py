@@ -1177,9 +1177,27 @@ class TestCountImplFiles:
         mod = _reload_plan_lib()
         assert mod.count_impl_files(["skills/foo/SKILL.md"], impl_extensions=[".md"]) == 1
 
-    def test_opt_in_counts_top_level_markdown(self):
+    def test_opt_in_counts_arbitrary_product_markdown(self):
+        # a non-doc .md (not a docs/ dir, not a well-known doc basename) counts when opted in
         mod = _reload_plan_lib()
-        assert mod.count_impl_files(["README.md"], impl_extensions=[".md"]) == 1
+        assert mod.count_impl_files(["skills/foo/reference.md"], impl_extensions=[".md"]) == 1
+
+    def test_opt_in_still_excludes_well_known_root_docs(self):
+        # #143 review F1: README/CHANGELOG are docs even in markdown-is-product mode
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["README.md"], impl_extensions=[".md"]) == 0
+        assert mod.count_impl_files(["CHANGELOG.md"], impl_extensions=[".md"]) == 0
+
+    def test_default_excludes_uppercase_md_doc_case_insensitive(self):
+        # #143 review F4: matching is case-insensitive both with and without opt-in
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["README.MD"]) == 0
+        assert mod.count_impl_files(["skills/x/GUIDE.MD"], impl_extensions=[".md"]) == 1
+
+    def test_opt_in_bare_ext_without_dot_is_normalized(self):
+        # #143 review F3: a direct caller passing "md" (no dot) still works
+        mod = _reload_plan_lib()
+        assert mod.count_impl_files(["skills/x/SKILL.md"], impl_extensions=["md"]) == 1
 
     def test_opt_in_still_excludes_docs_dir_markdown(self):
         # a genuine docs/ dir stays docs even in markdown-is-product mode
@@ -1193,8 +1211,8 @@ class TestCountImplFiles:
     def test_opt_in_mixed_counts_product_md_plus_code(self):
         mod = _reload_plan_lib()
         paths = ["skills/a/SKILL.md", "hooks/b.py", "docs/c.md", "README.md", "tests/test_d.py"]
-        # SKILL.md + b.py + README.md = 3; docs/c.md and the test excluded
-        assert mod.count_impl_files(paths, impl_extensions=[".md"]) == 3
+        # SKILL.md + b.py = 2; docs/c.md, README.md (well-known doc), and the test excluded
+        assert mod.count_impl_files(paths, impl_extensions=[".md"]) == 2
 
 
 class TestLaneImplExtensions:

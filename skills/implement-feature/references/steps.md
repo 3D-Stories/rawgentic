@@ -52,7 +52,8 @@ the whole spine. Log the tier + reason in session notes.
 **Secondary signal — bounded multi-defect election (#225).** When the Step-2 analysis
 identifies the change as **2..`MAX_LANE_DEFECTS` (3) separately-understood, bounded defects**
 (e.g. the same fix pattern across native-core + host + frontend) with no architecture
-change, pass their per-defect impl-file estimates (same `count_impl_files` exclusions) as
+change, pass their per-defect impl-file estimates (same `count_impl_files` exclusions,
+including the same `impl_extensions` from `lane_impl_extensions(cfg)` — #143) as
 `defect_file_counts=[...]` on the `lane_decision` call. The lane is then electable even when
 the TOTAL exceeds 7, provided each defect is ≤ `LANE_MAX_IMPL_FILES` AND the total is ≤
 `MAX_LANE_DEFECTS × LANE_MAX_IMPL_FILES` (21) — a multi-defect change is lane-eligible iff
