@@ -86,6 +86,15 @@ Screenshot at device scale (2×) for crisp README rendering.
 - **Rendering:** DOM-builder only (`h()` + `replaceChildren`) — **no `innerHTML`**
   anywhere; this is both the repo security-hook contract and showcase hygiene, and
   it is test-enforced.
+- **Station drill-down = modal overlay (#227):** clicking a station opens its detail in
+  a native `<dialog>` (`showModal()`) over the dimmed, still-rendered overview — the
+  reader keeps their place in the spine, instead of a full-page swap. The hash still
+  carries `#/wf2/<ver>/s/<id>` (deep-links + back/forward open/close the modal); Esc, the
+  close button, and a backdrop click all route back to `#/wf2/<ver>`. `<dialog>` provides
+  focus-trap, focus-restore, and `::backdrop` for free; open/close animation honors
+  `prefers-reduced-motion`. `render()` (re)builds the overview only on a wf/rev change and
+  opens/closes the modal per the `/s/<id>` segment. A drift guard pins the modal so a later
+  edit can't silently revert to the full-page swap.
 - **Fonts** are embedded as base64 woff2 latin subsets, all licensed under the
   **SIL Open Font License 1.1**: IBM Plex Mono / IBM Plex Sans (© IBM Corp.,
   github.com/IBM/plex) and Big Shoulders (© the Big Shoulders Project Authors,
