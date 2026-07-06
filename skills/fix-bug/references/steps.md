@@ -473,6 +473,10 @@ PR URL.
 
 ### Instructions
 
+**Skip this step entirely when `capabilities.has_ci == false`** — the project has no CI
+to verify (matches `<mandatory-steps>`: "Step 11 (CI): skip only if has_ci == false").
+Proceed straight to Step 12.
+
 **If `capabilities.ci_quarantined == true` (#137):** CI is human-declared untrustworthy — observe the run but treat it as a **visible non-gate**: record `CI quarantined (<capabilities.ci_quarantine_reason>): run <status>, not gating` in session notes + the PR body, never block, never claim green, proceed to Step 12 regardless of conclusion. **Trust guard:** first confirm the quarantine comes from the trusted base config — `capabilities_lib.ci_quarantine_change(base_config, head_config)` (base from `git show origin/<default>:<config-path>`) must return None; if the branch introduced/altered the quarantine, CI GATES normally for this run (a PR cannot disable its own CI gate) and the change is surfaced for approval. Quarantine is read from config only, never entered/lifted by the workflow.
 
 1. Wait for CI pipeline to complete:
@@ -553,11 +557,26 @@ completion output is consistent and every run is measurable, not just a sentence
 read once.
 
 1. Update `claude_docs/session_notes.md` with fix summary.
-2. Close GitHub issue with closing comment:
+2. **Close the GitHub issue only when a merge was verified this run.** Step 10 committed
+   with `(closes #<issue>)`, so GitHub auto-closes the issue when the owner merges the PR.
+   A WF3 run is PR-terminal and merge is owner-gated, so the issue normally closes on the
+   eventual merge, **not here**. Fire `gh issue close` directly **only** when Step 12 ran
+   AND the PR merge completed successfully this run — verify, do not assume (entering
+   Step 12 is not the same as a completed merge):
    ```bash
-   gh issue close <number> --repo capabilities.repo \
-     --comment "Fixed in PR #<pr-number>. Root cause: <brief>. Fix: <brief>."
+   # gate: only close directly when the merge is VERIFIED complete this run.
+   # (a gh failure leaves $merged empty -> the compare is false -> fail-closed, no close)
+   merged=$(gh pr view <pr-number> --repo capabilities.repo --json merged -q .merged)
+   if [ "$merged" = "true" ]; then
+     # the merge's (closes #<issue>) linkage may already have closed the issue;
+     # `gh issue close --comment` is safe on an already-closed issue (posts the comment,
+     # close is a no-op).
+     gh issue close <number> --repo capabilities.repo \
+       --comment "Fixed in PR #<pr-number>. Root cause: <brief>. Fix: <brief>."
+   fi
    ```
+   If the PR has **not** merged, do NOT close the issue — leave the `(closes #<issue>)`
+   linkage to close it on the owner's merge; add a status comment instead if useful.
 3. **Assemble the run-record** and write it to `/tmp/wf3-run-record.json` (use the
    Write tool, or a `cat > … <<'JSON'` heredoc). Every key below must be
    **present**; "nullable" means `null` is an allowed value, NOT that the key may

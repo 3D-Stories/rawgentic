@@ -395,15 +395,19 @@ This is stricter than WF2's general TDD flow because bugs have a concrete "befor
 
 **Type:** automated
 **Actor:** Claude
-**Command:** Update session notes + close issue
+**Command:** Update session notes + completion summary (issue closes on the owner's merge)
 **Input:** All prior artifacts
 **Action:**
 
 1. Update `claude_docs/session_notes.md` with fix summary
-2. Close GitHub issue with closing comment: root cause, fix description, PR link
+2. Issue closure **follows the merge, not the workflow**: Step 10's `(closes #<issue>)`
+   commit auto-closes the issue when the owner merges the PR (merge is owner-gated; a WF3
+   run is PR-terminal). Fire a direct `gh issue close` **only** when a merge completed
+   this run (Step 12, verified) — never for an unmerged PR (#182).
 3. Present summary to user: issue, root cause, fix approach, PR link, verification status
 
-**Output:** Closed issue + session notes updated
+**Output:** Completion summary + session notes updated (the issue is closed by the merge
+linkage, or directly only on a verified in-run merge)
 **Principle alignment:** P14 (Documentation)
 
 ---
