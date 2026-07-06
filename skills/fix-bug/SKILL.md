@@ -55,11 +55,15 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 8 | Verification | Confirms fix works and no regressions |
 | 9 | Code Review | **NON-NEGOTIABLE.** Catches security issues, logic errors, and regression risks in the fix. |
 | 10 | Create PR | Deliverable — no PR means no review trail |
+| 14 | Completion Summary + run-record | Always-run closure — WF3's terminal deliverable and Tier-2 telemetry substrate. Runs even when Steps 11-13 are skipped (a PR-terminal run). |
 
 Conditional steps (skip ONLY when their condition is not met):
 - Step 11 (CI): skip only if has_ci == false
 - Step 12 (Merge/Deploy): skip only if user does not request merge
 - Step 13 (Post-Deploy): skip only if no deployment performed
+
+(Step 14 sits in the mandatory set above even though it follows the conditional Steps
+11-13: only 11-13 are conditional, 14 always runs — see `<mandatory-rule>`.)
 
 **ENFORCEMENT:** You MUST NOT rationalize skipping a mandatory step. Common invalid justifications:
 - "This is a simple one-line fix" — one-line fixes can introduce injection vulnerabilities
@@ -125,7 +129,7 @@ If config loading fails, STOP and tell the user which config step failed.
 </environment-setup>
 
 <termination-rule>
-WF3 terminates after deployment verification and completion summary. No auto-transition to other workflows. WF3 terminates ONLY after the completion-gate (after Step 14) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
+WF3 terminates after the completion summary (Step 14) — plus deployment verification when a deployment occurred (Step 13 is conditional). No auto-transition to other workflows. WF3 terminates ONLY after the completion-gate (after Step 14) passes. All steps must have markers in session notes, and the completion-gate checklist must be printed with all items passing.
 </termination-rule>
 
 <context-compaction>
@@ -156,9 +160,23 @@ Inherited from WF2 (identical behavior): Apply ALL findings from quality gates a
 </ambiguity-circuit-breaker>
 
 <mandatory-rule>
-Steps 12-14 (Merge and Deploy, Post-Deploy Verification, Completion Summary) are NEVER optional, even when the fix is confirmed working after merge. A bug fix without formal closure risks repeating the same class of bug. If the fix is permanent (no Phase B needed), you may execute these steps quickly, but you MUST execute them.
+**Step 14 (Completion Summary + run-record) always runs — it is the workflow's
+mandatory closure and is never skipped**, even when the fix is confirmed working: a bug
+fix without a recorded completion risks repeating the same class of bug.
 
-If the project's CLAUDE.md or development rules require explicit approval for merge, deploy, or similar operations, ask the user before proceeding. The steps must still be executed — they just require user confirmation first.
+Steps 11-13 (CI Verification, Merge/Deploy, Post-Deploy Verification) are **conditional**,
+exactly as `<mandatory-steps>` defines them — CI runs only when `has_ci`, and merge/deploy
+happen only when the user requests a merge. Merge is **owner-gated**: a WF3 run is
+PR-terminal (mirroring WF2), so the terminal deliverable is normally an OPEN PR. Do NOT
+treat merge/deploy as unconditional.
+
+**Issue closure follows the merge, not the workflow.** Step 10 commits with
+`(closes #<issue>)`, so GitHub closes the issue automatically when the owner merges the
+PR. Step 14 therefore does NOT close the issue on its own unless a merge was **verified as
+completed** during this run (Step 12) — closing an issue whose fix never merged is the
+exact defect this rule guards against. If the project's development rules require explicit
+approval for merge or deploy, ask the user before those conditional steps; the always-run
+Step 14 closure summary still runs regardless.
 </mandatory-rule>
 
 <step-tracking>
@@ -215,8 +233,8 @@ Before declaring WF3 complete, verify ALL of the following. Print the checklist 
 3. [ ] Session notes updated with completion summary
 4. [ ] PR URL documented
 5. [ ] Root cause documented in session notes
-6. [ ] Same-class bug scan completed
-7. [ ] E2E passed
+6. [ ] Same-class bug scan completed — **only if a deployment occurred (Step 13 ran); N/A for a PR-terminal run where merge/deploy were skipped**
+7. [ ] E2E passed — **only if a deployment occurred (Step 13 ran); N/A for a PR-terminal run**
 8. [ ] Completion summary rendered via `work_summary.py` (Step 14) and the run-record persisted (rc 0) — or, if validation failed (rc 1), the telemetry gap is recorded in session notes
 
 If ANY item fails, go back and complete it before declaring "WF3 complete."
