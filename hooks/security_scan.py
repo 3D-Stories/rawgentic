@@ -265,7 +265,17 @@ def _build_gitleaks(project_root, base_ref, full):
 
 
 def _build_osv(project_root, base_ref, full):
-    return ["osv-scanner", "--format", "json", "--recursive", project_root]
+    # AC2 (#230): in a cargo workspace, cargo resolves the WORKSPACE-ROOT
+    # Cargo.lock. When the scan is pointed at a member dir (e.g. src-tauri), that
+    # root lock lives above project_root and `--recursive project_root` would miss
+    # it — a `cargo update` fix to the root lock wouldn't register. Add it as an
+    # explicit --lockfile so the canonical lock is always scanned. Non-workspace
+    # projects: byte-for-byte unchanged (canonical_cargo_lock returns None,False).
+    cmd = ["osv-scanner", "--format", "json", "--recursive", project_root]
+    canon, is_above = canonical_cargo_lock(project_root)
+    if is_above:
+        cmd += ["--lockfile", canon]
+    return cmd
 
 
 def _build_npm(project_root, base_ref, full):
@@ -311,6 +321,183 @@ def _build_trivy_config(project_root, base_ref, full):
         cmd += ["--ignorefile", ignorefile]
     cmd.append(project_root)
     return cmd
+
+
+# --- SCA diff-scoping (AC1, #230) + cargo-workspace lock awareness (AC2) ----
+
+# Dependency manifests/lockfiles osv-scanner (and the fallbacks) understand. Used
+# to decide whether a branch's diff touched dependency state at all: if it changed
+# none of these, no advisory it reports can have been introduced by the branch.
+# This allowlist must track osv-scanner's supported lockfiles — a name missing
+# here excludes a changed manifest from the diff, dropping its introduced advisory
+# (under-block). `tests/...::test_dep_manifest_re_matches_osv_supported_lockfiles`
+# pins the set; extend both when osv-scanner adds an ecosystem.
+_DEP_MANIFEST_RE = re.compile(
+    r"(?:^|/)(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|"
+    r"pnpm-lock\.yaml|bun\.lock|bun\.lockb|package\.json|Cargo\.lock|Cargo\.toml|"
+    r"go\.mod|go\.sum|requirements[^/]*\.txt|poetry\.lock|pyproject\.toml|"
+    r"uv\.lock|pdm\.lock|pylock\.toml|Pipfile\.lock|Pipfile|Gemfile\.lock|"
+    r"Gemfile|composer\.lock|composer\.json|pom\.xml|build\.gradle(?:\.kts)?|"
+    r"gradle\.lockfile|buildscript-gradle\.lockfile|verification-metadata\.xml|"
+    r"Package\.resolved|packages\.lock\.json|packages\.config|deps\.json|"
+    r"renv\.lock|stack\.yaml\.lock|conan\.lock|mix\.lock|pubspec\.lock)$",
+    re.IGNORECASE)
+
+
+def _norm_repo_rel(path, project_root):
+    """Normalize a scanner-reported path to a repo-relative POSIX string so it can
+    be matched against `git diff --name-only` output (which is repo-relative).
+    Absolute paths under project_root are relativized; a leading ./ is stripped."""
+    p = (path or "").replace("\\", "/").strip()
+    if not p:
+        return ""
+    root = os.path.abspath(project_root).replace("\\", "/")
+    if os.path.isabs(p):
+        ap = os.path.abspath(p).replace("\\", "/")
+        if ap == root:
+            return ""
+        if ap.startswith(root + "/"):
+            p = ap[len(root) + 1:]
+        else:
+            p = ap  # outside root — keep absolute; basename fallback still applies
+    while p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _changed_dep_manifests(project_root, base_ref, runner):
+    """The dependency-manifest paths the branch changed since `base_ref` (merge-base
+    three-dot diff, mirroring semgrep's --baseline-commit semantics). Returns a set
+    of repo-relative POSIX paths, or None when git cannot tell (nonzero exit / error)
+    — the caller treats None as fail-closed (keep every SCA finding)."""
+    try:
+        # -c core.quotePath=false: with the default (true) git octal-escapes and
+        # quotes non-ASCII paths (e.g. "caf\303\251/package-lock.json"), which the
+        # $-anchored manifest regex would miss -> its introduced advisory dropped.
+        proc = runner(["git", "-c", "core.quotePath=false", "diff", "--name-only",
+                       f"{base_ref}...HEAD"], cwd=project_root)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = set()
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip().replace("\\", "/")
+        if line and _DEP_MANIFEST_RE.search(line):
+            out.add(line)
+    return out
+
+
+def _sca_finding_is_in_scope(finding, changed_manifests, project_root):
+    """True if an SCA finding's manifest was changed by the branch. Match by exact
+    repo-relative path FIRST, then a basename fallback (osv `source.path` formatting
+    varies — a false *drop* would under-block, so the fallback errs toward keeping).
+    An empty/unknown location is kept conservatively.
+
+    pip-audit is exempt (always kept): its parser cannot localize a finding to a
+    concrete file — it hardcodes location="requirements", which matches no real
+    path, so scoping would silently drop EVERY pip-audit advisory. pip-audit is the
+    degraded SCA fallback (osv-scanner absent); keep-all is the fail-closed-safe
+    behavior there. (npm's hardcoded "package-lock.json" IS a real filename, so it
+    scopes correctly by the basename fallback.)"""
+    if finding.get("scanner") == "pip-audit":
+        return True
+    loc = _norm_repo_rel(finding.get("location", ""), project_root)
+    if not loc:
+        return True  # can't localize -> can't prove pre-existing -> keep
+    if loc in changed_manifests:
+        return True
+    # Basename fallback (safe/over-keep). NOTE: every cargo lock is named
+    # "Cargo.lock", so in a member-scoped workspace scan a root-lock pre-existing
+    # advisory can match a changed member lock by basename and stay blocking — an
+    # over-block (safe), inherent to manifest-granularity scoping with colliding
+    # basenames. Acceptable: it never under-blocks.
+    base = os.path.basename(loc)
+    return any(os.path.basename(ch) == base for ch in changed_manifests)
+
+
+def diff_scope_sca(findings, changed_manifests, project_root):
+    """Drop SCA findings whose dependency manifest the branch did not change; every
+    non-SCA finding passes through untouched. `changed_manifests is None` (git could
+    not determine the diff) -> keep everything (fail-closed)."""
+    if changed_manifests is None:
+        return findings
+    out = []
+    for f in findings:
+        if f.get("kind") != "sca" or _sca_finding_is_in_scope(
+                f, changed_manifests, project_root):
+            out.append(f)
+    return out
+
+
+def cargo_workspace_root(start):
+    """Walk UP from `start` to the cargo workspace root — the nearest ancestor
+    whose Cargo.toml declares a [workspace] table — or None if `start` is not
+    inside one. cargo resolves the workspace-ROOT Cargo.lock, so a member-scoped
+    scan that ignores this misses the canonical lock."""
+    cur = os.path.abspath(start)
+    while True:
+        toml = os.path.join(cur, "Cargo.toml")
+        try:
+            with open(toml, "r", encoding="utf-8", errors="replace") as fh:
+                if re.search(r"(?m)^\s*\[workspace\]", fh.read()):
+                    return cur
+        except OSError:
+            pass
+        parent = os.path.dirname(cur)
+        if parent == cur:  # filesystem root
+            return None
+        cur = parent
+
+
+def canonical_cargo_lock(project_root):
+    """Return (canonical_lock_path, is_above_scan_root) for a cargo workspace, or
+    (None, False). canonical = <workspace_root>/Cargo.lock. `is_above` is True when
+    that lock lives outside project_root, so `--recursive project_root` would miss
+    it and it must be scanned explicitly."""
+    ws = cargo_workspace_root(project_root)
+    if not ws:
+        return None, False
+    lock = os.path.join(ws, "Cargo.lock")
+    if not os.path.isfile(lock):
+        return None, False
+    root = os.path.abspath(project_root)
+    is_above = os.path.abspath(lock) != os.path.join(root, "Cargo.lock") \
+        and not os.path.abspath(lock).startswith(root + os.sep)
+    return lock, is_above
+
+
+def divergent_member_locks(project_root, canonical_lock):
+    """Cargo.lock files under project_root whose bytes differ from the canonical
+    (workspace-root) lock — a drift meaning a member-scoped scan sees a different
+    dependency set than cargo actually resolves. Returns the divergent member-lock
+    paths (empty when none / canonical unknown)."""
+    if not canonical_lock or not os.path.isfile(canonical_lock):
+        return []
+    try:
+        with open(canonical_lock, "rb") as fh:
+            canon = fh.read()
+    except OSError:
+        return []
+    canon_real = os.path.realpath(canonical_lock)
+    # os.walk(followlinks=False), not glob(recursive=True): the latter follows
+    # directory symlinks and a symlink cycle multiplies one member lock into many
+    # spurious warnings. Dedup by realpath so an aliased path can't double-count.
+    out = set()
+    for dirpath, _dirs, filenames in os.walk(project_root, followlinks=False):
+        if "Cargo.lock" not in filenames:
+            continue
+        member = os.path.join(dirpath, "Cargo.lock")
+        real = os.path.realpath(member)
+        if real == canon_real:
+            continue
+        try:
+            with open(member, "rb") as fh:
+                if fh.read() != canon:
+                    out.add(real)
+        except OSError:
+            continue
+    return sorted(out)
 
 
 # Each scanner: a kind + ordered tool candidates. select_scanners picks the first
@@ -480,7 +667,28 @@ def run_scan(project_root, *, project_type="unknown", has_docker=False,
     available = {t for t in candidate_tools if which(t)}
     to_run, skipped = select_scanners(project_type, has_docker, available)
 
-    findings, errors = [], []
+    # AC1 (#230): pre-compute what dependency manifests the branch changed, so the
+    # SCA gate blocks only on advisories in touched manifests — not the repo's
+    # whole pre-existing advisory set. Gated on (a) diff mode, not the WF9 whole-
+    # tree audit, and (b) an SCA scanner actually being selected, so no `git diff`
+    # fires (and runner.calls stays empty) when nothing SCA runs. None == git could
+    # not tell → diff_scope_sca keeps everything (fail-closed).
+    sca_changed = None
+    if not full and any(s["kind"] == "sca" for s in to_run):
+        sca_changed = _changed_dep_manifests(project_root, base_ref, runner)
+
+    findings, errors, warnings = [], [], []
+
+    # AC2 (#230): flag divergent committed cargo locks (member vs canonical root)
+    # regardless of tool availability — it is a repo-hygiene fact, non-blocking.
+    canon_lock, _ = canonical_cargo_lock(project_root)
+    for div in divergent_member_locks(project_root, canon_lock):
+        warnings.append({
+            "kind": "sca",
+            "message": f"cargo workspace lock drift: {div} differs from the "
+                       f"canonical {canon_lock}; a `cargo update` fix to the root "
+                       f"lock will not match this member lock — reconcile them."})
+
     for scanner in to_run:
         cmd = scanner["build"](project_root, base_ref, full)
         if cmd is None:
@@ -549,6 +757,11 @@ def run_scan(project_root, *, project_type="unknown", has_docker=False,
                     "message": f"exited rc={rc}; scan may be incomplete; "
                                f"{stderr.strip()[:200]}"})
 
+    # AC1 (#230): drop SCA advisories in manifests the branch never touched. Runs
+    # after the per-scanner exit-code checks (those already validated the tool ran
+    # correctly) and never touches non-SCA findings.
+    findings = diff_scope_sca(findings, sca_changed, project_root)
+
     block_severities = _resolve_block_severities(env)
     # Surface an invalid override instead of silently falling back to default —
     # otherwise an intended-stricter config (e.g. "medium,hgih") is dropped with
@@ -560,7 +773,8 @@ def run_scan(project_root, *, project_type="unknown", has_docker=False,
               f"value(s) {invalid}; falling back to the fail-closed default "
               f"{list(BLOCK_SEVERITIES_DEFAULT)}", file=sys.stderr)
     gate = decide_gate(findings, errors, block_severities)
-    return {"findings": findings, "skipped": skipped, "gate": gate}
+    return {"findings": findings, "skipped": skipped, "gate": gate,
+            "warnings": warnings}
 
 
 # --- human rendering + CLI -------------------------------------------------
@@ -589,6 +803,11 @@ def render_text(result: dict) -> str:
                      f"not applicable (NOT a pass):")
         for s in result["skipped"]:
             lines.append(f"  {s['kind']}: {s['reason']}")
+    warnings = result.get("warnings") or []
+    if warnings:
+        lines.append(f"\nWarnings ({len(warnings)}) — non-blocking, review:")
+        for w in warnings:
+            lines.append(f"  {w['kind']}: {w['message']}")
     return "\n".join(lines)
 
 

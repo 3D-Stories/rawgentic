@@ -19,7 +19,7 @@ tool being installed:
 | Kind | Tool | Notes |
 |------|------|-------|
 | secrets | `gitleaks` | Always. Diff-scoped to the branch's new commits in WF2; whole working tree in WF9 (`--full`). |
-| SCA (dependency CVEs) | `osv-scanner` → `npm audit` → `pip-audit` | Prefers osv-scanner (one binary, every ecosystem); falls back to the per-language tool when osv-scanner is absent. |
+| SCA (dependency CVEs) | `osv-scanner` → `npm audit` → `pip-audit` | Prefers osv-scanner (one binary, every ecosystem); falls back to the per-language tool when osv-scanner is absent. Diff-scoped in WF2 (only advisories in manifests the branch changed); whole tree in WF9 (`--full`). See [Diff-scoped SCA](#diff-scoped-sca-230). |
 | SAST | `semgrep` | `p/ci` ruleset (low false-positive). Diff-scoped (`--baseline-commit`) in WF2; whole tree in WF9. |
 | IaC | `trivy config` | Only when `capabilities.has_docker` (Dockerfile/compose/Actions/k8s/Terraform misconfig). |
 
@@ -41,6 +41,45 @@ membership: the lowest level listed blocks that level *and everything above it*,
 so a lower setting only makes the gate stricter (e.g. `medium` blocks
 medium/high/critical) and can never accidentally let a high/critical through. An
 empty or unrecognized value falls back to the fail-closed default.
+
+## Diff-scoped SCA (#230)
+
+Like the SAST scan (semgrep `--baseline-commit`), the WF2 pre-PR **SCA** scan is
+scoped to what the branch introduced — not the repo's whole pre-existing advisory
+set. osv-scanner has no native baseline flag, so the gate approximates it:
+
+1. It computes the dependency manifests the branch changed with a merge-base diff
+   (`git diff --name-only <base_ref>...HEAD`), filtered to known lockfiles/manifests
+   (`package-lock.json`, `Cargo.lock`, `go.sum`, `requirements*.txt`, …).
+2. An SCA finding is kept only when its manifest is in that changed set — matched by
+   exact repo-relative path first, then a filename (basename) fallback. Advisories in
+   manifests the branch never touched are **pre-existing** and do not block.
+
+Fail-closed by construction:
+
+- If git **cannot** determine the diff (nonzero exit / error), **every** SCA finding
+  is kept — an unknown diff is never treated as "nothing introduced."
+- A pre-existing advisory in a manifest the branch **did** touch still blocks (the
+  gate re-justifies dependency state whenever a PR changes it). The scoping only
+  removes the block on *untouched* manifests — the reported failure where a
+  zero-dependency PR was blocked by 21 unrelated pre-existing advisories.
+- `--full` (WF9 whole-tree audit) is **never** scoped, and the `git diff` only runs
+  when an SCA scanner is actually selected (so a no-SCA project makes no git call).
+
+## Cargo-workspace canonical-lock awareness (#230)
+
+In a Cargo **workspace**, cargo resolves the workspace-root `Cargo.lock`; a scan
+pointed at a member directory (e.g. `src-tauri`) with `--recursive` would miss that
+root lock, so a `cargo update` fix there wouldn't register. The gate now:
+
+- Detects the workspace root (nearest ancestor `Cargo.toml` with a `[workspace]`
+  table) and, when the canonical root lock lives **above** the scan root, adds it as
+  an explicit `--lockfile` so the canonical lock is always scanned.
+- Surfaces a **non-blocking warning** when a committed member `Cargo.lock` diverges
+  from the canonical root lock (drift means the member-scoped view differs from what
+  cargo actually resolves). Divergence detection is gated on a real `[workspace]`
+  relationship, so independent, unrelated crates with their own locks are not
+  false-flagged.
 
 ## Suppressing IaC misconfigs (`.trivyignore`)
 
