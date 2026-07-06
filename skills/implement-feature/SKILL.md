@@ -172,6 +172,25 @@ merges the PR. This is also enforced at the hook layer — `wal-guard` blocks an
 override), so even an ad-hoc SSH that a step forgot to annotate is denied.
 </headless-mode>
 
+<error-protocol>
+When a step hits an unrecoverable blocker (a base mismatch, an exhausted loop-back
+budget, a fail-closed parse/security finding the user must resolve), post a legible
+blocker and STOP — never silently continue. The mechanics are mode-specific (#232):
+
+- **Interactive (default):** post a **blocker comment** to the issue describing what
+  went wrong and exactly what the user must do to unblock, write the error state to
+  session notes, then STOP and tell the user. This IS "a blocker posted to the issue
+  via the ERROR protocol" — it satisfies the `/goal` guard's escape disjunct with **no
+  label**: `rawgentic:ai-error` is a headless-orchestrator signal, not a requirement of
+  the interactive protocol, so do NOT add it interactively.
+- **Headless:** run the full protocol in `references/headless.md` — blocker comment +
+  create-and-add the `rawgentic:ai-error` label + exit (the orchestrator watches that
+  label). Every per-step **headless ERROR** annotation resolves to that protocol.
+
+Either way the blocker is *posted*, so the goal guard clears honestly instead of the
+run hanging on an unsatisfiable "PR open with green CI".
+</error-protocol>
+
 <termination-rule>
 WF2 ALWAYS terminates after the completion summary. Do NOT suggest "shall I create another issue?" or restart WF2 for the same issue. WF2 terminates ONLY after the completion-gate passes. All steps must have markers in session notes.
 </termination-rule>
