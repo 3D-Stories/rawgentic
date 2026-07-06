@@ -2,11 +2,13 @@ name: Lint
 
 # #40: pylint the production Python (hooks + tests) so a bug in a hook — which runs on
 # every prompt/tool-call — can't silently break security enforcement across all projects.
-# Scoped to the ERROR class (undefined vars, f-string errors, type mismatches, no-member)
-# plus unreachable-code, NOT full-strict style: the gate catches real bugs and passes on
-# the current tree with no code churn (the AC's bare `--disable=import-error` would drown
-# in convention/refactor noise and never go green). import-error is disabled because hook
-# runtime deps aren't pip-installed in CI. Uses only standard actions (no OAuth).
+# Scoped to the ERROR class (E: undefined vars, f-string errors, type mismatches, no-member)
+# PLUS `unreachable` (W0101) and `f-string-without-interpolation` (W1309), NOT full-strict
+# style: the gate catches real bugs and passes on the current tree with no code churn (the
+# AC's bare `--disable=import-error` would drown in convention/refactor noise and never go
+# green). `--disable=all --enable=...` (NOT `--errors-only`, which would suppress the two
+# extra W-checks). import-error is disabled because hook runtime deps aren't pip-installed
+# in CI. Uses only standard actions (no OAuth).
 on:
   push:
     branches: [main]
@@ -27,7 +29,7 @@ jobs:
         run: pip install pylint
 
       - name: Lint hooks
-        run: pylint hooks/*.py --disable=import-error --errors-only --enable=unreachable,f-string-without-interpolation
+        run: pylint hooks/*.py --disable=all --enable=E,unreachable,f-string-without-interpolation --disable=import-error
 
       - name: Lint tests
-        run: pylint tests/ --disable=import-error --errors-only --enable=unreachable,f-string-without-interpolation
+        run: pylint tests/ --disable=all --enable=E,unreachable,f-string-without-interpolation --disable=import-error

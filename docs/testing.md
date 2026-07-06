@@ -28,12 +28,14 @@ on `ubuntu-latest`.
 A second workflow, `.github/workflows/lint.yml` (#40), runs **pylint** on the
 production Python (`hooks/*.py` and `tests/`) on push to `main` and PRs to `main`.
 A hook runs on every prompt/tool-call, so a bug there could silently break security
-enforcement across all projects. The gate is scoped to the **ERROR class**
-(`--errors-only` plus `unreachable`/`f-string-without-interpolation`) with
+enforcement across all projects. The gate is scoped to the **ERROR class** plus two targeted warnings —
+`--disable=all --enable=E,unreachable,f-string-without-interpolation` with
 `--disable=import-error` (hook runtime deps aren't pip-installed in CI) — it catches
 real bugs (undefined variables, f-string errors, type mismatches, unreachable code)
 without failing on style conventions, so it passes on the current tree with no code
-churn. Run it locally with `pylint hooks/*.py --disable=import-error --errors-only`.
+churn. (`--errors-only` is deliberately NOT used — it would suppress the `unreachable`
+and `f-string-without-interpolation` warnings.) Run it locally with
+`pylint hooks/*.py --disable=all --enable=E,unreachable,f-string-without-interpolation --disable=import-error`.
 
 Additionally, rawgentic's `.rawgentic.json` includes a `testing` section,
 so all SDLC workflow skills (WF2-WF4, WF7-WF12) automatically run the test

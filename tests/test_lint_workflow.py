@@ -50,12 +50,15 @@ def test_lints_hooks_and_tests():
 
 def test_disables_import_error_and_scopes_to_error_class():
     # import-error disabled (hook deps not installed in CI) AND scoped to the ERROR
-    # class so the gate passes on the current tree instead of drowning in style noise.
+    # class + unreachable/f-string so the gate passes on the current tree instead of
+    # drowning in style noise. NOT --errors-only (which would suppress the two W-checks).
     run_steps = " ".join(
         s.get("run", "") for s in _load()["jobs"]["lint"]["steps"]
     )
     assert "--disable=import-error" in run_steps
-    assert "--errors-only" in run_steps
+    assert "--disable=all" in run_steps
+    assert "--enable=E,unreachable,f-string-without-interpolation" in run_steps
+    assert "--errors-only" not in run_steps  # would render the extra W-checks inert
 
 
 def test_pip_installs_pylint():
