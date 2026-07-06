@@ -150,7 +150,7 @@ substrate exists for — gate effectiveness becomes a query, not a guess:
 ```bash
 python3 hooks/work_summary.py aggregate \
   --store <path> \
-  [--json] [--group-by {workflow,version,type,complexity}] [--since <ISO-date>]
+  [--json] [--group-by {workflow,version,type,complexity,source}] [--since <ISO-date>]
 ```
 
 `--store` falls back to `$RAWGENTIC_RUN_RECORD_STORE`; unlike `summarize`,
@@ -179,6 +179,32 @@ variants, and the distinct names ride along as a `names` label list. When a stor
 mixes workflows that reuse a step number for different gates, use `--group-by
 workflow` for a clean read. (This is a deliberate refinement of issue #94's
 literal AC2.)
+
+### Fleet view — pool multiple stores (#115)
+
+Run-records are written per project, so a workspace's telemetry is fragmented across
+N stores. `aggregate` pools them in one pass — the fastest path to the record count
+that makes metrics trustworthy:
+
+```bash
+# repeatable --store (explicit)
+python3 hooks/work_summary.py aggregate --store a/run_records.jsonl --store b/run_records.jsonl --group-by source
+
+# or resolve every ACTIVE project's default store from a workspace
+python3 hooks/work_summary.py aggregate --workspace .rawgentic_workspace.json --group-by source
+```
+
+- **Origin-tagging (read-side, no schema change):** the record schema has no `project`
+  field, so each record is tagged with its origin store/project as `_source` **at load
+  time**. `--group-by source` then partitions the fleet by origin (project name in
+  `--workspace` mode; the store path with repeatable `--store`).
+- **Cross-store fail-closed:** a missing/unreadable store *among several* (or any store
+  in `--workspace` mode) is **skipped with a visible stderr warning + a `missing_stores`
+  count in `--json`**; the run still aggregates the rest. A **single** explicitly-named
+  `--store` that is missing still exits 2 (single-store parity). This is the store-level
+  analog of the per-line fail-closed reader below.
+- **Caveat:** effort means are only loosely comparable across project *types* (a library
+  PR vs an infra PR) — lean on `--group-by` rather than one blended fleet number.
 
 **Fail-closed reader** (mirrors the fail-closed writer): a line that is unparseable
 JSON, not an object, schema-invalid, or missing/non-ISO `generated_at` is
