@@ -239,3 +239,110 @@ class TestFailOpen:
 
         assert result.returncode == 0, f"Expected rc=0 (fail-open), got rc={result.returncode}"
         assert _decision(result.stdout) == "allow"
+
+
+# ── #49: cross-project allowlist (crossProjectAllowedPaths) ──────────────────
+
+
+class TestCrossProjectAllowlist:
+    """Gate-2 opt-in allowlist relaxing SPECIFIC paths in other active projects."""
+
+    def _bound(self, make_workspace, allowed):
+        return make_workspace(
+            projects=[ALPHA_PROJECT, BETA_PROJECT],
+            registry_entries=[
+                {"session_id": "s1", "project": "alpha", "ts": "2026-03-08T00:00:00Z"},
+            ],
+            workspace_fields=({"crossProjectAllowedPaths": allowed}
+                              if allowed is not None else None),
+        )
+
+    def test_allows_docs_write(self, make_workspace) -> None:
+        ws = self._bound(make_workspace, ["docs/**", "CLAUDE.md"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / "findings.md")
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "allow"
+        assert "crossProjectAllowedPaths" in stderr and "write" in stderr
+
+    def test_allows_docs_read(self, make_workspace) -> None:
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / "x.md")
+        stdin = _make_stdin("Read", "s1", str(ws.root), {"file_path": fp})
+        stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "allow"
+        assert "read" in stderr
+
+    def test_denies_non_docs_write(self, make_workspace) -> None:
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "src" / "main.py")
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_missing_config_default_deny(self, make_workspace) -> None:
+        ws = self._bound(make_workspace, None)  # no crossProjectAllowedPaths
+        fp = str(ws.root / "projects" / "beta" / "docs" / "x.md")
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_exact_file_pattern(self, make_workspace) -> None:
+        ws = self._bound(make_workspace, ["CLAUDE.md"])
+        # exact match allowed
+        fp_ok = str(ws.root / "projects" / "beta" / "CLAUDE.md")
+        s_ok = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp_ok})
+        out_ok, _e, rc_ok = run_hook(HOOK, s_ok, cwd=ws.root)
+        assert rc_ok == 0 and _decision(out_ok) == "allow"
+        # nested CLAUDE.md NOT matched by the bare pattern
+        fp_no = str(ws.root / "projects" / "beta" / "docs" / "CLAUDE.md")
+        s_no = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp_no})
+        out_no, _e2, rc_no = run_hook(HOOK, s_no, cwd=ws.root)
+        assert rc_no == 0 and _decision(out_no) == "deny"
+
+    def test_no_false_prefix_match(self, make_workspace) -> None:
+        # AC8: "docs/**" must not match "docs-extra/…"
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs-extra" / "x.md")
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_symlink_traversal_blocked(self, make_workspace, tmp_path) -> None:
+        # AC4: a symlinked docs/ escaping the target dir must NOT be allowed by the list
+        ws = self._bound(make_workspace, ["docs/**"])
+        outside = tmp_path / "outside_secret"
+        outside.mkdir(parents=True, exist_ok=True)
+        beta_docs = ws.root / "projects" / "beta" / "docs"
+        beta_docs.parent.mkdir(parents=True, exist_ok=True)
+        beta_docs.symlink_to(outside, target_is_directory=True)  # beta/docs -> outside
+        fp = str(beta_docs / "escaped.md")  # resolves to outside/escaped.md
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_dotdot_traversal_blocked(self, make_workspace) -> None:
+        # AC4: a plain ../ escape (no symlink) must not be allowed by the list
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / ".." / ".." / ".." / "escaped.md")
+        stdin = _make_stdin("Write", "s1", str(ws.root), {"file_path": fp})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "deny"
+
+    def test_edit_tool_allowed(self, make_workspace) -> None:
+        # AC2: Edit (not just Write/Read) is relaxed by the allowlist
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / "notes.md")
+        stdin = _make_stdin("Edit", "s1", str(ws.root), {"file_path": fp})
+        stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "allow"
+        assert "write" in stderr
+
+    def test_notebookedit_tool_allowed(self, make_workspace) -> None:
+        # AC2: NotebookEdit shares the same relaxed path (reads notebook_path, not file_path)
+        ws = self._bound(make_workspace, ["docs/**"])
+        fp = str(ws.root / "projects" / "beta" / "docs" / "nb.ipynb")
+        stdin = _make_stdin("NotebookEdit", "s1", str(ws.root), {"notebook_path": fp})
+        stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0 and _decision(stdout) == "allow"
+        assert "crossProjectAllowedPaths" in stderr  # non-vacuous: allowed by list, not empty-path

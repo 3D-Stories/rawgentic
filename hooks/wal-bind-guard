@@ -135,6 +135,39 @@ VIOLATION=$("$JQ" -r --arg file "$FILE_PATH" --arg bound "$BOUND_PROJECT" --arg 
 ' "$WORKSPACE_FILE" 2>/dev/null | head -1 || true)
 
 if [ -n "$VIOLATION" ]; then
+    # --- #49: cross-project allowlist exception (Gate 2 ONLY) ---
+    # An opt-in workspace allowlist of glob patterns (crossProjectAllowedPaths) may relax
+    # SPECIFIC paths in another active project (e.g. "docs/**", "CLAUDE.md"). Missing/empty
+    # => deny-all preserved. Realpath-hardened: the file is canonicalized and MUST still
+    # resolve under the target project's dir, so a symlink or `../` can't escape it.
+    ALLOWLIST=$("$JQ" -r '.crossProjectAllowedPaths // [] | .[]' "$WORKSPACE_FILE" 2>/dev/null || true)
+    if [ -n "$ALLOWLIST" ]; then
+        TARGET_PATH=$("$JQ" -r --arg v "$VIOLATION" '.projects[] | select(.name == $v and .active == true) | .path' "$WORKSPACE_FILE" 2>/dev/null | head -1 || true)
+        TARGET_ABS=$(realpath -m "$WORKSPACE_ROOT/${TARGET_PATH#./}" 2>/dev/null || true)
+        FILE_REAL=$(realpath -m "$FILE_PATH" 2>/dev/null || true)
+        # AC4: resolved file must still be under the (resolved) target project dir.
+        if [ -n "$TARGET_ABS" ] && [ -n "$FILE_REAL" ] && [ "${FILE_REAL#"$TARGET_ABS"/}" != "$FILE_REAL" ]; then
+            REL="${FILE_REAL#"$TARGET_ABS"/}"
+            MATCHED=0
+            while IFS= read -r _pat; do
+                [ -z "$_pat" ] && continue
+                # AC5: bash glob match. In `case`, `*` spans `/`, so "docs/**" matches
+                # nested paths. AC8 (no "docs-extra/…" false match) holds because the
+                # pattern's OWN literal prefix ("docs/") anchors it — a bare "*"/"**"
+                # matches everything (documented footgun), so patterns must be specific.
+                case "$REL" in
+                    $_pat) MATCHED=1; break ;;
+                esac
+            done <<EOF_ALLOW
+$ALLOWLIST
+EOF_ALLOW
+            if [ "$MATCHED" = "1" ]; then
+                _op="write"; [ "$TOOL_NAME" = "Read" ] && _op="read"
+                echo "wal-bind-guard: cross-project ${_op} to ${VIOLATION}/${REL} — allowed by crossProjectAllowedPaths" >&2
+                exit 0
+            fi
+        fi
+    fi
     cat <<DENYEOF
 {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"You're bound to **${BOUND_PROJECT}** but this file is in **${VIOLATION}**. Switch first with /rawgentic:switch ${VIOLATION}, or ask the user if this cross-project edit is intentional."}
 DENYEOF
