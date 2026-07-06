@@ -718,30 +718,35 @@ def load_stores(store_specs, *, tolerate_missing=True) -> tuple:
     return records, excluded, missing
 
 
-def stores_from_workspace(workspace_path) -> list:
+def stores_from_workspace(workspace_path) -> tuple:
     """Resolve each ACTIVE project's default run-record store from a
-    `.rawgentic_workspace.json` (#115 — `--workspace` fleet mode). Returns a list of
-    `(store_path, project_name)` pairs (origin = project name). Inactive projects and
-    entries without a `path` are skipped. A relative project path resolves against the
-    workspace file's directory. Fail-closed: an unreadable/malformed workspace raises
-    `WorkSummaryError`."""
+    `.rawgentic_workspace.json` (#115 — `--workspace` fleet mode). Returns
+    `(specs, skipped)`: `specs` is a list of `(store_path, project_name)` pairs
+    (origin = project name); `skipped` is a list of human-readable reasons for any
+    **active** project that could NOT be resolved to a store path (a malformed/absent
+    `path`) — surfaced so a silently-dropped active project can't hide (mirrors the
+    per-store fail-closed policy). Inactive projects are ignored (not skipped-with-reason).
+    A relative project path resolves against the workspace file's directory. Fail-closed:
+    an unreadable/malformed workspace raises `WorkSummaryError`."""
     try:
         data = json.loads(Path(workspace_path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise WorkSummaryError(f"cannot read workspace {workspace_path}: {e}")
     root = Path(workspace_path).resolve().parent
-    out = []
+    out, skipped = [], []
     for proj in _as_list(data.get("projects")):
         if not isinstance(proj, dict) or not proj.get("active"):
             continue
         ppath = proj.get("path")
+        name = proj.get("name") if _is_str(proj.get("name")) else None
         if not _is_str(ppath) or not ppath:
+            skipped.append(f"{name or '<unnamed>'}: active project has no usable 'path'")
             continue
         base = Path(ppath)
         if not base.is_absolute():
             base = root / base
-        out.append((str(base.joinpath(*DEFAULT_STORE_RELPATH)), proj.get("name") or ppath))
-    return out
+        out.append((str(base.joinpath(*DEFAULT_STORE_RELPATH)), name or ppath))
+    return out, skipped
 
 
 def filter_since(records, since):
@@ -1076,13 +1081,17 @@ def main(argv=None) -> int:
         # --store is repeatable; else fall back to the env store. A SINGLE explicitly
         # named store keeps single-store parity (missing -> exit 2); a fleet of >1
         # stores (or --workspace) tolerates a missing store with a visible warning.
+        if args.workspace and args.store:
+            print("use --workspace OR --store, not both", file=sys.stderr)
+            return 2
+        ws_skipped = []
         if args.workspace:
             try:
-                store_specs = stores_from_workspace(args.workspace)
+                store_specs, ws_skipped = stores_from_workspace(args.workspace)
             except WorkSummaryError as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
-            if not store_specs:
+            if not store_specs and not ws_skipped:
                 print(f"no active projects with stores in {args.workspace}",
                       file=sys.stderr)
                 return 2
@@ -1103,6 +1112,9 @@ def main(argv=None) -> int:
         except WorkSummaryError as exc:
             print(str(exc), file=sys.stderr)
             return 2
+        # #115 (review F1): active projects that couldn't resolve to a store path are
+        # surfaced alongside unreadable stores — a dropped active project never hides.
+        missing = ws_skipped + missing
         records = filter_since(records, args.since)
         agg = (aggregate_grouped(records, args.group_by) if args.group_by
                else aggregate_records(records))

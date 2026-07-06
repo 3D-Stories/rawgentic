@@ -1718,11 +1718,23 @@ class TestStoresFromWorkspace:
             {"name": "app", "path": "./projects/app", "active": True},
             {"name": "off", "path": "./projects/off", "active": False},
         ]}), encoding="utf-8")
-        stores = stores_from_workspace(str(ws))
-        assert len(stores) == 1
-        path, origin = stores[0]
+        specs, skipped = stores_from_workspace(str(ws))
+        assert len(specs) == 1 and skipped == []
+        path, origin = specs[0]
         assert origin == "app"
         assert path.endswith("projects/app/docs/measurements/run_records.jsonl")
+
+    def test_active_project_without_path_is_surfaced_not_dropped(self, tmp_path):
+        # review F1: an active project with a malformed/absent path must not vanish silently
+        from work_summary import stores_from_workspace
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "good", "path": "./projects/good", "active": True},
+            {"name": "broken", "active": True},  # no path
+        ]}), encoding="utf-8")
+        specs, skipped = stores_from_workspace(str(ws))
+        assert len(specs) == 1
+        assert len(skipped) == 1 and "broken" in skipped[0]
 
     def test_malformed_workspace_raises(self, tmp_path):
         from work_summary import stores_from_workspace, WorkSummaryError
@@ -1777,6 +1789,16 @@ class TestFleetCLI:
     def test_single_missing_store_exits_2(self, tmp_path):
         r = self._run(tmp_path, "--store", str(tmp_path / "nope.jsonl"))
         assert r.returncode == 2
+
+    def test_workspace_and_store_together_rejected(self, tmp_path):
+        # review F2: --workspace + --store together must error, not silently ignore --store
+        a = tmp_path / "a.jsonl"
+        _write_store(a, [_store_rec()])
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"projects": []}), encoding="utf-8")
+        r = self._run(tmp_path, "--workspace", str(ws), "--store", str(a))
+        assert r.returncode == 2
+        assert "not both" in r.stderr
 
     def test_workspace_mode_pools(self, tmp_path):
         (tmp_path / "projects" / "app" / "docs" / "measurements").mkdir(parents=True)
