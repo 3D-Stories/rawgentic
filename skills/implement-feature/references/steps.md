@@ -330,11 +330,30 @@ Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contrac
    readers are unchanged. Trivial changes (item 9) exit via `<trivial-work-check>`, which takes
    precedence over the lane.
 
-9. **Trivial-work check (the one Step 2 step that may surface to the user):** Apply
+   **Path-cost estimate (#224) — emit BEFORE the lane surfacing (or, when the lane isn't
+   offered, at Step-2 completion), so the choice is informed.** Project the high-risk task
+   count as an explicit **lower bound**: P = count of item-2 blast-radius files matching
+   `plan_lib.any_high_risk_path` (path allowlist ONLY — the semantic risk criteria
+   (subprocess, module boundary, error-flow, deserialization, regex-on-untrusted) are
+   invisible before Step-5 task decomposition, and this counts components, not tasks).
+   Resolve the opt-in flags from the probes the spine already runs (`adversarial_review_lib
+   is-enabled`, peerConsult config); `diff_review=False` at Step 2 on both paths (unknowable
+   pre-diff; cancels in the comparison). Call `plan_lib.estimate_agents(P, lane=...)` for
+   BOTH paths and print one line:
+
+   `Path estimate: full spine ≈ N agents (~M min); small-standard lane ≈ K agents (~L min). (high-risk projected: ≥P — lower bound; the two paths' minutes always match under this wall model — the lane saves agent-cost, not wall time)`
+
+   The estimate is derived via plan_lib.estimate_agents — never hard-coded — and is an estimate, not a contract (loop-backs, Step-2 analysis fan-out, and whole-issue delegation
+   are not modeled). Log it UNCONDITIONALLY (interactive and headless — session notes are
+   the headless record) as a dedicated marker at Step-2 completion:
+   `### WF2 Step 2 — path estimate: full ≈ N agents ~M min · lane ≈ K agents ~L min (high-risk ≥P projected)`
+
+9. **Trivial-work check (the one Step 2 step that WAITS for a user decision):** Apply
    `<trivial-work-check>`. If the change is `trivial_work == true`, present the
    "do it directly vs. continue the full workflow" suggestion and WAIT for the user's
    choice before proceeding to Step 3 (headless: auto-continue). The analysis from
-   items 1–8 still feeds Step 3 silently; only this suggestion interacts with the user.
+   items 1–8 still feeds Step 3 silently; only this suggestion (and the item-8 lane
+   surfacing) waits for input — the item-8 path estimate is print-and-continue.
 
 10. **Worktree-isolation probe (#136 — parallelism capability).** Probe once so WF2 (and any outer multi-issue orchestrator) knows up front whether worktree-isolated concurrency is possible, instead of attempt-then-fail on an Agent-tool "not in a git repository" error:
     ```bash
@@ -343,7 +362,7 @@ Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contrac
     Prints `worktree` or `serial-only` (the probe is non-mutating — it creates and force-removes a throwaway worktree under the system temp dir — and never fails the run). Carry it as `capabilities.parallelism` and log one session-note line. Step 8 consults it. **Gotcha to encode for parallel-build orchestrators:** `secret-scan --since` full-scans a *linked* worktree — push from the MAIN checkout (existing documented behavior).
 
 ### Output
-Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3 (the lane suggestion in item 8 is the one part that may interact with the user).
+Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3. User-visible surfaces: the item-8 lane suggestion (waits for input), the item-8 path estimate line (print-and-continue), and the item-9 trivial-work suggestion (waits for input).
 
 ### Failure Modes
 - Serena MCP unavailable: fall back to Grep/Glob
@@ -681,6 +700,11 @@ form (run them when not in the lane).
    The 15–30% high-risk ratio is the documented calibration target. Anything above the WARN band signals that the criteria are being over-applied (dilution returns).
 
    **High-risk path allowlist:** A task touching any file whose path matches the regex allowlist in `plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS` (auth, secret, .env, migration, crypto, jwt, session, oauth, csrf, token, credential, passport, middleware, lib/server/auth, security-, hooks/security) is auto-tagged `high` regardless of the agent's manual classification.
+
+   **Estimate refresh (#224):** the Step-2 path estimate used a projected lower bound; now
+   the REAL high-risk task count exists. Re-run `plan_lib.estimate_agents(high, lane=...)`
+   and, if it differs from the Step-2 line, print + log the updated
+   `### WF2 Step 5 — path estimate refresh: ...` one-liner.
 
 4. **Verification strategy per task:** Specify how each task is verified:
    - Test file + test cases (if test framework exists)
