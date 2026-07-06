@@ -165,3 +165,17 @@ class TestRecordOnceDecision:
         # the user must learn this is a one-time notice and how to keep both
         assert "keep" in ctx
         assert "once" in ctx or "won't" in ctx or "will not" in ctx
+
+    def test_recommendation_does_not_reassert_refuted_double_block_claim(self, tmp_path):
+        # #119: the "broken blocking mechanism that auto-retries / double-block loop" claim
+        # was REFUTED (security-guidance registers no PreToolUse hook; it reviews on
+        # PostToolUse/Stop). The notice must not reassert it, and must state the accurate,
+        # relaxed mechanism (redundant, not conflicting) so the recommendation is optional.
+        _enable_security_guidance(tmp_path)
+        out, _, rc = run_hook(HOOK_NAME, STDIN_PAYLOAD,
+                              env_override={"HOME": str(tmp_path)})
+        ctx = parse_hook_output(out)["hookSpecificOutput"]["additionalContext"].lower()
+        assert "double-block loop" not in ctx
+        assert "auto-retr" not in ctx
+        assert "redundant" in ctx
+        assert "posttooluse" in ctx or "post-edit" in ctx  # the accurate lifecycle
