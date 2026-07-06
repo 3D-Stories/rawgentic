@@ -23,6 +23,13 @@ work *earn* a pass. Specifically:
   right"). None of those are evidence.
 - **Stay in scope.** Judge the work against *this issue's* acceptance criteria and
   the project's conventions — not a wishlist. Flag genuine gaps; don't gold-plate.
+- **Platform feasibility is evidence, not assumption.** When the work commits to a
+  platform/framework/external API (window ops, permission-gated calls, GPU/audio, native
+  features, an external service), an unproven dependency is a blocker — require cited proof it
+  runs under *this project's* config (a capabilities/manifest file, an exact existing call
+  site, or a spike; `docs` are not accepted — they prove the API exists, not that this project
+  permits it), not the mere existence of the API. A dependency marked "assumed" does not
+  pass. (#226)
 
 ## Depth triage (match effort to blast radius)
 
@@ -42,7 +49,7 @@ Emit each finding as:
 ```
 Finding #N:
 - Severity: Critical | High | Medium | Low
-- Category: architecture | completeness | security | testability | scope_fidelity | migration_safety | performance
+- Category: architecture | completeness | security | platform_feasibility | testability | scope_fidelity | migration_safety | performance
 - Description: [the concrete defect — what, and where]
 - Recommendation: [the specific action that resolves it]
 - Ambiguity flag: clear | ambiguous

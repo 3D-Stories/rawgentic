@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Platform / external-dependency feasibility gate (#226)</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #1b1f23; --muted: #57606a; --border: #d0d7de;
+    --card: #f6f8fa; --code-bg: #eef1f4; --link: #0969da; --accent: #8250df;
+    --chosen: #1a7f37; --rejected: #cf222e; --thead-bg: #eaeef2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #30363d;
+      --card: #161b22; --code-bg: #1c2128; --link: #4493f8; --accent: #a371f7;
+      --chosen: #3fb950; --rejected: #ff7b72; --thead-bg: #1c2128;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #30363d;
+    --card: #161b22; --code-bg: #1c2128; --link: #4493f8; --accent: #a371f7;
+    --chosen: #3fb950; --rejected: #ff7b72; --thead-bg: #1c2128;
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff; --fg: #1b1f23; --muted: #57606a; --border: #d0d7de;
+    --card: #f6f8fa; --code-bg: #eef1f4; --link: #0969da; --accent: #8250df;
+    --chosen: #1a7f37; --rejected: #cf222e; --thead-bg: #eaeef2;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6; padding: 2.5rem 1.25rem 5rem; max-width: 880px; margin: 0 auto;
+  }
+  h1, h2, h3, h4 { line-height: 1.3; font-weight: 600; scroll-margin-top: 1rem; }
+  h1 { font-size: 1.7rem; border-bottom: 1px solid var(--border); padding-bottom: 0.6rem; margin-bottom: 0.3rem; }
+  h1 + p { color: var(--muted); font-size: 0.92rem; margin-top: 0.4rem; }
+  h2 { font-size: 1.28rem; margin-top: 2.4rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.05rem; margin-top: 1.8rem; color: var(--accent); }
+  p { margin: 0.7rem 0; }
+  ul, ol { padding-left: 1.4rem; }
+  li { margin: 0.35rem 0; }
+  li > ul, li > ol { margin-top: 0.35rem; }
+  code { background: var(--code-bg); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.88em;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  pre { background: var(--code-bg); padding: 1rem; border-radius: 8px; overflow-x: auto; border: 1px solid var(--border); }
+  pre code { background: none; padding: 0; }
+  a { color: var(--link); }
+  strong { font-weight: 650; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+  blockquote { margin: 1rem 0; padding: 0.5rem 1rem; border-left: 3px solid var(--accent); background: var(--card); color: var(--muted); }
+  blockquote p { margin: 0.3rem 0; }
+  .table-wrap { overflow-x: auto; margin: 1.1rem 0 1.5rem; border: 1px solid var(--border); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.92rem; }
+  thead th { background: var(--thead-bg); text-align: left; font-weight: 650; border-bottom: 1px solid var(--border); }
+  th, td { padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--card); }
+  .badge { display: inline-block; font-size: 0.72rem; font-weight: 650; letter-spacing: 0.02em; text-transform: uppercase;
+    padding: 0.15rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin: 0 0.3rem 0.3rem 0; }
+  .chosen { color: var(--chosen); border-color: var(--chosen); }
+  .rejected { color: var(--rejected); border-color: var(--rejected); }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.6rem 0 1.6rem; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<div class="meta">
+  <span class="badge">Issue #226</span>
+  <span class="badge">WF2 · WF3</span>
+  <span class="badge">standard_feature</span>
+  <span class="badge">2026-07-06</span>
+</div>
+<h1>Platform / external-dependency feasibility gate (#226)</h1>
+<p>WF2 Step 3 design of record · Complexity: standard_feature · Blast: low code, prose-heavy · plugin 3.12.0</p>
+<blockquote><p>Design shaped by a blind cross-model peer consult (converged on Approach A) and a cross-model adversarial-on-design pass (2 High folded → the mechanical omission-catch). The pre-PR review round (a cross-model diff review + two reviewer agents) then closed five more fail-opens — chiefly <strong>docs removed from accepted evidence kinds</strong> and <strong>duplicate declarations rejected as ambiguous</strong>. Dogfooded: this feature's own design declares <code>platform_apis: none</code> and passes its own Step-4 gate.</p></blockquote>
+
+<h2>Problem</h2>
+<p>A design can commit to a platform/framework API the project's own configuration does not permit and still pass <strong>every</strong> current gate, because the gates are test-centric and the failure only manifests at runtime on a surface CI never exercises. Motivating real run: a Tauri&nbsp;2 overlay used <code>window.setSize</code>; that window's capability file lacked <code>allow-set-size</code> (the main window had it — a visible asymmetry in the repo). The call was silently denied (error only in the webview console); <code>cargo</code> compile, <code>tsc</code>, and unit tests were all green. Three build-and-UAT cycles to catch.</p>
+<p><strong>Unifying principle:</strong> an unproven external/platform dependency is a design-gate blocker, verified against the project's real config — not assumed from the API's existence.</p>
+
+<h2>Approaches weighed</h2>
+<ul>
+<li><span class="badge chosen">chosen</span> <strong>A. Evidence-cited feasibility declaration + review lens + tiny validator.</strong> A design declares a mandatory <code>platform_apis:</code> block cited to real evidence; the design gate (Step 4 self-review + the WF5 adversarial lens) checks it; a small <code>plan_lib</code> helper mechanically rejects an omitted declaration, an <code>assumed</code> dep, weak evidence, or an unsurfaced silent failure; drift guards pin the prose. Generic and framework-agnostic.</li>
+<li><span class="badge rejected">rejected</span> <strong>B. Automated capability-model parser</strong> (parse Tauri capability files, iOS entitlements, browser permission policies, …). Explicitly out-of-scope in the issue: per-framework, unbounded to maintain, and the issue wants a <em>generic, evidence-cited</em> mechanism, not an auto-parser. Evidence is a cited file/doc/call-site/spike, not a parse.</li>
+</ul>
+
+<h2>The canonical feasibility contract</h2>
+<p>A <code>platform_apis:</code> declaration is <strong>mandatory on every design doc / RCA</strong> — the key decision resolving the adversarial High findings: an <em>omitted</em> note must not pass silently, which is the exact silent-gap class #226 targets. It is one line when there are no platform APIs — symmetric with the already-required "Security implications" section, so it is not the "feasibility proof for APIs that are fine" over-gating the issue warns against.</p>
+<pre><code>## Platform / external dependencies
+platform_apis: none        # the whole declaration when no material platform/external API is used</code></pre>
+<p>or, per <strong>material</strong> platform/framework/external API not already proven in-repo the same way, one block per API:</p>
+<pre><code>platform_apis:
+- api: &lt;exact API&gt; on &lt;exact object/runtime surface&gt;
+  feasibility: verified via &lt;capabilities-file|existing-call-site|spike&gt; — &lt;citation&gt;
+  failure: fail-loud | fail-silent
+  surface: &lt;assertion|log|observable check&gt; — &lt;where&gt;   # REQUIRED when failure: fail-silent</code></pre>
+<ul>
+<li><code>feasibility: assumed</code> may appear as an interim Step-3 drafting marker, but is explicitly <strong>Step-4-blocking</strong>.</li>
+<li><strong><code>docs</code> is NOT an accepted evidence kind:</strong> docs prove the API <em>exists</em>, not that this project's config <em>permits</em> it — accepting docs is the exact #226 failure (docs say <code>setSize</code> exists; the capability file denies it). Cite a capabilities/manifest file, an exact call site, or a spike. (A cross-model diff review flagged docs-accepted as a fail-open; closed mechanically.)</li>
+<li><strong>Working-precedent:</strong> an <code>existing-call-site</code> counts only for the <strong>exact</strong> API on the <strong>exact</strong> object kind + target surface (the main-window-has-it / overlay-doesn't asymmetry); otherwise spike or cite config.</li>
+<li>The full contract lives <strong>once</strong> in WF2 §3; WF3 and the lens carry a short checklist + pointer, not a duplicate.</li>
+</ul>
+
+<h2>Mechanism</h2>
+<h3>1. <code>plan_lib</code> feasibility validator (the only new code)</h3>
+<ul>
+<li><code>parse_feasibility_block(text) → FeasibilityDecl | None</code> — returns <code>None</code> when NO <code>platform_apis:</code> declaration is present (so the caller can distinguish "declaration absent" from "declared none"); code-fence aware (both ``` and ~~~); collects ALL non-fenced declarations — &gt;1 sets <code>ambiguous=True</code> so an early stray <code>none</code> can't shadow a later real one. Separator-tolerant (em/en-dash, minus, hyphen, colon).</li>
+<li><code>assert_feasibility_declared(decl) → (ok, errors)</code> — the mechanical Step-4 gate, fail-closed: <code>None</code> (absent) errors; <code>ambiguous</code> (&gt;1 declaration) errors; <code>none</code> passes; else per block <code>assumed</code>, a bad evidence-kind (docs excluded), an empty citation, a missing <code>failure:</code>, or <code>fail-silent</code> without <code>surface:</code> all error.</li>
+</ul>
+<p>No new dataclass field is needed for the runtime-surface rule — the existing <code>deferral_reason</code> and the run-record's <code>verification_deferred[].target_check</code> already carry "the claim most likely to be wrong." A mechanical "is this the <em>most</em> likely wrong claim?" check is impossible; the drift guard pins the requirement and review judges the naming.</p>
+
+<h3>2. Prose edits (the bulk)</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>AC</th><th>Where</th><th>What</th></tr></thead>
+<tbody>
+<tr><td>1,3,4</td><td>WF2 <code>steps.md</code> §3</td><td>New required "Platform / external dependencies" section carrying the mandatory <code>platform_apis:</code> declaration; working-precedent + silent-failure rules.</td></tr>
+<tr><td>2</td><td>WF2 <code>steps.md</code> §4</td><td>Platform-feasibility critique dimension running <code>assert_feasibility_declared</code>; credibility + used-but-undeclared lens.</td></tr>
+<tr><td>2</td><td><code>quality-bar.md</code> ×3</td><td><code>platform_feasibility</code> category + stance bullet (kept byte-identical across the three copies).</td></tr>
+<tr><td>2</td><td><code>adversarial_review_lib._TYPE_LENS</code></td><td>Platform-constraints emphasis on the <code>design</code> + <code>plan</code> lens (WF5 adversarial-on-design).</td></tr>
+<tr><td>5</td><td>WF2 <code>steps.md</code> §9</td><td>Runtime-surface rule: real-surface spike OR a <code>deferred-to-target</code> whose <code>target_check</code> names the single likeliest-wrong claim.</td></tr>
+<tr><td>6</td><td>WF2 <code>steps.md</code> §8</td><td>Mid-flight feasibility check for gate-bypassing / UAT fixes.</td></tr>
+<tr><td>6</td><td>WF3 <code>fix-bug</code> §3/§4 + spine</td><td>Mirror — where the original failure lived (a mid-UAT fix). Short checklist + pointer to WF2 §3.</td></tr>
+<tr><td>7</td><td><code>tests/test_feasibility_gate.py</code></td><td>Unit tests for the two helpers + step-scoped corpus drift guards; non-vacuity verified.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Failure modes / over-gating traps (the main risk)</h2>
+<ul>
+<li><strong>Over-gating</strong> (the issue's stated #1 risk): the feasibility <em>proof</em> requirement is scoped to APIs not already proven in-repo the same way — a precedented exact call site is sufficient, so well-worn APIs never trip it. The mandatory declaration is one line (<code>platform_apis: none</code>), symmetric with the existing "Security implications" section — not proof-for-everything.</li>
+<li><strong>False "verified":</strong> the validator requires an allowed evidence kind (<code>docs</code> excluded) AND a non-empty citation, so <code>verified via docs</code>, an unknown kind, or a citation-less <code>verified</code> all fail closed.</li>
+<li><strong>Silent skip of the mirror:</strong> the drift guard pins the WF3 §3/§4 text (and every other surface) so a later prose edit can't quietly drop it.</li>
+</ul>
+
+<h2>Security / backward-compat</h2>
+<ul>
+<li>Additive: the validator returns <code>None</code>/ok on absent notes only via the explicit gate decision; no change to <code>parse_tasks</code>, the deferral machinery, or any existing contract. No new dependency, no migration. Pure-function helpers, unit-tested.</li>
+</ul>
+
+<footer>
+rawgentic · docs/design/2026-07-06-platform-feasibility-gate.md · issue #226 · plugin 3.12.0 ·
+committed alongside the markdown design doc per the project's design-doc convention.
+</footer>
+</body>
+</html>

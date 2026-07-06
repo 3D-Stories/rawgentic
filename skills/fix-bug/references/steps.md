@@ -201,6 +201,16 @@ Bug analysis (internal working artifact):
 3. **Root cause determination:** Select the hypothesis with strongest evidence.
 4. **Fix approach:** Design the minimal fix that addresses the root cause (not symptoms).
 5. **Regression risk assessment:** Identify code paths that could break from the fix.
+6. **Platform-feasibility check (#226 — lightweight mirror).** This is exactly where the
+   motivating failure lived: a mid-UAT fix that never went back through a design gate. If the
+   fix relies on a platform/framework/external API (window ops, permission-gated calls,
+   GPU/audio, native features, an external service) **not already proven in-repo the same way**,
+   carry a short feasibility note — the canonical contract is WF2
+   `skills/implement-feature/references/steps.md` §3 (`platform_apis:` / `feasibility: verified
+   via <capabilities-file|existing-call-site|spike> — <citation>` / `failure:
+   fail-loud|fail-silent` + `surface:` when silent; `docs` are not accepted). Prove it against this project's real config
+   (exact-object-kind precedent or a spike, not the API's mere existence); `assumed` does not
+   pass Step 4. When the fix uses no such API, this is one line: `platform_apis: none`.
 
 ### Output
 
@@ -230,6 +240,12 @@ Apply the quality-bar rubric (`references/quality-bar.md`) with focus on root ca
 3. Are there unintended side effects of the proposed fix?
 4. Does the fix handle edge cases mentioned in the bug report?
 5. Is the fix backward-compatible (especially for API/DB changes)?
+6. **Platform feasibility (#226):** if the fix relies on a platform/framework/external API, is
+   it proven to work under this project's real config (cited evidence — not `assumed`), and is a
+   `fail-silent` call surfaced by an assertion/log? Run `plan_lib.assert_feasibility_declared(
+   plan_lib.parse_feasibility_block(<RCA text>))` when the RCA carries a `platform_apis:`
+   declaration; treat a non-`ok` result as a Step-3 loop-back trigger. (The shared quality-bar
+   rubric carries the same lens.)
 
 **Quality-gate level:** Lightweight reflect ONLY. RATIONALE: Bug fixes have lower reversal cost than new features. A heavier multi-pass critique adds latency for diminishing returns on small-scope changes.
 
