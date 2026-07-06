@@ -619,13 +619,15 @@ class TestAppendOnlySessionNotes:
         text = _text()
         assert text.count("APPEND") >= 6, f"expected APPEND at multiple sites, got {text.count('APPEND')}"
 
-    def test_cumulative_subheaders_beneath_done_marker(self):
-        # AC2: sub-headers are ADDITIVE beneath the load-bearing `— DONE` marker, never replace it
+    def test_cumulative_subheaders_additive_to_done_marker(self):
+        # AC2: sub-headers are ADDITIVE (appended as the step runs); the `— DONE` marker is
+        # appended LAST and is load-bearing; nothing overwrites an earlier entry.
         block = _block(_text(), "step-tracking")
         low = block.lower()
         assert "####" in block  # cumulative sub-header shape named
         assert "load-bearing" in low
-        assert "beneath" in low and "never replacing" in low
+        assert "last" in low  # DONE marker appended last, after the sub-headers
+        assert "never overwrite or replace" in low
 
     def test_lightweight_progress_checkpoint_defined_and_distinct(self):
         # AC4: a lightweight per-batch progress checkpoint, separate from <headless-checkpoint>

@@ -168,7 +168,7 @@ Non-fatal on failure, same as STATUS.
 </headless-status>
 
 <headless-checkpoint>
-Before exiting in headless mode (either QUESTION suspend or ERROR), write a rich
+Before exiting in headless mode (either QUESTION suspend or ERROR), APPEND a rich
 checkpoint to session notes. This checkpoint must contain enough context for a
 FRESH session (no --resume, no conversation history) to reconstruct the workflow state.
 

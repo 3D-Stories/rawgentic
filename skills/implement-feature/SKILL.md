@@ -239,14 +239,15 @@ When triggered: STOP the workflow at the current step. Present ALL problematic f
 <step-tracking>
 Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
 trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's
-entry must still be present at the end of the run (#50). Wherever any step below says to
-"log", "record", "write", "update", or "document" session notes, it means **APPEND**.
+entry must still be present at the end of the run (#50). Wherever anything in this skill
+(including the `references/` files) says to "log", "record", "write", "update", or
+"document" session notes, it means **APPEND** — never overwrite or replace an earlier entry.
 
-At the end of each step, APPEND a marker to `claude_docs/session_notes.md`:
+As a step runs, APPEND cumulative `####` sub-headers (progress, evidence, decisions) under
+that step's section; then APPEND the step's marker **last**:
 `### WF2 Step X: <Name> — DONE (<key detail>)`
-Within a step, APPEND cumulative `####` sub-headers (progress, evidence, decisions)
-**beneath** — never replacing — that step's `— DONE` marker; the `— DONE` marker is
-load-bearing for the resumption protocol. This enables workflow resumption if context is lost.
+The `— DONE` marker is load-bearing for the resumption protocol. This enables workflow
+resumption if context is lost.
 </step-tracking>
 
 <references>

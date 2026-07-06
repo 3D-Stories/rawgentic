@@ -951,9 +951,10 @@ than the heavy `<headless-checkpoint>` (`references/headless.md`, for suspend/er
 - Key decisions: [if any]
 ```
 
-APPEND it **beneath** (never replacing) the Step 8 `— DONE` marker, so the audit trail is
-cumulative. **[Headless: ALSO write the heavy `<headless-checkpoint>` (format in
-`references/headless.md`) after every 2-3 tasks to enable fresh-session resumption.]**
+APPEND it under the Step 8 section as you go (the Step 8 `— DONE` marker is APPENDed last);
+never overwrite an earlier entry, so the audit trail stays cumulative. **[Headless: ALSO
+write the heavy `<headless-checkpoint>` (format in `references/headless.md`) after every
+2-3 tasks to enable fresh-session resumption.]**
 
 ---
 
