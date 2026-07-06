@@ -890,8 +890,12 @@ Step 8a design-flaw escapes use a SEPARATE counter
 `tdd_loopback_used`. Sharing a counter created a starvation hazard:
 a per-task-review-triggered loopback would silently consume the
 budget Step 8's TDD path needed (or vice versa). The global cap
-`GLOBAL_LOOPBACK_BUDGET = 3` arbitrates across all four counters
-(design, tdd, review_design, review).
+`GLOBAL_LOOPBACK_BUDGET = 3` arbitrates across all five counters
+(design, tdd, review_design, review, spec_tighten). The `spec_tighten`
+counter (#223, max 2) funds the Step-4 in-gate spec-tightening pass —
+amend + one incremental verifier, no Step-3 return — folded from
+finding `Loopback-class` tags via `plan_lib.classify_loopback_source`,
+fail-closed to `design` on any design-flaw, untagged, or unknown entry.
 
 ### Defer-chain integrity
 

@@ -229,7 +229,7 @@ a{color:var(--blue)}
   <main id="app"></main>
 
   <div class="prov">
-    <span>SOURCE OF TRUTH · skills/&lt;workflow&gt;/SKILL.md + references/steps.md @ plugin 3.13.0</span>
+    <span>SOURCE OF TRUTH · skills/&lt;workflow&gt;/SKILL.md + references/steps.md @ plugin 3.16.0</span>
     <span>SEPARATE FROM the health/proposals overlay — this sheet is the canonical reference</span>
   </div>
 </div>
@@ -242,7 +242,7 @@ const DATA = {
   workflows: {
   wf2: {
     code:"WF2", name:"Implement Feature", skill:"skills/implement-feature",
-    revs:["3.13.0","3.12.0","3.10.0","3.1.0"],
+    revs:["3.16.0","3.13.0","3.12.0","3.10.0","3.1.0"],
     loopbacks:[
       {from:"4",to:"3",label:"×2"},
       {from:"8",to:"3",label:"×1 tdd"},
@@ -251,7 +251,7 @@ const DATA = {
     ],
     loopnote:"Global loop-back budget: 3 (binds before per-source caps)",
     versions: {
-      "3.13.0": { superseded:false, steps:[
+      "3.16.0": { superseded:false, steps:[
         {id:"1", num:"01", name:"Receive Issue", kind:"step", mand:true,
          sum:"Load config, derive capabilities, fetch + validate the GitHub issue, probe branch protection.",
          lane:"unchanged",
@@ -278,12 +278,12 @@ const DATA = {
          sub:[["a","Opt-in peer consult dispatches in the BACKGROUND, blind both ways — your own draft must be on disk before reading the peer's"],["b","2–3 approaches (complex, via subagent brainstorm) or 1–2 inline (standard); pick with rationale"],["c","Design doc: file changes, config changes, error handling, security implications (+ type-specific sections)"],["d","Multi-PR assessment: >500 lines or separable phases → flag for decomposition in Step 5"],["e","Peer-consult failure is non-blocking — gate on exit code; empty proposal → proceed with your own design"],["f","platform_apis: declaration — `none` or evidence-cited blocks; assumed=Step-4 blocker; working-precedent = exact API on exact object kind; fail-silent needs a surfacing assertion"]],
          facts:[["Peer consult","opt-in · background · non-blocking"],["Blindness","own draft first, both ways"],["Feasibility","platform_apis: mandatory · omission blocks (#226)"]]},
         {id:"4", num:"04", name:"Gate · Design Critique", kind:"gate", mand:true,
-         sum:"In-repo quality-bar rubric for ALL lanes; opt-in adversarial-on-design on the full spine.",
+         sum:"In-repo quality-bar rubric for ALL lanes; tiered loop-back — spec-tightening cheap path vs full design-flaw redesign.",
          lane:"rubric only (no cross-model layers)",
-         rev:{delta:"#226 adds a platform-feasibility dimension: the gate runs the mechanical plan_lib.assert_feasibility_declared over the design's platform_apis: declaration (absent declaration, assumed dep, weak/uncited evidence, or fail-silent-without-surface all block) plus a credibility + used-but-undeclared lens the parser cannot do. The WF5 adversarial-on-design lens gains the same platform-constraints emphasis.", refs:["#226"]},
-         purpose:"Catches design flaws BEFORE implementation — the cheapest place to catch them. Every lane runs the in-repo quality-bar rubric (stance + depth triage + finding shape); the full spine may add the opt-in cross-model adversarial-on-design pass, dispatched CONCURRENTLY with the self-review and joined at a single barrier.",
-         sub:[["a","Self-review the design against the quality-bar rubric → findings with severity, category, ambiguity flag"],["b","(full spine, opt-in) adversarial-on-design — cross-model, report-only, dispatched concurrently"],["c","Join barrier: merge self-review + adversarial findings; the ambiguity circuit-breaker runs EXACTLY once"],["d","Volume thresholds → loop back to Step 3 (max 2) via plan_lib.consume_loopback; in-flight adversarial result is discarded as stale"],["e","Cross-model failure is non-blocking — the breaker still runs over self-review findings alone"],["f","Platform-feasibility (#226): run plan_lib.assert_feasibility_declared over platform_apis:; non-ok = blocking; also flag a used-but-undeclared API"]],
-         facts:[["Loop-back","→ Step 3, max 2 (source: design)"],["Breaker","EXACTLY once, merged findings"],["Feasibility gate","assert_feasibility_declared (#226)"]]},
+         rev:{delta:"#223 adds a tiered loop-back: Critical/High findings carry a Loopback-class tag (spec-tightening | design-flaw); at the post-breaker consumption point the tags fold via plan_lib.classify_loopback_source — fail-closed, every finding contributes exactly one entry, absent = untagged = full path. An all-spec-tightening set takes the cheap in-gate path: consume the new spec_tighten source (cap 2, shares the global budget of 3), amend the affected design sections, dispatch exactly ONE incremental verifier over only the changed sections, never return to Step 3; any new Critical/High or ambiguous verifier finding escalates to a real design loop-back. VOLUME loop-backs and adversarial-sourced Critical/High findings never fold — full path always.", refs:["#223"]},
+         purpose:"Catches design flaws BEFORE implementation — the cheapest place to catch them. Every lane runs the in-repo quality-bar rubric (stance + depth triage + finding shape); the full spine may add the opt-in cross-model adversarial-on-design pass, dispatched CONCURRENTLY with the self-review and joined at a single barrier. Not every Critical/High costs a full redesign: a pure spec-tightening set (wording, stale anchors, internal contradictions) takes a cheap amend-and-verify pass in-gate (#223).",
+         sub:[["a","Self-review the design against the quality-bar rubric → findings with severity, category, ambiguity flag, Loopback-class (Critical/High)"],["b","(full spine, opt-in) adversarial-on-design — cross-model, report-only, dispatched concurrently"],["c","Join barrier: merge self-review + adversarial findings; the ambiguity circuit-breaker runs EXACTLY once"],["d","Volume thresholds → loop back to Step 3 (max 2) via plan_lib.consume_loopback; NEVER folds to the cheap path; in-flight adversarial result is discarded as stale"],["e","Post-breaker fold (#223): classify_loopback_source over the Critical/High Loopback-class tags — all spec-tightening → consume spec_tighten (max 2), amend sections in place + ONE incremental verifier, no Step-3 return; escalate on any new Critical/High or ambiguity"],["f","Cross-model failure is non-blocking — the breaker still runs over self-review findings alone"],["g","Platform-feasibility (#226): run plan_lib.assert_feasibility_declared over platform_apis:; non-ok = blocking; also flag a used-but-undeclared API"]],
+         facts:[["Loop-back","→ Step 3 ×2 (design) · in-gate ×2 (spec_tighten)"],["Breaker","EXACTLY once, merged findings"],["Fold","fail-closed; untagged/adversarial/volume → full path"]]},
         {id:"5", num:"05", name:"Implementation Plan", kind:"step", mand:true,
          sum:"Risk-tagged task decomposition; parallel groups; verification strategy per task.",
          lane:"collapsed → checklist plan (keeps riskLevel)",
@@ -372,8 +372,19 @@ const DATA = {
          sub:[["a","Assemble the run-record per references/run-record.md — every documented key PRESENT, counts sane"],["b","Usage capture from the session transcript — fail-closed: a captured record can never persist with null tokens"],["c","Lane marker (small-standard vs full) keeps lane runs measurable against full runs"],["d","work_summary.py renders the summary (its stdout IS the summary) + appends to docs/measurements/run_records.jsonl"],["e","rc 1 = rendered but not persisted — a telemetry gap to fix or record, never ignore"],["f","Completion-gate checklist re-verified before WF2 may terminate"]],
          facts:[["Store","docs/measurements/run_records.jsonl"],["rc","0 persisted · 1 gap · 2 usage error"]]}
       ]},
+      "3.13.0": { superseded:"3.16.0", steps:null,
+        overrides: {
+          "4": {sum:"In-repo quality-bar rubric for ALL lanes; opt-in adversarial-on-design on the full spine.",
+                purpose:"Catches design flaws BEFORE implementation — the cheapest place to catch them. Every lane runs the in-repo quality-bar rubric (stance + depth triage + finding shape); the full spine may add the opt-in cross-model adversarial-on-design pass, dispatched CONCURRENTLY with the self-review and joined at a single barrier.",
+                sub:[["a","Self-review the design against the quality-bar rubric → findings with severity, category, ambiguity flag"],["b","(full spine, opt-in) adversarial-on-design — cross-model, report-only, dispatched concurrently"],["c","Join barrier: merge self-review + adversarial findings; the ambiguity circuit-breaker runs EXACTLY once"],["d","Volume thresholds → loop back to Step 3 (max 2) via plan_lib.consume_loopback; in-flight adversarial result is discarded as stale"],["e","Cross-model failure is non-blocking — the breaker still runs over self-review findings alone"],["f","Platform-feasibility (#226): run plan_lib.assert_feasibility_declared over platform_apis:; non-ok = blocking; also flag a used-but-undeclared API"]],
+                facts:[["Loop-back","→ Step 3, max 2 (source: design)"],["Breaker","EXACTLY once, merged findings"],["Feasibility gate","assert_feasibility_declared (#226)"]]}
+        }},
       "3.12.0": { superseded:"3.13.0", steps:null,
         overrides: {
+          "4": {sum:"In-repo quality-bar rubric for ALL lanes; opt-in adversarial-on-design on the full spine.",
+                purpose:"Catches design flaws BEFORE implementation — the cheapest place to catch them. Every lane runs the in-repo quality-bar rubric (stance + depth triage + finding shape); the full spine may add the opt-in cross-model adversarial-on-design pass, dispatched CONCURRENTLY with the self-review and joined at a single barrier.",
+                sub:[["a","Self-review the design against the quality-bar rubric → findings with severity, category, ambiguity flag"],["b","(full spine, opt-in) adversarial-on-design — cross-model, report-only, dispatched concurrently"],["c","Join barrier: merge self-review + adversarial findings; the ambiguity circuit-breaker runs EXACTLY once"],["d","Volume thresholds → loop back to Step 3 (max 2) via plan_lib.consume_loopback; in-flight adversarial result is discarded as stale"],["e","Cross-model failure is non-blocking — the breaker still runs over self-review findings alone"],["f","Platform-feasibility (#226): run plan_lib.assert_feasibility_declared over platform_apis:; non-ok = blocking; also flag a used-but-undeclared API"]],
+                facts:[["Loop-back","→ Step 3, max 2 (source: design)"],["Breaker","EXACTLY once, merged findings"],["Feasibility gate","assert_feasibility_declared (#226)"]]},
           "13": {sum:"Poll checks to green; quarantined CI is a visible non-gate with a trust guard.",
                  purpose:"Monitor and fix CI when the project has it. A quarantined CI is a visible non-gate — observed, recorded verbatim, never blocking and never reported green. The trust guard stops a PR from disabling its own gate: quarantine only counts when it comes from the base config, not this branch's diff.",
                  sub:[["a","Poll gh run list for the branch (30s cadence, 10-minute ceiling)"],["b","Red run → diagnose via --log-failed, fix, push; CI re-runs"],["c","Quarantined: record \"run <status>, not gating\" in session notes + PR body; never diagnose, never claim green"],["d","Trust guard: a branch that INTRODUCED/ALTERED the quarantine gates normally + surfaces the change for owner approval"]],

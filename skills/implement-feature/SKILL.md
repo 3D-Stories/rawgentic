@@ -35,6 +35,7 @@ MAX_DESIGN_LOOPBACK_ITERATIONS = 2
 MAX_TDD_DESIGN_LOOPBACK = 1
 MAX_REVIEW_DESIGN_LOOPBACK = 1
 MAX_REVIEW_DESIGN_LOOPBACK_STEP_8A = 1   # P15: Step 8a per-task review loopback (separate from tdd)
+MAX_SPEC_TIGHTEN_LOOPBACK = 2            # #223: Step 4 in-gate spec-tightening pass (no Step-3 return)
 GLOBAL_LOOPBACK_BUDGET = 3
 VOLUME_THRESHOLDS:
   Critical: 5
@@ -196,21 +197,28 @@ WF2 ALWAYS terminates after the completion summary. Do NOT suggest "shall I crea
 </termination-rule>
 
 <loop-back-budget>
-Track all design loop-backs across the workflow. There are **four** sources (the
+Track all design loop-backs across the workflow. There are **five** sources (the
 canonical caps live in `plan_lib._LOOPBACK_SOURCE_MAX`):
 - Step 4 -> Step 3: max 2 iterations (MAX_DESIGN_LOOPBACK_ITERATIONS, source `design`)
+- Step 4 in-gate: max 2 iterations (MAX_SPEC_TIGHTEN_LOOPBACK, source `spec_tighten`) —
+  the #223 spec-tightening cheap path: amend + one incremental verifier, NO Step-3
+  return; folded from finding `Loopback-class` tags via `plan_lib.classify_loopback_source`
 - Step 8 -> Step 3: max 1 iteration (MAX_TDD_DESIGN_LOOPBACK, source `tdd`)
 - Step 8a -> Step 3: max 1 iteration (MAX_REVIEW_DESIGN_LOOPBACK_STEP_8A, source `review_design`)
 - Step 11 -> Step 3: max 1 iteration (MAX_REVIEW_DESIGN_LOOPBACK, source `review`)
 
 Global cap: GLOBAL_LOOPBACK_BUDGET = 3 — this binds BEFORE the per-source caps (which
-sum to 5), so the workflow loops back at most 3 times total. `plan_lib.consume_loopback`
+sum to 7), so the workflow loops back at most 3 times total. Spec-tightening passes
+share this global budget: two cheap passes can starve a later design loop-back — an
+accepted, pinned trade-off (worst case equals today's escalate-to-user).
+`plan_lib.consume_loopback`
 enforces both the per-source and the global cap; call it and act on its `(ok, state)`
 return rather than pre-checking the in-context mirror.
 If the global cap is reached, STOP and escalate to user with a full summary of all loop-back triggers. **[Headless: ERROR — post error comment with full loop-back summary, add rawgentic:ai-error label, exit.]**
 
 Track loop-back state (mirror of the canonical counters file — one var per source):
 design_loopback_count = 0
+spec_tighten_loopback_count = 0
 tdd_loopback_used = false
 review_loopback_used = false
 review_design_loopback_used = false

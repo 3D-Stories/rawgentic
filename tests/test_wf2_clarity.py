@@ -429,6 +429,65 @@ class TestBranchProtectionProbe:
         assert "quarantine_protection_contradiction" in s14.group(0)
 
 
+# --- #223: tiered design loop-back (spec-tightening vs design-flaw) ---
+
+class TestTieredLoopback:
+    """Drift guards for the #223 two-class Step-4 loop-back. Pin the canonical
+    contract sentences, the fail-closed fold, the volume-never-folds rule, the
+    Loopback-class field in both finding shapes, and the SKILL.md budget-block
+    mirror of the new plan_lib source."""
+
+    def _step4(self) -> str:
+        text = _text()
+        return text[text.index("## Step 4: Quality Gate"):text.index("## Step 5:")]
+
+    def test_canonical_cheap_path_sentence(self):
+        # AC1's contract: one verifier, changed sections only, no Step-3 return.
+        s4 = self._step4()
+        assert ("dispatches exactly one verifier over only the changed design "
+                "sections and never returns to Step 3") in s4
+
+    def test_canonical_one_entry_per_finding_sentence(self):
+        # Whitespace-normalized: prose may hard-wrap mid-phrase.
+        s4 = " ".join(self._step4().split())
+        assert "contributes exactly one Loopback-class entry" in s4
+        assert "untagged" in s4, "absent field must contribute the 'untagged' entry"
+
+    def test_volume_loopback_never_folds(self):
+        s4 = self._step4()
+        assert "NEVER folds" in s4, "the item-5 volume loop-back must stay on the full design path"
+
+    def test_fold_helper_named(self):
+        assert "classify_loopback_source" in self._step4()
+
+    def test_loopback_class_field_in_wf2_finding_shape(self):
+        # steps.md §4 is WF2's gate-owned finding shape (quality-bar.md is the
+        # 3-gate shared DEFAULT — fix-bug/setup don't tier, so the field lives
+        # only in the WF2 override, per quality-bar.md's own override clause).
+        s4 = self._step4()
+        assert "Loopback-class: spec-tightening | design-flaw" in s4
+
+    def test_budget_block_lists_spec_tighten(self):
+        block = _block(_text(), "loop-back-budget")
+        assert "spec_tighten" in block
+        assert "spec_tighten_loopback_count" in block, "spec_tighten needs an in-context mirror counter"
+        assert "**five** sources" in block
+
+    def test_constants_mirror_plan_lib_cap(self):
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "hooks"))
+        import plan_lib
+        constants = _block(_text(), "constants")
+        m = re.search(r"MAX_SPEC_TIGHTEN_LOOPBACK = (\d+)", constants)
+        assert m, "SKILL.md constants must declare MAX_SPEC_TIGHTEN_LOOPBACK"
+        assert int(m.group(1)) == plan_lib._LOOPBACK_SOURCE_MAX["spec_tighten"]
+
+    def test_escalation_never_silent_passes_ambiguity(self):
+        # F6: an ambiguous/conflicting verifier finding escalates, never PASSes.
+        s4 = self._step4()
+        assert "never silent-PASS" in s4 or "never silently PASS" in s4
+
+
 # --- #136: worktree-isolation parallelism probe ---
 
 class TestParallelismProbe:
