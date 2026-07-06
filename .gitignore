@@ -29,6 +29,11 @@ claude_docs/
 .rawgentic-diff-review-*.patch
 .rawgentic-diff-findings-*.json
 
+# WF2 per-branch review-state pointers (#231 AC2): local, git-excluded bookkeeping —
+# never committed into a feature PR. `write_review_state` also adds `.rawgentic/` to a
+# repo's `.git/info/exclude` at runtime for app repos that lack this line.
+.rawgentic/review-state/*.json
+
 # Vendored external command copies (#194): third-party prompt content — a durable
 # local copy, never committed (redistribution/licensing). See docs/external-references.md
 .rawgentic-vendored/

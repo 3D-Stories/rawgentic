@@ -619,7 +619,14 @@ form (run them when not in the lane).
    - Tasks lacking a `riskLevel` line **fail closed** (parse error → STOP). **[Headless: ERROR — add `rawgentic:ai-error` label, post comment explaining the plan format contract.]**
    - OPTIONAL: `- parallel_group: <id>` and `- files: <comma-separated paths>` (see Task ordering above). These are purely additive — absent fields just mean the task is not parallel-eligible; they never affect the `riskLevel` fail-closed contract or the pre-P15 migration.
 
-   **Calibration check** — after task decomposition, compute the high-risk ratio via `plan_lib.compute_risk_ratio(tasks)` and classify via `plan_lib.check_ratio_band(ratio, len(tasks))`. Handle the result:
+   **Calibration check** — after task decomposition, compute the high-risk ratio and classify it. **Mind the real return shapes (#231 AC3 — each mismatch cost a round-trip):** `plan_lib.compute_risk_ratio(tasks)` returns a **3-tuple `(ratio, high_count, total_count)`**, NOT a bare float — unpack it and pass the SCALAR `ratio` (plus `total`) to `check_ratio_band`, never the whole tuple:
+
+   ```python
+   ratio, high, total = plan_lib.compute_risk_ratio(tasks)   # (float, int, int)
+   band = plan_lib.check_ratio_band(ratio, total)            # scalar ratio + int total
+   ```
+
+   (And `plan_lib.parse_tasks(md)` returns `list[Task]` **objects** — access attributes `t.id`, `t.title`, `t.risk_level`, `t.reason`, `t.parallel_group`, `t.files`, `t.deferral_reason`, NOT dict `t.get("risk_level")`.) Handle the `band` result:
 
    - `skip` (N<3): silent.
    - `pass` (ratio ≤ WARN_PCT/100, default 30%): silent.
@@ -866,12 +873,12 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
     "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
     "findings": {"crit": N, "high": N, "med": N, "low": N, "dropped": N}}
    ```
-9. **Update the committed status pointer** via `plan_lib.write_review_state(repo_root, branch, last_review_log_status)` (path resolved by `plan_lib.review_state_path(repo_root, branch)`). Valid statuses: `"applied"|"suspended"|"dispatch_failed"`. Commit this update along with any fix commits.
+9. **Update the review-state pointer** via `plan_lib.write_review_state(repo_root, branch, last_review_log_status)` (path resolved by `plan_lib.review_state_path(repo_root, branch)`). Valid statuses: `"applied"|"suspended"|"dispatch_failed"`. This pointer is **local, git-excluded bookkeeping** (#231 AC2) — `write_review_state` auto-appends `.rawgentic/` to the repo's `.git/info/exclude` so it can never land in the feature PR. **Do NOT stage or commit it** (staging `.rawgentic/` into an app PR is the exact #231 bug); commit only the actual fix files.
 10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<summary>)`.
 11. **Headless suspend protection:** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
 
 ### Output
-For each high-risk task: an applied|deferred review log entry, committed status pointer updated, optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
+For each high-risk task: an applied|deferred review log entry, review-state pointer updated (local, git-excluded — never staged into the PR), optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
 
 ### Step 8a Failure Modes
 - Reviewer cost spike on a plan with many high-risk tasks: confirmed expected behavior (P15 trades cost for early signal).
@@ -1062,10 +1069,10 @@ Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-r
 
 8. **Deferred-resolution exit gate (P15):** before declaring Step 11 complete, call `plan_lib.assert_no_unresolved_high_deferrals(<deferrals_path>)`. If any deferred Critical/High remains unresolved (not `applied` and lacking independent concurrence from a different reviewer slot), Step 11 cannot complete. A finding with `defer_count >= 2` additionally requires `user_ack: true`.
 
-9. **Update committed status pointer:** after Step 11 passes, call `plan_lib.write_review_state(repo_root, branch, "applied")` (file path resolved via `plan_lib.review_state_path`). Stage and commit it.
+9. **Update review-state pointer:** after Step 11 passes, call `plan_lib.write_review_state(repo_root, branch, "applied")` (file path resolved via `plan_lib.review_state_path`). It is **local, git-excluded** (auto-added to `.git/info/exclude`); do NOT stage or commit it (#231 AC2).
 
 ### Output
-Code review result with filtered findings and fixes applied. Committed `.rawgentic/review-state/<branch-sanitized>.json` reflects "applied".
+Code review result with filtered findings and fixes applied. The local, git-excluded `.rawgentic/review-state/<branch-sanitized>.json` reflects "applied" (not committed — #231 AC2).
 
 ### Failure Modes
 - Fundamental design flaw -> loop back to Step 3 if budget allows; if budget exhausted: **[Headless: ERROR — post error comment with design flaw description + code review findings + loop-back history, add rawgentic:ai-error label, exit.]**
