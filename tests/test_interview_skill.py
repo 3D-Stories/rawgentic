@@ -52,8 +52,9 @@ def test_marketplace_registers_skill_alphabetically():
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     skills = mp["plugins"][0]["skills"]
     assert "./skills/interview" in skills
-    # alphabetical placement: incident < interview < new-project
-    assert skills.index("./skills/interview") == skills.index("./skills/incident") + 1
+    # The whole whitelist is alphabetically ordered (robust to new-skill inserts —
+    # e.g. install-operating-charter now sits between incident and interview).
+    assert skills == sorted(skills), f"marketplace skills not alphabetical: {skills}"
 
 
 def test_descriptions_account_for_interview_as_planning_skill():
