@@ -25,6 +25,16 @@ GitHub Actions runs `pytest tests/ -v` on all pull requests targeting `main`.
 The workflow is defined in `.github/workflows/ci.yml` and uses Python 3.12
 on `ubuntu-latest`.
 
+A second workflow, `.github/workflows/lint.yml` (#40), runs **pylint** on the
+production Python (`hooks/*.py` and `tests/`) on push to `main` and PRs to `main`.
+A hook runs on every prompt/tool-call, so a bug there could silently break security
+enforcement across all projects. The gate is scoped to the **ERROR class**
+(`--errors-only` plus `unreachable`/`f-string-without-interpolation`) with
+`--disable=import-error` (hook runtime deps aren't pip-installed in CI) — it catches
+real bugs (undefined variables, f-string errors, type mismatches, unreachable code)
+without failing on style conventions, so it passes on the current tree with no code
+churn. Run it locally with `pylint hooks/*.py --disable=import-error --errors-only`.
+
 Additionally, rawgentic's `.rawgentic.json` includes a `testing` section,
 so all SDLC workflow skills (WF2-WF4, WF7-WF12) automatically run the test
 suite when working on rawgentic itself.
