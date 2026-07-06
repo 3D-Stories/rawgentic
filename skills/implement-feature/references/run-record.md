@@ -21,6 +21,7 @@ non-negative integers and `resolved` may not exceed `findings`:
     {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path",
      "reviewer_kind": "inline|reflexion|builtin_code_review|codex|hand_rolled_multi"},
     {"step": "6",  "name": "Plan Drift",            "findings": N, "resolved": N, "status": "..."},
+    {"step": "8a", "name": "Per-task Review",       "findings": N, "resolved": N, "status": "..."},
     {"step": "9",  "name": "Implementation Drift",  "findings": N, "resolved": N, "status": "..."},
     {"step": "11", "name": "Code Review",           "findings": N, "resolved": N, "status": "..."},
     {"step": "15", "name": "Post-Deploy",           "findings": N, "resolved": N, "status": "..."}
@@ -47,6 +48,16 @@ non-negative integers and `resolved` may not exceed `findings`:
 The `gates` array carries whichever gates actually ran (Step 11.5 is captured in
 `security_scan`, not as a gate row). Use `status: "fast_path"` for a gate the fast path
 replaced, `"skipped"` for one that didn't apply.
+
+**Canonical gate names (#116).** Use the EXACT `name` for each step from the single source
+of truth `work_summary.CANONICAL_GATE_NAMES` (`canonical_gate_name(workflow, step)` — keyed
+by workflow because WF2/WF3 reuse step numbers). For `implement-feature`: `4`→"Design
+Critique", `6`→"Plan Drift", `8a`→"Per-task Review", `9`→"Implementation Drift", `11`→"Code
+Review", `15`→"Post-Deploy" — so the Tier-2 `gates[].name` column stops drifting across
+sessions. `security_scan.skipped[]` must be a scanner **KIND** from `work_summary.SCANNER_KINDS`
+(`secrets`/`sca`/`sast`/`iac`), never a free-text reason — the summarize CLI validates this
+fail-closed at write time (`validate_record(..., strict=True)`); historical free-text records
+still load (lenient read).
 
 **`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
 `"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`

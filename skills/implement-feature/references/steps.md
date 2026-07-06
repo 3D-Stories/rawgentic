@@ -1537,7 +1537,12 @@ measurable signal — not just a sentence the user reads once.
    conventions live in **`references/run-record.md`** — read it before assembling.
    In short: every documented key must be **present** (a dropped field is a
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
-   `findings`, and `workflow` is `"implement-feature"`.
+   `findings`, and `workflow` is `"implement-feature"`. **Canonical names (#116):** use
+   the exact `gates[].name` per step from `work_summary.CANONICAL_GATE_NAMES`
+   (`canonical_gate_name("implement-feature", step)`) and record `security_scan.skipped[]` as scanner **kinds**
+   from `work_summary.SCANNER_KINDS` (`secrets`/`sca`/`sast`/`iac`), never free text — the
+   summarize CLI validates this fail-closed (`strict=True`), so a non-canonical skip
+   fails the persist.
 
 2b. **Capture usage (#189) — populate the `usage` object with REAL numbers.** #155 added
    the `usage` field but nothing filled it, so it was null in all 24 records and #162's

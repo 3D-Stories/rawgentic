@@ -54,6 +54,34 @@ DEPLOY_STATUSES = {"success", "manual", "failed", "not_applicable"}
 # vocabulary contract. Optional; free text is rejected by design.
 REVIEWER_KINDS = {"inline", "reflexion", "builtin_code_review", "codex",
                    "hand_rolled_multi"}
+# #116: canonical gate name per (workflow, step) — the SINGLE SOURCE OF TRUTH so the Tier-2
+# `gates[].name` column stops drifting across orchestrator sessions (the same gate was
+# recorded as "Design Critique" / "design critique (3-judge + codex)" / "Design Critique
+# (3-panel + codex)"). Keyed BY WORKFLOW because WF2 and WF3 map the same step numbers to
+# different gates (WF2 step 4 = design critique; WF3 step 4 = the lightweight reflect; WF3
+# does code review at step 9 where WF2 does drift). The run-record schema doc
+# (references/run-record.md) + the WF2/WF3 Step-16 assembly prompts must emit these names;
+# `TestCanonicalGateRegistry` guards the code↔doc sync. Step 11.5 is intentionally absent —
+# its result lives in the `security_scan` section, not a `gates[]` row.
+CANONICAL_GATE_NAMES = {
+    "implement-feature": {
+        "4": "Design Critique",
+        "6": "Plan Drift",
+        "8a": "Per-task Review",
+        "9": "Implementation Drift",
+        "11": "Code Review",
+        "15": "Post-Deploy",
+    },
+    "fix-bug": {
+        "4": "Lightweight Reflect",
+        "9": "Code Review",
+    },
+}
+# #116: controlled vocabulary for `security_scan.skipped[]` — a scanner KIND, not a
+# free-text reason (the live dogfood fragmented `sca` and `sca: osv-scanner (no lockfiles)`
+# into two "kinds"). Enforced fail-closed only in strict (write-time) validation; the
+# lenient default keeps historical free-text records readable (forward-only, no eviction).
+SCANNER_KINDS = {"secrets", "sca", "sast", "iac"}
 # `set`/`skipped`/`deferred` are recorded by the orchestrator; `fired` is
 # MANUAL-ONLY (see the goal_guard validation block below) — no code path detects
 # it automatically. `deferred` (#191): Step 1b deferred the per-issue /goal to an
@@ -123,16 +151,29 @@ def _require_present(obj, section, keys, errs) -> None:
             errs.append(f"{section}.{k} is required (use null if not applicable)")
 
 
+def canonical_gate_name(workflow, step):
+    """Canonical gate name for a (workflow, step) pair (#116). Unknown workflow/step
+    -> None (the caller keeps its own name; the registry covers the standard WF2/WF3
+    gates). Keyed by workflow because WF2 and WF3 reuse step numbers for different gates."""
+    return CANONICAL_GATE_NAMES.get(workflow, {}).get(str(step))
+
+
 # --- validate_record (pure) ------------------------------------------------
 
-def validate_record(record) -> list:
+def validate_record(record, *, strict=False) -> list:
     """Return a list of human-readable validation errors ([] == valid).
 
     Hand-rolled (matching capabilities_lib's style) so the hook carries no
     runtime jsonschema dependency. Enforces required fields, types (rejecting
     bool-as-int), enum membership, and cross-field integrity (resolved<=findings,
     passing<=total, used<=budget, non-negative counts) — the integrity the
-    downstream Tier-2 aggregation will rely on."""
+    downstream Tier-2 aggregation will rely on.
+
+    `strict` (#116): additional WRITE-TIME controls that would evict historical
+    free-text records if applied on read. Currently: `security_scan.skipped[]` must
+    be a scanner KIND from `SCANNER_KINDS`. The lenient default is what `load_store`
+    uses, so pre-#116 records stay readable (forward-only, no data loss); the summarize
+    CLI validates with `strict=True` so every NEW record is clean."""
     if not isinstance(record, dict):
         return ["record must be a JSON object"]
 
@@ -240,6 +281,13 @@ def validate_record(record) -> list:
             skipped = sec.get("skipped")
             if not isinstance(skipped, list) or not all(_is_str(s) for s in skipped):
                 errs.append("security_scan.skipped must be a list of strings")
+            elif strict:
+                bad = [s for s in skipped if s not in SCANNER_KINDS]
+                if bad:
+                    errs.append(
+                        f"security_scan.skipped entries must be scanner kinds "
+                        f"{sorted(SCANNER_KINDS)} (got {bad}) — record the KIND, not a "
+                        f"free-text reason (#116)")
             # A scan that did NOT run cannot have resolved findings or skipped
             # scanners. render shows only "not run" for ran=false, so accepting
             # nonzero data here would hide it AND be self-contradictory telemetry.
@@ -927,7 +975,7 @@ def main(argv=None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
 
-        errors = validate_record(raw)
+        errors = validate_record(raw, strict=True)  # #116: new writes must use the controlled vocab
         if errors:
             # Best-effort render so the user keeps Step 16 output, but never
             # persist an invalid record. Exit 1 so the skill surfaces the gap.

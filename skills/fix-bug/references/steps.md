@@ -630,7 +630,10 @@ read once.
    lines WF3 has always shown. WF3's loop-back budget is **2**. Each gate's
    `step` must be distinct; conditional memorization happens *within* Step 9
    (Code Review), so record any memorized insights in `follow_ups` rather than as
-   a second step-9 gate.
+   a second step-9 gate. **Canonical names (#116):** use the exact `gates[].name`
+   from `work_summary.CANONICAL_GATE_NAMES` (`canonical_gate_name("fix-bug", step)`) —
+   WF3: `4`→"Lightweight Reflect", `9`→"Code Review" — so the Tier-2 `gates[].name`
+   column stays canonical across sessions.
 
 4. **Render + persist** (carry `activeProject.path` in as a literal — shell vars
    do not persist across Bash tool calls):

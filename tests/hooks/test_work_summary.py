@@ -1563,3 +1563,105 @@ class TestCommittedStorePristine:
         records, excluded = load_store(str(p))
         assert len(records) == 1
         assert excluded != []
+
+
+# --- #116: canonical gate-name registry + scanner-kind controlled vocab ---
+
+class TestCanonicalGateRegistry:
+    def test_accessor_is_workflow_aware(self):
+        from work_summary import canonical_gate_name, CANONICAL_GATE_NAMES
+        # WF2 and WF3 reuse step numbers for different gates — the registry disambiguates
+        assert canonical_gate_name("implement-feature", "4") == "Design Critique"
+        assert canonical_gate_name("implement-feature", "11") == "Code Review"
+        assert canonical_gate_name("implement-feature", "9") == "Implementation Drift"
+        assert canonical_gate_name("fix-bug", "4") == "Lightweight Reflect"
+        assert canonical_gate_name("fix-bug", "9") == "Code Review"
+        # accepts int-ish step, normalizes to str key
+        assert canonical_gate_name("implement-feature", 4) == "Design Critique"
+        # unknown workflow/step -> None (caller keeps its own name)
+        assert canonical_gate_name("implement-feature", "99") is None
+        assert canonical_gate_name("nope", "4") is None
+        assert set(CANONICAL_GATE_NAMES) == {"implement-feature", "fix-bug"}
+
+    @staticmethod
+    def _doc_binds_step_to_name(doc, step, name):
+        # Anchor to the step->name PAIRING (a JSON row `"step": "<s>" ... "name": "<n>"`),
+        # not the bare name — a common phrase like "Code Review" appears in prose, so a bare
+        # membership check is near-vacuous (review F1). Fails if the mapping row is removed.
+        import re
+        return re.search(
+            rf'"step":\s*"{re.escape(step)}"[^\n]*"name":\s*"{re.escape(name)}"', doc
+        ) is not None
+
+    def test_wf2_registry_matches_schema_doc(self):
+        # drift guard (AC4): WF2's run-record schema doc binds each step to its canonical name
+        from work_summary import CANONICAL_GATE_NAMES
+        doc = (SKILLS_DIR / "implement-feature" / "references" / "run-record.md").read_text()
+        for step, name in CANONICAL_GATE_NAMES["implement-feature"].items():
+            assert self._doc_binds_step_to_name(doc, step, name), \
+                f"WF2 run-record.md does not bind step {step} -> {name!r}"
+
+    def test_wf3_registry_matches_assembly_doc(self):
+        # drift guard (AC4): WF3's Step-14 run-record assembly binds each step to its name
+        from work_summary import CANONICAL_GATE_NAMES
+        doc = (SKILLS_DIR / "fix-bug" / "references" / "steps.md").read_text()
+        for step, name in CANONICAL_GATE_NAMES["fix-bug"].items():
+            assert self._doc_binds_step_to_name(doc, step, name), \
+                f"WF3 fix-bug steps.md does not bind step {step} -> {name!r}"
+
+
+class TestScannerKindVocab:
+    def test_kinds_content(self):
+        from work_summary import SCANNER_KINDS
+        assert SCANNER_KINDS == {"secrets", "sca", "sast", "iac"}
+
+    def test_lenient_default_accepts_free_text_skip_historical(self):
+        # forward-only: a pre-#116 record with a free-text skip must still LOAD (not evicted)
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["security_scan"]["skipped"] = ["sca: osv-scanner (no lockfiles)"]
+        assert validate_record(rec) == []
+
+    def test_strict_rejects_non_kind_skip(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["security_scan"]["skipped"] = ["sca: osv-scanner (no lockfiles)"]
+        errs = validate_record(rec, strict=True)
+        assert any("scanner kinds" in e for e in errs), errs
+
+    def test_strict_accepts_valid_kinds(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["security_scan"]["skipped"] = ["iac", "sca"]
+        assert validate_record(rec, strict=True) == []
+
+
+class TestWritePathIsStrict:
+    def test_cli_write_rejects_non_kind_skip(self, tmp_path):
+        import subprocess
+        rec = _valid_record()
+        rec["security_scan"]["skipped"] = ["sca: no lockfiles"]
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        store = tmp_path / "store.jsonl"
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(tmp_path), "--store", str(store)],
+            capture_output=True, text=True)
+        assert r.returncode == 1, r.stderr
+        assert "scanner kinds" in r.stderr
+        assert not store.exists() or store.read_text().strip() == ""  # not persisted
+
+    def test_cli_write_accepts_valid_kinds(self, tmp_path):
+        import subprocess
+        rec = _valid_record()
+        rec["security_scan"]["skipped"] = ["iac"]
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        store = tmp_path / "store.jsonl"
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(tmp_path), "--store", str(store)],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert store.exists() and store.read_text().strip()
