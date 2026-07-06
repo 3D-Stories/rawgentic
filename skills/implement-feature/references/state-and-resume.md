@@ -1,7 +1,7 @@
 # WF2 state files & resumption protocol
 
 Read this before any WF2 resume, and before reading or writing a
-session-scoped state file or the committed review-state pointer. These are the
+session-scoped state file or the local (git-excluded) review-state pointer. These are the
 cross-cutting state/resume contracts the spine's steps depend on.
 
 <state-files>
@@ -24,14 +24,18 @@ P15 (tiered review) introduces session-scoped state files under
   `review_design`, `review`) plus `total`. Persisted across sessions via
   `plan_lib.consume_loopback`.
 
-In addition, a small COMMITTED status pointer lives at
+In addition, a small **local, git-excluded** status pointer lives at
 `.rawgentic/review-state/<branch-sanitized>.json` (single object: `{schema_version,
 branch, last_review_log_status, ts}`). Per-branch path so concurrent PRs do
-not conflict. Read via `plan_lib.read_review_state(repo_root, branch)` which
+not conflict. `plan_lib.write_review_state` auto-appends `.rawgentic/` to the repo's
+`.git/info/exclude` so the pointer is **never committed into a feature PR** (#231 AC2) —
+do NOT stage it. Read via `plan_lib.read_review_state(repo_root, branch)` which
 also verifies `state.branch == current_branch` before trusting the file.
 Step 12 and Step 14 read this file and refuse to ship if the last status is
-not `"applied"`. The committed pointer survives across sessions and worktrees;
-the session-scoped files do not.
+not `"applied"`. The pointer is an on-disk file that survives across sessions in the
+same checkout (it is no longer git-committed, so it does not travel via git history
+across a fresh clone/worktree — a single WF2 run is one checkout, so this is moot);
+the session-scoped files likewise do not.
 
 The session-scoped directory is cleaned up on Step 14 merge success.
 </state-files>

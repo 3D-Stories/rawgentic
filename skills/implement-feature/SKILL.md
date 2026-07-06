@@ -224,7 +224,7 @@ read on demand by this contract:
   `<trivial-work-check>`, and `<learning-config>` blocks.
 - `references/state-and-resume.md` — the `<state-files>` and
   `<resumption-protocol>` contracts. Read before ANY resume, or before reading
-  or writing a session-scoped state file or the committed review-state pointer.
+  or writing a session-scoped state file or the local (git-excluded) review-state pointer.
 - `references/run-record.md` — the run-record schema. Read before the Step 16
   run-record assembly.
 - `references/headless.md` — the headless interaction protocols. Read IN FULL
@@ -249,7 +249,7 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
 - **Step 7 — Create feature branch.** Branch from a freshly-fetched `origin/<default>` and assert the base; never pull into the current checkout. (read references/steps.md §7 before executing)
 - **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; optional per-task or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
-- **Step 8a — Per-task review (conditional).** Fires for any `riskLevel: high` task: 2 reviewers over that commit's diff, deferrals persisted, review log + committed status pointer updated. (read references/steps.md §8a before executing)
+- **Step 8a — Per-task review (conditional).** Fires for any `riskLevel: high` task: 2 reviewers over that commit's diff, deferrals persisted, review log + review-state pointer (local, git-excluded) updated. (read references/steps.md §8a before executing)
 - **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage assertion; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
 - **Step 10 — Conditional memorization (background).** Runs in parallel with Step 11; never blocks. (read references/steps.md §10 before executing)
 - **Step 11 — Pre-PR code review.** 3-agent review (≥1 in the lane) + opt-in adversarial diff review; severity-banded confidence, deferred-resolution exit gate. NON-NEGOTIABLE. (read references/steps.md §11 before executing)

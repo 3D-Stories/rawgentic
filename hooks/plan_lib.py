@@ -137,7 +137,11 @@ _ANY_HEADING_RE = re.compile(r"^#{1,6}\s+")
 # A deferral MUST carry a non-empty parenthesized reason, else it is malformed.
 _VERIFICATION_RE = re.compile(r"^\s*[-*]\s*verification\s*:\s*(.+?)\s*$", re.IGNORECASE)
 _DEFERRAL_KEYWORD_RE = re.compile(r"^deferred-to-target\b", re.IGNORECASE)
-_DEFERRAL_VALUE_RE = re.compile(r"^deferred-to-target\s*\(([^)]*)\)\s*$", re.IGNORECASE)
+# Greedy `.*` (not `[^)]*`) so a reason containing inner parens — e.g.
+# `deferred-to-target (needs #[cfg(target_os="windows")] build)` — is captured to
+# the LAST `)`, not truncated at the first (#231 AC1). Empty `()` still yields ""
+# which the caller rejects as malformed.
+_DEFERRAL_VALUE_RE = re.compile(r"^deferred-to-target\s*\((.*)\)\s*$", re.IGNORECASE)
 
 
 def _split_files(raw: str) -> tuple[str, ...]:
@@ -1588,7 +1592,16 @@ def quarantine_protection_contradiction(
     return None
 
 
-# --- Committed per-branch review-state pointer (.rawgentic/review-state/) ---
+# --- Per-branch review-state pointer (.rawgentic/review-state/, git-excluded) ---
+#
+# The pointer lives at <repo_root>/.rawgentic/review-state/<branch>.json but is
+# LOCAL, git-excluded bookkeeping — it MUST NOT be committed into a feature PR
+# (#231 AC2). An app repo that doesn't track `.rawgentic/` would otherwise get
+# rawgentic bookkeeping in its PR. write_review_state auto-appends `.rawgentic/`
+# to the repo's `.git/info/exclude` (local, per-clone, shared across worktrees via
+# the common git dir — never committed), and the WF2 prose never stages it. A
+# single WF2 run reads/writes it in one checkout, so losing git cross-worktree
+# visibility (vs the old committed pointer) has no practical effect.
 
 _REVIEW_STATE_DIR = ".rawgentic/review-state"
 _VALID_STATUSES = ("applied", "suspended", "dispatch_failed")
@@ -1602,6 +1615,49 @@ def _sanitize_branch(branch: str) -> str:
     .rawgentic/review-state/README.md.
     """
     return re.sub(r"[/\\:?*<>|\"]", "-", branch)
+
+
+def _ensure_rawgentic_git_excluded(repo_root: str) -> bool:
+    """Append `.rawgentic/` to the repo's LOCAL git exclude (`.git/info/exclude`)
+    so the review-state pointer (and any other `.rawgentic/` bookkeeping) can never
+    be accidentally staged into an app repo's feature PR (#231 AC2).
+
+    Local-only (never committed, unlike a tracked `.gitignore`) and shared across
+    linked worktrees via the common git dir — exactly the manual `.git/info/exclude`
+    workaround, made automatic. Best-effort: returns True if the pattern is present
+    or was added, False on a no-op (not a git repo) or any failure — it must never
+    break a review-state write.
+    """
+    pattern = ".rawgentic/"
+    try:
+        cp = subprocess.run(
+            ["git", "-C", repo_root, "rev-parse", "--git-path", "info/exclude"],
+            capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if cp.returncode != 0:
+        return False
+    exclude_path = (cp.stdout or "").strip()
+    if not exclude_path:
+        return False
+    if not os.path.isabs(exclude_path):
+        exclude_path = os.path.join(repo_root, exclude_path)
+    try:
+        existing = ""
+        if os.path.exists(exclude_path):
+            with open(exclude_path, "r", encoding="utf-8", errors="replace") as fh:
+                existing = fh.read()
+        present = {ln.strip() for ln in existing.splitlines()}
+        if pattern in present or ".rawgentic" in present:
+            return True
+        os.makedirs(os.path.dirname(exclude_path), exist_ok=True)
+        with open(exclude_path, "a", encoding="utf-8") as fh:
+            if existing and not existing.endswith("\n"):
+                fh.write("\n")
+            fh.write(pattern + "\n")
+        return True
+    except OSError:
+        return False
 
 
 def review_state_path(repo_root: str, branch: str) -> str:
@@ -1647,6 +1703,10 @@ def write_review_state(
 ) -> str:
     """Write the per-branch review-state pointer atomically. Returns the path.
 
+    The pointer is LOCAL, git-excluded bookkeeping (#231 AC2) — this call
+    best-effort-appends `.rawgentic/` to the repo's `.git/info/exclude` so it can
+    never be staged into the feature PR. The WF2 prose never commits it.
+
     Raises ValueError on invalid status.
     """
     if last_review_log_status not in _VALID_STATUSES:
@@ -1654,6 +1714,7 @@ def write_review_state(
             f"invalid last_review_log_status {last_review_log_status!r}; "
             f"must be one of {_VALID_STATUSES}"
         )
+    _ensure_rawgentic_git_excluded(repo_root)  # keep the pointer out of the PR
     path = review_state_path(repo_root, branch)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     payload = {

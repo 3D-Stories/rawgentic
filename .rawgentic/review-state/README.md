@@ -1,11 +1,19 @@
 # P15 review-state pointers
 
-Per-branch committed status pointers for the WF2 tiered code review (P15).
-Each in-flight feature branch writes its own file here:
+Per-branch **local, git-excluded** status pointers for the WF2 tiered code review
+(P15). Each in-flight feature branch writes its own file here:
 
 ```
 .rawgentic/review-state/<branch-sanitized>.json
 ```
+
+> **Not committed (#231 AC2).** These `*.json` pointers are workspace-local
+> bookkeeping and MUST NOT land in a feature PR — an app repo that doesn't track
+> `.rawgentic/` would otherwise get rawgentic bookkeeping committed into its PR.
+> `plan_lib.write_review_state` appends `.rawgentic/` to the repo's
+> `.git/info/exclude` (local, per-clone, shared across worktrees via the common
+> git dir) on every write, and this repo's own `.gitignore` ignores
+> `.rawgentic/review-state/*.json`. Only this README is tracked.
 
 where `<branch-sanitized>` is the branch name with `/` and other path-unsafe
 characters replaced by `-`. For example:
@@ -35,5 +43,5 @@ a safety check against a misnamed file from another branch.
 
 ## Lifecycle
 
-Step 14 (merge) deletes the branch's pointer file as part of merge cleanup
+Step 14 (merge) deletes the branch's (local) pointer file as part of merge cleanup
 along with `claude_docs/.wf2-state/<issue>/`.

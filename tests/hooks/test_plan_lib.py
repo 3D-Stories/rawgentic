@@ -744,7 +744,7 @@ class TestConsumeLoopback:
 
 
 class TestReviewState:
-    """Per-branch committed review-state pointer (.rawgentic/review-state/)."""
+    """Per-branch review-state pointer (.rawgentic/review-state/, local git-excluded)."""
 
     def test_sanitize_branch_replaces_slash(self):
         mod = _reload_plan_lib()
@@ -764,6 +764,36 @@ class TestReviewState:
     def test_read_missing_returns_none(self, tmp_path):
         mod = _reload_plan_lib()
         assert mod.read_review_state(str(tmp_path), "feature/x") is None
+
+    def test_ensure_rawgentic_git_excluded_adds_pattern(self, tmp_path):
+        # #231 AC2: keep the review-state pointer out of an app PR by appending
+        # .rawgentic/ to the repo's LOCAL .git/info/exclude (never committed).
+        import subprocess as sp
+        mod = _reload_plan_lib()
+        sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+        assert mod._ensure_rawgentic_git_excluded(str(tmp_path)) is True
+        excl = (tmp_path / ".git" / "info" / "exclude").read_text()
+        assert ".rawgentic/" in excl
+        # idempotent — a second call does not duplicate the entry
+        assert mod._ensure_rawgentic_git_excluded(str(tmp_path)) is True
+        excl2 = (tmp_path / ".git" / "info" / "exclude").read_text()
+        assert excl2.count(".rawgentic/") == 1
+
+    def test_ensure_rawgentic_git_excluded_noop_outside_repo(self, tmp_path):
+        # No .git -> best-effort no-op (never raises), so write_review_state stays
+        # usable in the non-git test/fixtures path.
+        mod = _reload_plan_lib()
+        assert mod._ensure_rawgentic_git_excluded(str(tmp_path)) is False
+
+    def test_write_review_state_auto_excludes_rawgentic(self, tmp_path):
+        # Writing the pointer inside a real repo auto-excludes .rawgentic/ so it
+        # can never be accidentally staged into the feature PR.
+        import subprocess as sp
+        mod = _reload_plan_lib()
+        sp.run(["git", "init", "-q", str(tmp_path)], check=True)
+        mod.write_review_state(str(tmp_path), "feature/x", "applied")
+        excl = (tmp_path / ".git" / "info" / "exclude").read_text()
+        assert ".rawgentic/" in excl
 
     def test_read_wrong_branch_returns_none(self, tmp_path, capsys):
         """If the file's branch field doesn't match the requested branch,
@@ -1414,6 +1444,18 @@ class TestVerificationDeferral:
         tasks = mod.parse_tasks(plan)
         deferred = mod.deferred_tasks(tasks)
         assert [t.id for t in deferred] == ["2", "3"]
+
+    def test_deferral_reason_with_nested_parens(self):
+        # #231 AC1 (confirmed bug): a reason containing inner parens must not
+        # truncate at the first ) and raise "without a (reason)".
+        mod = _reload_plan_lib()
+        plan = """
+### Task 1: cfg-gated build
+- riskLevel: standard
+- verification: deferred-to-target (needs #[cfg(target_os="windows")] build)
+"""
+        tasks = mod.parse_tasks(plan)
+        assert tasks[0].deferral_reason == 'needs #[cfg(target_os="windows")] build'
 
     def test_deferral_survives_pre_p15_migration(self):
         """A plan with NO riskLevel anywhere still parses the deferral field on the

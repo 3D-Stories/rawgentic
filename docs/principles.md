@@ -864,8 +864,9 @@ while keeping the cross-cutting PR-wide review intact.
 - **WF2 Step 11:** receives the reviewed-SHA list and the verbatim
   list of deferred-High findings. `plan_lib.assert_no_unresolved_high_deferrals`
   guards the exit gate.
-- **WF2 Step 12/14:** read `.rawgentic/review-state.json` (committed) and
-  refuse PR creation / merge if `last_review_log_status != "applied"`.
+- **WF2 Step 12/14:** read `.rawgentic/review-state/<branch>.json` (local,
+  git-excluded — never committed into the PR, #231 AC2) and refuse PR creation /
+  merge if `last_review_log_status != "applied"`.
 
 ### Calibration
 

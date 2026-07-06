@@ -901,7 +901,7 @@ Workflow state lives under `claude_docs/.wf2-state/<issue-number>/`:
 - `deferrals.json` — finding-level deferrals re-presented at Step 11.
 - `loopback_counters.json` — per-source loop-back state.
 
-These are cleaned up on Step 14 merge success. A small COMMITTED status pointer at `.rawgentic/review-state.json` survives across worktrees so Step 12/14 can refuse to ship if `last_review_log_status != "applied"`.
+These are cleaned up on Step 14 merge success. A small **local, git-excluded** status pointer at `.rawgentic/review-state/<branch>.json` (never committed into the PR — #231 AC2; `write_review_state` auto-adds `.rawgentic/` to `.git/info/exclude`) lets Step 12/14 refuse to ship if `last_review_log_status != "applied"`.
 
 ### Test boundary
 
