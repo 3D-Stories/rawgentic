@@ -94,7 +94,7 @@ ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
    On a clarification re-ask, also pass `--clarification-round N` to
    `write-suspend` (defaults to `0`); `--session-id` defaults to `N/A`.
 
-2. Write a rich checkpoint to session notes (see <headless-checkpoint>).
+2. APPEND a rich checkpoint to session notes (see <headless-checkpoint>).
 
 3. **EXIT the workflow cleanly.** Do NOT continue to the next step. The orchestrator
    will re-invoke the skill in a fresh session after the user replies.
@@ -112,7 +112,7 @@ ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
      --color "D93F0B" --description "WF2/WF3 terminal error — needs human" 2>/dev/null || true
    gh issue edit ISSUE --repo ${capabilities.repo} --add-label "rawgentic:ai-error"
    ```
-4. Write session notes with the error state.
+4. APPEND the error state to session notes.
 5. EXIT the workflow.
 
 **Label management:**

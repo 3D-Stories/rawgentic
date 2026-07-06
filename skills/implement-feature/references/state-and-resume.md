@@ -79,7 +79,7 @@ echo "Resuming at: $STEP"
 
 Pass the marker booleans (and `--headless`) on every call (don't leave the completion-gate or headless rules to prose) — `detect-step` prints either a step number (1, 2, 5, 8, 9, 11, 13, 14, 15, 16) or `completion-gate` (all markers present but the gate was never printed — run the completion gate, then terminate). Resume at the printed step. An unrecognized `--*-state` or non-`true`/`false` flag value exits non-zero rather than defaulting to Step 1, so a mistyped fact fails loudly instead of restarting in-flight work.
 
-Before context compacts, document in session notes:
+Before context compacts, APPEND to session notes:
 - Current step number and sub-step
 - Quality gate findings not yet applied
 - Feature branch name and last commit SHA

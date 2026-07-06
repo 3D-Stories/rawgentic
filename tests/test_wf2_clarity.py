@@ -600,3 +600,44 @@ class TestParallelismProbe:
         body = s8.group(0)
         assert "capabilities.parallelism" in body
         assert "serial-only" in body
+
+
+# --- #50: append-only, cumulative session notes across all steps ---
+
+class TestAppendOnlySessionNotes:
+    def test_step_tracking_states_append_only_invariant(self):
+        block = _block(_text(), "step-tracking")
+        low = block.lower()
+        # AC1: the canonical rule that ALL session-notes writes are appends.
+        assert "append-only" in low
+        assert "APPEND" in block  # explicit uppercase verb (not "update"/"log")
+        # the blanket rule so every downstream "log/record/write" site inherits append semantics
+        assert "never an overwrite" in low or "never overwrite" in low
+
+    def test_append_verb_used_across_mutation_sites_non_vacuous(self):
+        # non-vacuity: APPEND must actually appear at the mutation instructions, not just once
+        text = _text()
+        assert text.count("APPEND") >= 6, f"expected APPEND at multiple sites, got {text.count('APPEND')}"
+
+    def test_cumulative_subheaders_beneath_done_marker(self):
+        # AC2: sub-headers are ADDITIVE beneath the load-bearing `— DONE` marker, never replace it
+        block = _block(_text(), "step-tracking")
+        low = block.lower()
+        assert "####" in block  # cumulative sub-header shape named
+        assert "load-bearing" in low
+        assert "beneath" in low and "never replacing" in low
+
+    def test_lightweight_progress_checkpoint_defined_and_distinct(self):
+        # AC4: a lightweight per-batch progress checkpoint, separate from <headless-checkpoint>
+        text = _text()
+        assert "#### Progress — Tasks N-M complete" in text
+        # it must be framed as distinct/lighter than the heavy headless checkpoint
+        m = re.search(r"lightweight progress checkpoint.*?headless-checkpoint", text, re.DOTALL)
+        assert m, "progress checkpoint not framed as distinct from <headless-checkpoint>"
+
+    def test_ambiguous_overwrite_verbs_removed_at_key_sites(self):
+        # AC1/AC5: the specific content-mutation sites now say APPEND, not update/document
+        text = _text()
+        assert "Update session notes with WF2 results" not in text
+        assert "Document verification evidence in session notes" not in text
+        assert "Before context compacts, document in session notes" not in text

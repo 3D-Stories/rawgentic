@@ -237,9 +237,16 @@ When triggered: STOP the workflow at the current step. Present ALL problematic f
 </ambiguity-circuit-breaker>
 
 <step-tracking>
-At the end of each step, log a marker in `claude_docs/session_notes.md`:
+Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
+trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's
+entry must still be present at the end of the run (#50). Wherever any step below says to
+"log", "record", "write", "update", or "document" session notes, it means **APPEND**.
+
+At the end of each step, APPEND a marker to `claude_docs/session_notes.md`:
 `### WF2 Step X: <Name> — DONE (<key detail>)`
-This enables workflow resumption if context is lost.
+Within a step, APPEND cumulative `####` sub-headers (progress, evidence, decisions)
+**beneath** — never replacing — that step's `— DONE` marker; the `— DONE` marker is
+load-bearing for the resumption protocol. This enables workflow resumption if context is lost.
 </step-tracking>
 
 <references>
