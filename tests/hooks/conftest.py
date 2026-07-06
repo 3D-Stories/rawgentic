@@ -66,6 +66,9 @@ def make_workspace(tmp_path: Path):
         Mapping of project name -> .rawgentic.json content.
         Written to each project's directory as .rawgentic.json.
         Example: {"testproj": {"protectionLevel": "standard"}}
+    workspace_fields : dict
+        Arbitrary top-level keys merged into .rawgentic_workspace.json (#49).
+        Example: {"crossProjectAllowedPaths": ["docs/**", "CLAUDE.md"]}
 
     Returns
     -------
@@ -82,6 +85,7 @@ def make_workspace(tmp_path: Path):
         create_project_dirs: bool = True,
         project_configs: dict[str, dict[str, Any]] | None = None,
         claude_docs_path: Path | str | None = None,
+        workspace_fields: dict[str, Any] | None = None,
     ) -> Workspace:
         root = tmp_path
 
@@ -106,6 +110,9 @@ def make_workspace(tmp_path: Path):
         }
         if claude_docs_path is not None:
             ws_data["claudeDocsPath"] = str(claude_docs_path)
+        if workspace_fields:
+            # Arbitrary workspace-level keys (e.g. crossProjectAllowedPaths, #49)
+            ws_data.update(workspace_fields)
         workspace_json.write_text(json.dumps(ws_data, indent=2))
 
         # -- claude_docs directory tree --

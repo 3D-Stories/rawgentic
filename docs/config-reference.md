@@ -277,6 +277,13 @@ to any project repo — and are set by `/rawgentic:setup`.
 | `headlessEnabled` | `object` \| `bool` | Opt-in to headless (non-interactive) execution. Default `false`. Bool `true` allows any trigger; object shape `{ "enabled": bool, "triggers": ["issue-label"], "auth": "subscription-oauth" \| "api-key" }` adds a per-trigger allowlist matched against `RAWGENTIC_HEADLESS_TRIGGER` (fail-closed on non-member/unset/malformed; absent `triggers` = any) plus the recorded Action auth mode (#165). See [Per-Project Access Control](#per-project-access-control). |
 | `headlessAllowSSH` | `bool` | Escape hatch for the headless SSH guard. Default `false` (SSH blocked in headless). Fail-closed. See [Per-Project Access Control](#per-project-access-control). |
 
+### Top-Level Fields (siblings of `projects[]`)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `defaultProtectionLevel` | `string` | Workspace-wide protection default for unconfigured projects (`sandbox`/`standard`/`strict`). See [Resolution Order](#resolution-order). |
+| `crossProjectAllowedPaths` | `string[]` | **Opt-in (#49).** Glob patterns that relax the `wal-bind-guard` **Gate 2** (bound-session cross-project guard) for SPECIFIC paths in *other active projects* — e.g. `["docs/**", "CLAUDE.md"]` lets a bound session Read/Write those paths in a sibling project (the headless-retrospective case: writing findings to several projects' `docs/`). **Missing or empty → deny-all preserved** (current behavior). The pattern is matched (bash glob) against the file's path **relative to the target project root**; a `docs/**` pattern never matches `docs-extra/…` (anchored). **Realpath-hardened:** the file is canonicalized and must still resolve *under* the target project's directory, so a symlink or `../` cannot escape it. Allowed ops log a stderr warning. Gate 1 (unbound sessions) is unaffected. |
+
 ### `critiqueMethod`
 
 **Deprecated / ignored (#205).** The external reflexion plugin dependency was
