@@ -724,22 +724,33 @@ function buildDetailSheet(r){
 let modalEl = null;
 function closeModal(){
   if(modalEl){ const m = modalEl; modalEl = null; if(m.open) m.close(); m.remove(); }
+  document.body.classList.remove('modal-open');   // release the background scroll-lock
+}
+function buildCloseBtn(r){
+  return h('button',{class:'modal-close', type:'button', 'aria-label':'Close (Esc)',
+    onclick:function(){ location.hash = href(r.wf, r.ver, null); }}, '×');
 }
 function openModal(r){
-  const closeBtn = h('button',{class:'modal-close', type:'button', 'aria-label':'Close (Esc)',
-    onclick:function(){ location.hash = href(r.wf, r.ver, null); }}, '×');
   const detail = buildDetailSheet(r);
   if(modalEl && modalEl.open){
-    modalEl.replaceChildren(closeBtn, detail);   // prev/next within an open modal — swap content, keep focus-trap
+    modalEl.replaceChildren(buildCloseBtn(r), detail);  // prev/next — swap content, keep focus-trap
+    modalEl.querySelector('.modal-close').focus();      // replaceChildren dropped focus; put it back in-modal
     return;
   }
   const dlg = h('dialog',{class:'modal', role:'dialog', 'aria-modal':'true', 'aria-label':'Station detail'},
-    closeBtn, detail);
+    buildCloseBtn(r), detail);
   /* Esc: <dialog> fires 'cancel'; drive it through the hash so URL + modal stay in sync. */
   dlg.addEventListener('cancel', function(ev){ ev.preventDefault(); location.hash = href(r.wf, r.ver, null); });
-  /* Backdrop click: a click whose target IS the dialog element is the ::backdrop region. */
-  dlg.addEventListener('click', function(ev){ if(ev.target===dlg) location.hash = href(r.wf, r.ver, null); });
+  /* Backdrop close: only when the press STARTED on the dialog element (the ::backdrop
+     region) — guards against a click that lands on the backdrop after a scrollbar drag
+     or a text-selection drag-out from the content, which would wrongly close it. */
+  let downOnBackdrop = false;
+  dlg.addEventListener('mousedown', function(ev){ downOnBackdrop = (ev.target===dlg); });
+  dlg.addEventListener('click', function(ev){
+    if(ev.target===dlg && downOnBackdrop) location.hash = href(r.wf, r.ver, null);
+  });
   document.body.append(dlg);
+  document.body.classList.add('modal-open');   // lock background scroll — keep place in the spine (AC1)
   modalEl = dlg;
   dlg.showModal();   // traps focus + restores it to the triggering card on close
 }
