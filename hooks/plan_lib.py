@@ -1179,14 +1179,38 @@ def resolve_deferral(
 
 # --- loop-back budget persistence ---
 
-_LOOPBACK_SOURCES: Final[tuple[str, ...]] = ("design", "tdd", "review", "review_design")
+_LOOPBACK_SOURCES: Final[tuple[str, ...]] = (
+    "design", "tdd", "review", "review_design", "spec_tighten",
+)
 _LOOPBACK_SOURCE_MAX = {
     "design": 2,
     "tdd": 1,
     "review": 1,
     "review_design": 1,
+    # #223: cheap in-gate spec-tightening pass (amend + 1 verifier, no
+    # Step-3 return). Shares the global budget: spec passes can starve a
+    # later design loop-back — accepted; worst case is today's escalate.
+    "spec_tighten": 2,
 }
 GLOBAL_LOOPBACK_BUDGET: Final[int] = 3
+
+_SPEC_TIGHTENING_TAG: Final[str] = "spec-tightening"
+
+
+def classify_loopback_source(flaw_classes: list[str]) -> str:
+    """Fold per-finding Loopback-class tags into the loop-back source (#223).
+
+    Contract: the caller passes EXACTLY ONE entry per Critical/High finding;
+    a finding lacking the field contributes the literal "untagged". Returns
+    "spec_tighten" only when the list is non-empty and every entry normalizes
+    (case/whitespace) to "spec-tightening"; anything else — any "design-flaw",
+    unknown, "untagged", or an empty list — folds to "design" (fail-closed).
+    """
+    if not flaw_classes:
+        return "design"
+    if all(c.strip().lower() == _SPEC_TIGHTENING_TAG for c in flaw_classes):
+        return "spec_tighten"
+    return "design"
 
 
 def _read_loopback_state(path: str) -> dict:

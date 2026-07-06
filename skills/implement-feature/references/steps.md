@@ -507,16 +507,26 @@ The self-review produces findings in the shape the gate consumes:
    ```
    Finding #N:
    - Severity: Critical | High | Medium | Low
-   - Category: architecture | completeness | security | testability | scope_fidelity | migration_safety | performance
+   - Category: architecture | completeness | security | platform_feasibility | testability | scope_fidelity | migration_safety | performance
    - Description: [what the issue is]
    - Recommendation: [specific action]
    - Ambiguity flag: clear | ambiguous
    - Ambiguity reason: [why, if ambiguous]
+   - Loopback-class: spec-tightening | design-flaw   (Critical/High only — lower severities never loop back)
    ```
+
+   **Loopback-class guidance (#223):** `spec-tightening` = the design's INTENT is right
+   but its text is wrong — a wording fix, a stale file:line anchor, an internal
+   contradiction the author's own edits introduced, a missing sentence the reviewer can
+   state verbatim in the Recommendation. `design-flaw` = the intent or structure is
+   wrong — wrong approach, missing component, security hole, infeasible dependency.
+   When unsure → `design-flaw`.
 
 4. **Volume threshold check** (per-tier independent): thresholds per `VOLUME_THRESHOLDS`.
 
 5. **If loop-back triggered:**
+   - The volume loop-back (≥ threshold findings = the design-is-a-mess signal) **NEVER folds**
+     to the spec-tightening path — it stays unconditionally on the full `design` source (#223).
    - Check `design_loopback_count` and `global_loopback_total`
    - If within budget: increment counters, apply findings as constraints, return to Step 3
    - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with findings summary, add rawgentic:ai-error label, exit.]**
@@ -534,7 +544,35 @@ The self-review produces findings in the shape the gate consumes:
      The command exits `0` when the review is enabled for this skill and `1` (or any non-zero) otherwise. If it exits non-zero, or `fast_path_eligible == true`, **skip silently** — behavior is byte-for-byte unchanged.
    When both gates pass, dispatch `/rawgentic:adversarial-review <design-doc-path>` **in parallel with the self-review** (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate at the **join barrier** described next:
    - **Join barrier (single breaker):** once both the self-review and the review have returned, merge adversarial findings with the self-review findings into ONE list, tagging each with `source: self-review | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, self-review-only breaker.
-   - If the merged list contains one or more Critical/High design flaws, consume **exactly one** `design` loop-back via `plan_lib.consume_loopback(<counters>, "design")` (the existing counter, NOT a new source) regardless of how many such findings there are, and return to Step 3 once with the unified constraint set. Do not consume per-finding and do not double-count against the self-review loop-back.
+   - If the merged list contains one or more Critical/High findings, fold their
+     `Loopback-class` tags via `plan_lib.classify_loopback_source(<classes>)` (#223) and
+     consume **exactly one** loop-back from the source it returns, regardless of how many
+     such findings there are. **Every Critical/High finding contributes exactly one
+     Loopback-class entry to the fold; a finding without the field contributes 'untagged',
+     which folds to the full design path.** Adversarial-review findings carry no
+     Loopback-class (that skill's finding shape doesn't know the field) → they enter as
+     `untagged`, so any adversarial Critical/High forces the full path — the cheap path
+     serves self-review-sourced findings by construction.
+     - Fold = `design` → consume `plan_lib.consume_loopback(<counters>, "design")` and
+       return to Step 3 once with the unified constraint set (the pre-#223 behavior,
+       unchanged). Do not consume per-finding and do not double-count against the
+       self-review loop-back.
+     - Fold = `spec_tighten` → the **spec-tightening cheap path** (#223): consume
+       `plan_lib.consume_loopback(<counters>, "spec_tighten")` and do NOT return to
+       Step 3. Apply each finding's Recommendation directly to the affected design-doc
+       sections, then dispatch ONE incremental verifier: a `rawgentic:rawgentic-reviewer`
+       (review-role model per `<model-routing-resolve>`) reviewing ONLY the changed
+       sections (quote before/after). A spec-tightening loop-back dispatches exactly one verifier over only the changed design sections and never returns to Step 3. Verifier verdict:
+       - clean (no new Critical/High) → gate PASSES; continue to Step 5.
+       - ANY new Critical/High finding (either class), or any `ambiguous`/conflicting
+         verifier finding → **escalate**: consume a `design` loop-back and return to
+         Step 3. No chained cheap passes within one gate, and never silent-PASS an
+         ambiguous verifier result. Escalation is two distinct consumes for two distinct
+         passes (the amend+verify pass happened, then a full loop-back happens) — not a
+         double-count of one event.
+       - `spec_tighten` exhausted (per-source cap or global) → fall back to consuming
+         `design` (full path) if it has budget; else the existing budget-exhausted
+         STOP/ERROR protocol.
    - **Codex failure is non-blocking (the review is additive — the self-review gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the self-review result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the self-review-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
    - **Concurrency tradeoff (accepted):** because the review now overlaps the self-review instead of waiting for it, a design that the self-review sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
    - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
@@ -553,6 +591,11 @@ the single breaker runs over. It runs in exactly one row, never twice:
 
 The only path on which the breaker does not run is the volume-loop-back row, and that is
 because it returns to Step 3 *before* the breaker point — not because the breaker was skipped.
+
+**#223 fold note:** the Loopback-class fold runs **post-breaker only** — at the item-7
+consumption point (and its self-review-only analog), after the single breaker has
+completed. The volume row above never folds (item 5), so this table and the
+breaker-exactly-once invariant are unchanged by the tiered loop-back.
 
 **Lane note:** on the fast path the adversarial review sub-step (item 7) and the Step 3 peer
 consult do NOT run — the self-review alone is the gate. The dimensions above are unchanged;

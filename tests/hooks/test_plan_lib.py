@@ -743,6 +743,95 @@ class TestConsumeLoopback:
         assert final["design"] == 2  # cap reached, no over-spend
 
 
+class TestClassifyLoopbackSource:
+    """#223: fold per-finding Loopback-class tags into the loop-back source.
+
+    Fail-closed: ONLY a non-empty all-spec-tightening list folds to the cheap
+    spec_tighten source; any design-flaw, unknown, untagged, or empty input
+    folds to the full design path.
+    """
+
+    def test_all_spec_tightening_folds_cheap(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_loopback_source(
+            ["spec-tightening", "spec-tightening"]) == "spec_tighten"
+
+    def test_any_design_flaw_folds_full(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_loopback_source(
+            ["spec-tightening", "design-flaw"]) == "design"
+
+    def test_empty_list_folds_full(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_loopback_source([]) == "design"
+
+    def test_untagged_among_spec_folds_full(self):
+        # One-entry-per-finding contract: a finding without the field
+        # contributes "untagged" — it must drag the fold to the full path.
+        mod = _reload_plan_lib()
+        assert mod.classify_loopback_source(
+            ["spec-tightening", "untagged"]) == "design"
+
+    def test_unknown_value_folds_full(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_loopback_source(["speling-fix"]) == "design"
+        assert mod.classify_loopback_source([""]) == "design"
+
+    def test_case_and_whitespace_tolerant(self):
+        mod = _reload_plan_lib()
+        assert mod.classify_loopback_source(
+            ["  Spec-Tightening ", "SPEC-TIGHTENING"]) == "spec_tighten"
+
+
+class TestSpecTightenLoopbackSource:
+    """#223: spec_tighten is a fifth budgeted loop-back source (cap 2)."""
+
+    def test_consume_spec_tighten(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        ok, state = mod.consume_loopback(str(path), "spec_tighten")
+        assert ok is True
+        assert state["spec_tighten"] == 1
+        assert state["total"] == 1
+
+    def test_spec_tighten_cap_2(self, tmp_path):
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        mod.consume_loopback(str(path), "spec_tighten")
+        mod.consume_loopback(str(path), "spec_tighten")
+        ok, _ = mod.consume_loopback(str(path), "spec_tighten")
+        assert ok is False
+
+    def test_spec_tighten_counts_toward_global_cap(self, tmp_path):
+        # D1 (option A): spec passes share the global budget of 3. Two spec
+        # passes + one design loop-back exhaust it; a further design consume
+        # is refused by the GLOBAL cap even though design's own cap (2) has
+        # room. Starvation is the accepted, pinned trade-off.
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        mod.consume_loopback(str(path), "spec_tighten")
+        mod.consume_loopback(str(path), "spec_tighten")
+        ok3, _ = mod.consume_loopback(str(path), "design")
+        assert ok3 is True
+        ok4, state = mod.consume_loopback(str(path), "design")
+        assert ok4 is False
+        assert state["total"] == 3
+
+    def test_old_counters_file_backfills_spec_tighten(self, tmp_path):
+        # Resume: a pre-#223 counters file has no spec_tighten key — it must
+        # backfill to 0 and total must recompute over all five sources.
+        mod = _reload_plan_lib()
+        path = tmp_path / "counters.json"
+        path.write_text(json.dumps(
+            {"design": 1, "tdd": 0, "review": 0, "review_design": 0, "total": 1}))
+        state = mod._read_loopback_state(str(path))
+        assert state["spec_tighten"] == 0
+        assert state["total"] == 1
+        ok, state = mod.consume_loopback(str(path), "spec_tighten")
+        assert ok is True
+        assert state["total"] == 2
+
+
 class TestReviewState:
     """Per-branch review-state pointer (.rawgentic/review-state/, local git-excluded)."""
 
