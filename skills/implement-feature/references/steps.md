@@ -225,7 +225,7 @@ If this workflow discovers new project capabilities during execution (e.g., a ne
    /goal command above (or say "skip goal" to decline — declining is fine and never blocks).
    ```
 
-7. Update session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt). **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
+7. APPEND to session notes. Wait for user confirmation (and, in the same round-trip, whether they ran `/goal` or declined — see Step 1b; no second prompt). **[Headless: AUTO-RESOLVE for WF1-created issues (accept and proceed). QUESTION for manual issues — post summary comment for confirmation, suspend.]**
 
 8. **CI-quarantine staleness nag (#137):** if `capabilities.ci_quarantined == true` and `capabilities.ci_quarantined_since` is set, compute `(current local date from the workflow env) − (the YYYY-MM-DD date) > 30 calendar days`; if so, log a "fix or retire CI" advisory in session notes (quarantine is meant to be temporary; this keeps it from silently becoming permanent). Advisory only — never blocks. `ci_quarantined_since` is guaranteed a valid ISO date by `capabilities_lib` (a malformed value already fails the derive), so no parse-guard is needed here. If `ci_quarantined_since` is unset, note that a date should be added so staleness can be tracked.
 
@@ -940,7 +940,21 @@ original failure lived — a mid-UAT fix that never went back through Step 3/4.
 - If allowed: loop back to Step 3 with the flaw identified
 - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with design flaw description + loop-back history, add rawgentic:ai-error label, exit.]**
 
-**Session checkpoint:** Update session notes with progress, verification results, deviations from plan. **[Headless: write a headless checkpoint (format in `references/headless.md`) after every 2-3 tasks to enable fresh-session resumption.]**
+**Session checkpoint (APPEND, every 2-3 tasks).** After each batch of 2-3 tasks, APPEND a
+**lightweight progress checkpoint** to session notes — this is separate from and lighter
+than the heavy `<headless-checkpoint>` (`references/headless.md`, for suspend/error exits):
+
+```
+#### Progress — Tasks N-M complete
+- Files: [list]
+- Commits: [count]
+- Key decisions: [if any]
+```
+
+APPEND it under the Step 8 section as you go (the Step 8 `— DONE` marker is APPENDed last);
+never overwrite an earlier entry, so the audit trail stays cumulative. **[Headless: ALSO
+write the heavy `<headless-checkpoint>` (format in `references/headless.md`) after every
+2-3 tasks to enable fresh-session resumption.]**
 
 ---
 
@@ -1037,7 +1051,7 @@ If `capabilities.has_tests`:
 If NOT `capabilities.has_tests`:
 - Re-run all verification commands from the plan
 - Confirm all produce expected results
-- Document verification evidence in session notes
+- APPEND verification evidence to session notes
 
 **Deferred-to-target tasks (#138):** for every task in `plan_lib.deferred_tasks(tasks)`, list it explicitly with (a) its deferral reason and (b) the **local proxy that WAS run** (compile/typecheck/extractable-unit-tests). A deferred task **never counts as verified** and **never fails the gate by itself** — but a deferred task with NO local-proxy evidence recorded is NOT satisfied (the proxy is still required; deferral is not a pass). It is impossible to silently convert deferred → passed: the deferred surface is tracked separately in the Step 16 run-record `verification_deferred` list, and `<completion-gate>` reconciles the plan's deferred tasks against that list via `plan_lib.assert_deferrals_recorded`.
 
@@ -1502,7 +1516,7 @@ the store is the Tier-2 measurement telemetry substrate (per
 `docs/measurements/`), so every gate's findings-caught-vs-resolved becomes a
 measurable signal — not just a sentence the user reads once.
 
-1. Update session notes with WF2 results.
+1. APPEND WF2 results to session notes.
 
 1b. **Headless mode:** if `additionalContext` has "HEADLESS MODE active", Steps 14
    and 15 were skipped — the PR is the terminal deliverable. Record this for
