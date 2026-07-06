@@ -1,6 +1,6 @@
 {
   "name": "rawgentic",
-  "version": "3.12.0",
+  "version": "3.12.1",
   "description": "6 SDLC workflow skills + 4 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, incident response, peer consultation, whole-tree security scanning, security pattern syncing, and dangerous pattern blocking with per-project exceptions.",
   "author": {
     "name": "3D-Stories",
