@@ -77,7 +77,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 7 | Create Branch | Git isolation is non-negotiable |
 | 8 | Implementation | The actual work |
 | 9 | Quality Gate (Drift) | Verifies implementation matches design and all ACs covered |
-| 11 | Code Review | **NON-NEGOTIABLE.** Full 3-agent review for complex_feature. Minimum 1-agent for simple/standard. This step found 2 Critical security issues (HTML injection + path traversal) when the orchestrator attempted to skip it. |
+| 11 | Code Review | **NON-NEGOTIABLE.** Full 3-agent review; ≥1 in the small-standard lane. This step found 2 Critical security issues (HTML injection + path traversal) when the orchestrator attempted to skip it. |
 | 11.5 | Security Scan | Tool-based pre-PR gate (secrets / dependency-CVE / SAST / IaC) via `hooks/security_scan.py`. Catches concrete known-pattern problems the LLM review misses; fail-closed on a real finding. The step always runs — absent scanners are a recorded *visible skip*, never a silent pass. |
 | 12 | Create PR | Deliverable — no PR means no review trail |
 | 16 | Completion Summary + run-record | WF2 terminates here. The run-record (`hooks/work_summary.py`) is the Tier-2 telemetry substrate — a dropped field is a measurement gap, so the step is not optional even when nothing deployed. |

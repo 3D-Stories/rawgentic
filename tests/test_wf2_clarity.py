@@ -488,6 +488,63 @@ class TestTieredLoopback:
         assert "never silent-PASS" in s4 or "never silently PASS" in s4
 
 
+# --- #224: Step-2 upfront agent-count / est-time estimate ---
+
+class TestStep2PathEstimate:
+    """Drift guards for the #224 Step-2 path-cost estimate."""
+
+    def _step2(self) -> str:
+        text = _text()
+        return text[text.index("## Step 2:"):text.index("## Step 3:")]
+
+    def test_step2_emits_derived_estimate(self):
+        s2 = " ".join(self._step2().split())
+        assert "plan_lib.estimate_agents" in s2
+        assert "Path estimate:" in s2
+        # AC1: both paths in one line.
+        assert "small-standard lane ≈" in s2
+
+    def test_not_a_contract_canonical_sentence(self):
+        s2 = " ".join(self._step2().split())
+        assert ("derived via plan_lib.estimate_agents — never hard-coded — "
+                "and is an estimate, not a contract") in s2
+
+    def test_projection_is_labeled_lower_bound(self):
+        s2 = " ".join(self._step2().split())
+        assert "any_high_risk_path" in s2
+        assert "lower bound" in s2
+        # semantic criteria invisible pre-decomposition must be named
+        assert "invisible" in s2 or "cannot be seen" in s2
+
+    def test_unconditional_estimate_marker(self):
+        # AC3: a dedicated session-note marker, not a suspend-only checkpoint.
+        s2 = self._step2()
+        assert "### WF2 Step 2 — path estimate:" in s2
+
+    def test_step5_refreshes_estimate(self):
+        text = _text()
+        s5 = _section(text, "## Step 5:", "## Step 6:")
+        assert "estimate_agents" in s5, "Step 5 must refresh the estimate with the real high-risk count"
+
+    def test_step11_axis_reconciled_in_skill_base(self):
+        # The stale complexity-keyed row contradicted steps.md's unconditional
+        # 3-agent dispatch; the mandatory table is lane-keyed now.
+        base = SKILL.read_text()
+        assert "Full 3-agent review for complex_feature. Minimum 1-agent for simple/standard." not in base
+        assert "Full 3-agent review; ≥1 in the small-standard lane." in base
+
+    def test_constants_mirror_step11_counts(self):
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "hooks"))
+        import plan_lib
+        assert plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL == 3
+        assert plan_lib.STEP11_REVIEW_AGENT_COUNT_LANE == 1
+        # steps.md §11 still documents the 3-agent dispatch the constant mirrors.
+        text = _text()
+        s11 = _step11()
+        assert "3-agent parallel review" in s11
+
+
 # --- #136: worktree-isolation parallelism probe ---
 
 class TestParallelismProbe:

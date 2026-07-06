@@ -105,6 +105,47 @@ WF2_HIGH_RISK_RATIO_HALT_PCT: Final[int] = _halt
 PER_TASK_REVIEW_CONFIDENCE_THRESHOLD: Final[float] = _CONFIDENCE_DEFAULT
 PER_TASK_REVIEW_AGENT_COUNT: Final[int] = 2
 
+# #224: Step-2 path-cost estimate. Step 11 dispatches 3 review agents on the
+# full spine and ≥1 in the small-standard lane — the axis is LANE, not
+# complexity (steps.md §11; drift-guarded in tests/test_wf2_clarity.py).
+STEP11_REVIEW_AGENT_COUNT_FULL: Final[int] = 3
+STEP11_REVIEW_AGENT_COUNT_LANE: Final[int] = 1
+WF2_EST_MINUTES_PER_AGENT: Final[int] = _clamp(
+    _coerce_int_env("WF2_EST_MINUTES_PER_AGENT", 5), 1, 60)
+
+
+def estimate_agents(high_risk_tasks: int, *, lane: bool,
+                    adversarial: bool = False, peer_consult: bool = False,
+                    diff_review: bool = False) -> dict:
+    """Estimate dispatched agents + rough wall minutes for a WF2 path (#224).
+
+    agents (work count): Step-4 self-review 1 (counted whether inline or
+    dispatched) + PER_TASK_REVIEW_AGENT_COUNT × high_risk_tasks (Step 8a)
+    + Step 11 (lane-keyed: 3 full / 1 lane) + opt-ins ×1 each. adversarial
+    and peer_consult are forced off when lane=True (the lane drops all
+    design-stage cross-model ceremony); diff_review counts on both paths.
+
+    minutes (wall model): parallel-stage model, NOT a serial sum — stages =
+    1 (Step-4; adversarial/peer run concurrent within it) + high_risk_tasks
+    (Step-8a reviews serialize across tasks, parallel within) + 1 (Step-11;
+    its agents + diff review run parallel); minutes = stages ×
+    WF2_EST_MINUTES_PER_AGENT. The two paths' minutes therefore always
+    match under this wall model — the lane saves agent-cost, not wall time.
+
+    An ESTIMATE, not a contract: Step-2 analysis fan-out, loop-backs, and
+    whole-issue delegation are not modeled.
+    """
+    if high_risk_tasks < 0:
+        raise ValueError("high_risk_tasks must be >= 0")
+    if lane:
+        adversarial = peer_consult = False
+    agents = (1 + PER_TASK_REVIEW_AGENT_COUNT * high_risk_tasks
+              + (STEP11_REVIEW_AGENT_COUNT_LANE if lane
+                 else STEP11_REVIEW_AGENT_COUNT_FULL)
+              + int(adversarial) + int(peer_consult) + int(diff_review))
+    stages = 1 + high_risk_tasks + 1
+    return {"agents": agents, "minutes": stages * WF2_EST_MINUTES_PER_AGENT}
+
 # Severity-banded confidence thresholds for filtering reviewer findings (Step 8a
 # per-task review AND Step 11 pre-PR review). Critical/High get a lower bar
 # because hiding them is more dangerous than flagging a false-positive. This dict

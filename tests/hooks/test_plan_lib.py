@@ -832,6 +832,74 @@ class TestSpecTightenLoopbackSource:
         assert state["total"] == 2
 
 
+class TestEstimateAgents:
+    """#224: pure path-cost estimator surfaced at Step 2."""
+
+    def test_full_spine_baseline(self):
+        # Step 4 (1) + 8a (2×0) + Step 11 full (3) = 4 agents.
+        # Stages: 1 (Step 4) + 0 (no high-risk) + 1 (Step 11) = 2 → 10 min @5.
+        mod = _reload_plan_lib()
+        est = mod.estimate_agents(0, lane=False)
+        assert est == {"agents": 4, "minutes": 10}
+
+    def test_lane_baseline(self):
+        # Step 4 (1) + 8a (0) + Step 11 lane (1) = 2 agents; stages 2 → 10 min.
+        mod = _reload_plan_lib()
+        est = mod.estimate_agents(0, lane=True)
+        assert est == {"agents": 2, "minutes": 10}
+
+    def test_step11_term_is_lane_keyed(self):
+        mod = _reload_plan_lib()
+        assert mod.STEP11_REVIEW_AGENT_COUNT_FULL == 3
+        assert mod.STEP11_REVIEW_AGENT_COUNT_LANE == 1
+        diff = (mod.estimate_agents(0, lane=False)["agents"]
+                - mod.estimate_agents(0, lane=True)["agents"])
+        assert diff == 2  # the 3-vs-1 Step-11 saving, nothing else
+
+    def test_high_risk_tasks_multiply_by_two(self):
+        # Each high-risk task adds PER_TASK_REVIEW_AGENT_COUNT (2) agents
+        # and one stage: high=2 full → 1+4+3=8 agents, 4 stages → 20 min.
+        mod = _reload_plan_lib()
+        est = mod.estimate_agents(2, lane=False)
+        assert est == {"agents": 8, "minutes": 20}
+
+    def test_optins_add_agents_not_stages(self):
+        # adversarial + peer_consult + diff_review are concurrent within
+        # existing stages: +3 agents, minutes unchanged.
+        mod = _reload_plan_lib()
+        est = mod.estimate_agents(0, lane=False, adversarial=True,
+                                  peer_consult=True, diff_review=True)
+        assert est == {"agents": 7, "minutes": 10}
+
+    def test_lane_forces_design_ceremony_off(self):
+        # The lane drops adversarial-on-design + peer consult; diff_review
+        # still counts on both paths.
+        mod = _reload_plan_lib()
+        est = mod.estimate_agents(0, lane=True, adversarial=True,
+                                  peer_consult=True, diff_review=True)
+        assert est == {"agents": 3, "minutes": 10}
+
+    def test_negative_high_risk_raises(self):
+        mod = _reload_plan_lib()
+        with pytest.raises(ValueError):
+            mod.estimate_agents(-1, lane=False)
+
+    def test_minutes_env_override(self):
+        mod = _reload_plan_lib({"WF2_EST_MINUTES_PER_AGENT": "10"})
+        assert mod.WF2_EST_MINUTES_PER_AGENT == 10
+        assert mod.estimate_agents(0, lane=False)["minutes"] == 20
+
+    def test_minutes_env_malformed_falls_back(self):
+        mod = _reload_plan_lib({"WF2_EST_MINUTES_PER_AGENT": "fast"})
+        assert mod.WF2_EST_MINUTES_PER_AGENT == 5
+
+    def test_minutes_env_clamped(self):
+        mod = _reload_plan_lib({"WF2_EST_MINUTES_PER_AGENT": "500"})
+        assert mod.WF2_EST_MINUTES_PER_AGENT == 60
+        mod = _reload_plan_lib({"WF2_EST_MINUTES_PER_AGENT": "0"})
+        assert mod.WF2_EST_MINUTES_PER_AGENT == 1
+
+
 class TestReviewState:
     """Per-branch review-state pointer (.rawgentic/review-state/, local git-excluded)."""
 
