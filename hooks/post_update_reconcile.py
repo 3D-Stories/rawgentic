@@ -100,6 +100,102 @@ def _newly_crossed(manifest, last, current):
     return out
 
 
+def project_feature_gaps(project, manifest, current):
+    """#234: answer-required (needs-question) features a project has NOT configured
+    that EXIST at `current` (their `since` <= current). This is PER-PROJECT and
+    independent of the reconcile marker — it surfaces a project left behind even when
+    the plugin already updated (`last == current`), which the version-cross nudge in
+    `main()` deliberately does not. Returns [(key, nudge_label), ...] sorted by key.
+
+    A feature with no/unparseable `since`, or an unparseable `current`, counts as
+    present (fail-open toward nudging — a bad version string must never silence it)."""
+    cur_t = _ver_tuple(current)
+    out = []
+    if not isinstance(project, dict):
+        return out
+    for feat in manifest:
+        if feat.get("policy") != "needs-question":
+            continue
+        key = feat.get("key")
+        if not key or key in project:  # present (any value) = already answered
+            continue
+        s_t = _ver_tuple(feat.get("since"))
+        if cur_t is None or s_t is None or s_t <= cur_t:
+            out.append((key, feat.get("nudge", key)))
+    return sorted(out)
+
+
+def _sanitize_name(name):
+    return "".join(c if (c.isalnum() or c in "._-") else "-" for c in str(name)) or "_"
+
+
+def _staleness_marker_path(state_dir, project_name):
+    return os.path.join(state_dir, "rawgentic-staleness-" + _sanitize_name(project_name))
+
+
+def _staleness_nudge(name, gaps, current):
+    labels = ", ".join(lbl for _, lbl in gaps)
+    return (
+        f"Project '{name}' is behind rawgentic {current}: it has not configured "
+        f"available setup feature(s): {labels}. Run /rawgentic:setup to enable them "
+        f"for '{name}' (setup preserves your existing config). Silence these notices "
+        f'with "setupPrompt": false at the top level of .rawgentic_workspace.json.'
+    )
+
+
+def _run_staleness(args, current, manifest):
+    """#234 modes: `--staleness-project <name>` (always show one project's gaps —
+    for the explicit /switch action) and `--staleness-active` (each active project,
+    once per (project, version) via a per-project marker — for SessionStart, so it
+    doesn't nag every session). Both respect the workspace-level setupPrompt opt-out
+    and are advisory/non-blocking. Fail-open: any problem emits nothing."""
+    ws = _load_json(args.workspace)
+    if not isinstance(ws, dict):
+        return 0
+    if ws.get("setupPrompt", True) is False:
+        return 0  # #184 opt-out silences per-project nudges too
+    projects = ws.get("projects")
+    if not isinstance(projects, list):
+        return 0
+
+    parts = []
+    if args.staleness_project:
+        p = next((x for x in projects
+                  if isinstance(x, dict) and x.get("name") == args.staleness_project), None)
+        if isinstance(p, dict):
+            gaps = project_feature_gaps(p, manifest, current)
+            if gaps:
+                parts.append(_staleness_nudge(args.staleness_project, gaps, current))
+        # explicit switch: always show, no once-per-version marker
+    else:  # --staleness-active
+        # Accepted overlap (#234 review L1): on the FIRST session after a release
+        # that ships a NEW needs-question feature (since == the just-crossed version),
+        # the default reconcile's version-cross nudge AND this per-project nudge both
+        # fire once for that feature — two differently-worded notices in one session,
+        # self-clearing next session (both markers == current). Steady-state upgrades
+        # that ship no new needs-question feature never trigger it. Left as-is rather
+        # than coupling this pass to the reconciled-version marker.
+        for p in projects:
+            if not isinstance(p, dict) or not p.get("active"):
+                continue
+            name = p.get("name", "?")
+            gaps = project_feature_gaps(p, manifest, current)
+            if not gaps:
+                continue
+            marker = _staleness_marker_path(args.state_dir, name)
+            if _read_version_file(marker) == current:
+                continue  # already nudged this project for this version
+            parts.append(_staleness_nudge(name, gaps, current))
+            try:
+                _write_version_file(marker, current)
+            except Exception:
+                pass  # fail-open: a lost marker only risks a repeat nudge, never a crash
+
+    if parts:
+        print("\n\n".join(parts))
+    return 0
+
+
 def reconcile_projects(projects, manifest):
     """Pure: apply the manifest to a list of project entries (mutates + returns).
 
@@ -219,11 +315,21 @@ def main(argv=None):
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--version", default=None, help="override the detected version (tests)")
     parser.add_argument("--plugin-root", default=None)
+    # #234 per-project staleness modes (separate from the default reconcile so the
+    # "silent on same version" reconcile contract is preserved):
+    parser.add_argument("--staleness-project", default=None,
+                        help="#234: always nudge THIS project's unconfigured feature gaps (for /switch)")
+    parser.add_argument("--staleness-active", action="store_true",
+                        help="#234: nudge each ACTIVE project's gaps once per version (for SessionStart)")
     args = parser.parse_args(argv)
 
     current = _resolve_version(args)
     if not current:
         return 0  # can't determine the version -> do nothing
+
+    # #234: staleness modes short-circuit the default reconcile entirely.
+    if args.staleness_project or args.staleness_active:
+        return _run_staleness(args, current, _load_manifest())
 
     state_path = os.path.join(args.state_dir, STATE_FILENAME)
     last = _read_version_file(state_path)
