@@ -152,6 +152,26 @@ def test_snapshot_assets_committed():
         assert f.stat().st_size > 20_000, f"{p} suspiciously small"
 
 
+def test_station_drilldown_is_a_modal_not_a_full_page_swap():
+    """#227: drilling into a station opens a modal dialog over the overview, NOT a
+    full-page swap. Pins the modal mechanism so a later edit can't silently revert."""
+    text = _html()
+    # a native <dialog> modal (built via the DOM builder) with the accessible contract
+    assert "h('dialog'" in text
+    assert "role:'dialog'" in text.replace(" ", "")
+    assert "aria-modal" in text
+    assert ".showModal(" in text
+    # the open/close plumbing + the router opening the modal on a station hash
+    assert "function openModal(" in text and "function closeModal(" in text
+    assert "openModal(r)" in text
+    # the overview stays rendered behind the modal (router no longer swaps the page
+    # to a detail view): the old full-page detail renderer is gone
+    assert "renderDetail(r)" not in text
+    # dismissal wiring: Esc (dialog 'cancel') + a close button
+    assert "'cancel'" in text or '"cancel"' in text
+    assert "modal-close" in text
+
+
 def test_diagram_newest_rev_matches_plugin_version():
     """The diagram's newest WF2 rev must exist and not exceed the shipped
     plugin version (it documents the pinned spine, never a future one)."""

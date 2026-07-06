@@ -201,6 +201,23 @@ a{color:var(--blue)}
   .rail{left:25px}
   .node .num{font-size:24px}
 }
+/* Station drill-down modal (#227) — a native <dialog> over the dimmed overview. */
+body.modal-open{overflow:hidden}
+dialog.modal{width:min(920px,94vw);max-height:90vh;overflow:auto;padding:0;border:1.5px solid var(--frame);
+  background:var(--paper);color:var(--ink);box-shadow:var(--shadow);border-radius:2px}
+dialog.modal::backdrop{background:rgba(6,14,26,.55)}
+dialog.modal .sheet{margin-top:0;border:0;box-shadow:none;animation:none}
+.modal-close{position:absolute;top:12px;right:14px;z-index:5;width:34px;height:34px;line-height:1;
+  font-size:24px;cursor:pointer;background:var(--card2);color:var(--soft);border:1.5px solid var(--hair2);
+  border-radius:2px}
+.modal-close:hover{color:var(--ink);border-color:var(--frame)}
+.modal-close:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+@media (prefers-reduced-motion:no-preference){
+  dialog.modal[open]{animation:modalin .22s ease-out}
+  dialog.modal[open]::backdrop{animation:fadein .22s ease-out}
+  @keyframes modalin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes fadein{from{opacity:0}to{opacity:1}}
+}
 </style>
 
 <div class="wrap">
@@ -650,7 +667,7 @@ function panel(title, cls, kids){
   return h('div',{class:'panel'+(cls?' '+cls:'')}, h('h3',null,title), kids);
 }
 
-function renderDetail(r){
+function buildDetailSheet(r){
   const w = DATA.workflows[r.wf], v = w.versions[r.ver];
   let idx = -1;
   v.steps.forEach(function(s,i){ if(s.id===r.step) idx=i; });
@@ -696,7 +713,35 @@ function renderDetail(r){
     h('div',{class:'pn'},
       prev ? h('a',{href:href(r.wf,r.ver,prev.id)},h('span',{class:'lbl'},'← prev station'),prev.num+' '+prev.name) : h('span'),
       next ? h('a',{href:href(r.wf,r.ver,next.id),style:'text-align:right'},h('span',{class:'lbl'},'next station →'),next.num+' '+next.name) : h('span')));
-  app.replaceChildren(sheet);
+  return sheet;
+}
+
+/* =================== STATION MODAL (#227) =================== */
+/* Drill-down opens in a native <dialog> over the dimmed overview instead of a
+   full-page swap, so the reader keeps their place in the spine. showModal() gives
+   focus-trap + Esc + ::backdrop + focus-restore for free (offline, CSP-safe). The
+   hash still carries #/wf2/<ver>/s/<id>, so deep-links + back/forward open/close it. */
+let modalEl = null;
+function closeModal(){
+  if(modalEl){ const m = modalEl; modalEl = null; if(m.open) m.close(); m.remove(); }
+}
+function openModal(r){
+  const closeBtn = h('button',{class:'modal-close', type:'button', 'aria-label':'Close (Esc)',
+    onclick:function(){ location.hash = href(r.wf, r.ver, null); }}, '×');
+  const detail = buildDetailSheet(r);
+  if(modalEl && modalEl.open){
+    modalEl.replaceChildren(closeBtn, detail);   // prev/next within an open modal — swap content, keep focus-trap
+    return;
+  }
+  const dlg = h('dialog',{class:'modal', role:'dialog', 'aria-modal':'true', 'aria-label':'Station detail'},
+    closeBtn, detail);
+  /* Esc: <dialog> fires 'cancel'; drive it through the hash so URL + modal stay in sync. */
+  dlg.addEventListener('cancel', function(ev){ ev.preventDefault(); location.hash = href(r.wf, r.ver, null); });
+  /* Backdrop click: a click whose target IS the dialog element is the ::backdrop region. */
+  dlg.addEventListener('click', function(ev){ if(ev.target===dlg) location.hash = href(r.wf, r.ver, null); });
+  document.body.append(dlg);
+  modalEl = dlg;
+  dlg.showModal();   // traps focus + restores it to the triggering card on close
 }
 
 function renderChrome(r){
@@ -720,17 +765,26 @@ function renderChrome(r){
   }));
 }
 
+let currentOverviewKey = null;
 function render(){
   const r = route();
   renderChrome(r);
-  if(r.step) renderDetail(r); else renderOverview(r);
-  window.scrollTo({top:0});
+  const key = r.wf+'/'+r.ver;
+  if(key !== currentOverviewKey){
+    closeModal();                 // a wf/rev change must rebuild the modal fresh — its
+                                  // close handlers are bound to the rev at creation time
+    renderOverview(r);            // (re)build the base spine only when wf/rev changes
+    currentOverviewKey = key;
+    if(!r.step) window.scrollTo({top:0});
+  }
+  if(r.step) openModal(r);        // drill-down over the still-rendered overview (#227)
+  else closeModal();
 }
 addEventListener('hashchange', render);
 let rsz;
 addEventListener('resize', function(){
   cancelAnimationFrame(rsz);
-  rsz = requestAnimationFrame(function(){ const r = route(); if(!r.step) drawArcs(DATA.workflows[r.wf]); });
+  rsz = requestAnimationFrame(function(){ const r = route(); drawArcs(DATA.workflows[r.wf]); });
 });
 
 /* theme cycle: auto -> light -> dark */
