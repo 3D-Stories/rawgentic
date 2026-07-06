@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 from pathlib import Path
 
 CHARTER_FILENAME = "rawgentic-operating-charter.md"
@@ -86,18 +87,22 @@ def inject_import(text: str, filename: str = CHARTER_FILENAME) -> tuple[str, boo
 
 # --- gating-language drift guard (regression tripwire, not the primary control) ---
 
-# Real autonomy-gating language *families* — a confirmation gate that could make a
-# headless WF2 run wrongly suspend. Each entry is (compiled pattern, human label).
-# Tuned to catch the paraphrase families (not just four literals) while not tripping
-# on legitimate quality/verification prose ("... before you fix it", "get the
-# baseline before ...").
+# Autonomy-gating language — a confirmation gate that could make a headless WF2 run
+# wrongly suspend. Each entry is (pattern, human label). This is a **curated tripwire,
+# not an exhaustive classifier** — it catches a broad set of common gating phrasings so a
+# charter that could gate autonomy cannot ship unnoticed, but paraphrase can always evade
+# a regex list. The primary control is that rawgentic authors the charter and it goes
+# through PR review; this guard is defense-in-depth. Tuned to not trip on legitimate
+# quality/verification prose ("... before you fix it", "get the baseline before ...").
 _GATING_SPECS: list[tuple[str, str]] = [
     (r"confirm\s+first", "confirm first"),
     (r"before\s+acting\b", "before acting"),
     (r"\bbefore\s+you\s+act\b", "before you act"),
     (r"stop\s+and\s+ask", "stop and ask"),
     (r"stop\s+for\s+a\s+yes", "stop for a yes"),
-    (r"wait\s+for\s+(?:explicit\s+)?(?:confirmation|approval|the\s+user|a\s+yes|sign-?off)",
+    (r"pause\s+and\s+check\s+with", "pause and check with"),
+    (r"check\s+with\s+(?:the\s+)?user", "check with the user"),
+    (r"wait\s+for\s+(?:explicit\s+)?(?:confirmation|approval|the\s+user|a\s+yes|sign-?off|permission)",
      "wait for confirmation/approval"),
     (r"hold\s+persists", "a hold persists"),
     (r"competing\s+hold", "competing hold"),
@@ -105,6 +110,16 @@ _GATING_SPECS: list[tuple[str, str]] = [
     (r"commit\s+and\s+push\s+only\s+when", "commit and push only when"),
     (r"proceed\s+without\s+asking", "proceed without asking"),
     (r"without\s+asking\s+first", "without asking first"),
+    (r"\bask\s+(?:the\s+user\s+)?before\b", "ask before"),
+    (r"(?:seek|get|ask\s+for|obtain|need)\s+(?:the\s+user'?s?\s+)?(?:permission|approval|sign-?off|go-?ahead)",
+     "seek permission/approval/sign-off"),
+    (r"(?:requires?|needs?)\s+(?:explicit\s+)?(?:user\s+)?(?:permission|approval|sign-?off)",
+     "requires approval"),
+    (r"without\s+(?:explicit\s+)?(?:user\s+)?(?:approval|permission|sign-?off)",
+     "without approval"),
+    (r"until\s+(?:the\s+)?user\s+(?:approves|confirms|says|gives)", "until the user approves"),
+    (r"do\s+not\s+act\s+until", "do not act until"),
+    (r"go-?ahead\s+before", "go-ahead before"),
 ]
 GATING_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(p, re.IGNORECASE), label) for p, label in _GATING_SPECS
@@ -181,20 +196,47 @@ def install(
     assert_charter_safe(charter_text)  # fail-closed before any write
 
     # Write the charter file (no-clobber; upgrade our own file only on --force-upgrade).
+    # `loaded_text` is the content that will ACTUALLY load after this call — the freshly
+    # written bundle, or the on-disk file we're keeping.
     if charter_dest.exists():
         existing = charter_dest.read_text(encoding="utf-8")
         if has_provenance_sentinel(existing):
             if force_upgrade:
                 charter_dest.write_text(charter_text, encoding="utf-8")
-                charter_action = "updated"
+                charter_action, loaded_text = "updated", charter_text
             else:
-                charter_action = "kept"
+                charter_action, loaded_text = "kept", existing
         else:
-            charter_action = "kept-foreign"
+            charter_action, loaded_text = "kept-foreign", existing
     else:
         charter_dest.parent.mkdir(parents=True, exist_ok=True)
         charter_dest.write_text(charter_text, encoding="utf-8")
-        charter_action = "created"
+        charter_action, loaded_text = "created", charter_text
+
+    # Only wire the `@import` if the file that will actually load is trustworthy — never
+    # point a CLAUDE.md at a charter this command did not write and validate (the whole
+    # feature's guarantee is "the charter that loads is autonomy-safe"). A foreign
+    # same-named file is never wired; a kept rawgentic file is re-validated by the tripwire.
+    if charter_action == "kept-foreign":
+        return {
+            "scope": scope, "claude_md": str(claude_md), "charter": str(charter_dest),
+            "charter_action": charter_action, "import_action": "skipped-foreign-charter",
+            "warning": (
+                f"a non-rawgentic file named {CHARTER_FILENAME} already exists at "
+                f"{charter_dest}; the @import was NOT wired (rename that file, then re-run)"
+            ),
+        }
+    unsafe = find_gating_language(loaded_text)
+    if unsafe:
+        return {
+            "scope": scope, "claude_md": str(claude_md), "charter": str(charter_dest),
+            "charter_action": charter_action, "import_action": "skipped-unsafe-charter",
+            "warning": (
+                f"on-disk charter at {charter_dest} contains autonomy-gating language "
+                f"{unsafe}; the @import was NOT wired (pass --force-upgrade to replace it "
+                f"with the current safe bundle)"
+            ),
+        }
 
     # Inject the import line (idempotent; creates CLAUDE.md if absent).
     body = claude_md.read_text(encoding="utf-8") if claude_md.exists() else ""
@@ -241,10 +283,10 @@ def main(argv: list[str] | None = None) -> int:
                 force_upgrade=args.force_upgrade,
             )
         except GlobalScopeNotConfirmed as e:
-            print(f"REFUSED: {e}", file=__import__("sys").stderr)
+            print(f"REFUSED: {e}", file=sys.stderr)
             return 3
         except (ValueError, FileNotFoundError) as e:
-            print(f"ERROR: {e}", file=__import__("sys").stderr)
+            print(f"ERROR: {e}", file=sys.stderr)
             return 2
         print(json.dumps(res, indent=2))
         return 0

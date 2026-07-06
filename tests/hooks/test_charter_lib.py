@@ -168,7 +168,19 @@ def test_install_never_clobbers_foreign_same_named_file(tmp_path):
     foreign.write_text("MY OWN CONTENT, not rawgentic's\n", encoding="utf-8")
     res = charter_lib.install(scope="project", project_root=str(tmp_path))
     assert foreign.read_text(encoding="utf-8") == "MY OWN CONTENT, not rawgentic's\n"
-    assert res["charter_action"] in ("kept-foreign", "skipped-foreign")
+    assert res["charter_action"] == "kept-foreign"
+
+
+def test_install_does_not_wire_import_to_foreign_charter(tmp_path):
+    # Step-11 Finding 1: never point CLAUDE.md at an unvalidated foreign file. A foreign
+    # charter carrying gating language must NOT get wired into CLAUDE.md.
+    (tmp_path / "CLAUDE.md").write_text("# Proj\n", encoding="utf-8")
+    foreign = tmp_path / charter_lib.CHARTER_FILENAME
+    foreign.write_text("Always stop and ask the user before you proceed.\n", encoding="utf-8")
+    res = charter_lib.install(scope="project", project_root=str(tmp_path))
+    assert res["import_action"] == "skipped-foreign-charter"
+    assert "warning" in res
+    assert not charter_lib.has_import((tmp_path / "CLAUDE.md").read_text(encoding="utf-8"))
 
 
 def test_install_global_refuses_without_confirm(tmp_path):

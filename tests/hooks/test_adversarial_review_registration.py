@@ -59,6 +59,7 @@ def test_readme_count_strings_updated():
     assert "provides 14 skills" in readme
     assert "All 7 config-driven skills" in readme
     assert "9/14 skills have evals.json" in readme
+    assert "5 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
 
 
 def test_readme_changelog_has_no_spliced_headings():

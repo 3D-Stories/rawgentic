@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#113 opt-in operating charter via @import</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-06 12:06 MDT</div>
+<h1>#113 opt-in operating charter via @import</h1>
+
+</header>
+<main>
+<h1>Design — #113: opt-in operating-instructions charter via <code>@import</code></h1>
+<p><strong>Issue:</strong> [#113](https://github.com/3D-Stories/rawgentic/issues/113) · <strong>WF2 run</strong> (epic #247) · <strong>Complexity:</strong> standard_feature · <strong>Version bump:</strong> minor (feat) 3.18.0 → 3.19.0</p>
+<h2>Problem</h2>
+<p>Offer an <strong>opt-in</strong> way to install a personal &quot;operating instructions&quot; charter that</p>
+<p>attaches to a <code>CLAUDE.md</code> via a one-line <code>@import</code> + an external versioned file. It must</p>
+<p><strong>never</strong> be a default setup step and <strong>never</strong> silently mutate the user&#x27;s global</p>
+<p><code>~/.claude/CLAUDE.md</code>.</p>
+<h2>Owner-fork decision (D1, logged in epic-247-autorun-log.md)</h2>
+<ul>
+<li>Ship <strong>both</strong> the mechanism <strong>and</strong> a bundled charter (not mechanism-only).</li>
+<li>The bundled charter is <strong>rawgentic-authored and autonomy-safe</strong> — quality / verification /</li>
+</ul>
+<p>  honesty discipline <strong>only</strong>. It is NOT a verbatim copy of the maintainer&#x27;s personal</p>
+<p>  charter, which contains autonomy-gating language (&quot;confirm first…&quot;) that the issue&#x27;s</p>
+<p>  <strong>Critical safety invariant</strong> forbids.</p>
+<ul>
+<li><strong>Default scope = project</strong> <code>CLAUDE.md</code> (Layer 3). Global (<code>~/.claude</code>, Layer 1) is</li>
+</ul>
+<p>  offered but never the default — honors &quot;never default-global&quot;.</p>
+<h2>Approach</h2>
+<p>A new <strong>opt-in command</strong> <code>/rawgentic:install-operating-charter</code> (auto-registered from</p>
+<p><code>skills/install-operating-charter/SKILL.md</code>) that:</p>
+<p>1. Resolves the target scope — arg or prompt <code>{project | global | skip}</code>; **never runs by</p>
+<p>   default<strong>, </strong>never silently** writes global.</p>
+<p>2. Validates the bundled charter is autonomy-safe (<code>assert_charter_safe</code>) <strong>before</strong> writing.</p>
+<p>3. Copies the charter next to the chosen <code>CLAUDE.md</code> (idempotent, no-clobber of user edits).</p>
+<p>4. Injects a single <code>@operating-instructions.md</code> import line under a</p>
+<p>   <code>## Operating Instructions</code> heading (idempotent — never duplicates, never clobbers).</p>
+<p>The mutation + safety logic lives in a <strong>tested helper</strong> <code>hooks/charter_lib.py</code>, so the</p>
+<p>behavior is unit-tested and the drift guard is reusable (matches rawgentic&#x27;s</p>
+<p>one-tested-source ethos). The SKILL.md is a thin orchestrator over the helper.</p>
+<h3><code>@import</code> mechanism — confirmed</h3>
+<p>The bare relative form <code>@operating-instructions.md</code> on its own line inside a <code>CLAUDE.md</code></p>
+<p>is Claude Code&#x27;s import syntax — <strong>confirmed from live ground truth</strong>: this session&#x27;s</p>
+<p><code>~/.claude/CLAUDE.md</code> uses exactly <code>@operating-instructions.md</code> and the imported content</p>
+<p>loads. Placing the charter file next to the target <code>CLAUDE.md</code> makes the same relative</p>
+<p>line resolve for both global (<code>~/.claude/…</code>) and project (<code>&lt;path&gt;/…</code>) scopes.</p>
+<h2>File plan</h2>
+<p>| File | Change | Kind |</p>
+<p>|---|---|---|</p>
+<p>| <code>hooks/charter_lib.py</code> | NEW — <code>CHARTER_FILENAME</code>, <code>import_line</code>, <code>charter_block</code>, <code>inject_import</code>, <code>GATING_PATTERNS</code>, <code>find_gating_language</code>, <code>assert_charter_safe</code>, <code>bundled_charter_path</code> | impl |</p>
+<p>| <code>skills/install-operating-charter/SKILL.md</code> | NEW — opt-in command orchestrator | skill (.md) |</p>
+<p>| <code>skills/install-operating-charter/assets/operating-instructions.md</code> | NEW — autonomy-safe charter content | asset (.md) |</p>
+<p>| <code>.claude-plugin/marketplace.json</code> | add <code>&quot;./skills/install-operating-charter&quot;</code> to <code>skills[]</code> | config |</p>
+<p>| <code>plugins/rawgentic/skills/install-operating-charter</code> | NEW symlink → <code>../../../skills/install-operating-charter</code> (codex mirror; guarded by <code>test_codex_manifest_exposes_same_runtime_skills_as_claude_marketplace</code>) | symlink |</p>
+<p>| <code>.claude-plugin/plugin.json</code>, <code>plugins/rawgentic/.codex-plugin/plugin.json</code> | version 3.18.0 → 3.19.0 | config |</p>
+<p>| <code>tests/hooks/test_charter_lib.py</code> | NEW — drift guard + idempotency + no-clobber + non-vacuity | test |</p>
+<p>| <code>tests/hooks/test_adversarial_review_registration.py</code> (<code>test_plugin_version_bumped</code>) | 3.18.0 → 3.19.0 | test |</p>
+<p>| <code>README.md</code> | changelog + command doc | docs (.md) |</p>
+<p>No workflow-diagram REV: this adds a standalone command; it does not change the WF2 spine.</p>
+<h2>Safety / failure modes</h2>
+<ul>
+<li><strong>Critical invariant:</strong> the shipped charter must contain <strong>no</strong> autonomy-gating language.</li>
+</ul>
+<p>  Enforced by <code>assert_charter_safe</code> (grep for <code>stop for a yes</code>, `commit and push only when</p>
+<p>  asked<code>, </code>wait for explicit confirmation<code>, </code>a hold persists`, case-insensitive) called</p>
+<p>  BOTH by the command (pre-write, fail-closed) and by the drift-guard test on the shipped</p>
+<p>  charter. Non-vacuity: the test also asserts each pattern is detected in a synthetic</p>
+<p>  gating charter.</p>
+<ul>
+<li><strong>No silent global mutation:</strong> default scope is project; global requires explicit choice.</li>
+<li><strong>Idempotent:</strong> re-running never duplicates the import line; <code>inject_import</code> returns</li>
+</ul>
+<p>  <code>changed=False</code> when <code>@&lt;filename&gt;</code> is already present.</p>
+<ul>
+<li><strong>No-clobber:</strong> if the target charter file already exists, the command does not overwrite</li>
+</ul>
+<p>  user edits silently — it reports and offers an upgrade only on explicit confirmation.</p>
+<h2>Test plan (TDD)</h2>
+<p><code>tests/hooks/test_charter_lib.py</code>:</p>
+<p>1. <code>import_line()</code> == <code>@operating-instructions.md</code>.</p>
+<p>2. <code>inject_import</code> adds the section when absent; second call is a no-op (<code>changed=False</code>) — idempotency.</p>
+<p>3. <code>inject_import</code> preserves pre-existing CLAUDE.md content (no-clobber).</p>
+<p>4. <code>assert_charter_safe</code> passes on the <strong>shipped</strong> charter (AC3 drift guard).</p>
+<p>5. Non-vacuity: <code>find_gating_language</code> detects EACH forbidden phrase in a synthetic charter;</p>
+<p>   <code>assert_charter_safe</code> raises on it.</p>
+<p>6. <code>bundled_charter_path()</code> points at an existing file.</p>
+<h2>Step-4 review amendments (applied — independent Opus reviewer, D2)</h2>
+<p>An independent <code>rawgentic-reviewer</code> (Opus) adversarial pass found 3 High + 4 Medium. All</p>
+<p>folded in (spec-tightening; 3 High &lt; volume threshold 5, no Step-3 return):</p>
+<ul>
+<li><strong>A1 (H2 — filename collision, confirmed on this machine):</strong> <code>~/.claude/operating-instructions.md</code></li>
+</ul>
+<p>  already exists and <code>~/.claude/CLAUDE.md:3</code> is <code>@operating-instructions.md</code>. Using that name</p>
+<p>  would make global-scope install a silent no-op (import present → no-op; file exists →</p>
+<p>  no-clobber) while the *gating* personal charter keeps loading. <strong>Fix:</strong> bundled charter is</p>
+<p>  <code>rawgentic-operating-charter.md</code>; import line <code>@rawgentic-operating-charter.md</code>; idempotency</p>
+<p>  keys off that rawgentic-owned name. Coexists with a user&#x27;s own <code>operating-instructions.md</code>.</p>
+<ul>
+<li><strong>A2 (H1 — guard oversold + circular test):</strong> the REAL control is *rawgentic authors the</li>
+</ul>
+<p>  charter + PR review*; the guard is a <strong>regression tripwire</strong>, not &quot;enforcement&quot; (reframed in</p>
+<p>  the charter + this doc). Strengthen <code>GATING_PATTERNS</code> to cover real gating-language *families*</p>
+<p>  (confirm first / get the call before acting / stop and ask / wait for confirmation|approval /</p>
+<p>  a hold persists / competing hold / commit … only when asked / don&#x27;t … without asking / ask</p>
+<p>  before …). Non-vacuity test is built from <strong>paraphrased real gating families</strong> (not the guard&#x27;s</p>
+<p>  own literals), so it proves the guard catches the dangerous class, not just that regex compiles.</p>
+<ul>
+<li><strong>A3 (H3 — skill-count guards):</strong> adding a 14th skill also updates <code>tests/test_v3_removals.py</code></li>
+</ul>
+<p>  (<code>== 13</code>→<code>14</code>), <code>test_adversarial_review_registration.py::test_readme_count_strings_updated</code></p>
+<p>  (<code>13</code>→<code>14</code>, <code>9/13</code>→<code>9/14</code>), <code>README.md</code> L14 + L652, and the marketplace/plugin.json description</p>
+<p>  enumeration (sum → 14; <code>6 SDLC workflow skills</code> substring preserved so</p>
+<p>  <code>test_descriptions_consistent_count</code> stays green).</p>
+<ul>
+<li><strong>A4 (M1):</strong> <code>inject_import</code> edge tests — no-trailing-newline target, pre-existing</li>
+</ul>
+<p>  <code>## Operating Instructions</code> heading without the import line, and <strong>line-anchored</strong> match</p>
+<p>  (<code>^@rawgentic-operating-charter.md\s*$</code>, not substring).</p>
+<ul>
+<li><strong>A5 (M2):</strong> provenance sentinel <code>&lt;!-- rawgentic-operating-charter v1 --&gt;</code> as the charter&#x27;s</li>
+</ul>
+<p>  first line; no-clobber/upgrade gate on its presence (distinguishes rawgentic&#x27;s own file from a</p>
+<p>  user&#x27;s same-named file).</p>
+<ul>
+<li><strong>A6 (M3/M4):</strong> the safety-critical mutation runs as <strong>tested code</strong>, not LLM prose — a CLI</li>
+</ul>
+<p>  entrypoint `python3 hooks/charter_lib.py install --scope {project|global} --project-root &lt;root&gt;</p>
+<p>  [--home &lt;h&gt;] [--confirm-global] [--force-upgrade]<code>. </code>--scope<code> is required; **</code>global` refuses</p>
+<p>  without <code>--confirm-global</code>** (converts &quot;never silent global&quot; into a tested contract). SKILL.md</p>
+<p>  invokes it verbatim.</p>
+<ul>
+<li><strong>A7 (L1):</strong> project-scope <code>@import</code> stays *inferred*; co-location makes the relative path</li>
+</ul>
+<p>  correct by construction (Step 9 proxy).</p>
+<h2>Platform feasibility (#226)</h2>
+<p>The likeliest-wrong claim is that a relative <code>@import</code> resolves identically from a</p>
+<p><strong>project</strong> CLAUDE.md as from <code>~/.claude</code> — confirmed for global from live context,</p>
+<p>inferred same for project (docs: imports work in any CLAUDE.md). Step 9 proxy: the command</p>
+<p>always co-locates the charter with the target CLAUDE.md, so the relative path is correct by</p>
+<p>construction regardless of scope. Machine-readable declaration follows (kept as the final</p>
+<p>section so no heading interrupts a block):</p>
+<p>platform_apis:</p>
+<ul>
+<li>api: Claude Code @import in CLAUDE.md (bare relative @file.md line)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — this session&#x27;s ~/.claude/CLAUDE.md uses a bare @operating-instructions.md line and the imported content loads</p>
+<p>  failure: fail-silent</p>
+<p>  surface: the command writes the charter next to the target CLAUDE.md and reports+stat-checks both paths after writing, so a missing/misplaced import is visible</p>
+<ul>
+<li>api: skill auto-registration (skills/&lt;name&gt;/SKILL.md listed in marketplace.json skills[])</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — 13 existing skills register this exact way (marketplace.json entry + codex mirror symlink)</p>
+<p>  failure: fail-silent</p>
+<p>  surface: tests/test_codex_plugin_packaging.py drift guards fail the build if the symlink or whitelist entry is missing</p>
+<ul>
+<li>api: Python stdlib file I/O (pathlib, os.path.expanduser)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — hooks/*.py read and write files with pathlib throughout</p>
+<p>  failure: fail-loud</p>
+
+</main>
+<footer>Last updated: 2026-07-06 12:06 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
