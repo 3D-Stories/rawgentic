@@ -545,6 +545,43 @@ class TestStep2PathEstimate:
         assert "3-agent parallel review" in s11
 
 
+# --- #225: lane secondary signal + operator override ---
+
+class TestLaneSecondarySignalProse:
+    """Drift guards for the #225 lane election paths."""
+
+    def _lane_block(self) -> str:
+        return " ".join(_block(_text(), "small-standard-lane").split())
+
+    def test_surfacing_has_force_lane_choice(self):
+        assert "Force lane" in self._lane_block()
+
+    def test_headless_env_documented(self):
+        assert "RAWGENTIC_WF2_FORCE_LANE" in self._lane_block()
+
+    def test_secondary_signal_wired(self):
+        block = self._lane_block()
+        assert "defect_file_counts" in block
+        assert "MAX_LANE_DEFECTS" in block
+
+    def test_ac2_canonical_sentence(self):
+        block = self._lane_block()
+        assert ("neither the secondary signal nor the operator override can "
+                "bypass them") in block
+        assert "re-tag it, don't force it" in block
+
+    def test_ac3_canonical_sentence(self):
+        assert ("logged with its reason verbatim — never silent"
+                ) in self._lane_block()
+
+    def test_sanctioned_count_handoff(self):
+        assert "sanctioned" in self._lane_block()
+
+    def test_step9_compares_sanctioned_count(self):
+        step9 = " ".join(_section(_text(), "## Step 9:", "## Step 10:").split())
+        assert "sanctioned" in step9
+
+
 # --- #136: worktree-isolation parallelism probe ---
 
 class TestParallelismProbe:

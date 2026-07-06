@@ -1234,6 +1234,94 @@ class TestLaneDecision:
             mod.lane_decision("standard_feature", "3", False, False, False, False)
 
 
+class TestLaneSecondarySignal:
+    """#225: bounded multi-defect secondary signal + operator override."""
+
+    def _call(self, mod, count, **kw):
+        return mod.lane_decision("standard_feature", count, False, False, False,
+                                 False, **kw)
+
+    # --- operator override ---
+
+    def test_override_elects_lane_over_file_count(self):
+        mod = _reload_plan_lib()
+        tier, reason = self._call(mod, 15, operator_override=True)
+        assert tier == "lane"
+        assert "operator override" in reason
+
+    def test_override_cannot_bypass_hard_guards(self):
+        # AC2: arch / migration / new dep / complex_feature all force full
+        # even with the override.
+        mod = _reload_plan_lib()
+        for args in (("standard_feature", 15, True, False, False, False),
+                     ("standard_feature", 15, False, True, False, False),
+                     ("standard_feature", 15, False, False, True, False),
+                     ("complex_feature", 15, False, False, False, False)):
+            tier, _ = mod.lane_decision(*args, operator_override=True)
+            assert tier == "full", args
+
+    # --- secondary signal ---
+
+    def test_bounded_multi_defect_elects_lane(self):
+        mod = _reload_plan_lib()
+        tier, reason = self._call(mod, 15, defect_file_counts=[5, 5, 5])
+        assert tier == "lane"
+        assert "secondary signal" in reason
+        assert "5+5+5" in reason  # per-defect counts enumerated verbatim
+
+    def test_one_defect_over_per_defect_cap_is_full(self):
+        mod = _reload_plan_lib()
+        tier, _ = self._call(mod, 10, defect_file_counts=[8, 2])
+        assert tier == "full"
+
+    def test_single_defect_list_is_full(self):
+        # One big defect over the total is just a big change, not multi-defect.
+        mod = _reload_plan_lib()
+        tier, _ = self._call(mod, 8, defect_file_counts=[7])
+        assert tier == "full"
+
+    def test_defect_count_cap(self):
+        # More than MAX_LANE_DEFECTS defects → full, even if each is small.
+        mod = _reload_plan_lib()
+        assert mod.MAX_LANE_DEFECTS == 3
+        tier, _ = self._call(mod, 12, defect_file_counts=[3, 3, 3, 3])
+        assert tier == "full"
+
+    def test_aggregate_ceiling(self):
+        # [7,7,7,7,7] = 35 must NOT take the lane (F1); and even a valid
+        # 3-defect list cannot sanction a total over 21.
+        mod = _reload_plan_lib()
+        tier, _ = self._call(mod, 35, defect_file_counts=[7, 7, 7, 7, 7])
+        assert tier == "full"
+        tier, _ = self._call(mod, 22, defect_file_counts=[7, 7, 7])
+        assert tier == "full"
+
+    def test_aggregate_boundary_exactly_21_is_lane(self):
+        mod = _reload_plan_lib()
+        tier, _ = self._call(mod, 21, defect_file_counts=[7, 7, 7])
+        assert tier == "lane"
+
+    def test_malformed_counts_fail_closed(self):
+        mod = _reload_plan_lib()
+        for bad in ([], None, [5, True], [5, "5"], [5, 0], [5, -1]):
+            tier, _ = self._call(mod, 15, defect_file_counts=bad)
+            assert tier == "full", bad
+
+    def test_secondary_signal_cannot_bypass_hard_guards(self):
+        mod = _reload_plan_lib()
+        tier, _ = mod.lane_decision("standard_feature", 15, True, False, False,
+                                    False, defect_file_counts=[5, 5, 5])
+        assert tier == "full"
+
+    def test_positional_calls_unchanged(self):
+        # Backward compat: no kwargs → pre-#225 behavior byte-identical.
+        mod = _reload_plan_lib()
+        tier, reason = mod.lane_decision(
+            "standard_feature", 15, False, False, False, False)
+        assert tier == "full"
+        assert "15 impl files > 7" in reason
+
+
 # --- should_run_diff_review (pure WF2 Step 11 dispatch gate, #131) ---
 
 class TestShouldRunDiffReview:

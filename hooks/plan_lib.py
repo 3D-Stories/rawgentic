@@ -913,6 +913,9 @@ def format_promotion_note(
 # --- Small-standard lane decision (#135) ---
 
 LANE_MAX_IMPL_FILES: Final[int] = 7
+# #225: secondary lane signal — at most this many bounded defects, each within
+# LANE_MAX_IMPL_FILES, aggregate <= MAX_LANE_DEFECTS * LANE_MAX_IMPL_FILES.
+MAX_LANE_DEFECTS: Final[int] = 3
 
 
 def _is_excluded_impl_file(path: str) -> bool:
@@ -962,6 +965,9 @@ def lane_decision(
     has_migration: bool,
     has_new_dep: bool,
     is_trivial: bool,
+    *,
+    defect_file_counts: list[int] | None = None,
+    operator_override: bool = False,
 ) -> tuple[str, str]:
     """Decide the WF2 execution tier for the small-standard lane (#135).
 
@@ -972,8 +978,15 @@ def lane_decision(
     - complexity == "complex_feature"         -> ("full", ...)
     - arch change / migration / new dep       -> ("full", ...) (first true wins)
     - complexity not lane-eligible (defensive)-> ("full", ...)
-    - impl_file_count > LANE_MAX_IMPL_FILES   -> ("full", ...)
-    - else                                    -> ("lane", ...)
+    - operator_override (#225)               -> ("lane", ...) — AFTER the hard
+      guards above, which it can never bypass; reason names the override
+    - impl_file_count <= LANE_MAX_IMPL_FILES  -> ("lane", ...)
+    - secondary signal (#225): count > cap but the change is 2..MAX_LANE_DEFECTS
+      bounded defects, each 1..LANE_MAX_IMPL_FILES files, and the total is
+      <= MAX_LANE_DEFECTS * LANE_MAX_IMPL_FILES -> ("lane", ...) with the
+      per-defect counts enumerated verbatim; malformed/over-bound entries fall
+      through to full (fail-closed)
+    - else                                    -> ("full", ...)
     """
     if is_trivial:
         return "trivial", "trivial — handled by trivial-work exit"
@@ -995,7 +1008,29 @@ def lane_decision(
         raise TypeError(
             f"impl_file_count must be an int (got {type(impl_file_count).__name__})"
         )
+    if operator_override:
+        return "lane", (
+            f"operator override — lane elected ({impl_file_count} impl files; "
+            f"hard guards passed)"
+        )
     if impl_file_count > LANE_MAX_IMPL_FILES:
+        counts = defect_file_counts
+        if (
+            isinstance(counts, list)
+            and 2 <= len(counts) <= MAX_LANE_DEFECTS
+            and all(
+                isinstance(c, int) and not isinstance(c, bool)
+                and 1 <= c <= LANE_MAX_IMPL_FILES
+                for c in counts
+            )
+            and impl_file_count <= MAX_LANE_DEFECTS * LANE_MAX_IMPL_FILES
+        ):
+            return "lane", (
+                f"bounded multi-defect: {len(counts)} defects "
+                f"({'+'.join(str(c) for c in counts)}), each ≤ {LANE_MAX_IMPL_FILES}, "
+                f"total {impl_file_count} ≤ {MAX_LANE_DEFECTS * LANE_MAX_IMPL_FILES} "
+                f"— lane (secondary signal)"
+            )
         return "full", f"{impl_file_count} impl files > {LANE_MAX_IMPL_FILES} — full spine"
     return "lane", f"small-standard: {complexity}, {impl_file_count} impl files ≤ {LANE_MAX_IMPL_FILES}"
 

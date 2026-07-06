@@ -46,6 +46,32 @@ python3 -c "import sys; sys.path.insert(0,'hooks'); from plan_lib import lane_de
 → `small_standard_lane_eligible = true`**; `trivial` defers to `<trivial-work-check>`; `full` runs
 the whole spine. Log the tier + reason in session notes.
 
+**Secondary signal — bounded multi-defect election (#225).** When the Step-2 analysis
+identifies the change as **2..`MAX_LANE_DEFECTS` (3) separately-understood, bounded defects**
+(e.g. the same fix pattern across native-core + host + frontend) with no architecture
+change, pass their per-defect impl-file estimates (same `count_impl_files` exclusions) as
+`defect_file_counts=[...]` on the `lane_decision` call. The lane is then electable even when
+the TOTAL exceeds 7, provided each defect is ≤ `LANE_MAX_IMPL_FILES` AND the total is ≤
+`MAX_LANE_DEFECTS × LANE_MAX_IMPL_FILES` (21) — a multi-defect change is lane-eligible iff
+each defect independently would be, with a hard aggregate ceiling. Malformed or over-bound
+counts fail closed to the full spine, and the returned reason enumerates the per-defect
+counts verbatim so an implausible split is reviewable.
+
+**Operator override (#225).** When the operator judges an over-cutoff change bounded, the
+surfacing block below gains choice **(c) Force lane** — re-call `lane_decision(...,
+operator_override=True)`. In **headless** mode there is no interactive choice: set the
+per-run env `RAWGENTIC_WF2_FORCE_LANE=1` to elect it (precedent: `RAWGENTIC_EPIC_GOAL`, the
+per-run headless-signal pattern; the wiring is prose-enforced at this call site —
+`lane_decision` stays pure); otherwise headless auto-resolve stays conservative (full).
+**The architecture-change / migration / new-dependency guards force the full spine
+regardless — neither the secondary signal nor the operator override can bypass them (and a
+complex_feature classification is likewise unbypassable: re-tag it, don't force it).**
+
+**Sanctioned-count handoff (#225).** An elected-lane run (secondary signal or override) logs
+its **sanctioned expected impl-file count** in the lane marker — the Step-2 estimate N it was
+elected at — so Step 9's cross-check compares the real diff against the sanctioned figure,
+not the ordinary 7. An override or secondary-signal lane election is logged with its reason verbatim — never silent.
+
 **Input-source honesty.** `lane_decision` is a pure, unit-tested function, but at Step 2
 (pre-implementation) `file_count` is an **estimate** from the Step-2 component map — there is no
 diff yet. So lane eligibility is "mechanically decided **given** the Step-2 estimates," not fully
@@ -54,17 +80,23 @@ lane cross-check); on a material overshoot it records a `lane-widened` note — 
 retroactively fail. A deterministic pre-diff detector is the AC5 follow-up.
 
 **Surfacing (suggested-never-silent; mirrors `<trivial-work-check>`).** When
-`small_standard_lane_eligible` and the lane is not already forced or declined, STOP and present:
+`small_standard_lane_eligible`, **or** the tier came back `full` on file-count alone with all
+hard guards passed (the #225 operator-override case), and the lane is not already forced or
+declined, STOP and present:
 ```
 Step 2 → SMALL-STANDARD detected (<N files, complexity>). Recommend the small-standard lane:
   keeps TDD + code review + security scan + CI; skips the design panel + drift gates.
   (a) Small-standard lane  [recommended]
   (b) Full WF2 (design panel + all gates)
+  (c) Force lane (operator override — offered only in the tier=="full"-on-file-count-alone
+      case; re-calls lane_decision with operator_override=True)
 ```
 This is a **suggestion, never a hard gate** — the orchestrator must NOT silently pick the lane;
 continuing the full workflow is always valid. In **headless** mode there is no interactive user,
 so AUTO-RESOLVE the lane-vs-full choice: take the lane for eligible changes and the full spine for
-`complex_feature`, and log the choice in session notes. (Stated as inline prose, not a bracketed
+`complex_feature`; the tier=="full"-on-count-alone case stays full unless the per-run
+`RAWGENTIC_WF2_FORCE_LANE=1` env elects the override (see the Operator override paragraph).
+Log the choice in session notes. (Stated as inline prose, not a bracketed
 annotation, to keep the per-skill headless-annotation count stable.)
 
 ### Keep / collapse table (the contract)
@@ -980,10 +1012,12 @@ compare against `LANE_MAX_IMPL_FILES`:
 ```bash
 python3 -c "import sys,subprocess; sys.path.insert(0,'hooks'); from plan_lib import count_impl_files, LANE_MAX_IMPL_FILES; paths=subprocess.run(['git','diff','--name-only','origin/<default>..HEAD'],capture_output=True,text=True).stdout.split(); n=count_impl_files(paths); print(n, n > LANE_MAX_IMPL_FILES)"
 ```
-If the real count materially exceeds `LANE_MAX_IMPL_FILES`, log a **`lane-widened`** note to
+If the real count materially exceeds the run's **comparison figure** — the **sanctioned
+elected count** logged by a #225 secondary-signal/override lane election when one exists,
+else `LANE_MAX_IMPL_FILES` — log a **`lane-widened`** note to
 session notes AND set a run-record note (the design panel was skipped on a change that turned out
-larger than estimated) — do **NOT** retroactively fail: the gates that DID run (Step 11, Step
-11.5, Step 8a) are still valid and load-bearing.
+larger than estimated, or beyond the sanctioned elected count) — do **NOT** retroactively
+fail: the gates that DID run (Step 11, Step 11.5, Step 8a) are still valid and load-bearing.
 
 **Part A: Drift check (apply the quality-bar rubric, `references/quality-bar.md`):**
 - Plan-implementation alignment: does every task have a corresponding implementation?
