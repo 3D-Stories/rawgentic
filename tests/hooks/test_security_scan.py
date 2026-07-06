@@ -1174,6 +1174,69 @@ class TestRunScanCwdIndependence:
         assert result.get("warnings")
         assert any("lock" in w["message"].lower() for w in result["warnings"])
 
+    # --- Step 11 review fixes (#230) ---------------------------------------
+
+    def test_pip_audit_findings_kept_not_dropped_by_diff_scope(self, tmp_path):
+        # CRITICAL (review): parse_pip_audit hardcodes location="requirements", which
+        # matches no real path — diff-scoping must NOT silently drop pip-audit SCA
+        # advisories. Keep-all is the fail-closed-safe direction for the fallback.
+        from security_scan import run_scan
+        (tmp_path / "requirements.txt").write_text("flask==0.1\n")
+        pip_out = json.dumps({"dependencies": [{"name": "flask", "version": "0.1",
+            "vulns": [{"id": "PYSEC-1", "severity": "HIGH"}]}]})
+        runner = _fake_runner_from({
+            "git": _proc(0, "requirements.txt\n"),
+            "gitleaks": _proc(0, "[]"),
+            "pip-audit": _proc(1, pip_out),   # rc=1 = vulns found
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        result = run_scan(str(tmp_path), project_type="python", base_ref="origin/main",
+                          which=_which_from({"gitleaks", "pip-audit", "semgrep"}),
+                          runner=runner, env={})
+        assert any(f["kind"] == "sca" for f in result["findings"]), \
+            "pip-audit advisory must survive diff-scoping"
+        assert result["gate"]["blocked"] is True
+
+    @pytest.mark.parametrize("lockfile", [
+        "uv.lock", "bun.lock", "pdm.lock", "pylock.toml", "gradle.lockfile",
+        "buildscript-gradle.lockfile", "gradle/verification-metadata.xml",
+        "packages.config", "deps.json", "renv.lock", "stack.yaml.lock"])
+    def test_dep_manifest_re_matches_osv_supported_lockfiles(self, lockfile):
+        # HIGH (review): the allowlist must cover osv-scanner's supported lockfiles,
+        # else a branch changing one drops its introduced advisory (under-block).
+        from security_scan import _DEP_MANIFEST_RE
+        assert _DEP_MANIFEST_RE.search(lockfile), \
+            f"{lockfile} not recognized — its introduced advisories would be dropped"
+
+    def test_git_diff_disables_quotepath(self):
+        # LOW (review): git core.quotePath=true octal-escapes non-ASCII manifest paths,
+        # so the anchored regex misses them and drops their advisories. Force it off.
+        from security_scan import run_scan
+        runner = _fake_runner_from({
+            "git": _proc(0, "package-lock.json\n"),
+            "gitleaks": _proc(0, "[]"),
+            "osv-scanner": _proc(0, '{"results": []}'),
+            "semgrep": _proc(0, '{"results": [], "errors": []}')})
+        run_scan("/proj", project_type="node", base_ref="origin/main",
+                 which=_which_from({"gitleaks", "osv-scanner", "semgrep"}),
+                 runner=runner, env={})
+        git_cmd = next(c for c in runner.calls if c[0] == "git")
+        assert "core.quotePath=false" in git_cmd
+
+    def test_divergent_member_locks_dedups_symlink_cycle(self, tmp_path):
+        # LOW/MED (review): a symlink cycle must not multiply one divergent member lock
+        # into many spurious warnings (glob followed symlinks; os.walk must not).
+        from security_scan import divergent_member_locks
+        (tmp_path / "Cargo.lock").write_text("root\n")
+        sub = tmp_path / "src-tauri"
+        sub.mkdir()
+        (sub / "Cargo.lock").write_text("DRIFT\n")
+        try:
+            os.symlink(tmp_path, sub / "loop")
+        except OSError:
+            pytest.skip("symlinks unavailable")
+        div = divergent_member_locks(str(tmp_path), str(tmp_path / "Cargo.lock"))
+        assert len(div) == 1, f"symlink cycle multiplied results: {div}"
+
     def test_semgrep_not_failclosed_when_cwd_is_threaded(self):
         # Behavioral regression mirroring the #101 repro: a cwd-sensitive semgrep
         # exits rc=2 unless invoked from the repo root. With cwd threaded it

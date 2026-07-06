@@ -328,13 +328,20 @@ def _build_trivy_config(project_root, base_ref, full):
 # Dependency manifests/lockfiles osv-scanner (and the fallbacks) understand. Used
 # to decide whether a branch's diff touched dependency state at all: if it changed
 # none of these, no advisory it reports can have been introduced by the branch.
+# This allowlist must track osv-scanner's supported lockfiles — a name missing
+# here excludes a changed manifest from the diff, dropping its introduced advisory
+# (under-block). `tests/...::test_dep_manifest_re_matches_osv_supported_lockfiles`
+# pins the set; extend both when osv-scanner adds an ecosystem.
 _DEP_MANIFEST_RE = re.compile(
     r"(?:^|/)(?:package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|"
-    r"pnpm-lock\.yaml|package\.json|Cargo\.lock|Cargo\.toml|go\.mod|go\.sum|"
-    r"requirements[^/]*\.txt|poetry\.lock|pyproject\.toml|Pipfile\.lock|"
-    r"Pipfile|Gemfile\.lock|Gemfile|composer\.lock|composer\.json|pom\.xml|"
-    r"build\.gradle(?:\.kts)?|Package\.resolved|packages\.lock\.json|"
-    r"conan\.lock|mix\.lock|pubspec\.lock)$", re.IGNORECASE)
+    r"pnpm-lock\.yaml|bun\.lock|bun\.lockb|package\.json|Cargo\.lock|Cargo\.toml|"
+    r"go\.mod|go\.sum|requirements[^/]*\.txt|poetry\.lock|pyproject\.toml|"
+    r"uv\.lock|pdm\.lock|pylock\.toml|Pipfile\.lock|Pipfile|Gemfile\.lock|"
+    r"Gemfile|composer\.lock|composer\.json|pom\.xml|build\.gradle(?:\.kts)?|"
+    r"gradle\.lockfile|buildscript-gradle\.lockfile|verification-metadata\.xml|"
+    r"Package\.resolved|packages\.lock\.json|packages\.config|deps\.json|"
+    r"renv\.lock|stack\.yaml\.lock|conan\.lock|mix\.lock|pubspec\.lock)$",
+    re.IGNORECASE)
 
 
 def _norm_repo_rel(path, project_root):
@@ -364,8 +371,11 @@ def _changed_dep_manifests(project_root, base_ref, runner):
     of repo-relative POSIX paths, or None when git cannot tell (nonzero exit / error)
     — the caller treats None as fail-closed (keep every SCA finding)."""
     try:
-        proc = runner(["git", "diff", "--name-only", f"{base_ref}...HEAD"],
-                      cwd=project_root)
+        # -c core.quotePath=false: with the default (true) git octal-escapes and
+        # quotes non-ASCII paths (e.g. "caf\303\251/package-lock.json"), which the
+        # $-anchored manifest regex would miss -> its introduced advisory dropped.
+        proc = runner(["git", "-c", "core.quotePath=false", "diff", "--name-only",
+                       f"{base_ref}...HEAD"], cwd=project_root)
     except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
@@ -380,14 +390,28 @@ def _changed_dep_manifests(project_root, base_ref, runner):
 
 def _sca_finding_is_in_scope(finding, changed_manifests, project_root):
     """True if an SCA finding's manifest was changed by the branch. Match by exact
-    repo-relative path FIRST, then a basename fallback (Codex-flagged: osv
-    `source.path` formatting varies — a false *drop* would under-block, so the
-    fallback errs toward keeping). An empty/unknown location is kept conservatively."""
+    repo-relative path FIRST, then a basename fallback (osv `source.path` formatting
+    varies — a false *drop* would under-block, so the fallback errs toward keeping).
+    An empty/unknown location is kept conservatively.
+
+    pip-audit is exempt (always kept): its parser cannot localize a finding to a
+    concrete file — it hardcodes location="requirements", which matches no real
+    path, so scoping would silently drop EVERY pip-audit advisory. pip-audit is the
+    degraded SCA fallback (osv-scanner absent); keep-all is the fail-closed-safe
+    behavior there. (npm's hardcoded "package-lock.json" IS a real filename, so it
+    scopes correctly by the basename fallback.)"""
+    if finding.get("scanner") == "pip-audit":
+        return True
     loc = _norm_repo_rel(finding.get("location", ""), project_root)
     if not loc:
         return True  # can't localize -> can't prove pre-existing -> keep
     if loc in changed_manifests:
         return True
+    # Basename fallback (safe/over-keep). NOTE: every cargo lock is named
+    # "Cargo.lock", so in a member-scoped workspace scan a root-lock pre-existing
+    # advisory can match a changed member lock by basename and stay blocking — an
+    # over-block (safe), inherent to manifest-granularity scoping with colliding
+    # basenames. Acceptable: it never under-blocks.
     base = os.path.basename(loc)
     return any(os.path.basename(ch) == base for ch in changed_manifests)
 
@@ -455,15 +479,22 @@ def divergent_member_locks(project_root, canonical_lock):
             canon = fh.read()
     except OSError:
         return []
-    out = []
-    for member in glob.glob(os.path.join(project_root, "**", "Cargo.lock"),
-                            recursive=True):
-        if os.path.abspath(member) == os.path.abspath(canonical_lock):
+    canon_real = os.path.realpath(canonical_lock)
+    # os.walk(followlinks=False), not glob(recursive=True): the latter follows
+    # directory symlinks and a symlink cycle multiplies one member lock into many
+    # spurious warnings. Dedup by realpath so an aliased path can't double-count.
+    out = set()
+    for dirpath, _dirs, filenames in os.walk(project_root, followlinks=False):
+        if "Cargo.lock" not in filenames:
+            continue
+        member = os.path.join(dirpath, "Cargo.lock")
+        real = os.path.realpath(member)
+        if real == canon_real:
             continue
         try:
             with open(member, "rb") as fh:
                 if fh.read() != canon:
-                    out.append(member)
+                    out.add(real)
         except OSError:
             continue
     return sorted(out)
