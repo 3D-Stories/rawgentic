@@ -91,6 +91,8 @@ def test_cli_prunes_and_rewrites(tmp_path):
     assert r.returncode == 0, r.stderr
     lines = [l for l in reg.read_text().splitlines() if l.strip()]
     assert len(lines) == 1 and "new" in lines[0]
+    # atomic write via os.replace leaves no stray temp file behind
+    assert not list(tmp_path.glob(".registry_prune.*.tmp"))
 
 def test_cli_dry_run_does_not_write(tmp_path):
     reg = tmp_path / "r.jsonl"

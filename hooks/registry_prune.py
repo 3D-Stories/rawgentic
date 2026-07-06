@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 
 DEFAULT_TTL_DAYS = 30
@@ -46,6 +47,30 @@ def _parse_started(obj) -> datetime | None:
     except ValueError:
         return None
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _atomic_write(path: str, text: str) -> None:
+    """Write `text` to `path` via a temp file + os.replace so a crash never leaves the
+    registry truncated/half-written (mirrors hooks/notes-size-handler.py's discipline).
+    ponytail: os.replace closes the truncate-corruption window. Residual ceiling (NOT
+    closed here): the registry's appenders are bash `printf ... >>` in skills/switch +
+    skills/new-project, which take no lock — so a session that BINDS in the window between
+    this prune's read and its os.replace can be dropped (its line went to the old inode).
+    Accepted for #7: opt-in manual tool, rarely run concurrently with a bind, and the lost
+    datum is a low-value registry line ("no correctness impact"); fully closing it needs
+    cooperative locking added to those two bash append sites — out of this issue's scope."""
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".registry_prune.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def prune_registry(text: str, now: datetime, ttl: int = DEFAULT_TTL_DAYS) -> tuple[str, dict]:
@@ -121,8 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.dry_run:
         print("(dry-run — no changes written)")
     elif stats["removed"] > 0:
-        with open(a.registry, "w", encoding="utf-8") as f:
-            f.write(new_text)
+        _atomic_write(a.registry, new_text)   # temp + os.replace — never truncate-in-place
         print(f"rewrote {a.registry}")
     else:
         print("nothing to remove — registry unchanged")
