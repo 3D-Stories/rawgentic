@@ -135,5 +135,7 @@ and claude_docs migration.
 Skills are tested via the `/skill-creator` eval pipeline, which produces
 `evals.json`, `benchmark.json`, and `review.html` for each skill.
 
-- **Coverage:** 14/14 skills have `evals.json`.
+- **Coverage:** 9/15 skills have `evals.json` (the README pin
+  `tests/hooks/test_adversarial_review_registration.py` guards this count — update
+  both together).
 - **When to re-run:** after modifying a `SKILL.md`.
