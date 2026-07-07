@@ -33,7 +33,8 @@ instructions.
 > skill) are a `<role>` plus a short prompt body — no `<config-loading>`, no
 > plan_lib counters, no eval workspace. Keep new skills lightweight unless they
 > genuinely need the full workflow protocol. The `<config-loading>` canary in
-> `tests/hooks/test_headless.py` expects exactly 12 skills to carry that block,
+> `tests/hooks/test_headless.py` (`EXPECTED_CONFIG_LOADING_COUNT`) pins exactly how
+> many skills carry that block — read the current value from the test, not this doc —
 > so adding it to a skill is a deliberate choice that must bump the canary.
 > A sibling optional tag, `<model-routing-resolve>`, follows `<config-loading>`
 > in skills that dispatch subagents (implement-feature, fix-bug, refactor) —
