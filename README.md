@@ -702,6 +702,9 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.24.3 (2026-07-07)
+- **render_summary no longer raises on a non-dict record (#261, epic #277).** `hooks/work_summary.py` read `verification_deferred` off the raw parameter while every sibling access routes through the `_as_dict`-coerced copy, so a list/str/int record raised `AttributeError` despite the function's "never raises" contract. One-line fix routes the read through the coerced copy; a parametrized reproduction test (list/str/int/None records) was red before the fix. No workflow-spine change → no diagram REV. Suite 2278→2283.
+
 ### v3.24.2 (2026-07-07)
 - **Unified harness + code review deliverable committed (docs).** `docs/reviews/2026-07-07-harness-and-code-review.md` and its rendered `.html` added: 28 confirmed findings (6 harness H-A…H-F, 22 code C1…C22, each independently re-verified), severity summary, a proposed 6-epic / 25-child work breakdown with dependency edges and acceptance criteria, a post-publication QA-pass record (cross-map complete both directions, 5 findings re-verified first-hand, suite re-run 2278/0), a discard log, and named coverage gaps. Review-only PR — no code changed. No workflow-spine change → no diagram REV. Suite 2278→2278.
 
