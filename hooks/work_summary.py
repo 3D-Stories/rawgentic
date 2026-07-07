@@ -575,7 +575,7 @@ def render_summary(record) -> str:
     usage = _as_dict(r.get("usage"))
     if usage:
         lines.append(_render_usage_line(usage))
-    deferred = record.get("verification_deferred")
+    deferred = r.get("verification_deferred")
     if isinstance(deferred, list) and deferred:
         lines.append("- Verification deferred (must be checked on target):")
         for d in deferred:

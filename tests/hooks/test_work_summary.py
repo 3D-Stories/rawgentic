@@ -561,6 +561,21 @@ class TestRenderSummary:
         text = render_summary(bad)
         assert isinstance(text, str) and text
 
+    @pytest.mark.parametrize("nondict", [
+        [],                    # a record file holding a JSON array
+        ["a", "b"],
+        "not-a-record",
+        42,
+        None,
+    ])
+    def test_never_raises_on_nondict_record(self, nondict):
+        """#261: the docstring promises "never raises on a ... non-dict record",
+        but the verification_deferred read went through the RAW param instead of
+        the _as_dict-coerced copy, so a list/str/int record raised AttributeError."""
+        from work_summary import render_summary
+        text = render_summary(nondict)
+        assert isinstance(text, str) and text
+
 
 # --- resolve_store_path ----------------------------------------------------
 
