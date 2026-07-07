@@ -1,0 +1,321 @@
+<title>Rawgentic — Unified Harness + Code Review</title>
+<style>
+  :root{
+    --bg:#f5f7f9; --panel:#fff; --panel2:#eef2f5; --ink:#11161c; --muted:#586471; --faint:#8b96a2;
+    --line:#dde3e9; --accent:#0d7d8a; --accent-ink:#075661;
+    --high:#c4322f; --med:#b8770c; --low:#5f6b78;
+    --high-bg:#fbecea; --med-bg:#faf1e0; --low-bg:#edf1f4;
+    --ok:#2f7d4f;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0d1014; --panel:#161b22; --panel2:#1b222b; --ink:#e6edf3; --muted:#9aa6b2; --faint:#66707c;
+    --line:#252d36; --accent:#35c2d1; --accent-ink:#7fdce6;
+    --high:#f0625d; --med:#e0a12a; --low:#8b97a4;
+    --high-bg:#2a1615; --med-bg:#241d10; --low-bg:#1a212a; --ok:#4bb87a;
+  }}
+  :root[data-theme="light"]{--bg:#f5f7f9;--panel:#fff;--panel2:#eef2f5;--ink:#11161c;--muted:#586471;--faint:#8b96a2;--line:#dde3e9;--accent:#0d7d8a;--accent-ink:#075661;--high:#c4322f;--med:#b8770c;--low:#5f6b78;--high-bg:#fbecea;--med-bg:#faf1e0;--low-bg:#edf1f4;--ok:#2f7d4f;}
+  :root[data-theme="dark"]{--bg:#0d1014;--panel:#161b22;--panel2:#1b222b;--ink:#e6edf3;--muted:#9aa6b2;--faint:#66707c;--line:#252d36;--accent:#35c2d1;--accent-ink:#7fdce6;--high:#f0625d;--med:#e0a12a;--low:#8b97a4;--high-bg:#2a1615;--med-bg:#241d10;--low-bg:#1a212a;--ok:#4bb87a;}
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;font-size:15.5px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:900px;margin:0 auto;padding:52px 22px 96px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .eyebrow .dot{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+  h1{font-size:clamp(28px,4.6vw,42px);line-height:1.08;letter-spacing:-.02em;margin:0 0 16px;text-wrap:balance;font-weight:680}
+  .lede{font-size:17.5px;color:var(--muted);max-width:66ch;margin:0 0 18px}
+  .meta{font-family:var(--mono);font-size:12.5px;color:var(--faint);border-top:1px solid var(--line);padding-top:14px;line-height:1.7}
+  .meta b{color:var(--muted);font-weight:600}
+
+  section{margin-top:48px}
+  h2{font-family:var(--mono);font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);font-weight:600;margin:0 0 8px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+  h2 .n{color:var(--accent)}
+  .sub{color:var(--muted);margin:0 0 20px;font-size:14.5px}
+  h3{font-family:var(--mono);font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:26px 0 12px;font-weight:600}
+  p{margin:0 0 14px;max-width:70ch}
+
+  /* matrix */
+  .matrix{width:100%;border-collapse:collapse;font-size:14.5px;margin:0 0 8px;overflow-x:auto;display:block}
+  .matrix table{width:100%;border-collapse:collapse}
+  table.m{width:100%;border-collapse:collapse;font-size:14.5px}
+  table.m th,table.m td{text-align:center;padding:9px 10px;border-bottom:1px solid var(--line)}
+  table.m th:first-child,table.m td:first-child{text-align:left;color:var(--muted)}
+  table.m th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  table.m td{font-variant-numeric:tabular-nums;font-weight:600}
+  .cell-h{color:var(--high)} .cell-m{color:var(--med)} .cell-l{color:var(--low)} .cell-z{color:var(--faint);font-weight:400}
+  .totrow td{border-top:2px solid var(--line);border-bottom:none;font-weight:700}
+
+  .goal{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:18px 22px;font-size:15px;color:var(--muted)}
+  .goal b{color:var(--ink)}
+
+  /* finding */
+  .f{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:15px 17px;margin-bottom:11px;position:relative;overflow:hidden}
+  .f::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px}
+  .f.high::before{background:var(--high)} .f.med::before{background:var(--med)} .f.low::before{background:var(--low)}
+  .fh{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:7px}
+  .fid{font-family:var(--mono);font-size:12.5px;font-weight:700;color:var(--accent)}
+  .ft{font-weight:640;font-size:15.5px;flex:1;min-width:220px;letter-spacing:-.01em}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;font-weight:700;padding:3px 8px;border-radius:20px;white-space:nowrap}
+  .chip.high{color:var(--high);background:var(--high-bg)} .chip.med{color:var(--med);background:var(--med-bg)} .chip.low{color:var(--low);background:var(--low-bg)}
+  .chip.dim{color:var(--muted);background:var(--panel2)}
+  .f p{margin:0 0 7px;color:var(--muted);font-size:14px;max-width:none}
+  .f .ev{font-family:var(--mono);font-size:12px;line-height:1.5;background:var(--panel2);border-radius:6px;padding:8px 11px;margin-top:8px;color:var(--muted);overflow-x:auto}
+  .f .ev b{color:var(--ink);font-weight:600}
+  .f .fix{color:var(--ink);font-size:13.5px}
+  .f .fix b{color:var(--accent-ink)}
+
+  /* epics */
+  .epic{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:0;margin-bottom:16px;overflow:hidden}
+  .epic > .ehead{padding:15px 18px 13px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .ehead .etitle{font-weight:680;font-size:16px;letter-spacing:-.01em;margin:0}
+  .ehead .enote{color:var(--muted);font-size:13.5px;margin:4px 0 0}
+  .child{display:flex;gap:12px;padding:11px 18px;border-bottom:1px solid var(--line);align-items:flex-start}
+  .child:last-child{border-bottom:none}
+  .child .cid{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);min-width:26px;padding-top:1px}
+  .child .cbody{flex:1}
+  .child .ct{font-weight:600;font-size:14.5px}
+  .child .cmeta{font-family:var(--mono);font-size:11px;color:var(--faint);margin-top:3px}
+  .child .cmeta .ref{color:var(--accent-ink)}
+  .sevtag{font-family:var(--mono);font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;white-space:nowrap;margin-top:1px}
+  .sevtag.high{color:var(--high);background:var(--high-bg)} .sevtag.med{color:var(--med);background:var(--med-bg)} .sevtag.low{color:var(--low);background:var(--low-bg)}
+  .decision{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:1px}
+
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 18px}
+  .box.ok{border-left:3px solid var(--ok)}
+  .box ul{margin:8px 0 0;padding-left:18px} .box li{margin-bottom:7px;color:var(--muted);font-size:14px}
+  .box li b{color:var(--ink)}
+  .box .k{font-family:var(--mono);font-size:12px;color:var(--faint)}
+
+  .footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);font-family:var(--mono);font-size:12px;color:var(--faint);line-height:1.7}
+  a{color:var(--accent-ink)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:6px 0 0}
+  .legend span{display:flex;align-items:center;gap:6px}
+  .sw{width:10px;height:10px;border-radius:2px;display:inline-block}
+</style>
+
+<div class="wrap">
+  <p class="eyebrow"><span class="dot"></span> Unified Review · harness + code · Fable 5 multi-agent</p>
+  <h1>What the factory ships, and 28 things to fix in how it's built</h1>
+  <p class="lede">Two multi-agent passes over the rawgentic system: a five-layer harness audit and a seven-dimension code review of <code>projects/rawgentic</code> — merged, deduped, every finding independently confirmed against the cited code.</p>
+  <p class="meta"><b>Method.</b> Harness: 5 layer readers + 8 refuters. Code: 7 dimension reviewers → dedup → one independent second-reviewer per finding (could reject). <b>42 agents total.</b> Read-only; nothing was changed. <b>Result:</b> 28 findings — 6 harness + 22 code; all 22 code findings survived confirmation (0 rejected, 10 severity-adjusted down). No Critical anywhere; every High sits in the config/instruction layer, not the code.</p>
+
+  <section>
+    <h2>The goal this serves</h2>
+    <div class="goal">Confirmed across five independent layer reads: a <b>personal, multi-project, high-autonomy software factory</b> — issues in, merged verified PRs out, attention pulled to the ends (specify, authorize), the middle autonomous but measurably rigorous, self-productizing (the process is the shippable plugin). Every finding below is a place the system fights that goal.</div>
+  </section>
+
+  <section>
+    <h2>Severity at a glance</h2>
+    <div style="overflow-x:auto">
+    <table class="m">
+      <tr><th>Layer</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Total</th></tr>
+      <tr><td>Harness (config / instructions)</td><td class="cell-z">0</td><td class="cell-h">4</td><td class="cell-m">2</td><td class="cell-z">0</td><td>6</td></tr>
+      <tr><td>Code (projects/rawgentic)</td><td class="cell-z">0</td><td class="cell-z">0</td><td class="cell-m">7</td><td class="cell-l">15</td><td>22</td></tr>
+      <tr class="totrow"><td>Total</td><td>0</td><td>4</td><td>9</td><td>15</td><td>28</td></tr>
+    </table>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--high)"></i> High</span>
+      <span><i class="sw" style="background:var(--med)"></i> Medium</span>
+      <span><i class="sw" style="background:var(--low)"></i> Low</span>
+      <span>effort: S &lt;1h · M &lt;½day · L &gt;½day</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Harness findings <span class="n">· H-A … H-F</span></h2>
+    <p class="sub">Config and instruction layer. Full evidence in the prior harness artifact — all independently re-measured. These carry every High.</p>
+
+    <div class="f high"><div class="fh"><span class="fid">H-A</span><span class="ft">Permission allowlist pre-authorizes the classes the safety model relies on</span><span class="chip high">High · S</span></div>
+      <p>The gate the instructions defer safety to can't fire on the actions that would break the rules.</p>
+      <div class="ev">unprompted: <b>python3 -c ":*"</b> (arbitrary code) · <b>gh api:*</b> (arbitrary GitHub mutation) · <b>GH_TOKEN=… git:*</b> (incl. <b>push origin main --force</b>) — vs CLAUDE.md "never push to main"</div></div>
+
+    <div class="f high"><div class="fh"><span class="fid">H-B</span><span class="ft">Four always-on, contradictory output / autonomy contracts</span><span class="chip high">High · M</span><span class="chip dim">decision</span></div>
+      <p>operating-instructions (rich status) vs caveman (no narration) vs ponytail (3 lines) vs learning-output-style (educational prose + "stop, let the human write code"). Resolved arbitrarily each turn; the loser is trained as ignorable.</p></div>
+
+    <div class="f high"><div class="fh"><span class="fid">H-C</span><span class="ft">Competing process ownership</span><span class="chip high">High · M</span><span class="chip dim">decision</span></div>
+      <p>superpowers ("MUST invoke a skill before ANY response" + brainstorming HARD-GATE) and reflexion (threat-based judge, "value = what you REJECT") claim process rawgentic owns and train the over-reporting the global instructions fight.</p></div>
+
+    <div class="f high"><div class="fh"><span class="fid">H-D</span><span class="ft">Memory-stack layering; authority inverted</span><span class="chip high">High · M</span></div>
+      <p>Five systems. The declared-authoritative store (mempalace) is quietest at bootstrap; "legacy" MEMORY.md is loudest and still written despite a standing "do not write" hook; the WAL recovery report re-announces 183 incomplete ops (oldest March) every session with no expiry.</p>
+      <div class="ev">~93 KB injected before the first prompt; same facts arrive at three freshness levels</div></div>
+
+    <div class="f med"><div class="fh"><span class="fid">H-E</span><span class="ft">principles.md staleness</span><span class="chip med">Medium · M</span></div>
+      <p>Merged with code C18 / C19 below — same root cause.</p></div>
+
+    <div class="f med"><div class="fh"><span class="fid">H-F</span><span class="ft">No janitor</span><span class="chip med">Medium · M</span></div>
+      <p>684 dead permission rules (54 on a path that no longer exists), 2.6 MB stray root files incl. a byte-identical duplicate operating-instructions.md, 5.7 MB WAL incl. orphans, dead-weight plugins. Merged with the code dead-code cluster below.</p></div>
+  </section>
+
+  <section>
+    <h2>Code findings <span class="n">· C1 … C22</span></h2>
+    <p class="sub">All confirmed against cited code by an independent second reviewer. 0 rejected.</p>
+
+    <h3>Correctness</h3>
+    <div class="f med"><div class="fh"><span class="fid">C1</span><span class="ft">render_summary() crashes on a non-dict record — breaks its "never raises" contract</span><span class="chip med">Medium · S</span></div>
+      <p>The best-effort Step-16 summary exists precisely so the user always gets output when validation fails. One line skips the safe coercion.</p>
+      <div class="ev">work_summary.py:578 <b>record.get(...)</b> on the raw param vs <b>r = _as_dict(record)</b> used everywhere else — a top-level JSON array/string/number throws</div>
+      <p class="fix"><b>Fix:</b> read from <code>r</code>; test render_summary([]) / "x" / 42.</p></div>
+
+    <h3>Robustness / error-path</h3>
+    <div class="f med"><div class="fh"><span class="fid">C20</span><span class="ft">wal-guard headless block-audit is dead — WAL_FILE never initialized</span><span class="chip med">Medium · S</span></div>
+      <p>The deny still fires, but "in headless, blocks MUST be auditable" — and none are recorded.</p>
+      <div class="ev">wal-guard:40-50 gated on WAL_FILE; set only by wal_init_file (wal-lib.sh:114), which wal-guard never calls</div>
+      <p class="fix"><b>Fix:</b> call wal_init_file after wal_resolve_project; test the GUARD_BLOCK line.</p></div>
+
+    <div class="f med"><div class="fh"><span class="fid">C21</span><span class="ft">Divergent claudeDocsPath resolution would disable the cross-project guard (latent — unreachable today)</span><span class="chip med">Medium · M</span></div>
+      <p>wal-lib.sh trusts an absolute path outside $HOME; wal-stop and wal-bind-guard reject it. Writes could land where the guard doesn't read. <b>Verified 2026-07-07: no project sets claudeDocsPath, so the branch is never taken — a latent inconsistency, not a live hole.</b></p>
+      <div class="ev">wal-lib.sh:76-95 vs wal-stop:38-45 / wal-bind-guard:68-75</div>
+      <p class="fix"><b>Fix:</b> same under-HOME check in all three resolvers before anyone sets an absolute path.</p></div>
+
+    <div class="f low"><div class="fh"><span class="fid">C22</span><span class="ft">Project name not path-traversal-validated in the shared paths</span><span class="chip low">Low · S</span></div>
+      <div class="ev">wal-stop:67-72 guards <b>*/*|*\\*|..*</b>; wal-lib.sh:114, wal-context:64,88, security-guard.py:176 build paths from the same name with no guard</div>
+      <p class="fix"><b>Fix:</b> one check in wal_resolve_project covers all bash callers.</p></div>
+
+    <h3>Duplication / simplification</h3>
+    <div class="f med"><div class="fh"><span class="fid">C6</span><span class="ft">Atomic write reimplemented in 6+ hooks; plan_lib uses a weaker variant</span><span class="chip med">Medium · M</span></div>
+      <div class="ev">notes-size-handler:116, scanner_bootstrap:64, post_update_reconcile:248 &amp; :276, registry_prune:63; weaker fixed-name (no unlink-on-except) at plan_lib:1893 — violates the repo's own §5 checklist. (Re-enumerate sites: adversarial_review_lib:1431 is NOT mkstemp.)</div>
+      <p class="fix"><b>Fix:</b> one atomic_write helper; route all sites incl. plan_lib.</p></div>
+
+    <div class="f med"><div class="fh"><span class="fid">C7</span><span class="ft">wal-stop / wal-suspend reinvent wal-lib.sh resolution and have diverged</span><span class="chip med">Medium · M</span></div>
+      <p>They don't source the lib; the inline copies carry the C21 divergence.</p>
+      <div class="ev">canonical fns wal-lib.sh:45,68,193; reinvented at wal-stop:26-62, wal-suspend:33-79</div>
+      <p class="fix"><b>Fix:</b> source wal-lib.sh, call the shared fns; removes ~30 dup lines each and collapses C21.</p></div>
+
+    <div class="f low"><div class="fh"><span class="fid">C5</span><span class="ft">quality-bar.md is a hand-synced byte-identical triple, outside the shared-block mechanism</span><span class="chip low">Low · M</span></div>
+      <div class="ev">skills/{fix-bug,implement-feature,setup}/references/ · md5 23a78567… · not in sync_shared_blocks.py MANIFEST (an existing feasibility test catches full divergence → Low)</div>
+      <p class="fix"><b>Fix:</b> single-source via the shared-block mechanism (needs whole-file support).</p></div>
+
+    <h3>Performance — hooks that fire on every tool call</h3>
+    <div class="f med"><div class="fh"><span class="fid">C8</span><span class="ft">WAL stdin JSON re-parsed with 4 separate jq spawns</span><span class="chip med">Medium · S</span></div>
+      <div class="ev">wal-lib.sh:29-34 wal_parse_fields, across wal-pre/post/post-fail/guard/context — measured ~124 ms/Bash call</div>
+      <p class="fix"><b>Fix:</b> one jq for all fields; reuse the already-read input.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C9</span><span class="ft">wal-guard spawns one grep per pattern (up to 12) per Bash call</span><span class="chip low">Low · S</span></div>
+      <div class="ev">strict/standard mode + the no-workspace default; sandbox is skipped — narrow blast radius → Low</div>
+      <p class="fix"><b>Fix:</b> one combined grep -iE.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C10</span><span class="ft">wal-bind-guard fires on every Read (~52-63 ms) to allow</span><span class="chip low">Low · M</span></div>
+      <div class="ev">hooks.json PreToolUse matcher includes Read; full config work on the common bound-project allow path</div>
+      <p class="fix"><b>Fix:</b> string-prefix fast-path for the bound project; consolidate the 3-jq parse.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C11</span><span class="ft">Workspace up-tree search forks a subshell per parent level</span><span class="chip low">Low · S</span></div>
+      <div class="ev">wal-lib.sh:58, wal-bind-guard (security-guard.py citation was wrong — pure-Python, no fork)</div>
+      <p class="fix"><b>Fix:</b> pure-bash dir=${dir%/*}.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C12</span><span class="ft">session-start spawns python3 once per notes file, every startup/compact</span><span class="chip low">Low · S</span></div>
+      <div class="ev">session-start:440 _do_size_handler loop — O(N projects) interpreter starts per event</div>
+      <p class="fix"><b>Fix:</b> one python invocation looping internally, or a wc -l gate.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C13</span><span class="ft">session-start shells to query-archive.py, removed in #57 (dead spawn path)</span><span class="chip low">Low · S</span></div>
+      <div class="ev">session-start:464 _do_archive_context — file confirmed absent</div>
+      <p class="fix"><b>Fix:</b> delete the block (comment already flags it).</p></div>
+
+    <h3>Test health</h3>
+    <div class="f low"><div class="fh"><span class="fid">C14</span><span class="ft">"9/15 skills have evals.json" is an uncomputed substring pin — and already wrong</span><span class="chip low">Low · S</span></div>
+      <div class="ev">test_adversarial_review_registration.py:61 asserts a literal string, never enumerates disk; sync-security-patterns/evals/evals.json exists (2991 B), uncounted</div>
+      <p class="fix"><b>Fix:</b> compute the count from disk; assert README renders it.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C15</span><span class="ft">Headless annotation guard counts the substring "[Headless" over the whole corpus</span><span class="chip low">Low · S</span></div>
+      <div class="ev">test_headless.py:1485 — any incidental occurrence breaks it; forces manual bumps</div>
+      <p class="fix"><b>Fix:</b> anchored regex \[Headless: , or a &gt;= floor + structural check.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C16</span><span class="ft">security-guard-check.sh write-failure branch has no test</span><span class="chip low">Low · S</span></div>
+      <div class="ev">the "fail-closed on the nag when the decision file can't be written" path; every other branch covered</div>
+      <p class="fix"><b>Fix:</b> chmod parent unwritable, assert empty stdout + no file.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C17</span><span class="ft">test_no_issue_template_carries_auto_label passes vacuously</span><span class="chip low">Low · S</span></div>
+      <div class="ev">test_headless_action_workflow.py:97-102 early-returns with 0 assertions when ISSUE_TEMPLATE dir is absent (current state) — guards a real approval-gate property</div>
+      <p class="fix"><b>Fix:</b> pytest.skip so the vacuity is visible.</p></div>
+
+    <h3>Doc↔code drift <span style="color:var(--faint);font-weight:400">(merges H-E)</span></h3>
+    <div class="f med"><div class="fh"><span class="fid">C18</span><span class="ft">README presents principles.md as the plugin's "enforcement mechanisms" — it's a March artifact for a different project</span><span class="chip med">Medium · M</span></div>
+      <div class="ev">docs/principles.md P1–P14 describe hooks never built, stated present-tense as fact; README:479-497 links it as authoritative. Only P15 is enforced.</div>
+      <p class="fix"><b>Fix:</b> banner it superseded; correct the four "existing hook already enforces" sentences; single-source principle statements.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C19</span><span class="ft">README P2 says "Black," principles.md says "Ruff"; neither (nor Prettier) is wired</span><span class="chip low">Low · S</span></div>
+      <div class="ev">README:484 vs principles.md:62 — real style gate is pylint E-only</div>
+      <p class="fix"><b>Fix:</b> drop the tool names from README P2 or reconcile + mark not-implemented.</p></div>
+
+    <h3>Dead code <span style="color:var(--faint);font-weight:400">(merges H-F)</span></h3>
+    <div class="f low"><div class="fh"><span class="fid">C2</span><span class="ft">external_ref_lib.py (262 lines) has zero production consumers</span><span class="chip low">Low · S</span><span class="chip dim">decision</span></div>
+      <div class="ev">README:796 flags the intended consumer (#196 code-review gate) as never landed</div>
+      <p class="fix"><b>Fix:</b> land the gate wiring (closes the #162 silent-pass gap) OR delete module + 16 tests + docs.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C3</span><span class="ft">headless_interaction.py parse_metadata() is dead</span><span class="chip low">Low · S</span></div>
+      <div class="ev">metadata block emitted into every headless comment; nothing reads it back (resume uses the suspend-state file)</div>
+      <p class="fix"><b>Fix:</b> wire a parse-metadata subcommand into resume, or drop it.</p></div>
+    <div class="f low"><div class="fh"><span class="fid">C4</span><span class="ft">scripts/verify_158_split.py — self-described throwaway, left behind</span><span class="chip low">Low · S</span></div>
+      <div class="ev">"delete after #158 merges" (merged); not runnable-correct at HEAD; no caller</div>
+      <p class="fix"><b>Fix:</b> delete.</p></div>
+  </section>
+
+  <section>
+    <h2>Proposed work breakdown <span class="n">· 6 epics · 25 children</span></h2>
+    <p class="sub">Nothing filed — proposals awaiting your "go". Each child sized to one WF2/WF3 run. <span class="decision" style="margin:0">decision</span> = wants an owner call. Sequencing: EPIC 1 first (safety); EPIC 3 before EPIC 4 (3b unblocks 4a). <b>QA pass added 2d, 5d, 6e</b> — harness sub-findings (PreCompact fail-closed block, the manuals' own self-rot, plugin/Context7 pruning) that had landed in no child. Full draft ACs per child live in the .md source.</p>
+
+    <div class="epic">
+      <div class="ehead"><p class="etitle">EPIC 1 — Harness safety &amp; instruction coherence</p><p class="enote">Config/instruction layer. The only latent-safety epic; highest leverage.</p></div>
+      <div class="child"><span class="cid">1a</span><div class="cbody"><div class="ct">Tighten the permission allowlist <span class="decision">safety</span></div><div class="cmeta"><span class="sevtag high">High/S</span> · remove python3 -c / gh api / token-git catch-alls · AC: no unprompted push --force or arbitrary code · <span class="ref">H-A</span></div></div></div>
+      <div class="child"><span class="cid">1b</span><div class="cbody"><div class="ct">Resolve the output-style contract conflict <span class="decision">decision</span></div><div class="cmeta"><span class="sevtag high">High/M</span> · one voice owner; scope/remove learning-output-style · <span class="ref">H-B</span></div></div></div>
+      <div class="child"><span class="cid">1c</span><div class="cbody"><div class="ct">Scope competing process-owner plugins out of rawgentic sessions <span class="decision">decision</span></div><div class="cmeta"><span class="sevtag high">High/M</span> · superpowers mandate + reflexion judge · <span class="ref">H-C</span></div></div></div>
+    </div>
+
+    <div class="epic">
+      <div class="ehead"><p class="etitle">EPIC 2 — Memory-stack consolidation</p><p class="enote">Collapse five systems toward the declared authority.</p></div>
+      <div class="child"><span class="cid">2a</span><div class="cbody"><div class="ct">Expire the WAL recovery report</div><div class="cmeta"><span class="sevtag high">High/S</span> · age cutoff / ack so stale INTENTs stop re-announcing · <span class="ref">H-D</span></div></div></div>
+      <div class="child"><span class="cid">2b</span><div class="cbody"><div class="ct">Collapse memory authority <span class="decision">decision</span></div><div class="cmeta"><span class="sevtag high">High/M</span> · end the auto-memory write contradiction; bootstrap matches source of truth · <span class="ref">H-D</span></div></div></div>
+      <div class="child"><span class="cid">2c</span><div class="cbody"><div class="ct">Tune mempalace per-prompt recall</div><div class="cmeta"><span class="sevtag med">Med/S</span> · raise similarity threshold, scope to bound project · <span class="ref">H-D</span></div></div></div>
+      <div class="child"><span class="cid">2d</span><div class="cbody"><div class="ct">Degraded path for the PreCompact fail-closed block <span class="decision">QA-added</span></div><div class="cmeta"><span class="sevtag med">Med/S</span> · local transcript fallback before blocking compaction — a mempalace outage must not wedge a long run · <span class="ref">H-D</span></div></div></div>
+    </div>
+
+    <div class="epic">
+      <div class="ehead"><p class="etitle">EPIC 3 — Hook correctness &amp; error-path integrity</p></div>
+      <div class="child"><span class="cid">3a</span><div class="cbody"><div class="ct">Fix render_summary() non-dict crash</div><div class="cmeta"><span class="sevtag med">Med/S</span> · red-before-green test · <span class="ref">C1</span></div></div></div>
+      <div class="child"><span class="cid">3b</span><div class="cbody"><div class="ct">Unify claude_docs resolution; fix absolute-outside-HOME divergence</div><div class="cmeta"><span class="sevtag med">Med/M</span> · all three resolvers agree · <span class="ref">C7 + C21</span> · <b>unblocks 3d, 4a</b></div></div></div>
+      <div class="child"><span class="cid">3c</span><div class="cbody"><div class="ct">Init WAL_FILE in wal-guard so headless block audit records</div><div class="cmeta"><span class="sevtag med">Med/S</span> · <span class="ref">C20</span></div></div></div>
+      <div class="child"><span class="cid">3d</span><div class="cbody"><div class="ct">Add project-name path-traversal validation to the shared resolver</div><div class="cmeta"><span class="sevtag low">Low/S</span> · depends_on 3b · <span class="ref">C22</span></div></div></div>
+      <div class="child"><span class="cid">3e</span><div class="cbody"><div class="ct">Extract one atomic_write helper; route all sites incl. plan_lib</div><div class="cmeta"><span class="sevtag med">Med/M</span> · re-enumerate sites first · <span class="ref">C6</span></div></div></div>
+    </div>
+
+    <div class="epic">
+      <div class="ehead"><p class="etitle">EPIC 4 — Hot-path hook performance</p></div>
+      <div class="child"><span class="cid">4a</span><div class="cbody"><div class="ct">Consolidate WAL stdin parse to one jq + reuse read input</div><div class="cmeta"><span class="sevtag med">Med/S</span> · depends_on 3b · <span class="ref">C8 + C11</span></div></div></div>
+      <div class="child"><span class="cid">4b</span><div class="cbody"><div class="ct">wal-guard: one combined grep instead of 12</div><div class="cmeta"><span class="sevtag low">Low/S</span> · <span class="ref">C9</span></div></div></div>
+      <div class="child"><span class="cid">4c</span><div class="cbody"><div class="ct">wal-bind-guard Read fast-path for the bound project</div><div class="cmeta"><span class="sevtag low">Low/M</span> · <span class="ref">C10</span></div></div></div>
+      <div class="child"><span class="cid">4d</span><div class="cbody"><div class="ct">session-start: batch the notes-size spawn + delete the dead query-archive path</div><div class="cmeta"><span class="sevtag low">Low/S</span> · <span class="ref">C12 + C13</span></div></div></div>
+    </div>
+
+    <div class="epic">
+      <div class="ehead"><p class="etitle">EPIC 5 — Docs &amp; test-guard integrity</p></div>
+      <div class="child"><span class="cid">5a</span><div class="cbody"><div class="ct">Quarantine principles.md; reconcile README P-table; single-source principle statements</div><div class="cmeta"><span class="sevtag med">Med/M</span> · <span class="ref">C18 + C19 + H-E</span></div></div></div>
+      <div class="child"><span class="cid">5b</span><div class="cbody"><div class="ct">Replace uncomputed count/annotation guards with computed assertions</div><div class="cmeta"><span class="sevtag low">Low/M</span> · <span class="ref">C14 + C15</span></div></div></div>
+      <div class="child"><span class="cid">5c</span><div class="cbody"><div class="ct">Fix the vacuous/untested guards (template skip + write-fail case)</div><div class="cmeta"><span class="sevtag low">Low/S</span> · <span class="ref">C16 + C17</span></div></div></div>
+      <div class="child"><span class="cid">5d</span><div class="cbody"><div class="ct">Fix the review-discovered self-rot in the two operating manuals <span class="decision">QA-added</span></div><div class="cmeta"><span class="sevtag low">Low/S</span> · workspace CLAUDE.md 4-vs-7 surfaces contradiction · repo §3 stale "live examples" · unguarded volatile pins · <span class="ref">fingerprints</span></div></div></div>
+    </div>
+
+    <div class="epic">
+      <div class="ehead"><p class="etitle">EPIC 6 — Dead-code &amp; cleanup</p><p class="enote">Merges harness H-F.</p></div>
+      <div class="child"><span class="cid">6a</span><div class="cbody"><div class="ct">Wire-or-delete external_ref_lib <span class="decision">decision</span></div><div class="cmeta"><span class="sevtag low">Low/M</span> · land the #162 gate consumer or remove module+tests · <span class="ref">C2</span></div></div></div>
+      <div class="child"><span class="cid">6b</span><div class="cbody"><div class="ct">Delete verify_158_split.py; resolve parse_metadata</div><div class="cmeta"><span class="sevtag low">Low/S</span> · <span class="ref">C3 + C4</span></div></div></div>
+      <div class="child"><span class="cid">6c</span><div class="cbody"><div class="ct">Move quality-bar.md into the shared-block single-source</div><div class="cmeta"><span class="sevtag low">Low/M</span> · <span class="ref">C5</span></div></div></div>
+      <div class="child"><span class="cid">6d</span><div class="cbody"><div class="ct">Janitor pass: settings.local.json dead rules, stray root files, orphan WALs</div><div class="cmeta"><span class="sevtag med">Med/M</span> · <span class="ref">H-F</span></div></div></div>
+      <div class="child"><span class="cid">6e</span><div class="cbody"><div class="ct">Prune dead-weight + duplicated plugins <span class="decision">QA-added</span></div><div class="cmeta"><span class="sevtag low">Low/S</span> · astronomer/microsoft-docs/exa/code-review (0 uses) · Context7 loaded 4× → one connector · <span class="ref">H-F</span></div></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Discard log &amp; coverage</h2>
+    <div class="box ok" style="margin-bottom:14px">
+      <p style="margin:0;color:var(--ink)"><b>Code review: 0 findings rejected</b> by the confirmation pass — 22/22 survived (10 severity-adjusted down). <b>Harness: 1 of 8 partial</b> — dead permission-rule count is <b>684, not ~643</b>; all else confirmed, incl. one confirmed-with-irony (the CLAUDE.md §3 "two live doc-rot examples" were both fixed by PR #259 in the same commit citing them).</p>
+      <p class="k" style="margin:10px 0 0">Reviewer-investigated, not filed (safe-direction, judged correct): plan_lib.check_ratio_band ordering; driver_lib._NEG_BEFORE_RE over-capture; unanchored extra_patterns (over-promotes = safe); post_update_reconcile double-nudge (cosmetic).</p>
+    </div>
+    <div class="box">
+      <div class="k" style="margin-bottom:6px">NOT SWEPT — named gaps (two closed by the QA pass, struck below)</div>
+      <ul>
+        <li><b>Correctness:</b> live Codex + git subprocess paths (test-stubbed); <s>full pytest suite not run</s> → <b style="color:var(--ok)">QA ran it: 2278 passed, 0 failed</b>.</li>
+        <li><b>Perf:</b> <s>session-start lines ~540-800</s> → <b style="color:var(--ok)">QA swept: ~7 more per-event python3 spawns found, folded into 4d</b>; Stop hook still not profiled.</li>
+        <li><b>Test health:</b> the large lib-behavior test files (test_plan_lib ~82k, test_work_summary ~80k, test_security_scan ~59k) not deep-read.</li>
+        <li><b>Doc drift:</b> not every SKILL.md body diffed against code; consolidation.md / multi-issue-driver.md not exhaustive.</li>
+        <li><b>Error-path:</b> WAL write atomicity under concurrent appends not chased (registry_prune documents a known ceiling).</li>
+      </ul>
+    </div>
+  </section>
+
+  <div class="footer">
+    generated 2026-07-07 · 42 agents (13 harness + 29 code) across 3 workflows · every finding confirmed against cited code<br>
+    QA pass same day: cross-map verified both directions · C1/C6/C13/C14/C20 re-verified first-hand · suite 2278/0 · children 22→25 (2d, 5d, 6e added)<br>
+    harness detail: prior artifact 0a3bfbd6 · source: docs/reviews/2026-07-07-harness-and-code-review.md · issues PROPOSED only, filing awaits approval
+  </div>
+</div>

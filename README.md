@@ -702,6 +702,9 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.24.2 (2026-07-07)
+- **Unified harness + code review deliverable committed (docs).** `docs/reviews/2026-07-07-harness-and-code-review.md` and its rendered `.html` added: 28 confirmed findings (6 harness H-A…H-F, 22 code C1…C22, each independently re-verified), severity summary, a proposed 6-epic / 25-child work breakdown with dependency edges and acceptance criteria, a post-publication QA-pass record (cross-map complete both directions, 5 findings re-verified first-hand, suite re-run 2278/0), a discard log, and named coverage gaps. Review-only PR — no code changed. No workflow-spine change → no diagram REV. Suite 2278→2278.
+
 ### v3.24.1 (2026-07-07)
 - **Repo operating manual + stale-doc fixes (docs).** `CLAUDE.md` rewritten as a full operating manual grounded in a systematic repo read: conventions (git/versioning/changelog shape, shared blocks, codex mirror, CI lanes, epic driver, telemetry), 21 named weaker-model mistakes each with its preventing rule, checkable quality bars per deliverable (PR / hook / skill / drift-guard test / bug fix / investigation / diagram REV), a fail-open-vs-fail-closed decision guide with cited examples, and exact escalation rules. Two stale docs corrected: `docs/skill-development.md` claimed the `<config-loading>` canary expects 12 skills (the live pin is `EXPECTED_CONFIG_LOADING_COUNT` in `tests/hooks/test_headless.py` — the doc now defers to the test), and `docs/testing.md` claimed "14/14 skills have evals.json" (actual: 9/15, matching the README pin). No workflow-spine change → no diagram REV. Suite 2278→2278.
 
