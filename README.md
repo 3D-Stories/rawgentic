@@ -702,6 +702,9 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.24.18 (2026-07-08)
+- **Deleted unconsumed external_ref_lib — wire-or-delete resolved as DELETE (#274, epic #280).** The module (probe / vendor / is-trusted, 262 lines, 16 tests, own doc page) was complete but had zero production consumers: its intended consumer — the #196/#162 post-PR `/code-review` gate — shipped as a GitHub Action that does not call it. Owner-directed Codex consult recommended DELETE (recorded on the issue); removed `hooks/external_ref_lib.py`, `tests/hooks/test_external_ref_lib.py`, `docs/external-references.md`, and the two structural parametrization references in `tests/hooks/test_atomic_write_lib.py` (historical changelog entries stay — append-only history). No workflow-spine change → no diagram REV. Suite 2359+1skip→2340+1skip.
+
 ### v3.24.17 (2026-07-08)
 - **quality-bar.md promoted into the shared-block single-source (#276, epic #280).** The rubric was a hand-synced byte-identical triple (fix-bug/, implement-feature/, setup/ references) with no drift guard — editing one silently diverged the others (C5; the repo manual had called this out as a known trap). `shared/blocks/quality-bar.md` is now the one source; `sync_shared_blocks.py` gains a `FILE_MANIFEST` for whole-file targets (the existing MANIFEST handles tag-delimited SKILL.md blocks) with `--check` and bare-invocation sync support, and the drift tests pin the source + all three copies AND exercise the detect/repair branches in a sandbox tree (red-first: source absent; a drifted copy is flagged by `--check` rc 1 and repaired by running the script). No workflow-spine change → no diagram REV. Suite 2357+1skip→2359+1skip.
 
