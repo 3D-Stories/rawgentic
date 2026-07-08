@@ -349,8 +349,10 @@ class TestCrossProjectAllowlist:
 
 
 class TestBoundProjectFastPath:
-    """#268: a bound session touching its OWN project's files short-circuits
-    before the cross-project violation jq scan (6 jq spawns -> 5)."""
+    """#268: bound-session jq cost drops 6 -> 5 — the registry's two field
+    reads are ONE jq, and the own-project check + violation scan are ONE jq
+    (own-path derived from the workspace entry for the validated bound name,
+    never from the registry's unvalidated project_path)."""
 
     def _run_counting(self, ws, tmp_path, file_path):
         import os as _os
@@ -407,8 +409,8 @@ class TestBoundProjectFastPath:
         assert _decision(result.stdout) == "allow"
         assert spawns == 5, (
             f"bound-project Read spawned jq {spawns} times, want 5 "
-            f"(parse, claude_docs, registry project+path, file-path — "
-            f"NO cross-project violation scan)"
+            f"(stdin parse, claude_docs, combined registry read, file-path, "
+            f"combined own-check+violation scan)"
         )
 
     def test_cross_project_still_denies_with_project_path(
@@ -428,3 +430,27 @@ class TestBoundProjectFastPath:
         result, _spawns = self._run_counting(ws, tmp_path, file_path)
         assert result.returncode == 0, result.stderr
         assert _decision(result.stdout) == "deny"
+
+    def test_inconsistent_registry_project_path_still_denies(
+        self, make_workspace, tmp_path
+    ) -> None:
+        """#268 Step 11 R2 catch: the fast path must derive its prefix from
+        the WORKSPACE entry for the (validated) bound name — never from the
+        registry's unvalidated project_path. A stale or hand-edited entry
+        (project alpha, project_path pointing at beta) must not fast-path
+        allow beta's files."""
+        ws: Workspace = make_workspace(
+            projects=[ALPHA_PROJECT, BETA_PROJECT],
+            registry_entries=[{
+                "session_id": "s1", "project": "alpha",
+                "project_path": "./projects/beta",
+                "ts": "2026-03-08T00:00:00Z",
+            }],
+        )
+        file_path = str(ws.root / "projects" / "beta" / "lib" / "utils.py")
+        result, _spawns = self._run_counting(ws, tmp_path, file_path)
+        assert result.returncode == 0, result.stderr
+        assert _decision(result.stdout) == "deny", (
+            "inconsistent registry project_path must not defeat the "
+            "cross-project deny"
+        )
