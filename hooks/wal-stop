@@ -6,53 +6,30 @@
 _do_stop() {
     set -euo pipefail
 
-    INPUT=$(cat)
+    # Shared resolution (#262): workspace find, claude_docs containment, and
+    # registry lookup all come from wal-lib.sh — never inline a copy here.
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    source "$SCRIPT_DIR/wal-lib.sh"
 
-    JQ="${HOME}/.local/bin/jq"
-    [ -x "$JQ" ] || JQ="jq"
-    command -v "$JQ" &>/dev/null || exit 0
-
-    SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
-    CWD=$(printf '%s' "$INPUT" | "$JQ" -r '.cwd // "."')
+    wal_read_stdin
+    command -v "$WAL_JQ" &>/dev/null || exit 0
+    wal_parse_fields
+    JQ="$WAL_JQ"
+    SESSION_ID="$WAL_SESSION_ID"
 
     [ "$SESSION_ID" = "unknown" ] && exit 0
 
     # --- Guard clause: not a rawgentic session ---
-    WORKSPACE_FILE=""
-    WS_ROOT=""
-    _d="$CWD"
-    _i=0
-    while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
-        if [ -f "$_d/.rawgentic_workspace.json" ]; then
-            WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
-            WS_ROOT="$_d"
-            break
-        fi
-        _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
-        _i=$((_i + 1))
-    done
-    [ -z "$WORKSPACE_FILE" ] && exit 0
+    wal_find_workspace || exit 0
+    WORKSPACE_FILE="$WAL_WORKSPACE_FILE"
 
-    # --- Resolve claude_docs path ---
-    CLAUDE_DOCS="$WS_ROOT/claude_docs"
-    _cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
-    if [ -n "$_cdp" ]; then
-        _cdp="${_cdp/#\~/$HOME}"
-        _resolved=$(realpath -m "$_cdp" 2>/dev/null || echo "$_cdp")
-        if [ "${_resolved#$HOME/}" != "$_resolved" ] || [ "$_resolved" = "$HOME" ]; then
-            CLAUDE_DOCS="$_resolved"
-        fi
-    fi
+    # --- Resolve claude_docs path (shared containment semantics) ---
+    wal_resolve_claude_docs
+    CLAUDE_DOCS="$WAL_CLAUDE_DOCS"
 
     # --- Lookup project from registry ---
-    REGISTRY_FILE="$CLAUDE_DOCS/session_registry.jsonl"
-    PROJECT=""
-    if [ -f "$REGISTRY_FILE" ]; then
-        REG_LINE=$(grep "$SESSION_ID" "$REGISTRY_FILE" 2>/dev/null | tail -1 || true)
-        if [ -n "$REG_LINE" ]; then
-            PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""')
-        fi
-    fi
+    wal_resolve_project
+    PROJECT="$WAL_PROJECT"
 
     # Fallback to active workspace project
     if [ -z "$PROJECT" ]; then

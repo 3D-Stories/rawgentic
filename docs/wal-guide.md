@@ -17,6 +17,15 @@ The `claude_docs/` directory is resolved from the `claudeDocsPath` field in
 `.rawgentic_workspace.json`. If the field is absent, hooks fall back to
 `<workspace_root>/claude_docs/` for backward compatibility.
 
+Resolution lives in exactly two places (#262): `wal-lib.sh`'s
+`wal_resolve_claude_docs()` (bash source of truth — `wal-stop`, `wal-suspend`,
+`wal-bind-guard`, and `session-start` all source the lib rather than carrying
+inline copies) and a matching python mirror in `security-guard.py`. Both apply
+the same containment guard: every `claudeDocsPath` — tilde or absolute — must
+resolve under `$HOME`; a path outside `$HOME` is rejected with a warning and
+the workspace-relative fallback is used, so WAL/registry writers and readers
+can never be split across two directories.
+
 After migration (automatic on first startup with v2.20.0+), session data lives
 at `~/claude_docs/` and a symlink at the old workspace-relative location
 preserves backward compatibility.

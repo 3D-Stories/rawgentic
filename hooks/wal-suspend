@@ -17,38 +17,23 @@
 
 set -euo pipefail
 
+# Shared resolution (#262): workspace find + claude_docs containment come from
+# wal-lib.sh — never inline a copy here.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/wal-lib.sh"
 
-# --- Resolve jq ---
-JQ="${HOME}/.local/bin/jq"
-[ -x "$JQ" ] || JQ="jq"
+# --- Resolve jq (lib sets WAL_JQ) ---
+JQ="$WAL_JQ"
 command -v "$JQ" &>/dev/null || { echo "jq not found" >&2; exit 1; }
 
 # --- Find workspace root ---
-CWD="${PWD}"
-WS_ROOT=""
-_d="$CWD"
-_i=0
-while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
-    if [ -f "$_d/.rawgentic_workspace.json" ]; then
-        WS_ROOT="$_d"
-        break
-    fi
-    _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
-    _i=$((_i + 1))
-done
-[ -z "$WS_ROOT" ] && { echo "No rawgentic workspace found" >&2; exit 1; }
+WAL_CWD="${PWD}"
+wal_find_workspace || { echo "No rawgentic workspace found" >&2; exit 1; }
+WS_ROOT="$WAL_WORKSPACE_ROOT"
 
-# --- Resolve claude_docs path ---
-CLAUDE_DOCS="$WS_ROOT/claude_docs"
-_cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WS_ROOT/.rawgentic_workspace.json" 2>/dev/null || true)
-if [ -n "$_cdp" ]; then
-    _cdp="${_cdp/#\~/$HOME}"
-    _resolved=$(realpath -m "$_cdp" 2>/dev/null || echo "$_cdp")
-    if [ "${_resolved#$HOME/}" != "$_resolved" ] || [ "$_resolved" = "$HOME" ]; then
-        CLAUDE_DOCS="$_resolved"
-    fi
-fi
+# --- Resolve claude_docs path (shared containment semantics) ---
+wal_resolve_claude_docs
+CLAUDE_DOCS="$WAL_CLAUDE_DOCS"
 
 # --- Read session ID (with staleness check) ---
 SESSION_FILE="$CLAUDE_DOCS/.current_session_id"
@@ -63,15 +48,10 @@ if [ "$SESSION_FILE_AGE" -gt 86400 ]; then
     echo "WARNING: .current_session_id is >24h old (may be stale)" >&2
 fi
 
-# --- Resolve project from registry ---
-REGISTRY="$CLAUDE_DOCS/session_registry.jsonl"
-PROJECT=""
-if [ -f "$REGISTRY" ]; then
-    REG_LINE=$(grep "$SESSION_ID" "$REGISTRY" 2>/dev/null | tail -1 || true)
-    if [ -n "$REG_LINE" ]; then
-        PROJECT=$(printf '%s' "$REG_LINE" | "$JQ" -r '.project // ""')
-    fi
-fi
+# --- Resolve project from registry (shared lookup) ---
+WAL_SESSION_ID="$SESSION_ID"
+wal_resolve_project
+PROJECT="$WAL_PROJECT"
 
 # Fallback: first active project
 if [ -z "$PROJECT" ]; then
