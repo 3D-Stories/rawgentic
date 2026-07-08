@@ -767,3 +767,43 @@ class TestHugeCommandDeny:
         blocks = [e for e in entries if e.get("phase") == "GUARD_BLOCK"]
         assert blocks, "huge-command headless deny must still append its audit line"
         assert len(blocks[-1]["command"]) < 5000
+
+
+class TestDecisionSerializerFallback:
+    """#310 adversarial-review High: the decision jq call was the single point
+    of fail-open — ANY failure there (not just E2BIG) meant empty stdout =
+    allow. deny() must emit a static, jq-free fallback decision when the
+    serializer fails."""
+
+    def test_decision_emitted_when_decision_jq_fails(self, tmp_path):
+        import shutil
+        real_jq = os.path.expanduser("~/.local/bin/jq")
+        if not os.path.isfile(real_jq):
+            real_jq = shutil.which("jq")
+        assert real_jq, "test needs a real jq to delegate to"
+        # wal-lib resolves $HOME/.local/bin/jq first, so a fake HOME with a
+        # wrapper there deterministically intercepts every jq call. The
+        # wrapper delegates to the real jq EXCEPT for the decision call
+        # (recognized by its permissionDecision filter), which it fails.
+        fake_home = tmp_path / "home"
+        bindir = fake_home / ".local" / "bin"
+        bindir.mkdir(parents=True)
+        wrapper = bindir / "jq"
+        wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            'for a in "$@"; do\n'
+            '  case "$a" in *permissionDecision*) exit 1;; esac\n'
+            "done\n"
+            f'exec "{real_jq}" "$@"\n'
+        )
+        wrapper.chmod(0o755)
+        cwd = tmp_path / "work"
+        cwd.mkdir()
+        stdout, _stderr, _rc = run_hook(
+            HOOK, _make_input("ssh user@prod-host"), cwd=cwd,
+            env_override={"HOME": str(fake_home)})
+        parsed = parse_hook_output(stdout)
+        assert parsed is not None, \
+            "a failing decision serializer must not suppress the deny"
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "fallback" in parsed["hookSpecificOutput"]["permissionDecisionReason"]
