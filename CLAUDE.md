@@ -13,9 +13,10 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
 
 ## 1. What this repo is (and is not)
 
-- **Three layers.** `skills/<name>/SKILL.md` (15 workflows — judgment), `hooks/` (~20
-  Python modules + ~12 bash hooks — anything mechanical/testable), `tests/` (~2278 tests,
-  0 failing at v3.24.0). Judgment lives in skills; logic lives in hooks; skills shell out
+- **Three layers.** `skills/<name>/SKILL.md` (workflow skills — judgment; count computed-guarded since #271), `hooks/` (~20
+  Python modules + ~12 bash hooks — anything mechanical/testable), `tests/` (2278/0
+  as of v3.24.0, 2026-07-07 — a dated snapshot; the current count comes from running
+  the gate, never from this file). Judgment lives in skills; logic lives in hooks; skills shell out
   via `python3 hooks/<lib>.py <subcmd>`. The most-called: `capabilities_lib.py derive`
   (the ONLY sanctioned way to read `.rawgentic.json` — never hand-derive, never probe the
   filesystem for config-level facts), `adversarial_review_lib.py is-enabled`,
@@ -139,11 +140,13 @@ load-bearing for resume. Never edit or truncate an existing entry.
 
 ## 3. Conventions I'd add (adopted as of this manual)
 
-- **Trust tests over docs.** Two live examples of doc rot the suite doesn't guard:
-  `docs/skill-development.md:37` says the `<config-loading>` canary expects 12 skills —
-  the real pin is `EXPECTED_CONFIG_LOADING_COUNT = 7` (`tests/hooks/test_headless.py:1348`);
-  `docs/testing.md:138` says "14/14 skills have evals.json" — the pinned README string is
-  "9/15". Before acting on any count/claim in a doc, find the test that pins it.
+- **Trust tests over docs.** Prose counts rot silently; tests fail loudly. Before
+  acting on any count/claim in a doc, find the test that pins it (and since #271 the
+  skill/evals counts are computed from the tree, so the guard names the stale surface).
+  Historical proof of the pattern: the very PR that wrote this section (#259, 2026-07-07)
+  cited two then-live rot examples in skill-development.md and testing.md — and fixed
+  them in the same commit, turning its own "live examples" stale on merge. That irony is
+  the lesson: never describe rot as "live", date it.
 - **Fail-mode is a per-hook decision — read the docstring, never guess** (§4.11's rule,
   promoted): the two PreToolUse siblings are deliberately OPPOSITE — `wal-guard`
   fail-CLOSED (jq missing → deny all, `wal-guard:14-17`) vs `security-guard.py`
@@ -167,11 +170,13 @@ load-bearing for resume. Never edit or truncate an existing entry.
 
 1. **Bumping one or two of the three version surfaces.** Rule: all three (§2), then
    `pytest tests/hooks/test_adversarial_review_registration.py -q`.
-2. **Adding a skill by touching only `skills/<name>/`.** A skill is FOUR surfaces plus
-   guards: SKILL.md (frontmatter `name: rawgentic:<name>`, `description` = WHEN-triggers,
-   `argument-hint`); the `.claude-plugin/marketplace.json` whitelist entry **in
-   alphabetical position** (tests pin neighbors, e.g.
-   `test_adversarial_review_registration.py:36`); the symlink
+2. **Adding a skill by touching only `skills/<name>/`.** Registration spans **up to
+   seven surfaces plus count guards — the authoritative list lives in the `add-skill`
+   workspace skill; do not trust any restated count here or in the workspace manual.**
+   The load-bearing ones: SKILL.md (frontmatter `name: rawgentic:<name>`,
+   `description` = WHEN-triggers, `argument-hint`); the
+   `.claude-plugin/marketplace.json` whitelist entry **in alphabetical position**
+   (tests pin neighbors, e.g. `test_adversarial_review_registration.py:36`); the symlink
    `plugins/rawgentic/skills/<name>` (packaging test asserts `is_symlink()` AND resolve
    — catches a missed symlink but NOT a missed whitelist entry); and the count guards —
    since #271 these COMPUTE from the tree (`tests/test_v3_removals.py` asserts
@@ -244,7 +249,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
 **A merged-ready PR** (all boxes; the `pr-preflight` workspace skill executes this):
 - [ ] Branch from fresh `origin/main`; conventional title matching branch prefix
 - [ ] Red-before-green evidence for any behavior change (the new test failed first)
-- [ ] Full suite exit 0; delta vs recorded baseline stated ("2278 → 2291, 0 failing")
+- [ ] Full suite exit 0; delta vs recorded baseline stated ("<old> → <new>, 0 failing")
 - [ ] Both pylint lanes green (§2 commands, verbatim)
 - [ ] `python3 hooks/security_scan.py scan --project-root . --project-type library
       --base-ref origin/main` — findings fixed or user-decided; absent scanners noted as
