@@ -137,33 +137,10 @@ def format_status_comment(step: int | str, title: str, context: str) -> str:
 
 # --- Metadata parsing ---
 
-_METADATA_PATTERN = re.compile(
-    r"<!--\s*rawgentic-headless:\s*(.*?)\s*-->",
-    re.DOTALL,
-)
-
-
-def parse_metadata(comment_body: str | None) -> dict | None:
-    """Extract JSON metadata from a structured headless comment.
-
-    Looks for the last ``<!-- rawgentic-headless: {...} -->`` block.
-    Returns None if no valid metadata found (graceful degradation).
-    """
-    if not comment_body:
-        return None
-
-    matches = list(_METADATA_PATTERN.finditer(comment_body))
-    if not matches:
-        return None
-
-    # Use the last match (in case of multiple blocks)
-    last_match = matches[-1]
-    json_str = last_match.group(1).strip()
-
-    try:
-        return json.loads(json_str)
-    except (json.JSONDecodeError, ValueError):
-        return None
+# (parse_metadata was removed in #275: the metadata block is emitted into
+# every headless comment for driver/human visibility, but resume reads the
+# suspend-state file — nothing ever parsed the comment back. The emitted
+# format is still round-trip-validated by a test-local helper.)
 
 
 # --- User reply parsing (headless resume) ---
