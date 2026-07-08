@@ -133,3 +133,65 @@ def test_new_project_skill_uses_env_var_for_session_id():
     text = (SKILLS_DIR / "new-project" / "SKILL.md").read_text()
     assert "$CLAUDE_CODE_SESSION_ID" in text, \
         "new-project skill must source the session id from $CLAUDE_CODE_SESSION_ID"
+
+
+# --- security-guard claudeDocsPath containment (#262) --------------------------
+
+
+def test_log_rejects_claude_docs_path_outside_home(make_workspace, monkeypatch, tmp_path):
+    """#262 (C21 python mirror): an absolute claudeDocsPath OUTSIDE $HOME must be
+    rejected — the GUARD_BLOCK audit line falls back to the workspace-relative
+    claude_docs/ (where the WAL readers look), never the outside dir."""
+    mod = _load_security_guard()
+    ws = _two_project_ws(make_workspace)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    outside = tmp_path / "outside-docs"
+    outside.mkdir()
+    # Give the outside dir its own registry so the OLD (trusting) code would
+    # have resolved a project there and written the WAL outside.
+    (outside / "session_registry.jsonl").write_text(
+        json.dumps({"session_id": SID_B, "project": "projB",
+                    "project_path": "./projects/projB"}) + "\n")
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    ws_file = ws.root / ".rawgentic_workspace.json"
+    data = json.loads(ws_file.read_text())
+    data["claudeDocsPath"] = str(outside)
+    ws_file.write_text(json.dumps(data))
+
+    mod._log_headless_guard_block(
+        [{"name": "r"}], "foo.py", str(ws.root), session_id=SID_B)
+
+    assert not (outside / "wal").exists(), (
+        "outside-HOME claudeDocsPath must be rejected, not written to")
+    assert (ws.claude_docs / "wal" / "projB.jsonl").exists(), (
+        "audit line must land in the workspace-relative fallback")
+
+
+def test_log_accepts_claude_docs_path_under_home(make_workspace, monkeypatch, tmp_path):
+    """Companion: an absolute claudeDocsPath UNDER $HOME is honored."""
+    mod = _load_security_guard()
+    ws = _two_project_ws(make_workspace)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    fake_home = tmp_path / "fakehome"
+    inside = fake_home / "my-docs"
+    inside.mkdir(parents=True)
+    (inside / "session_registry.jsonl").write_text(
+        json.dumps({"session_id": SID_B, "project": "projB",
+                    "project_path": "./projects/projB"}) + "\n")
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    ws_file = ws.root / ".rawgentic_workspace.json"
+    data = json.loads(ws_file.read_text())
+    data["claudeDocsPath"] = str(inside)
+    ws_file.write_text(json.dumps(data))
+
+    mod._log_headless_guard_block(
+        [{"name": "r"}], "foo.py", str(ws.root), session_id=SID_B)
+
+    assert (inside / "wal" / "projB.jsonl").exists(), (
+        "under-HOME claudeDocsPath must be honored")

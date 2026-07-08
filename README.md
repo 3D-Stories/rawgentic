@@ -702,6 +702,9 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.24.4 (2026-07-07)
+- **claude_docs resolution unified across all six resolver surfaces (#262, epic #277).** `claudeDocsPath` resolution had drifted into three semantics: `wal-lib.sh` trusted an absolute path outside `$HOME`, the inline copies in `wal-stop`/`wal-suspend`/`wal-bind-guard` rejected it, and `session-start`/`security-guard.py` (two surfaces the review missed) trusted everything with no containment. Now ONE semantic — containment under `$HOME` or workspace-relative fallback — lives in `wal_resolve_claude_docs()` (plus a python mirror in `security-guard.py`); the four bash consumers source the lib, deleting ~90 duplicated lines. Structural tests pin the routing; red-before-green rejection tests cover bash + python; `docs/wal-guide.md` documents the semantic. Unblocks review children 3d and 4a. No workflow-spine change → no diagram REV. Suite 2283→2293.
+
 ### v3.24.3 (2026-07-07)
 - **render_summary no longer raises on a non-dict record (#261, epic #277).** `hooks/work_summary.py` read `verification_deferred` off the raw parameter while every sibling access routes through the `_as_dict`-coerced copy, so a list/str/int record raised `AttributeError` despite the function's "never raises" contract. One-line fix routes the read through the coerced copy; a parametrized reproduction test (list/str/int/None records) was red before the fix. No workflow-spine change → no diagram REV. Suite 2278→2283.
 

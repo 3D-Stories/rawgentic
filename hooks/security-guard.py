@@ -140,7 +140,16 @@ def _log_headless_guard_block(findings, rel_path, workspace_root, session_id=Non
                     ws_config = json.load(f)
                 cdp = ws_config.get("claudeDocsPath", "")
                 if cdp:
-                    claude_docs = os.path.expanduser(cdp)
+                    # Containment guard (#262): mirror wal-lib.sh's shared
+                    # semantic — every claudeDocsPath must resolve under $HOME,
+                    # else keep the workspace-relative fallback so the audit
+                    # log lands where the WAL readers look.
+                    home = os.path.realpath(os.path.expanduser("~"))
+                    resolved = os.path.realpath(os.path.expanduser(cdp))
+                    if resolved == home or resolved.startswith(home + os.sep):
+                        claude_docs = resolved
+                    else:
+                        _warn(f"claudeDocsPath outside $HOME rejected: {cdp}")
             except (json.JSONDecodeError, OSError):
                 pass
 

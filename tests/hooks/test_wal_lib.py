@@ -444,12 +444,28 @@ echo "$WAL_CLAUDE_DOCS"
         return stdout, stderr
 
     def test_reads_claude_docs_path_from_config(self, make_workspace, tmp_path):
-        """When claudeDocsPath is set, resolves to the expanded path."""
-        target = tmp_path / "fakehome" / "claude_docs"
+        """When claudeDocsPath is set (absolute, under $HOME), resolves to it."""
+        fake_home = tmp_path / "fakehome"
+        target = fake_home / "claude_docs"
         target.mkdir(parents=True)
         ws = make_workspace(claude_docs_path=str(target))
-        result, _ = self._resolve(ws)
+        result, _ = self._resolve(ws, home_dir=fake_home)
         assert result == str(target)
+
+    def test_absolute_outside_home_rejected(self, make_workspace, tmp_path):
+        """#262 (C21): an absolute claudeDocsPath OUTSIDE $HOME is rejected with
+        a warning and falls back to workspace-relative — the same containment
+        the sibling resolvers (wal-stop/wal-suspend/wal-bind-guard) always
+        applied. Before the unification the lib trusted it, so WAL/registry
+        writes could land where the guards never read."""
+        fake_home = tmp_path / "fakehome"
+        fake_home.mkdir()
+        outside = tmp_path / "elsewhere" / "claude_docs"
+        outside.mkdir(parents=True)
+        ws = make_workspace(claude_docs_path=str(outside))
+        result, stderr = self._resolve(ws, home_dir=fake_home)
+        assert result == f"{ws.root}/claude_docs"
+        assert "rejected" in stderr.lower()
 
     def test_tilde_expansion(self, make_workspace, tmp_path):
         """Tilde in claudeDocsPath is expanded to $HOME."""
@@ -500,7 +516,7 @@ wal_init_file
 echo "$WAL_DIR"
 echo "$WAL_FILE"
 """
-        stdout, _, rc = _run_bash(script)
+        stdout, _, rc = _run_bash(script, env_override={"HOME": str(tmp_path / "fakehome")})
         assert rc == 0
         lines = stdout.strip().split("\n")
         assert lines[0] == str(target / "wal")
@@ -528,6 +544,35 @@ wal_resolve_claude_docs
 wal_resolve_project
 echo "$WAL_PROJECT"
 """
-        stdout, _, rc = _run_bash(script)
+        stdout, _, rc = _run_bash(script, env_override={"HOME": str(tmp_path / "fakehome")})
         assert rc == 0
         assert stdout == "testproj"
+
+
+class TestSharedResolutionRouting:
+    """#262: claudeDocsPath path RESOLUTION lives in exactly two places —
+    wal-lib.sh (bash source of truth) and security-guard.py (python mirror,
+    same containment semantic). Every bash consumer sources the lib instead of
+    carrying an inline copy; inline copies are what diverged (C7/C21)."""
+
+    CONSUMERS = ["wal-stop", "wal-suspend", "wal-bind-guard", "session-start"]
+    # These three had full inline resolver copies before #262 and have NO other
+    # legitimate claudeDocsPath use, so the string must be entirely absent.
+    # (session-start keeps two non-resolution uses: the migration presence
+    # check and the migration write — both act on the raw field, not a path.)
+    NO_INLINE = ["wal-stop", "wal-suspend", "wal-bind-guard"]
+
+    @pytest.mark.parametrize("script", CONSUMERS)
+    def test_consumer_sources_wal_lib(self, script):
+        text = (HOOKS_DIR / script).read_text()
+        assert 'source "$SCRIPT_DIR/wal-lib.sh"' in text, (
+            f"{script} must source wal-lib.sh for shared resolution")
+        assert "wal_resolve_claude_docs" in text, (
+            f"{script} must resolve claude_docs via the shared function")
+
+    @pytest.mark.parametrize("script", NO_INLINE)
+    def test_no_inline_claude_docs_parse(self, script):
+        text = (HOOKS_DIR / script).read_text()
+        assert "claudeDocsPath" not in text, (
+            f"{script} carries an inline claudeDocsPath parse — the divergent-"
+            f"copy pattern #262 removed; route through wal-lib.sh instead")

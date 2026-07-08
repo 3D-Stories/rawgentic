@@ -6,6 +6,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Shared resolution (#262): workspace find + claude_docs containment come from
+# wal-lib.sh — never inline a copy here.
+source "$SCRIPT_DIR/wal-lib.sh"
 
 # --- Shared utilities ---
 escape_for_json() {
@@ -51,28 +54,16 @@ fi
 CONTEXT_PARTS=()
 
 # Find workspace file (traverse up from CWD)
-WORKSPACE_FILE=""
-WS_ROOT=""
-_d="$CWD"
-_i=0
-while [ "$_i" -lt 5 ] && [ "$_d" != "/" ]; do
-    if [ -f "$_d/.rawgentic_workspace.json" ]; then
-        WORKSPACE_FILE="$_d/.rawgentic_workspace.json"
-        WS_ROOT="$_d"
-        break
-    fi
-    _d=$(cd "$_d/.." 2>/dev/null && pwd) || break
-    _i=$((_i + 1))
-done
+WAL_CWD="$CWD"
+wal_find_workspace || true
+WORKSPACE_FILE="$WAL_WORKSPACE_FILE"
+WS_ROOT="$WAL_WORKSPACE_ROOT"
 
-# --- Resolve claude_docs path ---
+# --- Resolve claude_docs path (shared containment semantics, #262) ---
 CLAUDE_DOCS=""
-[ -n "$WS_ROOT" ] && CLAUDE_DOCS="$WS_ROOT/claude_docs"
-if [ -n "$WORKSPACE_FILE" ] && command -v "$JQ" &>/dev/null; then
-    _cdp=$("$JQ" -r '.claudeDocsPath // ""' "$WORKSPACE_FILE" 2>/dev/null || true)
-    if [ -n "$_cdp" ]; then
-        CLAUDE_DOCS="${_cdp/#\~/$HOME}"
-    fi
+if [ -n "$WS_ROOT" ]; then
+    wal_resolve_claude_docs
+    CLAUDE_DOCS="$WAL_CLAUDE_DOCS"
 fi
 
 # =========================================================================

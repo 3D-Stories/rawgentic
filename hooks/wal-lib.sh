@@ -73,23 +73,21 @@ wal_resolve_claude_docs() {
     local cdp
     cdp=$("$WAL_JQ" -r '.claudeDocsPath // ""' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
     if [ -n "$cdp" ]; then
-      local had_tilde=false
-      if [ "${cdp#\~}" != "$cdp" ]; then
-        had_tilde=true
-        cdp="${cdp/#\~/$HOME}"
-      fi
-      local resolved
+      cdp="${cdp/#\~/$HOME}"
+      local resolved home
       resolved=$(realpath -m "$cdp" 2>/dev/null || echo "$cdp")
-      if [ "$had_tilde" = true ]; then
-        # Tilde-expanded paths must stay under $HOME (path traversal guard)
-        if [ "${resolved#$HOME/}" != "$resolved" ] || [ "$resolved" = "$HOME" ]; then
-          WAL_CLAUDE_DOCS="$resolved"
-        else
-          echo "wal-lib: WARNING: claudeDocsPath traversal rejected: $cdp" >&2
-        fi
-      else
-        # Explicit absolute paths are trusted
+      # Containment guard (#262): EVERY claudeDocsPath — tilde or absolute —
+      # must resolve under $HOME, else the guards could read a different dir
+      # than the WAL/registry writers use. Outside $HOME → warn + keep the
+      # workspace-relative fallback. This is the single semantic all hooks
+      # share; do not reintroduce a per-hook copy. HOME is realpath'd so a
+      # symlinked HOME component compares equal — exact parity with the
+      # python mirror in security-guard.py.
+      home=$(realpath -m "$HOME" 2>/dev/null || echo "$HOME")
+      if [ "${resolved#$home/}" != "$resolved" ] || [ "$resolved" = "$home" ]; then
         WAL_CLAUDE_DOCS="$resolved"
+      else
+        echo "wal-lib: WARNING: claudeDocsPath outside \$HOME rejected: $cdp" >&2
       fi
     fi
   fi
