@@ -577,6 +577,117 @@ class TestRenderSummary:
         assert isinstance(text, str) and text
 
 
+# --- worker_token_share (#315) ----------------------------------------------
+
+class TestWorkerTokenShare:
+    """Derived worker-token-share from usage.model_mix (#315, CMA cookbook)."""
+
+    MIX = {"claude-fable-5": {"input_tokens": 55_000_000, "output_tokens": 260_000},
+           "claude-opus-4-8": {"input_tokens": 8_800_000, "output_tokens": 11_000},
+           "claude-sonnet-5": {"input_tokens": 36_200_000, "output_tokens": 9_000}}
+
+    def test_normal_split(self):
+        from work_summary import worker_token_share
+        share = worker_token_share(self.MIX, ["opus", "sonnet"])
+        assert share == pytest.approx(45_000_000 / 100_000_000)
+
+    def test_single_model_orchestrator_only_is_zero(self):
+        from work_summary import worker_token_share
+        mix = {"claude-fable-5": {"input_tokens": 100, "output_tokens": 1}}
+        assert worker_token_share(mix, ["opus", "sonnet"]) == 0.0
+
+    def test_malformed_mix_returns_none_never_raises(self):
+        from work_summary import worker_token_share
+        assert worker_token_share(None, ["opus"]) is None
+        assert worker_token_share("nope", ["opus"]) is None
+        assert worker_token_share({}, ["opus"]) is None
+        assert worker_token_share({"m": "bad"}, ["opus"]) is None
+        assert worker_token_share({"m": {"input_tokens": "x"}}, ["opus"]) is None
+
+    def test_zero_total_and_no_workers_config(self):
+        from work_summary import worker_token_share
+        assert worker_token_share({"m": {"input_tokens": 0}}, ["opus"]) is None
+        assert worker_token_share(self.MIX, []) is None
+        assert worker_token_share(self.MIX, None) is None
+
+    def test_matching_is_case_insensitive_substring(self):
+        from work_summary import worker_token_share
+        mix = {"CLAUDE-OPUS-4-8": {"input_tokens": 30, "output_tokens": 1},
+               "claude-fable-5": {"input_tokens": 70, "output_tokens": 1}}
+        assert worker_token_share(mix, ["Opus"]) == pytest.approx(0.3)
+
+    def test_render_line_includes_share_when_workers_known(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": 100, "output_tokens": 2,
+                        "cost_estimate_usd": None, "wall_clock_s": None,
+                        "model_mix": self.MIX, "capture_status": "captured"}
+        text = render_summary(rec, worker_models=["opus", "sonnet"])
+        assert "worker-share 45%" in text
+
+    def test_render_line_omits_share_without_worker_models(self):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": 100, "output_tokens": 2,
+                        "cost_estimate_usd": None, "wall_clock_s": None,
+                        "model_mix": self.MIX, "capture_status": "captured"}
+        assert "worker-share" not in render_summary(rec)
+
+
+class TestWorkerShareCLI:
+    """summarize resolves modelRouting from the workspace file, fail-open (#315)."""
+
+    def _project(self, tmp_path, routing=True):
+        ws_root = tmp_path / "ws"
+        proj = ws_root / "projects" / "myproj"
+        proj.mkdir(parents=True)
+        entry = {"name": "myproj", "path": "./projects/myproj", "active": True}
+        if routing:
+            entry["modelRouting"] = {"review": "opus", "analysis": "sonnet",
+                                     "implementation": "opus"}
+        (ws_root / ".rawgentic_workspace.json").write_text(
+            json.dumps({"version": 1, "projects": [entry]}))
+        return proj
+
+    def _record_with_mix(self):
+        rec = _valid_record()
+        rec["usage"] = {"input_tokens": 100_000_000, "output_tokens": 2,
+                        "cost_estimate_usd": None, "wall_clock_s": None,
+                        "model_mix": TestWorkerTokenShare.MIX,
+                        "capture_status": "captured"}
+        return rec
+
+    def test_share_rendered_and_injected_with_workspace_routing(self, tmp_path, capsys):
+        from work_summary import main
+        proj = self._project(tmp_path)
+        store = proj / "store.jsonl"
+        rc = main(["summarize", "--record-file",
+                   _write_record(tmp_path, self._record_with_mix()),
+                   "--project-root", str(proj), "--store", str(store)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "worker-share 45%" in out
+        stored = json.loads(store.read_text().splitlines()[0])
+        assert stored["usage"]["worker_token_share"] == pytest.approx(0.45)
+
+    def test_no_workspace_omits_share_rc0(self, tmp_path, capsys):
+        from work_summary import main
+        store = tmp_path / "store.jsonl"
+        rc = main(["summarize", "--record-file",
+                   _write_record(tmp_path, self._record_with_mix()),
+                   "--project-root", str(tmp_path), "--store", str(store)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "worker-share" not in out
+        stored = json.loads(store.read_text().splitlines()[0])
+        assert "worker_token_share" not in stored["usage"]
+
+    def test_record_without_field_still_validates(self, tmp_path):
+        """AC5: no new required key — a record with no share field passes strict."""
+        from work_summary import validate_record
+        assert validate_record(self._record_with_mix(), strict=True) == []
+
+
 # --- resolve_store_path ----------------------------------------------------
 
 class TestResolveStorePath:
