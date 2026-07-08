@@ -37,6 +37,12 @@ Run this command manually in your terminal if you need to proceed."
 
   # Headless mode audit: log guard blocks to WAL for visibility
   # In bypassPermissions mode, guards are the last defense — blocks MUST be auditable
+  # #263: WAL_FILE is initialized lazily HERE (denies are rare) so the hot
+  # allow-path pays no mkdir. Best-effort — an init failure must never break
+  # the deny itself (audit skipped, decision still returned).
+  if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ -z "${WAL_FILE:-}" ]; then
+    wal_init_file 2>/dev/null || true
+  fi
   if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ -n "${WAL_FILE:-}" ]; then
     local ts
     ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
