@@ -14,6 +14,37 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #280 — unified-review EPIC 6 close-out
+
+The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:
+`docs/reviews/2026-07-08-unified-review-backlog-run-report.md`); child 6a (#274)
+was owner-gated on a wire-or-delete decision and closes the epic.
+
+### #274 — wire-or-delete external_ref_lib → DELETE · v3.24.18
+
+**Issue.** #274 (epic #280, review 6a): `hooks/external_ref_lib.py` was complete,
+tested (16 tests), and documented — with zero production consumers. The intended
+consumer (#196/#162 post-PR `/code-review` gate) shipped as a GitHub Action that
+never called it.
+
+**Decision.** Owner directed a Codex consult first, then follow it. Codex
+recommended **DELETE** (fresh thread; verdict recorded on the issue): wiring now
+would create behavior just to justify existing code, reopening an abandoned gate
+design with no scheduled owner. First consult attempt is its own lesson — the task
+went web-spelunking and its process died leaving a zombie "running" job (23 min);
+the scoped no-research retry answered in ~1 minute (memorized).
+
+**What shipped.** Removed `hooks/external_ref_lib.py`,
+`tests/hooks/test_external_ref_lib.py`, `docs/external-references.md`; dropped the
+two structural parametrization references in `tests/hooks/test_atomic_write_lib.py`.
+Historical changelog/campaign/review references stay (append-only history). Version
+3.24.18 ×3 surfaces. No workflow-spine change → no diagram REV.
+
+**Reviews.** Small-standard lane. Step 11 (1 opus reviewer, all 3 lenses): CLEAN,
+0 findings; suite-delta arithmetic independently confirmed (16+2+1=19). Adversarial
+diff review: skipped (no security surface). Security scan PASS (visible skips: iac
+not-applicable, sca nothing-to-scan). Suite 2359+1skip → 2340+1skip, 0 failing.
+
 ## Epic #188 fast-follow (post-M4)
 
 WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped

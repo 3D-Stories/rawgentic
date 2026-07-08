@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-05 15:22 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 10:08 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -65,6 +65,29 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong></p>
 <p>(WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
+<section class="mstone"><h3>Epic #280 — unified-review EPIC 6 close-out <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:</p>
+<p><code>docs/reviews/2026-07-08-unified-review-backlog-run-report.md</code>); child 6a (#274)</p>
+<p>was owner-gated on a wire-or-delete decision and closes the epic.</p>
+<h3>#274 — wire-or-delete external_ref_lib → DELETE · v3.24.18</h3>
+<p><strong>Issue.</strong> #274 (epic #280, review 6a): <code>hooks/external_ref_lib.py</code> was complete,</p>
+<p>tested (16 tests), and documented — with zero production consumers. The intended</p>
+<p>consumer (#196/#162 post-PR <code>/code-review</code> gate) shipped as a GitHub Action that</p>
+<p>never called it.</p>
+<p><strong>Decision.</strong> Owner directed a Codex consult first, then follow it. Codex</p>
+<p>recommended <strong>DELETE</strong> (fresh thread; verdict recorded on the issue): wiring now</p>
+<p>would create behavior just to justify existing code, reopening an abandoned gate</p>
+<p>design with no scheduled owner. First consult attempt is its own lesson — the task</p>
+<p>went web-spelunking and its process died leaving a zombie &quot;running&quot; job (23 min);</p>
+<p>the scoped no-research retry answered in ~1 minute (memorized).</p>
+<p><strong>What shipped.</strong> Removed <code>hooks/external_ref_lib.py</code>,</p>
+<p><code>tests/hooks/test_external_ref_lib.py</code>, <code>docs/external-references.md</code>; dropped the</p>
+<p>two structural parametrization references in <code>tests/hooks/test_atomic_write_lib.py</code>.</p>
+<p>Historical changelog/campaign/review references stay (append-only history). Version</p>
+<p>3.24.18 ×3 surfaces. No workflow-spine change → no diagram REV.</p>
+<p><strong>Reviews.</strong> Small-standard lane. Step 11 (1 opus reviewer, all 3 lenses): CLEAN,</p>
+<p>0 findings; suite-delta arithmetic independently confirmed (16+2+1=19). Adversarial</p>
+<p>diff review: skipped (no security surface). Security scan PASS (visible skips: iac</p>
+<p>not-applicable, sca nothing-to-scan). Suite 2359+1skip → 2340+1skip, 0 failing.</p></section>
 <section class="mstone"><h3>Epic #188 fast-follow (post-M4) <span class="chip c-conf">SHIPPED</span></h3><p>WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped</p>
 <p>(folded in as slot 12). Ordered slots #190 → #191 → #192 → #193 → #194 → #195</p>
 <p>→ #196 → #197 (+ owner-added #205) — <strong>all shipped</strong>; epic #188 closes with #197.</p>
@@ -494,9 +517,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#197 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>14 added · 2034/2034 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR 214 · merged: True · CI: passed</td></tr><tr><th>Usage</th><td>in 2215371806 / out 6941928 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>3</td><td>2</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#274 (chore, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>0 added · 2340/2341 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: False · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-05 15:22 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-08 10:08 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
