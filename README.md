@@ -481,7 +481,7 @@ See `docs/plans/2026-03-06-plugin-overhaul-design.md` for the full design.
 | ID  | Name                    | Summary                                                                  |
 | --- | ----------------------- | ------------------------------------------------------------------------ |
 | P1  | Branch Isolation        | Every workflow gets its own branch; parallel work uses git worktrees     |
-| P2  | Code Formatting         | Auto-format before every commit (Prettier for JS, Black for Python)      |
+| P2  | Code Formatting         | Auto-format before every commit (aspirational — no formatter is wired; this repo's style gate is pylint E-only) |
 | P3  | Frequent Local Commits  | Commit after each meaningful change; never lose more than 15 min of work |
 | P4  | Regular Remote Sync     | Push to remote at every natural checkpoint                               |
 | P5  | TDD Enforcement         | Write tests before implementation; variant per workflow type             |
@@ -597,7 +597,7 @@ count, never silently averaged in.
 
 The `docs/` directory contains detailed design documentation for contributors:
 
-- **[Principles](docs/principles.md)** — P1-P15 definitions with rationale and enforcement mechanisms
+- **[Principles](docs/principles.md)** — quarantined historical design rationale (2026-03 planning artifact); its top-of-file STATUS table is the authoritative per-principle enforcement record, mirrored against the P-table above by a drift guard
 - **[Consolidation](docs/consolidation.md)** — Step archetype mappings, shared protocol, principle coverage matrix
 - **[Multi-Issue Driver](docs/multi-issue-driver.md)** — the documented pattern for running an autonomous backlog: loop WF2 fresh per issue over a durable queue, with a DEFER taxonomy, rollback anchors, dependency-DAG ordering (`hooks/driver_lib.py`), an epic anchor, and a resumption contract. State schema + examples in `docs/driver-state/`.
 - **Design documents** (in `docs/design/`):
@@ -701,6 +701,9 @@ For major changes, please open an issue first to discuss the approach.
 
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
+
+### v3.24.12 (2026-07-08)
+- **principles.md quarantined; P-statements single-sourced (#270, epic #279).** `docs/principles.md` was a March planning artifact for a different target workspace, presented by the README as the plugin's current "enforcement mechanisms" — its present-tense claims described hooks never built here (C18+C19+H-E). It now opens with a quarantine banner plus an authoritative P1–P15 STATUS table (enforced-in-code / process-mandated / convention / not-implemented per row — only P15 is code-enforced, via plan_lib); the four "hook already enforces" sentences are corrected to March-target-workspace framing; the README P2 row drops the unwired formatter names (the real style gate is the pylint E-only lane) and the README pointer describes the doc honestly. A Step 11 reviewer refutation extended the scope: `docs/consolidation.md` — the same class of March artifact — marked P2/P4/P6/P12 "✓ Fully enforced" in its coverage matrix, contradicting the new STATUS table unbannered; it now carries its own quarantine notice and a "designed coverage, not current enforcement" legend. Drift guards (mutation-proven by review) pin README P-table rows == STATUS-table rows, both banner sentences, the tool-name absence, the neutralized legend, and that no row but P15 claims code enforcement — with section-marker slicing per reviewer note. No workflow-spine change → no diagram REV. Suite 2358→2363.
 
 ### v3.24.11 (2026-07-08)
 - **session-start: python3 spawns bounded, dead archive path removed (#269, epic #278).** Startup spawned python3 once per session-notes file plus a dead two-spawn archive-context section whose helper script was deleted back in #57 (C12+C13); consolidations: the notes-size handler accepts many files in ONE invocation (per-file failures isolated inside — red-before-green delta test pins that 1 vs 6 notes files spawn python3 identically); the dead section is gone (structural pin); the four inline workspace parses are ONE python3 emitting a single parseable state line, with the registry project name passed via argv instead of interpolated into code (removes a latent injection surface); the two post_update_reconcile invocations are ONE `--session-start` combined pass (each sub-pass isolated, fail-open, behavior pinned); the jq-fallback stdin parse is one spawn instead of three, with values transported as shlex-quoted assignments (a Codex diff-review catch: the first draft's newline-delimited transport let a newline inside `cwd` silently shift `session_id` — now pinned by test); and the migration registry-merge snippet now routes through `atomic_write_lib.atomic_write_text`, closing the docstring's documented exclusion (structural no-mkstemp pin added). Folded #268 follow-up: wal-context absolutizes its in-process `WAL_PROJECT_PATH` to match the resolver's shape (registry format unchanged). No workflow-spine change → no diagram REV. Suite 2350→2358.

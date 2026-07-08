@@ -7,6 +7,16 @@
 
 ---
 
+> **QUARANTINE NOTICE (2026-07-08, #270).** This is the same class of
+> historical planning artifact as `docs/principles.md`: a March design for a
+> different target workspace. Its "Principle Coverage" matrix describes
+> DESIGNED coverage, not current enforcement — the authoritative per-principle
+> enforcement record is the STATUS table at the top of `docs/principles.md`
+> (drift-guarded against the README P-table). Where this document says a
+> principle is "enforced", read "was designed to be enforced".
+
+---
+
 ## 1. Framework Overview
 
 ### 1.1 Workflow Catalog
@@ -283,7 +293,7 @@ User wants to do something
 | P14       | —   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓   | ✓    | ✓    |
 | P15       | —   | ✓   | C   | C   | —   | —   | —   | —    | —    |
 
-**Legend:** ✓ = Fully enforced | C = Conditional | ~ = Relaxed during active phase | — = N/A (justified)
+**Legend (designed coverage, not current enforcement — see quarantine notice):** ✓ = Designed as enforced | C = Conditional | ~ = Relaxed during active phase | — = N/A (justified)
 
 **P15 (Risk-stratified Review)** is fully enforced in WF2 (where it
 originated), conditional in WF3 (bug-fix tasks rarely cross the high-risk
