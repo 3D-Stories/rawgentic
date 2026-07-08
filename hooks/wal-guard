@@ -202,8 +202,14 @@ _check_patterns() {
   # ONE combined pass on the hot allow-path (#267): no pattern can match →
   # done. A match falls through to the per-pattern loop below, which alone
   # decides (active-set filter, exclusions, per-rule reason) — decisions are
-  # byte-identical to the pre-#267 12-grep loop.
-  if ! printf '%s' "$COMMAND" | grep -qiE "$_COMBINED_PATTERN"; then
+  # byte-identical to the pre-#267 12-grep loop. Only a clean no-match
+  # (rc 1) takes the fast path: a grep ERROR (rc >= 2, e.g. a future
+  # malformed pattern edit) falls through to the loop instead — this guard
+  # is fail-closed, and treating rc 2 as no-match would disable all 12
+  # rules at once (Step 11 reviewer catch).
+  local pre_rc=0
+  printf '%s' "$COMMAND" | grep -qiE "$_COMBINED_PATTERN" || pre_rc=$?
+  if [ "$pre_rc" -eq 1 ]; then
     return 0
   fi
 
