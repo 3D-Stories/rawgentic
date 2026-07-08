@@ -501,6 +501,14 @@ class TestSessionStartCombined:
         # reconcile pass: version-cross nudge; staleness pass: per-project nudge
         assert "rawgentic updated to 9.9.9" in r.stdout
         assert "behind rawgentic 9.9.9" in r.stdout
+        # R2 parity pin: the two notices were separate CONTEXT_PARTS before
+        # #269 (double-newline join) — the combined output must keep the
+        # blank-line paragraph separation.
+        body = r.stdout.strip()
+        first, sep, rest = body.partition("\n\n")
+        assert sep, f"combined output lost the blank-line separator: {body!r}"
+        assert "rawgentic updated to 9.9.9" in first
+        assert "behind rawgentic 9.9.9" in rest
         # both markers recorded: second combined run is fully silent
         r2, _ = _run(tmp_path, ws, version="9.9.9", state_dir=sd, manifest=mf,
                      extra_args=["--session-start"])

@@ -311,18 +311,31 @@ def main(argv=None):
 
     # #269: session-start combined mode — both passes, one spawn. Each pass is
     # isolated so a reconcile failure cannot suppress the staleness nudge (and
-    # vice versa); both are fail-open by contract.
+    # vice versa); both are fail-open by contract. Each pass's output is
+    # captured and the non-empty parts joined with a BLANK line — the two
+    # notices were separate CONTEXT_PARTS before #269 (double-newline join),
+    # and the combined output must render identically (R2 parity catch).
     if args.session_start:
-        try:
-            _run_reconcile(args, current)
-        except Exception:
-            pass
-        try:
-            args.staleness_project = None
-            args.staleness_active = True
-            _run_staleness(args, current, _load_manifest())
-        except Exception:
-            pass
+        import contextlib
+        import io
+        parts = []
+        for pass_fn in (
+            lambda: _run_reconcile(args, current),
+            lambda: (setattr(args, "staleness_project", None),
+                     setattr(args, "staleness_active", True),
+                     _run_staleness(args, current, _load_manifest())),
+        ):
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    pass_fn()
+            except Exception:
+                pass
+            text = buf.getvalue().strip()
+            if text:
+                parts.append(text)
+        if parts:
+            print("\n\n".join(parts))
         return 0
 
     # #234: staleness modes short-circuit the default reconcile entirely.
