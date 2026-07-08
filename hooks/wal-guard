@@ -28,6 +28,18 @@ fi
 deny() {
   local reason="$1"
   local cmd="${2:-}"
+  # #310: a single exec argument over Linux MAX_ARG_STRLEN (~128KiB) makes the
+  # jq exec fail (E2BIG, rc 126) — no deny JSON on stdout means the harness
+  # ALLOWS the command, so this fail-closed guard failed open on huge commands.
+  # Bound the embedded command BEFORE it reaches any argv; both jq calls below
+  # inherit the bound. Truncation is visible, never silent (precedent:
+  # wal-lib.sh's INTENT summary head -c).
+  # Pure parameter expansion — a printf|head pipe here dies of SIGPIPE under
+  # this script's pipefail and fails open all over again.
+  local cmd_len=${#cmd}
+  if [ "$cmd_len" -gt 2000 ]; then
+    cmd="${cmd:0:2000} [truncated: total ${cmd_len} chars]"
+  fi
   local msg="$reason"
   if [ -n "$cmd" ]; then
     msg="${reason}

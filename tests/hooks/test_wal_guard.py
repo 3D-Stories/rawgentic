@@ -711,3 +711,59 @@ class TestSingleCombinedGrep:
             f"pre-filter grep error must fall through to the loop, not "
             f"allow; rc={result.returncode} stdout={result.stdout!r}"
         )
+
+
+class TestHugeCommandDeny:
+    """#310: deny() passed the full command as a single jq exec argument; a
+    command over Linux MAX_ARG_STRLEN (~128KiB per argument) made the jq exec
+    fail (E2BIG, rc 126), so NO deny JSON reached stdout and the fail-closed
+    guard failed OPEN. The fix bounds the embedded command at deny() entry."""
+
+    HUGE = "ssh user@prod-host " + "A" * 300_000
+
+    def test_huge_command_still_denied(self, tmp_path):
+        assert _run_guard(self.HUGE, cwd=tmp_path) == "deny"
+
+    def test_huge_command_reason_bounded_and_marked(self, tmp_path):
+        stdout, _stderr, _rc = run_hook(HOOK, _make_input(self.HUGE), cwd=tmp_path)
+        parsed = parse_hook_output(stdout)
+        reason = parsed["hookSpecificOutput"]["permissionDecisionReason"]
+        assert len(reason) < 5000, "reason must not embed the unbounded command"
+        assert "[truncated:" in reason, "truncation must be visible, never silent"
+
+    def test_small_command_reason_untruncated(self, tmp_path):
+        stdout, _stderr, _rc = run_hook(
+            HOOK, _make_input("ssh user@prod-host"), cwd=tmp_path)
+        parsed = parse_hook_output(stdout)
+        reason = parsed["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "ssh user@prod-host" in reason
+        assert "[truncated:" not in reason
+
+    def test_headless_huge_deny_still_audits(self, make_workspace):
+        """The GUARD_BLOCK audit jq call had the same unbounded --arg cmd."""
+        session_id = "headless-huge-sess"
+        ws = make_workspace(
+            projects=[{
+                "name": "testproj", "path": "./projects/testproj",
+                "active": True, "configured": True,
+            }],
+            registry_entries=[{
+                "session_id": session_id, "project": "testproj",
+                "project_path": "./projects/testproj",
+            }],
+            project_configs={"testproj": {"protectionLevel": "strict"}},
+        )
+        payload = {
+            "tool_input": {"command": self.HUGE}, "tool_name": "Bash",
+            "session_id": session_id, "tool_use_id": "tu-huge", "cwd": str(ws.root),
+        }
+        stdout, _stderr, _rc = run_hook(
+            HOOK, payload, cwd=ws.root, env_override={"RAWGENTIC_HEADLESS": "1"})
+        parsed = parse_hook_output(stdout)
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        wal_file = ws.claude_docs / "wal" / "testproj.jsonl"
+        assert wal_file.exists()
+        entries = [json.loads(l) for l in wal_file.read_text().splitlines() if l.strip()]
+        blocks = [e for e in entries if e.get("phase") == "GUARD_BLOCK"]
+        assert blocks, "huge-command headless deny must still append its audit line"
+        assert len(blocks[-1]["command"]) < 5000
