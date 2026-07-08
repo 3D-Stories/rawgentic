@@ -700,6 +700,25 @@ wal_parse_fields
         )
         assert values == ["Bash", "s1", "tu1", "/tmp/a\nb"]
 
+    def test_malformed_input_returns_nonzero_under_set_e(self, tmp_path):
+        """Caller-fidelity pin (8a review): every real hook calls
+        wal_parse_fields under `set -euo pipefail`; on malformed stdin the
+        function must return jq's non-zero code (aborting a set -e caller,
+        exactly as the old four-call form did) — sentinels are NOT consumed
+        on this path."""
+        shim, _ = self._make_counting_shim(tmp_path)
+        script = f"""
+source "{WAL_LIB}"
+WAL_JQ="{shim}"
+WAL_RAW_INPUT='not json at all'
+set -euo pipefail
+wal_parse_fields
+echo "unreachable-on-malformed"
+"""
+        stdout, _, rc = _run_bash(script)
+        assert rc != 0, "malformed stdin must propagate jq's non-zero exit"
+        assert "unreachable-on-malformed" not in stdout
+
     def test_command_substitution_value_is_inert(self, tmp_path):
         marker = tmp_path / "pwned-marker"
         hostile = f"$(touch {marker})"

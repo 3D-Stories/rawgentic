@@ -26,8 +26,11 @@ wal_read_stdin() {
 # per-field jq invocations were the WAL hot path's dominant cost. jq emits the
 # four assignments quoted by its @sh filter, which is what makes the eval safe:
 # every value arrives single-quoted (quotes, newlines, $() all inert — test-
-# enforced). Defaults are pre-set so malformed stdin (jq exits non-zero, emits
-# nothing, eval skipped) leaves the same sentinels as missing fields.
+# enforced). On malformed stdin jq exits non-zero with no output, eval is
+# skipped, and the function returns jq's code — same as the old four-call form
+# (a set -e caller aborts; the logger hooks swallow it via `|| true`). The
+# pre-set defaults below mirror the missing-field sentinels for any caller
+# that reads the fields after a tolerated failure.
 wal_parse_fields() {
   WAL_INPUT="$WAL_RAW_INPUT"
   WAL_TOOL_NAME="unknown"
