@@ -111,8 +111,33 @@ when the harness itself doesn't report them — the intended source for the
 numbers that populate `usage` at assembly time or during a hand-edit backfill.
 
 When present, `usage` renders as a `- Usage: <in> in / <out> out tokens[, ~$cost][,
-Ns wall][ (model: in/out, ...)]` line in the completion summary, immediately
-after the `- Tests:` line.
+Ns wall][ (model: in/out, ...)][, worker-share NN%]` line in the completion summary,
+immediately after the `- Tests:` line.
+
+### Derived: worker-token-share (#315)
+
+Concept from the Anthropic "plan big, execute small" cookbook
+([`managed_agents/CMA_plan_big_execute_small.ipynb`](https://github.com/anthropics/claude-cookbooks/blob/main/managed_agents/CMA_plan_big_execute_small.ipynb)),
+which treats **worker-token-share** — the fraction of input tokens billed to cheap
+worker models instead of the expensive coordinator — as its headline optimization
+metric. `work_summary.worker_token_share(mix, worker_models)` derives it at render
+time from the already-captured `model_mix`; nothing new is recorded at capture time.
+
+**Classification rule (config-derived, never hardcoded):** the worker-model short
+names are the unique values of the bound project's `modelRouting` in
+`.rawgentic_workspace.json` (resolved by walking up from `--project-root`, ≤5
+levels, fail-open). A `model_mix` entry is a **worker** iff any short name (e.g.
+`sonnet`, `opus`) is a case-insensitive substring of the model id; everything else
+is orchestrator. `share = worker input_tokens / total input_tokens` (input-side,
+matching the cookbook). A single-model orchestrator-only run is `0.0`; an
+underivable case (no `modelRouting`, malformed/empty `model_mix`, zero totals)
+omits the figure entirely — never raises, never renders `?`. Known limitation: if
+the orchestrator's own family equals a routed value, its tokens count as worker.
+
+When derivable, `summarize` also injects `usage.worker_token_share` (rounded to
+4 decimals) into the persisted record — a **present-optional derived field** like
+`lane`: `validate_record`'s required keys are unchanged and records without it
+remain valid (no schema version bump).
 
 ## Fail-closed for the store, best-effort for the human
 
