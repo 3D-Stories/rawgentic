@@ -241,3 +241,21 @@ class TestWalPostFail:
         assert entry["phase"] == "FAIL"
         assert entry["session"] == "test-sess"
         assert entry["tool"] == "Bash"
+
+
+class TestProjectNameEscape:
+    """#265 (C22): a malicious registry project name must not let a WAL hook
+    write outside claude_docs/wal/. Before the central validation, a name like
+    '../evil' built the path claude_docs/wal/../evil.jsonl = claude_docs/evil.jsonl."""
+
+    def test_wal_pre_does_not_escape_wal_dir(self, make_workspace) -> None:
+        ws: Workspace = make_workspace(
+            registry_entries=_bound_registry(project="../evil"),
+        )
+        stdin = _make_stdin(cwd=str(ws.root))
+        run_hook("wal-pre", stdin, cwd=ws.root)
+
+        escaped = ws.claude_docs / "evil.jsonl"
+        assert not escaped.exists(), (
+            "registry name '../evil' escaped the wal/ directory")
+        assert not (ws.wal_dir / "..jsonl").exists()

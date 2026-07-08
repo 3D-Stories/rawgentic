@@ -289,6 +289,12 @@ if [ -f "$REGISTRY_FILE" ] && [ "$SESSION_ID" != "unknown" ]; then
         _registry_project=$(printf '%s' "$_registry_line" | "$JQ" -r '.project // ""' 2>/dev/null || true)
     fi
 fi
+# Containment (#265): session-start builds WAL/archive paths from this name
+# WITHOUT going through wal_resolve_project — validate it here once so every
+# downstream interpolation (_do_wal_ops, _do_archive_context) is covered.
+if [ -n "$_registry_project" ] && ! wal_validate_project_name "$_registry_project"; then
+    _registry_project=""
+fi
 
 # =========================================================================
 # SECTION 0: Project Directory Reconciliation (startup/resume only)

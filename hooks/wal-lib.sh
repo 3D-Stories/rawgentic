@@ -182,6 +182,20 @@ wal_append_phase() {
   fi
 }
 
+# --- Project name validation ---
+# Rejects names that could escape the claude_docs/wal|session_notes dirs when
+# used to build file paths (#265): path separators or a leading "..".
+# Usage: wal_validate_project_name "$name"  → rc 0 valid / rc 1 invalid.
+# Callers with a project-name FALLBACK (wal-stop, wal-suspend, wal-context)
+# must validate the fallback value too — wal_resolve_project only covers the
+# registry-derived name.
+wal_validate_project_name() {
+  case "${1:-}" in
+    */*|*\\*|..*) return 1 ;;
+  esac
+  return 0
+}
+
 # --- Project resolution ---
 # Resolves which project the current session is bound to.
 # Reads session registry and workspace config.
@@ -211,6 +225,15 @@ wal_resolve_project() {
   # If project_path is relative, resolve against workspace root
   if [ -n "$WAL_PROJECT_PATH" ] && [ "${WAL_PROJECT_PATH#/}" = "$WAL_PROJECT_PATH" ]; then
     WAL_PROJECT_PATH="$root/$WAL_PROJECT_PATH"
+  fi
+
+  # Containment (#265): a registry entry is user-editable text — a name with a
+  # path separator or leading ".." would escape the wal/ and session_notes/
+  # dirs when interpolated into file paths. Treat it as unresolvable.
+  if [ -n "$WAL_PROJECT" ] && ! wal_validate_project_name "$WAL_PROJECT"; then
+    echo "wal-lib: WARNING: invalid project name in registry rejected: $WAL_PROJECT" >&2
+    WAL_PROJECT=""
+    WAL_PROJECT_PATH=""
   fi
 }
 

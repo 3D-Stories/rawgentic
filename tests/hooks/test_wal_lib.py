@@ -576,3 +576,45 @@ class TestSharedResolutionRouting:
         assert "claudeDocsPath" not in text, (
             f"{script} carries an inline claudeDocsPath parse — the divergent-"
             f"copy pattern #262 removed; route through wal-lib.sh instead")
+
+
+class TestProjectNameValidation:
+    """#265 (C22): a registry-derived project name containing a path separator
+    or leading '..' must be rejected centrally in wal_resolve_project — every
+    path-building hook routes through it, so one guard covers them all."""
+
+    BAD_NAMES = ["../evil", "a/b", "a\\b", "..", "..hidden"]
+
+    def _resolve_project(self, ws, name, tmp_path):
+        script = f"""
+source "{WAL_LIB}"
+WAL_WORKSPACE_FILE="{ws.workspace_json}"
+WAL_WORKSPACE_ROOT="{ws.root}"
+WAL_CWD="{ws.root}"
+WAL_SESSION_ID="s-val"
+wal_resolve_claude_docs
+wal_resolve_project
+echo "project=$WAL_PROJECT"
+"""
+        return _run_bash(script)
+
+    @pytest.mark.parametrize("bad", BAD_NAMES)
+    def test_rejects_malicious_registry_name(self, make_workspace, tmp_path, bad):
+        ws = make_workspace(registry_entries=[{
+            "session_id": "s-val", "project": bad,
+            "project_path": "./projects/x",
+        }])
+        stdout, stderr, rc = self._resolve_project(ws, bad, tmp_path)
+        assert rc == 0
+        assert stdout.splitlines()[-1] == "project=", (
+            f"malicious name {bad!r} must resolve to an EMPTY project")
+
+    def test_accepts_normal_names(self, make_workspace, tmp_path):
+        for good in ["testproj", "my-app", "app_2", "a.b"]:
+            ws = make_workspace(registry_entries=[{
+                "session_id": "s-val", "project": good,
+                "project_path": "./projects/x",
+            }])
+            stdout, _, rc = self._resolve_project(ws, good, tmp_path)
+            assert rc == 0
+            assert stdout.splitlines()[-1] == f"project={good}"
