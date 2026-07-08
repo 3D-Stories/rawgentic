@@ -14,6 +14,42 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #309 — harness safety, memory consolidation & workspace janitor
+
+The 2026-07-07 unified-review scope that was never filed (children #300–#308,
+mostly supervised live-config items). Repo children run WF2/WF3 under the owner's
+2026-07-08 scoped unsupervised grant; live-config children apply with timestamped
+backups and close on-issue.
+
+### #303 — WAL recovery report expires stale INTENTs · v3.24.20
+
+**Issue.** #303 (epic #309, review 2a): the SessionStart recovery notice
+re-announced every incomplete INTENT forever (~20/session, oldest March 2026,
+188 total live) — permanent noise desensitizing against real fresh crash INTENTs.
+
+**What shipped.** `hooks/session-start` announce filter hides incomplete INTENTs
+older than `WAL_RECOVERY_MAX_AGE_DAYS` (default 7, clamped [1,365]) behind a
+visible suppressed-count line; hidden entries stay on disk (rotation already
+preserves incomplete entries regardless of age). Fail-open everywhere: undated
+entries, a failed date computation, a filter jq error, and a malformed env value
+all announce MORE, never less — with the malformed value noted visibly in the
+session context (the hook's stderr is discarded at its callsite). Version
+3.24.20 ×3 surfaces. No workflow-spine change → no diagram REV.
+
+**Reviews.** Small-standard lane. Step 8a (2 opus reviewers over the hook commit):
+1 Medium applied — the filter's jq-error path failed CLOSED against its own
+fail-open contract; now exit-code gated. Step 11 (1 opus reviewer + cross-model
+Codex diff review, report committed at
+`docs/reviews/rawgentic-diff-review-303-e466f037-patch-2026-07-08.md`): both
+reviewers independently converged on the dead-stderr-warning finding (fixed +
+red-first assert); Codex's all-suppressed-framing Medium refuted with grep
+evidence (no programmatic consumer). Security scan PASS (visible skips: iac
+not-applicable, sca nothing-to-scan). 8 boundary tests red-before-green.
+Suite 2345+1skip → 2353+1skip, 0 failing.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry embedded below.
+
 ## Epic #280 — unified-review EPIC 6 close-out
 
 The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:

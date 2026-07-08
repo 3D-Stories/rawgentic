@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 11:33 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 13:10 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -65,6 +65,34 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong></p>
 <p>(WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
+<section class="mstone"><h3>Epic #309 — harness safety, memory consolidation &amp; workspace janitor <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-07 unified-review scope that was never filed (children #300–#308,</p>
+<p>mostly supervised live-config items). Repo children run WF2/WF3 under the owner&#x27;s</p>
+<p>2026-07-08 scoped unsupervised grant; live-config children apply with timestamped</p>
+<p>backups and close on-issue.</p>
+<h3>#303 — WAL recovery report expires stale INTENTs · v3.24.20</h3>
+<p><strong>Issue.</strong> #303 (epic #309, review 2a): the SessionStart recovery notice</p>
+<p>re-announced every incomplete INTENT forever (~20/session, oldest March 2026,</p>
+<p>188 total live) — permanent noise desensitizing against real fresh crash INTENTs.</p>
+<p><strong>What shipped.</strong> <code>hooks/session-start</code> announce filter hides incomplete INTENTs</p>
+<p>older than <code>WAL_RECOVERY_MAX_AGE_DAYS</code> (default 7, clamped [1,365]) behind a</p>
+<p>visible suppressed-count line; hidden entries stay on disk (rotation already</p>
+<p>preserves incomplete entries regardless of age). Fail-open everywhere: undated</p>
+<p>entries, a failed date computation, a filter jq error, and a malformed env value</p>
+<p>all announce MORE, never less — with the malformed value noted visibly in the</p>
+<p>session context (the hook&#x27;s stderr is discarded at its callsite). Version</p>
+<p>3.24.20 ×3 surfaces. No workflow-spine change → no diagram REV.</p>
+<p><strong>Reviews.</strong> Small-standard lane. Step 8a (2 opus reviewers over the hook commit):</p>
+<p>1 Medium applied — the filter&#x27;s jq-error path failed CLOSED against its own</p>
+<p>fail-open contract; now exit-code gated. Step 11 (1 opus reviewer + cross-model</p>
+<p>Codex diff review, report committed at</p>
+<p><code>docs/reviews/rawgentic-diff-review-303-e466f037-patch-2026-07-08.md</code>): both</p>
+<p>reviewers independently converged on the dead-stderr-warning finding (fixed +</p>
+<p>red-first assert); Codex&#x27;s all-suppressed-framing Medium refuted with grep</p>
+<p>evidence (no programmatic consumer). Security scan PASS (visible skips: iac</p>
+<p>not-applicable, sca nothing-to-scan). 8 boundary tests red-before-green.</p>
+<p>Suite 2345+1skip → 2353+1skip, 0 failing.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry embedded below.</p></section>
 <section class="mstone"><h3>Epic #280 — unified-review EPIC 6 close-out <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:</p>
 <p><code>docs/reviews/2026-07-08-unified-review-backlog-run-report.md</code>); child 6a (#274)</p>
 <p>was owner-gated on a wire-or-delete decision and closes the epic.</p>
@@ -530,9 +558,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#310 (bug, standard)</td></tr><tr><th>Tests</th><td>5 added · 2345/2346 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR 311 · merged: False · CI: passed</td></tr><tr><th>Usage</th><td>in 88915910 / out 288870 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Lightweight Reflect</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>9</td><td>Code Review</td><td>2</td><td>2</td><td>pass</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#274 (chore, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>0 added · 2340/2341 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR 299 · merged: False · CI: passed</td></tr><tr><th>Usage</th><td>in 35104660 / out 124034 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-08 11:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-08 13:10 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
