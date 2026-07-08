@@ -852,16 +852,17 @@ class TestSpawnConsolidation:
             "the dead query-archive block (C13) must be removed"
         )
 
-    def test_jq_fallback_newline_in_cwd_does_not_shift_fields(
+    def test_jq_fallback_newline_does_not_shift_fields(
         self, make_workspace, tmp_path
     ):
         """Codex diff-review pin: with jq unavailable (python fallback), a
-        newline inside cwd must not shift session_id/event_type — the
+        newline inside a field must not shift the following fields — the
         fallback transports fields as shell-quoted assignments."""
         import subprocess as sp
         from tests.hooks.conftest import HOOKS_DIR
         ws = make_workspace(
-            registry_entries=[{"session_id": "real-sess",
+            session_notes={"testproj": "# Notes\n" + ("line\n" * 900)},
+            registry_entries=[{"session_id": "sid",
                                "project": "testproj",
                                "project_path": "./projects/testproj"}],
         )
@@ -881,10 +882,21 @@ class TestSpawnConsolidation:
         env = dict(os.environ)
         env["HOME"] = str(fake_home)
         env["PATH"] = str(shadow)
+        # Discriminator: the notes-size trim is EVENT_TYPE-gated
+        # (startup|compact only) and needs python3 but not jq. A newline in
+        # session_id + source="clear" shifted the OLD newline-delimited
+        # transport to EVENT_TYPE="startup" (the second line of session_id),
+        # which TRIMS the 900-line notes file; the shlex transport keeps
+        # EVENT_TYPE="clear" and must leave it untouched. R1 catch: the
+        # first draft of this pin passed on both parsers (jq-less runs
+        # cannot bind a project, so context-based signals were dead);
+        # mutation-verified — the buggy transport trims and fails this.
+        notes_file = ws.notes_dir / "testproj.md"
+        assert len(notes_file.read_text().splitlines()) == 901
         payload = json.dumps({
-            "session_id": "real-sess",
-            "cwd": f"{ws.root}\nintruder-line",
-            "hook_event_name": "SessionStart", "source": "startup",
+            "session_id": "sid\nstartup",
+            "cwd": str(ws.root),
+            "hook_event_name": "SessionStart", "source": "clear",
         })
         result = sp.run(
             ["bash", str(HOOKS_DIR / "session-start")],
@@ -892,12 +904,9 @@ class TestSpawnConsolidation:
             timeout=30, cwd=str(ws.root), env=env,
         )
         assert result.returncode == 0, result.stderr
-        out = parse_hook_output(result.stdout)
-        ctx = (out or {}).get("hookSpecificOutput", {}).get(
-            "additionalContext", "")
-        # Field-shift would make SESSION_ID = "intruder-line"; the workspace
-        # walk then starts from a bogus CWD too. The decisive signal: the
-        # hook must NOT report the real session's project as if unbound, and
-        # must not crash. With correct parsing, cwd (with its newline) simply
-        # fails the workspace walk gracefully.
-        assert "intruder-line" not in ctx
+        lines_after = len(notes_file.read_text().splitlines())
+        assert lines_after == 901, (
+            f"notes file trimmed to {lines_after} lines on a 'clear' event — "
+            "a newline in session_id shifted EVENT_TYPE in the jq-fallback "
+            "transport"
+        )
