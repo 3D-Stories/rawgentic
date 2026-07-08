@@ -153,6 +153,11 @@ commands **before** execution. Unlike the WAL logging hooks above, wal-guard can
 **deny** tool use — it returns a JSON deny decision to prevent the command from
 running.
 
+The deny reason embeds the blocked command for context, bounded to 2000 chars
+with a visible `[truncated: total N chars]` marker (#310): an unbounded command
+in a single jq exec argument overflows Linux's per-argument limit and would
+suppress the deny JSON entirely — the guard would fail open.
+
 ### Blocked Patterns
 
 Wal-guard blocks two categories:

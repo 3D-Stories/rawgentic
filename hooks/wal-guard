@@ -28,6 +28,18 @@ fi
 deny() {
   local reason="$1"
   local cmd="${2:-}"
+  # #310: a single exec argument over Linux MAX_ARG_STRLEN (~128KiB) makes the
+  # jq exec fail (E2BIG, rc 126) — no deny JSON on stdout means the harness
+  # ALLOWS the command, so this fail-closed guard failed open on huge commands.
+  # Bound the embedded command BEFORE it reaches any argv; both jq calls below
+  # inherit the bound. Truncation is visible, never silent (precedent:
+  # wal-lib.sh's INTENT summary head -c).
+  # Pure parameter expansion — a printf|head pipe here dies of SIGPIPE under
+  # this script's pipefail and fails open all over again.
+  local cmd_len=${#cmd}
+  if [ "$cmd_len" -gt 2000 ]; then
+    cmd="${cmd:0:2000} [truncated: total ${cmd_len} chars]"
+  fi
   local msg="$reason"
   if [ -n "$cmd" ]; then
     msg="${reason}
@@ -45,7 +57,9 @@ Run this command manually in your terminal if you need to proceed."
   fi
   if [ "${RAWGENTIC_HEADLESS:-}" = "1" ] && [ -n "${WAL_FILE:-}" ]; then
     local ts
-    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    # || fallback: under set -e an unguarded failure here would abort deny()
+    # BEFORE the decision JSON below — the audit path must never break the deny.
+    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ") || ts="unknown"
     "$WAL_JQ" -nc \
       --arg ts "$ts" \
       --arg session "${WAL_SESSION_ID:-unknown}" \
@@ -58,13 +72,17 @@ Run this command manually in your terminal if you need to proceed."
   # -n: the filter uses no input. Piping $INPUT here ran the filter once per
   # JSON document on a multi-document stdin, emitting duplicate deny objects
   # that no longer parse as one JSON decision (#266 Step 11 catch).
+  # || fallback (#310 review): this call is the single point of fail-open —
+  # ANY jq failure here (not just E2BIG) means empty stdout, which the harness
+  # treats as ALLOW. The fallback is a static string via the printf builtin:
+  # no exec, no interpolation, cannot itself fail.
   "$WAL_JQ" -nc --arg reason "$msg" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: $reason
     }
-  }'
+  }' || printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"BLOCKED by wal-guard (fallback: decision serializer failed — the original reason could not be rendered; run the command manually if you need to proceed)"}}'
   exit 0
 }
 
