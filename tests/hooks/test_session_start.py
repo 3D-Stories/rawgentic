@@ -747,3 +747,31 @@ class TestPerProjectHandoff:
         assert rc == 0
         assert "SECRET UNREADABLE BODY" not in ctx
         assert "testproj.handoff.md" in ctx
+
+
+class TestProjectNameEscapeSessionStart:
+    """#265 (C22): session-start builds WAL paths from the registry project name
+    WITHOUT wal_resolve_project — a name like '../evil' escaped wal/ and let a
+    tampered registry read an arbitrary existing .jsonl into session context
+    (and rewrite it via WAL rotation when >5000 lines)."""
+
+    def test_escaped_wal_file_is_not_read(self, make_workspace):
+        ws = make_workspace(registry_entries=[{
+            "session_id": "test-sess", "project": "../evil",
+            "project_path": "./projects/testproj"}])
+        # A juicy INTENT file OUTSIDE wal/, exactly where wal/../evil.jsonl lands.
+        evil = ws.claude_docs / "evil.jsonl"
+        evil.write_text(
+            '{"ts":"2026-03-08T00:00:00Z","phase":"INTENT","session":"old",'
+            '"tool":"Bash","tool_use_id":"leak-1","summary":"secret-marker-xyz",'
+            '"cwd":"/tmp"}\n')
+
+        stdout, _stderr, rc = _run_session_start(ws.root)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        ctx = ""
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "secret-marker-xyz" not in ctx, (
+            "registry name '../evil' read a file outside wal/ into context")
+        assert "leak-1" not in ctx

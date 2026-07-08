@@ -41,12 +41,9 @@ _do_stop() {
 
     [ -z "$PROJECT" ] && exit 0
 
-    # Validate project name (path traversal prevention)
-    case "$PROJECT" in
-        */*|*\\*|..*)
-            exit 0
-            ;;
-    esac
+    # Validate project name (path traversal prevention) — covers the fallback
+    # value; the registry-derived name is already validated in wal_resolve_project.
+    wal_validate_project_name "$PROJECT" || exit 0
 
     # --- Write session end marker to notes ---
     NOTES_DIR="$CLAUDE_DOCS/session_notes"

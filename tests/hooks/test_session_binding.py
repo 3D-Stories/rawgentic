@@ -195,3 +195,26 @@ def test_log_accepts_claude_docs_path_under_home(make_workspace, monkeypatch, tm
 
     assert (inside / "wal" / "projB.jsonl").exists(), (
         "under-HOME claudeDocsPath must be honored")
+
+
+def test_log_rejects_malicious_project_name(make_workspace, monkeypatch):
+    """#265 (C22 python mirror): a registry project name like '../evil' must not
+    escape the wal/ directory — it falls back to 'unknown'."""
+    mod = _load_security_guard()
+    ws = make_workspace(
+        projects=[{"name": "projA", "path": "./projects/projA", "active": True,
+                   "lastUsed": "2026-01-01T00:00:00Z", "configured": True}],
+        registry_entries=[{
+            "session_id": SID_A, "project": "../evil",
+            "project_path": "./projects/projA", "started": "2026-01-01T00:00:00Z",
+            "cwd": "/x"}],
+    )
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+
+    mod._log_headless_guard_block(
+        [{"name": "r"}], "foo.py", str(ws.root), session_id=SID_A)
+
+    assert not (ws.claude_docs / "evil.jsonl").exists(), (
+        "'../evil' escaped the wal/ directory")
+    assert (ws.claude_docs / "wal" / "unknown.jsonl").exists(), (
+        "invalid name must fall back to 'unknown'")

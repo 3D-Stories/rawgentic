@@ -60,13 +60,9 @@ if [ -z "$PROJECT" ]; then
 fi
 [ -z "$PROJECT" ] && { echo "Cannot determine project" >&2; exit 1; }
 
-# --- Validate project name (path traversal prevention) ---
-case "$PROJECT" in
-    */*|*\\*|..*)
-        echo "Invalid project name: $PROJECT" >&2
-        exit 1
-        ;;
-esac
+# --- Validate project name (path traversal prevention) — covers the fallback
+# value; the registry-derived name is already validated in wal_resolve_project.
+wal_validate_project_name "$PROJECT" || { echo "Invalid project name: $PROJECT" >&2; exit 1; }
 
 # --- Write SUSPEND entry to per-project WAL ---
 WAL_DIR="$CLAUDE_DOCS/wal"

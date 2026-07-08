@@ -47,6 +47,9 @@ _do_context() {
             ACTIVE_PROJECT=$("$WAL_JQ" -r '.projects[] | select(.active == true) | .name' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
             ACTIVE_PATH=$("$WAL_JQ" -r '.projects[] | select(.active == true) | .path' "$WAL_WORKSPACE_FILE" 2>/dev/null || true)
 
+            # #265: the fallback name builds file paths too — validate it.
+            wal_validate_project_name "$ACTIVE_PROJECT" || ACTIVE_PROJECT=""
+
             if [ -n "$ACTIVE_PROJECT" ]; then
                 # Auto-register this session for the active project
                 mkdir -p "$WAL_CLAUDE_DOCS/session_notes"

@@ -179,6 +179,11 @@ def _log_headless_guard_block(findings, rel_path, workspace_root, session_id=Non
                     if session_id in line:
                         entry = json.loads(line)
                         project = entry.get("project", "unknown")
+        # Containment (#265): mirror wal-lib.sh's wal_validate_project_name —
+        # a registry name with a path separator or leading ".." would escape
+        # the wal/ dir when interpolated into the file path below.
+        if "/" in project or "\\" in project or project.startswith(".."):
+            project = "unknown"
 
         wal_dir = os.path.join(claude_docs, "wal")
         os.makedirs(wal_dir, exist_ok=True)
