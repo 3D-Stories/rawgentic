@@ -101,7 +101,7 @@ class TestAllSitesRouted:
     SITES = ["notes-size-handler.py", "registry_prune.py",
              "post_update_reconcile.py", "scanner_bootstrap.py",
              "plan_lib.py", "adversarial_review_lib.py",
-             "headless_interaction.py", "external_ref_lib.py"]
+             "headless_interaction.py"]
 
     def test_session_start_snippet_routed(self):
         """#269: the bash hook's inline python must route through the helper
@@ -122,10 +122,11 @@ class TestAllSitesRouted:
         assert "mkstemp" not in text, (
             f"{site} carries an inline mkstemp — route through atomic_write_lib")
 
-    @pytest.mark.parametrize("site", ["headless_interaction.py", "external_ref_lib.py"])
+    @pytest.mark.parametrize("site", ["headless_interaction.py"])
     def test_no_fixed_name_tmp_variants(self, site):
-        """The two weaker fixed-name variants the Step-11 sweep found (no
-        unlink-on-exception) must be gone."""
+        """The weaker fixed-name variant the Step-11 sweep found (no
+        unlink-on-exception) must be gone. (external_ref_lib.py was the other;
+        deleted unconsumed in #274.)"""
         text = (HOOKS_DIR / site).read_text()
         assert 'path + ".tmp"' not in text
         assert 'with_suffix(".json.tmp")' not in text
