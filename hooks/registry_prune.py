@@ -15,8 +15,9 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
+
+from atomic_write_lib import atomic_write_text
 
 DEFAULT_TTL_DAYS = 30
 TTL_ENV = "RAWGENTIC_REGISTRY_TTL_DAYS"
@@ -59,18 +60,7 @@ def _atomic_write(path: str, text: str) -> None:
     Accepted for #7: opt-in manual tool, rarely run concurrently with a bind, and the lost
     datum is a low-value registry line ("no correctness impact"); fully closing it needs
     cooperative locking added to those two bash append sites — out of this issue's scope."""
-    d = os.path.dirname(os.path.abspath(path)) or "."
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".registry_prune.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, text, prefix=".registry_prune.")
 
 
 def prune_registry(text: str, now: datetime, ttl: int = DEFAULT_TTL_DAYS) -> tuple[str, dict]:

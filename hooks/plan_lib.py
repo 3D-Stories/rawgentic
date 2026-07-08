@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, Literal
 
+from atomic_write_lib import atomic_write_text
+
 
 class PlanFormatError(ValueError):
     """Raised when the plan markdown does not conform to the WF2 contract."""
@@ -1889,12 +1891,9 @@ def write_review_state(
         "last_review_log_status": last_review_log_status,
         "ts": _now_iso(),
     }
-    # Atomic write: temp file + rename
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        _json.dump(payload, f, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
+    # Atomic write via the shared helper (#264) — gains a randomized temp name
+    # and unlink-on-exception over the old fixed-name variant.
+    atomic_write_text(path, _json.dumps(payload, indent=2, sort_keys=True) + "\n")
     return path
 
 
