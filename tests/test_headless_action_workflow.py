@@ -9,6 +9,7 @@ keys, not anywhere-in-file.
 """
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -94,7 +95,10 @@ def test_no_issue_template_carries_auto_label():
     approval gate into an unauthenticated trigger. Freeze that door shut."""
     tmpl_dir = REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
     if not tmpl_dir.exists():
-        return  # no templates at all — gate intact
+        # #272 (C17): a silent pass here hid that the gate is un-exercised —
+        # the property is real but nothing tests it until templates exist
+        pytest.skip("no .github/ISSUE_TEMPLATE dir — auto-label gate intact "
+                    "but unexercised; this skip goes away when templates land")
     for f in tmpl_dir.iterdir():
         if f.suffix in (".md", ".yml", ".yaml"):
             assert "rawgentic:auto" not in f.read_text(), \
