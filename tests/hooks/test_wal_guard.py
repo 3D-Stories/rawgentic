@@ -622,3 +622,48 @@ class TestMultiDocumentStdin:
             f"rc={result.returncode} stdout={result.stdout!r} "
             f"stderr={result.stderr!r}"
         )
+
+
+class TestSingleCombinedGrep:
+    """#267: the hot allow-path runs ONE combined-pattern grep instead of 12
+    per-pattern greps (plus the unconditional rm-/tmp allowlist grep = 2
+    spawns total for a clean command)."""
+
+    def test_clean_command_spawns_two_greps(self, tmp_path):
+        import shutil as _shutil
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        real_grep = _shutil.which("grep")
+        assert real_grep
+        count_file = tmp_path / "grep-count"
+        shim_dir = tmp_path / "shimbin"
+        shim_dir.mkdir()
+        shim = shim_dir / "grep"
+        shim.write_text(
+            f'#!/usr/bin/env bash\necho x >> "{count_file}"\n'
+            f'exec "{real_grep}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+        payload = json.dumps({
+            "tool_input": {"command": "echo hello world"},
+            "tool_name": "Bash", "session_id": "s-grepcount",
+            "tool_use_id": "tu-g", "cwd": str(tmp_path),
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "wal-guard")],
+            input=payload, capture_output=True, text=True,
+            timeout=10, cwd=str(tmp_path), env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        assert parse_hook_output(result.stdout) is None, "clean cmd must allow"
+        spawns = (
+            len(count_file.read_text().splitlines())
+            if count_file.exists()
+            else 0
+        )
+        assert spawns == 2, (
+            f"clean command spawned grep {spawns} times, want 2 "
+            f"(rm-/tmp allowlist + ONE combined pattern pre-filter)"
+        )
