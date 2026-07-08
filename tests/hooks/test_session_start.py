@@ -775,3 +775,138 @@ class TestProjectNameEscapeSessionStart:
         assert "secret-marker-xyz" not in ctx, (
             "registry name '../evil' read a file outside wal/ into context")
         assert "leak-1" not in ctx
+
+
+class TestSpawnConsolidation:
+    """#269: startup python3 spawn count is bounded — independent of how many
+    session-notes files exist — and the dead query-archive path is gone."""
+
+    def _count_python3_spawns(self, ws, tmp_path, tag):
+        import shutil as _shutil
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        real_py = _shutil.which("python3")
+        count_file = tmp_path / f"py-count-{tag}"
+        shim_dir = tmp_path / f"shimbin-{tag}"
+        shim_dir.mkdir()
+        shim = shim_dir / "python3"
+        shim.write_text(
+            f'#!/usr/bin/env bash\necho x >> "{count_file}"\n'
+            f'exec "{real_py}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        fake_home = tmp_path / f"home-{tag}"
+        fake_home.mkdir()
+        env = dict(os.environ)
+        env["HOME"] = str(fake_home)
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+        payload = json.dumps({
+            "session_id": "test-sess", "cwd": str(ws.root),
+            "hook_event_name": "SessionStart", "source": "startup",
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "session-start")],
+            input=payload, capture_output=True, text=True,
+            timeout=30, cwd=str(ws.root), env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        spawns = (
+            len(count_file.read_text().splitlines())
+            if count_file.exists()
+            else 0
+        )
+        return spawns
+
+    def test_spawns_independent_of_notes_file_count(
+        self, make_workspace, tmp_path
+    ):
+        """1 notes file vs 5 notes files -> IDENTICAL python3 spawn count
+        (the notes-size loop must batch into one invocation)."""
+        big = "# Notes\n" + ("line\n" * 900)
+        ws1 = make_workspace(
+            session_notes={"testproj": big},
+            registry_entries=[{"session_id": "test-sess",
+                               "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        n1 = self._count_python3_spawns(ws1, tmp_path, "one")
+
+        many = {f"proj{i}": big for i in range(5)}
+        many["testproj"] = big
+        ws5 = make_workspace(
+            session_notes=many,
+            registry_entries=[{"session_id": "test-sess",
+                               "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        n5 = self._count_python3_spawns(ws5, tmp_path, "five")
+        assert n1 == n5, (
+            f"python3 spawns scale with notes-file count: {n1} for 1 file "
+            f"vs {n5} for 6 files — the notes-size loop must batch"
+        )
+
+    def test_query_archive_block_gone(self):
+        from tests.hooks.conftest import HOOKS_DIR
+        text = (HOOKS_DIR / "session-start").read_text()
+        assert "query-archive" not in text, (
+            "the dead query-archive block (C13) must be removed"
+        )
+
+    def test_jq_fallback_newline_does_not_shift_fields(
+        self, make_workspace, tmp_path
+    ):
+        """Codex diff-review pin: with jq unavailable (python fallback), a
+        newline inside a field must not shift the following fields — the
+        fallback transports fields as shell-quoted assignments."""
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        ws = make_workspace(
+            session_notes={"testproj": "# Notes\n" + ("line\n" * 900)},
+            registry_entries=[{"session_id": "sid",
+                               "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        fake_home = tmp_path / "home-nl"
+        fake_home.mkdir()
+        # Shadow /usr/bin without jq (established no-jq pattern — jq and bash
+        # share /usr/bin, so a plain PATH strip would lose bash too)
+        shadow = tmp_path / "shadow_bin"
+        shadow.mkdir()
+        for entry in Path("/usr/bin").iterdir():
+            if entry.name == "jq":
+                continue
+            try:
+                (shadow / entry.name).symlink_to(entry)
+            except (OSError, FileExistsError):
+                continue
+        env = dict(os.environ)
+        env["HOME"] = str(fake_home)
+        env["PATH"] = str(shadow)
+        # Discriminator: the notes-size trim is EVENT_TYPE-gated
+        # (startup|compact only) and needs python3 but not jq. A newline in
+        # session_id + source="clear" shifted the OLD newline-delimited
+        # transport to EVENT_TYPE="startup" (the second line of session_id),
+        # which TRIMS the 900-line notes file; the shlex transport keeps
+        # EVENT_TYPE="clear" and must leave it untouched. R1 catch: the
+        # first draft of this pin passed on both parsers (jq-less runs
+        # cannot bind a project, so context-based signals were dead);
+        # mutation-verified — the buggy transport trims and fails this.
+        notes_file = ws.notes_dir / "testproj.md"
+        assert len(notes_file.read_text().splitlines()) == 901
+        payload = json.dumps({
+            "session_id": "sid\nstartup",
+            "cwd": str(ws.root),
+            "hook_event_name": "SessionStart", "source": "clear",
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "session-start")],
+            input=payload, capture_output=True, text=True,
+            timeout=30, cwd=str(ws.root), env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        lines_after = len(notes_file.read_text().splitlines())
+        assert lines_after == 901, (
+            f"notes file trimmed to {lines_after} lines on a 'clear' event — "
+            "a newline in session_id shifted EVENT_TYPE in the jq-fallback "
+            "transport"
+        )

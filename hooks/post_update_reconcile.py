@@ -299,16 +299,54 @@ def main(argv=None):
                         help="#234: always nudge THIS project's unconfigured feature gaps (for /switch)")
     parser.add_argument("--staleness-active", action="store_true",
                         help="#234: nudge each ACTIVE project's gaps once per version (for SessionStart)")
+    parser.add_argument("--session-start", action="store_true",
+                        help="#269: run the default reconcile AND the "
+                             "--staleness-active pass in ONE process (each "
+                             "pass isolated, fail-open)")
     args = parser.parse_args(argv)
 
     current = _resolve_version(args)
     if not current:
         return 0  # can't determine the version -> do nothing
 
+    # #269: session-start combined mode — both passes, one spawn. Each pass is
+    # isolated so a reconcile failure cannot suppress the staleness nudge (and
+    # vice versa); both are fail-open by contract. Each pass's output is
+    # captured and the non-empty parts joined with a BLANK line — the two
+    # notices were separate CONTEXT_PARTS before #269 (double-newline join),
+    # and the combined output must render identically (R2 parity catch).
+    if args.session_start:
+        import contextlib
+        import io
+        parts = []
+        for pass_fn in (
+            lambda: _run_reconcile(args, current),
+            lambda: (setattr(args, "staleness_project", None),
+                     setattr(args, "staleness_active", True),
+                     _run_staleness(args, current, _load_manifest())),
+        ):
+            buf = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(buf):
+                    pass_fn()
+            except Exception:
+                pass
+            text = buf.getvalue().strip()
+            if text:
+                parts.append(text)
+        if parts:
+            print("\n\n".join(parts))
+        return 0
+
     # #234: staleness modes short-circuit the default reconcile entirely.
     if args.staleness_project or args.staleness_active:
         return _run_staleness(args, current, _load_manifest())
 
+    return _run_reconcile(args, current)
+
+
+def _run_reconcile(args, current):
+    """The default once-per-version reconcile pass (silent on same version)."""
     state_path = os.path.join(args.state_dir, STATE_FILENAME)
     last = _read_version_file(state_path)
     if last == current:

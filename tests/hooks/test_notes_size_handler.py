@@ -292,3 +292,54 @@ class TestExitBehavior:
             assert rc == 0
         finally:
             notes_file.chmod(0o644)
+
+
+class TestMultiFile:
+    """#269: one invocation handles many files; a failing file is isolated."""
+
+    def test_multiple_files_one_invocation(self, tmp_path):
+        import subprocess
+        big = "x\n" * 900
+        small = "y\n" * 10
+        f1 = tmp_path / "alpha.md"
+        f2 = tmp_path / "beta.md"
+        f3 = tmp_path / "gamma.md"
+        f1.write_text(big)
+        f2.write_text(small)
+        f3.write_text(big)
+        r = subprocess.run(
+            ["python3", str(HANDLER_SCRIPT), str(f1), str(f2), str(f3),
+             "--session-id", "s1"],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert r.returncode == 0, r.stderr
+        results = [json.loads(line) for line in r.stdout.splitlines() if line]
+        assert len(results) == 3
+        assert results[0]["trimmed"] is True
+        assert results[1]["trimmed"] is False
+        assert results[2]["trimmed"] is True
+        assert len(f1.read_text().splitlines()) < 900
+        assert len(f3.read_text().splitlines()) < 900
+
+    def test_failing_file_does_not_block_rest(self, tmp_path):
+        import subprocess
+        f_bad = tmp_path / "bad.md"
+        f_bad.write_text("x\n" * 900)
+        f_bad.chmod(0o000)
+        f_good = tmp_path / "good.md"
+        f_good.write_text("x\n" * 900)
+        try:
+            r = subprocess.run(
+                ["python3", str(HANDLER_SCRIPT), str(f_bad), str(f_good),
+                 "--session-id", "s1"],
+                capture_output=True, text=True, timeout=30,
+            )
+            assert r.returncode == 0
+            results = [json.loads(line) for line in r.stdout.splitlines() if line]
+            assert len(results) == 2
+            assert results[0]["trimmed"] is False
+            assert results[1]["trimmed"] is True, (
+                "a failing earlier file must not block later files"
+            )
+        finally:
+            f_bad.chmod(0o644)

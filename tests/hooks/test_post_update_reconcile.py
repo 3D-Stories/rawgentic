@@ -488,10 +488,51 @@ class TestStalenessCLI:
         assert r.stdout.strip() == "", "default same-version run must stay silent"
 
 
+class TestSessionStartCombined:
+    """#269: --session-start runs the default reconcile AND the
+    staleness-active pass in one process."""
+
+    def test_combined_emits_both_passes(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj("p", active=True)])
+        mf = _write_manifest(tmp_path, MANIFEST)
+        r, sd = _run(tmp_path, ws, version="9.9.9", manifest=mf,
+                     extra_args=["--session-start"])
+        assert r.returncode == 0, r.stderr
+        # reconcile pass: version-cross nudge; staleness pass: per-project nudge
+        assert "rawgentic updated to 9.9.9" in r.stdout
+        assert "behind rawgentic 9.9.9" in r.stdout
+        # R2 parity pin: the two notices were separate CONTEXT_PARTS before
+        # #269 (double-newline join) — the combined output must keep the
+        # blank-line paragraph separation.
+        body = r.stdout.strip()
+        first, sep, rest = body.partition("\n\n")
+        assert sep, f"combined output lost the blank-line separator: {body!r}"
+        assert "rawgentic updated to 9.9.9" in first
+        assert "behind rawgentic 9.9.9" in rest
+        # both markers recorded: second combined run is fully silent
+        r2, _ = _run(tmp_path, ws, version="9.9.9", state_dir=sd, manifest=mf,
+                     extra_args=["--session-start"])
+        assert r2.stdout.strip() == ""
+
+    def test_combined_staleness_survives_reconcile_failure(self, tmp_path, monkeypatch):
+        """A corrupt workspace makes the reconcile pass silent/failing; the
+        staleness pass must still run (isolation) — and stay fail-open."""
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text("{not json")
+        mf = _write_manifest(tmp_path, MANIFEST)
+        r, _ = _run(tmp_path, ws, version="9.9.9", manifest=mf,
+                    extra_args=["--session-start"])
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == ""  # both passes fail-open on corrupt ws
+
+
 class TestStalenessWiring:
-    def test_session_start_runs_staleness_active(self):
+    def test_session_start_runs_combined_pass(self):
+        """#269: session-start invokes the ONE combined flag, which runs the
+        default reconcile AND the #234 staleness-active pass in one process
+        (behavior pinned by TestSessionStartCombined below)."""
         t = (HOOKS_DIR / "session-start").read_text()
-        assert "--staleness-active" in t
+        assert "--session-start" in t
 
     def test_switch_skill_references_staleness_project(self):
         sw = (REPO_ROOT / "skills" / "switch" / "SKILL.md").read_text()

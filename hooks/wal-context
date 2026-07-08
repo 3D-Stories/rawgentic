@@ -71,7 +71,13 @@ _do_context() {
                 fi
 
                 WAL_PROJECT="$ACTIVE_PROJECT"
+                # Absolutize for in-process use, matching wal_resolve_project's
+                # shape (#268 follow-up) — the registry line above keeps the
+                # workspace-relative path (registry format unchanged).
                 WAL_PROJECT_PATH="$ACTIVE_PATH"
+                if [ -n "$WAL_PROJECT_PATH" ] && [ "${WAL_PROJECT_PATH#/}" = "$WAL_PROJECT_PATH" ]; then
+                    WAL_PROJECT_PATH="${WAL_WORKSPACE_ROOT:-$WAL_CWD}/${WAL_PROJECT_PATH#./}"
+                fi
             fi
         else
             # Multiple active projects — prompt user to bind

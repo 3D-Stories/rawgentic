@@ -93,15 +93,22 @@ class TestAtomicWriteText:
 
 class TestAllSitesRouted:
     """#264 structural pin: no inline mkstemp/tmp+replace outside the helper.
-    All pre-#264 python sites must import atomic_write_lib instead. Known
-    deliberate exclusion: session-start's embedded `python3 -c` registry-write
-    snippet (can't import from an inline string; consolidation tracked in
-    review child 4d)."""
+    All pre-#264 python sites must import atomic_write_lib instead. The former
+    session-start exclusion was closed in #269 — its embedded `python3 -c`
+    registry-write snippet imports the helper via sys.path.insert (pinned by
+    test_session_start_snippet_routed below)."""
 
     SITES = ["notes-size-handler.py", "registry_prune.py",
              "post_update_reconcile.py", "scanner_bootstrap.py",
              "plan_lib.py", "adversarial_review_lib.py",
              "headless_interaction.py", "external_ref_lib.py"]
+
+    def test_session_start_snippet_routed(self):
+        """#269: the bash hook's inline python must route through the helper
+        and carry no inline mkstemp."""
+        text = (HOOKS_DIR / "session-start").read_text()
+        assert "from atomic_write_lib import atomic_write_text" in text
+        assert "mkstemp" not in text
 
     @pytest.mark.parametrize("site", SITES)
     def test_site_imports_helper(self, site):
