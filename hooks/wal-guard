@@ -55,7 +55,10 @@ Run this command manually in your terminal if you need to proceed."
       >> "$WAL_FILE" 2>/dev/null || true
   fi
 
-  printf '%s' "$INPUT" | "$WAL_JQ" -c --arg reason "$msg" '{
+  # -n: the filter uses no input. Piping $INPUT here ran the filter once per
+  # JSON document on a multi-document stdin, emitting duplicate deny objects
+  # that no longer parse as one JSON decision (#266 Step 11 catch).
+  "$WAL_JQ" -nc --arg reason "$msg" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
@@ -71,7 +74,12 @@ if printf '%s' "$COMMAND" | grep -qE '^rm\s+.*(/tmp/|/tmp$)'; then
 fi
 
 # --- Resolve project and protection level ---
-wal_parse_fields
+# `|| true`: a parse failure (malformed or multi-document stdin) must not
+# abort this fail-CLOSED guard under set -e — the pre-set sentinels plus the
+# strict "ALL" default below keep pattern-matching running at full strictness
+# (#266 Step 11 catch: without this, a multi-document stdin exited 5 with no
+# deny JSON, which the harness treats as allow).
+wal_parse_fields || true
 if wal_find_workspace; then
   wal_resolve_project
   wal_resolve_protection_level

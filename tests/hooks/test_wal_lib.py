@@ -3,8 +3,11 @@
 Tests individual bash functions by sourcing wal-lib.sh in a subprocess
 and echoing variable values after function calls.
 """
+import base64
 import json
 import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -618,3 +621,149 @@ echo "project=$WAL_PROJECT"
             stdout, _, rc = self._resolve_project(ws, good, tmp_path)
             assert rc == 0
             assert stdout.splitlines()[-1] == f"project={good}"
+
+
+class TestWalParseFieldsSingleSpawn:
+    """#266: wal_parse_fields makes exactly ONE jq invocation per event and
+    survives hostile field values (quotes, newlines, command substitution)."""
+
+    def _make_counting_shim(self, tmp_path):
+        """A jq shim that logs each invocation to a count file, then delegates
+        to the real jq binary."""
+        real_jq = os.path.expanduser("~/.local/bin/jq")
+        if not os.access(real_jq, os.X_OK):
+            real_jq = shutil.which("jq")
+        assert real_jq, "no jq binary available for the counting shim"
+        count_file = tmp_path / "jq-spawn-count"
+        shim = tmp_path / "counting-jq"
+        shim.write_text(
+            f'#!/usr/bin/env bash\necho x >> "{count_file}"\n'
+            f'exec "{real_jq}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        return shim, count_file
+
+    def _parse_with_shim(self, tmp_path, raw, fields):
+        shim, count_file = self._make_counting_shim(tmp_path)
+        # base64 each value so hostile content (newlines, delimiters) cannot
+        # corrupt the harness's own result parsing (Codex diff-review #2)
+        echoes = "\n".join(
+            f'printf "%s" "${{{f}}}" | base64 -w0; echo' for f in fields
+        )
+        script = f"""
+source "{WAL_LIB}"
+WAL_JQ="{shim}"
+WAL_RAW_INPUT={shlex.quote(raw)}
+wal_parse_fields
+{echoes}
+"""
+        stdout, stderr, rc = _run_bash(script)
+        assert rc == 0, stderr
+        values = [
+            base64.b64decode(line).decode()
+            for line in stdout.splitlines()
+            if line
+        ]
+        spawns = (
+            len(count_file.read_text().splitlines())
+            if count_file.exists()
+            else 0
+        )
+        return values, spawns
+
+    def test_exactly_one_jq_spawn(self, tmp_path):
+        raw = json.dumps({
+            "tool_name": "Bash", "session_id": "s1",
+            "tool_use_id": "tu1", "cwd": "/tmp",
+        })
+        values, spawns = self._parse_with_shim(
+            tmp_path, raw,
+            ["WAL_TOOL_NAME", "WAL_SESSION_ID", "WAL_TOOL_USE_ID", "WAL_CWD"],
+        )
+        assert values == ["Bash", "s1", "tu1", "/tmp"]
+        assert spawns == 1, f"wal_parse_fields spawned jq {spawns} times, want 1"
+
+    def test_malformed_input_keeps_sentinel_defaults(self, tmp_path):
+        values, _ = self._parse_with_shim(
+            tmp_path, "not json at all",
+            ["WAL_TOOL_NAME", "WAL_SESSION_ID", "WAL_TOOL_USE_ID", "WAL_CWD"],
+        )
+        assert values == ["unknown", "unknown", "unknown", "."], (
+            "malformed stdin must leave the same sentinel defaults as missing "
+            f"fields, got {values!r}"
+        )
+
+    def test_single_quote_value_is_literal(self, tmp_path):
+        hostile = "a'b; echo pwned"
+        raw = json.dumps({"tool_name": hostile, "session_id": "s1",
+                          "tool_use_id": "tu1", "cwd": "/tmp"})
+        values, _ = self._parse_with_shim(tmp_path, raw, ["WAL_TOOL_NAME"])
+        assert values == [hostile]
+
+    def test_newline_value_preserved_and_no_field_bleed(self, tmp_path):
+        raw = json.dumps({"tool_name": "Bash", "session_id": "s1",
+                          "tool_use_id": "tu1", "cwd": "/tmp/a\nb"})
+        values, _ = self._parse_with_shim(
+            tmp_path, raw,
+            ["WAL_TOOL_NAME", "WAL_SESSION_ID", "WAL_TOOL_USE_ID", "WAL_CWD"],
+        )
+        assert values == ["Bash", "s1", "tu1", "/tmp/a\nb"]
+
+    def test_multiple_json_documents_rejected(self, tmp_path):
+        """Codex diff-review #1: a stdin holding TWO valid JSON documents must
+        not have the second document's assignment group win via eval — the
+        parse must fail like malformed input (sentinels kept, non-zero from
+        jq under the hood), never silently adopt trailing-document fields."""
+        raw = '{"tool_name":"First"} {"tool_name":"Second"}'
+        values, _ = self._parse_with_shim(
+            tmp_path, raw, ["WAL_TOOL_NAME", "WAL_CWD"]
+        )
+        assert values == ["unknown", "."], (
+            f"multi-document stdin must keep sentinel defaults, got {values!r}"
+        )
+
+    def test_empty_stdin_keeps_defaults_and_rc_zero(self, tmp_path):
+        """Empty stdin is tolerated (rc 0, sentinels) — hooks invoked with a
+        closed stdin must not start failing (parity with pre-#266 rc 0)."""
+        shim, _ = self._make_counting_shim(tmp_path)
+        script = f"""
+source "{WAL_LIB}"
+WAL_JQ="{shim}"
+WAL_RAW_INPUT=""
+set -euo pipefail
+wal_parse_fields
+printf "%s" "$WAL_TOOL_NAME" | base64 -w0; echo
+"""
+        stdout, stderr, rc = _run_bash(script)
+        assert rc == 0, stderr
+        assert base64.b64decode(stdout.strip()).decode() == "unknown"
+
+    def test_malformed_input_returns_nonzero_under_set_e(self, tmp_path):
+        """Caller-fidelity pin (8a review): every real hook calls
+        wal_parse_fields under `set -euo pipefail`; on malformed stdin the
+        function must return jq's non-zero code (aborting a set -e caller,
+        exactly as the old four-call form did) — sentinels are NOT consumed
+        on this path."""
+        shim, _ = self._make_counting_shim(tmp_path)
+        script = f"""
+source "{WAL_LIB}"
+WAL_JQ="{shim}"
+WAL_RAW_INPUT='not json at all'
+set -euo pipefail
+wal_parse_fields
+echo "unreachable-on-malformed"
+"""
+        stdout, _, rc = _run_bash(script)
+        assert rc != 0, "malformed stdin must propagate jq's non-zero exit"
+        assert "unreachable-on-malformed" not in stdout
+
+    def test_command_substitution_value_is_inert(self, tmp_path):
+        marker = tmp_path / "pwned-marker"
+        hostile = f"$(touch {marker})"
+        raw = json.dumps({"tool_name": "Bash", "session_id": hostile,
+                          "tool_use_id": "tu1", "cwd": "/tmp"})
+        values, _ = self._parse_with_shim(tmp_path, raw, ["WAL_SESSION_ID"])
+        assert values == [hostile], "value must land as a literal"
+        assert not marker.exists(), (
+            "command substitution inside a field value EXECUTED during parse"
+        )

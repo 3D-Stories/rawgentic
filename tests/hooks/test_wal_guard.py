@@ -587,3 +587,38 @@ class TestHeadlessGuardBlockAudit:
         if wal_file.exists():
             entries = [json.loads(l) for l in wal_file.read_text().splitlines() if l.strip()]
             assert not [e for e in entries if e.get("phase") == "GUARD_BLOCK"]
+
+
+class TestMultiDocumentStdin:
+    """#266 Step 11 R2 catch: the strict one-document parse in
+    wal_parse_fields must not flip the fail-closed guard open. Before the
+    fix, a stdin holding two JSON documents made wal_parse_fields return
+    non-zero under set -e, aborting the hook with no deny JSON — which
+    Claude Code treats as allow."""
+
+    def test_multi_document_stdin_still_denies(self, tmp_path):
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        raw = '{"foo":1} ' + json.dumps({
+            "tool_input": {
+                "command": "docker compose -f docker-compose.prod.yml up -d"
+            },
+            "tool_name": "Bash", "session_id": "s-multi",
+            "tool_use_id": "tu-multi", "cwd": str(tmp_path),
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "wal-guard")],
+            input=raw, capture_output=True, text=True,
+            timeout=10, cwd=str(tmp_path),
+        )
+        parsed = parse_hook_output(result.stdout)
+        decision = (
+            (parsed or {})
+            .get("hookSpecificOutput", {})
+            .get("permissionDecision", "")
+        )
+        assert decision == "deny", (
+            f"multi-document stdin must still deny a prod-destroy command; "
+            f"rc={result.returncode} stdout={result.stdout!r} "
+            f"stderr={result.stderr!r}"
+        )
