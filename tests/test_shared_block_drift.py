@@ -66,3 +66,39 @@ def test_create_issue_intentionally_not_synced():
     """create-issue (WF1) keeps its deliberately-slim bespoke block (PR #104)."""
     block = _config_block("create-issue")
     assert block.rstrip("\n") != (SHARED / "config-loading.md").read_text().rstrip("\n")
+
+
+def test_quality_bar_single_sourced():
+    """#276 (C5): quality-bar.md was a hand-synced byte-identical triple with
+    no guard. It must have ONE source under shared/blocks/, and every skill
+    copy must equal it (the --check path covers this via FILE_MANIFEST; this
+    test additionally pins the source's existence and the copy set).
+    Repair is the BARE invocation (no `sync` argument exists)."""
+    src = SHARED / "quality-bar.md"
+    assert src.exists(), "shared/blocks/quality-bar.md must be the one source"
+    for skill in ("fix-bug", "implement-feature", "setup"):
+        copy = SKILLS / skill / "references" / "quality-bar.md"
+        assert copy.read_text() == src.read_text(), (
+            f"{skill}/references/quality-bar.md drifted from shared/blocks/"
+        )
+
+
+def test_file_manifest_detects_and_repairs_drift(tmp_path):
+    """#276 reviewer fold: commit the detect/repair proof (was manual-only).
+    A drifted FILE_MANIFEST copy must fail --check (rc 1, names the file)
+    and be repaired by the bare sync invocation. Sandboxed — never mutates
+    the real tree (same pattern as test_sync_is_idempotent)."""
+    for d in ("scripts", "shared", "skills"):
+        shutil.copytree(REPO_ROOT / d, tmp_path / d)
+    victim = tmp_path / "skills" / "setup" / "references" / "quality-bar.md"
+    victim.write_text(victim.read_text() + "\nDRIFT-PROBE\n")
+    r = _run_in(tmp_path, "--check")
+    assert r.returncode == 1
+    assert "setup/references/quality-bar.md" in r.stderr
+    r2 = _run_in(tmp_path)
+    assert r2.returncode == 0
+    assert "setup/references/quality-bar.md" in r2.stdout
+    src = (tmp_path / "shared" / "blocks" / "quality-bar.md").read_text()
+    assert victim.read_text() == src
+    r3 = _run_in(tmp_path, "--check")
+    assert r3.returncode == 0

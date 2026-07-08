@@ -161,10 +161,10 @@ load-bearing for resume. Never edit or truncate an existing entry.
   `registry_prune`, `driver_lib`, `resume_lib`, `headless_interaction` cover most needs.
 - **Timeout ≠ failure for mutating calls** (gh/API): check the resource's real state
   before retrying — the write may have landed; a blind retry double-creates.
-- **`quality-bar.md` is a hand-synced triple.** Byte-identical copies live under
-  fix-bug/, implement-feature/, and setup/ references, but it is NOT in the shared-block
-  MANIFEST and has NO drift guard — editing one silently diverges the others. Touch it →
-  update all three (or promote it into `shared/blocks/` properly).
+- **`quality-bar.md` is single-sourced (since #276).** The one source is
+  `shared/blocks/quality-bar.md`; `sync_shared_blocks.py`'s `FILE_MANIFEST` copies it
+  into the three references/ dirs and `--check` (CI-run) flags drift. Edit the source,
+  run the script — never the copies.
 
 ## 4. Mistakes a weaker model WILL make here — and the rule that prevents each
 
