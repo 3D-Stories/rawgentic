@@ -10,7 +10,7 @@ from tests.corpus import skill_corpus
 
 # (skill, role, count of annotations expected in that skill's corpus)
 EXPECTED = [
-    ("implement-feature", "analysis", 2),
+    ("implement-feature", "analysis", 3),  # Step-2 fan-out, Step-10 memorize, Step-11 diff reader (#314)
     ("implement-feature", "review", 3),
     ("implement-feature", "implementation", 1),
     ("fix-bug", "review", 1),

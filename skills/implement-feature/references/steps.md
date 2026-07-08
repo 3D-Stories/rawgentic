@@ -181,6 +181,49 @@ If this workflow discovers new project capabilities during execution (e.g., a ne
 
 ---
 
+### Delegated reads (#314)
+
+Concept: Anthropic "plan big, execute small" cookbook
+(https://github.com/anthropics/claude-cookbooks/blob/main/managed_agents/CMA_plan_big_execute_small.ipynb)
+— context isolation: the coordinator never touches token-heavy raw material. The canonical
+rule: **A raw artifact whose measured size exceeds its surface's byte threshold never
+enters the orchestrator's context.** A deterministic reduction (a runner summary, a gate
+field, a grep of failure lines) is read as a **mechanical projection**; a reduction that
+needs judgment is produced by an analysis-role reader subagent as a **validated index**.
+**The reader returns material (an index), never a decision; design, plan, gate verdicts,
+and finding evaluation stay orchestrator-side** — and **every decision is made from raw
+bytes via targeted reads** (the index only says where the bytes are; index prose is never
+evidence).
+
+- **Trigger:** measure with a PIPED byte count (`git diff … | wc -c` — bytes never enter
+  context). Thresholds: `WF2_READ_DELEGATE_BYTES_DIFF` (default 65536) for diffs,
+  `WF2_READ_DELEGATE_BYTES_LOG` (default 32768) for logs/scan output — env-tunable,
+  clamped, frozen at import in `hooks/plan_lib.py`. For thresholded surfaces only, under
+  threshold ⇒ inline exactly as today.
+- **Index validation:** every reader return is a hypothesis. Validate with
+  `plan_lib.validate_index(index, expected_units, artifact_text)` — closed schema,
+  set-equality coverage against the unit list the dispatcher FED the reader
+  (`git diff --name-only` for step11-diff: a completeness proof; component ids for
+  step2-map: a drop-guard only — discovered entries legitimately exceed the fed hints),
+  verbatim-evidence verification (fabricated quotes reject), patch-shape and
+  truncated/vacuous rejection. Rejection ⇒ **inline fallback, logged in session notes and
+  counted in the run-record** — fail-open for HOW material is read, never for WHETHER a
+  gate runs.
+- **Projection validation (fail-closed):** capture the producing command's exit status;
+  when the source reports failure the projection must contain non-empty failure
+  identifiers; **an empty, malformed, or command-failed projection falls back to the
+  inline raw read**, logged and counted like a rejected index.
+- **Temp artifacts:** `.rawgentic-read-<issue>-<token>.*` under the project root, mode
+  0600, appended to the SAME stale-sweep globs and `.git/info/exclude` discipline as the
+  Step 11 item 1a patch files. Immediately after writing each artifact run two fail-loud
+  post-creation asserts: `stat -c %a <file>` must print `600`, and
+  `git check-ignore -q <file>` must exit 0 — either failing aborts the delegated read
+  (inline fallback + loud log).
+- **Staleness:** re-derive `source_ref` before consuming an index (HEAD unchanged for a
+  diff; HEAD sha for the step2-map). Mismatch ⇒ regenerate or read inline.
+
+---
+
 ## Step 1: Receive Issue Reference and Detect Capabilities
 
 ### Instructions
@@ -320,7 +363,7 @@ unlabeled/manual issues, skip the guard and log the marker with (skipped).]**
 <!-- model-routing: role=analysis -->
 Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contract for the `analysis` role (generic subagents — no bundled analysis agent; `model: <analysis>` unless `inherit`; effort dual-path, always logged).
 
-1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts.
+1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts. **Delegated read (#314, non-trivial changes only — the trivial-inline path above is unchanged):** run the mapping as an `analysis`-role reader (the same routing annotation below covers it) that greps/reads in ITS context and returns a `step2-map` index (fed units = the issue's affected-components ids; discovered entries legitimately exceed them — the coverage check is a drop-guard, not a completeness proof; `source_ref` = HEAD sha). Validate via `plan_lib.validate_index`; rejection ⇒ map inline as before. Complexity classification and the lane decision stay YOURS, made after targeted reads of whatever the map surfaces.
 
 2. **Dependency analysis:** Trace relationships from affected components to understand the blast radius. The scope depends on project type:
    - `application`: trace call chains from entry points (routes, handlers, main functions)
@@ -852,6 +895,12 @@ Execute the implementation plan task by task.
    - RED: Write failing test(s). Run test command from `capabilities.test_commands` to confirm failure.
    - GREEN: Write minimum code to pass. Run tests to confirm all pass.
    - REFACTOR: Clean up. Re-run tests.
+   - **Test-output projection (#314, see `### Delegated reads`):** consume the runner's
+     own final summary (pass/fail counts + failing test ids + first assertion lines — a
+     bounded tail), never `cat` a full run log into context. Verdicts come from exit
+     codes; diagnosing a failure is a correctness decision and uses targeted reads of the
+     named failing tests, not a summarizing agent. Projection validation applies (empty
+     projection on a failing run ⇒ inline).
 
 2. **If Implement-Verify mode** (`capabilities.has_tests == false`):
    - IMPLEMENT: Write the code, config, or infrastructure changes.
@@ -1049,7 +1098,9 @@ fail: the gates that DID run (Step 11, Step 11.5, Step 8a) are still valid and l
 **Part B: Evidence enforcement:**
 
 If `capabilities.has_tests`:
-- Run full test suite using `capabilities.test_commands`
+- Run full test suite using `capabilities.test_commands` — consume it as a projection
+  (#314): the runner's final-summary tail + delta vs the recorded baseline; exit code is
+  the verdict; never a full log dump into context (empty projection on failure ⇒ inline)
 - Verify new tests actually test new behavior
 - Confirm no regressions
 
@@ -1113,10 +1164,27 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
 
 **Runs in PARALLEL with Step 10** (this is the foreground task).
 
-1. **Generate diff:**
+1. **Generate diff — delegated read (#314, see `### Delegated reads`):** measure first,
+   piped: `git diff ${capabilities.default_branch}..HEAD | wc -c`. Under
+   `WF2_READ_DELEGATE_BYTES_DIFF` ⇒ read inline exactly as before:
    ```bash
    git diff ${capabilities.default_branch}..HEAD
    ```
+   Over threshold ⇒ do NOT read the diff into your context. Write it to
+   `.rawgentic-read-<issue>-<token>.diff` (0600; run the post-creation asserts), compute
+   the fed unit list via `git diff --name-only ${capabilities.default_branch}..HEAD`, and
+   dispatch a reader subagent that reads the FILE in its own context and returns the
+   index JSON (schema in the design contract).
+
+<!-- model-routing: role=analysis -->
+   Dispatch the reader per the `<model-routing-resolve>` contract for the `analysis`
+   role. Validate the return with `plan_lib.validate_index(index, fed_units,
+   artifact_text=<the file's text via a subagent-side check or orchestrator grep -F per
+   evidence quote — never by reading the whole artifact inline>)`; rejection ⇒ inline
+   fallback, logged + counted. Consume the index as a MAP ONLY: at item 6 (finding
+   evaluation) read the specific file/hunk spans in question via targeted
+   `git diff ${capabilities.default_branch}..HEAD -- <file>` — never the full artifact,
+   and never treat index prose as evidence.
 
    **P15 pre-flight (when Step 8a fired any reviews):** read the review log via `plan_lib.read_review_log(<log_path>)` and read deferrals via `plan_lib.get_deferred_findings(<deferrals_path>)`. Build:
    - `reviewed_shas` — SHAs that already went through Step 8a
@@ -1228,7 +1296,11 @@ its fixes and committed, and BEFORE pushing in Step 12.
    ```
    The JSON `gate` object is authoritative (exit code mirrors it: `0` PASS, `1`
    BLOCKED, `2` usage error). Read `gate.blocking`, `gate.advisory`,
-   `gate.errors`, and the top-level `skipped` / `findings`.
+   `gate.errors`, and the top-level `skipped` / `findings`. **This IS the #314
+   projection for this surface** (see `### Delegated reads`): consume the gate object +
+   each finding's compact id/loc/title dict; finding IDs are never dropped; the raw
+   scanner stdout never enters context. Projection validation: a command-failed or
+   empty-on-BLOCKED result falls back to inline.
 
 2. **Blocking findings (`gate.blocking`) — fix before the PR, exactly like a
    Step 11 Critical/High:**
@@ -1416,7 +1488,11 @@ PR URL.
 
 2. If CI passes: proceed to Step 14.
 
-3. If CI fails: diagnose with `gh run view <id> --log-failed`, fix, push, CI re-runs.
+3. If CI fails: diagnose with `gh run view <id> --log-failed` consumed as a projection
+   (#314, see `### Delegated reads`): measure piped (`| wc -c`); over
+   `WF2_READ_DELEGATE_BYTES_LOG` grep it to failing job/step + assertion/traceback first
+   lines instead of reading the full log (a failing run with an empty grep ⇒ inline —
+   projection validation). Fix, push, CI re-runs.
 
 4. If CI times out (> CI_MAX_WAIT_MINUTES) on a run that DID start: ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If a run started but still isn't done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit. If NO run ever spawned, use item 1a's visible non-gate instead of ERROR.]**
 

@@ -659,3 +659,66 @@ class TestLaneMarkdownIsProduct:
         assert text.count("lane_impl_extensions(") >= 2, \
             "entry + Step-9 reconcile must both resolve laneImplExtensions"
         assert "impl_extensions=exts" in text
+
+
+# --- #314: delegated reads — projections + validated index readers ---
+
+class TestDelegatedReads:
+    """The #314 contract: oversized raw artifacts never enter the
+    orchestrator's context. Section-sliced presence checks (never whole-file
+    counts — role=analysis already appears at the Step-2 fan-out and Step-10
+    memorization sites, repo mistake #6)."""
+
+    def _contract(self) -> str:
+        return _section(_text(), "### Delegated reads (#314)", "\n## Step ")
+
+    def test_canonical_rule_sentence(self):
+        c = " ".join(self._contract().split())
+        assert ("A raw artifact whose measured size exceeds its surface's "
+                "byte threshold never enters the orchestrator's context") in c
+
+    def test_carve_out_sentence(self):
+        c = " ".join(self._contract().split())
+        assert ("The reader returns material (an index), never a decision") in c
+
+    def test_raw_bytes_reread_contract(self):
+        c = " ".join(self._contract().split())
+        assert ("every decision is made from raw bytes via targeted reads") in c
+
+    def test_validator_wired(self):
+        # wire-or-delete: the helper the guard test demands a home for.
+        c = self._contract()
+        assert "plan_lib.validate_index" in c
+        assert "WF2_READ_DELEGATE_BYTES" in c
+
+    def test_projection_fail_closed_rule(self):
+        c = " ".join(self._contract().split())
+        assert ("an empty, malformed, or command-failed projection falls back "
+                "to the inline raw read") in c
+
+    def test_step11_reader_annotation_present(self):
+        s11 = _step11()
+        assert s11.count("<!-- model-routing: role=analysis -->") >= 1, (
+            "Step 11 item 1's diff reader must carry the analysis-role "
+            "annotation")
+
+    def test_projection_discipline_at_each_surface(self):
+        text = _text()
+        s9 = _section(text, "## Step 9:", "## Step 10:")
+        s115 = _section(text, "## Step 11.5:", "## Step 12:")
+        s13 = _section(text, "## Step 13:", "## Step 14:")
+        s8 = _section(text, "## Step 8:", "## Step 9:")
+        for name, s in (("8", s8), ("9", s9), ("11.5", s115), ("13", s13)):
+            assert "projection" in s, f"Step {name} lost its projection wiring"
+
+    def test_ac3_review_and_implementation_annotations_survive(self):
+        # Positive AC3 check: delegation must never re-route these roles.
+        text = _text()
+        assert text.count("<!-- model-routing: role=review -->") >= 3
+        assert text.count("<!-- model-routing: role=implementation -->") >= 1
+
+    def test_temp_artifact_post_creation_asserts(self):
+        c = " ".join(self._contract().split())
+        assert "stat -c %a" in c and "git check-ignore -q" in c, (
+            "the fail-silent temp-file deps need their fail-loud "
+            "post-creation asserts")
