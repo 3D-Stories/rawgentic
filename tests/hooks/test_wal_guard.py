@@ -622,3 +622,92 @@ class TestMultiDocumentStdin:
             f"rc={result.returncode} stdout={result.stdout!r} "
             f"stderr={result.stderr!r}"
         )
+
+
+class TestSingleCombinedGrep:
+    """#267: the hot allow-path runs ONE combined-pattern grep instead of 12
+    per-pattern greps (plus the unconditional rm-/tmp allowlist grep = 2
+    spawns total for a clean command)."""
+
+    def test_clean_command_spawns_two_greps(self, tmp_path):
+        import shutil as _shutil
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        real_grep = _shutil.which("grep")
+        assert real_grep
+        count_file = tmp_path / "grep-count"
+        shim_dir = tmp_path / "shimbin"
+        shim_dir.mkdir()
+        shim = shim_dir / "grep"
+        shim.write_text(
+            f'#!/usr/bin/env bash\necho x >> "{count_file}"\n'
+            f'exec "{real_grep}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+        payload = json.dumps({
+            "tool_input": {"command": "echo hello world"},
+            "tool_name": "Bash", "session_id": "s-grepcount",
+            "tool_use_id": "tu-g", "cwd": str(tmp_path),
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "wal-guard")],
+            input=payload, capture_output=True, text=True,
+            timeout=10, cwd=str(tmp_path), env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        assert parse_hook_output(result.stdout) is None, "clean cmd must allow"
+        spawns = (
+            len(count_file.read_text().splitlines())
+            if count_file.exists()
+            else 0
+        )
+        assert spawns == 2, (
+            f"clean command spawned grep {spawns} times, want 2 "
+            f"(rm-/tmp allowlist + ONE combined pattern pre-filter)"
+        )
+
+    def test_prefilter_grep_error_does_not_fail_open(self, tmp_path):
+        """#267 Step 11 R2 catch: if the combined pre-filter grep errors
+        (rc 2, e.g. a future malformed pattern edit), wal-guard must fall
+        through to the per-pattern loop — never fast-path allow. The shim
+        errors only on the union-sized pattern argument and delegates every
+        normal grep, so a prod-destroy command must still be denied."""
+        import shutil as _shutil
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        real_grep = _shutil.which("grep")
+        shim_dir = tmp_path / "shimbin"
+        shim_dir.mkdir()
+        shim = shim_dir / "grep"
+        shim.write_text(
+            '#!/usr/bin/env bash\n'
+            'for a in "$@"; do\n'
+            '  if [ "${#a}" -gt 200 ]; then exit 2; fi\n'
+            'done\n'
+            f'exec "{real_grep}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        env = dict(os.environ)
+        env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+        payload = json.dumps({
+            "tool_input": {"command": "ssh deploy@prod-host"},
+            "tool_name": "Bash", "session_id": "s-rc2",
+            "tool_use_id": "tu-rc2", "cwd": str(tmp_path),
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "wal-guard")],
+            input=payload, capture_output=True, text=True,
+            timeout=10, cwd=str(tmp_path), env=env,
+        )
+        parsed = parse_hook_output(result.stdout)
+        decision = (
+            (parsed or {})
+            .get("hookSpecificOutput", {})
+            .get("permissionDecision", "")
+        )
+        assert decision == "deny", (
+            f"pre-filter grep error must fall through to the loop, not "
+            f"allow; rc={result.returncode} stdout={result.stdout!r}"
+        )
