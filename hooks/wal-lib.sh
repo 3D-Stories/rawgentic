@@ -22,12 +22,25 @@ wal_read_stdin() {
 # wal_parse_fields: Extracts common fields from WAL_RAW_INPUT using jq.
 # Requires: WAL_RAW_INPUT to be set (via wal_read_stdin).
 # Sets: WAL_INPUT, WAL_TOOL_NAME, WAL_SESSION_ID, WAL_TOOL_USE_ID, WAL_CWD
+# ONE jq spawn per event (#266): this runs on every tool call, so the four
+# per-field jq invocations were the WAL hot path's dominant cost. jq emits the
+# four assignments quoted by its @sh filter, which is what makes the eval safe:
+# every value arrives single-quoted (quotes, newlines, $() all inert — test-
+# enforced). Defaults are pre-set so malformed stdin (jq exits non-zero, emits
+# nothing, eval skipped) leaves the same sentinels as missing fields.
 wal_parse_fields() {
   WAL_INPUT="$WAL_RAW_INPUT"
-  WAL_TOOL_NAME=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.tool_name // "unknown"')
-  WAL_SESSION_ID=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.session_id // "unknown"')
-  WAL_TOOL_USE_ID=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.tool_use_id // "unknown"')
-  WAL_CWD=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '.cwd // "."')
+  WAL_TOOL_NAME="unknown"
+  WAL_SESSION_ID="unknown"
+  WAL_TOOL_USE_ID="unknown"
+  WAL_CWD="."
+  local assigns
+  assigns=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '
+    "WAL_TOOL_NAME=" + ((.tool_name // "unknown") | tostring | @sh),
+    "WAL_SESSION_ID=" + ((.session_id // "unknown") | tostring | @sh),
+    "WAL_TOOL_USE_ID=" + ((.tool_use_id // "unknown") | tostring | @sh),
+    "WAL_CWD=" + ((.cwd // ".") | tostring | @sh)
+  ') && eval "$assigns"
 }
 
 # wal_parse_input: Backward-compatible wrapper that reads stdin and extracts fields.

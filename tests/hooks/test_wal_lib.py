@@ -5,6 +5,9 @@ and echoing variable values after function calls.
 """
 import json
 import os
+import re
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -618,3 +621,92 @@ echo "project=$WAL_PROJECT"
             stdout, _, rc = self._resolve_project(ws, good, tmp_path)
             assert rc == 0
             assert stdout.splitlines()[-1] == f"project={good}"
+
+
+class TestWalParseFieldsSingleSpawn:
+    """#266: wal_parse_fields makes exactly ONE jq invocation per event and
+    survives hostile field values (quotes, newlines, command substitution)."""
+
+    def _make_counting_shim(self, tmp_path):
+        """A jq shim that logs each invocation to a count file, then delegates
+        to the real jq binary."""
+        real_jq = os.path.expanduser("~/.local/bin/jq")
+        if not os.access(real_jq, os.X_OK):
+            real_jq = shutil.which("jq")
+        assert real_jq, "no jq binary available for the counting shim"
+        count_file = tmp_path / "jq-spawn-count"
+        shim = tmp_path / "counting-jq"
+        shim.write_text(
+            f'#!/bin/bash\necho x >> "{count_file}"\nexec "{real_jq}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        return shim, count_file
+
+    def _parse_with_shim(self, tmp_path, raw, fields):
+        shim, count_file = self._make_counting_shim(tmp_path)
+        echoes = "\n".join(f'printf "%s\\n" "END${{{f}}}END"' for f in fields)
+        script = f"""
+source "{WAL_LIB}"
+WAL_JQ="{shim}"
+WAL_RAW_INPUT={shlex.quote(raw)}
+wal_parse_fields
+{echoes}
+"""
+        stdout, stderr, rc = _run_bash(script)
+        assert rc == 0, stderr
+        values = re.findall(r"END(.*?)END", stdout, flags=re.S)
+        spawns = (
+            len(count_file.read_text().splitlines())
+            if count_file.exists()
+            else 0
+        )
+        return values, spawns
+
+    def test_exactly_one_jq_spawn(self, tmp_path):
+        raw = json.dumps({
+            "tool_name": "Bash", "session_id": "s1",
+            "tool_use_id": "tu1", "cwd": "/tmp",
+        })
+        values, spawns = self._parse_with_shim(
+            tmp_path, raw,
+            ["WAL_TOOL_NAME", "WAL_SESSION_ID", "WAL_TOOL_USE_ID", "WAL_CWD"],
+        )
+        assert values == ["Bash", "s1", "tu1", "/tmp"]
+        assert spawns == 1, f"wal_parse_fields spawned jq {spawns} times, want 1"
+
+    def test_malformed_input_keeps_sentinel_defaults(self, tmp_path):
+        values, _ = self._parse_with_shim(
+            tmp_path, "not json at all",
+            ["WAL_TOOL_NAME", "WAL_SESSION_ID", "WAL_TOOL_USE_ID", "WAL_CWD"],
+        )
+        assert values == ["unknown", "unknown", "unknown", "."], (
+            "malformed stdin must leave the same sentinel defaults as missing "
+            f"fields, got {values!r}"
+        )
+
+    def test_single_quote_value_is_literal(self, tmp_path):
+        hostile = "a'b; echo pwned"
+        raw = json.dumps({"tool_name": hostile, "session_id": "s1",
+                          "tool_use_id": "tu1", "cwd": "/tmp"})
+        values, _ = self._parse_with_shim(tmp_path, raw, ["WAL_TOOL_NAME"])
+        assert values == [hostile]
+
+    def test_newline_value_preserved_and_no_field_bleed(self, tmp_path):
+        raw = json.dumps({"tool_name": "Bash", "session_id": "s1",
+                          "tool_use_id": "tu1", "cwd": "/tmp/a\nb"})
+        values, _ = self._parse_with_shim(
+            tmp_path, raw,
+            ["WAL_TOOL_NAME", "WAL_SESSION_ID", "WAL_TOOL_USE_ID", "WAL_CWD"],
+        )
+        assert values == ["Bash", "s1", "tu1", "/tmp/a\nb"]
+
+    def test_command_substitution_value_is_inert(self, tmp_path):
+        marker = tmp_path / "pwned-marker"
+        hostile = f"$(touch {marker})"
+        raw = json.dumps({"tool_name": "Bash", "session_id": hostile,
+                          "tool_use_id": "tu1", "cwd": "/tmp"})
+        values, _ = self._parse_with_shim(tmp_path, raw, ["WAL_SESSION_ID"])
+        assert values == [hostile], "value must land as a literal"
+        assert not marker.exists(), (
+            "command substitution inside a field value EXECUTED during parse"
+        )
