@@ -333,6 +333,10 @@ class TestWalRecoveryExpiry:
         ctx, stderr = self._ctx(ws, env_override={"WAL_RECOVERY_MAX_AGE_DAYS": "banana"})
         assert "three day op" in ctx   # default 7d still applies
         assert "march op" not in ctx
+        # The invalid value must be VISIBLY noted, not silently defaulted — the
+        # hook's whole stderr is discarded at the callsite (`_do_wal_ops
+        # 2>/dev/null`), so the note must ride the session context instead.
+        assert "WAL_RECOVERY_MAX_AGE_DAYS" in ctx
 
     def test_missing_ts_announces_fail_open(self, make_workspace):
         ws = self._ws(make_workspace, [

@@ -428,14 +428,16 @@ _do_wal_ops() {
     # entries regardless of age). Fail-open: an unparseable date fallback (empty
     # CUTOFF) or a missing .ts announces as before, so a real crash INTENT is
     # never silently lost to a broken clock or an undated entry.
+    # Invalid values are noted via CONTEXT_PARTS, not (only) stderr: the callsite
+    # runs `_do_wal_ops 2>/dev/null`, so a stderr-only warning would be invisible.
     MAX_AGE_DAYS="${WAL_RECOVERY_MAX_AGE_DAYS:-7}"
     case "$MAX_AGE_DAYS" in
         ''|*[!0-9]*)
-            echo "session-start: WAL_RECOVERY_MAX_AGE_DAYS='$MAX_AGE_DAYS' is not a positive integer — using default 7" >&2
+            CONTEXT_PARTS+=("WAL config note: WAL_RECOVERY_MAX_AGE_DAYS='$MAX_AGE_DAYS' is not a positive integer — using default 7.")
             MAX_AGE_DAYS=7 ;;
     esac
     if [ "$MAX_AGE_DAYS" -lt 1 ] || [ "$MAX_AGE_DAYS" -gt 365 ]; then
-        echo "session-start: WAL_RECOVERY_MAX_AGE_DAYS=$MAX_AGE_DAYS out of range [1,365] — using default 7" >&2
+        CONTEXT_PARTS+=("WAL config note: WAL_RECOVERY_MAX_AGE_DAYS=$MAX_AGE_DAYS out of range [1,365] — using default 7.")
         MAX_AGE_DAYS=7
     fi
     SUPPRESSED_COUNT=0
