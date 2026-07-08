@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unified-Review Backlog Run — Final Report (v3.24.2 → v3.24.17)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 08:23 MDT</div>
+<h1>Unified-Review Backlog Run — Final Report (v3.24.2 → v3.24.17)</h1>
+
+</header>
+<main>
+<h1>Unified-review backlog run — final report (2026-07-07 → 2026-07-08, unsupervised)</h1>
+<p><strong>Scope executed:</strong> EPIC 3 (5 children), EPIC 4 (4), EPIC 5 (4), 6b + 6c — <strong>15 children + the PR0 deliverable, all merged.</strong> Goal source: docs/reviews/2026-07-07-harness-and-code-review.md Part 3.</p>
+<h2>Merged (16 PRs, v3.24.2 → v3.24.17, plus telemetry)</h2>
+<p>| PR | child | issue | version | main sha | suite after |</p>
+<p>|---|---|---|---|---|---|</p>
+<p>| #260 | PR0 review deliverable | — | 3.24.2 | c50aa5e | 2278 |</p>
+<p>| #281 | 3a | #261 | 3.24.3 | af6c023 | 2283 |</p>
+<p>| #282 | 3b | #262 | 3.24.4 | 1be0ed5 | 2293 |</p>
+<p>| #283 | 3c | #263 | 3.24.5 | 952f863 | 2295 |</p>
+<p>| #284 | 3d | #265 | 3.24.6 | 4724eba | 2304 |</p>
+<p>| #285 | 3e | #264 | 3.24.7 | 2c95fbc | 2336 |</p>
+<p>| #286 | 4a | #266 | 3.24.8 | e414f99 | 2345 |</p>
+<p>| #287 | 4b | #267 | 3.24.9 | 2f716ed | 2347 |</p>
+<p>| #288 | 4c | #268 | 3.24.10 | 98a2238 | 2350 |</p>
+<p>| #289 | 4d | #269 | 3.24.11 | 732ee3f | 2358 |</p>
+<p>| #290 | 5a | #270 | 3.24.12 | bc070d2 | 2363 |</p>
+<p>| #291 | 5b | #271 | 3.24.13 | 85bb101 | 2363 |</p>
+<p>| #292 | 5c (WF3) | #272 | 3.24.14 | ee2fd4b | 2363+1skip |</p>
+<p>| #293 | 5d | #273 | 3.24.15 | cd0e043 | 2363+1skip |</p>
+<p>| #294 | 6b | #275 | 3.24.16 | 023c98e | 2357+1skip |</p>
+<p>| #295 | 6c | #276 | 3.24.17 | c905ec8 | 2359+1skip |</p>
+<p>| #296 | telemetry (15 records) | — | — | faed5df | — |</p>
+<p><strong>Suite delta vs run baseline:</strong> 2278/0 → <strong>2359 passed + 1 deliberate visible skip, 0 failing</strong> (+81 net: new guards/regression tests added, 6 dead unit cases removed with their dead subject, 1 silent-pass converted to a visible skip). Every child: red-before-green shown, full-suite gate by exit code, both pylint lanes, security scan (iac/sca always visible skips), ≥1 opus review, CI all-4-lanes green before merge, merge verified on main, run-record rc=0.</p>
+<h2>Epics closed</h2>
+<ul>
+<li><strong>#277 (EPIC 3)</strong> — closed with summary (prior session).</li>
+<li><strong>#278 (EPIC 4)</strong> — closed with summary: WAL stdin 4 jq→1; wal-guard 13 greps→2; wal-bind-guard 6 jq→5; session-start spawns bounded + dead archive path removed.</li>
+<li><strong>#279 (EPIC 5)</strong> — closed with summary: principles.md + consolidation.md quarantined w/ authoritative STATUS table; count guards compute from the tree; vacuous guards made loud; both operating manuals&#x27; self-rot fixed (workspace half direct-edited, .bak at /home/rocky00717/rawgentic/CLAUDE.md.2026-07-08.bak).</li>
+<li><strong>#280 (EPIC 6)</strong> — STAYS OPEN: 6b+6c merged (status comment posted); <strong>6a #274 [decision] not implemented per scope</strong> (wire-or-delete external_ref_lib is an owner call).</li>
+</ul>
+<h2>Review catches worth reading (every child had ≥1 real catch)</h2>
+<ul>
+<li><strong>#266</strong>: Codex High — multi-document stdin let the trailing document&#x27;s assignment group win via eval (verified live, fixed). Chasing it exposed + fixed a pre-existing deny() duplicate-JSON bug, and a reviewer caught my own fix flipping the fail-closed guard open (also fixed, end-to-end pinned).</li>
+<li><strong>#267</strong>: pre-filter treated grep rc 2 (future malformed pattern edit) as no-match — would have fail-opened all 12 rules at once. Fixed; parity fuzzed 600 iterations, 0 breaks.</li>
+<li><strong>#268</strong>: reviewer refuted the first draft LIVE — it trusted the registry&#x27;s unvalidated project_path; a stale/hand-edited entry flipped deny→allow. Redesigned to workspace-truth (kept the perf win).</li>
+<li><strong>#269</strong>: Codex — newline-in-cwd field-shift in the consolidated transport (shlex fix); a reviewer then proved my regression pin was VACUOUS (passed on both parsers) — replaced with a mutation-verified discriminator.</li>
+<li><strong>#271</strong>: the computed membership guard exposed that &quot;9/15 evals&quot; had the right count with WRONG membership (sync-security-patterns HAS evals) — and the review doc&#x27;s own &quot;10/15&quot; correction was wrong too.</li>
+<li><strong>#272/#273/#275/#276</strong>: root-skip convention omission; one more bare count found by the accuracy pass; stale doc bullet; detect/repair proof promoted from manual verification to a committed sandbox test.</li>
+</ul>
+<h2>Incidents / process notes (honest ledger)</h2>
+<ul>
+<li><strong>Session limit (~4:00–4:30am MT)</strong> killed the first #271 reviewer pair mid-run. The requested overnight watchdog (25-min session cron) worked as designed: queued ticks fired after reset, both reviewers relaunched, zero work lost.</li>
+<li><strong>#273 merge</strong>: first attempt hit a network error; PR state verified still OPEN before retry (no double-merge). The run-record was persisted one retry BEFORE the merge landed — accurate in hindsight, but the ordering was wrong; corrected for all later children (merge-verify before summarize).</li>
+<li><strong>Opus classifier outage</strong> denied one agent dispatch once; retried clean.</li>
+<li>mempalace MCP disconnected mid-run — Step 10 memorize skipped (best-effort per convention) from #272 onward.</li>
+</ul>
+<h2>Reserved for owner (untouched, per scope)</h2>
+<ul>
+<li><strong>EPICs 1–2</strong>: never filed as issues (live-harness scope) — only their review-doc entries exist.</li>
+<li><strong>6a #274</strong> [decision], <strong>6d</strong>, <strong>6e</strong> (not filed — live-infra).</li>
+<li>Follow-up recorded during the run: wal-guard <code>deny()</code> uses <code>jq --arg</code>, which hits argv limits at ~300KB commands leaving no deny JSON (= allow) — pre-existing, verified not introduced by this run&#x27;s changes; candidate small fix.</li>
+<li>Plugin cache still runs v3.24.0 — reinstall (exit sessions first, §7 recipe) to pick up v3.24.17.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-08 08:23 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
