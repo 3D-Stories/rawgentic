@@ -28,9 +28,13 @@ wal_read_stdin() {
 # every value arrives single-quoted (quotes, newlines, $() all inert — test-
 # enforced). On malformed stdin jq exits non-zero with no output, eval is
 # skipped, and the function returns jq's code — same as the old four-call form
-# (a set -e caller aborts; the logger hooks swallow it via `|| true`). The
-# pre-set defaults below mirror the missing-field sentinels for any caller
-# that reads the fields after a tolerated failure.
+# (a set -e caller aborts; the logger hooks swallow it via `|| true`); the
+# pre-set defaults are belt-and-suspenders for any future tolerant caller.
+# The filter binds the assignments to EXACTLY ONE input document: a stdin
+# holding several JSON texts is rejected like malformed input, so eval can
+# never apply a trailing document's assignment group over the first event's
+# (adversarial diff-review finding). Empty stdin stays tolerated (rc 0,
+# sentinels), matching the pre-#266 hooks.
 wal_parse_fields() {
   WAL_INPUT="$WAL_RAW_INPUT"
   WAL_TOOL_NAME="unknown"
@@ -38,11 +42,15 @@ wal_parse_fields() {
   WAL_TOOL_USE_ID="unknown"
   WAL_CWD="."
   local assigns
-  assigns=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -r '
-    "WAL_TOOL_NAME=" + ((.tool_name // "unknown") | tostring | @sh),
-    "WAL_SESSION_ID=" + ((.session_id // "unknown") | tostring | @sh),
-    "WAL_TOOL_USE_ID=" + ((.tool_use_id // "unknown") | tostring | @sh),
-    "WAL_CWD=" + ((.cwd // ".") | tostring | @sh)
+  assigns=$(printf '%s' "$WAL_RAW_INPUT" | "$WAL_JQ" -rn '
+    [inputs]
+    | if length > 1 then error("multiple JSON documents on hook stdin")
+      elif length == 0 then empty
+      else .[0] end
+    | "WAL_TOOL_NAME=" + ((.tool_name // "unknown") | tostring | @sh),
+      "WAL_SESSION_ID=" + ((.session_id // "unknown") | tostring | @sh),
+      "WAL_TOOL_USE_ID=" + ((.tool_use_id // "unknown") | tostring | @sh),
+      "WAL_CWD=" + ((.cwd // ".") | tostring | @sh)
   ') && eval "$assigns"
 }
 
