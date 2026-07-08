@@ -423,12 +423,51 @@ _do_wal_ops() {
 
     rm -f "$CLEAN_FILE"
 
+    # Announce expiry (#303): incomplete INTENTs older than the cutoff are hidden
+    # from the report (they stay on disk — rotation above preserves incomplete
+    # entries regardless of age). Fail-open: an unparseable date fallback (empty
+    # CUTOFF) or a missing .ts announces as before, so a real crash INTENT is
+    # never silently lost to a broken clock or an undated entry.
+    MAX_AGE_DAYS="${WAL_RECOVERY_MAX_AGE_DAYS:-7}"
+    case "$MAX_AGE_DAYS" in
+        ''|*[!0-9]*)
+            echo "session-start: WAL_RECOVERY_MAX_AGE_DAYS='$MAX_AGE_DAYS' is not a positive integer — using default 7" >&2
+            MAX_AGE_DAYS=7 ;;
+    esac
+    if [ "$MAX_AGE_DAYS" -lt 1 ] || [ "$MAX_AGE_DAYS" -gt 365 ]; then
+        echo "session-start: WAL_RECOVERY_MAX_AGE_DAYS=$MAX_AGE_DAYS out of range [1,365] — using default 7" >&2
+        MAX_AGE_DAYS=7
+    fi
+    SUPPRESSED_COUNT=0
+    if [ -n "$INCOMPLETE" ]; then
+        ANNOUNCE_CUTOFF=$(date -u -d "$MAX_AGE_DAYS days ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-"${MAX_AGE_DAYS}"d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || printf '')
+        if [ -n "$ANNOUNCE_CUTOFF" ]; then
+            TOTAL_COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
+            INCOMPLETE=$(printf '%s\n' "$INCOMPLETE" | "$JQ" -c --arg cutoff "$ANNOUNCE_CUTOFF" \
+                'select(((.ts // "") == "") or (.ts >= $cutoff))' 2>/dev/null) || true
+            if [ -n "$INCOMPLETE" ]; then
+                SHOWN_COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
+            else
+                SHOWN_COUNT=0
+            fi
+            SUPPRESSED_COUNT=$((TOTAL_COUNT - SHOWN_COUNT))
+        fi
+    fi
+
+    SUPPRESSED_NOTE=""
+    if [ "$SUPPRESSED_COUNT" -gt 0 ]; then
+        SUPPRESSED_NOTE="
+($SUPPRESSED_COUNT older incomplete INTENT(s) suppressed — age > $MAX_AGE_DAYS days; retained on disk for audit.)"
+    fi
+
     if [ -n "$INCOMPLETE" ]; then
         COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
-        SUMMARY=$(printf '%s\n' "$INCOMPLETE" | "$JQ" -r '"  - [" + .ts + "] " + .tool + ": " + .summary' 2>/dev/null | head -20)
+        SUMMARY=$(printf '%s\n' "$INCOMPLETE" | "$JQ" -r '"  - [" + (.ts // "undated") + "] " + .tool + ": " + .summary' 2>/dev/null | head -20)
         CONTEXT_PARTS+=("WAL RECOVERY: Found $COUNT incomplete operation(s) from previous session(s):
 $SUMMARY
-Review these and determine if any recovery action is needed.")
+Review these and determine if any recovery action is needed.$SUPPRESSED_NOTE")
+    elif [ "$SUPPRESSED_COUNT" -gt 0 ]; then
+        CONTEXT_PARTS+=("WAL note: $SUPPRESSED_COUNT older incomplete INTENT(s) suppressed from the recovery report — age > $MAX_AGE_DAYS days; retained on disk for audit.")
     fi
 }
 _do_wal_ops 2>/dev/null || true
