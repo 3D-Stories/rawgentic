@@ -35,9 +35,10 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+from atomic_write_lib import atomic_write_text
 
 STATUS_SCHEMA = 1
 ALL_TOOLS = ["gitleaks", "semgrep", "osv-scanner", "trivy", "pip-audit"]
@@ -58,20 +59,9 @@ def read_status(path):
 
 
 def write_status(path, status):
-    """Atomically write the status dict (tmp file + os.replace)."""
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".scanner-status-")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(status, f, indent=2)
-        os.replace(tmp, str(p))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    """Atomically write the status dict (shared helper, #264)."""
+    atomic_write_text(path, json.dumps(status, indent=2),
+                      prefix=".scanner-status-", mkdir=True)
 
 
 # --------------------------------------------------------------------------

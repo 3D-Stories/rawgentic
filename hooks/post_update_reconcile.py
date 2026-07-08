@@ -34,8 +34,9 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
+
+from atomic_write_lib import atomic_write_text
 
 STATE_FILENAME = "rawgentic-reconciled-version"
 
@@ -243,19 +244,8 @@ def _load_json(path):
 
 
 def _write_json_atomic(path, data):
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".rawgentic-tmp-")
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp, str(p))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, json.dumps(data, indent=2),
+                      prefix=".rawgentic-tmp-", mkdir=True)
 
 
 def _read_version_file(path):
@@ -271,19 +261,7 @@ def _write_version_file(path, version):
 
 
 def _write_json_text(path, text):
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=".reconciled-")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        os.replace(tmp, str(p))
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    atomic_write_text(path, text, prefix=".reconciled-", mkdir=True)
 
 
 def _resolve_version(args):

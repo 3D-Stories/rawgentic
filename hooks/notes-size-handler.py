@@ -19,11 +19,13 @@ import json
 import os
 import re
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from atomic_write_lib import atomic_write_text  # noqa: E402
 
 THRESHOLD = 800
 KEEP_LINES = 200
@@ -112,20 +114,8 @@ def trim_notes(
         if not new_content.endswith("\n"):
             new_content += "\n"
 
-        # Atomic write: tempfile in same directory + os.replace
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=str(path.parent), suffix=".tmp"
-        )
-        try:
-            with os.fdopen(tmp_fd, "w") as f:
-                f.write(new_content)
-            os.replace(tmp_path, str(path))
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        # Atomic write via the shared helper (#264)
+        atomic_write_text(path, new_content)
 
         return {
             "trimmed": True,

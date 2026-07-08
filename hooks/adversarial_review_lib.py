@@ -30,6 +30,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Final
 
+from atomic_write_lib import atomic_write_text
+
 
 # ============================================================================
 # Env-frozen constants (clamped, loaded once at import — mirrors plan_lib.py)
@@ -1428,28 +1430,19 @@ def main(argv: list[str] | None = None) -> int:
         # mirroring the report-write contract) so a consumer never read-gates on a
         # missing/partial sidecar and misreads it as success (#131).
         if sidecar_path is not None:
-            # Atomic write: build the full sidecar in a tmp file, then os.replace()
-            # into place, so a crash/interrupt mid-write never leaves a partial
-            # sidecar at the canonical path (a reader either sees the old file, if
-            # any, or the complete new one). O_NOFOLLOW on the tmp path defends
-            # against a symlink planted at the tmp name between calls.
-            tmp_path = sidecar_path + ".tmp"
+            # Atomic write via the shared helper (#264): crash/interrupt mid-write
+            # never leaves a partial sidecar (reader sees the old file or the
+            # complete new one); the helper's exclusive temp creation covers the
+            # planted-symlink defense the old bespoke variant carried.
             try:
-                fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump({
-                        "status": "success",
-                        "summary": result.summary,
-                        "truncated": result.truncated,
-                        "secrets": list(result.secrets),
-                        "findings": list(result.findings),
-                    }, f)
-                os.replace(tmp_path, sidecar_path)
+                atomic_write_text(sidecar_path, json.dumps({
+                    "status": "success",
+                    "summary": result.summary,
+                    "truncated": result.truncated,
+                    "secrets": list(result.secrets),
+                    "findings": list(result.findings),
+                }))
             except OSError as exc:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
                 print(f"failed to write findings sidecar: {exc}", file=sys.stderr)
                 return 3
         print(path)

@@ -16,6 +16,8 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
+from atomic_write_lib import atomic_write_text
+
 
 # --- HTML comment injection prevention ---
 
@@ -224,14 +226,10 @@ def format_suspend_state(
 def write_suspend_state(path: str, state: dict) -> None:
     """Atomically write suspend state to a JSON file.
 
-    Uses write-to-tmp-then-rename pattern to prevent partial writes.
+    Shared helper (#264) with fsync=True — suspend state must survive a crash
+    right after the write (a headless orchestrator resumes from it).
     """
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(state, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.rename(tmp_path, path)
+    atomic_write_text(path, json.dumps(state, indent=2), fsync=True)
 
 
 def read_suspend_state(path: str) -> dict | None:
