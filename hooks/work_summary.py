@@ -464,7 +464,39 @@ def normalize_record(record, *, now, schema_version=SCHEMA_VERSION) -> dict:
     return out
 
 
-def _render_usage_line(usage: dict) -> str:
+def worker_token_share(mix, worker_models) -> "float | None":
+    """Derived worker-token-share (#315, CMA 'plan big, execute small' cookbook:
+    https://github.com/anthropics/claude-cookbooks/blob/main/managed_agents/CMA_plan_big_execute_small.ipynb).
+
+    A ``model_mix`` entry counts as a WORKER iff any configured ``modelRouting``
+    value (short name, e.g. "sonnet"/"opus") is a case-insensitive substring of
+    the model id; everything else is orchestrator. Returns worker input_tokens /
+    total input_tokens, or None when underivable (malformed/empty mix, no
+    worker_models config, zero/unparseable totals). Best-effort like
+    _render_usage_line: never raises on unvalidated records. Known limitation:
+    when the orchestrator's own family equals a routed value, its tokens count
+    as worker — the rule is config-derived, not session-aware."""
+    if not isinstance(mix, dict) or not mix or not worker_models:
+        return None
+    names = [w.lower() for w in worker_models if isinstance(w, str) and w]
+    if not names:
+        return None
+    total = worker = 0
+    for model, counts in mix.items():
+        if not isinstance(model, str) or not isinstance(counts, dict):
+            continue
+        tokens = counts.get("input_tokens")
+        if not _is_int(tokens) or tokens < 0:
+            continue
+        total += tokens
+        if any(n in model.lower() for n in names):
+            worker += tokens
+    if total <= 0:
+        return None
+    return worker / total
+
+
+def _render_usage_line(usage: dict, worker_models=None) -> str:
     """Render the best-effort '- Usage: ...' line (#155 Task 3). `usage` is
     already coerced by _as_dict and confirmed truthy by the caller. Every inner
     value is isinstance-guarded (never trusted) since render_summary runs on
@@ -498,12 +530,16 @@ def _render_usage_line(usage: dict) -> str:
         if parts:
             line += f" ({', '.join(parts)})"
 
+    share = worker_token_share(usage.get("model_mix"), worker_models)
+    if share is not None:
+        line += f", worker-share {round(share * 100)}%"
+
     return line
 
 
 # --- render_summary (pure, best-effort) ------------------------------------
 
-def render_summary(record) -> str:
+def render_summary(record, worker_models=None) -> str:
     """Render the human "WF COMPLETE" block. Best-effort and total: never raises
     on a partial/invalid/non-dict record, so the user always gets Step 16 output
     even when the record failed validation."""
@@ -574,7 +610,7 @@ def render_summary(record) -> str:
         lines.append(f"- Tests: {tests.get('added', 0)} added")
     usage = _as_dict(r.get("usage"))
     if usage:
-        lines.append(_render_usage_line(usage))
+        lines.append(_render_usage_line(usage, worker_models))
     deferred = r.get("verification_deferred")
     if isinstance(deferred, list) and deferred:
         lines.append("- Verification deferred (must be checked on target):")
@@ -991,6 +1027,41 @@ def render_aggregate_markdown(agg, *, group_by=None, excluded=None, since=None) 
 
 # --- CLI -------------------------------------------------------------------
 
+def _resolve_worker_models(project_root) -> "list | None":
+    """Best-effort worker-model resolution for #315 — fail-open like
+    model_routing_lib: walk up from project_root (≤5 levels) for
+    .rawgentic_workspace.json, find the entry whose path basename matches the
+    project root's basename, and return its unique modelRouting values.
+    Any error/absence → None (the worker-share line is simply omitted)."""
+    try:
+        root = os.path.abspath(project_root)
+        name = os.path.basename(root)
+        d = root
+        for _ in range(5):
+            ws = os.path.join(d, ".rawgentic_workspace.json")
+            if os.path.isfile(ws):
+                with open(ws, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                for proj in data.get("projects", []):
+                    if not isinstance(proj, dict):
+                        continue
+                    ppath = str(proj.get("path", ""))
+                    if proj.get("name") == name or os.path.basename(ppath.rstrip("/")) == name:
+                        routing = proj.get("modelRouting")
+                        if isinstance(routing, dict):
+                            vals = sorted({str(v) for v in routing.values() if v})
+                            return vals or None
+                        return None
+                return None
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    except Exception:
+        pass
+    return None
+
+
 def main(argv=None) -> int:
     """CLI entry point.
 
@@ -1048,20 +1119,28 @@ def main(argv=None) -> int:
             print(str(exc), file=sys.stderr)
             return 2
 
+        workers = _resolve_worker_models(args.project_root)
+
         errors = validate_record(raw, strict=True)  # #116: new writes must use the controlled vocab
         if errors:
             # Best-effort render so the user keeps Step 16 output, but never
             # persist an invalid record. Exit 1 so the skill surfaces the gap.
             print(json.dumps(raw, separators=(",", ":")) if args.json
-                  else render_summary(raw))
+                  else render_summary(raw, worker_models=workers))
             print("run-record validation failed (NOT persisted):", file=sys.stderr)
             for e in errors:
                 print(f"  - {e}", file=sys.stderr)
             return 1
 
         record = normalize_record(raw, now=_now())
+        # #315: derived field — present-optional, never required by the validator
+        usage = record.get("usage")
+        if isinstance(usage, dict):
+            share = worker_token_share(usage.get("model_mix"), workers)
+            if share is not None:
+                usage["worker_token_share"] = round(share, 4)
         print(json.dumps(record, separators=(",", ":")) if args.json
-              else render_summary(record))
+              else render_summary(record, worker_models=workers))
         if not args.no_persist:
             store = resolve_store_path(args.store, os.environ, args.project_root)
             try:
