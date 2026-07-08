@@ -1482,7 +1482,9 @@ class TestHeadlessInteractionBlock:
         Counted over the CORPUS (SKILL.md + references/): #158 may move annotated
         prose into references/, and the count must follow it. (references/ hold 0
         occurrences today, so the pins are unchanged by the corpus switch.)"""
-        count = skill_corpus(skill_name).count("[Headless")  # matches [Headless: annotations
+        # #271 (C15): anchored to the annotation form `[Headless:` — a bare
+        # substring count broke on ANY incidental `[Headless` occurrence
+        count = len(re.findall(r"\[Headless:", skill_corpus(skill_name)))
         expected = self.EXPECTED_COUNTS[skill_name]
         assert count == expected, (
             f"{skill_name} corpus has {count} [Headless] annotations, "

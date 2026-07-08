@@ -43,7 +43,14 @@ def test_marketplace_whitelist_has_no_removed_skills():
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     listed = {Path(rel).name for rel in mp["plugins"][0]["skills"]}
     assert not listed & set(REMOVED), f"whitelist still carries: {listed & set(REMOVED)}"
-    assert len(listed) == 15
+    # #271: computed cross-check — the whitelist must track the skills on
+    # disk exactly, not a hand-maintained literal
+    disk = {p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md")}
+    assert listed == disk, (
+        f"marketplace whitelist != skills on disk\n"
+        f"whitelist only: {sorted(listed - disk)}\n"
+        f"disk only: {sorted(disk - listed)}"
+    )
 
 
 def test_descriptions_no_longer_mention_stubs():
