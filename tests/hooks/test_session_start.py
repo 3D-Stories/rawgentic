@@ -196,14 +196,23 @@ class TestReconciliation:
         assert updated["projects"][0]["active"] is True  # Not deactivated
 
 
+def _iso_ago(days=0, hours=0):
+    """ISO-8601Z timestamp <days>d<hours>h in the past — the announce filter is
+    age-relative, so fixture timestamps must be dynamic (a fixed date silently
+    crosses the cutoff as wall-clock time passes)."""
+    from datetime import datetime, timedelta, timezone
+    t = datetime.now(timezone.utc) - timedelta(days=days, hours=hours)
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class TestWalRecovery:
     def test_detects_incomplete_operations(self, make_workspace):
         wal_entries = [
-            {"ts": "2026-03-08T00:00:00Z", "phase": "INTENT", "session": "old",
+            {"ts": _iso_ago(hours=1), "phase": "INTENT", "session": "old",
              "tool": "Bash", "tool_use_id": "orphan-1", "summary": "rm -rf /", "cwd": "/tmp"},
-            {"ts": "2026-03-08T00:00:01Z", "phase": "INTENT", "session": "old",
+            {"ts": _iso_ago(hours=1), "phase": "INTENT", "session": "old",
              "tool": "Edit", "tool_use_id": "complete-1", "summary": "edit file", "cwd": "/tmp"},
-            {"ts": "2026-03-08T00:00:02Z", "phase": "DONE", "session": "old",
+            {"ts": _iso_ago(hours=1), "phase": "DONE", "session": "old",
              "tool": "Edit", "tool_use_id": "complete-1"},
         ]
         ws = make_workspace(wal_entries={"testproj": wal_entries},
@@ -234,6 +243,104 @@ class TestWalRecovery:
         if output:
             ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
             assert "WAL RECOVERY" not in ctx
+
+
+class TestWalRecoveryExpiry:
+    """#303: incomplete INTENTs older than the age cutoff (default 7 days) are
+    hidden from the session-start announce — but never deleted from disk."""
+
+    def _ws(self, make_workspace, wal_entries):
+        return make_workspace(
+            wal_entries={"testproj": wal_entries},
+            registry_entries=[{"session_id": "test-sess", "project": "testproj",
+                               "project_path": "./projects/testproj"}])
+
+    def _ctx(self, ws, env_override=None):
+        stdout, stderr, rc = _run_session_start(ws.root, env_override=env_override)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        ctx = ""
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        return ctx, stderr
+
+    def test_fresh_intent_still_announces(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"ts": _iso_ago(days=6), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "fresh-1", "summary": "fresh op", "cwd": "/tmp"},
+        ])
+        ctx, _ = self._ctx(ws)
+        assert "WAL RECOVERY" in ctx
+        assert "fresh op" in ctx
+
+    def test_stale_intent_hidden(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"ts": _iso_ago(days=30), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "stale-1", "summary": "march op", "cwd": "/tmp"},
+        ])
+        ctx, _ = self._ctx(ws)
+        assert "march op" not in ctx
+
+    def test_fresh_shows_while_stale_hidden(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"ts": _iso_ago(days=30), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "stale-1", "summary": "march op", "cwd": "/tmp"},
+            {"ts": _iso_ago(days=1), "phase": "INTENT", "session": "s",
+             "tool": "Edit", "tool_use_id": "fresh-1", "summary": "fresh op", "cwd": "/tmp"},
+        ])
+        ctx, _ = self._ctx(ws)
+        assert "fresh op" in ctx
+        assert "march op" not in ctx
+
+    def test_suppression_is_visible_not_silent(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"ts": _iso_ago(days=30), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "stale-1", "summary": "march op", "cwd": "/tmp"},
+            {"ts": _iso_ago(days=1), "phase": "INTENT", "session": "s",
+             "tool": "Edit", "tool_use_id": "fresh-1", "summary": "fresh op", "cwd": "/tmp"},
+        ])
+        ctx, _ = self._ctx(ws)
+        assert "suppressed" in ctx
+        assert "1" in ctx  # the suppressed count
+
+    def test_expiry_hides_never_deletes(self, make_workspace):
+        entries = [
+            {"ts": _iso_ago(days=30), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "stale-1", "summary": "march op", "cwd": "/tmp"},
+        ]
+        ws = self._ws(make_workspace, entries)
+        wal_file = Path(str(ws.root)) / "claude_docs" / "wal" / "testproj.jsonl"
+        before = wal_file.read_text()
+        ctx, _ = self._ctx(ws)
+        assert "march op" not in ctx
+        assert wal_file.read_text() == before  # on disk for audit, untouched
+
+    def test_env_override_tightens_cutoff(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"ts": _iso_ago(days=2), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "two-day", "summary": "two day op", "cwd": "/tmp"},
+        ])
+        ctx, _ = self._ctx(ws, env_override={"WAL_RECOVERY_MAX_AGE_DAYS": "1"})
+        assert "two day op" not in ctx
+
+    def test_malformed_env_falls_back_to_default(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"ts": _iso_ago(days=3), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "three-day", "summary": "three day op", "cwd": "/tmp"},
+            {"ts": _iso_ago(days=30), "phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "stale-1", "summary": "march op", "cwd": "/tmp"},
+        ])
+        ctx, stderr = self._ctx(ws, env_override={"WAL_RECOVERY_MAX_AGE_DAYS": "banana"})
+        assert "three day op" in ctx   # default 7d still applies
+        assert "march op" not in ctx
+
+    def test_missing_ts_announces_fail_open(self, make_workspace):
+        ws = self._ws(make_workspace, [
+            {"phase": "INTENT", "session": "s",
+             "tool": "Bash", "tool_use_id": "no-ts", "summary": "undated op", "cwd": "/tmp"},
+        ])
+        ctx, _ = self._ctx(ws)
+        assert "undated op" in ctx
 
 
 class TestLegacyArchivalRemoved:
