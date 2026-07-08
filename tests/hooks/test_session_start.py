@@ -851,3 +851,53 @@ class TestSpawnConsolidation:
         assert "query-archive" not in text, (
             "the dead query-archive block (C13) must be removed"
         )
+
+    def test_jq_fallback_newline_in_cwd_does_not_shift_fields(
+        self, make_workspace, tmp_path
+    ):
+        """Codex diff-review pin: with jq unavailable (python fallback), a
+        newline inside cwd must not shift session_id/event_type — the
+        fallback transports fields as shell-quoted assignments."""
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        ws = make_workspace(
+            registry_entries=[{"session_id": "real-sess",
+                               "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+        )
+        fake_home = tmp_path / "home-nl"
+        fake_home.mkdir()
+        # Shadow /usr/bin without jq (established no-jq pattern — jq and bash
+        # share /usr/bin, so a plain PATH strip would lose bash too)
+        shadow = tmp_path / "shadow_bin"
+        shadow.mkdir()
+        for entry in Path("/usr/bin").iterdir():
+            if entry.name == "jq":
+                continue
+            try:
+                (shadow / entry.name).symlink_to(entry)
+            except (OSError, FileExistsError):
+                continue
+        env = dict(os.environ)
+        env["HOME"] = str(fake_home)
+        env["PATH"] = str(shadow)
+        payload = json.dumps({
+            "session_id": "real-sess",
+            "cwd": f"{ws.root}\nintruder-line",
+            "hook_event_name": "SessionStart", "source": "startup",
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / "session-start")],
+            input=payload, capture_output=True, text=True,
+            timeout=30, cwd=str(ws.root), env=env,
+        )
+        assert result.returncode == 0, result.stderr
+        out = parse_hook_output(result.stdout)
+        ctx = (out or {}).get("hookSpecificOutput", {}).get(
+            "additionalContext", "")
+        # Field-shift would make SESSION_ID = "intruder-line"; the workspace
+        # walk then starts from a bogus CWD too. The decisive signal: the
+        # hook must NOT report the real session's project as if unbound, and
+        # must not crash. With correct parsing, cwd (with its newline) simply
+        # fails the workspace walk gracefully.
+        assert "intruder-line" not in ctx

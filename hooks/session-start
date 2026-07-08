@@ -42,18 +42,24 @@ if command -v "$JQ" &>/dev/null; then
     SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
     EVENT_TYPE=$(printf '%s' "$INPUT" | "$JQ" -r '.source // .hook_event_name // "startup"')
 else
-    # ONE python3 for all three fields (#269) — newline-delimited, read in order.
+    # ONE python3 for all three fields (#269). Values travel as shell-quoted
+    # assignments (shlex.quote — the python mirror of wal-lib's jq @sh
+    # pattern), so a newline or quote inside any field cannot shift the
+    # following fields (Codex diff-review catch: newline-delimited transport
+    # silently misbound SESSION_ID when cwd contained a newline).
+    CWD="."
+    SESSION_ID="unknown"
+    EVENT_TYPE="startup"
     _PARSED=$(printf '%s' "$INPUT" | python3 -c "
-import sys, json
+import sys, json, shlex
 try:
     d = json.load(sys.stdin)
 except Exception:
     d = {}
-print(d.get('cwd', '.'))
-print(d.get('session_id', 'unknown'))
-print(d.get('source') or d.get('hook_event_name') or 'startup')
-" 2>/dev/null || printf '.\nunknown\nstartup\n')
-    { read -r CWD; read -r SESSION_ID; read -r EVENT_TYPE; } <<< "$_PARSED"
+print('CWD=' + shlex.quote(str(d.get('cwd', '.'))))
+print('SESSION_ID=' + shlex.quote(str(d.get('session_id', 'unknown'))))
+print('EVENT_TYPE=' + shlex.quote(str(d.get('source') or d.get('hook_event_name') or 'startup')))
+" 2>/dev/null) && eval "$_PARSED"
     [ -n "$CWD" ] || CWD="."
     [ -n "$SESSION_ID" ] || SESSION_ID="unknown"
 fi
