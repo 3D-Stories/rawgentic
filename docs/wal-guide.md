@@ -108,7 +108,13 @@ runs WAL recovery:
 3. **Rotate** -- when the file exceeds **5000 lines**, entries older than
    **7 days** are pruned. Incomplete operations are preserved regardless of age.
 4. **Report** -- incomplete INTENT entries (no DONE/FAIL) are injected into the
-   session context as a recovery notice (up to 20 shown).
+   session context as a recovery notice (up to 20 shown). Entries older than
+   **`WAL_RECOVERY_MAX_AGE_DAYS`** (default **7**, clamped to [1,365]; a malformed
+   value falls back to the default with a visible note in the session context —
+   the hook's stderr is discarded at the callsite) are hidden from the notice with a
+   visible suppressed-count line -- hidden, never deleted: they stay on disk for
+   audit. Fail-open: an undated entry, a failed date computation, or a filter
+   error announces everything as before (#303).
 
 ## Session Notes Size Handler (`hooks/notes-size-handler.py`)
 
