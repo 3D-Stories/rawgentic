@@ -96,6 +96,18 @@ FILE_PATH=$(_get_file_path)
 [ -z "$FILE_PATH" ] && exit 0
 [[ "$FILE_PATH" != /* ]] && exit 0
 
+# --- Fast path (#268): file inside the BOUND project's own directory ---
+# WAL_PROJECT_PATH is already absolutized by wal_resolve_project. The common
+# case — every Read/Edit in the bound project — short-circuits here, before
+# the WORKSPACE_ROOT subshell and the cross-project violation jq scan.
+# Guarded on non-empty: a registry entry without project_path falls through
+# to the unchanged scan. Named delta: with (unsupported) NESTED project dirs
+# a file under both the bound project and a nested other project now allows
+# via the bound prefix; the scan used to deny — no workspace nests projects.
+if [ -n "${WAL_PROJECT_PATH:-}" ] && [[ "$FILE_PATH" == "${WAL_PROJECT_PATH%/}/"* ]]; then
+    exit 0
+fi
+
 # Resolve workspace root (directory containing .rawgentic_workspace.json)
 WORKSPACE_ROOT=$(cd "$(dirname "$WORKSPACE_FILE")" && pwd 2>/dev/null) || {
     # Path resolution failed — fail-open, log to stderr for debugging

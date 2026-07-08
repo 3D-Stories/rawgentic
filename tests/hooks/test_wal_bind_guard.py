@@ -346,3 +346,85 @@ class TestCrossProjectAllowlist:
         stdout, stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
         assert rc == 0 and _decision(stdout) == "allow"
         assert "crossProjectAllowedPaths" in stderr  # non-vacuous: allowed by list, not empty-path
+
+
+class TestBoundProjectFastPath:
+    """#268: a bound session touching its OWN project's files short-circuits
+    before the cross-project violation jq scan (6 jq spawns -> 5)."""
+
+    def _run_counting(self, ws, tmp_path, file_path):
+        import os as _os
+        import shutil as _shutil
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        real_jq = _shutil.which("jq")
+        assert real_jq
+        count_file = tmp_path / "jq-count"
+        shim_dir = tmp_path / "shimbin"
+        shim_dir.mkdir()
+        shim = shim_dir / "jq"
+        shim.write_text(
+            f'#!/usr/bin/env bash\necho x >> "{count_file}"\n'
+            f'exec "{real_jq}" "$@"\n'
+        )
+        shim.chmod(0o755)
+        env = dict(_os.environ)
+        # HOME -> tmp so _resolve_jq finds no ~/.local/bin/jq and falls back
+        # to PATH, where the counting shim sits first.
+        env["HOME"] = str(tmp_path)
+        env["PATH"] = f"{shim_dir}{_os.pathsep}{env['PATH']}"
+        payload = json.dumps({
+            "tool_name": "Read", "session_id": "s1",
+            "tool_use_id": "tu-fp", "cwd": str(ws.root),
+            "tool_input": {"file_path": file_path},
+        })
+        result = sp.run(
+            ["bash", str(HOOKS_DIR / HOOK)],
+            input=payload, capture_output=True, text=True,
+            timeout=10, cwd=str(ws.root), env=env,
+        )
+        spawns = (
+            len(count_file.read_text().splitlines())
+            if count_file.exists()
+            else 0
+        )
+        return result, spawns
+
+    def test_bound_project_read_skips_violation_scan(
+        self, make_workspace, tmp_path
+    ) -> None:
+        ws: Workspace = make_workspace(
+            projects=[ALPHA_PROJECT, BETA_PROJECT],
+            registry_entries=[{
+                "session_id": "s1", "project": "alpha",
+                "project_path": "./projects/alpha",
+                "ts": "2026-03-08T00:00:00Z",
+            }],
+        )
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        result, spawns = self._run_counting(ws, tmp_path, file_path)
+        assert result.returncode == 0, result.stderr
+        assert _decision(result.stdout) == "allow"
+        assert spawns == 5, (
+            f"bound-project Read spawned jq {spawns} times, want 5 "
+            f"(parse, claude_docs, registry project+path, file-path — "
+            f"NO cross-project violation scan)"
+        )
+
+    def test_cross_project_still_denies_with_project_path(
+        self, make_workspace, tmp_path
+    ) -> None:
+        """The fast path must not weaken Gate 2: bound to alpha WITH a
+        project_path in the registry, touching beta still denies."""
+        ws: Workspace = make_workspace(
+            projects=[ALPHA_PROJECT, BETA_PROJECT],
+            registry_entries=[{
+                "session_id": "s1", "project": "alpha",
+                "project_path": "./projects/alpha",
+                "ts": "2026-03-08T00:00:00Z",
+            }],
+        )
+        file_path = str(ws.root / "projects" / "beta" / "lib" / "utils.py")
+        result, _spawns = self._run_counting(ws, tmp_path, file_path)
+        assert result.returncode == 0, result.stderr
+        assert _decision(result.stdout) == "deny"

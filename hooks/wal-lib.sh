@@ -246,9 +246,11 @@ wal_resolve_project() {
     fi
   fi
 
-  # If project_path is relative, resolve against workspace root
+  # If project_path is relative, resolve against workspace root. Strip a
+  # leading "./" so the result is prefix-comparable (no embedded "/./" —
+  # the #268 fast path compares literally).
   if [ -n "$WAL_PROJECT_PATH" ] && [ "${WAL_PROJECT_PATH#/}" = "$WAL_PROJECT_PATH" ]; then
-    WAL_PROJECT_PATH="$root/$WAL_PROJECT_PATH"
+    WAL_PROJECT_PATH="$root/${WAL_PROJECT_PATH#./}"
   fi
 
   # Containment (#265): a registry entry is user-editable text — a name with a
