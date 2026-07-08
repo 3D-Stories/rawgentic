@@ -8,6 +8,9 @@ We override HOME via env_override so that tests use a temporary directory
 instead of the real ~/.claude/settings.json.
 """
 import json
+import os
+
+import pytest
 
 from tests.hooks.conftest import parse_hook_output, run_hook
 
@@ -179,3 +182,33 @@ class TestRecordOnceDecision:
         assert "auto-retr" not in ctx
         assert "redundant" in ctx
         assert "posttooluse" in ctx or "post-edit" in ctx  # the accurate lifecycle
+
+
+class TestWriteFailure:
+    """#272 (C16): when the decision file cannot be written, the hook must
+    fail closed on the nag — empty stdout AND no decision file (emitting
+    without a record would re-surface the notice every session forever)."""
+
+    def test_unwritable_decision_dir_stays_silent(self, tmp_path):
+        if os.geteuid() == 0:
+            pytest.skip("root bypasses directory write permissions")
+        _enable_security_guidance(tmp_path)
+        rawgentic_dir = tmp_path / ".rawgentic"
+        rawgentic_dir.mkdir()
+        rawgentic_dir.chmod(0o555)
+        try:
+            stdout, _stderr, rc = run_hook(
+                HOOK_NAME,
+                STDIN_PAYLOAD,
+                env_override={"HOME": str(tmp_path)},
+            )
+            assert rc == 0
+            assert stdout.strip() == "", (
+                "write-fail must stay silent (fail closed on the nag), "
+                f"got: {stdout!r}"
+            )
+            assert not _decision_file(tmp_path).exists(), (
+                "no decision file must exist after a failed write"
+            )
+        finally:
+            rawgentic_dir.chmod(0o755)
