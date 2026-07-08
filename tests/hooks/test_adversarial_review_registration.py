@@ -58,6 +58,21 @@ def test_readme_count_strings_updated():
     assert "12 SDLC workflow skills" not in readme
     n_skills = len(list((REPO_ROOT / "skills").glob("*/SKILL.md")))
     assert f"provides {n_skills} skills" in readme
+    # #271 reviewer note: computed==computed loses the absolute floor a
+    # deleted-everywhere skill would have tripped. The plugin description's
+    # human-readable breakdown ("6 SDLC + 6 workspace + 1 planning + 2
+    # security") is the remaining hand-written tally — assert it sums to the
+    # disk count so a silent shrink still fails somewhere.
+    import re as _re2
+    desc = json.loads(
+        (REPO_ROOT / ".claude-plugin" / "plugin.json").read_text()
+    )["description"]
+    breakdown = [int(n) for n in _re2.findall(
+        r"(\d+) (?:SDLC workflow|workspace management|planning|security)", desc)]
+    assert len(breakdown) == 4 and sum(breakdown) == n_skills, (
+        f"plugin description breakdown {breakdown} must sum to the "
+        f"{n_skills} skills on disk"
+    )
     assert "All 7 config-driven skills" in readme
     # #271: computed from disk, never a hand-maintained literal. A skill
     # "has evals" iff evals.json exists in its own evals/ dir or its

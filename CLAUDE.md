@@ -174,9 +174,13 @@ load-bearing for resume. Never edit or truncate an existing entry.
    `test_adversarial_review_registration.py:36`); the symlink
    `plugins/rawgentic/skills/<name>` (packaging test asserts `is_symlink()` AND resolve
    — catches a missed symlink but NOT a missed whitelist entry); and the count guards —
-   `tests/test_v3_removals.py:46` (`== 15`) + pinned README strings ("provides 15
-   skills", "9/15 skills have evals.json", "All 7 config-driven skills", "6 workspace
-   management"). If the skill carries `<config-loading>`: also bump
+   since #271 these COMPUTE from the tree (`tests/test_v3_removals.py` asserts
+   whitelist == the `skills/*/SKILL.md` glob; the README "provides N skills" and
+   the evals fraction/membership are computed-checked; the plugin description's
+   breakdown must sum to the disk count), so adding a skill means updating the
+   whitelist, the README prose, AND the description breakdown — the guards tell
+   you which surface is stale. Still hand-pinned: "All 7 config-driven skills",
+   "6 workspace management". If the skill carries `<config-loading>`: also bump
    `EXPECTED_CONFIG_LOADING_COUNT` (`tests/hooks/test_headless.py:1348`) and register the
    block in `scripts/sync_shared_blocks.py`'s MANIFEST + run the sync. Use the
    `add-skill` workspace skill — it executes this whole list.
