@@ -45,6 +45,23 @@ Historical changelog/campaign/review references stay (append-only history). Vers
 diff review: skipped (no security surface). Security scan PASS (visible skips: iac
 not-applicable, sca nothing-to-scan). Suite 2359+1skip → 2340+1skip, 0 failing.
 
+### #310 — wal-guard deny() fails closed on huge commands · v3.24.19
+
+**Issue.** #310 (found by #267 R2): deny() passed the full blocked command as one
+jq exec argument; over Linux `MAX_ARG_STRLEN` (~128KiB) the exec failed (E2BIG,
+rc 126) — empty stdout = ALLOW. The deliberately fail-closed guard failed open.
+
+**What shipped.** Command bounded at deny() entry (`${cmd:0:2000}` + visible
+`[truncated: total N chars]`, pure parameter expansion — a first-cut `printf|head`
+pipe died of SIGPIPE under pipefail and failed open again, caught red-first).
+Review hardening applied: printf-builtin fallback deny on the decision call (ANY
+serializer failure previously = allow) + guarded audit `ts=` assignment.
+
+**Reviews.** WF3: 2-reviewer Step 9 (opus — silent-failure hunter + standards;
+standards CLEAN, hunter's `ts=` finding applied) + cross-model adversarial on the
+RCA (report: `docs/reviews/rawgentic-rca-310-md-2026-07-08.md`; High applied).
+5 tests red-before-green. Suite 2340+1skip → 2345+1skip, 0 failing. PR #311.
+
 ## Epic #188 fast-follow (post-M4)
 
 WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped
