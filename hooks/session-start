@@ -42,9 +42,20 @@ if command -v "$JQ" &>/dev/null; then
     SESSION_ID=$(printf '%s' "$INPUT" | "$JQ" -r '.session_id // "unknown"')
     EVENT_TYPE=$(printf '%s' "$INPUT" | "$JQ" -r '.source // .hook_event_name // "startup"')
 else
-    CWD=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('cwd','.'))" 2>/dev/null || echo ".")
-    SESSION_ID=$(printf '%s' "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('session_id','unknown'))" 2>/dev/null || echo "unknown")
-    EVENT_TYPE=$(printf '%s' "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('source') or d.get('hook_event_name') or 'startup')" 2>/dev/null || echo "startup")
+    # ONE python3 for all three fields (#269) — newline-delimited, read in order.
+    _PARSED=$(printf '%s' "$INPUT" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+print(d.get('cwd', '.'))
+print(d.get('session_id', 'unknown'))
+print(d.get('source') or d.get('hook_event_name') or 'startup')
+" 2>/dev/null || printf '.\nunknown\nstartup\n')
+    { read -r CWD; read -r SESSION_ID; read -r EVENT_TYPE; } <<< "$_PARSED"
+    [ -n "$CWD" ] || CWD="."
+    [ -n "$SESSION_ID" ] || SESSION_ID="unknown"
 fi
 # Defensive: jq's // keeps an empty-string .source (only null/false fall through),
 # and a malformed payload could yield empty — never leave EVENT_TYPE blank, or no
@@ -116,8 +127,10 @@ _do_migration() {
         if [ -f "$target/session_registry.jsonl" ]; then
             python3 -c "
 import json, sys
+sys.path.insert(0, sys.argv[3])
+from atomic_write_lib import atomic_write_text
 seen = {}
-for path in sys.argv[1:]:
+for path in sys.argv[1:3]:
     try:
         with open(path) as f:
             for line in f:
@@ -138,17 +151,9 @@ for path in sys.argv[1:]:
                     pass
     except FileNotFoundError:
         pass
-import os, tempfile
-tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(sys.argv[2]))
-try:
-    with os.fdopen(tmp_fd, 'w') as f:
-        for line, _ in seen.values():
-            f.write(line + '\n')
-    os.replace(tmp_path, sys.argv[2])
-except Exception:
-    os.unlink(tmp_path)
-    raise
-" "$source/session_registry.jsonl" "$target/session_registry.jsonl" 2>/dev/null || true
+atomic_write_text(sys.argv[2],
+                  ''.join(line + '\n' for line, _ in seen.values()))
+" "$source/session_registry.jsonl" "$target/session_registry.jsonl" "$SCRIPT_DIR" 2>/dev/null || true
         else
             cp "$source/session_registry.jsonl" "$target/session_registry.jsonl" 2>/dev/null || true
         fi
@@ -434,56 +439,25 @@ _do_size_handler() {
     NOTES_DIR="$CLAUDE_DOCS/session_notes"
     [ -d "$NOTES_DIR" ] || return 0
 
+    # ONE invocation for all notes files (#269): the handler accepts multiple
+    # paths and isolates per-file failures internally, so startup cost no
+    # longer scales with project count.
+    local _notes=()
     for notes_file in "$NOTES_DIR"/*.md; do
         [ -f "$notes_file" ] || continue
-        python3 "$SCRIPT_DIR/notes-size-handler.py" "$notes_file" \
-            --session-id "$SESSION_ID" >/dev/null 2>&1 || continue
+        _notes+=("$notes_file")
     done
+    [ "${#_notes[@]}" -gt 0 ] || return 0
+    python3 "$SCRIPT_DIR/notes-size-handler.py" "${_notes[@]}" \
+        --session-id "$SESSION_ID" >/dev/null 2>&1 || true
 }
 _do_size_handler 2>/dev/null || true
 
 # =========================================================================
-# SECTION 2b: Archive Context Injection (startup/resume, bound sessions)
-# =========================================================================
-# NOTE: This section calls query-archive.py which was removed in #57.
-# It silently fails (|| return 0) and produces no output.
-# Kept as a placeholder — memorypalace plugin will replace this with
-# its own context injection hook. Remove in cleanup phase.
-_do_archive_context() {
-    [ "$EVENT_TYPE" = "startup" ] || [ "$EVENT_TYPE" = "resume" ] || return 0
-    [ -n "$_registry_project" ] || return 0
-
-    ARCHIVE_DIR="$CLAUDE_DOCS/session_notes/archive"
-    ARCHIVE_JSONL="$ARCHIVE_DIR/${_registry_project}.jsonl"
-    [ -f "$ARCHIVE_JSONL" ] || return 0
-
-    # Query recent archive entries for context (max 500 chars)
-    QUERY_RESULT=$(python3 "$SCRIPT_DIR/query-archive.py" "$ARCHIVE_DIR" \
-        --project "$_registry_project" --keyword "." --limit 3 --format brief 2>/dev/null) || return 0
-
-    # Parse summaries from JSON array
-    ARCHIVE_SUMMARY=$(python3 -c "
-import json, sys
-results = json.loads(sys.stdin.read())
-if not results:
-    sys.exit(0)
-parts = []
-for r in results[:3]:
-    s = r.get('summary', '')[:80]
-    if s:
-        parts.append(s)
-if parts:
-    print('ARCHIVE CONTEXT: Recent sessions for ${_registry_project}: ' + '; '.join(parts))
-" <<< "$QUERY_RESULT" 2>/dev/null) || return 0
-
-    if [ -n "$ARCHIVE_SUMMARY" ]; then
-        # Enforce 500 char budget
-        ARCHIVE_SUMMARY="${ARCHIVE_SUMMARY:0:500}"
-        CONTEXT_PARTS+=("$ARCHIVE_SUMMARY")
-    fi
-}
-_do_archive_context 2>/dev/null || true
-
+# (Former SECTION 2b, archive context injection, removed in #269: its helper
+# script was deleted back in #57, so the whole section was a dead path — two
+# spawns per startup that always failed silently. The memorypalace plugin
+# owns archive context injection now.)
 # =========================================================================
 # SECTION 2e: Per-Project Handoff (startup/resume/clear, bound sessions)
 # =========================================================================
@@ -603,6 +577,10 @@ _do_scanner_bootstrap 2>/dev/null || true
 # /rawgentic:setup for answer-required features (WF5/adversarialReview). Delegates
 # to hooks/post_update_reconcile.py, which records the reconciled version
 # per-workspace (in claude_docs) so it runs ONCE per version.
+# Runs BOTH passes in one process (#269): the version reconcile plus the #234
+# per-project config-staleness nudge (each ACTIVE project's unconfigured-feature
+# gaps once per (project, version), independent of the reconcile marker).
+# Advisory, non-blocking, fail-open; each pass is isolated inside the helper.
 _do_post_update_reconcile() {
     case "$EVENT_TYPE" in startup|resume) ;; *) return 0 ;; esac
     command -v python3 &>/dev/null || return 0
@@ -612,30 +590,10 @@ _do_post_update_reconcile() {
     [ -f "$reconcile" ] || return 0
 
     local _out
-    _out=$(python3 "$reconcile" --workspace "$WORKSPACE_FILE" --state-dir "$CLAUDE_DOCS" 2>/dev/null || true)
+    _out=$(python3 "$reconcile" --session-start --workspace "$WORKSPACE_FILE" --state-dir "$CLAUDE_DOCS" 2>/dev/null || true)
     [ -n "$_out" ] && CONTEXT_PARTS+=("$_out")
 }
 _do_post_update_reconcile 2>/dev/null || true
-
-# --- #234: per-project config-staleness nudge -----------------------------------
-# The reconcile above nudges only when the plugin version JUST crossed a feature's
-# `since` (once per workspace per version). A project left behind and first seen AFTER
-# the plugin already updated stays silent. This surfaces each ACTIVE project's own
-# unconfigured-feature gaps once per (project, version) — independent of the reconcile
-# marker. Advisory, non-blocking, fail-open.
-_do_config_staleness_check() {
-    case "$EVENT_TYPE" in startup|resume) ;; *) return 0 ;; esac
-    command -v python3 &>/dev/null || return 0
-    [ -n "$WORKSPACE_FILE" ] || return 0
-    [ -n "$CLAUDE_DOCS" ] || return 0
-    local reconcile="$SCRIPT_DIR/post_update_reconcile.py"
-    [ -f "$reconcile" ] || return 0
-
-    local _out
-    _out=$(python3 "$reconcile" --staleness-active --workspace "$WORKSPACE_FILE" --state-dir "$CLAUDE_DOCS" 2>/dev/null || true)
-    [ -n "$_out" ] && CONTEXT_PARTS+=("$_out")
-}
-_do_config_staleness_check 2>/dev/null || true
 
 # =========================================================================
 # SECTION 3: Rawgentic Workspace Context (always runs)
@@ -643,77 +601,79 @@ _do_config_staleness_check 2>/dev/null || true
 if [ -z "$WORKSPACE_FILE" ]; then
     CONTEXT_PARTS+=("No rawgentic workspace found. Run /rawgentic:new-project to get started.")
 else
-    if ! python3 -c "import json; json.load(open('${WORKSPACE_FILE}'))" 2>/dev/null; then
-        CONTEXT_PARTS+=("Rawgentic workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix .rawgentic_workspace.json manually.")
-    else
-        PROJECTS_COUNT=$(python3 -c "import json; d=json.load(open('${WORKSPACE_FILE}')); print(len(d.get('projects',[])))")
-        if [ "$PROJECTS_COUNT" -eq 0 ]; then
-            CONTEXT_PARTS+=("Rawgentic workspace exists but no projects registered. Run /rawgentic:new-project.")
-        else
-            # Determine project context
-            if [ -n "$_registry_project" ]; then
-                # Session is bound — show bound project info
-                ACTIVE_INFO=$(python3 -c "
-import json
-d = json.load(open('${WORKSPACE_FILE}'))
-for p in d.get('projects', []):
-    if p['name'] == '${_registry_project}':
-        print(f\"{p['name']}|{p['path']}|{p.get('configured', False)}|{p.get('active', False)}\")
-        break
-" 2>/dev/null || true)
-
-                if [ -n "${ACTIVE_INFO:-}" ]; then
-                    IFS='|' read -r ACTIVE_NAME ACTIVE_PATH CONFIGURED IS_ACTIVE <<< "$ACTIVE_INFO"
-                    if [ "$EVENT_TYPE" = "resume" ]; then
-                        if [ "$IS_ACTIVE" = "True" ]; then
-                            CONTEXT_PARTS+=("Resuming work on project: **${ACTIVE_NAME}** (${ACTIVE_PATH}).")
-                        else
-                            CONTEXT_PARTS+=("Your previous session was bound to **${ACTIVE_NAME}**, but that project is no longer active (directory may have been removed).")
-                        fi
-                    else
-                        if [ "$CONFIGURED" = "True" ]; then
-                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
-                        else
-                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
-                        fi
-                    fi
-                fi
-            else
-                # No registry binding — show active project summary
-                ACTIVE_SUMMARY=$(python3 -c "
-import json
-d = json.load(open('${WORKSPACE_FILE}'))
-active = [p['name'] for p in d.get('projects', []) if p.get('active')]
-if len(active) == 0:
+    # ONE python3 for validate + count + bound-info/summary (#269 — was four).
+    # The registry project name is passed via argv, never interpolated into
+    # code. Output is a single machine-parseable line the case below routes on.
+    WS_STATE=$(python3 -c "
+import json, sys
+ws_file, bound = sys.argv[1], sys.argv[2]
+try:
+    d = json.load(open(ws_file))
+except Exception:
+    print('CORRUPT'); sys.exit(0)
+projects = d.get('projects', [])
+if not projects:
+    print('EMPTY'); sys.exit(0)
+if bound:
+    for p in projects:
+        if p.get('name') == bound:
+            print(f\"BOUND|{p['name']}|{p['path']}|{p.get('configured', False)}|{p.get('active', False)}\")
+            sys.exit(0)
+    print('BOUND-MISSING'); sys.exit(0)
+active = [p for p in projects if p.get('active')]
+if not active:
     print('NONE')
 elif len(active) == 1:
-    p = [p for p in d['projects'] if p.get('active')][0]
+    p = active[0]
     conf = 'True' if p.get('configured') else 'False'
     print(f\"SINGLE|{p['name']}|{p['path']}|{conf}\")
 else:
-    print(f\"MULTI|{', '.join(active)}\")
-" 2>/dev/null || true)
+    print('MULTI|' + ', '.join(p['name'] for p in active))
+" "$WORKSPACE_FILE" "${_registry_project:-}" 2>/dev/null || echo "CORRUPT")
 
-                case "${ACTIVE_SUMMARY%%|*}" in
-                    NONE)
-                        CONTEXT_PARTS+=("Rawgentic workspace has projects but none is active. Run /rawgentic:switch to select one.")
-                        ;;
-                    SINGLE)
-                        IFS='|' read -r _ ACTIVE_NAME ACTIVE_PATH CONFIGURED <<< "$ACTIVE_SUMMARY"
-                        if [ "$CONFIGURED" = "True" ]; then
-                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
-                        else
-                            CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
-                        fi
-                        ;;
-                    MULTI)
-                        NAMES="${ACTIVE_SUMMARY#MULTI|}"
-                        CONTEXT_PARTS+=("Multiple projects active: ${NAMES}. Use /rawgentic:switch <name> to bind this session to a project.")
-                        ;;
-                esac
+    case "${WS_STATE%%|*}" in
+        CORRUPT)
+            CONTEXT_PARTS+=("Rawgentic workspace file is corrupted. Run /rawgentic:new-project to regenerate, or fix .rawgentic_workspace.json manually.")
+            ;;
+        EMPTY)
+            CONTEXT_PARTS+=("Rawgentic workspace exists but no projects registered. Run /rawgentic:new-project.")
+            ;;
+        BOUND)
+            IFS='|' read -r _ ACTIVE_NAME ACTIVE_PATH CONFIGURED IS_ACTIVE <<< "$WS_STATE"
+            if [ "$EVENT_TYPE" = "resume" ]; then
+                if [ "$IS_ACTIVE" = "True" ]; then
+                    CONTEXT_PARTS+=("Resuming work on project: **${ACTIVE_NAME}** (${ACTIVE_PATH}).")
+                else
+                    CONTEXT_PARTS+=("Your previous session was bound to **${ACTIVE_NAME}**, but that project is no longer active (directory may have been removed).")
+                fi
+            else
+                if [ "$CONFIGURED" = "True" ]; then
+                    CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
+                else
+                    CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
+                fi
             fi
-        fi
-    fi
+            ;;
+        BOUND-MISSING)
+            # Bound name not in workspace — same silent outcome as the old
+            # per-branch code (its loop simply printed nothing).
+            ;;
+        NONE)
+            CONTEXT_PARTS+=("Rawgentic workspace has projects but none is active. Run /rawgentic:switch to select one.")
+            ;;
+        SINGLE)
+            IFS='|' read -r _ ACTIVE_NAME ACTIVE_PATH CONFIGURED <<< "$WS_STATE"
+            if [ "$CONFIGURED" = "True" ]; then
+                CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}).")
+            else
+                CONTEXT_PARTS+=("Active project: ${ACTIVE_NAME} (${ACTIVE_PATH}). Config missing -- run /rawgentic:setup.")
+            fi
+            ;;
+        MULTI)
+            NAMES="${WS_STATE#MULTI|}"
+            CONTEXT_PARTS+=("Multiple projects active: ${NAMES}. Use /rawgentic:switch <name> to bind this session to a project.")
+            ;;
+    esac
 fi
 
 # =========================================================================

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Session notes size handler — trims oversized notes files.
 
-Usage: notes-size-handler.py <notes_file> [--session-id ID] [--port PORT]
+Usage: notes-size-handler.py <notes_file> [<notes_file> ...] [--session-id ID] [--port PORT]
+
+Accepts multiple files in one invocation (#269) so session-start's cost does
+not scale with project count; per-file failures are isolated (a broken file
+yields its own error result, the rest are still processed).
 
 When a session notes file exceeds THRESHOLD lines (800):
 1. Optionally POST full content to memorypalace /ingest (best-effort)
@@ -131,21 +135,25 @@ def trim_notes(
 
 def main():
     parser = argparse.ArgumentParser(description="Trim oversized session notes")
-    parser.add_argument("notes_file", help="Path to the session notes .md file")
+    parser.add_argument("notes_file", nargs="+",
+                        help="Path(s) to session notes .md file(s)")
     parser.add_argument("--session-id", default="unknown", help="Current session ID")
     parser.add_argument("--port", type=int, default=9077, help="Memorypalace server port")
     args = parser.parse_args()
 
-    try:
-        result = trim_notes(
-            Path(args.notes_file),
-            session_id=args.session_id,
-            port=args.port,
-        )
-        print(json.dumps(result))
-    except Exception:
-        # Guarantee exit 0 on all non-fatal errors
-        print(json.dumps({"trimmed": False, "reason": "error"}))
+    # One JSON result line per file, in argument order; a failing file emits
+    # its own error result and never blocks the rest (#269).
+    for notes_file in args.notes_file:
+        try:
+            result = trim_notes(
+                Path(notes_file),
+                session_id=args.session_id,
+                port=args.port,
+            )
+            print(json.dumps(result))
+        except Exception:
+            # Guarantee exit 0 on all non-fatal errors
+            print(json.dumps({"trimmed": False, "reason": "error"}))
 
 
 if __name__ == "__main__":

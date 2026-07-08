@@ -4,10 +4,9 @@
 Every python hook that atomically writes a file routes through
 `atomic_write_text`; do not reimplement mkstemp/os.replace inline (that is
 exactly the duplication this module removed — nine divergent copies, three of
-them weaker). Known deliberate exclusion: the `python3 -c` registry-write
-snippet embedded in `hooks/session-start` (can't import from an inline -c
-string; slated for consolidation with the other session-start spawns, review
-child 4d).
+them weaker). The former exclusion — session-start's embedded `python3 -c`
+registry-write snippet — was closed in #269: the inline snippet now imports
+this module via a `sys.path.insert` of the hooks dir.
 
 Contract:
 - Crash-safe: a reader sees the old file or the complete new one, never a
