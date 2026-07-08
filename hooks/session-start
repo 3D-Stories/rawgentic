@@ -443,14 +443,19 @@ _do_wal_ops() {
         ANNOUNCE_CUTOFF=$(date -u -d "$MAX_AGE_DAYS days ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v-"${MAX_AGE_DAYS}"d +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || printf '')
         if [ -n "$ANNOUNCE_CUTOFF" ]; then
             TOTAL_COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
-            INCOMPLETE=$(printf '%s\n' "$INCOMPLETE" | "$JQ" -c --arg cutoff "$ANNOUNCE_CUTOFF" \
-                'select(((.ts // "") == "") or (.ts >= $cutoff))' 2>/dev/null) || true
-            if [ -n "$INCOMPLETE" ]; then
-                SHOWN_COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
-            else
-                SHOWN_COUNT=0
+            FILTERED=$(printf '%s\n' "$INCOMPLETE" | "$JQ" -c --arg cutoff "$ANNOUNCE_CUTOFF" \
+                'select(((.ts // "") == "") or (.ts >= $cutoff))' 2>/dev/null)
+            if [ $? -eq 0 ]; then
+                INCOMPLETE="$FILTERED"
+                if [ -n "$INCOMPLETE" ]; then
+                    SHOWN_COUNT=$(printf '%s\n' "$INCOMPLETE" | wc -l)
+                else
+                    SHOWN_COUNT=0
+                fi
+                SUPPRESSED_COUNT=$((TOTAL_COUNT - SHOWN_COUNT))
             fi
-            SUPPRESSED_COUNT=$((TOTAL_COUNT - SHOWN_COUNT))
+            # jq failure → INCOMPLETE left untouched, SUPPRESSED_COUNT stays 0:
+            # announce everything (fail-open), never mislabel real INTENTs as expired.
         fi
     fi
 
