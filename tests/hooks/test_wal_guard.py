@@ -518,3 +518,72 @@ class TestHeadlessSSHBlock:
         _, parsed = _run_guard_headless("ssh deploy@host", make_workspace)
         reason = parsed["hookSpecificOutput"]["permissionDecisionReason"]
         assert "headlessAllowSSH" in reason
+
+
+class TestHeadlessGuardBlockAudit:
+    """#263 (C20): a headless deny must append a GUARD_BLOCK audit line to the
+    per-project WAL. Before the fix, deny() gated on WAL_FILE but nothing ever
+    called wal_init_file — the audit path was dead code and blocks in
+    bypassPermissions mode left no trace."""
+
+    def _deny_and_read_wal(self, make_workspace, command="ssh deploy@host"):
+        session_id = "headless-audit-sess"
+        ws = make_workspace(
+            projects=[{
+                "name": "testproj", "path": "./projects/testproj",
+                "active": True, "configured": True,
+            }],
+            registry_entries=[{
+                "session_id": session_id, "project": "testproj",
+                "project_path": "./projects/testproj",
+            }],
+            project_configs={"testproj": {"protectionLevel": "strict"}},
+        )
+        payload = {
+            "tool_input": {"command": command}, "tool_name": "Bash",
+            "session_id": session_id, "tool_use_id": "tu-a", "cwd": str(ws.root),
+        }
+        stdout, _stderr, _rc = run_hook(
+            HOOK, payload, cwd=ws.root, env_override={"RAWGENTIC_HEADLESS": "1"})
+        parsed = parse_hook_output(stdout)
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        wal_file = ws.claude_docs / "wal" / "testproj.jsonl"
+        return ws, wal_file
+
+    def test_headless_deny_appends_guard_block(self, make_workspace):
+        _, wal_file = self._deny_and_read_wal(make_workspace)
+        assert wal_file.exists(), "headless deny must create the per-project WAL"
+        entries = [json.loads(l) for l in wal_file.read_text().splitlines() if l.strip()]
+        blocks = [e for e in entries if e.get("phase") == "GUARD_BLOCK"]
+        assert blocks, "headless deny must append a GUARD_BLOCK audit line"
+        entry = blocks[-1]
+        assert entry["guard"] == "wal-guard"
+        assert entry["session"] == "headless-audit-sess"
+        assert "ssh" in entry["command"]
+
+    def test_non_headless_deny_writes_no_audit(self, make_workspace):
+        """Companion: without RAWGENTIC_HEADLESS the deny stays silent (audit is
+        a headless-only contract)."""
+        session_id = "interactive-sess"
+        ws = make_workspace(
+            projects=[{
+                "name": "testproj", "path": "./projects/testproj",
+                "active": True, "configured": True,
+            }],
+            registry_entries=[{
+                "session_id": session_id, "project": "testproj",
+                "project_path": "./projects/testproj",
+            }],
+            project_configs={"testproj": {"protectionLevel": "strict"}},
+        )
+        payload = {
+            "tool_input": {"command": "ssh deploy@prod-1"}, "tool_name": "Bash",
+            "session_id": session_id, "tool_use_id": "tu-b", "cwd": str(ws.root),
+        }
+        stdout, _stderr, _rc = run_hook(HOOK, payload, cwd=ws.root)
+        parsed = parse_hook_output(stdout)
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        wal_file = ws.claude_docs / "wal" / "testproj.jsonl"
+        if wal_file.exists():
+            entries = [json.loads(l) for l in wal_file.read_text().splitlines() if l.strip()]
+            assert not [e for e in entries if e.get("phase") == "GUARD_BLOCK"]

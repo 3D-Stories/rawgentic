@@ -702,6 +702,9 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.24.5 (2026-07-07)
+- **Headless guard blocks are auditable again (#263, epic #277).** `wal-guard`'s `deny()` promised a GUARD_BLOCK audit line in headless mode but gated it on `WAL_FILE`, which nothing ever initialized (`wal_init_file` was never called) — the audit path was dead code, so blocks under bypassPermissions left no WAL trace. Fix initializes `WAL_FILE` lazily inside `deny()` (denies are rare; the hot allow-path pays no mkdir), best-effort so an init failure can never break the deny decision. Red-before-green test asserts a headless deny appends the GUARD_BLOCK line; a companion pins interactive denies staying silent. No workflow-spine change → no diagram REV. Suite 2293→2295.
+
 ### v3.24.4 (2026-07-07)
 - **claude_docs resolution unified across all six resolver surfaces (#262, epic #277).** `claudeDocsPath` resolution had drifted into three semantics: `wal-lib.sh` trusted an absolute path outside `$HOME`, the inline copies in `wal-stop`/`wal-suspend`/`wal-bind-guard` rejected it, and `session-start`/`security-guard.py` (two surfaces the review missed) trusted everything with no containment. Now ONE semantic — containment under `$HOME` or workspace-relative fallback — lives in `wal_resolve_claude_docs()` (plus a python mirror in `security-guard.py`); the four bash consumers source the lib, deleting ~90 duplicated lines. Structural tests pin the routing; red-before-green rejection tests cover bash + python; `docs/wal-guide.md` documents the semantic. Unblocks review children 3d and 4a. No workflow-spine change → no diagram REV. Suite 2283→2293.
 
