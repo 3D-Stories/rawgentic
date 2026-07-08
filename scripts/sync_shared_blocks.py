@@ -49,6 +49,18 @@ MANIFEST = {
     },
 }
 
+# Whole-FILE targets (#276): source filename in shared/blocks/ -> list of
+# skill-relative destination paths. Unlike MANIFEST's tag-delimited SKILL.md
+# blocks, these are standalone references/ files copied verbatim (the
+# quality-bar rubric was a hand-synced byte-identical triple before this).
+FILE_MANIFEST = {
+    "quality-bar.md": [
+        "fix-bug/references/quality-bar.md",
+        "implement-feature/references/quality-bar.md",
+        "setup/references/quality-bar.md",
+    ],
+}
+
 
 def _skill_md(skill: str) -> Path:
     return SKILLS / skill / "SKILL.md"
@@ -86,6 +98,14 @@ def check() -> list[str]:
         s, e = span
         if lines[s + 1:e] != _source_inner(src_file):
             drift.append(f"{skill}: <{tag}> differs from shared/blocks/{src_file}")
+    for src_file, dests in FILE_MANIFEST.items():
+        src_text = SHARED.joinpath(src_file).read_text()
+        for dest in dests:
+            p = SKILLS / dest
+            if not p.exists():
+                drift.append(f"{dest}: missing (source shared/blocks/{src_file})")
+            elif p.read_text() != src_text:
+                drift.append(f"{dest}: differs from shared/blocks/{src_file}")
     return drift
 
 
@@ -103,6 +123,14 @@ def sync() -> list[str]:
             continue
         p.write_text("\n".join(lines[:s + 1] + new_inner + lines[e:]) + "\n")
         changed.append(f"{skill} <{tag}>")
+    for src_file, dests in FILE_MANIFEST.items():
+        src_text = SHARED.joinpath(src_file).read_text()
+        for dest in dests:
+            p = SKILLS / dest
+            if p.exists() and p.read_text() == src_text:
+                continue
+            p.write_text(src_text)
+            changed.append(dest)
     return changed
 
 
