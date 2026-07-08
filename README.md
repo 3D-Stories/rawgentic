@@ -702,6 +702,9 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.24.19 (2026-07-08)
+- **wal-guard deny() no longer fails open on huge commands (#310).** `deny()` passed the full blocked command as a single jq exec argument; over Linux `MAX_ARG_STRLEN` (~128KiB per argument) the jq exec failed (E2BIG, rc 126), no deny JSON reached stdout, and the deliberately fail-closed guard silently ALLOWED the command (pre-existing; found by the #267 R2 review, reproduced red-first with a 300KB command). The embedded command is now bounded at deny() entry via pure bash parameter expansion — a first-cut `printf|head` pipe died of SIGPIPE under the script's pipefail and failed open again, caught red-first — bounding both the decision JSON and the headless GUARD_BLOCK audit line; truncation is visible in the reason (`[truncated: total N chars]`), never silent. 4 tests. No workflow-spine change → no diagram REV. Suite 2340+1skip→2344+1skip.
+
 ### v3.24.18 (2026-07-08)
 - **Deleted unconsumed external_ref_lib — wire-or-delete resolved as DELETE (#274, epic #280).** The module (probe / vendor / is-trusted, 262 lines, 16 tests, own doc page) was complete but had zero production consumers: its intended consumer — the #196/#162 post-PR `/code-review` gate — shipped as a GitHub Action that does not call it. Owner-directed Codex consult recommended DELETE (recorded on the issue); removed `hooks/external_ref_lib.py`, `tests/hooks/test_external_ref_lib.py`, `docs/external-references.md`, and the two structural parametrization references in `tests/hooks/test_atomic_write_lib.py` (historical changelog entries stay — append-only history). No workflow-spine change → no diagram REV. Suite 2359+1skip→2340+1skip.
 
