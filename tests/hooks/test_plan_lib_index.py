@@ -174,6 +174,92 @@ class TestValidateIndexRejects:
         assert ok
 
 
+class TestValidateIndexAdversarial:
+    """Step 8a findings (both reviewers, commit a6e7c90) — reproduced holes."""
+
+    def _reject(self, idx, expected=None, artifact_text=None):
+        from plan_lib import validate_index
+        ok, errors = validate_index(idx, EXPECTED if expected is None else expected,
+                                    artifact_text=artifact_text)
+        assert not ok
+        assert errors
+        return errors
+
+    def test_unhashable_coverage_elements_reject_not_raise(self):
+        """HIGH (both reviewers, reproduced): set() on nested JSON raised
+        TypeError, defeating the fail-closed -> inline-fallback contract."""
+        from plan_lib import validate_index
+        for bad_cov in (
+            {"expected": [{"x": 1}], "indexed": ["hooks/plan_lib.py"]},
+            {"expected": ["hooks/plan_lib.py"], "indexed": [["nested"]]},
+        ):
+            ok, errors = validate_index(_valid_index(coverage=bad_cov), EXPECTED)
+            assert not ok and errors  # must reject, never raise
+
+    def test_expected_units_none_rejects_not_raises(self):
+        from plan_lib import validate_index
+        ok, errors = validate_index(_valid_index(), None)
+        assert not ok and errors
+
+    def test_risk_tag_is_capped_typed_and_patch_checked(self):
+        """MEDIUM: risk_tag was an unbounded free-text channel escaping the
+        one_line cap the AC3 argument leans on."""
+        idx = _valid_index()
+        idx["entries"][0]["risk_tag"] = "X" * 5000
+        self._reject(idx)
+        idx = _valid_index()
+        idx["entries"][0]["risk_tag"] = {"nested": "obj"}
+        self._reject(idx)
+        idx = _valid_index()
+        idx["entries"][0]["risk_tag"] = "+ patch shaped"
+        self._reject(idx)
+
+    def test_component_must_be_nonempty_string(self):
+        idx = _valid_index()
+        idx["entries"][0]["component"] = {"nested": True}
+        self._reject(idx)
+
+    def test_unindented_patch_lines_reject(self):
+        """MEDIUM: design documents ^[+-]; code required trailing whitespace,
+        letting '+import os' through."""
+        idx = _valid_index()
+        idx["entries"][0]["one_line"] = "+import os"
+        self._reject(idx)
+        idx = _valid_index()
+        idx["entries"][0]["one_line"] = "-return x"
+        self._reject(idx)
+
+    def test_prose_starting_with_plus_number_still_passes(self):
+        """The deliberate carve-out: '+10% faster' is prose, not patch."""
+        from plan_lib import validate_index
+        idx = _valid_index()
+        idx["entries"][0]["one_line"] = "+10% faster recall on scoped searches"
+        ok, _ = validate_index(idx, EXPECTED)
+        assert ok
+
+    def test_evidence_without_artifact_text_rejects(self):
+        """MEDIUM: evidence with artifact_text=None silently skipped the
+        verbatim check — now fail-closed on the unverifiable case."""
+        idx = _valid_index(evidence=[
+            {"file": "hooks/plan_lib.py", "line": 3, "text": "some quote"}])
+        self._reject(idx, artifact_text=None)
+
+    def test_evidence_line_bool_rejects(self):
+        idx = _valid_index(evidence=[
+            {"file": "hooks/plan_lib.py", "line": True, "text": "real"}])
+        self._reject(idx, artifact_text="real\n")
+
+    def test_one_line_at_exactly_120_accepts(self):
+        from plan_lib import validate_index
+        idx = _valid_index()
+        idx["entries"][0]["one_line"] = "y" * 120
+        ok, _ = validate_index(idx, EXPECTED)
+        assert ok
+
+    def test_whitespace_only_source_ref_rejects(self):
+        self._reject(_valid_index(source_ref="   "))
+
+
 class TestReadDelegateThresholds:
     def test_defaults(self):
         import plan_lib

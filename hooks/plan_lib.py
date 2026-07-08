@@ -1556,9 +1556,13 @@ WF2_READ_DELEGATE_BYTES_LOG: Final[int] = _rd_log
 
 
 def _patch_shaped(text: str) -> bool:
-    """A hunk-style +/- line (patch content) — never legitimate index prose."""
-    return bool(re.match(r"^[+-]\s", text)) or text.startswith(("+++", "---",
-                                                                "@@"))
+    """A patch-content line — never legitimate index prose. Design contract is
+    ^[+-] (any sign-led line, so '+import os' is caught); the one deliberate
+    carve-out is a sign immediately followed by a digit ('+10% faster'),
+    which is prose, not a diff line."""
+    if text.startswith(("+++", "---", "@@")):
+        return True
+    return bool(re.match(r"^[+-](?!\d)", text))
 
 
 def validate_index(
@@ -1573,13 +1577,20 @@ def validate_index(
     step2-map). coverage.indexed must equal it exactly — for step11-diff
     that is a completeness proof; for step2-map a drop-guard only
     (discovered entries legitimately exceed the fed list and are NOT
-    coverage units). When artifact_text is provided, every evidence quote
-    must be a verbatim substring of it (anti-hallucination). Pure; never
-    raises on malformed input — malformed rejects.
+    coverage units). Every evidence quote must be a verbatim substring of
+    artifact_text — an EXISTENCE check, not attribution (file/line binding
+    is neutralized by the orchestrator's raw-bytes re-read contract); when
+    evidence is present but artifact_text is None the index REJECTS
+    (fail-closed on the unverifiable case). Pure; never raises on a
+    malformed index — malformed rejects. expected_units is dispatcher-fed
+    and must be a list of str; anything else rejects.
     """
     errors: list[str] = []
     if not isinstance(index, dict):
         return (False, ["index is not a dict"])
+    if not isinstance(expected_units, list) or any(
+            not isinstance(u, str) for u in expected_units):
+        return (False, ["expected_units must be a list of str"])
 
     extra = set(index) - _INDEX_KEYS
     missing = _INDEX_KEYS - set(index)
@@ -1593,8 +1604,9 @@ def validate_index(
     if surface not in INDEX_SURFACES:
         errors.append(f"unknown surface: {surface!r}")
 
-    if not isinstance(index["source_ref"], str) or not index["source_ref"]:
-        errors.append("source_ref must be a non-empty string")
+    if (not isinstance(index["source_ref"], str)
+            or not index["source_ref"].strip()):
+        errors.append("source_ref must be a non-blank string")
 
     if index["truncated"] is not False:
         errors.append("truncated index rejected — a partial read is never "
@@ -1624,6 +1636,18 @@ def validate_index(
             errors.append(f"entries[{i}].one_line exceeds {_ONE_LINE_MAX} chars")
         if line and _patch_shaped(line):
             errors.append(f"entries[{i}].one_line is patch-shaped")
+        # risk_tag / component: same discipline as one_line — a free channel
+        # here would escape exactly the cap the AC3 argument leans on (8a).
+        for opt_key in ("risk_tag", "component"):
+            if opt_key not in e:
+                continue
+            val = e[opt_key]
+            if not isinstance(val, str) or not val:
+                errors.append(f"entries[{i}].{opt_key} must be a non-empty string")
+            elif len(val) > _ONE_LINE_MAX:
+                errors.append(f"entries[{i}].{opt_key} exceeds {_ONE_LINE_MAX} chars")
+            elif _patch_shaped(val):
+                errors.append(f"entries[{i}].{opt_key} is patch-shaped")
         if surface == "step11-diff" and loc:
             base = loc.split(":", 1)[0]
             if base not in expected_set:
@@ -1635,6 +1659,11 @@ def validate_index(
             or not isinstance(cov.get("expected"), list)
             or not isinstance(cov.get("indexed"), list)):
         errors.append("coverage must be {expected: [...], indexed: [...]}")
+    elif (any(not isinstance(u, str) for u in cov["expected"])
+            or any(not isinstance(u, str) for u in cov["indexed"])):
+        # 8a HIGH (both reviewers, reproduced): nested JSON here made set()
+        # raise TypeError — a reject, never a raise, is the whole contract.
+        errors.append("coverage lists must contain only strings")
     else:
         if set(cov["expected"]) != expected_set:
             errors.append("coverage.expected does not match the fed unit list")
@@ -1646,10 +1675,15 @@ def validate_index(
     if not isinstance(evidence, list):
         errors.append("evidence must be a list")
         evidence = []
+    if evidence and artifact_text is None:
+        # 8a Medium: an unverifiable quote must not pass silently.
+        errors.append("evidence present but no artifact_text to verify "
+                      "against — fail-closed on the unverifiable case")
     for i, ev in enumerate(evidence):
         if (not isinstance(ev, dict) or set(ev) != _EVIDENCE_KEYS
                 or not isinstance(ev.get("file"), str)
                 or not isinstance(ev.get("line"), int)
+                or isinstance(ev.get("line"), bool)
                 or not isinstance(ev.get("text"), str) or not ev.get("text")):
             errors.append(f"evidence[{i}] malformed (need file:str, line:int, "
                           "text:str)")
