@@ -38,7 +38,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.24.12"
+    assert plugin["version"] == "3.24.13"
 
 
 def test_descriptions_consistent_count():
@@ -56,9 +56,39 @@ def test_readme_count_strings_updated():
     readme = (REPO_ROOT / "README.md").read_text()
     assert "6 SDLC workflow skills" in readme
     assert "12 SDLC workflow skills" not in readme
-    assert "provides 15 skills" in readme
+    n_skills = len(list((REPO_ROOT / "skills").glob("*/SKILL.md")))
+    assert f"provides {n_skills} skills" in readme
     assert "All 7 config-driven skills" in readme
-    assert "9/15 skills have evals.json" in readme
+    # #271: computed from disk, never a hand-maintained literal. A skill
+    # "has evals" iff evals.json exists in its own evals/ dir or its
+    # -workspace evals/ dir.
+    skills = sorted(p.parent.name for p in (REPO_ROOT / "skills").glob("*/SKILL.md"))
+    have = {
+        s for s in skills
+        if (REPO_ROOT / "skills" / s / "evals" / "evals.json").exists()
+        or (REPO_ROOT / "skills" / f"{s}-workspace" / "evals" / "evals.json").exists()
+    }
+    assert f"{len(have)}/{len(skills)} skills have evals.json" in readme, (
+        f"README must render the computed evals fraction "
+        f"{len(have)}/{len(skills)}"
+    )
+    # Membership cross-check: every skill README names as having NO evals
+    # must really lack them (C14: the count was right, the membership wrong)
+    for name in sorted(set(skills) - have):
+        assert f"`{name}`" in readme, (
+            f"README's have-none list must name {name} (computed complement)"
+        )
+    import re as _re
+    m = _re.search(
+        r"skills have evals\.json[^)]*?the lightweight (.*?) skills have none",
+        readme, _re.S)
+    assert m, "README must carry the have-none list in its evals sentence"
+    listed_none = set(_re.findall(r"`([a-z0-9-]+)`", m.group(1)))
+    assert listed_none == (set(skills) - have - {"peer-consult"}), (
+        f"README have-none list {sorted(listed_none)} != computed "
+        f"{sorted(set(skills) - have - {'peer-consult'})} (peer-consult is "
+        f"called out separately as a stub)"
+    )
     assert "6 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
 
 
