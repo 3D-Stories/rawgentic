@@ -364,7 +364,7 @@ exit 0
 
 **Industry basis:** Continuous integration. The "integrate early, integrate often" principle. Remote pushes serve as off-machine backup (critical for a solo developer), enable CI to run on the latest code, and provide visibility into work-in-progress. Google's trunk-based development recommends pushing at least daily; 30 minutes is appropriate for an AI-assisted rapid development workflow.
 
-**Discovery validation:** In the March target workspace, a PostToolUse `deploy-on-push.sh` hook (not part of this plugin) triggered deployment after every push, which validates that pushes are meaningful events in this workflow. No push frequency enforcement exists. Phase 1 shows the deploy hook has a 300s timeout, indicating pushes are expected to trigger substantial operations.
+**Discovery validation:** In the March target workspace, a PostToolUse `deploy-on-push.sh` hook (not part of this plugin) triggered deployment after every push, which validated that pushes were meaningful events in that workflow. No push frequency enforcement exists. Phase 1 shows the deploy hook has a 300s timeout, indicating pushes are expected to trigger substantial operations.
 
 **Enforcement:** PostToolUse hook (same timestamp-file pattern as Principle 3, with 1800-second interval and checking time since last push)
 

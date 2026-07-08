@@ -21,6 +21,25 @@ BANNER_SENTENCE = (
     "enforced today."
 )
 
+CONSOLIDATION = REPO_ROOT / "docs" / "consolidation.md"
+CONSOLIDATION_BANNER = (
+    "the authoritative per-principle enforcement record is the STATUS table "
+    "at the top of"
+)
+
+
+def _status_table_region():
+    """The STATUS table region: everything before the first historical-body
+    section. Section-marker slicing (reviewer note) — a byte-count slice
+    would silently mis-scope if the banner prose grew."""
+    text = PRINCIPLES.read_text(encoding="utf-8")
+    marker = "## Critique Strategy Reference"
+    assert marker in text, (
+        f"principles.md lost its {marker!r} section — status-table slicing "
+        "needs re-anchoring"
+    )
+    return text[: text.index(marker)]
+
 
 def _table_rows(text, id_prefix="P"):
     """Parse markdown-table rows whose first cell is P<number>."""
@@ -34,15 +53,23 @@ def _table_rows(text, id_prefix="P"):
 
 def _readme_p_section():
     text = README.read_text(encoding="utf-8")
-    start = text.index("### 15 Principles (P1-P15)")
+    heading = "### 15 Principles (P1-P15)"
+    assert heading in text, (
+        f"README lost its {heading!r} heading — P-table guards need "
+        "re-anchoring"
+    )
+    start = text.index(heading)
     end = text.index("### ", start + 10)
     return text[start:end]
 
 
 def test_readme_and_status_table_rows_match():
+    """Guards ID + Name per row. Deliberate limitation (reviewer-noted): the
+    README Summary column is the aspirational statement and the STATUS column
+    carries enforcement — neither third column is cross-checked, except P2's
+    tool-name absence below."""
     readme_rows = _table_rows(_readme_p_section())
-    principles_text = PRINCIPLES.read_text(encoding="utf-8")
-    status_rows = _table_rows(principles_text[:6000])  # status table is at top
+    status_rows = _table_rows(_status_table_region())
     assert len(readme_rows) == 15, f"README P-table has {len(readme_rows)} rows"
     assert readme_rows == status_rows, (
         "README P-table and principles.md STATUS table diverged:\n"
@@ -73,7 +100,7 @@ def test_readme_p2_has_no_unwired_tool_names():
 def test_status_table_marks_only_p15_code_enforced():
     """The review's core finding: only P15's mechanism is enforced in code
     (plan_lib). The STATUS table must not claim code enforcement elsewhere."""
-    text = PRINCIPLES.read_text(encoding="utf-8")[:6000]
+    text = _status_table_region()
     rows = [line for line in text.splitlines()
             if re.match(r"\|\s*P\d+\s*\|", line)]
     assert len(rows) == 15, f"STATUS table has {len(rows)} rows"
@@ -85,4 +112,16 @@ def test_status_table_marks_only_p15_code_enforced():
             )
     assert any("enforced (code" in line for line in rows), (
         "P15 must be marked enforced (code)"
+    )
+
+
+def test_consolidation_carries_quarantine_banner():
+    """R2 catch: docs/consolidation.md is the same class of March artifact and
+    its coverage matrix contradicted the STATUS table unbannered."""
+    text = CONSOLIDATION.read_text(encoding="utf-8")
+    normalized = " ".join(w for w in text.split() if w != ">")
+    assert CONSOLIDATION_BANNER in normalized
+    assert "✓ = Designed as enforced" in text, (
+        "consolidation.md legend must read as designed coverage, not "
+        "current enforcement"
     )
