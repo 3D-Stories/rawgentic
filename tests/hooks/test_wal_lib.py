@@ -258,8 +258,10 @@ echo "$WAL_PROJECT_PATH"
 """
         stdout, _, rc = _run_bash(script)
         assert rc == 0
-        # Relative path should be resolved against workspace root
-        assert stdout == f"{ws.root}/./projects/testproj"
+        # Relative path resolved against workspace root, "./" stripped so the
+        # result is prefix-comparable (#268 fast path compares literally —
+        # the old "/./"-embedded form was an accident this test had pinned)
+        assert stdout == f"{ws.root}/projects/testproj"
 
     def test_absolute_project_path_unchanged(self, make_workspace):
         ws = make_workspace(

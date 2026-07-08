@@ -241,14 +241,22 @@ wal_resolve_project() {
     local reg_line
     reg_line=$(grep "$WAL_SESSION_ID" "$registry_file" 2>/dev/null | tail -1 || true)
     if [ -n "$reg_line" ]; then
-      WAL_PROJECT=$(printf '%s' "$reg_line" | "$WAL_JQ" -r '.project // ""' 2>/dev/null || true)
-      WAL_PROJECT_PATH=$(printf '%s' "$reg_line" | "$WAL_JQ" -r '.project_path // ""' 2>/dev/null || true)
+      # ONE jq for both fields (#268, same @sh pattern as wal_parse_fields):
+      # values arrive single-quoted, eval sets exactly these two variables.
+      local assigns
+      assigns=$(printf '%s' "$reg_line" | "$WAL_JQ" -r '
+        "WAL_PROJECT=" + ((.project // "") | tostring | @sh),
+        "WAL_PROJECT_PATH=" + ((.project_path // "") | tostring | @sh)
+      ' 2>/dev/null) && eval "$assigns" || true
     fi
   fi
 
-  # If project_path is relative, resolve against workspace root
+  # If project_path is relative, resolve against workspace root. Strip a
+  # leading "./" so the result carries no embedded "/./" (#268 — keeps the
+  # path literally prefix-comparable for any consumer; do NOT base an
+  # allow/deny decision on this value, it is unvalidated registry text).
   if [ -n "$WAL_PROJECT_PATH" ] && [ "${WAL_PROJECT_PATH#/}" = "$WAL_PROJECT_PATH" ]; then
-    WAL_PROJECT_PATH="$root/$WAL_PROJECT_PATH"
+    WAL_PROJECT_PATH="$root/${WAL_PROJECT_PATH#./}"
   fi
 
   # Containment (#265): a registry entry is user-editable text — a name with a

@@ -103,14 +103,26 @@ WORKSPACE_ROOT=$(cd "$(dirname "$WORKSPACE_FILE")" && pwd 2>/dev/null) || {
     exit 0
 }
 
-# Check if file is under a DIFFERENT project's directory
+# Check if file is under a DIFFERENT project's directory. Own-project check
+# and violation scan run in ONE jq (#268): a file under the BOUND project's
+# workspace-declared path emits nothing (allow). The bound path comes from
+# the WORKSPACE entry for the #265-validated bound NAME — never from the
+# registry's unvalidated project_path (Step 11 catch: a stale/hand-edited
+# project_path pointing at another project must not defeat the deny).
+# Named delta: with (unsupported) NESTED project dirs a file under both the
+# bound project and a nested other project allows via the own-check where
+# the plain scan denied — no workspace nests projects.
 VIOLATION=$("$JQ" -r --arg file "$FILE_PATH" --arg bound "$BOUND_PROJECT" --arg root "$WORKSPACE_ROOT" '
-  .projects[]
-  | select(.name != $bound and .active == true)
-  | .path as $p
-  | ($root + "/" + ($p | ltrimstr("./")) + "/") as $abs
-  | select($file | startswith($abs))
-  | .name
+  ([.projects[] | select(.name == $bound) | .path] | .[0] // "") as $bp
+  | if $bp != "" and ($file | startswith($root + "/" + ($bp | ltrimstr("./")) + "/"))
+    then empty
+    else (.projects[]
+      | select(.name != $bound and .active == true)
+      | .path as $p
+      | ($root + "/" + ($p | ltrimstr("./")) + "/") as $abs
+      | select($file | startswith($abs))
+      | .name)
+    end
 ' "$WORKSPACE_FILE" 2>/dev/null | head -1 || true)
 
 if [ -n "$VIOLATION" ]; then
