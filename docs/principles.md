@@ -7,6 +7,45 @@
 
 ---
 
+> **QUARANTINE NOTICE (2026-07-08, #270).** This is a quarantined historical
+> planning artifact; the canonical one-line principle statements live in the
+> README P-table, and the STATUS table below is the authoritative record of
+> what is actually enforced today. The body below was written 2026-03-01
+> against a *different target workspace* (the chorestory-era setup) and
+> describes hooks — `block-main-push.sh`, `deploy-on-push.sh`, commit-timer
+> watchdogs, formatter gates — that were **never built in this plugin**. Do
+> not read its present-tense claims as current fact. It is kept for the
+> design rationale and the P15 risk-criteria prose (which a drift-guard test
+> pins to `plan_lib.RISK_CRITERIA`).
+
+## STATUS — what each principle is today (authoritative)
+
+Statuses: **enforced (code)** = a hook/library mechanically enforces it;
+**process-mandated** = a mandatory workflow step implements it (skipping the
+step violates the workflow contract, but no hook blocks it); **convention** =
+followed by practice and review, nothing mandates it; **not implemented** =
+the mechanism this document describes was never built.
+
+| ID  | Name                    | Status today |
+| --- | ----------------------- | ------------ |
+| P1  | Branch Isolation        | process-mandated — WF2 Step 7 (branch from fresh origin/main); worktree isolation via the implementer agent |
+| P2  | Code Formatting         | not implemented — no formatter is wired; this repo's style gate is the pylint E-only CI lane |
+| P3  | Frequent Local Commits  | process-mandated — WF2 Step 8 commits per task; the timer hooks described below were never built |
+| P4  | Regular Remote Sync     | convention — push happens at PR creation; no sync hook exists |
+| P5  | TDD Enforcement         | process-mandated — WF2/WF3 mandate red-before-green; no hook blocks an untested PR |
+| P6  | Main-to-Dev Sync        | not implemented — deploy is per-project config (WF2 Step 14, conditional); no auto dev-deploy |
+| P7  | Triple-Gate Testing     | process-mandated — local suite (Step 9) + CI (Step 13); post-deploy E2E only when a deploy is configured (Step 15) |
+| P8  | Shift-Left Critique     | process-mandated — WF2 Step 4 design gate runs before implementation |
+| P9  | Continuous Memorization | process-mandated — WF2 Step 10 (background, best-effort) |
+| P10 | Diagram-Driven Design   | process-mandated — every PR records a workflow-diagram REV decision; version linkage is test-guarded |
+| P11 | User-in-the-Loop Gates  | process-mandated — merge is owner-gated; the ambiguity circuit breaker stops on conflicting findings |
+| P12 | Conventional Commit     | convention — matched by review; no commit-msg hook |
+| P13 | Pre-PR Code Review      | process-mandated — WF2 Step 11 is non-negotiable |
+| P14 | Documentation-Gated PRs | process-mandated — README/changelog gates are drift-guard tested; PR body templated |
+| P15 | Risk-stratified Review  | **enforced (code)** — plan_lib risk criteria, SEVERITY_BANDED_CONFIDENCE, WF2 Step 8a per-task review |
+
+---
+
 ## Critique Strategy Reference
 
 <!-- NOTE: This matrix is intentionally duplicated here (also in orchestrator-prompt.md) because sub-agents
@@ -32,7 +71,7 @@
 
 **Industry basis:** Trunk-based development with short-lived feature branches. Git worktrees are the emerging standard for AI-agent parallel development, preventing cross-contamination between concurrent tasks. Atlassian and Google both advocate for short-lived feature branches that merge within 1-2 days.
 
-**Discovery validation:** Aligns with the existing pattern. Phase 1 discovery confirms trunk-based strategy with `feature/` and `fix/` branch naming conventions. A `block-main-push.sh` PreToolUse hook already prevents direct pushes to main. No conflicts detected. However, no worktree usage was observed -- this is a net-new capability.
+**Discovery validation:** Aligns with the existing pattern. Phase 1 discovery confirms trunk-based strategy with `feature/` and `fix/` branch naming conventions. In the March target workspace, a `block-main-push.sh` PreToolUse hook prevented direct pushes to main (that hook is not part of this plugin). No conflicts detected. However, no worktree usage was observed -- this is a net-new capability.
 
 **Enforcement:** Hook (PreToolUse) + Plugin command
 
@@ -40,7 +79,7 @@
 
 - `git:create-worktree` / `git:compare-worktrees` / `git:merge-worktree` -- NeoLabHQ/context-engineering-kit (git plugin v1.2.0) for worktree lifecycle management
 - `git:worktrees` skill -- always-loaded reference for worktree operations
-- Existing `block-main-push.sh` hook -- already enforces the "no direct main push" rule
+- `block-main-push.sh` hook (March target workspace; not part of this plugin) -- enforced the "no direct main push" rule there
 
 **Source:** NeoLabHQ/context-engineering-kit
 
@@ -325,7 +364,7 @@ exit 0
 
 **Industry basis:** Continuous integration. The "integrate early, integrate often" principle. Remote pushes serve as off-machine backup (critical for a solo developer), enable CI to run on the latest code, and provide visibility into work-in-progress. Google's trunk-based development recommends pushing at least daily; 30 minutes is appropriate for an AI-assisted rapid development workflow.
 
-**Discovery validation:** The existing PostToolUse `deploy-on-push.sh` hook already triggers deployment after every push, which validates that pushes are meaningful events in this workflow. No push frequency enforcement exists. Phase 1 shows the deploy hook has a 300s timeout, indicating pushes are expected to trigger substantial operations.
+**Discovery validation:** In the March target workspace, a PostToolUse `deploy-on-push.sh` hook (not part of this plugin) triggered deployment after every push, which validates that pushes are meaningful events in this workflow. No push frequency enforcement exists. Phase 1 shows the deploy hook has a 300s timeout, indicating pushes are expected to trigger substantial operations.
 
 **Enforcement:** PostToolUse hook (same timestamp-file pattern as Principle 3, with 1800-second interval and checking time since last push)
 
@@ -436,7 +475,7 @@ exit 0
 
 **Industry basis:** Continuous Deployment (CD). The deploy-on-merge pattern ensures the development environment always reflects the latest main branch. This is a simplified version of GitOps where the desired state (main branch) is automatically reconciled with the actual state (dev servers).
 
-**Discovery validation:** Phase 1 confirms the `deploy-on-push.sh` PostToolUse hook already triggers the deploy script after pushes, but this only fires within Claude Code sessions and only deploys to `${DEV_HOST}` (not `${ENGINE_HOST}`). The discovery doc flags: "deploy script only covers one of two VMs" and "engine deployment on the engine host is fully manual." This principle formalizes and extends the existing pattern.
+**Discovery validation:** Phase 1 confirmed the March target workspace's `deploy-on-push.sh` PostToolUse hook (not part of this plugin) triggered the deploy script after pushes, but this only fires within Claude Code sessions and only deploys to `${DEV_HOST}` (not `${ENGINE_HOST}`). The discovery doc flags: "deploy script only covers one of two VMs" and "engine deployment on the engine host is fully manual." This principle formalizes and extends the existing pattern.
 
 **Enforcement:** PostToolUse hook (extend existing deploy-on-push.sh) + GitHub Actions workflow (webhook on merge)
 
