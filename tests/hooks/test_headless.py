@@ -54,6 +54,23 @@ def _run_hook(hook_name, stdin_dict, *, cwd=None, env_override=None, timeout=10)
 # headless_interaction.py — unit tests
 # =========================================================================
 
+def _parse_metadata(comment_body):
+    """Test-local round-trip parser for the emitted metadata block (#275:
+    the production parse_metadata was removed — nothing read comments back;
+    this helper keeps the emitted format validated)."""
+    import json as _json
+    import re as _re
+    matches = list(_re.finditer(
+        r"<!--\s*rawgentic-headless:\s*(.*?)\s*-->", comment_body or "",
+        _re.DOTALL))
+    if not matches:
+        return None
+    try:
+        return _json.loads(matches[-1].group(1).strip())
+    except ValueError:
+        return None
+
+
 class TestFormatComment:
     """Unit tests for format_comment()."""
 
@@ -184,7 +201,7 @@ class TestStatusComment:
     by construction)."""
 
     def test_format_status_comment_shape(self):
-        from headless_interaction import format_status_comment, parse_metadata
+        from headless_interaction import format_status_comment
 
         result = format_status_comment(
             step=5,
@@ -195,7 +212,7 @@ class TestStatusComment:
         assert "starting TDD on task 1" in result
         assert "**Question:**" not in result
         assert "Reply to this comment" not in result
-        meta = parse_metadata(result)
+        meta = _parse_metadata(result)
         assert meta == {"step": 5, "type": "status"}
         assert "question_id" not in meta
 
@@ -212,8 +229,6 @@ class TestStatusComment:
         assert "\\<img" in before_meta
 
     def test_cli_status_type_needs_no_question_or_id(self):
-        from headless_interaction import parse_metadata
-
         out, err, rc = _run_cli(
             "format-comment", "--step", "8", "--title", "Task 3 committed",
             "--context", "sha abc123, suite green", "--type", "status",
@@ -221,17 +236,15 @@ class TestStatusComment:
         assert rc == 0, err
         assert "Task 3 committed" in out
         assert "Reply to this comment" not in out
-        assert parse_metadata(out) == {"step": 8, "type": "status"}
+        assert _parse_metadata(out) == {"step": 8, "type": "status"}
 
     def test_cli_status_substep_stays_string(self):
-        from headless_interaction import parse_metadata
-
         out, _, rc = _run_cli(
             "format-comment", "--step", "8a", "--title", "t",
             "--context", "c", "--type", "status",
         )
         assert rc == 0
-        assert parse_metadata(out)["step"] == "8a"
+        assert _parse_metadata(out)["step"] == "8a"
 
     def test_cli_non_status_still_requires_question_and_id(self):
         """The blocking-comment contract is unchanged: any non-status type
@@ -243,58 +256,6 @@ class TestStatusComment:
         )
         assert rc == 1
         assert "question" in err.lower()
-
-
-class TestParseMetadata:
-    """Unit tests for parse_metadata()."""
-
-    def test_valid_metadata(self):
-        from headless_interaction import parse_metadata
-
-        body = 'Some text\n<!-- rawgentic-headless: {"question_id":"abc","step":4} -->\n'
-        result = parse_metadata(body)
-        assert result is not None
-        assert result["question_id"] == "abc"
-        assert result["step"] == 4
-
-    def test_no_metadata_marker(self):
-        from headless_interaction import parse_metadata
-
-        result = parse_metadata("Just a regular comment with no metadata")
-        assert result is None
-
-    def test_malformed_json(self):
-        from headless_interaction import parse_metadata
-
-        body = '<!-- rawgentic-headless: {invalid json here} -->'
-        result = parse_metadata(body)
-        assert result is None
-
-    def test_metadata_with_extra_whitespace(self):
-        from headless_interaction import parse_metadata
-
-        body = '<!-- rawgentic-headless:  \n  {"question_id":"abc","step":1}  \n -->'
-        result = parse_metadata(body)
-        assert result is not None
-        assert result["question_id"] == "abc"
-
-    def test_multiple_metadata_blocks_returns_last(self):
-        from headless_interaction import parse_metadata
-
-        body = (
-            '<!-- rawgentic-headless: {"question_id":"first"} -->\n'
-            'Some text\n'
-            '<!-- rawgentic-headless: {"question_id":"second"} -->\n'
-        )
-        result = parse_metadata(body)
-        assert result is not None
-        assert result["question_id"] == "second"
-
-    def test_empty_body(self):
-        from headless_interaction import parse_metadata
-
-        assert parse_metadata("") is None
-        assert parse_metadata(None) is None
 
 
 class TestSuspendState:
@@ -890,7 +851,6 @@ class TestHeadlessCLI:
     # --- format-comment ---
 
     def test_format_comment_renders_and_roundtrips_metadata(self):
-        from headless_interaction import parse_metadata
         out, err, rc = _run_cli(
             "format-comment",
             "--step", "5",
@@ -907,23 +867,21 @@ class TestHeadlessCLI:
         # parens are markdown-escaped by format_comment; assert on word portions
         assert "decompose" in out
         assert "override" in out
-        meta = parse_metadata(out)
+        meta = _parse_metadata(out)
         assert meta == {"question_id": "abc-123", "step": 5, "type": "risk_ratio"}
 
     def test_format_comment_numeric_step_is_int_in_metadata(self):
         """A numeric --step must land in metadata as an int (resume routing
         compares step values); only non-numeric sub-steps stay strings."""
-        from headless_interaction import parse_metadata
         out, _, rc = _run_cli(
             "format-comment", "--step", "5", "--title", "t",
             "--context", "c", "--question", "q",
             "--type", "x", "--question-id", "id1",
         )
         assert rc == 0
-        assert parse_metadata(out)["step"] == 5
+        assert _parse_metadata(out)["step"] == 5
 
     def test_format_comment_substep_8a_stays_string(self):
-        from headless_interaction import parse_metadata
         out, _, rc = _run_cli(
             "format-comment", "--step", "8a", "--title", "t",
             "--context", "c", "--question", "q",
@@ -931,7 +889,7 @@ class TestHeadlessCLI:
         )
         assert rc == 0
         assert "Step 8a" in out
-        assert parse_metadata(out)["step"] == "8a"
+        assert _parse_metadata(out)["step"] == "8a"
 
     def test_format_comment_no_options_ok(self):
         out, _, rc = _run_cli(
@@ -1023,7 +981,7 @@ class TestHeadlessCLI:
         """The comment metadata and the suspend state must carry the SAME
         question_id — the resume path matches the user's reply to the suspend by
         this id, so a mismatch silently loses the reply."""
-        from headless_interaction import parse_metadata, read_suspend_state
+        from headless_interaction import read_suspend_state
         qid = _run_cli("new-id")[0].strip()
         comment = _run_cli("format-comment", "--step", "5", "--title", "t",
                            "--context", "c", "--question", "q", "--type", "x",
@@ -1032,7 +990,7 @@ class TestHeadlessCLI:
         _run_cli("write-suspend", "--path", str(path), "--issue", "5",
                  "--step", "5", "--question-id", qid,
                  "--comment-url", "https://example.com/c/1")
-        meta_qid = parse_metadata(comment)["question_id"]
+        meta_qid = _parse_metadata(comment)["question_id"]
         state_qid = read_suspend_state(str(path))["question_id"]
         assert meta_qid == state_qid == qid
 

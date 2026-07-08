@@ -773,7 +773,6 @@ removed when the session resumes.
 
 `hooks/headless_interaction.py` provides testable functions:
 - `format_comment()` — generates structured comments with sanitized content
-- `parse_metadata()` — extracts JSON from hidden comment blocks
 - `format_suspend_state()` / `write_suspend_state()` / `read_suspend_state()`
 
 It also exposes a CLI so workflow skills drive the headless protocol from Bash
