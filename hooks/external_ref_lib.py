@@ -31,6 +31,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from atomic_write_lib import atomic_write_text
+
 # Marketplaces rawgentic legitimately vendors from / relies on. Executing an
 # external command file runs its author's prompt content, so this is an
 # allow-list, not a probe of whatever happens to be in the cache (which also
@@ -156,9 +158,7 @@ def _read_manifest(state: Path) -> dict:
 
 def _write_manifest(state: Path, manifest: dict) -> None:
     mf = state / "manifest.json"
-    tmp = mf.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-    tmp.replace(mf)
+    atomic_write_text(mf, json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
 
 def vendor_copy(src: str | Path, name: str, state_dir: str | Path,

@@ -37,22 +37,34 @@ class TestAtomicWriteText:
         atomic_write_text(tmp_path / "out.txt", "x")
         assert [p.name for p in tmp_path.iterdir()] == ["out.txt"]
 
-    def test_no_stray_tmp_on_write_failure(self, tmp_path, monkeypatch):
-        """The temp must be unlinked when the write itself blows up."""
-        class Boom(Exception):
-            pass
-
+    @pytest.mark.parametrize("exc_type", [Exception, KeyboardInterrupt, SystemExit])
+    def test_no_stray_tmp_on_write_failure(self, tmp_path, monkeypatch, exc_type):
+        """The temp must be unlinked when the write itself blows up — including
+        BaseException shapes (KeyboardInterrupt/SystemExit): the except clause
+        must stay `BaseException`, not `Exception`."""
         real_fdopen = os.fdopen
 
         def exploding_fdopen(fd, *a, **k):
             f = real_fdopen(fd, *a, **k)
-            f.write = lambda *_: (_ for _ in ()).throw(Boom("disk"))
+            f.write = lambda *_: (_ for _ in ()).throw(exc_type("disk"))
             return f
 
         monkeypatch.setattr(os, "fdopen", exploding_fdopen)
-        with pytest.raises(Boom):
+        with pytest.raises(exc_type):
             atomic_write_text(tmp_path / "out.txt", "x")
         assert list(tmp_path.iterdir()) == [], "stray temp survived the failure"
+
+    def test_fsync_flag_flushes_before_replace(self, tmp_path, monkeypatch):
+        """fsync=True must fsync the temp fd before os.replace (suspend-state
+        durability contract)."""
+        calls = []
+        real_fsync, real_replace = os.fsync, os.replace
+        monkeypatch.setattr(os, "fsync", lambda fd: calls.append("fsync") or real_fsync(fd))
+        monkeypatch.setattr(os, "replace", lambda *a: calls.append("replace") or real_replace(*a))
+        atomic_write_text(tmp_path / "o.json", "{}", fsync=True)
+        assert calls == ["fsync", "replace"]
+        atomic_write_text(tmp_path / "o2.json", "{}")
+        assert calls.count("fsync") == 1, "fsync must be opt-in"
 
     def test_custom_prefix_used_for_tmp(self, tmp_path, monkeypatch):
         """A site-specific prefix reaches mkstemp (observability contract)."""
@@ -81,16 +93,20 @@ class TestAtomicWriteText:
 
 class TestAllSitesRouted:
     """#264 structural pin: no inline mkstemp/tmp+replace outside the helper.
-    The seven pre-#264 sites must import atomic_write_lib instead."""
+    All pre-#264 python sites must import atomic_write_lib instead. Known
+    deliberate exclusion: session-start's embedded `python3 -c` registry-write
+    snippet (can't import from an inline string; consolidation tracked in
+    review child 4d)."""
 
     SITES = ["notes-size-handler.py", "registry_prune.py",
              "post_update_reconcile.py", "scanner_bootstrap.py",
-             "plan_lib.py", "adversarial_review_lib.py"]
+             "plan_lib.py", "adversarial_review_lib.py",
+             "headless_interaction.py", "external_ref_lib.py"]
 
     @pytest.mark.parametrize("site", SITES)
     def test_site_imports_helper(self, site):
         text = (HOOKS_DIR / site).read_text()
-        assert "atomic_write_lib" in text or "atomic_write_text" in text, (
+        assert "from atomic_write_lib import" in text, (
             f"{site} must route atomic writes through atomic_write_lib")
 
     @pytest.mark.parametrize("site", SITES)
@@ -98,6 +114,14 @@ class TestAllSitesRouted:
         text = (HOOKS_DIR / site).read_text()
         assert "mkstemp" not in text, (
             f"{site} carries an inline mkstemp — route through atomic_write_lib")
+
+    @pytest.mark.parametrize("site", ["headless_interaction.py", "external_ref_lib.py"])
+    def test_no_fixed_name_tmp_variants(self, site):
+        """The two weaker fixed-name variants the Step-11 sweep found (no
+        unlink-on-exception) must be gone."""
+        text = (HOOKS_DIR / site).read_text()
+        assert 'path + ".tmp"' not in text
+        assert 'with_suffix(".json.tmp")' not in text
 
     def test_plan_lib_no_fixed_name_tmp(self):
         """plan_lib's weaker variant (fixed '.tmp' name, no unlink-on-exception)
