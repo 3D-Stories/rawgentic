@@ -1,103 +1,202 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unified-Review Backlog Run — Final Report (v3.24.2 → v3.24.17)</title>
+<title>Unified-Review Backlog Run — Final Report</title>
 <style>
-:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
---line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
-@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
---ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
-:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
---ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
-:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
---ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
-.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
-header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
-.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
-h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
-h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
-p,li{color:var(--ink-2)}
-code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
-pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
-pre code{background:none;padding:0}
-blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
-table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
-th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
-.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
-footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+  :root {
+    --paper: #F6F8F7;
+    --card: #FFFFFF;
+    --ink: #171D1B;
+    --ink-2: #5A6663;
+    --ink-3: #8A9793;
+    --line: #DCE3E1;
+    --accent: #1F6E64;
+    --accent-soft: #E3EFED;
+    --pass: #2E7D46;
+    --pass-soft: #E4F1E8;
+    --warn: #9A5B15;
+    --warn-soft: #F6ECDD;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #121715; --card: #1A211E; --ink: #E8EEEC; --ink-2: #9DABA6;
+      --ink-3: #6F7D78; --line: #2C3633; --accent: #63B8AC; --accent-soft: #1E2E2B;
+      --pass: #66BB7E; --pass-soft: #1C2B21; --warn: #D99A45; --warn-soft: #302517;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #121715; --card: #1A211E; --ink: #E8EEEC; --ink-2: #9DABA6;
+    --ink-3: #6F7D78; --line: #2C3633; --accent: #63B8AC; --accent-soft: #1E2E2B;
+    --pass: #66BB7E; --pass-soft: #1C2B21; --warn: #D99A45; --warn-soft: #302517;
+  }
+  :root[data-theme="light"] {
+    --paper: #F6F8F7; --card: #FFFFFF; --ink: #171D1B; --ink-2: #5A6663;
+    --ink-3: #8A9793; --line: #DCE3E1; --accent: #1F6E64; --accent-soft: #E3EFED;
+    --pass: #2E7D46; --pass-soft: #E4F1E8; --warn: #9A5B15; --warn-soft: #F6ECDD;
+  }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55; margin: 0;
+    font-size: 15.5px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 48px 24px 80px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); margin: 0 0 10px;
+  }
+  h1 {
+    font-size: 30px; line-height: 1.2; margin: 0 0 8px; letter-spacing: -.01em;
+    text-wrap: balance; font-weight: 750;
+  }
+  .verdict { color: var(--ink-2); max-width: 62ch; margin: 0 0 30px; }
+  .verdict strong { color: var(--ink); }
+  h2 {
+    font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 650; margin: 44px 0 14px;
+    padding-bottom: 8px; border-bottom: 1px solid var(--line);
+  }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  .tile {
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 16px 18px;
+  }
+  .tile .n {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 26px; font-weight: 700; letter-spacing: -.02em;
+  }
+  .tile .n small { font-size: 15px; font-weight: 600; color: var(--ink-2); }
+  .tile .l { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th {
+    text-align: left; font-family: var(--mono); font-size: 11px;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3);
+    font-weight: 600; padding: 10px 14px; border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  td {
+    padding: 8px 14px; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  tr:last-child td { border-bottom: none; }
+  td.what { font-family: var(--sans); white-space: normal; min-width: 260px; color: var(--ink-2); }
+  td .sha { color: var(--ink-3); }
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 11px;
+    padding: 2px 8px; border-radius: 999px; font-weight: 600;
+  }
+  .pill.pass { background: var(--pass-soft); color: var(--pass); }
+  .pill.open { background: var(--warn-soft); color: var(--warn); }
+  .catch {
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+    padding: 14px 18px; margin-bottom: 10px;
+  }
+  .catch .who {
+    font-family: var(--mono); font-size: 12px; color: var(--accent);
+    font-weight: 700; margin-bottom: 4px;
+  }
+  .catch p { margin: 0; color: var(--ink-2); font-size: 14px; max-width: 72ch; }
+  .catch p strong { color: var(--ink); }
+  .sev {
+    float: right; font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+    text-transform: uppercase; padding: 2px 8px; border-radius: 3px;
+    background: var(--warn-soft); color: var(--warn); font-weight: 700;
+  }
+  ul.plain { list-style: none; padding: 0; margin: 0; }
+  ul.plain li {
+    padding: 12px 0 12px 18px; border-bottom: 1px solid var(--line);
+    position: relative; color: var(--ink-2); font-size: 14px; max-width: 74ch;
+  }
+  ul.plain li::before {
+    content: ""; position: absolute; left: 0; top: 19px; width: 7px; height: 7px;
+    border-radius: 999px; background: var(--accent);
+  }
+  ul.plain li:last-child { border-bottom: none; }
+  ul.plain li strong { color: var(--ink); }
+  code {
+    font-family: var(--mono); font-size: .92em; background: var(--accent-soft);
+    color: var(--ink); padding: 1px 5px; border-radius: 3px;
+  }
+  .foot {
+    margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-3);
+  }
 </style>
-</head>
-<body>
 <div class="wrap">
-<header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 08:23 MDT</div>
-<h1>Unified-Review Backlog Run — Final Report (v3.24.2 → v3.24.17)</h1>
+  <p class="eyebrow">rawgentic · unsupervised overnight run · 2026-07-07 → 07-08</p>
+  <h1>Unified-Review Backlog Run — Final Report</h1>
+  <p class="verdict"><strong>All 15 backlog children plus the review deliverable merged</strong> — EPICs 3, 4, 5 complete and closed; EPIC 6 delivered 6b + 6c and stays open on one owner decision. Every child shipped red-before-green, a full-suite exit-code gate, an opus review with each finding verified before acting, and all four CI lanes green before merge.</p>
 
-</header>
-<main>
-<h1>Unified-review backlog run — final report (2026-07-07 → 2026-07-08, unsupervised)</h1>
-<p><strong>Scope executed:</strong> EPIC 3 (5 children), EPIC 4 (4), EPIC 5 (4), 6b + 6c — <strong>15 children + the PR0 deliverable, all merged.</strong> Goal source: docs/reviews/2026-07-07-harness-and-code-review.md Part 3.</p>
-<h2>Merged (16 PRs, v3.24.2 → v3.24.17, plus telemetry)</h2>
-<p>| PR | child | issue | version | main sha | suite after |</p>
-<p>|---|---|---|---|---|---|</p>
-<p>| #260 | PR0 review deliverable | — | 3.24.2 | c50aa5e | 2278 |</p>
-<p>| #281 | 3a | #261 | 3.24.3 | af6c023 | 2283 |</p>
-<p>| #282 | 3b | #262 | 3.24.4 | 1be0ed5 | 2293 |</p>
-<p>| #283 | 3c | #263 | 3.24.5 | 952f863 | 2295 |</p>
-<p>| #284 | 3d | #265 | 3.24.6 | 4724eba | 2304 |</p>
-<p>| #285 | 3e | #264 | 3.24.7 | 2c95fbc | 2336 |</p>
-<p>| #286 | 4a | #266 | 3.24.8 | e414f99 | 2345 |</p>
-<p>| #287 | 4b | #267 | 3.24.9 | 2f716ed | 2347 |</p>
-<p>| #288 | 4c | #268 | 3.24.10 | 98a2238 | 2350 |</p>
-<p>| #289 | 4d | #269 | 3.24.11 | 732ee3f | 2358 |</p>
-<p>| #290 | 5a | #270 | 3.24.12 | bc070d2 | 2363 |</p>
-<p>| #291 | 5b | #271 | 3.24.13 | 85bb101 | 2363 |</p>
-<p>| #292 | 5c (WF3) | #272 | 3.24.14 | ee2fd4b | 2363+1skip |</p>
-<p>| #293 | 5d | #273 | 3.24.15 | cd0e043 | 2363+1skip |</p>
-<p>| #294 | 6b | #275 | 3.24.16 | 023c98e | 2357+1skip |</p>
-<p>| #295 | 6c | #276 | 3.24.17 | c905ec8 | 2359+1skip |</p>
-<p>| #296 | telemetry (15 records) | — | — | faed5df | — |</p>
-<p><strong>Suite delta vs run baseline:</strong> 2278/0 → <strong>2359 passed + 1 deliberate visible skip, 0 failing</strong> (+81 net: new guards/regression tests added, 6 dead unit cases removed with their dead subject, 1 silent-pass converted to a visible skip). Every child: red-before-green shown, full-suite gate by exit code, both pylint lanes, security scan (iac/sca always visible skips), ≥1 opus review, CI all-4-lanes green before merge, merge verified on main, run-record rc=0.</p>
-<h2>Epics closed</h2>
-<ul>
-<li><strong>#277 (EPIC 3)</strong> — closed with summary (prior session).</li>
-<li><strong>#278 (EPIC 4)</strong> — closed with summary: WAL stdin 4 jq→1; wal-guard 13 greps→2; wal-bind-guard 6 jq→5; session-start spawns bounded + dead archive path removed.</li>
-<li><strong>#279 (EPIC 5)</strong> — closed with summary: principles.md + consolidation.md quarantined w/ authoritative STATUS table; count guards compute from the tree; vacuous guards made loud; both operating manuals&#x27; self-rot fixed (workspace half direct-edited, .bak at /home/rocky00717/rawgentic/CLAUDE.md.2026-07-08.bak).</li>
-<li><strong>#280 (EPIC 6)</strong> — STAYS OPEN: 6b+6c merged (status comment posted); <strong>6a #274 [decision] not implemented per scope</strong> (wire-or-delete external_ref_lib is an owner call).</li>
-</ul>
-<h2>Review catches worth reading (every child had ≥1 real catch)</h2>
-<ul>
-<li><strong>#266</strong>: Codex High — multi-document stdin let the trailing document&#x27;s assignment group win via eval (verified live, fixed). Chasing it exposed + fixed a pre-existing deny() duplicate-JSON bug, and a reviewer caught my own fix flipping the fail-closed guard open (also fixed, end-to-end pinned).</li>
-<li><strong>#267</strong>: pre-filter treated grep rc 2 (future malformed pattern edit) as no-match — would have fail-opened all 12 rules at once. Fixed; parity fuzzed 600 iterations, 0 breaks.</li>
-<li><strong>#268</strong>: reviewer refuted the first draft LIVE — it trusted the registry&#x27;s unvalidated project_path; a stale/hand-edited entry flipped deny→allow. Redesigned to workspace-truth (kept the perf win).</li>
-<li><strong>#269</strong>: Codex — newline-in-cwd field-shift in the consolidated transport (shlex fix); a reviewer then proved my regression pin was VACUOUS (passed on both parsers) — replaced with a mutation-verified discriminator.</li>
-<li><strong>#271</strong>: the computed membership guard exposed that &quot;9/15 evals&quot; had the right count with WRONG membership (sync-security-patterns HAS evals) — and the review doc&#x27;s own &quot;10/15&quot; correction was wrong too.</li>
-<li><strong>#272/#273/#275/#276</strong>: root-skip convention omission; one more bare count found by the accuracy pass; stale doc bullet; detect/repair proof promoted from manual verification to a committed sandbox test.</li>
-</ul>
-<h2>Incidents / process notes (honest ledger)</h2>
-<ul>
-<li><strong>Session limit (~4:00–4:30am MT)</strong> killed the first #271 reviewer pair mid-run. The requested overnight watchdog (25-min session cron) worked as designed: queued ticks fired after reset, both reviewers relaunched, zero work lost.</li>
-<li><strong>#273 merge</strong>: first attempt hit a network error; PR state verified still OPEN before retry (no double-merge). The run-record was persisted one retry BEFORE the merge landed — accurate in hindsight, but the ordering was wrong; corrected for all later children (merge-verify before summarize).</li>
-<li><strong>Opus classifier outage</strong> denied one agent dispatch once; retried clean.</li>
-<li>mempalace MCP disconnected mid-run — Step 10 memorize skipped (best-effort per convention) from #272 onward.</li>
-</ul>
-<h2>Reserved for owner (untouched, per scope)</h2>
-<ul>
-<li><strong>EPICs 1–2</strong>: never filed as issues (live-harness scope) — only their review-doc entries exist.</li>
-<li><strong>6a #274</strong> [decision], <strong>6d</strong>, <strong>6e</strong> (not filed — live-infra).</li>
-<li>Follow-up recorded during the run: wal-guard <code>deny()</code> uses <code>jq --arg</code>, which hits argv limits at ~300KB commands leaving no deny JSON (= allow) — pre-existing, verified not introduced by this run&#x27;s changes; candidate small fix.</li>
-<li>Plugin cache still runs v3.24.0 — reinstall (exit sessions first, §7 recipe) to pick up v3.24.17.</li>
-</ul>
+  <div class="stats">
+    <div class="tile"><div class="n">18</div><div class="l">PRs merged (16 children + telemetry + this report)</div></div>
+    <div class="tile"><div class="n">3.24.2<small> → </small>3.24.17</div><div class="l">version span, one bump per child</div></div>
+    <div class="tile"><div class="n">2278<small> → </small>2359</div><div class="l">suite, 0 failing (+1 deliberate visible skip)</div></div>
+    <div class="tile"><div class="n">16<small> / 16</small></div><div class="l">children with ≥1 real review catch</div></div>
+  </div>
 
-</main>
-<footer>Last updated: 2026-07-08 08:23 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+  <h2>Run ledger</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>child</th><th>issue</th><th>PR</th><th>version</th><th>main</th><th>delivered</th></tr></thead>
+      <tbody>
+        <tr><td>PR0</td><td>—</td><td>#260</td><td>3.24.2</td><td class="sha">c50aa5e</td><td class="what">review deliverable committed</td></tr>
+        <tr><td>3a</td><td>#261</td><td>#281</td><td>3.24.3</td><td class="sha">af6c023</td><td class="what">work_summary render fix</td></tr>
+        <tr><td>3b</td><td>#262</td><td>#282</td><td>3.24.4</td><td class="sha">1be0ed5</td><td class="what">shared claudeDocsPath resolver + containment</td></tr>
+        <tr><td>3c</td><td>#263</td><td>#283</td><td>3.24.5</td><td class="sha">952f863</td><td class="what">headless deny audit trail revived</td></tr>
+        <tr><td>3d</td><td>#265</td><td>#284</td><td>3.24.6</td><td class="sha">4724eba</td><td class="what">registry project-name validation</td></tr>
+        <tr><td>3e</td><td>#264</td><td>#285</td><td>3.24.7</td><td class="sha">2c95fbc</td><td class="what">one atomic-write helper, nine sites routed</td></tr>
+        <tr><td>4a</td><td>#266</td><td>#286</td><td>3.24.8</td><td class="sha">e414f99</td><td class="what">WAL stdin: 4 jq → 1 (@sh eval, one-document binding)</td></tr>
+        <tr><td>4b</td><td>#267</td><td>#287</td><td>3.24.9</td><td class="sha">2f716ed</td><td class="what">wal-guard: 13 greps → 2 (union pre-filter, fail-closed)</td></tr>
+        <tr><td>4c</td><td>#268</td><td>#288</td><td>3.24.10</td><td class="sha">98a2238</td><td class="what">wal-bind-guard: 6 jq → 5, workspace-truth own-check</td></tr>
+        <tr><td>4d</td><td>#269</td><td>#289</td><td>3.24.11</td><td class="sha">732ee3f</td><td class="what">session-start spawns bounded; dead archive path removed</td></tr>
+        <tr><td>5a</td><td>#270</td><td>#290</td><td>3.24.12</td><td class="sha">bc070d2</td><td class="what">principles.md + consolidation.md quarantined, STATUS table</td></tr>
+        <tr><td>5b</td><td>#271</td><td>#291</td><td>3.24.13</td><td class="sha">85bb101</td><td class="what">count guards compute from the tree</td></tr>
+        <tr><td>5c</td><td>#272</td><td>#292</td><td>3.24.14</td><td class="sha">ee2fd4b</td><td class="what">vacuous guards fail loudly (WF3)</td></tr>
+        <tr><td>5d</td><td>#273</td><td>#293</td><td>3.24.15</td><td class="sha">cd0e043</td><td class="what">operating-manual self-rot fixed (workspace half direct-edited, .bak kept)</td></tr>
+        <tr><td>6b</td><td>#275</td><td>#294</td><td>3.24.16</td><td class="sha">023c98e</td><td class="what">dead code −148 lines (verify_158_split, parse_metadata)</td></tr>
+        <tr><td>6c</td><td>#276</td><td>#295</td><td>3.24.17</td><td class="sha">c905ec8</td><td class="what">quality-bar.md single-sourced (FILE_MANIFEST + sandbox drift test)</td></tr>
+        <tr><td>telemetry</td><td>—</td><td>#296</td><td>—</td><td class="sha">faed5df</td><td class="what">15 run-records batched (established backfill lane)</td></tr>
+        <tr><td>report</td><td>—</td><td>#297</td><td>—</td><td class="sha">3fa9161</td><td class="what">this report (md + html pair)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Epic status</h2>
+  <ul class="plain">
+    <li><span class="pill pass">closed</span>&nbsp; <strong>#277 EPIC 3</strong> — resolver, validation, audit, atomic-write foundations (5 children)</li>
+    <li><span class="pill pass">closed</span>&nbsp; <strong>#278 EPIC 4</strong> — hot-path hook performance: every per-tool-call hook now spawns a bounded, minimal process count</li>
+    <li><span class="pill pass">closed</span>&nbsp; <strong>#279 EPIC 5</strong> — docs &amp; test-guard integrity: quarantined planning artifacts, computed guards, loud failures</li>
+    <li><span class="pill open">open</span>&nbsp; <strong>#280 EPIC 6</strong> — 6b + 6c merged; stays open on <strong>6a #274</strong>, the wire-or-delete <code>external_ref_lib</code> owner decision</li>
+  </ul>
+
+  <h2>Review catches worth reading — every child had at least one</h2>
+  <div class="catch"><span class="sev">high · fixed</span><div class="who">#266 · WAL stdin parse</div>
+    <p>Codex found the single-jq consolidation let a <strong>multi-document stdin's trailing document win via eval</strong> (verified live). Chasing it exposed two more: a pre-existing <code>deny()</code> duplicate-JSON bug, and a reviewer caught my own fix <strong>flipping the fail-closed guard open</strong> — both fixed with end-to-end pins.</p></div>
+  <div class="catch"><span class="sev">low · fixed</span><div class="who">#267 · wal-guard pre-filter</div>
+    <p>The combined-grep fast path treated <strong>grep rc 2 (a future malformed pattern edit) as no-match</strong> — one bad edit would have silently disabled all 12 rules in a fail-closed guard. Parity was fuzzed 600 iterations, zero breaks.</p></div>
+  <div class="catch"><span class="sev">medium · redesigned</span><div class="who">#268 · wal-bind-guard fast path</div>
+    <p>A reviewer <strong>refuted the first draft live</strong>: it trusted the registry's unvalidated <code>project_path</code>, so a stale or hand-edited entry flipped a cross-project deny into an allow. Redesigned to derive the check from workspace truth — the perf win survived.</p></div>
+  <div class="catch"><span class="sev">medium · fixed</span><div class="who">#269 · session-start transport</div>
+    <p>Codex caught a <strong>newline-in-cwd field shift</strong> in the consolidated stdin transport; a second reviewer then proved my regression pin was <strong>vacuous</strong> — it passed against both the broken and fixed parser. Replaced with a mutation-verified discriminator.</p></div>
+  <div class="catch"><span class="sev">medium · fixed</span><div class="who">#271 · computed count guards</div>
+    <p>The new membership guard proved <strong>"9/15 skills have evals" had the right count with the wrong membership</strong> — <code>sync-security-patterns</code> HAS evals — and the review document's own "10/15" correction was wrong too.</p></div>
+  <div class="catch"><span class="sev">low · fixed</span><div class="who">#272 / #273 / #275 / #276</div>
+    <p>Root-skip convention omission in a chmod test; one more bare count found by the accuracy pass; a stale doc bullet; and a detect/repair proof promoted from manual verification to a <strong>committed sandbox test</strong>.</p></div>
+
+  <h2>Incident ledger — honest record</h2>
+  <ul class="plain">
+    <li><strong>Session limit (~4:30am MT)</strong> killed the first #271 reviewer pair mid-run. The requested watchdog (25-min session cron) worked as designed: queued ticks fired after reset, both reviewers relaunched, <strong>zero work lost</strong>. Cron deleted at close-out.</li>
+    <li><strong>#273 merge network error</strong> — PR state verified still OPEN before retry (no double-merge), but the run-record persisted one retry <em>before</em> the merge landed. Accurate in hindsight; ordering corrected for all later children (merge-verify before summarize).</li>
+    <li><strong>Opus classifier outage</strong> denied one agent dispatch once; clean on retry.</li>
+    <li><strong>mempalace MCP disconnected</strong> mid-run — memorize steps skipped (best-effort per convention) from #272 onward.</li>
+  </ul>
+
+  <h2>Reserved for owner</h2>
+  <ul class="plain">
+    <li><strong>6a #274</strong> — wire-or-delete <code>external_ref_lib</code> (262 lines, zero consumers). Marked <code>[decision]</code>; EPIC #280 stays open on it.</li>
+    <li><strong>EPICs 1–2, 6d, 6e</strong> — never filed as issues (live-harness / live-infra scope); only their review-doc entries exist.</li>
+    <li><strong>Follow-up recorded:</strong> wal-guard <code>deny()</code> uses <code>jq --arg</code>, which hits argv limits at ~300 KB commands and emits no deny JSON (= allow). Pre-existing, verified not introduced this run; small fix candidate.</li>
+    <li><strong>Plugin cache still runs v3.24.0</strong> — exit hook-using sessions, then reinstall (§7 recipe) to go live on v3.24.17.</li>
+  </ul>
+
+  <p class="foot">source: docs/reviews/2026-07-08-unified-review-backlog-run-report.md · goal: docs/reviews/2026-07-07-harness-and-code-review.md Part 3 · main @ 3fa9161 · suite 2359 passed + 1 deliberate skip, 0 failing</p>
 </div>
-</body>
-</html>
