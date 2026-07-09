@@ -1157,6 +1157,69 @@ class TestAggregateGrouped:
         assert aggregate_grouped([_store_rec()], dim)
 
 
+class TestAggregateDispatches:
+    def _d(self, role, outcome, resolution, model=None, subagent_type="rawgentic-implementer",
+           effort="medium"):
+        return {"role": role, "subagent_type": subagent_type, "model": model,
+                "effort": effort, "outcome": outcome, "resolution": resolution}
+
+    def test_rollup_math(self):
+        from work_summary import aggregate_records
+        r1 = _store_rec(dispatches=[
+            self._d("review", "ok", "primary", model="opus"),
+            self._d("review", "dead", "fallback", model="sonnet"),
+        ])
+        r2 = _store_rec(dispatches=[
+            self._d("implementation", "ok", "primary", model=None),
+        ])
+        d = aggregate_records([r1, r2])["dispatches"]
+        assert d["runs_with_dispatches"] == 2
+        assert d["total"] == 3
+        assert d["by_role"] == {"review": 2, "implementation": 1}
+        assert d["by_model"] == {"opus": 1, "sonnet": 1, "(none)": 1}
+        assert d["dead_rate"] == pytest.approx(1 / 3)
+        assert d["fallback_rate"] == pytest.approx(1 / 3)
+
+    def test_omitted_when_no_record_carries_dispatches(self):
+        from work_summary import aggregate_records
+        a = aggregate_records([_store_rec(), _store_rec()])
+        assert "dispatches" not in a
+
+    def test_present_in_mixed_store(self):
+        from work_summary import aggregate_records
+        r1 = _store_rec(dispatches=[self._d("review", "ok", "primary")])
+        r2 = _store_rec()
+        r3 = _store_rec()
+        a = aggregate_records([r1, r2, r3])
+        assert "dispatches" in a
+        assert a["dispatches"]["runs_with_dispatches"] == 1
+
+    def test_present_but_empty_no_zero_division(self):
+        from work_summary import aggregate_records
+        r = _store_rec(dispatches=[])
+        d = aggregate_records([r])["dispatches"]
+        assert d["runs_with_dispatches"] == 1
+        assert d["total"] == 0
+        assert d["dead_rate"] is None and d["fallback_rate"] is None
+
+    def test_grouped_per_partition(self):
+        from work_summary import aggregate_grouped
+        a = _store_rec(workflow_version="2.40.0",
+                        dispatches=[self._d("review", "ok", "primary")])
+        b = _store_rec(workflow_version="2.41.0")
+        g = aggregate_grouped([a, b], "version")
+        assert "dispatches" in g["2.40.0"]
+        assert "dispatches" not in g["2.41.0"]
+
+    def test_render_shows_section_only_when_present(self):
+        from work_summary import aggregate_records, render_aggregate_markdown
+        with_d = render_aggregate_markdown(
+            aggregate_records([_store_rec(dispatches=[self._d("review", "ok", "primary")])]))
+        without_d = render_aggregate_markdown(aggregate_records([_store_rec()]))
+        assert "### Dispatches" in with_d
+        assert "### Dispatches" not in without_d
+
+
 class TestAggregateEdge:
     def test_empty_records_no_crash(self):
         from work_summary import aggregate_records

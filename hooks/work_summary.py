@@ -964,8 +964,44 @@ def aggregate_records(records) -> dict:
         "mean_commits": _mean(_col("changes", "commits")),
         "mean_tests_added": _mean(_col("tests", "added")),
     }
-    return {"n": n, "gates": gates, "loop_backs": loop_backs,
-            "outcomes": outcomes, "effort": effort}
+    result = {"n": n, "gates": gates, "loop_backs": loop_backs,
+              "outcomes": outcomes, "effort": effort}
+
+    # dispatches (#329) — omitted entirely when no record carries the key at
+    # all (present-is-present: a record with dispatches: [] still counts).
+    runs_with_dispatches = 0
+    total = by_role = by_model = None
+    dead = fallback = 0
+    for r in records:
+        entries = r.get("dispatches")
+        if not isinstance(entries, list):
+            continue
+        if by_role is None:
+            total, by_role, by_model = 0, {}, {}
+        runs_with_dispatches += 1
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            total += 1
+            role = e.get("role")
+            if _is_str(role):
+                by_role[role] = by_role.get(role, 0) + 1
+            model = e.get("model") if _is_str(e.get("model")) else "(none)"
+            by_model[model] = by_model.get(model, 0) + 1
+            if e.get("outcome") == "dead":
+                dead += 1
+            if e.get("resolution") == "fallback":
+                fallback += 1
+    if by_role is not None:
+        result["dispatches"] = {
+            "runs_with_dispatches": runs_with_dispatches,
+            "total": total,
+            "by_role": by_role,
+            "by_model": by_model,
+            "dead_rate": _rate(dead, total),
+            "fallback_rate": _rate(fallback, total),
+        }
+    return result
 
 
 _GROUP_KEYS = {
@@ -1043,6 +1079,17 @@ def _render_one(a) -> list:
               f"- Deletions: {_fmt_num(e['mean_deletions'])}",
               f"- Commits: {_fmt_num(e['mean_commits'])}",
               f"- Tests added: {_fmt_num(e['mean_tests_added'])}"]
+    if "dispatches" in a:
+        d = a["dispatches"]
+        rolestr = ", ".join(f"{k}={v}" for k, v in sorted(d["by_role"].items())) or "none"
+        modelstr = ", ".join(f"{k}={v}" for k, v in sorted(d["by_model"].items())) or "none"
+        lines += ["", "### Dispatches",
+                  f"- Runs with dispatches: {d['runs_with_dispatches']}",
+                  f"- Total: {d['total']}",
+                  f"- By role: {rolestr}",
+                  f"- By model: {modelstr}",
+                  f"- Dead rate: {_fmt_pct(d['dead_rate'])}",
+                  f"- Fallback rate: {_fmt_pct(d['fallback_rate'])}"]
     return lines
 
 
