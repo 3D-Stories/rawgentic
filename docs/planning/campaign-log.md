@@ -14,6 +14,34 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #333 — subagent-dispatch observability + review-gate hardening (auto-run)
+
+### #329 — structured dispatches[] in the run-record schema + aggregate rollup · v3.26.0
+
+**Issue.** #329 (feature, epic #333 child 1/10): the #328 dispatch audit needed ~2.3 GB
+of transcript archaeology to answer "did subagents run?" — `run_records.jsonl` had no
+structured dispatch field.
+
+**What shipped.** Optional, present-is-strict `dispatches[]` in the run-record schema
+(`hooks/work_summary.py` validate_record — the usage #155 / goal_guard #156 precedent):
+per-entry `role`/`subagent_type`/`model`/`effort` + orthogonal `outcome`
+(ok/error/retried/dead; dead = vacuous return) vs `resolution` (primary/fallback/generic).
+Aggregate rollup: counts by role/model (null model → `"(none)"`), dead rate, fallback
+rate, `runs_with_dispatches`; the section is omitted ENTIRELY when no record carries the
+field (single contract, per-partition under `--group-by`). Documented in
+`docs/run-records.md`. Emission wired by follow-up #330.
+
+**Reviews.** Step 4 quality-bar (opus): 2 Low ambiguous, both resolved in-gate from repo
+conventions ("(none)" sentinel; per-partition omit). Step 8a on the high-risk validation
+task: 2 reviewers, clean. Step 11: 2 opus reviewers NO FINDINGS + codex adversarial diff
+2 Medium @0.7 — dropped by the severity band and refuted against code. Security scan:
+0 blocking / 0 advisory (iac n/a, sca nothing-to-scan). Lane: small-standard (3 impl
+files). Suite 2435+1skip → 2503+1skip (+68). No spine change → no diagram REV.
+
+**PR.** _PR # and CI filled by the next slot's pass._
+
+---
+
 ## Standalone — codex reliability (audit #328 fallout)
 
 ### #334 — codex thought-partner dispatches hang: routing rule + dead-job protocol + userns runbook · v3.24.26
