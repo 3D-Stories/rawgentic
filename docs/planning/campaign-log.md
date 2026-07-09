@@ -21,6 +21,46 @@ mostly supervised live-config items). Repo children run WF2/WF3 under the owner'
 2026-07-08 scoped unsupervised grant; live-config children apply with timestamped
 backups and close on-issue.
 
+### #320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23
+
+**Issue.** #320 (epic #309): PR #319 (#314, option 3) shipped fail-closed
+**projection** read discipline in WF2 — token-heavy runner/scan/CI output consumed
+as a bounded reduction, never a full-log dump into the orchestrator's context — but
+`skills/fix-bug/` had zero #314 wiring while WF3 has the same heavy read points
+(reproduce-first TDD runs, the full-suite gate, CI `--log-failed`). A prose + drift-
+guard port; no hook changes (the `plan_lib` byte-threshold constants are skill-
+agnostic and already shipped in #319). WF3 has no security-scan step, so the WF2
+Step-11.5 projection has no WF3 equivalent (out of scope).
+
+**What shipped.** `skills/fix-bug/references/steps.md`: Step 7 (RED reproduction run
++ full-suite regression) and Step 8 item 4 now consume test runs as **projections** —
+the runner's final-summary tail (pass/fail counts + failing test ids + first assertion
+lines), the exit code as the verdict, and targeted reads of the named failing tests
+for diagnosis — with the fail-closed rule that an empty/malformed/command-failed
+projection on a failing run falls back to the inline raw read (logged). Step 11 item 3
+consumes `gh run view --log-failed` as a bounded grep (failing job/step +
+assertion/traceback first lines) when over `WF2_READ_DELEGATE_BYTES_LOG`, measured
+with a piped `wc -c`, same fail-closed fallback. `tests/test_wf3_clarity.py` gains
+`TestDelegatedReadsWF3` — 5 section-sliced, one-canonical-sentence-per-guard drift
+guards (repo mistake #6). Option-3 scope held: no LLM reader surface (no
+`validate_index`, no `.rawgentic-read-` in WF3); the Step 9 diff read stays inline.
+
+**Path.** Small-standard lane (simple_change, 3 impl files) — collapsed design note +
+quality-bar rubric + checklist plan + evidence-only drift; Step 6 skipped; TDD +
+2-reviewer code review + security scan retained.
+
+**Reviews.** Two `rawgentic-reviewer` agents (Opus) over the diff: both CLEAN on
+correctness/prose/scope; one shared Low (the Step 8 guard was a bare-word `projection`
+check, blind to its own drift target) — fixed in-run by pinning the item-4 canonical
+sentence. Adversarial diff review enabled but skipped (`no security surface` — 0
+high-risk paths/tasks). Security scan clean (0 findings; iac/sca skipped, no lockfile).
+
+**Decisions (this slot).** No workflow-spine change (read-discipline within existing
+WF3 Steps 7/8/11, no station/gate/loop-back delta) → **no diagram REV**.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry for this slot is embedded below.
+
 ### #303 — WAL recovery report expires stale INTENTs · v3.24.20
 
 **Issue.** #303 (epic #309, review 2a): the SessionStart recovery notice

@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 13:10 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 21:56 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -69,6 +69,39 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>mostly supervised live-config items). Repo children run WF2/WF3 under the owner&#x27;s</p>
 <p>2026-07-08 scoped unsupervised grant; live-config children apply with timestamped</p>
 <p>backups and close on-issue.</p>
+<h3>#320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23</h3>
+<p><strong>Issue.</strong> #320 (epic #309): PR #319 (#314, option 3) shipped fail-closed</p>
+<p><strong>projection</strong> read discipline in WF2 — token-heavy runner/scan/CI output consumed</p>
+<p>as a bounded reduction, never a full-log dump into the orchestrator&#x27;s context — but</p>
+<p><code>skills/fix-bug/</code> had zero #314 wiring while WF3 has the same heavy read points</p>
+<p>(reproduce-first TDD runs, the full-suite gate, CI <code>--log-failed</code>). A prose + drift-</p>
+<p>guard port; no hook changes (the <code>plan_lib</code> byte-threshold constants are skill-</p>
+<p>agnostic and already shipped in #319). WF3 has no security-scan step, so the WF2</p>
+<p>Step-11.5 projection has no WF3 equivalent (out of scope).</p>
+<p><strong>What shipped.</strong> <code>skills/fix-bug/references/steps.md</code>: Step 7 (RED reproduction run</p>
+<p>+ full-suite regression) and Step 8 item 4 now consume test runs as <strong>projections</strong> —</p>
+<p>the runner&#x27;s final-summary tail (pass/fail counts + failing test ids + first assertion</p>
+<p>lines), the exit code as the verdict, and targeted reads of the named failing tests</p>
+<p>for diagnosis — with the fail-closed rule that an empty/malformed/command-failed</p>
+<p>projection on a failing run falls back to the inline raw read (logged). Step 11 item 3</p>
+<p>consumes <code>gh run view --log-failed</code> as a bounded grep (failing job/step +</p>
+<p>assertion/traceback first lines) when over <code>WF2_READ_DELEGATE_BYTES_LOG</code>, measured</p>
+<p>with a piped <code>wc -c</code>, same fail-closed fallback. <code>tests/test_wf3_clarity.py</code> gains</p>
+<p><code>TestDelegatedReadsWF3</code> — 5 section-sliced, one-canonical-sentence-per-guard drift</p>
+<p>guards (repo mistake #6). Option-3 scope held: no LLM reader surface (no</p>
+<p><code>validate_index</code>, no <code>.rawgentic-read-</code> in WF3); the Step 9 diff read stays inline.</p>
+<p><strong>Path.</strong> Small-standard lane (simple_change, 3 impl files) — collapsed design note +</p>
+<p>quality-bar rubric + checklist plan + evidence-only drift; Step 6 skipped; TDD +</p>
+<p>2-reviewer code review + security scan retained.</p>
+<p><strong>Reviews.</strong> Two <code>rawgentic-reviewer</code> agents (Opus) over the diff: both CLEAN on</p>
+<p>correctness/prose/scope; one shared Low (the Step 8 guard was a bare-word <code>projection</code></p>
+<p>check, blind to its own drift target) — fixed in-run by pinning the item-4 canonical</p>
+<p>sentence. Adversarial diff review enabled but skipped (<code>no security surface</code> — 0</p>
+<p>high-risk paths/tasks). Security scan clean (0 findings; iac/sca skipped, no lockfile).</p>
+<p><strong>Decisions (this slot).</strong> No workflow-spine change (read-discipline within existing</p>
+<p>WF3 Steps 7/8/11, no station/gate/loop-back delta) → <strong>no diagram REV</strong>.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry for this slot is embedded below.</p>
 <h3>#303 — WAL recovery report expires stale INTENTs · v3.24.20</h3>
 <p><strong>Issue.</strong> #303 (epic #309, review 2a): the SessionStart recovery notice</p>
 <p>re-announced every incomplete INTENT forever (~20/session, oldest March 2026,</p>
@@ -558,9 +591,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#274 (chore, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>0 added · 2340/2341 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR 299 · merged: False · CI: passed</td></tr><tr><th>Usage</th><td>in 35104660 / out 124034 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#320 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>5 added · 2409/2410 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: passed</td></tr><tr><th>Usage</th><td>in 35290972 / out 164554 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>1</td><td>1</td><td>fast_path</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>1</td><td>1</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-08 13:10 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-08 21:56 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
