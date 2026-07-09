@@ -169,9 +169,12 @@ EOF_ALLOW
             fi
         fi
     fi
-    cat <<DENYEOF
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"You're bound to **${BOUND_PROJECT}** but this file is in **${VIOLATION}**. Switch first with /rawgentic:switch ${VIOLATION}, or ask the user if this cross-project edit is intentional."}
-DENYEOF
+    # #325: build the message as a plain shell string, then let jq do all JSON
+    # escaping via --arg — mirrors the Gate-1 deny at ~line 94. A raw heredoc
+    # interpolating VIOLATION/BOUND_PROJECT (VIOLATION is read unvalidated from the
+    # workspace .name) would malform the JSON on a `"`/`\` and silently fail-open.
+    MSG="You're bound to **${BOUND_PROJECT}** but this file is in **${VIOLATION}**. Switch first with /rawgentic:switch ${VIOLATION}, or ask the user if this cross-project edit is intentional."
+    "$JQ" -cn --arg msg "$MSG" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny"},systemMessage:$msg}'
     exit 0
 fi
 
