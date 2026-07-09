@@ -181,6 +181,64 @@ If this workflow discovers new project capabilities during execution (e.g., a ne
 
 ---
 
+### Delegated reads (#314)
+
+Concept: Anthropic "plan big, execute small" cookbook
+(https://github.com/anthropics/claude-cookbooks/blob/main/managed_agents/CMA_plan_big_execute_small.ipynb)
+— context isolation: the coordinator never touches token-heavy raw material. The canonical
+rule: **A raw artifact whose measured size exceeds its surface's byte threshold never
+enters the orchestrator's context.** A deterministic reduction (a runner summary, a gate
+field, a grep of failure lines) is read as a **mechanical projection**; a reduction that
+needs judgment would be produced by an analysis-role reader subagent as a **validated index**.
+**The reader returns material (an index), never a decision; design, plan, gate verdicts,
+and finding evaluation stay orchestrator-side** — and **every decision is made from raw
+bytes via targeted reads** (the index only says where the bytes are; index prose is never
+evidence).
+
+**Ship scope (#314, owner decision 2026-07-09 — option 3):** only the **mechanical
+projections** are wired this release (Steps 8, 9, 11.5, 13 below). The **validated-index
+reader path** (the `step11-diff` and `step2-map` LLM readers) is **BUILT but NOT WIRED**:
+`plan_lib.validate_index` and its suite ship as dormant infrastructure, and the byte
+thresholds / temp-artifact / staleness rules below are its spec for when it wires. The A/B
+experiment (`docs/planning/2026-07-08-314-ab-results.md`) settled quality in the index
+arm's favor across three rounds, but the LLM reader costs +25–71% more tokens one-shot with
+no implementation that removes it; its only remaining benefit is an unmeasured held-context
+("carry") saving. Wiring the readers is gated on the AC4 production carry measurement —
+until then they stay dormant.
+
+**Live this release — mechanical projections:**
+- **Projection validation (fail-closed):** capture the producing command's exit status;
+  when the source reports failure the projection must contain non-empty failure
+  identifiers; **an empty, malformed, or command-failed projection falls back to the
+  inline raw read**, logged and counted like a rejected index. The CI-log projection's
+  threshold is `WF2_READ_DELEGATE_BYTES_LOG` (default 32768) — env-tunable, clamped, frozen
+  at import in `hooks/plan_lib.py`.
+
+**Deferred — validated-index reader path (built, not wired):**
+- **Trigger:** measure with a PIPED byte count (`git diff … | wc -c` — bytes never enter
+  context). Thresholds: `WF2_READ_DELEGATE_BYTES_DIFF` (default 65536) for diffs,
+  `WF2_READ_DELEGATE_BYTES_LOG` (default 32768) for logs/scan output — env-tunable,
+  clamped, frozen at import in `hooks/plan_lib.py`. Under threshold ⇒ inline exactly as today.
+- **Index validation:** every reader return is a hypothesis. Validate with
+  `plan_lib.validate_index(index, expected_units, artifact_text)` — closed schema,
+  set-equality coverage against the unit list the dispatcher FED the reader
+  (`git diff --name-only` for step11-diff: a completeness proof; component ids for
+  step2-map: a drop-guard only — discovered entries legitimately exceed the fed hints),
+  verbatim-evidence verification (fabricated quotes reject), patch-shape and
+  truncated/vacuous rejection. Rejection ⇒ **inline fallback, logged in session notes and
+  counted in the run-record** — fail-open for HOW material is read, never for WHETHER a
+  gate runs.
+- **Temp artifacts:** `.rawgentic-read-<issue>-<token>.*` under the project root, mode
+  0600, appended to the SAME stale-sweep globs and `.git/info/exclude` discipline as the
+  Step 11 item 1a patch files. Immediately after writing each artifact run two fail-loud
+  post-creation asserts: `stat -c %a <file>` must print `600`, and
+  `git check-ignore -q <file>` must exit 0 — either failing aborts the delegated read
+  (inline fallback + loud log).
+- **Staleness:** re-derive `source_ref` before consuming an index (HEAD unchanged for a
+  diff; HEAD sha for the step2-map). Mismatch ⇒ regenerate or read inline.
+
+---
+
 ## Step 1: Receive Issue Reference and Detect Capabilities
 
 ### Instructions
@@ -852,6 +910,12 @@ Execute the implementation plan task by task.
    - RED: Write failing test(s). Run test command from `capabilities.test_commands` to confirm failure.
    - GREEN: Write minimum code to pass. Run tests to confirm all pass.
    - REFACTOR: Clean up. Re-run tests.
+   - **Test-output projection (#314, see `### Delegated reads`):** consume the runner's
+     own final summary (pass/fail counts + failing test ids + first assertion lines — a
+     bounded tail), never `cat` a full run log into context. Verdicts come from exit
+     codes; diagnosing a failure is a correctness decision and uses targeted reads of the
+     named failing tests, not a summarizing agent. Projection validation applies (empty
+     projection on a failing run ⇒ inline).
 
 2. **If Implement-Verify mode** (`capabilities.has_tests == false`):
    - IMPLEMENT: Write the code, config, or infrastructure changes.
@@ -1049,7 +1113,9 @@ fail: the gates that DID run (Step 11, Step 11.5, Step 8a) are still valid and l
 **Part B: Evidence enforcement:**
 
 If `capabilities.has_tests`:
-- Run full test suite using `capabilities.test_commands`
+- Run full test suite using `capabilities.test_commands` — consume it as a projection
+  (#314): the runner's final-summary tail + delta vs the recorded baseline; exit code is
+  the verdict; never a full log dump into context (empty projection on failure ⇒ inline)
 - Verify new tests actually test new behavior
 - Confirm no regressions
 
@@ -1228,7 +1294,11 @@ its fixes and committed, and BEFORE pushing in Step 12.
    ```
    The JSON `gate` object is authoritative (exit code mirrors it: `0` PASS, `1`
    BLOCKED, `2` usage error). Read `gate.blocking`, `gate.advisory`,
-   `gate.errors`, and the top-level `skipped` / `findings`.
+   `gate.errors`, and the top-level `skipped` / `findings`. **This IS the #314
+   projection for this surface** (see `### Delegated reads`): consume the gate object +
+   each finding's compact id/loc/title dict; finding IDs are never dropped; the raw
+   scanner stdout never enters context. Projection validation: a command-failed or
+   empty-on-BLOCKED result falls back to inline.
 
 2. **Blocking findings (`gate.blocking`) — fix before the PR, exactly like a
    Step 11 Critical/High:**
@@ -1416,7 +1486,11 @@ PR URL.
 
 2. If CI passes: proceed to Step 14.
 
-3. If CI fails: diagnose with `gh run view <id> --log-failed`, fix, push, CI re-runs.
+3. If CI fails: diagnose with `gh run view <id> --log-failed` consumed as a projection
+   (#314, see `### Delegated reads`): measure piped (`| wc -c`); over
+   `WF2_READ_DELEGATE_BYTES_LOG` grep it to failing job/step + assertion/traceback first
+   lines instead of reading the full log (a failing run with an empty grep ⇒ inline —
+   projection validation). Fix, push, CI re-runs.
 
 4. If CI times out (> CI_MAX_WAIT_MINUTES) on a run that DID start: ask user for explicit approval. **[Headless: AUTO-RESOLVE — wait up to 2x CI_MAX_WAIT_MINUTES. If a run started but still isn't done, ERROR — post error comment with CI run URL, add rawgentic:ai-error label, exit. If NO run ever spawned, use item 1a's visible non-gate instead of ERROR.]**
 

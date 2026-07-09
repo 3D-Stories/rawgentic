@@ -1523,6 +1523,180 @@ def _diff_files(repo: str, base: str) -> set[str] | None:
     return {p for p in (line.strip() for line in out.splitlines()) if p}
 
 
+# --- #314: delegated-read index validation -------------------------------
+#
+# A cheap analysis-role reader subagent reads a token-heavy artifact in its
+# own context and returns an INDEX (coordinates + capped one-liners + verbatim
+# evidence), never a decision. The index is a hypothesis until validated here.
+# Fail-closed: any structural problem, verdict-shaped structure, coverage
+# miss, or fabricated quote rejects and the caller reads the artifact inline.
+# AC3 honesty: the schema blocks STRUCTURED verdict-smuggling (closed keys, no
+# severity/verdict/patch field, patch-shaped text rejected); a terse prose
+# verdict still fits in 120 chars — that residual channel is neutralized by
+# the orchestrator's raw-bytes re-read contract in steps.md, not here.
+
+INDEX_SURFACES: Final[tuple[str, ...]] = ("step11-diff", "step2-map")
+
+_INDEX_KEYS = {"surface", "source_ref", "entries", "coverage", "evidence",
+               "truncated"}
+_ENTRY_KEYS = {"locator", "component", "risk_tag", "one_line"}
+_EVIDENCE_KEYS = {"file", "line", "text"}
+_ONE_LINE_MAX = 120
+
+
+def _load_read_delegate_bytes() -> tuple[int, int]:
+    diff = _coerce_int_env("WF2_READ_DELEGATE_BYTES_DIFF", 65536)
+    log = _coerce_int_env("WF2_READ_DELEGATE_BYTES_LOG", 32768)
+    return (_clamp(diff, 4096, 10485760), _clamp(log, 4096, 10485760))
+
+
+_rd_diff, _rd_log = _load_read_delegate_bytes()
+WF2_READ_DELEGATE_BYTES_DIFF: Final[int] = _rd_diff
+WF2_READ_DELEGATE_BYTES_LOG: Final[int] = _rd_log
+
+
+def _patch_shaped(text: str) -> bool:
+    """A patch-content line — never legitimate index prose. Design contract is
+    ^[+-] (any sign-led line, so '+import os' is caught); the one deliberate
+    carve-out is a sign immediately followed by a digit ('+10% faster'),
+    which is prose, not a diff line."""
+    if text.startswith(("+++", "---", "@@")):
+        return True
+    return bool(re.match(r"^[+-](?!\d)", text))
+
+
+def validate_index(
+    index,
+    expected_units: list[str],
+    artifact_text: "str | None" = None,
+) -> tuple[bool, list[str]]:
+    """Validate a delegated-read index (#314). Returns (ok, errors).
+
+    expected_units is the unit list the dispatcher FED the reader
+    (git diff --name-only output for step11-diff; component ids for
+    step2-map). coverage.indexed must equal it exactly — for step11-diff
+    that is a completeness proof; for step2-map a drop-guard only
+    (discovered entries legitimately exceed the fed list and are NOT
+    coverage units). Every evidence quote must be a verbatim substring of
+    artifact_text — an EXISTENCE check, not attribution (file/line binding
+    is neutralized by the orchestrator's raw-bytes re-read contract); when
+    evidence is present but artifact_text is None the index REJECTS
+    (fail-closed on the unverifiable case). Pure; never raises on a
+    malformed index — malformed rejects. expected_units is dispatcher-fed
+    and must be a list of str; anything else rejects.
+    """
+    errors: list[str] = []
+    if not isinstance(index, dict):
+        return (False, ["index is not a dict"])
+    if not isinstance(expected_units, list) or any(
+            not isinstance(u, str) for u in expected_units):
+        return (False, ["expected_units must be a list of str"])
+
+    extra = set(index) - _INDEX_KEYS
+    missing = _INDEX_KEYS - set(index)
+    if extra:
+        errors.append(f"unknown top-level keys: {sorted(extra)}")
+    if missing:
+        errors.append(f"missing required keys: {sorted(missing)}")
+        return (False, errors)
+
+    surface = index["surface"]
+    if surface not in INDEX_SURFACES:
+        errors.append(f"unknown surface: {surface!r}")
+
+    if (not isinstance(index["source_ref"], str)
+            or not index["source_ref"].strip()):
+        errors.append("source_ref must be a non-blank string")
+
+    if index["truncated"] is not False:
+        errors.append("truncated index rejected — a partial read is never "
+                      "accepted for judgment surfaces; fall back to inline")
+
+    entries = index["entries"]
+    if not isinstance(entries, list) or not entries:
+        errors.append("entries must be a non-empty list (a vacuous return is "
+                      "a dead reader, not a clean pass)")
+        entries = []
+    expected_set = {u for u in expected_units if isinstance(u, str)}
+    for i, e in enumerate(entries):
+        if not isinstance(e, dict):
+            errors.append(f"entries[{i}] is not an object")
+            continue
+        if set(e) - _ENTRY_KEYS:
+            errors.append(f"entries[{i}] unknown keys: {sorted(set(e) - _ENTRY_KEYS)}")
+        loc = e.get("locator")
+        line = e.get("one_line")
+        if not isinstance(loc, str) or not loc:
+            errors.append(f"entries[{i}].locator must be a non-empty string")
+            loc = ""
+        if not isinstance(line, str) or not line:
+            errors.append(f"entries[{i}].one_line must be a non-empty string")
+            line = ""
+        if len(line) > _ONE_LINE_MAX:
+            errors.append(f"entries[{i}].one_line exceeds {_ONE_LINE_MAX} chars")
+        if line and _patch_shaped(line):
+            errors.append(f"entries[{i}].one_line is patch-shaped")
+        # risk_tag / component: same discipline as one_line — a free channel
+        # here would escape exactly the cap the AC3 argument leans on (8a).
+        for opt_key in ("risk_tag", "component"):
+            if opt_key not in e:
+                continue
+            val = e[opt_key]
+            if not isinstance(val, str) or not val:
+                errors.append(f"entries[{i}].{opt_key} must be a non-empty string")
+            elif len(val) > _ONE_LINE_MAX:
+                errors.append(f"entries[{i}].{opt_key} exceeds {_ONE_LINE_MAX} chars")
+            elif _patch_shaped(val):
+                errors.append(f"entries[{i}].{opt_key} is patch-shaped")
+        if surface == "step11-diff" and loc:
+            base = loc.split(":", 1)[0]
+            if base not in expected_set:
+                errors.append(f"entries[{i}].locator {base!r} not in the fed "
+                              "unit list")
+
+    cov = index["coverage"]
+    if (not isinstance(cov, dict) or set(cov) != {"expected", "indexed"}
+            or not isinstance(cov.get("expected"), list)
+            or not isinstance(cov.get("indexed"), list)):
+        errors.append("coverage must be {expected: [...], indexed: [...]}")
+    elif (any(not isinstance(u, str) for u in cov["expected"])
+            or any(not isinstance(u, str) for u in cov["indexed"])):
+        # 8a HIGH (both reviewers, reproduced): nested JSON here made set()
+        # raise TypeError — a reject, never a raise, is the whole contract.
+        errors.append("coverage lists must contain only strings")
+    else:
+        if set(cov["expected"]) != expected_set:
+            errors.append("coverage.expected does not match the fed unit list")
+        if set(cov["indexed"]) != expected_set:
+            errors.append("coverage.indexed != fed unit list (dropped or "
+                          "invented units)")
+
+    evidence = index["evidence"]
+    if not isinstance(evidence, list):
+        errors.append("evidence must be a list")
+        evidence = []
+    if evidence and artifact_text is None:
+        # 8a Medium: an unverifiable quote must not pass silently.
+        errors.append("evidence present but no artifact_text to verify "
+                      "against — fail-closed on the unverifiable case")
+    for i, ev in enumerate(evidence):
+        if (not isinstance(ev, dict) or set(ev) != _EVIDENCE_KEYS
+                or not isinstance(ev.get("file"), str)
+                or not isinstance(ev.get("line"), int)
+                or isinstance(ev.get("line"), bool)
+                or not isinstance(ev.get("text"), str) or not ev.get("text")):
+            errors.append(f"evidence[{i}] malformed (need file:str, line:int, "
+                          "text:str)")
+            continue
+        if _patch_shaped(ev["text"]):
+            errors.append(f"evidence[{i}].text is patch-shaped")
+        if artifact_text is not None and ev["text"] not in artifact_text:
+            errors.append(f"evidence[{i}].text not found verbatim in the "
+                          "artifact — fabricated quote")
+
+    return (not errors, errors)
+
+
 def validate_build_receipt(
     receipt: dict,
     plan_tasks: list[Task],

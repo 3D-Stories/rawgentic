@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#314 Delegated Reads — Design</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 20:17 MDT</div>
+<h1>#314 Delegated Reads — Design</h1>
+
+</header>
+<main>
+<h1>#314 — Lean orchestrator reads: deterministic projections + validated index readers</h1>
+<p>Issue: #314 (epic #309). Date: 2026-07-08. Status: FINAL v2 (synthesis of own draft +</p>
+<p>Codex peer consult + deep-reasoner brainstorm, owner-approved shape; amended after the</p>
+<p>Step-4 gate — opus self-review 1H/2M/2L + Codex adversarial-on-design 1H/5M, one design</p>
+<p>loop-back consumed, all findings addressed in place).</p>
+<h2>Provenance (AC6)</h2>
+<ul>
+<li>Anthropic &quot;plan big, execute small&quot; cookbook — [managed_agents/CMA_plan_big_execute_small.ipynb](https://github.com/anthropics/claude-cookbooks/blob/main/managed_agents/CMA_plan_big_execute_small.ipynb): context isolation — the coordinator never touches token-heavy raw material; cheap workers read it in isolated contexts and return distilled digests. Link verified live (HTTP 200) 2026-07-08.</li>
+<li>Owner standing orchestration model (mempalace memory <code>feedback-orchestration-model</code>, 2026-07-02): &quot;Fable = orchestrator … keep own context lean — delegate reading/execution rather than doing it inline.&quot;</li>
+<li>Motivating measurement: #303 run-record <code>usage.model_mix</code> — orchestrator model at 55.5M of 64.3M input tokens (~86%). The #315-shipped <code>worker-share</code> line surfaces this per run.</li>
+</ul>
+<h2>Design inputs (this section is the review trail)</h2>
+<p>Three independent designs were produced blind and synthesized:</p>
+<p>1. <strong>Own draft</strong> (approach &quot;rule + file handoff + prose digest with verbatim quotes&quot;).</p>
+<p>2. <strong>Codex peer consult</strong> (report: <code>docs/reviews/peer-rawgentic-peer-problem-314-2026-07-08.md</code>) — verdict *sound-with-changes*: evidence-indexed schema over prose sections; coverage counts; keep Step 8/9 inline (high-decision-density); count fallback events so fail-open can&#x27;t mask dead delegation.</p>
+<p>3. <strong>Deep-reasoner brainstorm</strong> — three architectures; found the <strong>measurement trap</strong> (<code>usage_capture.py:139</code> buckets by *model name*, so a same-model reader moves AC4 zero; the expensive thing is *holding* an artifact across turns — cache-read charged every turn, <code>usage_capture.py:104</code>); showed 4 of 6 surfaces reduce deterministically and need <strong>no LLM reader at all</strong>; byte-count trigger beats line count (minified one-liner gaming); coverage as <strong>set-equality with the reader fed the known unit list</strong>.</p>
+<p>Convergent verdicts adopted: prose-summary digests are the decision-laundering surface → replaced by a structured index; Step 8/9 get no LLM reader (reading a failure to decide a fix IS the correctness decision — AC3); AC5 must be mechanical.</p>
+<h2>The canonical rule (goes into steps.md verbatim, drift-guarded)</h2>
+<blockquote>A raw artifact whose measured size exceeds its surface&#x27;s byte threshold never enters the</blockquote>
+<blockquote>orchestrator&#x27;s context. A deterministic reduction (a runner summary, a gate field, a</blockquote>
+<blockquote>grep of failure lines) is read as a mechanical projection; a reduction that needs</blockquote>
+<blockquote>judgment is produced by an analysis-role reader subagent as a validated index. The</blockquote>
+<blockquote>reader returns material (an index), never a decision; design, plan, gate verdicts, and</blockquote>
+<blockquote>finding evaluation stay orchestrator-side, acting on raw bytes via targeted reads.</blockquote>
+<h2>The six surfaces — mechanism selected by determinism</h2>
+<p>| Surface | Mechanism | What the orchestrator consumes | Judgment kept inline |</p>
+<p>|---|---|---|---|</p>
+<p>| Step 8 inline test runs | <strong>projection</strong> — runner&#x27;s own final summary (tail: counts + failing ids + first assertion lines), never <code>cat</code> the full log | bounded tail | the fix; RED/GREEN from exit codes |</p>
+<p>| Step 9 suite gate | <strong>projection</strong> — same tail discipline | bounded tail + delta vs baseline | gate verdict |</p>
+<p>| Step 11.5 security scan | <strong>projection</strong> — the <code>--json</code> output&#x27;s <code>gate{blocking,advisory,errors}</code> + per-finding id/loc lines (already structured); full findings blob stays out of context | gate projection | fix/accept per finding |</p>
+<p>| Step 13 CI failure | <strong>projection</strong> — grep of <code>--log-failed</code> to failing job/step + assertion/traceback first lines | bounded grep | the fix |</p>
+<p>| Step 11 branch diff | <strong>LLM index reader</strong> (analysis role) | validated index (below) + targeted raw reads | finding evaluation (targeted <code>git diff -- &lt;file&gt;</code> / line-span reads), loop-back calls |</p>
+<p>| Step 2 item 1 map | <strong>LLM index reader</strong> (analysis role) — repo-wide mapping moves into the reader&#x27;s context; orchestrator gets the map | component map index | complexity classification, lane decision |</p>
+<p>Projections are incapable of hallucination or verdict-smuggling — that removes AC5 risk</p>
+<p>from 4/6 surfaces at zero agent cost. The two judgment surfaces get the index contract.</p>
+<p><strong>Projection fail-closed rule (adversarial finding 2):</strong> a projection is validated before</p>
+<p>use — the producing command&#x27;s exit status is captured; when the source reports failure the</p>
+<p>projection must contain non-empty failure identifiers (failing job/step/test ids); an</p>
+<p>empty, malformed, or command-failed projection falls back to the inline raw read, logged</p>
+<p>and counted exactly like a rejected index. A silent empty grep never stands in for a</p>
+<p>failing log. (Step 11.5&#x27;s projection is the scan JSON&#x27;s <code>gate{blocking,advisory,errors}</code></p>
+<p>+ per-finding id/loc lines — findings are already compact dicts, <code>security_scan.py:97-99</code>;</p>
+<p>finding IDs are never dropped, only detail prose stays out of context.)</p>
+<h2>Index contract (fail-closed, validated by <code>plan_lib.validate_index</code>)</h2>
+<pre><code>{
+  &quot;surface&quot;: &quot;step11-diff | step2-map&quot;,
+  &quot;source_ref&quot;: &quot;&lt;origin/&lt;default&gt;..&lt;HEAD sha&gt; for step11-diff | &lt;HEAD sha&gt; for step2-map&gt;&quot;,
+  &quot;entries&quot;: [
+    {&quot;locator&quot;: &quot;&lt;file[:hunk|:line-span]&gt;&quot;, &quot;component&quot;: &quot;&lt;step2-map only: component id&gt;&quot;, &quot;risk_tag&quot;: &quot;&lt;plan_lib risk vocab | none&gt;&quot;, &quot;one_line&quot;: &quot;&lt;= 120 chars, descriptive only&quot;}
+  ],
+  &quot;coverage&quot;: {&quot;expected&quot;: [&quot;&lt;unit list the reader was FED&gt;&quot;], &quot;indexed&quot;: [&quot;&lt;fed units the reader examined — for step2-map: NOT its discovered entries, which live in entries[] and may legitimately exceed the fed hint list&gt;&quot;]},
+  &quot;evidence&quot;: [
+    {&quot;file&quot;: &quot;&lt;path&gt;&quot;, &quot;line&quot;: N, &quot;text&quot;: &quot;&lt;VERBATIM line — only for lines a decision keys on&gt;&quot;}
+  ],
+  &quot;truncated&quot;: false
+}</code></pre>
+<p><strong>The two surfaces are NOT symmetric (self-review finding 1 — the honest scoping):</strong></p>
+<ul>
+<li><strong>step11-diff</strong> reduces a *known bounded artifact* with mechanical ground truth:</li>
+</ul>
+<p>  coverage units are <code>git diff --name-only</code> output, set-equality there IS a completeness</p>
+<p>  proof, <code>source_ref</code> staleness is exact. AC5&#x27;s mechanical guarantee applies in full.</p>
+<ul>
+<li><strong>step2-map</strong> is repo-wide *discovery* — there is no mechanical ground truth at Step 2</li>
+</ul>
+<p>  (no diff exists yet). Its coverage check is a <strong>drop-guard only</strong> (the reader didn&#x27;t</p>
+<p>  silently omit a fed component — units are component ids; each entry carries both</p>
+<p>  <code>component</code> and file <code>locator</code>; locator existence against the repo tree is checked at</p>
+<p>  the CALL SITE by the orchestrator (the pure validator has no repo access), not by</p>
+<p>  <code>validate_index</code>), never a completeness proof; <code>source_ref</code> is the HEAD sha (map staleness</p>
+<p>  = HEAD moved). Completeness of the map remains the orchestrator&#x27;s judgment, exactly as</p>
+<p>  today (complexity classification, lane decision). AC5&#x27;s &quot;mechanical core&quot; claim is</p>
+<p>  scoped to step11-diff + the four projections; step2-map&#x27;s guarantee is</p>
+<p>  drop-guard + verbatim-evidence verification only.</p>
+<p>Validation (all mechanical, all red-first tested):</p>
+<p>1. <strong>Closed schema</strong> — unknown top-level or entry keys reject. There is no verdict/severity/patch/recommendation field; <code>one_line</code> is length-capped (≤120) and patch-shaped text (<code>^[+-]</code> hunk block) in <code>one_line</code>/<code>evidence.text</code> rejects. <strong>AC3 honesty (self-review finding 2):</strong> the schema blocks *structured* verdict-smuggling; a terse prose verdict still fits in 120 chars and no mechanical check can reject semantics. The real AC3 runtime guard is the next layer: <strong>the orchestrator never acts on index prose — every decision is made from raw bytes via targeted reads</strong> (drift-guarded contract sentence). The validator enforces what it can (schema, patch-shape, length); the re-read contract neutralizes the residual prose channel.</p>
+<p>2. <strong>Set-equality coverage</strong> — the dispatcher FEEDS the reader the unit list (<code>git diff --name-only</code> output for step11-diff — a completeness proof there; component ids for step2-map — a drop-guard only, see the asymmetry note above). <code>set(coverage.indexed) == set(coverage.expected)</code>; step11-diff <code>entries[].locator</code> files ∈ expected, step2-map locators validated against the repo tree. Any miss rejects.</p>
+<p>3. <strong>Anti-hallucination</strong> — every <code>evidence[].text</code> must <code>grep -F</code>-match its named file (or the artifact file); a fabricated quote rejects. Whitespace-drift false-rejects fall toward inline: acceptable by design.</p>
+<p>4. <strong>Staleness</strong> — orchestrator re-derives <code>source_ref</code> before consuming (HEAD unchanged for a diff; recomputed sha for a file). Mismatch ⇒ regenerate or inline.</p>
+<p>5. <strong>Vacuous-return guard</strong> — missing file, non-JSON, empty entries, or <code>truncated: true</code> rejects (a partial index is not accepted for judgment surfaces; repo mistake #9&#x27;s <code>confirmedCount: 0</code> class lands here).</p>
+<p>6. <strong>Rejection ⇒ inline fallback, loudly</strong> — the read falls back inline and the event is logged in session notes AND counted in the run-record (<code>follow_ups</code>/<code>extra</code>), so fail-open cannot silently mask dead delegation (Codex risk #3). Gates always run either way — delegation is fail-open for *how* material is read, never *whether* a gate executes.</p>
+<h2>Delegation trigger</h2>
+<p><code>wc -c</code> on the piped artifact (<code>git diff … | wc -c</code>) — bytes never enter context; byte</p>
+<p>count is deterministic and un-gameable by line structure (a minified one-line artifact</p>
+<p>defeats <code>wc -l</code>). Per-surface thresholds pick the number; bytes pull the trigger:</p>
+<p><code>WF2_READ_DELEGATE_BYTES_DIFF</code> (default 65536), <code>_LOG</code> (default 32768) — env-tunable,</p>
+<p>clamped [4096, 10485760], frozen at import (the <code>WF2_HIGH_RISK_RATIO_*</code> pattern,</p>
+<p><code>plan_lib.py:104-106</code>). **For thresholded surfaces only, under threshold ⇒ inline exactly</p>
+<p>as today** (adversarial finding 6&#x27;s wording fix). Step 2 item 1 is exempt from byte</p>
+<p>thresholds: it delegates whenever the existing Step-2 fan-out runs, and stays inline on</p>
+<p>the existing trivial-change path (<code>steps.md:318</code> &quot;for a trivially small change … run items</p>
+<p>1–6 inline&quot;) — this design does not regress that deliberate optimization (self-review</p>
+<p>finding 1). No hysteresis — the decision is per-artifact, both branches are correct, and</p>
+<p>the marker logs measured bytes + threshold so near-boundary flips are visible.</p>
+<h2>Why Step 11 nets positive (double-read audit)</h2>
+<p>The dominant cost is HOLDING the full diff across Step 11 items 1–8 — cache-read charged</p>
+<p>every subsequent turn (<code>usage_capture.py:104</code>). The index removes the diff from every</p>
+<p>turn; targeted verification reads at finding-evaluation are read late and briefly, not</p>
+<p>held. The 3 review agents already self-fetch their diffs (<code>steps.md</code> reviewer contract) —</p>
+<p>the reader replaces only the orchestrator&#x27;s own copy. Net negative only when nearly every</p>
+<p>hunk needs wide-context evaluation — rare, self-limiting (that finding volume trips the</p>
+<p>Step-3 loop-back), and below-threshold diffs never delegate at all.</p>
+<h2>AC4 measurement plan (the trap, named)</h2>
+<p><code>usage.model_mix</code> buckets by MODEL — a same-model reader moves the metric zero, and</p>
+<p>orchestrator-opus conflates with reviewer-opus. Therefore: AC4 is measured under</p>
+<p><code>analysis</code> routed to a cheaper model than the session (rawgentic already routes</p>
+<p><code>analysis: sonnet</code>), via the #315 <code>worker_token_share</code> line, and reported as a <strong>floor</strong>.</p>
+<p>Local proxy now: this run&#x27;s own record vs #303/#315. True before/after: the FIRST</p>
+<p>post-plugin-reinstall WF2 run — recorded as <code>verification_deferred</code> with that exact</p>
+<p>target check. Fallback-event and rejected-index counts ride the run-record so a &quot;green&quot;</p>
+<p>delta can&#x27;t hide savings lost to rereads (Codex point 10). **AC-traceability register</p>
+<p>(self-review finding 4): AC4 is satisfied-as-floor + verification_deferred at merge time</p>
+<p>— it is NOT demonstrated-at-merge, and the Step 11/16 gates must read it that way.**</p>
+<h2>A/B experiment (owner acceptance bar, 2026-07-08)</h2>
+<p>The PR must carry an empirical A/B result proving, on ≥3 real merged-PR diffs of varied</p>
+<p>size: <strong>(1) the B-arm saves tokens, and (2) B-arm quality is within ±5% of A-arm.</strong></p>
+<ul>
+<li><strong>A-arm (control):</strong> one subagent per artifact reads the FULL raw diff and answers a</li>
+</ul>
+<p>  fixed evaluation questionnaire (files with behavior changes; public API/signature</p>
+<p>  changes; test files added; the 3 riskiest hunks + why; security-relevant lines; a</p>
+<p>  ≤4-sentence overall summary — six items, q1–q6).</p>
+<ul>
+<li><strong>B-arm (treatment):</strong> sonnet index reader produces a <code>validate_index</code>-passing index;</li>
+</ul>
+<p>  a consumer subagent answers the SAME questionnaire from the index + targeted raw reads</p>
+<p>  only (never the full artifact).</p>
+<ul>
+<li><strong>Tokens:</strong> per-ARM-RUN totals from each arm&#x27;s own transcript/accounting (opus</li>
+</ul>
+<p>  verifier advisory: the repo&#x27;s usage tooling buckets by model, not per-subagent — the</p>
+<p>  bar needs only per-arm totals, which each arm&#x27;s separate run reports directly).</p>
+<p>  B total (reader + consumer) must be &lt; A total.</p>
+<ul>
+<li><strong>Quality scoring rubric (adversarial pass-2 finding — fully specified):</strong></li>
+<li>q1 (behavior files) and q3 (test files): set-F1 against git ground truth</li>
+</ul>
+<p>    (<code>--name-only</code> name sets; q1 truth = non-test, non-docs changed files by path</p>
+<p>    heuristic), scaled ×10 → 0–10.</p>
+<ul>
+<li>q2 (API changes), q4 (riskiest hunks), q5 (security-relevant), q6 (summary):</li>
+</ul>
+<p>    scored 0–10 each by an INDEPENDENT blinded opus judge holding the raw diff; the two</p>
+<p>    arms&#x27; answers are presented unlabeled in random order; anchors: 10 = complete +</p>
+<p>    precise, 5 = partially correct or materially incomplete, 0 = wrong/fabricated.</p>
+<ul>
+<li>Per-artifact score = mean of the six 0–10 items (equal weight). Pooled score =</li>
+</ul>
+<p>    mean of per-artifact scores. Quality delta = (B_pooled − A_pooled) / A_pooled.</p>
+<ul>
+<li><strong>Pass:</strong> |delta| ≤ 5% pooled AND no single artifact with B more than 10% below A.</li>
+<li><strong>Adversarial live probes</strong> (beyond unit tests): a tampered index with a fabricated</li>
+</ul>
+<p>  quote, a coverage-dropped file, and a vacuous return must each be REJECTED by</p>
+<p>  <code>validate_index</code> live.</p>
+<ul>
+<li><strong>Honest-failure clause:</strong> if the B-arm misses either bar, the result is reported</li>
+</ul>
+<p>  as-is on the issue and the design decision returns to the owner — a failed experiment</p>
+<p>  is never shipped as success.</p>
+<p>Results table rides the PR body, this doc (appendix added at Step 9), and an issue</p>
+<p>comment.</p>
+<h2>What is explicitly NOT delegated (AC1 stay-inline list)</h2>
+<p>Design (3), plan (5), all gate verdicts (4, 6, 9 Part A, 11 item 6 evaluation, 15),</p>
+<p>branch/commit/PR mechanics (7, 12, 14), completion judgment (16); every</p>
+<p><code>implementation</code>- and <code>review</code>-role dispatch unchanged (<code>modelRouting</code> untouched — AC3).</p>
+<p>Step 8/9 failure-diagnosis reads stay inline by design: deciding why a test failed is a</p>
+<p>correctness decision; the projection only strips the log around it.</p>
+<h2>File changes</h2>
+<p>1. <code>skills/implement-feature/references/steps.md</code> — new <code>### Delegated reads (#314)</code> contract subsection (rule, mechanism table, index schema pointer, trigger, fallback discipline, temp-file rules) + wiring edits at Steps 2 item 1, 8, 9, 11 item 1, 11.5, 13 with <code>&lt;!-- model-routing: role=analysis --&gt;</code> on the two reader surfaces. Step 11 item 1a pinned strings preserved verbatim (drift guards <code>test_wf2_clarity.py:183-225</code>).</p>
+<p>2. <code>hooks/plan_lib.py</code> — <code>validate_index(index, expected_units, artifact_text=None)</code> beside <code>validate_build_receipt</code> (same pure/fail-closed pattern), <code>INDEX_SURFACES</code>, byte-threshold env freeze.</p>
+<p>3. <code>tests/hooks/test_plan_lib_index.py</code> (new, red-first) — happy path; every reject branch: unknown key, verdict-key smuggle, patch-shaped text, &gt;120-char one_line, coverage miss (dropped file), fabricated quote, truncated, empty/vacuous, malformed JSON; threshold clamp/env parse; adversarial &quot;this should fail the gate&quot; one_line.</p>
+<p>4. <code>tests/test_wf2_clarity.py</code> — drift guards (self-review finding 3&#x27;s corrections): canonical-rule sentence (ONE file, section-sliced), carve-out + raw-bytes re-read contract sentences, section-sliced <code>&gt;=</code> PRESENCE checks for the new reader/projection prose (never a whole-file <code>count(&quot;role=analysis&quot;)</code> — two annotations already exist at steps.md:320 and :1091, and count guards break on any new occurrence, repo mistake #6). The step2-map reader reuses the EXISTING line-320 Step-2 fan-out annotation (Step 2 is not a net-new delegation surface) — only Step 11 item 1 gains a new <code>role=analysis</code> annotation. Positive AC3 check: <code>&gt;=</code> presence assertions that the review/implementation <code>role=</code> annotations at steps.md:539/872/973/1155 survive. Item-1a pinned strings stay byte-identical.</p>
+<p>5. <code>docs/workflow-diagram.html</code> — <strong>REV</strong> (per #224 precedent): stations 2, 8, 9, 11, 11.5, 13 sub-bullet deltas; snapshots regenerated.</p>
+<p>6. <code>docs/run-records.md</code> — fallback/rejected-index count note + AC4 floor caveat.</p>
+<p>7. README changelog + version ×3 (next: 3.24.22).</p>
+<p>8. This doc + rendered <code>.html</code> (<code>render_artifact.py</code>), committed in the PR.</p>
+<p>Temp artifacts (<code>.rawgentic-read-&lt;issue&gt;-&lt;token&gt;.*</code>): project root, 0600, stale-swept with</p>
+<p>the existing 1a sweep, finally-cleaned, <code>.git/info/exclude</code>d.</p>
+<h2>Error handling &amp; failure modes</h2>
+<p>Reader death/timeout/vacuous ⇒ validate rejects ⇒ inline fallback, logged + counted.</p>
+<p>Hallucinated quote ⇒ reject. Stale ⇒ source_ref mismatch ⇒ regenerate/inline. Threshold</p>
+<p>misconfig ⇒ clamp + stderr + default. Session-limit mid-gate ⇒ gate re-runs per</p>
+<p>resumption protocol; artifact + index on disk, revalidatable.</p>
+<h2>Security implications</h2>
+<p>Temp artifacts may carry diff/scan content — 0600, project-root contained, git-excluded,</p>
+<p>stale-swept (the 1a posture). Index/evidence text is data, not instructions (existing</p>
+<p>workspace rule restated in the contract section). No new secret surface; scan projection</p>
+<p>never drops finding IDs (only detail text stays out of context) so triage can&#x27;t silently</p>
+<p>lose a finding.</p>
+<h2>Platform / external dependencies</h2>
+<p>(Adversarial finding 1: the original <code>none</code> was false — the design leans on shell/git</p>
+<p>machinery. Every dependency below is proven by an existing in-repo call site.)</p>
+<p>platform_apis:</p>
+<ul>
+<li>api: git diff / git diff --name-only against origin/&lt;default&gt;..HEAD</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — Step 11 item 1 and item 1a already run exactly these (steps.md:1116-1139); the 1a patch build is the proven pattern this design generalizes.</p>
+<p>  failure: fail-loud</p>
+<ul>
+<li>api: wc -c on piped command output (bash)</li>
+</ul>
+<p>  feasibility: verified via spike — <code>git diff origin/main~1..origin/main | wc -c</code> → 7034, run in this design session 2026-07-08 (adversarial pass-2 finding: generic coreutils usage was not exact-object-kind proof; this is the exact invocation shape).</p>
+<p>  failure: fail-loud</p>
+<ul>
+<li>api: grep -F fixed-string matching for evidence verification</li>
+</ul>
+<p>  feasibility: verified via spike — run 2026-07-08 this session: known line → rc=0 with match printed; fabricated string against the same file → rc=1. The exact hit/miss mechanic validate_index relies on.</p>
+<p>  failure: fail-loud</p>
+<ul>
+<li>api: gh run view &lt;id&gt; --log-failed</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — Step 13 already directs exactly this invocation (steps.md:1419).</p>
+<p>  failure: fail-loud</p>
+<ul>
+<li>api: env-var freeze with clamp at import (WF2_READ_DELEGATE_BYTES_*)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — WF2_HIGH_RISK_RATIO_* implements the identical pattern (plan_lib.py:104-106).</p>
+<p>  failure: fail-loud</p>
+<ul>
+<li>api: temp artifact files mode 0600 under project root + stale sweep + .git/info/exclude</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — Step 11 item 1a creates .rawgentic-diff-review-&lt;issue&gt;-&lt;token&gt;.patch with exactly this discipline (steps.md:1129-1153: 0600, stale sweep at step start, finally-clean, .git/info/exclude append). Implementation extends the 1a sweep glob list to .rawgentic-read-* and adds a test proving the new pattern is swept and git-ignored.</p>
+<p>  failure: fail-silent</p>
+<p>  surface: post-creation mechanical asserts, both fail-loud, run immediately after writing each temp artifact (adversarial pass-2 High — a silent chmod/exclude failure must surface at build #1): <code>stat -c %a &lt;file&gt;</code> must print 600, and <code>git check-ignore -q &lt;file&gt;</code> must exit 0 (spiked live 2026-07-08: check-ignore correctly reports the current sidecar as ignored). Either assert failing aborts the delegated read → inline fallback + loud log. The Step-11 stale-sweep marker additionally logs every swept file, and the new test asserts sweep coverage of the .rawgentic-read-* glob.</p>
+<h2>Diagram decision</h2>
+<p>REV required — station-internal execution-model change on 6 stations; #224 precedent.</p>
+
+</main>
+<footer>Last updated: 2026-07-08 20:17 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
