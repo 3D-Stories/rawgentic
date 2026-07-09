@@ -101,7 +101,22 @@ Check whether `<path>` exists on disk.
 
 ## Step 3b: Conformance Check (existing projects only)
 
-If the project directory already existed (Path B from Step 3, or linked via Step 2b), audit its Claude configuration for conformance with the three-layer architecture:
+If the project directory already existed (Path B from Step 3, or linked via Step 2b), audit its Claude configuration for conformance with the three-layer architecture.
+
+> **Bind the session to the target FIRST (#318).** The audit below reads (and may edit)
+> files under `<path>` — e.g. `<path>/CLAUDE.md`. In a workspace with **≥2 active projects**,
+> an **unbound** session is denied every Read/Edit of a file under any active project by
+> `hooks/wal-bind-guard` Gate 1: registering the project `active: true` makes the guard
+> *stricter* before any binding exists, and `/rawgentic:switch` targets already-registered
+> projects — the register-existing catch-22. So complete registration **and** the session
+> bind before touching any `<path>` file: run **Step 4** (create the workspace file if
+> missing) then **Step 5** (register the project `active: true` **and** append the session
+> registry line per Step 5 item 3, mirroring `/rawgentic:switch` Step 5), **then return here**
+> to run the conformance audit, and only afterwards proceed to Step 6 (setup). Reuse Step 5's
+> single expansion-free registry-append block — do **not** add a second bind command. Once
+> bound, wal-bind-guard skips Gate 1 and Gate 2 permits the target's own files while still
+> blocking cross-project writes. (For a single-active or already-bound session this reordering
+> is a no-op — the reads were already allowed.)
 
 1. **Check for rawgentic pointer in project CLAUDE.md.** Read `<path>/CLAUDE.md` if it exists. Search for `## Rawgentic` or `Workspace config:` patterns.
    - **If found:** Tell the user: "The project CLAUDE.md contains a Rawgentic section. This belongs in the workspace-level CLAUDE.md, not in the project. I'll remove it." Remove the section (from `## Rawgentic` to the next `##` heading or end of file).
@@ -177,6 +192,8 @@ Read `.rawgentic_workspace.json`, then:
    `$CLAUDE_CODE_SESSION_ID` is per-process, so reading it in call 1 and writing in call 2 stays race-free.
 
    **Do NOT** read `claude_docs/.current_session_id` as the source — it is shared across all sessions and overwritten on every prompt, so under concurrent sessions it can name the wrong session. If `printenv` prints nothing, STOP and ask the user. (The legacy name `$CLAUDE_SESSION_ID` is not set; use `$CLAUDE_CODE_SESSION_ID`.)
+
+   **Verify the bind took (#318).** This append is what unblocks the subsequent conformance/setup reads of `<path>` files (see Step 3b's bind-first note). After it, confirm the session resolves to `<name>` — the next Read of a `<path>` file must NOT be denied by wal-bind-guard. If it IS denied, the registry line did not land (wrong path, wrong session id, or a write error): STOP and fix the append before proceeding — do not push on into a wedged, unbound flow.
 4. **Initialize session notes file:** If `claude_docs/session_notes/<name>.md` does not exist, create it with:
    ```markdown
    # Session Notes -- <name>
