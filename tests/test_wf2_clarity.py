@@ -784,3 +784,35 @@ class TestDispatchesAssembly:
         assert sentence in s16, (
             "Step 16 must contain the canonical #330 dispatches[] assembly "
             "sentence")
+
+
+# --- #330: dispatches[] capture contract + worked example, docs/run-records.md ---
+
+class TestDispatchCaptureDoc:
+    """Direct-file guard (docs/run-records.md is not part of the skill corpus, so
+    this reads the file directly rather than via skill_corpus) pinning the #330
+    `### Capture` subsection's worked example. Header-index-sliced to the
+    `## dispatches (#329)` section (repo convention: TestTieredLoopback, :444-454)
+    so a stray match elsewhere in the doc can't false-positive the pin."""
+
+    RUN_RECORDS = REPO_ROOT / "docs" / "run-records.md"
+
+    def _dispatches_section(self) -> str:
+        text = self.RUN_RECORDS.read_text()
+        start = text.index("## dispatches (#329)")
+        end = text.index("## Fail-closed for the store", start)
+        return text[start:end]
+
+    def test_capture_subsection_pins_null_model_assembled_entry(self):
+        section = self._dispatches_section()
+        assert "### Capture (#330)" in section, (
+            "docs/run-records.md's dispatches section must have a #330 Capture "
+            "subsection")
+        canonical_line = (
+            '{"role": "analysis", "subagent_type": "generic-analysis", '
+            '"model": null, "effort": null, "outcome": "ok", '
+            '"resolution": "generic"}'
+        )
+        assert canonical_line in section, (
+            "the #330 worked example's null-model assembled JSON entry must be "
+            "present verbatim in the dispatches section")
