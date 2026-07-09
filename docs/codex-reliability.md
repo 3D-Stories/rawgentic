@@ -11,8 +11,8 @@ that close it. The sentences below are drift-guarded by
 
 The plugin ships THREE sanctioned, timeout-enforced Codex entry points, all backed by
 `hooks/adversarial_review_lib.py` (hard `RAWGENTIC_ADV_REVIEW_TIMEOUT` subprocess
-timeout, default 600s; fail-closed exit contract 0/2/3/4; tools-OFF prompt so the
-Codex sandbox is never exercised):
+timeout, default 600s; fail-closed exit contract 0/2/3/4; the prompt requests no
+shell tool, so the failing bwrap sandbox path is not reached):
 
 | Need | Path |
 |---|---|
@@ -32,8 +32,10 @@ job (observed: >21 min silent `fetch_file`, 2026-07-09).
 
 ## 2. Dead-job protocol (when you dispatch companion/rescue anyway)
 
-Give every companion/rescue dispatch an explicit deadline up front (wall-clock, e.g.
-the engine's own 600s default is a sane ceiling). Then:
+Give every companion/rescue dispatch an explicit **absolute wall-clock deadline** up
+front (the engine's own 600s default is a sane ceiling) — the ceiling always fires,
+even for a job still emitting keepalive bytes. Output-file silence (no new bytes) is
+an ADDITIONAL, earlier kill signal, whichever trips first. Then:
 a companion or rescue job silent past its deadline is DEAD: kill it and
 substitute — never keep waiting. Substitution order mirrors the review-gate rule
 (workspace manual "Reviews and second opinions"): an independent Opus subagent
@@ -81,7 +83,8 @@ disables the restriction machine-wide for every process — strictly weaker; do 
 ## Provenance
 
 RCA and evidence: issue #334 (kernel-audit capture, reproduction, companion-runtime
-line anchors) and `docs/reviews/334-rca-md-2026-07-09.md` (adversarial review of the
-RCA). Related: #331 (review-gate fallback + dead-agent detection), #330 (dispatch
+line anchors); the RCA working doc `docs/planning/drafts/334-rca.md` and its
+cross-model adversarial review `docs/reviews/334-rca-md-2026-07-09.md` (both committed
+with this fix). Related: #331 (review-gate fallback + dead-agent detection), #330 (dispatch
 telemetry — consult dispatches emit the same audit line), PR #328 (the audit that
 first hit the failure).

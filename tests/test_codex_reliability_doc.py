@@ -45,3 +45,13 @@ def test_host_failure_signature_anchored():
     assert (
         "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted" in doc
     ), "the userns failure signature must stay in the runbook section"
+
+
+def test_runbook_recipe_tokens_anchored():
+    # The executable fix is the doc's highest-value content: a typo there (e.g. a
+    # dropped `userns,`) must not rot green behind signature-only guards.
+    doc = _doc_normalized()
+    assert (
+        "profile bwrap /usr/bin/bwrap flags=(unconfined)" in doc
+    ), "the AppArmor profile line must stay in the runbook recipe"
+    assert "userns," in doc, "the userns grant must stay in the runbook recipe"
