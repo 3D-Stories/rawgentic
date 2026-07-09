@@ -119,6 +119,51 @@ class TestBoundSession:
         assert _decision(stdout) == "allow"
 
 
+# ── Gate-2 deny-JSON escaping (#325, mirror of Gate-1 #318) ──────────────────
+
+
+class TestGate2DenyEscaping:
+    """#325: the Gate-2 cross-project deny must emit well-formed JSON regardless of
+    JSON-significant characters in the violating project's name. Before the fix the
+    deny was built with a raw heredoc interpolating the name unescaped, so a `"` or
+    `\\` malformed the JSON, the runtime dropped the deny, and the cross-project write
+    silently fail-opened. VIOLATION is read raw from the workspace .name field and is
+    never run through wal_validate_project_name, so a crafted/hand-edited name reaches
+    the response builder.
+    """
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        ['a"b', "a\\zb"],
+        ids=["quote-in-name", "backslash-in-name"],
+    )
+    def test_cross_project_deny_json_wellformed(self, make_workspace, bad_name) -> None:
+        """Bound to alpha; a cross-project write into a project whose name carries a
+        `"` (or `\\`) must still parse as a valid deny — not fail-open."""
+        bad_project = {
+            "name": bad_name,
+            "path": "./projects/aquote",
+            "active": True,
+            "configured": True,
+            "lastUsed": "2026-03-08T00:00:00Z",
+        }
+        ws: Workspace = make_workspace(
+            projects=[ALPHA_PROJECT, bad_project],
+            registry_entries=[
+                {"session_id": "s1", "project": "alpha", "ts": "2026-03-08T00:00:00Z"},
+            ],
+        )
+        file_path = str(ws.root / "projects" / "aquote" / "lib" / "utils.py")
+        stdin = _make_stdin("Edit", "s1", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0
+        parsed = parse_hook_output(stdout)
+        assert parsed is not None, f"deny output must be valid JSON, got: {stdout!r}"
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        # The (now-escaped) name still appears in the message — behaviour preserved.
+        assert bad_name in parsed["systemMessage"]
+
+
 # ── Unbound session tests ────────────────────────────────────────────────
 
 
