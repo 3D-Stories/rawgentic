@@ -95,6 +95,14 @@ GOAL_GUARD_VALUES = {"set", "skipped", "fired", "deferred"}
 # = capture was attempted for this run but failed (file missing / no usage).
 CAPTURE_STATUS_VALUES = {"captured", "unrecoverable", "unavailable"}
 
+# `dispatches[]` (#329) — per-subagent dispatch telemetry. Controlled
+# vocabularies, same present-is-strict philosophy as GOAL_GUARD_VALUES /
+# CAPTURE_STATUS_VALUES: an absent field is legacy-valid, but a present entry is
+# fail-closed on anything outside these sets (non-strings, case variants, null).
+DISPATCH_ROLES = {"review", "implementation", "analysis", "other"}
+DISPATCH_OUTCOMES = {"ok", "error", "retried", "dead"}
+DISPATCH_RESOLUTIONS = {"primary", "fallback", "generic"}
+
 # Human-summary header label per workflow; falls back to the upper-cased name.
 _WF_LABELS = {"implement-feature": "WF2", "fix-bug": "WF3"}
 
@@ -445,6 +453,41 @@ def validate_record(record, *, strict=False) -> list:
         gg = record["goal_guard"]
         if not _is_str(gg) or gg not in GOAL_GUARD_VALUES:
             errs.append(f"goal_guard must be one of {sorted(GOAL_GUARD_VALUES)}")
+
+    # `dispatches` (#329) — OPTIONAL top-level list of per-subagent dispatch
+    # records, same validated-optional pattern as `usage`/`goal_guard`: absent →
+    # old records stay valid (forward-compatible, no schema bump); present is
+    # strict — a list of dicts, each carrying all 6 keys with controlled-vocab
+    # role/outcome/resolution (fail-closed on non-strings, case variants, null),
+    # a non-empty subagent_type, and string-or-null model/effort.
+    if "dispatches" in record:
+        dispatches = record["dispatches"]
+        if not isinstance(dispatches, list):
+            errs.append("dispatches must be a list")
+        else:
+            for i, item in enumerate(dispatches):
+                if not isinstance(item, dict):
+                    errs.append(f"dispatches[{i}] must be an object")
+                    continue
+                _require_present(item, f"dispatches[{i}]",
+                                  ("role", "subagent_type", "model", "effort",
+                                   "outcome", "resolution"), errs)
+                for field, vocab in (("role", DISPATCH_ROLES),
+                                     ("outcome", DISPATCH_OUTCOMES),
+                                     ("resolution", DISPATCH_RESOLUTIONS)):
+                    v = item.get(field)
+                    if not _is_str(v) or v not in vocab:
+                        errs.append(f"dispatches[{i}].{field} must be one of "
+                                    f"{sorted(vocab)}")
+                st = item.get("subagent_type")
+                if not (_is_str(st) and st.strip()):
+                    errs.append(f"dispatches[{i}].subagent_type must be a "
+                                "non-empty string")
+                for field in ("model", "effort"):
+                    v = item.get(field)
+                    if v is not None and not _is_str(v):
+                        errs.append(f"dispatches[{i}].{field} must be a string "
+                                    "or null")
 
     return errs
 
@@ -921,8 +964,44 @@ def aggregate_records(records) -> dict:
         "mean_commits": _mean(_col("changes", "commits")),
         "mean_tests_added": _mean(_col("tests", "added")),
     }
-    return {"n": n, "gates": gates, "loop_backs": loop_backs,
-            "outcomes": outcomes, "effort": effort}
+    result = {"n": n, "gates": gates, "loop_backs": loop_backs,
+              "outcomes": outcomes, "effort": effort}
+
+    # dispatches (#329) — omitted entirely when no record carries the key at
+    # all (present-is-present: a record with dispatches: [] still counts).
+    runs_with_dispatches = 0
+    total = by_role = by_model = None
+    dead = fallback = 0
+    for r in records:
+        entries = r.get("dispatches")
+        if not isinstance(entries, list):
+            continue
+        if by_role is None:
+            total, by_role, by_model = 0, {}, {}
+        runs_with_dispatches += 1
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            total += 1
+            role = e.get("role")
+            if _is_str(role):
+                by_role[role] = by_role.get(role, 0) + 1
+            model = e.get("model") if _is_str(e.get("model")) else "(none)"
+            by_model[model] = by_model.get(model, 0) + 1
+            if e.get("outcome") == "dead":
+                dead += 1
+            if e.get("resolution") == "fallback":
+                fallback += 1
+    if by_role is not None:
+        result["dispatches"] = {
+            "runs_with_dispatches": runs_with_dispatches,
+            "total": total,
+            "by_role": by_role,
+            "by_model": by_model,
+            "dead_rate": _rate(dead, total),
+            "fallback_rate": _rate(fallback, total),
+        }
+    return result
 
 
 _GROUP_KEYS = {
@@ -1000,6 +1079,17 @@ def _render_one(a) -> list:
               f"- Deletions: {_fmt_num(e['mean_deletions'])}",
               f"- Commits: {_fmt_num(e['mean_commits'])}",
               f"- Tests added: {_fmt_num(e['mean_tests_added'])}"]
+    if "dispatches" in a:
+        d = a["dispatches"]
+        rolestr = ", ".join(f"{k}={v}" for k, v in sorted(d["by_role"].items())) or "none"
+        modelstr = ", ".join(f"{k}={v}" for k, v in sorted(d["by_model"].items())) or "none"
+        lines += ["", "### Dispatches",
+                  f"- Runs with dispatches: {d['runs_with_dispatches']}",
+                  f"- Total: {d['total']}",
+                  f"- By role: {rolestr}",
+                  f"- By model: {modelstr}",
+                  f"- Dead rate: {_fmt_pct(d['dead_rate'])}",
+                  f"- Fallback rate: {_fmt_pct(d['fallback_rate'])}"]
     return lines
 
 

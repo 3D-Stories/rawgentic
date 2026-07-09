@@ -1,0 +1,6 @@
+# Confirmed false positives (2026-07-09, epic #333 run — both already in upstream main history):
+# - tests/hooks/test_adversarial_review_io.py:97 is a deliberate redaction-test fixture
+#   (sk-abc123def456 / the AWS-documented example key AKIAIOSFODNN7EXAMPLE)
+# - transcript.md:321 is a captured characterization-test transcript quoting the same fixture pattern
+0d6d6a14906ddb6444c865529182d0cc5bdb38ed:tests/hooks/test_adversarial_review_io.py:generic-api-key:97
+8460c98f26b51ae8d1b9581595971bc46c1f5f9a:skills/refactor-workspace/iteration-1/characterization-tests-sentinel/with_skill/outputs/transcript.md:generic-api-key:321
