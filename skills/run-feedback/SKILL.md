@@ -57,7 +57,11 @@ gates, dispatches, telemetry — never the deliverable it produced.
 **Path binding:** the report is written under the RAWGENTIC project root resolved from
 the workspace config (`projects/rawgentic/docs/reviews/`), even when the assessment
 runs from a session bound to another project — the feedback subject is the plugin, so
-reports never land in the assessed project's tree.
+reports never land in the assessed project's tree. Derive that root explicitly: the
+`.rawgentic_workspace.json` `projects[]` entry named `rawgentic` (the one whose repo is
+`3D-Stories/rawgentic`), its `path` resolved against the workspace root — independent
+of whichever project this session is bound to. The run-record store path
+(`docs/measurements/run_records.jsonl`) resolves against the SAME derived root.
 
 **Embedding contract (embed-ready, AC6):** the core path takes explicit arguments and
 has zero interactive dependency — `--record <path>` (a run-record JSON file or the
@@ -76,8 +80,11 @@ is deliberately NOT part of this skill (named follow-up issue).
 ## Step 1: Gather run facts
 
 1. **Resolve the run-record.**
-   - `--record <path>`: load that file (`hooks/work_summary.py` `load_record_file`
-     semantics — schema-validated).
+   - `--record <path>`: load that file per `hooks/work_summary.py` `load_record_file`
+     semantics — JSON-parsed, fail-closed, but NOT schema-validated (`validate_record`
+     runs only at summarize/store time). After loading, run the record through
+     `work_summary.validate_record`; a schema-invalid record routes to degraded mode
+     with the validation error quoted, exactly like a malformed `latest` line.
    - `latest` (default): parse ONLY the last non-empty line of
      `<rawgentic-project-root>/docs/measurements/run_records.jsonl`. If that line is
      malformed, enter degraded mode and quote the parse error — do NOT scan earlier

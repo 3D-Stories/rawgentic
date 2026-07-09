@@ -172,6 +172,19 @@ def test_marker_acceptance_boundaries():
         "Accepted markers must be quoted with source lines in the evidence ledger")
 
 
+# --- Secrets redaction covers every egress surface (issues + memory too) ---
+
+def test_secrets_rule_covers_all_egress_surfaces():
+    r = _norm(_rubric())
+    assert ("no token values, no raw log dumps, in every egress surface: the report, "
+            "filed issues, the published artifact, and the mempalace memory") in r, (
+        "The secrets-by-name rule must cover the unscanned egress paths "
+        "(issue body + memory write), not just the committed report")
+    assert ("redacted BEFORE it enters the evidence ledger") in r, (
+        "Redaction must happen at ledger ingestion — the only choke point "
+        "for the unscanned egress paths")
+
+
 # --- Rubric version stamp quoted in every report ---
 
 def test_rubric_version_stamp():
