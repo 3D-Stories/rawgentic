@@ -35,7 +35,7 @@ MANIFEST = {
             # WF4/7/8/9/10/12 removed 2026-07-04 (#160): deprecation stubs carry
             # no config-loading block; removal at v3.0.0 (#161).
             "adversarial-review", "incident",
-            "implement-feature", "fix-bug", "peer-consult", "scan",
+            "implement-feature", "fix-bug", "peer-consult", "run-feedback", "scan",
         ],
     },
     # #158 AC6: WF2's dispatch-routing and loop-back contracts single-sourced.

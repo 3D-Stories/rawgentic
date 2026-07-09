@@ -301,7 +301,9 @@ behavior; what was NOT checked, named.
 full `steps` snapshot (or `steps:null` + `overrides` for small deltas); changed stations
 carry `rev:{delta, refs}`; prior rev `superseded`; provenance footer `@ plugin X.Y.Z`;
 snapshots regenerated (serve over `python3 -m http.server` — headless browsers block
-`file:`; screenshot light+dark at 1440×1200 ds2 → `docs/assets/`);
+`file:`; **FULL-PAGE** screenshot light+dark at 1440px-wide viewport, device scale →
+`docs/assets/` — a viewport-only 1440×1200 capture clips the sheet to ~6 of 19
+stations and passes CI, #337 review catch);
 `pytest tests/test_workflow_diagram.py` green.
 
 ## 6. When uncertain — exact escalation rules

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#337 WF14 run-feedback — design (Rev 4)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 12:22 MDT</div>
+<h1>#337 WF14 run-feedback — design (Rev 4)</h1>
+<p class="sub">Post-run workflow self-assessment skill</p>
+</header>
+<main>
+<h1>Design — #337 WF14 run-feedback: post-run workflow self-assessment skill</h1>
+<p>Date: 2026-07-09 · Issue: [#337](https://github.com/3D-Stories/rawgentic/issues/337) · Complexity: standard_feature (Step-2 authoritative; full spine elected — AC5 requires peer consult + adversarial design gate) · Version: 3.24.26 → <strong>3.25.0</strong> (minor, new skill) · <strong>Rev 2</strong> (Step-4 loop-back: 8 merged findings applied — wf14 entry shape + guard test, 6-way verdict vocabulary unified, mempalace/Artifact spike evidence, latest-line semantics, report-path binding, evals wording) · <strong>Rev 3</strong> (Step-4 pass-2 loop-back: rubric-section vocab remnant fixed, report-only invariant scoped to allow the report&#x27;s own write, <code>--session-notes</code> degraded-mode input contract + unscored rule, mempalace save-verification tri-state surface, same-day filename collision suffix) · <strong>Rev 4</strong> (Step-4 pass-3 spec-tighten: invariant explicitly covers the session-note DONE marker append (gitignored working memory), mempalace write tool named (<code>mempalace_add_drawer</code> + read-back verify) and Step 5 aligned to the tri-state, <code>noissue</code> filename fallback, marker-acceptance boundaries for prose-grep, gh spike citation + write-permission honesty, render-failure preserves the .md)</p>
+<h2>Approaches considered</h2>
+<p><strong>A — single SKILL.md (WF5 style, everything inline).</strong> Pro: fewest files, matches adversarial-review precedent. Con: the rubric is the drift-guarded, separately-evolving artifact — inlining it makes the SKILL.md huge, makes the workspace-prompt pointer awkward, and couples orchestration prose to rubric prose. Rejected.</p>
+<p><strong>B — thin orchestrator SKILL.md + <code>references/rubric.md</code> (CHOSEN, issue-prescribed).</strong> The rubric moves into the plugin as a reference file (house style: references/ scales with complexity — implement-feature precedent). SKILL.md carries steps, config contract, routing rules; rubric.md carries the assessment content. Drift guards pin canonical sentences in both.</p>
+<h2>Skill shape</h2>
+<p><code>skills/run-feedback/SKILL.md</code>:</p>
+<ul>
+<li>Frontmatter: <code>name: rawgentic:run-feedback</code>, description = WHEN to trigger (after any completed WFn run; &quot;assess the workflow run&quot;, &quot;post-run feedback&quot;; Do NOT use to assess the deliverable itself or non-rawgentic workflows), <code>argument-hint: latest | --record &lt;path&gt; [--wf &lt;n&gt;]</code>. Near-collision check (strip <code>:</code>/<code>-</code>): <code>runfeedback</code> — no collision with existing 15 names.</li>
+<li>Carries the synced <code>&lt;config-loading&gt;</code> block (MANIFEST entry; precedent: peer-consult, adversarial-review — both report-only and synced). Needed: project root (run-record store path, docs/reviews output), project name (runFeedback key).</li>
+<li><strong>Report-only invariant (WF5 wording, scoped):</strong> never edits rawgentic skills, hooks, or source docs mid-assessment; the ONLY file writes are the WF14 report <code>.md</code>/<code>.html</code> pair under <code>docs/reviews/</code> (uncommitted artifacts) plus the Step-6 session-note DONE marker append — session notes are gitignored working memory (confirmed: 0 tracked files under <code>claude_docs/</code>), not source docs, and the DONE marker is the universal WFn close protocol. Findings route via issues/memory only.</li>
+<li><strong>Embedding contract (AC6):</strong> core steps take explicit args — <code>--record &lt;path&gt;</code>, <code>--wf &lt;n&gt;</code>, and <code>--session-notes &lt;path&gt;</code> (the evidence source; interactive default: the workspace <code>claude_docs/session_notes.md</code>) — with zero interactive dependency; embedders gate on <code>python3 hooks/adversarial_review_lib.py is-enabled --workspace .rawgentic_workspace.json --project &lt;name&gt; --skill &lt;wf-skill&gt; --key runFeedback</code> (generic <code>key=</code> confirmed at hooks/adversarial_review_lib.py:230-266 — <strong>no code change</strong>). Degraded-mode input rule: when the run-record is absent, session notes are the ONLY evidence source, so an embedded caller that supplies neither a resolvable record nor a session-notes path gets an <code>unscored</code> assessment with the gap stated — never a guessed one. WF2 Step 16 / WF3 Step 14 wiring = named follow-up issue (filed at PR time).</li>
+</ul>
+<h3>Steps (WF14)</h3>
+<p>1. <strong>Gather run facts.</strong> Resolve the run-record: <code>--record &lt;path&gt;</code> → <code>work_summary.load_record_file</code>; <code>latest</code> (default) → last line of <code>&lt;project-root&gt;/docs/measurements/run_records.jsonl</code> (no latest-helper exists; <code>tail -1</code> + validate via <code>load_record_file</code> semantics). Missing/invalid store → <strong>degraded mode</strong>: assess from session notes alone and say so loudly in the report header (AC1). Grep session notes for <code>### WF&lt;n&gt; Step</code> markers (no hook parser exists — prose-grep, same as the resume protocol). Marker-acceptance boundaries: only line-start markdown headings count; anything inside code fences or quoted/example text is ignored; every accepted marker is quoted verbatim (with its source line) in the report&#x27;s evidence ledger — wording that doesn&#x27;t match is <code>unverifiable</code>, never guessed. Record loaded plugin cache version (<code>~/.claude/plugins/cache/rawgentic/rawgentic/&lt;version&gt;/</code>) vs current main.</p>
+<p>2. <strong>Assess + classify</strong> per <code>references/rubric.md</code>: six 1–5 dimensions with per-score anchors, every load-bearing claim confirmed (evidence) or inferred (what would confirm), 5-way classification per negative finding.</p>
+<p>3. <strong>(2b) Telemetry audit</strong> per the rubric&#x27;s audit section: field-by-field table with columns <code>field | recorded_value | session_evidence | verdict | impact | routing</code> and the SIX-value verdict vocabulary <code>match | mismatch | missing-in-record | missing-in-session | unverifiable | known-limitation</code> (single canonical set — used identically in SKILL.md step prose, rubric, and drift guards; <code>mismatch</code>, <code>missing-in-record</code>, and <code>missing-in-session</code> count as negative findings; <code>known-limitation</code> and <code>unverifiable</code> never do). Fields: <code>tests</code> (vs runner final output), <code>gates[]</code> (findings/resolved vs session-note markers), <code>loop_backs</code> (vs counters file), <code>outcome</code>, <code>security_scan</code>, <code>usage</code> (standing weak spot: whole-SESSION token attribution → <code>known-limitation</code> unless internally impossible), <code>dispatches[]</code> <strong>consume-when-present</strong> (#329/#330 NOT landed — absence is <code>missing-in-record</code> ONLY when session evidence shows dispatch activity; otherwise a version-gap note), <code>reviewer_kind</code> fidelity, gate-count honesty. Each negative verdict classified like any finding PLUS the telemetry-improvement routing lane.</p>
+<p>4. <strong>Render.</strong> Report md → <code>&lt;rawgentic-project-root&gt;/docs/reviews/run-feedback-wf&lt;wf&gt;-&lt;issue&gt;-&lt;YYYY-MM-DD&gt;.md</code>; when no issue number is resolvable (record absent AND session evidence names none), the token is <code>noissue</code> and the report header states the missing provenance; if the path already exists (same-day rerun), suffix <code>-2</code>, <code>-3</code>, … — never overwrite an earlier assessment&#x27;s evidence. A render_artifact.py failure never voids the assessment: record the failure in the report&#x27;s own text, preserve the <code>.md</code> (the <code>.html</code> becomes a stated gap). The output path is ALWAYS bound to the rawgentic project root resolved from the workspace config, even when the assessment runs from a session bound to another project (the feedback subject is the plugin; reports never land in the assessed project&#x27;s tree). HTML via <code>python3 hooks/render_artifact.py --md &lt;md&gt; --out &lt;html&gt; --title &quot;...&quot;</code> (never hand-rolled) — the committed-later <code>.md</code>+<code>.html</code> pair is the REQUIRED deliverable; Artifact publication is best-effort on top: publish with the Artifact tool and print the URL, or print the required failure line &quot;artifact publish FAILED/unavailable — committed .html is source of truth&quot;. Print the report path (AC2). Report-only: files are uncommitted artifacts until a later PR picks them up (WF5 convention).</p>
+<p>5. <strong>Route.</strong></p>
+<ul>
+<li>Plugin defects: dup-check first (<code>gh issue list --repo 3D-Stories/rawgentic --search</code>), then <code>gh issue create --repo 3D-Stories/rawgentic</code> <strong>always explicit-repo</strong> (deliberate deviation from create-issue&#x27;s bound-repo targeting; assessments run from chorestory/saystory sessions too). Simplification vs the seed prompt: ALWAYS direct <code>gh issue create</code> (never route through /rawgentic:create-issue even when bound to rawgentic) — deterministic, embed-ready, one code path. Labels: <code>bug</code>/<code>enhancement</code> + <code>framework</code> + <code>wf-feedback</code> (create-if-absent: <code>gh label list</code> check then <code>gh label create</code>; label confirmed ABSENT today). Cap 3/run; merge related; known issues linked never refiled; verify each defect still exists on current main before filing.</li>
+<li>Telemetry improvements: filed as <code>feat(telemetry)</code>/<code>fix(telemetry)</code> cross-linked to #329/#330, or appended to epic #333 when they fit its queue (same dup-check + cap pool).</li>
+<li>Friction: ONE mempalace memory (type <code>feedback</code>, project <code>rawgentic</code>, Why + How-to-apply) via <code>mcp__mempalace__mempalace_add_drawer</code> (the write tool; <code>mempalace_search</code> read-back verifies). Outcome is the platform_apis tri-state, exactly one surface line: saved id/slug | &quot;friction memory save FAILED — &lt;error&gt;&quot; | &quot;mempalace unavailable — friction memory SKIPPED&quot; (AC4).</li>
+<li>Clean run: explicit &quot;nothing filed, nothing memorized — clean run&quot; outcome.</li>
+</ul>
+<p>6. <strong>Close.</strong> Session-note marker <code>### WF14 run-feedback: DONE (&lt;wf&gt; #&lt;issue&gt;, &lt;n&gt; defects filed, &lt;clean|routed&gt;)</code> + the rubric&#x27;s fixed summary block.</p>
+<h2>Rubric (<code>references/rubric.md</code>)</h2>
+<p>Seeded from <code>claude_docs/prompts/wf-run-feedback.md</code> (workspace file becomes a pointer — workspace-side edit, not in this repo&#x27;s PR). Enhancements over the seed (AC5: enhanced via peer consult during this run; consult report committed as design evidence):</p>
+<ul>
+<li><strong>Per-score anchors</strong> for each of the six dimensions (what a 2 vs a 4 looks like) so scores are reproducible across assessor models.</li>
+<li><strong>Telemetry-audit section</strong> (new, issue item 2b): the field-by-field check list above, the canonical six-value verdict vocabulary <code>match | mismatch | missing-in-record | missing-in-session | unverifiable | known-limitation</code> (identical to Steps step 3 — one set, three surfaces), the accuracy-table format, and the standing known-weak spots NAMED as checks: usage attribution (whole-session tokens), <code>reviewer_kind</code> fidelity, gate-count honesty, store-append-lags-one-PR (Step 16 appends pre-merge; the JSONL line rides the next branch).</li>
+<li>Degraded-mode rules: which claims are permitted from session notes alone; everything else marked inferred.</li>
+<li>Security: reference secrets by name only; no tokens/log dumps in filed issues or the published artifact.</li>
+</ul>
+<h2>File changes</h2>
+<p>| # | File | Change |</p>
+<p>|---|---|---|</p>
+<p>| 1 | <code>skills/run-feedback/SKILL.md</code> | NEW |</p>
+<p>| 2 | <code>skills/run-feedback/references/rubric.md</code> | NEW |</p>
+<p>| 3 | <code>tests/test_run_feedback_clarity.py</code> | NEW — drift guards, test_wf3_clarity.py pattern (section-sliced, whitespace-normalized, ONE canonical sentence per guard): report-only invariant; always-explicit-repo; cap 3; degraded-mode loud; verdict vocabulary; known-weak-spots named; dispatches[] consume-when-present; mempalace tri-state surface line; artifact-publish failure line |</p>
+<p>| 4 | <code>.claude-plugin/marketplace.json</code> | whitelist <code>./skills/run-feedback</code> before <code>./skills/scan</code>; description &quot;6 SDLC workflow skills&quot; → &quot;7 SDLC workflow skills&quot; |</p>
+<p>| 5 | <code>.claude-plugin/plugin.json</code> | version 3.25.0; description 6→7 SDLC (breakdown regex must sum to n_skills=16: 7+6+1+2 ✓) |</p>
+<p>| 6 | <code>plugins/rawgentic/.codex-plugin/plugin.json</code> | version 3.25.0 (+ description if it carries the breakdown) |</p>
+<p>| 7 | <code>plugins/rawgentic/skills/run-feedback</code> | NEW symlink <code>../../../skills/run-feedback</code> |</p>
+<p>| 8 | <code>scripts/sync_shared_blocks.py</code> | MANIFEST += run-feedback; run sync; verify <code>--check</code> |</p>
+<p>| 9 | <code>tests/hooks/test_headless.py</code> | <code>EXPECTED_CONFIG_LOADING_COUNT</code> 7 → 8 |</p>
+<p>| 10 | <code>tests/hooks/test_adversarial_review_registration.py</code> | version pin 3.25.0; &quot;6 SDLC workflow skills&quot; literals → 7; &quot;All 7 config-driven&quot; → 8 |</p>
+<p>| 11 | <code>README.md</code> | line-3 breakdown 7+6+1+2; &quot;provides 16 skills&quot;; SDLC bullet (7 skills); skills table row; &quot;All 8 config-driven&quot;; evals &quot;9/16&quot; + <code>run-feedback</code> added to have-none backtick list; changelog entry |</p>
+<p>| 12 | <code>docs/workflow-diagram.html</code> | <code>wf14</code> entry mirroring the wf1/wf3/wf5 skeletal SHAPE exactly: <code>skeletal:true</code> <strong>plus a full <code>versions:{&quot;3.25.0&quot;:{superseded:false, steps:[...]}}</code> block with real pending steps</strong> (the WF14 step list, <code>pending:true</code>) + <code>order</code> append. &quot;Skeletal&quot; = pending-steps, NEVER empty/<code>steps:null</code> — the SPA renderer dereferences <code>versions[revs[0]].steps</code> unconditionally and an empty entry crashes the WF14 tab on click. Version-linkage test unaffected (reads first revs array = wf2&#x27;s, verified tests/test_workflow_diagram.py:181). Follow the <code>rev-diagram</code> workspace skill recipe (provenance footer, snapshots) |</p>
+<p>| 12b | <code>tests/test_workflow_diagram.py</code> | NEW guard: every entry in <code>DATA.order</code> has a <code>versions[revs[0]]</code> block whose <code>steps</code> is a non-empty array (catches the empty-skeletal crash class for wf14 and any future workflow) + WF14/&quot;Run Feedback&quot; presence check alongside the existing extensible-registry test |</p>
+<p>| 13 | docs/reviews/peer-consult report (rubric) | committed as design evidence (AC5) |</p>
+<p>| — | <code>claude_docs/prompts/wf-run-feedback.md</code> | workspace-side: replaced with pointer to the plugin skill (NOT in repo PR) |</p>
+<p>Evals: one explicit statement — README eval coverage changes from <strong>9/15 to 9/16</strong>; NO new eval artifact is added; <code>run-feedback</code> is added to the README have-none backtick list (computed membership guard).</p>
+<h2>Configuration changes</h2>
+<p>Workspace <code>.rawgentic_workspace.json</code> gains optional per-project <code>runFeedback: {&quot;enabled&quot;: bool, &quot;workflows&quot;: [...]}</code> — parsed by the EXISTING generic <code>load_adversarial_review_config(key=&quot;runFeedback&quot;)</code>; no schema/code change. Documented in SKILL.md embedding contract + README row.</p>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>Run-record store missing/invalid → degraded mode, loud header, claims bounded per rubric (never a silent pass).</li>
+<li><code>latest</code> resolution, exact semantics: parse ONLY the last non-empty line of the store; if that line is malformed, enter degraded mode and quote the parse error — do NOT scan earlier lines for a fallback record (a silently-older record is worse than a loud absence). Before treating a parsed <code>latest</code> as confirmed, sanity-check its workflow/issue/date against session evidence (concurrent runs can make <code>latest</code> the wrong run); a failed sanity-check downgrades the record to <code>unverifiable</code> provenance.</li>
+<li><code>dispatches[]</code> absent (today&#x27;s reality) → &quot;not captured at this version (#329/#330 open)&quot; — a gap note, never a mismatch verdict.</li>
+<li>gh filing failure → report already written; log the failure in the report&#x27;s routing section, continue (a filing error never voids the assessment).</li>
+<li>mempalace server down/absent → the mandatory <code>surface:</code> visible-skip line (AC4; see platform_apis — one contract).</li>
+<li>Label create race → check-then-create; treat already-exists as success.</li>
+<li>Cap enforcement: &gt;3 defect candidates → merge related, file top 3 by severity, list the rest in the report as unfiled-with-reason (AC8&#x27;s &quot;explicitly dropped with a reason&quot;).</li>
+</ul>
+<h2>Security implications</h2>
+<ul>
+<li>Filed issues + published artifact are outward-facing: secrets by NAME only, no token values, no raw log dumps (rubric rule + drift guard).</li>
+<li><code>gh issue create</code> on an explicit foreign repo from any session — write is to our own repo, intended; dup-check bounds spam; cap 3 bounds volume.</li>
+<li>No new hooks, no new subprocess surfaces in Python (skill is prose; all commands precedented).</li>
+</ul>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: gh CLI (issue list/create, label list/create) on the GitHub repo 3D-Stories/rawgentic</li>
+</ul>
+<p>  feasibility: verified via spike — <code>gh issue view 337 --repo 3D-Stories/rawgentic</code>, <code>gh label list --repo 3D-Stories/rawgentic</code>, and <code>gh api repos/3D-Stories/rawgentic/...</code> all executed live in THIS design session (2026-07-09, authenticated, scopes incl. repo per the API response headers); create-and-add label prior art at references/headless.md. Write permission not spike-proven (no test issue filed) — the routing step therefore prints the exact failed command + stderr on any gh failure, and a filing error never voids the assessment (existing error-handling rule)</p>
+<p>  failure: fail-loud</p>
+<ul>
+<li>api: mempalace MCP tools (mempalace_search / memory save) on MEMORY_SERVER_URL=http://10.0.17.205:8420</li>
+</ul>
+<p>  feasibility: verified via spike — mcp__mempalace__mempalace_search called live in THIS design session (2026-07-09, returned 8 results from http://10.0.17.205:8420) proves server reachability + tool loading; the WRITE path (memory save) is best-effort by design — the spike does not prove it, so the skill MUST verify each save by its returned id (or a read-back search) and print a save-failed line when verification fails</p>
+<p>  failure: fail-silent</p>
+<p>  surface: the report&#x27;s routing section MUST print exactly one of: the saved memory&#x27;s id/slug (verified write), &quot;friction memory save FAILED — &lt;error&gt;&quot; (attempted, unverified), or &quot;mempalace unavailable — friction memory SKIPPED&quot; (server absent). All three drift-guarded; the mandatory surface line IS the AC4 visible skip — <code>fail-silent</code> describes only the RAW API. Implementers ship the surface line, never the raw silent skip.</p>
+<ul>
+<li>api: Artifact tool (harness publish) on the Claude Code session</li>
+</ul>
+<p>  feasibility: verified via spike — the Artifact tool is loaded and schema-resolved in THIS design session (2026-07-09); prior-art call-site at skills/create-issue/SKILL.md:240-243 (publish after render_artifact.py). Availability varies per session/harness, hence best-effort classification below</p>
+<p>  failure: fail-silent</p>
+<p>  surface: report prints the published URL or the REQUIRED failure line &quot;artifact publish FAILED/unavailable — committed .html is source of truth&quot; (drift-guarded; mirrors workspace mistake #18). The committed .md+.html pair is the required deliverable; publication is best-effort on top.</p>
+<h2>Multi-PR assessment</h2>
+<p>~600–800 new prose lines + registration edits; one logical phase; single PR (precedent: every prior skill-add PR).</p>
+<h2>Peer-consult provenance (Step 3 sub-step, blind both ways)</h2>
+<p>Cross-model consult (Codex via <code>adversarial_review_lib.py consult</code>, exit 0) returned after this draft was on disk. Adopted into the design (peer contributions):</p>
+<p>1. <strong>Expanded verdict vocabulary</strong> — <code>match | mismatch | missing-in-record | missing-in-session | unverifiable | known-limitation</code> (superset of AC8&#x27;s minimum three; absent data has different remediation paths). Table columns: <code>field | recorded_value | session_evidence | verdict | impact | routing</code>.</p>
+<p>2. <strong>Run-facts evidence ledger</strong> — every gathered fact tagged <code>confirmed | inferred | absent | unverifiable</code> before scoring; gate verdicts must QUOTE the exact marker/evidence used (guards against prose-grep false negatives — <code>unverifiable</code> over guessing).</p>
+<p>3. <strong>Score anchors + evidence quotas</strong> — each dimension defines 1/3/5 anchors as observable evidence patterns (not adjectives) plus minimum-evidence caps: e.g. telemetry dimension capped at 2 with no run-record; <code>unscored</code> allowed when a dimension cannot honestly be assessed.</p>
+<p>4. <strong>Degraded mode as first-class mode</strong> — <code>record: absent</code> in the summary; telemetry claims limited to <code>unverifiable</code>/<code>missing-record</code>; the report LISTS claims intentionally not made.</p>
+<p>5. <strong><code>latest</code> sanity check</strong> — before treating the tail record as confirmed, cross-check its workflow/issue/date against session evidence (concurrent/multi-branch work can make <code>latest</code> the wrong run; embedded calls should prefer explicit <code>--record</code>).</p>
+<p>6. <strong>usage = <code>known-limitation</code></strong> unless values are internally impossible — never file a defect solely because whole-session attribution is broad. <strong><code>store-lag-known</code></strong> distinct from genuinely-missing record.</p>
+<p>7. <strong>Cap overflow routing</strong> — findings beyond the 3-issue cap carry <code>routing: not-filed-cap</code> and are preserved in the artifact (the cap must not hide systemic failures).</p>
+<p>8. <strong>dispatches[] refinement</strong> — absence verdicts: <code>missing-in-record</code> only when session evidence SHOWS dispatch activity; otherwise a version-gap note (#329/#330 open), and dispatch BEHAVIOR is scored from session evidence regardless.</p>
+<p>9. <strong>Rubric version stamp</strong> — rubric.md carries a version; every report quotes it so assessments stay comparable.</p>
+<p>10. <strong>Dup-check keys</strong> — normalized title keys (WF id + classification + failure signature) before label creation and filing; label create idempotent (already-exists = success).</p>
+<p>Peer confirmed (independent agreement, no change): thin-orchestrator + rubric split; always-explicit-repo filing; report-only invariant; clean-run still emits marker + full summary block. Rubric-draft consult per AC5 runs in Step 8 against the actual rubric.md; report committed to docs/reviews/.</p>
+
+</main>
+<footer>Last updated: 2026-07-09 12:22 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

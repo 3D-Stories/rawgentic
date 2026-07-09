@@ -65,7 +65,9 @@ Skeletal workflows follow the same shape with `skeletal:true` and phase-level st
 ## Regenerating the README snapshots
 
 Serve the file over localhost (browsers block `file:` in headless tooling), render at
-1440×1200, and screenshot the WF2 3.10.0 overview once per theme (the theme is forced
+a 1440px-wide viewport, and take a **full-page** screenshot (not viewport-only — a
+1200px-tall viewport capture clips the sheet after ~6 stations and still passes CI) of
+the WF2 overview once per theme (the theme is forced
 by stamping `data-theme` on `<html>`):
 
 ```
