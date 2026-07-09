@@ -337,7 +337,9 @@ snapshots regenerated (serve over `python3 -m http.server` — headless browsers
   is the fully-enforced one — `plan_lib.py`)
 - Per-area docs: `docs/testing.md`, `docs/ci-review-lanes.md`, `docs/security-scan.md`,
   `docs/wal-guide.md`, `docs/config-reference.md`, `docs/skill-development.md` (counts
-  stale — §3), `docs/multi-issue-driver.md`, `docs/run-records.md`
+  stale — §3), `docs/multi-issue-driver.md`, `docs/run-records.md`,
+  `docs/codex-reliability.md` (Codex consult routing + dead-job protocol + host
+  userns runbook — read BEFORE any load-bearing `codex:codex-rescue` dispatch)
 - Hook registration map: `hooks/hooks.json` (note `wal-suspend` exists but is
   unregistered — not every hook file is wired to an event)
 - Workspace skills that execute this manual's checklists: `pr-preflight`, `merge-watch`,
