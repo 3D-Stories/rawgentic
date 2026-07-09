@@ -325,12 +325,22 @@ Active fix branch with dependencies installed.
 
 Execute the plan from Step 5 using strict reproduce-first TDD:
 
-1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail in a way that demonstrates the bug exists. In mocked environments, the specific status code or error message may differ from production — the key proof is that the broken behavior (missing validation, unguarded code path, incorrect logic) is demonstrated, not that the exact production symptom is reproduced. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior. Investigate before proceeding.
+1. **RED — Reproduction test:** Write a test that captures the exact bug behavior. Run it — it MUST fail in a way that demonstrates the bug exists. In mocked environments, the specific status code or error message may differ from production — the key proof is that the broken behavior (missing validation, unguarded code path, incorrect logic) is demonstrated, not that the exact production symptom is reproduced. If the test passes, the bug may already be fixed or the test doesn't capture the right behavior. Investigate before proceeding. Consume the run as a **test-output projection** (see the note below the list), not a full-log dump.
 2. **GREEN — Minimal fix:** Make the reproduction test pass with the smallest possible code change. Resist the urge to refactor surrounding code.
 3. **REFACTOR (minimal):** Only refactor if the fix introduced obvious code smells. Bug fix PRs should be focused, not cleanup opportunities.
 4. **Regression tests:** Add 2-3 edge case tests around the fix boundary.
-5. **Full suite:** Run test commands from `capabilities.test_commands` to confirm no regressions. Iterate over all configured test frameworks.
+5. **Full suite:** Run test commands from `capabilities.test_commands` to confirm no regressions. Iterate over all configured test frameworks. Consume this run as a **test-output projection** too (the note below).
 6. **Commit frequently:** Follow P3 (every 5 min active work) and P12 (conventional commits): `fix(scope): brief description`
+
+**Test-output projection (#314).** Both the RED reproduction run (item 1) and the
+full-suite regression run (item 5) consume the runner's own final summary (pass/fail
+counts + failing test ids + first assertion lines — a bounded tail), never `cat` a full
+run log into context. The exit code is the verdict; diagnosing a failure is a
+correctness decision and uses targeted reads of the named failing tests, not a
+summarizing agent. Fail-closed: an empty, malformed, or command-failed projection on a
+failing run falls back to the inline raw read, logged. The `plan_lib` byte thresholds
+are skill-agnostic — this is the same read discipline WF2 wired in its
+`### Delegated reads` contract, applied unchanged here (no hook changes).
 
 ### Test Commands
 
@@ -359,7 +369,7 @@ Quick self-check (no sub-agent needed):
 1. Verify all acceptance criteria from the bug report (or all risk mitigations from the security finding) are addressed.
 2. Verify the reproduction test genuinely captures the original bug.
 3. Verify no unrelated changes crept in: `git diff --stat` should show only planned files.
-4. Verify all tests pass.
+4. Verify all tests pass — consume the run as a **test-output projection** (#314, the same discipline as Step 7): the final-summary tail (counts + failing test ids) plus the exit code as the verdict, never a full-log dump into context. A failing run with an empty/malformed projection falls back to the inline raw read.
 
 ### Output
 
@@ -500,7 +510,7 @@ Proceed straight to Step 12.
    gh run list --repo capabilities.repo --branch fix/<branch-name> --limit 3
    ```
 2. If CI passes → proceed to Step 12.
-3. If CI fails → analyze failure with `gh run view <id> --log-failed`, fix, push, and re-check (max 2 retries).
+3. If CI fails → diagnose with `gh run view <id> --log-failed` consumed as a **projection** (#314): measure it piped (`gh run view <id> --log-failed | wc -c` — bytes never enter context); when over `WF2_READ_DELEGATE_BYTES_LOG` (the skill-agnostic threshold shipped in #319) grep it to the failing job/step + assertion/traceback first lines instead of reading the full log (a failing run with an empty grep ⇒ inline raw read — the same fail-closed fallback). Fix, push, and re-check (max 2 retries).
 
 **Note:** `gh pr checks` does NOT work with fine-grained PATs. Use `gh run list` / `gh run view` instead.
 
