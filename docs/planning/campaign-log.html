@@ -32,23 +32,12 @@ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);verti
 .telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
 .telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
 footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
-
-:root{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
-@media(prefers-color-scheme:dark){:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}}
-:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
-:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
-.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
-.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
-.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
-.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
-.c-defer{color:var(--defer);background:var(--defer-bg)}
-.c-plan{color:var(--ink-2);background:var(--code)}
 </style>
 </head>
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 21:56 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 10:36 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -65,11 +54,38 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong></p>
 <p>(WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
-<section class="mstone"><h3>Epic #309 — harness safety, memory consolidation &amp; workspace janitor <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-07 unified-review scope that was never filed (children #300–#308,</p>
+<h2>Standalone — codex reliability (audit #328 fallout)</h2>
+<h3>#334 — codex thought-partner dispatches hang: routing rule + dead-job protocol + userns runbook · v3.24.26</h3>
+<p><strong>Issue.</strong> #334 (bug): two same-day cross-model &quot;thought partner&quot; dispatches via the</p>
+<p>third-party <code>codex:codex-rescue</code> path failed — Codex&#x27;s bwrap sandbox died on Ubuntu</p>
+<p>24.04&#x27;s <code>apparmor_restrict_unprivileged_userns=1</code> (kernel-audit evidence on the</p>
+<p>issue), then the connector fallback hung &gt;21 min with no watchdog anywhere</p>
+<p>(<code>codex-companion.mjs</code> has only a 240s status-poll wait).</p>
+<p><strong>RCA pivot.</strong> The issue as filed proposed building a timeout-enforced consult path —</p>
+<p>Step 2 found it <strong>already exists</strong> (WF13 <code>peer-consult</code> + the <code>consult</code> CLI, 600s</p>
+<p>fail-closed, 12 lib tests). Root cause reclassified: a routing/guidance gap, not</p>
+<p>missing code. Scope-correction comment posted on the issue.</p>
+<p><strong>What shipped.</strong> <code>docs/codex-reliability.md</code> — canonical routing rule (load-bearing</p>
+<p>consults go through WF13/<code>consult</code>, never bare <code>codex-rescue</code>), dead-job protocol</p>
+<p>(absolute wall-clock ceiling + output-silence signal, mirrors #331&#x27;s dead-agent</p>
+<p>rule), field-tested AppArmor bwrap-userns host runbook (applied + verified on the</p>
+<p>dev host same day). Repo-manual §8 pointer so sessions load the rule.</p>
+<p><code>tests/test_codex_reliability_doc.py</code> — 5 guards, red before the doc existed.</p>
+<p><strong>Reviews.</strong> Step 4 reflect + cross-model adversarial (codex, <code>plan</code> type): 0C/2H/3M,</p>
+<p>all 5 applied (dispatch-surface pointer, platform_apis declaration, version/test</p>
+<p>naming, 3-piece drift guard, per-slot detail). Step 9: <code>silent-failure-hunter</code> +</p>
+<p><code>code-reviewer</code> (both Opus): 0C/0H/0M/4L, all 4 applied (absolute-deadline semantics,</p>
+<p>recipe-token guard, RCA artifacts committed, sandbox parenthetical softened).</p>
+<p>Security scan PASS (iac/sca visible skips).</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
+<p>convention). Telemetry embedded below.</p>
+<p>---</p>
+<h2>Epic #309 — harness safety, memory consolidation &amp; workspace janitor</h2>
+<p>The 2026-07-07 unified-review scope that was never filed (children #300–#308,</p>
 <p>mostly supervised live-config items). Repo children run WF2/WF3 under the owner&#x27;s</p>
 <p>2026-07-08 scoped unsupervised grant; live-config children apply with timestamped</p>
 <p>backups and close on-issue.</p>
-<h3>#320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23</h3>
+<h3>#320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23 &lt;br&gt;*(status backfill: PR #321 squash-merged <code>4e6a723</code>)*</h3>
 <p><strong>Issue.</strong> #320 (epic #309): PR #319 (#314, option 3) shipped fail-closed</p>
 <p><strong>projection</strong> read discipline in WF2 — token-heavy runner/scan/CI output consumed</p>
 <p>as a bounded reduction, never a full-log dump into the orchestrator&#x27;s context — but</p>
@@ -125,8 +141,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>not-applicable, sca nothing-to-scan). 8 boundary tests red-before-green.</p>
 <p>Suite 2345+1skip → 2353+1skip, 0 failing.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below.</p></section>
-<section class="mstone"><h3>Epic #280 — unified-review EPIC 6 close-out <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:</p>
+<p>convention). Telemetry embedded below.</p>
+<h2>Epic #280 — unified-review EPIC 6 close-out</h2>
+<p>The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:</p>
 <p><code>docs/reviews/2026-07-08-unified-review-backlog-run-report.md</code>); child 6a (#274)</p>
 <p>was owner-gated on a wire-or-delete decision and closes the epic.</p>
 <h3>#274 — wire-or-delete external_ref_lib → DELETE · v3.24.18</h3>
@@ -161,8 +178,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Reviews.</strong> WF3: 2-reviewer Step 9 (opus — silent-failure hunter + standards;</p>
 <p>standards CLEAN, hunter&#x27;s <code>ts=</code> finding applied) + cross-model adversarial on the</p>
 <p>RCA (report: <code>docs/reviews/rawgentic-rca-310-md-2026-07-08.md</code>; High applied).</p>
-<p>5 tests red-before-green. Suite 2340+1skip → 2345+1skip, 0 failing. PR #311.</p></section>
-<section class="mstone"><h3>Epic #188 fast-follow (post-M4) <span class="chip c-conf">SHIPPED</span></h3><p>WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped</p>
+<p>5 tests red-before-green. Suite 2340+1skip → 2345+1skip, 0 failing. PR #311.</p>
+<h2>Epic #188 fast-follow (post-M4)</h2>
+<p>WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped</p>
 <p>(folded in as slot 12). Ordered slots #190 → #191 → #192 → #193 → #194 → #195</p>
 <p>→ #196 → #197 (+ owner-added #205) — <strong>all shipped</strong>; epic #188 closes with #197.</p>
 <p>Follow-up #206 (memory migration) remains conditional, outside the ordered list.</p>
@@ -327,8 +345,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Status.</strong> PR #214 squash-merged <code>2fe2e0e</code>, CI green (incl. first live firing of the</p>
 <p>#195/#196 Action review lanes), suite 2034/0. Issues #197 AND epic #188 closed —</p>
 <p><strong>campaign complete, 9/9 slots.</strong> Telemetry embedded below.</p>
-<p>---</p></section>
-<section class="mstone"><h3>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling</p>
+<p>---</p>
+<h2>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone</h2>
+<p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling</p>
 <p>(claude-code-action v1), folding #48 (STATUS comments), #51 (large-PR warning),</p>
 <p>#52 (progress guardrails). The overnight end-state: label an issue, get a PR.</p>
 <p><strong>What shipped.</strong></p>
@@ -387,8 +406,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>end-to-end success metric (1 issue, zero touches) is owner-gated: repo secret</p>
 <p><code>CLAUDE_CODE_OAUTH_TOKEN</code> (<code>claude setup-token</code>), the main-branch ruleset, then</p>
 <p>label a real issue <code>rawgentic:auto</code>. Telemetry embedded below.</p>
-<p>---</p></section>
-<section class="mstone"><h3>Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0</p>
+<p>---</p>
+<h2>Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped</h2>
+<p><strong>Issue.</strong> #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0</p>
 <p>boundary — one migration event for consumers instead of a drip.</p>
 <p><strong>What shipped.</strong></p>
 <ul>
@@ -426,8 +446,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Status.</strong> PR #202 squash-merged <code>ea4e048</code>, v3.0.0, issue closed. CI green</p>
 <p>(68s); AC3 verified via Mirror-to-STARS Action success @ea4e048 (evidence</p>
 <p>comment on #161). <strong>M3 COMPLETE.</strong></p>
-<p>---</p></section>
-<section class="mstone"><h3>Slot 13 — #184: version-aware setup prompt · v2.67.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because</p>
+<p>---</p>
+<h2>Slot 13 — #184: version-aware setup prompt · v2.67.0</h2>
+<p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because</p>
 <p>nothing tells users to re-run <code>/rawgentic:setup</code> after an upgrade — while the</p>
 <p>existing post-update nudge re-nagged about the *same* unconfigured features on</p>
 <p><strong>every</strong> version bump. Fix: prompt only when the upgrade actually shipped a</p>
@@ -476,8 +497,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.</p>
 <p><strong>Status.</strong> *(backfilled by slot 14&#x27;s pass)* PR #201 squash-merged <code>6c375b1</code>,</p>
 <p>CI green, v2.67.0, issue closed. Telemetry embedded below.</p>
-<p>---</p></section>
-<section class="mstone"><h3>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
+<p>---</p>
+<h2>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0</h2>
+<p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
 <p>object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> —</p>
 <p>so #162&#x27;s yield-per-token gate was incomputable. Fix: capture real numbers + backfill,</p>
 <p>with <strong>non-vacuous</strong> tests (AC5, explicitly &quot;better than #155&#x27;s schema-only tests&quot;).</p>
@@ -514,8 +536,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.</p>
 <p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* PR #198 squash-merged <code>f6e2682</code>, CI</p>
 <p>green, v2.65.0, issue closed. Telemetry embedded below.</p>
-<p>---</p></section>
-<section class="mstone"><h3>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2 <span class="chip c-defer">ABANDONED</span></h3><p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
+<p>---</p>
+<h2>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2</h2>
+<p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
 <p>pass) was <strong>data-gated</strong> by its own header (&quot;no A/B evidence, no switch&quot;) and</p>
 <p>AC4 (&quot;matched hand-rolled yield over ≥10 runs at lower cost … otherwise abandon</p>
 <p>this issue with the data cited&quot;).</p>
@@ -545,8 +568,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* decision-record PR #187</p>
 <p>squash-merged <code>e7aadf7</code>, CI green, v2.64.2. Telemetry embedded below. Issue</p>
 <p>closed as *not planned*, data cited.</p>
-<p>---</p></section>
-<section class="mstone"><h3>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)* <span class="chip c-conf">MERGED</span></h3><p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
+<p>---</p>
+<h2>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)*</h2>
+<p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
 <p>state schema, from design #134) and #163 (dependency-DAG + epic anchor,</p>
 <p>schema v2) — implemented together in one PR (#163 extends #148&#x27;s queue).</p>
 <p><strong>What shipped.</strong></p>
@@ -590,10 +614,10 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>&quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan</p>
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#320 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>5 added · 2409/2410 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: passed</td></tr><tr><th>Usage</th><td>in 35290972 / out 164554 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>1</td><td>1</td><td>fast_path</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>1</td><td>1</td><td>pass</td></tr></tbody></table></section>
+<p>convention). Telemetry for this slot is embedded below.</p>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#334 (bug, standard)</td></tr><tr><th>Tests</th><td>5 added · 2418/2419 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Lightweight Reflect</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>9</td><td>Code Review</td><td>4</td><td>4</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-08 21:56 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-09 10:36 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

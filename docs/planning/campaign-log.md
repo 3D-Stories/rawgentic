@@ -14,6 +14,40 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Standalone — codex reliability (audit #328 fallout)
+
+### #334 — codex thought-partner dispatches hang: routing rule + dead-job protocol + userns runbook · v3.24.26
+
+**Issue.** #334 (bug): two same-day cross-model "thought partner" dispatches via the
+third-party `codex:codex-rescue` path failed — Codex's bwrap sandbox died on Ubuntu
+24.04's `apparmor_restrict_unprivileged_userns=1` (kernel-audit evidence on the
+issue), then the connector fallback hung >21 min with no watchdog anywhere
+(`codex-companion.mjs` has only a 240s status-poll wait).
+
+**RCA pivot.** The issue as filed proposed building a timeout-enforced consult path —
+Step 2 found it **already exists** (WF13 `peer-consult` + the `consult` CLI, 600s
+fail-closed, 12 lib tests). Root cause reclassified: a routing/guidance gap, not
+missing code. Scope-correction comment posted on the issue.
+
+**What shipped.** `docs/codex-reliability.md` — canonical routing rule (load-bearing
+consults go through WF13/`consult`, never bare `codex-rescue`), dead-job protocol
+(absolute wall-clock ceiling + output-silence signal, mirrors #331's dead-agent
+rule), field-tested AppArmor bwrap-userns host runbook (applied + verified on the
+dev host same day). Repo-manual §8 pointer so sessions load the rule.
+`tests/test_codex_reliability_doc.py` — 5 guards, red before the doc existed.
+
+**Reviews.** Step 4 reflect + cross-model adversarial (codex, `plan` type): 0C/2H/3M,
+all 5 applied (dispatch-surface pointer, platform_apis declaration, version/test
+naming, 3-piece drift guard, per-slot detail). Step 9: `silent-failure-hunter` +
+`code-reviewer` (both Opus): 0C/0H/0M/4L, all 4 applied (absolute-deadline semantics,
+recipe-token guard, RCA artifacts committed, sandbox parenthetical softened).
+Security scan PASS (iac/sca visible skips).
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry embedded below.
+
+---
+
 ## Epic #309 — harness safety, memory consolidation & workspace janitor
 
 The 2026-07-07 unified-review scope that was never filed (children #300–#308,
@@ -21,7 +55,7 @@ mostly supervised live-config items). Repo children run WF2/WF3 under the owner'
 2026-07-08 scoped unsupervised grant; live-config children apply with timestamped
 backups and close on-issue.
 
-### #320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23
+### #320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23 <br>*(status backfill: PR #321 squash-merged `4e6a723`)*
 
 **Issue.** #320 (epic #309): PR #319 (#314, option 3) shipped fail-closed
 **projection** read discipline in WF2 — token-heavy runner/scan/CI output consumed
