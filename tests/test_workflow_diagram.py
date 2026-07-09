@@ -184,3 +184,38 @@ def test_diagram_newest_rev_matches_plugin_version():
     shipped = tuple(int(x) for x in plugin["version"].split("."))
     assert newest <= shipped, (
         f"diagram documents rev {revs[0]} > shipped plugin {plugin['version']}")
+
+
+def test_wf14_registry_entry_present():
+    """#337: WF14 run-feedback documented as a diagram workflow (skeletal)."""
+    text = _html()
+    assert "WF14" in text and "Run Feedback" in text
+    assert "skills/run-feedback" in text
+    # real WF14 phases, not invented ones (mirrors the WF1/WF3/WF5 sourcing check)
+    assert "Telemetry Audit" in text
+    assert "Gather Run Facts" in text
+
+
+def test_every_ordered_workflow_has_nonempty_default_steps():
+    """#337 guard: every DATA.order key carries versions[revs[0]] with a
+    non-empty steps array — an empty/steps:null-only 'skeletal' entry crashes
+    the SPA on tab click (the renderer dereferences versions[V].steps
+    unconditionally; the steps:null rebuild loop reads revs[0]'s steps as its
+    source, so revs[0] itself must be real)."""
+    text = _html()
+    m = re.search(r'order:\s*\[([^\]]*)\]', text)
+    assert m, "DATA.order not found"
+    keys = re.findall(r'"(wf\d+)"', m.group(1))
+    assert keys, "DATA.order empty"
+    for key in keys:
+        wf = re.search(rf'\b{key}:\s*{{', text)
+        assert wf, f"workflows.{key} entry missing"
+        block = text[wf.start():]
+        revs = re.search(r'revs:\["([0-9.]+)"', block)
+        assert revs, f"{key}: revs array missing or empty"
+        newest = revs.group(1)
+        ver = re.search(rf'"{re.escape(newest)}":\s*{{[^{{]*steps:\s*\[', block)
+        assert ver, (
+            f"{key}: versions[{newest}] must carry a real steps ARRAY "
+            f"(steps:null or a missing versions entry for revs[0] crashes the SPA)"
+        )
