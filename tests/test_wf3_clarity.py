@@ -224,3 +224,12 @@ class TestDispatchGrammar:
         assert grammar in corpus, (
             "the WF3 review-only canonical DISPATCH grammar line must be present "
             "in the fix-bug corpus")
+
+    def test_wf3_per_invocation_emission_rule_present(self):
+        """#330 8a hardening: two review agents must mean two DISPATCH lines."""
+        corpus = " ".join(skill_corpus("fix-bug").split())
+        rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
+                "— WF3 Step 9's two review agents = two lines")
+        assert rule in corpus, (
+            "the WF3 per-invocation DISPATCH emission rule must be present in "
+            "the fix-bug corpus")

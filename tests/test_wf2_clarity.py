@@ -748,3 +748,13 @@ class TestDispatchGrammar:
         assert grammar in corpus, (
             "the WF2 canonical DISPATCH grammar line must be present in the "
             "implement-feature corpus")
+
+    def test_wf2_per_invocation_emission_rule_present(self):
+        """#330 8a hardening: the per-invocation rule is the load-bearing
+        emission sentence — without it a two-reviewer gate can emit one line."""
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
+                "— a multi-reviewer gate emits one line per reviewer")
+        assert rule in corpus, (
+            "the WF2 per-invocation DISPATCH emission rule must be present in "
+            "the implement-feature corpus")

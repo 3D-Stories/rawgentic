@@ -119,7 +119,9 @@ Canonical regex (assembly's scoped grep + validator):
 ^DISPATCH issue=(\d+) role=(review) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
 ```
 Emission rules:
-- One line per dispatch DECISION (not per attempt), at completion/abandonment. Retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error`; a hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`.
+- One line per SUBAGENT INVOCATION dispatched (not per attempt) — WF3 Step 9's two review agents = two lines.
+- Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is silently lost).
+- Retry semantics: a single retry of the SAME invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error`. A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds.
 - `type`/`model`/`effort` values are stable slugs matching `[A-Za-z0-9_.:/-]+` (no spaces, no commas). Write the literal `null` when the role resolved `inherit` (model) or `none` (effort) — never an empty string or "unknown".
 - A generic inline-prompt review dispatch (no bundled agent type ran) uses the stable `subagent_type` token `generic-review` and carries `resolution=generic`.
 - `issue=<n>` is this run's issue number (scoping key — assembly greps the whole session-notes file for `^DISPATCH issue=<n> `). `DISPATCH` is uppercase so it can never collide with the lowercase start-time prose line.
