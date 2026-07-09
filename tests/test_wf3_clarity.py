@@ -126,3 +126,78 @@ def test_step11_documents_has_ci_false_skip():
         "Step 11 detail must state it is skipped when has_ci == false, matching "
         "<mandatory-steps> (#182 companion Medium)"
     )
+
+
+# --- #320: port the #314 mechanical-projection read discipline into WF3. ---
+# Section-sliced, ONE canonical sentence per guard (repo mistake #6: no
+# whole-corpus regex, no substring counts). Companion to
+# test_wf2_clarity.py::TestDelegatedReads (the WF2 sibling this ports from).
+
+
+def _norm(s: str) -> str:
+    """Whitespace-collapse so wrapped prose compares equal (WF2 sibling does
+    the same `" ".join(text.split())` before pinning a canonical sentence)."""
+    return " ".join(s.split())
+
+
+class TestDelegatedReadsWF3:
+    """The #314 contract in WF3: the RED reproduction run (Step 7 item 1), the
+    full-suite regression run (Step 7 item 5 / Step 8 item 4), and the CI
+    `--log-failed` read (Step 11 item 3) consume runner/CI output as bounded
+    mechanical projections, never full-log dumps into the orchestrator's
+    context. Prose + drift guards only (#320): the byte-threshold constants are
+    skill-agnostic and shipped in #319; no hook changes here."""
+
+    def _step7(self) -> str:
+        return _section(_text(), "## Step 7:", "## Step 8:")
+
+    def _step8(self) -> str:
+        return _section(_text(), "## Step 8:", "## Step 9:")
+
+    def _step11(self) -> str:
+        return _section(_text(), "## Step 11:", "## Step 12:")
+
+    def test_step7_projection_final_summary_tail(self):
+        # AC1: the RED run + full suite consume the runner's own bounded summary.
+        s7 = _norm(self._step7())
+        assert ("consume the runner's own final summary (pass/fail counts + "
+                "failing test ids + first assertion lines") in s7, (
+            "Step 7 must wire the #314 test-output projection (final-summary tail)")
+
+    def test_step7_projection_fail_closed(self):
+        # AC1: the fail-closed rule — a failing-run projection that is empty /
+        # malformed / command-failed falls back to the inline raw read.
+        s7 = _norm(self._step7())
+        assert ("an empty, malformed, or command-failed projection on a failing "
+                "run falls back to the inline raw read") in s7, (
+            "Step 7 must carry the #314 fail-closed inline-fallback rule")
+
+    def test_step8_verify_all_tests_pass_is_a_projection(self):
+        # AC1: Step 8's "verify all tests pass" is projection-consumed too.
+        s8 = self._step8()
+        assert "projection" in s8, (
+            "Step 8 item 4 (verify all tests pass) must consume the run as a "
+            "#314 projection")
+
+    def test_step11_log_failed_bounded_grep(self):
+        # AC2: CI --log-failed consumed as a bounded grep over the threshold,
+        # measured with a piped wc -c, same fail-closed fallback.
+        s11 = self._step11()
+        assert "WF2_READ_DELEGATE_BYTES_LOG" in s11, (
+            "Step 11 must name the skill-agnostic byte threshold constant (#320)")
+        assert "| wc -c" in s11, (
+            "Step 11 must measure --log-failed with a piped wc -c (#314)")
+        assert _norm(
+            "grep it to the failing job/step + assertion/traceback first lines "
+            "instead of reading the full log") in _norm(s11), (
+            "Step 11 must bound the --log-failed read to failing job/step + "
+            "assertion/traceback first lines (#314 AC2)")
+
+    def test_option3_no_llm_reader_surface(self):
+        # AC4: option-3 scope — WF3 ports the mechanical projections ONLY; the
+        # validated-index LLM reader path (step11-diff/step2-map) is NOT wired.
+        c = _text()
+        assert "validate_index" not in c, (
+            "WF3 must not wire the validated-index reader (option-3 scope, #320 AC4)")
+        assert ".rawgentic-read-" not in c, (
+            "WF3 must not wire the delegated-read temp-artifact surface (#320 AC4)")
