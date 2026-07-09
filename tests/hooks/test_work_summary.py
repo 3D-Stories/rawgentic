@@ -1560,6 +1560,132 @@ class TestValidateGoalGuard:
         assert any("goal_guard" in e for e in errs)
 
 
+class TestValidateDispatches:
+    """`dispatches` (#329) is a top-level *validated-optional* list, same
+    present-is-strict philosophy as `usage`/`goal_guard`: absent is valid (old
+    records unaffected, no schema bump); present must be a list of dicts, each
+    carrying all 6 keys with strict vocab for role/outcome/resolution, a
+    non-empty subagent_type, and string-or-null model/effort."""
+
+    def _dispatch(self, **overrides):
+        base = {"role": "review", "subagent_type": "rawgentic-reviewer",
+                "model": "opus", "effort": "high", "outcome": "ok",
+                "resolution": "primary"}
+        base.update(overrides)
+        return base
+
+    def test_happy_path_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [
+            self._dispatch(),
+            self._dispatch(role="implementation", subagent_type="rawgentic-implementer",
+                           model=None, effort=None, outcome="retried",
+                           resolution="fallback"),
+        ]
+        assert validate_record(rec) == []
+
+    def test_absent_is_valid_legacy_record(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        assert "dispatches" not in rec
+        assert validate_record(rec) == []
+
+    def test_empty_list_valid(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = []
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("bad", [{"role": "review"}, "review", 3])
+    def test_not_a_list_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = bad
+        assert any("dispatches" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("bad", ["review", 3, None, ["role"]])
+    def test_entry_not_a_dict_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [bad]
+        assert any("dispatches[0]" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("key", ["role", "subagent_type", "model", "effort",
+                                     "outcome", "resolution"])
+    def test_missing_key_rejected(self, key):
+        from work_summary import validate_record
+        rec = _valid_record()
+        d = self._dispatch()
+        del d[key]
+        rec["dispatches"] = [d]
+        assert any("dispatches[0]" in e and key in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("bad", ["approve", "OK", "", None, 3, True])
+    def test_bad_role_vocab_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(role=bad)]
+        assert any("dispatches[0].role" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("bad", ["done", "OK", "", None, 3, True])
+    def test_bad_outcome_vocab_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(outcome=bad)]
+        assert any("dispatches[0].outcome" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("bad", ["default", "PRIMARY", "", None, 3, True])
+    def test_bad_resolution_vocab_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(resolution=bad)]
+        assert any("dispatches[0].resolution" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("valid_role", ["review", "implementation", "analysis", "other"])
+    def test_each_role_vocab_valid(self, valid_role):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(role=valid_role)]
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("valid_outcome", ["ok", "error", "retried", "dead"])
+    def test_each_outcome_vocab_valid(self, valid_outcome):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(outcome=valid_outcome)]
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("valid_resolution", ["primary", "fallback", "generic"])
+    def test_each_resolution_vocab_valid(self, valid_resolution):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(resolution=valid_resolution)]
+        assert validate_record(rec) == []
+
+    @pytest.mark.parametrize("bad", ["", "   ", 3, True, None])
+    def test_bad_subagent_type_rejected(self, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(subagent_type=bad)]
+        assert any("dispatches[0].subagent_type" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("field", ["model", "effort"])
+    @pytest.mark.parametrize("bad", [3, True, 1.5, [], {}])
+    def test_model_effort_non_string_non_null_rejected(self, field, bad):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(**{field: bad})]
+        assert any(f"dispatches[0].{field}" in e for e in validate_record(rec))
+
+    @pytest.mark.parametrize("field", ["model", "effort"])
+    def test_model_effort_null_valid(self, field):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["dispatches"] = [self._dispatch(**{field: None})]
+        assert validate_record(rec) == []
+
+
 # --- #155 Task 3: render_summary best-effort Usage line --------------------
 
 class TestRenderUsage:
