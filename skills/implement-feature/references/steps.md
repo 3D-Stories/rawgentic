@@ -1646,6 +1646,27 @@ measurable signal — not just a sentence the user reads once.
    `hooks/work_summary.py` — `validate_record` only checks the keys it knows about and does not
    reject unrecognized top-level keys, so an omitted or present `lane` are both valid.
 
+2d. **dispatches[] assembly (#330).** Assemble `dispatches[]` by grepping
+   claude_docs/session_notes.md for lines matching `^DISPATCH issue=<n> ` where
+   `<n>` is this run's issue number. INPUT is `claude_docs/session_notes.md`; each
+   matching line becomes one `dispatches[]` entry carrying the 6 schema fields
+   (`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`) —
+   `issue=<n>` is the scoping key ONLY, it is NOT itself a record field. A
+   literal `null` in the `model`/`effort` capture position becomes JSON `null`,
+   never the string `"null"`. Entries preserve note order (the order the lines
+   appear in the session-notes file) and are NEVER deduplicated — two
+   identical lines are two distinct dispatches (e.g. Step 8a's two
+   identically-configured reviewers). A line starting `DISPATCH ` that fails
+   the canonical regex (`shared/blocks/model-routing-resolve.md`) is skipped
+   and adds an extra note `{"label": "dispatch capture notes", "value":
+   "skipped <n> malformed DISPATCH line(s)"}` — a malformed capture line never
+   fails the record. Zero well-formed lines for this issue → OMIT the
+   `dispatches` key entirely (never an empty array). Assembly does NOT compare
+   against the start-time observability line count — under-count detection is
+   owned entirely by WF14's dispatch-completeness rubric. OUTPUT is the
+   `dispatches` key of `/tmp/wf2-run-record.json`; the full schema shape lives
+   in `references/run-record.md`.
+
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):
    ```bash

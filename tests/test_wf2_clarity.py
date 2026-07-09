@@ -758,3 +758,29 @@ class TestDispatchGrammar:
         assert rule in corpus, (
             "the WF2 per-invocation DISPATCH emission rule must be present in "
             "the implement-feature corpus")
+
+
+# --- #330: dispatches[] assembly instruction at WF2 Step 16 ---
+
+class TestDispatchesAssembly:
+    """Header-index-sliced guard (repo convention: this file's TestTieredLoopback
+    pattern, :444-454) pinning the Step 16 dispatches[] assembly instruction — the
+    canonical sentence telling the orchestrator how to turn #330's DISPATCH audit
+    lines into the run-record's dispatches[] key. Location pin (reads steps.md
+    directly, not the corpus) since this is a specific-file, specific-section
+    contract, not corpus-wide content."""
+
+    def _step16(self) -> str:
+        text = (REFERENCES / "steps.md").read_text()
+        assert "## Step 16:" in text, "Step 16 not found"
+        return text[text.index("## Step 16:"):]
+
+    def test_canonical_assembly_sentence_present(self):
+        s16 = " ".join(self._step16().split())
+        sentence = (
+            "Assemble `dispatches[]` by grepping claude_docs/session_notes.md "
+            "for lines matching `^DISPATCH issue=<n> ` where `<n>` is this "
+            "run's issue number.")
+        assert sentence in s16, (
+            "Step 16 must contain the canonical #330 dispatches[] assembly "
+            "sentence")

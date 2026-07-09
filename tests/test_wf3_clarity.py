@@ -233,3 +233,27 @@ class TestDispatchGrammar:
         assert rule in corpus, (
             "the WF3 per-invocation DISPATCH emission rule must be present in "
             "the fix-bug corpus")
+
+
+# --- #330: dispatches[] assembly instruction at WF3 Step 14 ---
+
+class TestDispatchesAssembly:
+    """Header-index-sliced guard (repo convention: test_wf2_clarity.py's
+    TestTieredLoopback pattern, :444-454) pinning the Step 14 dispatches[]
+    assembly instruction — the WF3 mirror of the WF2 Step 16 guard. Location pin
+    (reads steps.md directly, not the corpus) since this is a specific-file,
+    specific-section contract."""
+
+    def _step14(self) -> str:
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        return _section(text, "## Step 14:", "## Workflow Resumption")
+
+    def test_canonical_assembly_sentence_present(self):
+        s14 = " ".join(self._step14().split())
+        sentence = (
+            "Assemble `dispatches[]` by grepping claude_docs/session_notes.md "
+            "for lines matching `^DISPATCH issue=<n> ` where `<n>` is this "
+            "run's issue number.")
+        assert sentence in s14, (
+            "Step 14 must contain the canonical #330 dispatches[] assembly "
+            "sentence")
