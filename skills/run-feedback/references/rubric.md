@@ -14,7 +14,9 @@ Every report quotes the rubric version it was assessed under.
   **inferred** (name what would confirm it) | **absent** | **unverifiable**.
 - Record the plugin version the run actually loaded (the cache path) and verify any
   defect still exists on current `main` before filing — feedback against a stale cache
-  is noise.
+  is noise. When current-main verification is unavailable (offline, detached cache),
+  still produce the assessment but do NOT file reproducibility-dependent plugin
+  defects — downgrade them to report-only findings with the verification gap stated.
 - Secrets by NAME only — no token values, no raw log dumps, in the report, in filed
   issues, or in the published artifact.
 
