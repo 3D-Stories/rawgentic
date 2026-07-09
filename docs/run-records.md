@@ -40,6 +40,7 @@ exceed `findings`, `passing` may not exceed `total`, `used` may not exceed
 | `follow_ups` | array | Optional list of strings; defaults to `[]`. |
 | `extra` | array | Optional ordered `{label, value}` (both strings) pairs for **workflow-specific** human lines that ride along in the render without bloating the uniform core (e.g. WF3's `Root Cause` / `Fix`). Defaults to `[]`. |
 | `usage` | object | Optional (#155). Best-effort telemetry: `input_tokens`, `output_tokens` (int\|null), `cost_estimate_usd`, `wall_clock_s` (number\|null), `model_mix` (object\|null, per-model `{input_tokens, output_tokens}`). Present is strict — all 5 keys required, nullable values; absent omits the object entirely rather than nulling it. Optional 6th key `capture_status` (#189): controlled vocab `{captured, unrecoverable, unavailable}`, fail-closed; when `captured`, `input_tokens`+`output_tokens` MUST be non-null and sum > 0 (the schema-level backstop against #155's null-forever state). Populated live by `hooks/usage_capture.py` (parses the session transcript); historical rows backfilled to `unrecoverable`. |
+| `dispatches` | array | Optional (#329). List of per-subagent-dispatch objects. Present is strict, same present-is-strict philosophy as `usage`/`goal_guard`: each entry requires all 6 keys — `role` (one of `analysis`/`implementation`/`other`/`review`), `subagent_type` (non-empty string), `model` (string\|null), `effort` (string\|null), `outcome` (one of `dead`/`error`/`ok`/`retried`), `resolution` (one of `fallback`/`generic`/`primary`) — fail-closed on non-strings, case variants, or null in a vocab field. Absent entirely → pre-#329 records stay valid, no schema version bump. |
 
 The fields above the line are the **uniform core** every workflow emits, so
 Tier-2 can aggregate across workflows; `extra` is the escape hatch for
@@ -139,6 +140,34 @@ When derivable, `summarize` also injects `usage.worker_token_share` (rounded to
 `lane`: `validate_record`'s required keys are unchanged and records without it
 remain valid (no schema version bump).
 
+## dispatches (#329)
+
+`dispatches` is optional structured telemetry for individual subagent dispatches
+during a run — one entry per dispatch, each carrying `role`, `subagent_type`,
+`model`, `effort`, `outcome`, `resolution`. It exists to replace transcript
+archaeology (re-reading a run's raw transcript to reconstruct what got dispatched
+and how it went) with a queryable record.
+
+Two of the six keys are easy to conflate but orthogonal — never collapse one into
+the other:
+
+- **`outcome`** is the dispatch's *terminal result*: `ok`, `error`, `retried`, or
+  `dead`. `dead` is the sharp one — a dispatch that returned "successfully" (no
+  error, no retry) but whose result was vacuous (empty body, `confirmedCount: 0`;
+  see mistake #9 in this repo's `CLAUDE.md`). A `dead` dispatch is NOT an `error`:
+  it completed without raising, it just produced nothing usable.
+- **`resolution`** is the *invocation path* that was actually taken: `primary`
+  (the named `subagent_type` ran as requested), `fallback` (the named agent type
+  was unavailable, so a bundled substitute ran instead), or `generic` (no named
+  agent type at all — an inline-prompt tier).
+
+A dispatch can be `{outcome: ok, resolution: fallback}` (the substitute agent did
+fine) just as easily as `{outcome: dead, resolution: primary}` (the requested
+agent ran and came back empty) — the two axes vary independently.
+
+Emission (actually populating `dispatches` from a live workflow run) is wired by
+follow-up #330; this schema entry only defines and validates the shape.
+
 ## Fail-closed for the store, best-effort for the human
 
 - **Fail closed on the store.** A record that fails validation is **never**
@@ -190,6 +219,7 @@ metrics:
 | Loop-backs | mean used; `pct_hit_cap` (used==budget, over runs with budget>0) |
 | Outcomes | CI-pass (over ci∈{passed,failed}), merge (over non-null merged), deploy-success (over deploy≠not_applicable), security-blocked (over ran==true), scanner-skip frequency |
 | Effort | means of files_changed / insertions / deletions / commits / tests.added (null insertions/deletions excluded from their mean) |
+| Dispatches | counts by role and by model (a null/missing model buckets under `(none)`); dead rate (`outcome==dead` over dispatch entries); fallback rate (`resolution==fallback` over dispatch entries); `runs_with_dispatches`. Omitted entirely when no record in the store (or partition, in `--group-by` mode) carries the `dispatches` key at all — a record with `dispatches: []` still counts as carrying it. |
 
 Every rate reports its denominator; a 0 denominator renders `n/a` (never a
 divide-by-zero). `--group-by` partitions every metric (a missing complexity
