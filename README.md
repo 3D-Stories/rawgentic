@@ -1,6 +1,6 @@
 # rawgentic
 
-**6 SDLC workflow skills + 6 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**7 SDLC workflow skills + 6 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 15 skills organized in three layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 16 skills organized in three layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
 - **Workspace management** (6 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, and session-registry housekeeping
-- **SDLC workflows** (6 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery
+- **SDLC workflows** (7 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery and a post-run `run-feedback` self-assessment (WF14)
 - **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
@@ -176,6 +176,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Adversarial Review       | `/rawgentic:adversarial-review`| 5     | Cross-model critique of a design/spec/plan/PRD/ADR/RFC/README artifact |
 | Incident Response        | `/rawgentic:incident`          | 14    | Production incident: stabilize first, then RCA      |
 | Peer Consult             | `/rawgentic:peer-consult`      | 5     | Independent cross-model design proposal for a problem/spec artifact |
+| Run Feedback             | `/rawgentic:run-feedback`      | 5     | Post-run assessment of the workflow machinery itself (WF14) |
 
 <details>
 <summary><strong>Issue Creation (WF1)</strong> — 5 steps</summary>
@@ -432,7 +433,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 7 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
+All 8 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`
@@ -651,7 +652,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (9/15 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, and `scan` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (9/16 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, and `scan` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -702,6 +703,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.25.0 (2026-07-09)
+- **WF14 `run-feedback`: post-run workflow self-assessment skill (#337).** New report-only skill assessing the WORKFLOW MACHINERY of a completed WFn run (never its deliverable): gathers run facts into a confirmed/inferred evidence ledger (run-record via `--record <path>` or `latest`; session-note markers with acceptance boundaries; loaded-cache-vs-main version), scores six 1-5 dimensions against anchored rubrics with evidence-quota caps (`skills/run-feedback/references/rubric.md`, v1), audits telemetry field-by-field against session evidence (six-way verdict vocabulary; standing weak spots — session-level usage attribution, `reviewer_kind` fidelity, gate-count honesty, store-lag — named as checks), renders `.md`+`.html` via `render_artifact.py`, and routes feedback: defects dup-checked and filed always against `3D-Stories/rawgentic` (labels incl. auto-created `wf-feedback`, cap 3/run with `not-filed-cap` preservation), telemetry improvements cross-linked to #329/#330/#333, friction as one mempalace memory with a tri-state visible-skip surface. Embed-ready (`runFeedback` config key via the generic `is_enabled_for` parser — no code change); WF2/WF3 invocation wiring deferred to a named follow-up issue. Registration: whitelist, codex symlink, MANIFEST sync, count guards 15->16, `EXPECTED_CONFIG_LOADING_COUNT` 7->8. Tests: red-before-green `tests/test_run_feedback_clarity.py` (14 canonical-sentence drift guards) + a diagram DATA-shape guard. New workflow documented -> WF14 diagram entry @ REV 3.25.0. Suite 2418+1skip→SUITE_FINAL_PLACEHOLDER.
 ### v3.24.26 (2026-07-09)
 - **Codex reliability doc: consult routing rule, dead-job protocol, host userns runbook (#334).** Two same-day cross-model "thought partner" dispatches via the third-party `codex:codex-rescue` path lost their shell (Ubuntu 24.04 `apparmor_restrict_unprivileged_userns=1` kills Codex's bwrap sandbox — kernel-audit evidence in #334) and then hung >21 min (the companion runtime has only a 240s status-poll timeout, no job wall-clock watchdog) — while the plugin's own timeout-enforced consult path (WF13 `peer-consult` + the `consult` CLI, 600s fail-closed) already existed, tested, and worked the same day. Root cause: a routing/guidance gap, not missing code. Fix: new `docs/codex-reliability.md` (canonical routing rule — load-bearing consults go through WF13/`consult`, never bare `codex-rescue`; dead-job deadline protocol mirroring #331's dead-agent rule; field-tested AppArmor bwrap-userns runbook with failure signature) + a repo-manual §8 pointer. Tests: red-before-green `tests/test_codex_reliability_doc.py` (doc-exists + 3 canonical-sentence guards + a runbook-recipe token guard). No workflow-spine change (docs + manual pointer, no station/gate/loop-back delta) → no diagram REV. Suite 2413+1skip→2418+1skip.
 ### v3.24.25 (2026-07-09)
