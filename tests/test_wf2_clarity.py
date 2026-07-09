@@ -696,11 +696,17 @@ class TestDelegatedReads:
         assert ("an empty, malformed, or command-failed projection falls back "
                 "to the inline raw read") in c
 
-    def test_step11_reader_annotation_present(self):
+    def test_reader_path_deferred_not_wired(self):
+        # #314 option 3: the step11-diff / step2-map LLM readers are built
+        # (validate_index) but NOT wired this release. Step 11 item 1 must be
+        # the plain inline `git diff`, carrying no reader analysis annotation,
+        # and the contract must say the reader path is deferred.
         s11 = _step11()
-        assert s11.count("<!-- model-routing: role=analysis -->") >= 1, (
-            "Step 11 item 1's diff reader must carry the analysis-role "
-            "annotation")
+        assert ".rawgentic-read-" not in s11, (
+            "Step 11 item 1 must not wire the diff reader (option 3 defers it)")
+        c = " ".join(self._contract().split())
+        assert "BUILT but NOT WIRED" in c, (
+            "the contract must mark the validated-index reader path deferred")
 
     def test_projection_discipline_at_each_surface(self):
         text = _text()

@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#314 Delegated Reads — A/B Results (rounds 1–3)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-08 20:17 MDT</div>
+<h1>#314 Delegated Reads — A/B Results (rounds 1–3)</h1>
+
+</header>
+<main>
+<h1>#314 A/B experiment results — delegated-read index vs inline full-artifact read</h1>
+<p>Date: 2026-07-08. Owner acceptance bars: (1) B-arm saves tokens; (2) B-arm quality within</p>
+<p>±5% pooled (no artifact &gt;10% below). Design: <code>2026-07-08-314-delegated-read-digests.md</code></p>
+<p>§A/B experiment. Raw materials + sealed blinding key: session scratchpad <code>ab314/</code>.</p>
+<h2>Verdict</h2>
+<p>| Bar | Result |</p>
+<p>|---|---|</p>
+<p>| <strong>Quality ±5%</strong> | <strong>PASS</strong> — pooled delta <strong>+0.0000%</strong> (A 9.0556 vs B 9.0556); worst artifact −3.39% (A3), well inside −10% |</p>
+<p>| <strong>Tokens saved</strong> | <strong>FAIL</strong> — B consumed <strong>+91.9%</strong> MORE tokens than A (358,067 vs 186,601) |</p>
+<p>Per the design&#x27;s honest-failure clause the experiment result is reported as-is and the</p>
+<p>ship decision returns to the owner. Not shipped as success.</p>
+<h2>Setup (as designed)</h2>
+<p>3 real merged-PR diffs: A1 = 02c11bd (#316 telemetry, 19.8KB/7 files), A2 = f836259</p>
+<p>(#311 wal-guard security fix, 29.8KB/11), A3 = 3488ab2 (#113 charter feature,</p>
+<p>72KB/14). A-arm: one opus agent reads the full raw diff + answers a fixed 6-item</p>
+<p>questionnaire. B-arm: sonnet index reader (fed the <code>--name-only</code> unit list) →</p>
+<p><code>plan_lib.validate_index</code> → opus consumer answers the SAME questionnaire from the index</p>
+<p>+ ≤3 targeted <code>git show &lt;sha&gt; -- &lt;file&gt;</code> reads (never the full artifact). Scoring:</p>
+<p>q1/q3 set-F1×10 vs git ground truth (identical arms — delta 0 on every artifact);</p>
+<p>q2/q4/q5/q6 by per-artifact blinded opus judges, answers unlabeled in randomized</p>
+<p>recorded order. Live adversarial probes against the validator: fabricated quote /</p>
+<p>dropped fed file / vacuous return — <strong>3/3 REJECTED</strong>.</p>
+<h2>Numbers</h2>
+<p>| Artifact | A tokens | B tokens (reader+consumer) | B vs A | A quality | B quality |</p>
+<p>|---|---|---|---|---|---|</p>
+<p>| A1 (19.8KB) | 52,237 | 107,343 (57,751+49,592) | +105.5% | 9.00 | 9.17 |</p>
+<p>| A2 (29.8KB) | 57,717 | 112,325 (63,304+49,021) | +94.6% | 8.33 | 8.50 |</p>
+<p>| A3 (72KB) | 76,647 | 138,399 (82,303+56,096) | +80.6% | 9.83 | 9.50 |</p>
+<p>| <strong>Pooled</strong> | <strong>186,601</strong> | <strong>358,067</strong> | <strong>+91.9%</strong> | <strong>9.056</strong> | <strong>9.056</strong> |</p>
+<p>Blinded-judge notes: B was scored equal-or-better on A1/A2 (judge on A1 called the</p>
+<p>B-arm answers &quot;marginally more precise&quot; without knowing which was which); A beat B on</p>
+<p>A3 by 0.33 (B grouped helpers where A enumerated them).</p>
+<h2>Validator field results (independent of the bars)</h2>
+<ul>
+<li><strong>Zero fabricated quotes</strong> across 22 evidence entries from three real sonnet readers</li>
+</ul>
+<p>  (every quote grep-verified against its artifact).</p>
+<ul>
+<li><strong>Zero coverage misses</strong> — all three readers indexed exactly the fed unit set.</li>
+<li><strong>Sole rejection cause: the 120-char <code>one_line</code> cap</strong> (A1: 5, A2: 1, A3: 18 entries</li>
+</ul>
+<p>  over). Production behavior = inline fallback. A single prompt-level fix (&quot;hard-wrap</p>
+<p>  at 110 chars&quot;) or a cap of 160 would likely bring rejects to zero — worth one</p>
+<p>  follow-up if the pattern ships.</p>
+<h2>Why tokens failed (analysis, confirmed vs inferred)</h2>
+<ul>
+<li><strong>Confirmed:</strong> per-subagent fixed overhead (system prompt + tool schemas + reasoning)</li>
+</ul>
+<p>  is ~30–50k tokens; B pays it twice (reader + consumer). At 20–72KB artifacts (~5–18k</p>
+<p>  tokens of content), overhead dominates content by 3–10×, so adding an agent can never</p>
+<p>  pay for itself at these sizes. Every reader ALONE cost more than its entire A-arm.</p>
+<ul>
+<li><strong>Confirmed (cost-weighted too):</strong> even pricing sonnet at ~0.2× opus, B ≈ 61k</li>
+</ul>
+<p>  opus-equivalent vs A ≈ 52k on A1 — still worse, because the opus consumer alone</p>
+<p>  matches the whole A-arm.</p>
+<ul>
+<li><strong>Inferred (named limitation of this harness):</strong> the A-arm is a one-shot subagent</li>
+</ul>
+<p>  read; the PRODUCTION inline pattern the design targets is the ORCHESTRATOR holding a</p>
+<p>  large artifact across ~8 Step-11 turns, re-charged as cache-read every turn</p>
+<p>  (<code>usage_capture.py:104</code>) — the mechanism behind the #303 record&#x27;s 86% orchestrator</p>
+<p>  share. This harness could not measure held-context cost without running two full WF2</p>
+<p>  runs; the deep-reasoner brainstorm predicted the win lives there, not in the one-shot</p>
+<p>  read. What would confirm it: worker-share + orchestrator input tokens on the first</p>
+<p>  two comparable post-reinstall WF2 runs, one with delegation active and one without.</p>
+<ul>
+<li><strong>Break-even estimate:</strong> B beats A on raw tokens only when the artifact&#x27;s token</li>
+</ul>
+<p>  content exceeds the added agent overhead (~55k tokens ≈ 200KB+ artifact) — or when</p>
+<p>  the inline alternative is a HELD read multiplied across turns. The shipped default</p>
+<p>  thresholds (64KB diff / 32KB log) sit far below the one-shot break-even.</p>
+<h2>Options for the owner (decision required)</h2>
+<p>1. <strong>Ship prose+validator with thresholds raised to the empirical break-even</strong></p>
+<p>   (e.g. <code>WF2_READ_DELEGATE_BYTES_DIFF=262144</code>): delegation then fires only on monster</p>
+<p>   artifacts where it plausibly pays, quality-safe per this experiment. Cheap, honest.</p>
+<p>2. <strong>Ship as designed and measure the held-context claim in production</strong> (AC4&#x27;s</p>
+<p>   deferred check on real WF2 runs): accepts interim token cost on mid-size diffs to</p>
+<p>   test the real hypothesis this harness couldn&#x27;t reach.</p>
+<p>3. <strong>Ship the validator + projections only</strong> (projections are pure savings — no added</p>
+<p>   agent), drop the two LLM reader surfaces until a held-context measurement exists.</p>
+<p>4. <strong>Abandon the reader surfaces entirely</strong>, keep validator as tested infrastructure.</p>
+<p>Recommendation: <strong>option 1 + projections</strong> — the quality result and validator field</p>
+<p>results are genuinely positive; the failure is specifically &quot;added agent overhead at</p>
+<p>typical artifact sizes,&quot; which the threshold knob already controls.</p>
+<h2>Round 2 — slim readers (owner-directed, 2026-07-09)</h2>
+<p>Re-run with reduced reader context (small-tool-surface agent proxy, single-pass paged-read</p>
+<p>discipline, ≤110-char one_line brief) on the original three artifacts plus two</p>
+<p>representative ones: <strong>A4 = this branch&#x27;s own diff</strong> (80KB, over the 64KB trigger) and</p>
+<p><strong>A5 = chorestory d958085</strong> (128KB, cross-repo JS/SQL). Same blinded protocol, fresh</p>
+<p>sealed key (<code>ab314/blinding-key2.json</code>).</p>
+<p>| Artifact | A tokens | B r1 | B r2 (slim) | R2 gap | A quality | B2 quality |</p>
+<p>|---|---|---|---|---|---|---|</p>
+<p>| A1 (19.8KB) | 52,237 | 107,343 | 59,661 | +14.2% | 8.50 | 9.50 |</p>
+<p>| A2 (29.8KB) | 57,717 | 112,325 | 67,983 | +17.8% | 8.17 | 8.17 |</p>
+<p>| A4 (80KB) | 77,704 | — | 91,468 | +17.7% | 8.83 | 9.50 |</p>
+<p>| A5 (128KB) | 83,291 | — | 142,260 | +70.8% | 9.33 | 9.33 |</p>
+<p>| <strong>Total/pooled</strong> | <strong>270,949</strong> | (+91.9%) | <strong>361,372</strong> | <strong>+33.4%</strong> | <strong>8.708</strong> | <strong>9.125</strong> |</p>
+<ul>
+<li><strong>Quality: PASS with margin — B2 pooled +4.8% ABOVE control, worst artifact ±0.0%.</strong></li>
+</ul>
+<p>  The index arm won A1 (F1 1.0 vs 0.5 on file ground truth) and A4 (surfaced a headline</p>
+<p>  fact the full read missed), tied A2/A5.</p>
+<ul>
+<li><strong>Tokens: one-shot gap 91.9% → 33.4%</strong> with only a PROXY slim reader (reviewer agent&#x27;s</li>
+</ul>
+<p>  4-tool surface; its reviewer-flavored system prompt still aboard — the purpose-built</p>
+<p>  <code>rawgentic-reader</code> agent trims further). A5&#x27;s +70.8% reflects real work: the reader</p>
+<p>  disambiguated an embedded stale diff snapshot inside a review doc from the live hunks.</p>
+<ul>
+<li><strong>Validator, round 2: 2/5 clean; 3 rejects, ALL brief-grammar classes</strong> (evidence</li>
+</ul>
+<p>  quoted with the diff&#x27;s +/− prefix; one_line cap overruns; locator annotations like</p>
+<p>  &quot;(new file)&quot;) — zero fabricated quotes in 8 reader runs across both rounds. Fix: the</p>
+<p>  exact grammar lives in the dedicated reader agent&#x27;s system prompt, not ad-hoc briefs.</p>
+<ul>
+<li>Reader baggage measured at 45.3k for generic agents (tool schemas dominate); consumers</li>
+</ul>
+<p>  halved (49.6k → 24.7–39.1k) under the ≤3-targeted-reads discipline.</p>
+<p>Round-2 conclusion: quality survives — improves — under the slim configuration; the</p>
+<p>remaining one-shot premium is bounded and the carry-term economics (measured 99%</p>
+<p>cache-read share, 165–254k/turn) sit on top. The reader-agent TODO is now also the fix</p>
+<p>for every observed validator reject.</p>
+<h2>Round 3 — real slim reader agent (owner-directed, post-context-clear, 2026-07-09)</h2>
+<p>Round 3 replaced the R2 proxy with the REAL slim reader: a registered workspace agent</p>
+<p>(<code>reader-proto</code>: tools Read/Grep/Glob only, sonnet, the full index grammar baked into</p>
+<p>its system prompt covering every R1/R2 reject cause). Same four artifacts, same</p>
+<p>questionnaire, same consumer discipline (index + ≤3 targeted git reads), fresh sealed</p>
+<p>blinded key (<code>ab314-r3/blinding-key3.json</code>), independent opus judges per artifact.</p>
+<p>| Artifact | A tokens | B r2 (proxy) | B r3 (real agent) | R3 gap vs A | A quality | B3 quality |</p>
+<p>|---|---|---|---|---|---|---|</p>
+<p>| A1 (19.8KB) | 52,237 | 59,661 | 65,520 | +25.4% | 7.17 | 8.00 |</p>
+<p>| A2 (29.8KB) | 57,717 | 67,983 | 72,738 | +26.0% | 7.83 | 8.00 |</p>
+<p>| A4 (80KB) | 77,704 | 91,468 | 106,165 | +36.6% | 8.67 | 9.00 |</p>
+<p>| A5 (128KB) | 83,291 | 142,260 | 142,481 | +71.1% | 9.00 | 9.17 |</p>
+<p>| <strong>Total/pooled</strong> | <strong>270,949</strong> | <strong>+33.4%</strong> | <strong>386,904</strong> | <strong>+42.8%</strong> | <strong>8.167</strong> | <strong>8.542</strong> |</p>
+<ul>
+<li>**Quality: PASS — B3 pooled +4.6% above control, worst artifact +1.85% (B3 ≥ A on</li>
+</ul>
+<p>  all four).** Third consecutive round with the index arm at or above the full-read</p>
+<p>  control. (Cross-round pooled levels are not comparable — R3 judges scored the SAME</p>
+<p>  reused A answers lower than R2 judges did; only within-round deltas are meaningful.)</p>
+<ul>
+<li><strong>Tokens: FAIL, and the R3 hypothesis is REFUTED.</strong> Reader tokens A1 35.4k / A2 43.0k /</li>
+</ul>
+<p>  A4 69.2k / A5 98.7k — vs the R2 proxy that is +1.2% / +6.1% / +12.2% / −4.3%:</p>
+<p>  statistically the same, not &quot;well below.&quot; The proxy&#x27;s reviewer prompt + Bash tool were</p>
+<p>  NOT the cost; reading the artifact is. The purpose-built agent does not move one-shot</p>
+<p>  economics, so the pooled premium worsened to +42.8% (consumer costs also ran slightly</p>
+<p>  above R2 on A4/A5).</p>
+<ul>
+<li><strong>Validator, round 3: 1/4 clean (target 4/4 — MISSED; worse rate than R2&#x27;s 2/5).</strong></li>
+</ul>
+<p>  A4 clean. Rejects: A1 3× one_line &gt;120 chars; A2 an invented <code>coverage_note</code> entry key</p>
+<p>  + 1× &gt;120; A5 7× &gt;120. Zero fabricated quotes and zero coverage errors — now 12/12</p>
+<p>  reader runs across three rounds with no fabrication. Moving the grammar into the</p>
+<p>  agent&#x27;s system prompt did NOT fix cap discipline: models cannot reliably count</p>
+<p>  characters, wherever the instruction lives. The cap violations are a model limitation,</p>
+<p>  not a prompt-location problem.</p>
+<ul>
+<li>Implication: the production inline-fallback (reject → inline read) remains the</li>
+</ul>
+<p>  operative safety net; if delegation ships, either add ONE re-request-with-errors pass</p>
+<p>  or demote the one_line overrun from index-fatal to truncate-on-accept — fabrication</p>
+<p>  and coverage guards (the actual trust boundary) have never fired.</p>
+<p>Round-3 conclusion: quality is settled (three rounds, index arm never below control);</p>
+<p>one-shot token economics are also settled — AGAINST delegation at typical artifact</p>
+<p>sizes, with the premium stable at +25–71% regardless of reader implementation. The</p>
+<p>remaining open claim is the held-context/carry term (production WF2 measurement), which</p>
+<p>no offline harness reaches. This strengthens option 1 (+projections) — or option 3 for</p>
+<p>maximum caution — and removes &quot;build a leaner reader agent&quot; as a credible economics fix.</p>
+<h2>Pricing verification (2026-07-09, live source)</h2>
+<p>Owner asked to confirm the fable/opus/sonnet pricing assumptions. Verified against</p>
+<p>the live pricing page (platform.claude.com/docs/en/about-claude/pricing, fetched</p>
+<p>2026-07-09): fable-5 $10 in / $1 cache-read / $50 out per MTok; opus-4.8 $5 / $0.50 /</p>
+<p>$25; sonnet-5 $2 / $0.20 / $10 (introductory through 2026-08-31; $3 / $0.30 / $15 from</p>
+<p>2026-09-01).</p>
+<ul>
+<li><strong>&quot;Fable ≈ 2× opus&quot; — CONFIRMED exactly</strong> (2.0× on input, output, and cache-read).</li>
+</ul>
+<p>  The UNVERIFIED flag on this assumption is retired.</p>
+<ul>
+<li><strong>&quot;Sonnet ~10× cheaper than fable&quot; — REFUTED.</strong> Real ratio: 5× at introductory</li>
+</ul>
+<p>  pricing, 3.33× from 2026-09-01. (10× is the Haiku ratio.) The artifact&#x27;s §1b</p>
+<p>  &quot;~2.4× cut&quot; example was computed with the wrong ratio; recomputed with live prices</p>
+<p>  (5k-token diff held ~200 turns at fable cache-read $1/MTok vs sonnet reader + index</p>
+<p>  carry) the illustrative cut is ~2×, still dominated entirely by the carry term —</p>
+<p>  direction survives, magnitude trimmed.</p>
+<ul>
+<li>**This doc&#x27;s &quot;pricing sonnet at ~0.2× opus&quot; (§Why tokens failed) understated sonnet&#x27;s</li>
+</ul>
+<p>  cost** — real ratio 0.4× (intro) / 0.6× (standard). Recomputed A1 r1: B ≈ 72.7k</p>
+<p>  opus-equivalent vs A ≈ 52.2k — the &quot;still worse&quot; conclusion strengthens; no verdict</p>
+<p>  changes.</p>
+
+</main>
+<footer>Last updated: 2026-07-08 20:17 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

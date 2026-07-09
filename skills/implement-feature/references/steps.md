@@ -189,17 +189,36 @@ Concept: Anthropic "plan big, execute small" cookbook
 rule: **A raw artifact whose measured size exceeds its surface's byte threshold never
 enters the orchestrator's context.** A deterministic reduction (a runner summary, a gate
 field, a grep of failure lines) is read as a **mechanical projection**; a reduction that
-needs judgment is produced by an analysis-role reader subagent as a **validated index**.
+needs judgment would be produced by an analysis-role reader subagent as a **validated index**.
 **The reader returns material (an index), never a decision; design, plan, gate verdicts,
 and finding evaluation stay orchestrator-side** — and **every decision is made from raw
 bytes via targeted reads** (the index only says where the bytes are; index prose is never
 evidence).
 
+**Ship scope (#314, owner decision 2026-07-09 — option 3):** only the **mechanical
+projections** are wired this release (Steps 8, 9, 11.5, 13 below). The **validated-index
+reader path** (the `step11-diff` and `step2-map` LLM readers) is **BUILT but NOT WIRED**:
+`plan_lib.validate_index` and its suite ship as dormant infrastructure, and the byte
+thresholds / temp-artifact / staleness rules below are its spec for when it wires. The A/B
+experiment (`docs/planning/2026-07-08-314-ab-results.md`) settled quality in the index
+arm's favor across three rounds, but the LLM reader costs +25–71% more tokens one-shot with
+no implementation that removes it; its only remaining benefit is an unmeasured held-context
+("carry") saving. Wiring the readers is gated on the AC4 production carry measurement —
+until then they stay dormant.
+
+**Live this release — mechanical projections:**
+- **Projection validation (fail-closed):** capture the producing command's exit status;
+  when the source reports failure the projection must contain non-empty failure
+  identifiers; **an empty, malformed, or command-failed projection falls back to the
+  inline raw read**, logged and counted like a rejected index. The CI-log projection's
+  threshold is `WF2_READ_DELEGATE_BYTES_LOG` (default 32768) — env-tunable, clamped, frozen
+  at import in `hooks/plan_lib.py`.
+
+**Deferred — validated-index reader path (built, not wired):**
 - **Trigger:** measure with a PIPED byte count (`git diff … | wc -c` — bytes never enter
   context). Thresholds: `WF2_READ_DELEGATE_BYTES_DIFF` (default 65536) for diffs,
   `WF2_READ_DELEGATE_BYTES_LOG` (default 32768) for logs/scan output — env-tunable,
-  clamped, frozen at import in `hooks/plan_lib.py`. For thresholded surfaces only, under
-  threshold ⇒ inline exactly as today.
+  clamped, frozen at import in `hooks/plan_lib.py`. Under threshold ⇒ inline exactly as today.
 - **Index validation:** every reader return is a hypothesis. Validate with
   `plan_lib.validate_index(index, expected_units, artifact_text)` — closed schema,
   set-equality coverage against the unit list the dispatcher FED the reader
@@ -209,10 +228,6 @@ evidence).
   truncated/vacuous rejection. Rejection ⇒ **inline fallback, logged in session notes and
   counted in the run-record** — fail-open for HOW material is read, never for WHETHER a
   gate runs.
-- **Projection validation (fail-closed):** capture the producing command's exit status;
-  when the source reports failure the projection must contain non-empty failure
-  identifiers; **an empty, malformed, or command-failed projection falls back to the
-  inline raw read**, logged and counted like a rejected index.
 - **Temp artifacts:** `.rawgentic-read-<issue>-<token>.*` under the project root, mode
   0600, appended to the SAME stale-sweep globs and `.git/info/exclude` discipline as the
   Step 11 item 1a patch files. Immediately after writing each artifact run two fail-loud
@@ -363,7 +378,7 @@ unlabeled/manual issues, skip the guard and log the marker with (skipped).]**
 <!-- model-routing: role=analysis -->
 Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contract for the `analysis` role (generic subagents — no bundled analysis agent; `model: <analysis>` unless `inherit`; effort dual-path, always logged).
 
-1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts. **Delegated read (#314, non-trivial changes only — the trivial-inline path above is unchanged):** run the mapping as an `analysis`-role reader (the same routing annotation below covers it) that greps/reads in ITS context and returns a `step2-map` index (fed units = the issue's affected-components ids; discovered entries legitimately exceed them — the coverage check is a drop-guard, not a completeness proof; `source_ref` = HEAD sha). Validate via `plan_lib.validate_index`; rejection ⇒ map inline as before. Complexity classification and the lane decision stay YOURS, made after targeted reads of whatever the map surfaces.
+1. **Component mapping:** Using Serena MCP (`find_symbol`, `get_symbols_overview`) or Grep/Glob as fallback, identify all files and code that will need to change. Map the issue's "affected components" to actual project artifacts.
 
 2. **Dependency analysis:** Trace relationships from affected components to understand the blast radius. The scope depends on project type:
    - `application`: trace call chains from entry points (routes, handlers, main functions)
@@ -1164,27 +1179,10 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
 
 **Runs in PARALLEL with Step 10** (this is the foreground task).
 
-1. **Generate diff — delegated read (#314, see `### Delegated reads`):** measure first,
-   piped: `git diff ${capabilities.default_branch}..HEAD | wc -c`. Under
-   `WF2_READ_DELEGATE_BYTES_DIFF` ⇒ read inline exactly as before:
+1. **Generate diff:**
    ```bash
    git diff ${capabilities.default_branch}..HEAD
    ```
-   Over threshold ⇒ do NOT read the diff into your context. Write it to
-   `.rawgentic-read-<issue>-<token>.diff` (0600; run the post-creation asserts), compute
-   the fed unit list via `git diff --name-only ${capabilities.default_branch}..HEAD`, and
-   dispatch a reader subagent that reads the FILE in its own context and returns the
-   index JSON (schema in the design contract).
-
-<!-- model-routing: role=analysis -->
-   Dispatch the reader per the `<model-routing-resolve>` contract for the `analysis`
-   role. Validate the return with `plan_lib.validate_index(index, fed_units,
-   artifact_text=<the file's text via a subagent-side check or orchestrator grep -F per
-   evidence quote — never by reading the whole artifact inline>)`; rejection ⇒ inline
-   fallback, logged + counted. Consume the index as a MAP ONLY: at item 6 (finding
-   evaluation) read the specific file/hunk spans in question via targeted
-   `git diff ${capabilities.default_branch}..HEAD -- <file>` — never the full artifact,
-   and never treat index prose as evidence.
 
    **P15 pre-flight (when Step 8a fired any reviews):** read the review log via `plan_lib.read_review_log(<log_path>)` and read deferrals via `plan_lib.get_deferred_findings(<deferrals_path>)`. Build:
    - `reviewed_shas` — SHAs that already went through Step 8a
