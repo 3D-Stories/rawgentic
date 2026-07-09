@@ -68,7 +68,7 @@ Ask the user:
 1. Ask: "Enter the path to your existing project folder:"
 2. Validate the provided path exists on disk and is a directory.
    - **If it does not exist or is not a directory:** Tell the user: "That path doesn't exist. Please check and try again." Re-prompt for the path (do NOT create the directory).
-   - **If it exists:** Override `<path>` with the user-provided path. Skip Step 3 and continue directly to Step 3b (conformance check), then Step 4.
+   - **If it exists:** Override `<path>` with the user-provided path. Skip Step 3 and continue to Step 3b (conformance check) — whose bind-first note routes you through Step 4 (workspace file) and Step 5 (register + bind) before the audit reads any `<path>` file (#318) — then Step 6.
 
 ---
 
