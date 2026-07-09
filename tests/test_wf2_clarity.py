@@ -728,3 +728,23 @@ class TestDelegatedReads:
         assert "stat -c %a" in c and "git check-ignore -q" in c, (
             "the fail-silent temp-file deps need their fail-loud "
             "post-creation asserts")
+
+
+# --- #330: canonical DISPATCH completion-time audit-line grammar ---
+
+class TestDispatchGrammar:
+    """Drift guard for the #330 canonical DISPATCH audit line. The completion-
+    time grammar sentence (all 6 schema fields + issue scope) must be present in
+    the implement-feature corpus so the emitter has one canonical form to copy.
+    Whitespace-normalized per the repo convention (prose may hard-wrap)."""
+
+    def test_wf2_canonical_grammar_sentence_present(self):
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        grammar = (
+            "DISPATCH issue=<n> role=<review|implementation|analysis|other> "
+            "type=<subagent_type> model=<model|null> effort=<effort|null> "
+            "outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>"
+        )
+        assert grammar in corpus, (
+            "the WF2 canonical DISPATCH grammar line must be present in the "
+            "implement-feature corpus")

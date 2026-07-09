@@ -205,3 +205,22 @@ class TestDelegatedReadsWF3:
             "WF3 must not wire the validated-index reader (option-3 scope, #320 AC4)")
         assert ".rawgentic-read-" not in c, (
             "WF3 must not wire the delegated-read temp-artifact surface (#320 AC4)")
+
+
+# --- #330: canonical DISPATCH completion-time audit-line grammar (review-only) ---
+
+class TestDispatchGrammar:
+    """Drift guard for the #330 canonical DISPATCH audit line, WF3 review-only
+    variant. WF3 dispatches only the `review` role, so its grammar line pins
+    role=review literally. Whitespace-normalized per the repo convention."""
+
+    def test_wf3_canonical_grammar_sentence_present(self):
+        corpus = " ".join(skill_corpus("fix-bug").split())
+        grammar = (
+            "DISPATCH issue=<n> role=review type=<subagent_type> "
+            "model=<model|null> effort=<effort|null> "
+            "outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>"
+        )
+        assert grammar in corpus, (
+            "the WF3 review-only canonical DISPATCH grammar line must be present "
+            "in the fix-bug corpus")
