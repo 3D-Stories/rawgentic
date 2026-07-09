@@ -136,6 +136,37 @@ class TestUnboundSession:
         assert rc == 0
         assert _decision(stdout) == "deny"
 
+    def test_multi_active_deny_message_names_tool_and_path(self, make_workspace) -> None:
+        """#318 AC3/AC4: the Gate-1 deny message must name the denied tool AND the
+        file path, so a wedged bootstrap (new-project register-existing reading a
+        candidate project's files while unbound in a multi-active workspace) is
+        diagnosable from the transcript — the observed symptom was three opaque
+        denials that named neither."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        file_path = str(ws.root / "projects" / "beta" / ".rawgentic.json")
+        stdin = _make_stdin("Read", "s1", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+        msg = parse_hook_output(stdout)["systemMessage"]
+        assert "Read" in msg, f"deny message must name the denied tool: {msg}"
+        assert file_path in msg, f"deny message must name the file path: {msg}"
+
+    def test_multi_active_deny_no_file_path_still_valid(self, make_workspace) -> None:
+        """#318 regression: a Gate-1 deny with no file_path omits the path clause
+        but still emits a well-formed deny that names the tool — the `[ -n
+        "$FILE_PATH" ]` branch must not produce malformed JSON. MultiEdit is not
+        in the workspace-level carve-out, so an empty tool_input reaches the deny
+        with FILE_PATH unset (a Read with no path is allowed as a non-project file)."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        stdin = _make_stdin("MultiEdit", "s1", str(ws.root), {})
+        stdout, _stderr, rc = run_hook(HOOK, stdin, cwd=ws.root)
+        assert rc == 0
+        parsed = parse_hook_output(stdout)
+        assert parsed is not None, f"deny must be valid JSON: {stdout!r}"
+        assert parsed["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "MultiEdit" in parsed["systemMessage"]
+
     def test_multi_active_workspace_file_allows(self, make_workspace) -> None:
         """Unbound, 2 active projects, file is .rawgentic_workspace.json -> allow."""
         ws: Workspace = make_workspace(

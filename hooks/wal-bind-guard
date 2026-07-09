@@ -70,18 +70,28 @@ if [ -z "$BOUND_PROJECT" ]; then
         # Allow Read/Edit/Write for workspace-level files (not under any project dir).
         # This is needed so /rawgentic:switch can read and update
         # .rawgentic_workspace.json and session_registry.jsonl to perform the binding.
+        FILE_PATH=$(_get_file_path)
         if [ "$TOOL_NAME" = "Read" ] || [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ]; then
             WORKSPACE_ROOT=$(cd "$(dirname "$WORKSPACE_FILE")" && pwd 2>/dev/null) || exit 0
-            FILE_PATH=$(_get_file_path)
             if ! _is_project_file "$FILE_PATH" "$WORKSPACE_ROOT"; then
                 exit 0  # Workspace-level file — allow
             fi
         fi
 
+        # Name the denied tool AND file path so a wedged bootstrap (#318 — the
+        # new-project register-existing flow reads a candidate project's files
+        # while still unbound) is diagnosable from the transcript, instead of an
+        # opaque "not bound" the operator can't map back to a specific Read. The
+        # bootstrap fix itself is skill-level (new-project binds the session to
+        # the target right after registering it); this only makes the deny legible.
+        # Build the JSON with jq so the tool name and file path are escaped — a
+        # path with a quote/backslash must not produce malformed JSON (which the
+        # runtime would drop, silently fail-opening the deny).
         ACTIVE_NAMES=$("$JQ" -r '[.projects[] | select(.active == true) | .name] | join(", ")' "$WORKSPACE_FILE" 2>/dev/null || true)
-        cat <<DENYEOF
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"This session isn't bound to a project yet. Multiple projects are active: ${ACTIVE_NAMES}. Ask the user which project they want to work on, then run /rawgentic:switch <name> to bind this session."}
-DENYEOF
+        FILE_CLAUSE=""
+        [ -n "$FILE_PATH" ] && FILE_CLAUSE=" (${TOOL_NAME} of ${FILE_PATH})"
+        MSG="This session isn't bound to a project yet, so ${TOOL_NAME} was denied${FILE_CLAUSE}. Multiple projects are active: ${ACTIVE_NAMES}. Ask the user which project they want to work on, then run /rawgentic:switch <name> to bind this session."
+        "$JQ" -cn --arg msg "$MSG" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny"},systemMessage:$msg}'
         exit 0
     fi
     # Single or zero active — allow (wal-context handles auto-bind)
