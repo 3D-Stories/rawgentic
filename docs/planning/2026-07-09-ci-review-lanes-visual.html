@@ -1,0 +1,524 @@
+<title>Claude CI Review Lanes — code-review & security-review</title>
+<style>
+:root{
+  --bg:#f4f6f7; --surface:#ffffff; --surface2:#eceff1;
+  --ink:#1a2530; --muted:#5a6b78; --line:#d5dde2;
+  --accent:#0b6e8f; --accent-soft:#e2eff4;
+  --ok:#1a7f37; --ok-soft:#e6f4ea; --ok-line:#9fd2ae;
+  --bad:#cf222e; --bad-soft:#fbeaea; --bad-line:#eeb0b3;
+  --warn:#9a6700; --warn-soft:#fbf2da; --warn-line:#e3ce93;
+  --skip:#6e7b85; --skip-soft:#eef1f3;
+  --code-bg:#1d2730; --code-ink:#d8e2ea;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#10161c; --surface:#171f27; --surface2:#1e2933;
+    --ink:#dce6ee; --muted:#8aa0b0; --line:#2a3742;
+    --accent:#4cc2e8; --accent-soft:#12303c;
+    --ok:#3fb950; --ok-soft:#12291a; --ok-line:#2e5d3b;
+    --bad:#f85149; --bad-soft:#33191b; --bad-line:#6b2f31;
+    --warn:#d29922; --warn-soft:#2e2611; --warn-line:#5f5023;
+    --skip:#8a97a1; --skip-soft:#1c242c;
+    --code-bg:#0c1218; --code-ink:#c9d6e0;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10161c; --surface:#171f27; --surface2:#1e2933;
+  --ink:#dce6ee; --muted:#8aa0b0; --line:#2a3742;
+  --accent:#4cc2e8; --accent-soft:#12303c;
+  --ok:#3fb950; --ok-soft:#12291a; --ok-line:#2e5d3b;
+  --bad:#f85149; --bad-soft:#33191b; --bad-line:#6b2f31;
+  --warn:#d29922; --warn-soft:#2e2611; --warn-line:#5f5023;
+  --skip:#8a97a1; --skip-soft:#1c242c;
+  --code-bg:#0c1218; --code-ink:#c9d6e0;
+}
+:root[data-theme="light"]{
+  --bg:#f4f6f7; --surface:#ffffff; --surface2:#eceff1;
+  --ink:#1a2530; --muted:#5a6b78; --line:#d5dde2;
+  --accent:#0b6e8f; --accent-soft:#e2eff4;
+  --ok:#1a7f37; --ok-soft:#e6f4ea; --ok-line:#9fd2ae;
+  --bad:#cf222e; --bad-soft:#fbeaea; --bad-line:#eeb0b3;
+  --warn:#9a6700; --warn-soft:#fbf2da; --warn-line:#e3ce93;
+  --skip:#6e7b85; --skip-soft:#eef1f3;
+  --code-bg:#1d2730; --code-ink:#d8e2ea;
+}
+*{box-sizing:border-box}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  font-size:15px; line-height:1.55; margin:0; padding:0 20px 80px;
+}
+.wrap{max-width:1100px; margin:0 auto}
+h1,h2,h3,.mono{font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,Menlo,monospace}
+h1{font-size:clamp(24px,4vw,34px); letter-spacing:-.5px; margin:44px 0 6px; text-wrap:balance}
+h2{font-size:19px; margin:0 0 4px; letter-spacing:-.3px}
+h3{font-size:15px; margin:0 0 8px}
+.eyebrow{font-family:ui-monospace,"SF Mono",Consolas,monospace; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); font-weight:700}
+.sub{color:var(--muted); max-width:72ch; margin:0 0 8px}
+section{margin-top:52px}
+.sec-head{display:flex; align-items:baseline; gap:12px; border-bottom:2px solid var(--line); padding-bottom:10px; margin-bottom:22px}
+.sec-num{font-family:ui-monospace,Consolas,monospace; color:var(--muted); font-size:13px}
+code,kbd{font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,Menlo,monospace; font-size:.92em; background:var(--surface2); border:1px solid var(--line); border-radius:4px; padding:1px 5px; white-space:nowrap}
+pre{background:var(--code-bg); color:var(--code-ink); border-radius:8px; padding:14px 16px; overflow-x:auto; font-size:12.5px; line-height:1.6; margin:10px 0 0}
+pre code{background:none; border:none; padding:0; color:inherit; white-space:pre}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:18px 20px}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:18px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+table{border-collapse:collapse; width:100%; font-size:13.5px}
+th{text-align:left; font-family:ui-monospace,Consolas,monospace; font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); padding:8px 10px; border-bottom:2px solid var(--line)}
+td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+td:first-child{color:var(--muted); white-space:nowrap}
+.pill{display:inline-block; font-family:ui-monospace,Consolas,monospace; font-size:11px; font-weight:700; letter-spacing:.06em; border-radius:999px; padding:2px 10px; border:1px solid}
+.pill.ok{color:var(--ok); background:var(--ok-soft); border-color:var(--ok-line)}
+.pill.bad{color:var(--bad); background:var(--bad-soft); border-color:var(--bad-line)}
+.pill.warn{color:var(--warn); background:var(--warn-soft); border-color:var(--warn-line)}
+.pill.skip{color:var(--skip); background:var(--skip-soft); border-color:var(--line)}
+.pill.acc{color:var(--accent); background:var(--accent-soft); border-color:var(--accent)}
+.callout{border:1px solid var(--accent); border-left:5px solid var(--accent); background:var(--accent-soft); border-radius:8px; padding:14px 18px; margin-top:18px}
+.callout b{font-family:ui-monospace,Consolas,monospace; font-size:13px}
+/* ---------- flowchart ---------- */
+.flow-pair{display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start}
+@media (max-width:980px){.flow-pair{grid-template-columns:1fr}}
+.lane{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px}
+.lane-title{display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:14px; flex-wrap:wrap}
+.lane-title h3{margin:0; font-size:14px}
+.dscroll{overflow-x:auto}
+.flow{min-width:400px}
+.frow{display:flex; gap:14px; align-items:stretch}
+.node{flex:1; border-radius:8px; padding:10px 13px; border:1px solid var(--line); background:var(--surface2); position:relative}
+.node .nk{font-family:ui-monospace,Consolas,monospace; font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; display:block; margin-bottom:3px}
+.node .nt{font-size:13px}
+.node .nd{font-size:12px; color:var(--muted); margin-top:3px}
+.node.evt{border-color:var(--accent); background:var(--accent-soft)} .node.evt .nk{color:var(--accent)}
+.node.gate{border-style:dashed; border-color:var(--warn); background:var(--warn-soft)} .node.gate .nk{color:var(--warn)}
+.node.step{background:var(--surface)} .node.step .nk{color:var(--muted)}
+.node.good{border-color:var(--ok-line); background:var(--ok-soft)} .node.good .nk{color:var(--ok)}
+.node.fail{border-color:var(--bad-line); background:var(--bad-soft)} .node.fail .nk{color:var(--bad)}
+.node.skipped{border-color:var(--line); background:var(--skip-soft); color:var(--skip)} .node.skipped .nk{color:var(--skip)}
+.bwrap{width:38%; display:flex; align-items:center; gap:0; min-width:130px}
+.bconn{width:16px; border-top:2px dashed var(--bad-line); flex:none}
+.bconn.grey{border-top-color:var(--line)}
+.bwrap .node{font-size:12px}
+.link{height:20px; margin-left:26px; border-left:2px solid var(--line); position:relative; width:0}
+.link.split{border-left-color:var(--ok-line)}
+.link .lab{position:absolute; left:8px; top:1px; font-family:ui-monospace,Consolas,monospace; font-size:10px; color:var(--muted); white-space:nowrap}
+.link .lab.oklab{color:var(--ok)}
+.mini{font-family:ui-monospace,Consolas,monospace; font-size:11px; word-break:break-all}
+/* honest signal */
+.hs{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:8px}
+@media (max-width:900px){.hs{grid-template-columns:1fr}}
+.hs .panel{border-radius:12px; padding:20px; border:2px solid}
+.hs .before{border-color:var(--warn-line); background:var(--warn-soft)}
+.hs .after{border-color:var(--ok-line); background:var(--ok-soft)}
+.hs .tag{font-family:ui-monospace,Consolas,monospace; font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; display:block; margin-bottom:12px}
+.hs .before .tag{color:var(--warn)} .hs .after .tag{color:var(--ok)}
+.bigcheck{font-size:44px; line-height:1; font-family:ui-monospace,Consolas,monospace; font-weight:700; margin:6px 0}
+.strike{position:relative; display:inline-block}
+.strike::after{content:""; position:absolute; left:-6px; right:-6px; top:50%; border-top:3px solid var(--bad); transform:rotate(-8deg)}
+.truth{width:100%; margin-top:10px; border-collapse:collapse}
+.truth td{border-bottom:none; padding:7px 8px; font-size:13.5px}
+.motto{font-family:ui-monospace,Consolas,monospace; font-weight:700; font-size:clamp(15px,2.4vw,19px); margin-top:14px; text-wrap:balance}
+/* auth ladder */
+.ladder{display:flex; flex-direction:column; gap:0; margin-top:6px}
+.rung{display:flex; gap:14px; align-items:flex-start}
+.rnum{flex:none; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-family:ui-monospace,Consolas,monospace; font-weight:700; font-size:14px; border:2px solid var(--accent); color:var(--accent); background:var(--surface)}
+.rnum.bad{border-color:var(--bad); color:var(--bad)}
+.rbody{flex:1; padding-bottom:20px; border-left:2px solid var(--line); margin-left:-18px; padding-left:32px; transform:translateX(17px)}
+.rung:last-child .rbody{border-left-color:transparent}
+.steps3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+@media (max-width:900px){.steps3{grid-template-columns:1fr}}
+footer{margin-top:64px; border-top:2px solid var(--line); padding-top:16px; font-size:12.5px; color:var(--muted)}
+footer code{font-size:11.5px}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+@media (prefers-reduced-motion: reduce){*{transition:none!important; animation:none!important}}
+</style>
+
+<div class="wrap">
+
+<header>
+  <span class="eyebrow">projects/rawgentic · .github/workflows</span>
+  <h1>Claude CI Review Lanes</h1>
+  <p class="sub">Two GitHub Action lanes run Claude's built-in reviews on every pull request to
+  <code>main</code>: <code>claude-code-review.yml</code> and <code>claude-security-review.yml</code>.
+  Both are <b>advisory</b> — a red check never blocks a merge — and both carry the
+  <b>honest-signal contract</b>: green means the review actually ran and succeeded; red means it did not run.</p>
+  <p>
+    <span class="pill acc">ADVISORY — not required checks</span>
+    <span class="pill ok">green = reviewed</span>
+    <span class="pill bad">red = NOT reviewed</span>
+  </p>
+</header>
+
+<!-- ============ 1. AT A GLANCE ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>At a glance</h2></div>
+  <div class="grid2">
+    <div class="card">
+      <h3><span class="pill acc">code-review</span> &nbsp;<code>claude-code-review.yml</code></h3>
+      <p class="sub" style="font-size:13.5px">Runs the built-in <code>/code-review</code> over the PR diff — a second, cross-checking reviewer alongside WF2's hand-rolled Step&nbsp;11 panel. Issues <code>#196</code> (reopens <code>#162</code>), <code>#233</code>.</p>
+      <table>
+        <tr><td>Trigger</td><td><code>pull_request</code> → <code>main</code><br><span class="mini">types: [opened, synchronize, reopened, <b>ready_for_review</b>]</span></td></tr>
+        <tr><td>Draft gate</td><td><span class="pill warn">YES</span> &nbsp;<code>if: github.event.pull_request.draft == false</code></td></tr>
+        <tr><td>Runs</td><td><code>prompt: "/code-review"</code> via <code>anthropics/claude-code-action@v1</code> (SHA-pinned)</td></tr>
+        <tr><td>Findings land</td><td>Inline PR comments + <code>GITHUB_STEP_SUMMARY</code> line</td></tr>
+        <tr><td>Telemetry</td><td><code>reviewer_kind: builtin_code_review</code> — the #162 A/B arm</td></tr>
+      </table>
+      <p class="sub" style="font-size:12.5px; margin-top:10px"><b>Why <code>ready_for_review</code>:</b> default trigger types don't include it — a PR marked "Ready for review" with no later push would never get a builtin review. WF2 drafts + un-drafts PRs on its suspend/resume path.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill acc">security-review</span> &nbsp;<code>claude-security-review.yml</code></h3>
+      <p class="sub" style="font-size:13.5px">Runs the built-in <code>/security-review</code> over the PR; confirmed findings posted as inline PR review comments (the action's <code>classify_inline_comments</code> mechanism). Issues <code>#166</code>, migrated <code>#195</code>, <code>#233</code>.</p>
+      <table>
+        <tr><td>Trigger</td><td><code>pull_request</code> → <code>main</code><br><span class="mini">default types (opened, synchronize, reopened)</span></td></tr>
+        <tr><td>Draft gate</td><td><span class="pill skip">NO</span> &nbsp;runs on draft PRs too</td></tr>
+        <tr><td>Runs</td><td><code>prompt: "/security-review"</code> via <code>anthropics/claude-code-action@v1</code> (SHA-pinned)</td></tr>
+        <tr><td>Findings land</td><td>Inline PR review comments + <code>GITHUB_STEP_SUMMARY</code> line</td></tr>
+        <tr><td>Telemetry</td><td>Clean runs count toward the 10-PR promotion tally</td></tr>
+      </table>
+      <p class="sub" style="font-size:12.5px; margin-top:10px"><b>Complements, never replaces,</b> the local Step&nbsp;11.5 tool scanners (<code>hooks/security_scan.py</code>: secrets, CVEs, SAST, IaC). This lane is the <i>semantic</i> pass.</p>
+    </div>
+  </div>
+  <div class="callout">
+    <b>BONUS SECOND OPINIONS.</b> These lanes sit <b>on top of</b> WF2's in-workflow gates — Step&nbsp;11
+    (hand-rolled multi-agent code review) and Step&nbsp;11.5 (<code>security_scan.py</code> fail-closed scan) remain the
+    <b>primary</b> gates. The lanes replace nothing; they are most valuable on <b>human-opened or non-Claude PRs</b>
+    that never went through WF2 at all.
+  </div>
+</section>
+
+<!-- ============ 2. WORKFLOW DIAGRAMS ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>Job flow — one lane at a time</h2></div>
+  <p class="sub">Every node below is a real step or condition from the YAML. Failure branches exit right in red;
+  the green spine is the only path that ends in a green check.</p>
+
+  <div class="flow-pair">
+
+    <!-- ------- code-review lane ------- -->
+    <div class="lane">
+      <div class="lane-title">
+        <h3>claude-code-review.yml</h3>
+        <span class="pill acc">job: code-review</span>
+      </div>
+      <div class="dscroll"><div class="flow">
+
+        <div class="frow"><div class="node evt">
+          <span class="nk">event</span>
+          <span class="nt"><code>pull_request</code> → <code>branches: [main]</code></span>
+          <span class="nd mini">types: [opened, synchronize, reopened, ready_for_review]</span>
+        </div></div>
+
+        <div class="link"></div>
+        <div class="frow">
+          <div class="node gate">
+            <span class="nk">if — job gate</span>
+            <span class="nt"><code>github.event.pull_request.draft == false</code> ?</span>
+          </div>
+          <div class="bwrap"><div class="bconn grey"></div><div class="node skipped">
+            <span class="nk">draft = true</span>
+            <span class="nt">Job skipped — drafts not reviewed (AC1)</span>
+          </div></div>
+        </div>
+
+        <div class="link split"><span class="lab oklab">not a draft ↓</span></div>
+        <div class="frow">
+          <div class="node step">
+            <span class="nk">step · id: auth</span>
+            <span class="nt">Resolve auth — OAuth first, then API key</span>
+            <span class="nd mini">CLAUDE_CODE_OAUTH_TOKEN → mode=oauth<br>ANTHROPIC_API_KEY → mode=apikey</span>
+          </div>
+          <div class="bwrap"><div class="bconn"></div><div class="node fail">
+            <span class="nk">neither secret</span>
+            <span class="nt"><code>::error</code> + summary <code>executed=false</code> + <code>exit 1</code></span>
+            <span class="nd">CHECK GOES RED — "not reviewed"</span>
+          </div></div>
+        </div>
+
+        <div class="link split"><span class="lab oklab">present=true ↓</span></div>
+        <div class="frow"><div class="node step">
+          <span class="nk">step</span>
+          <span class="nt">Checkout — <code>actions/checkout@v4</code></span>
+        </div></div>
+
+        <div class="link"></div>
+        <div class="frow">
+          <div class="node step">
+            <span class="nk">step · one of two, by mode</span>
+            <span class="nt">Review — <code>anthropics/claude-code-action</code></span>
+            <span class="nd mini">@558b1d6cab4085c7753fe402c10bef0fbb92ac7a (v1)<br>prompt: "/code-review"<br>auth: claude_code_oauth_token | anthropic_api_key</span>
+          </div>
+          <div class="bwrap"><div class="bconn"></div><div class="node fail">
+            <span class="nk">step fails</span>
+            <span class="nt">Bad token · plan lockout · action outage</span>
+            <span class="nd">CHECK GOES RED — "not reviewed"</span>
+          </div></div>
+        </div>
+
+        <div class="link"></div>
+        <div class="frow">
+          <div class="node step">
+            <span class="nk">step · if: always() &amp;&amp; auth present</span>
+            <span class="nt">Record execution status</span>
+            <span class="nd"><code>executed=true</code> ONLY if a review step outcome == <code>success</code></span>
+          </div>
+          <div class="bwrap"><div class="bconn"></div><div class="node fail">
+            <span class="nk">review not success</span>
+            <span class="nt"><code>::warning</code> + <code>executed=false</code></span>
+            <span class="nd">does NOT count toward #162 A/B sample</span>
+          </div></div>
+        </div>
+
+        <div class="link split"><span class="lab oklab">review succeeded ↓</span></div>
+        <div class="frow"><div class="node good">
+          <span class="nk">verdict</span>
+          <span class="nt">✓ Check GREEN — reviewed. Findings as inline PR comments.</span>
+          <span class="nd mini">## Claude code review: executed=true (auth=&lt;mode&gt;) — reviewer_kind=builtin_code_review</span>
+        </div></div>
+
+      </div></div>
+    </div>
+
+    <!-- ------- security-review lane ------- -->
+    <div class="lane">
+      <div class="lane-title">
+        <h3>claude-security-review.yml</h3>
+        <span class="pill acc">job: security-review</span>
+      </div>
+      <div class="dscroll"><div class="flow">
+
+        <div class="frow"><div class="node evt">
+          <span class="nk">event</span>
+          <span class="nt"><code>pull_request</code> → <code>branches: [main]</code></span>
+          <span class="nd mini">default types (opened, synchronize, reopened) — no draft gate: drafts reviewed too</span>
+        </div></div>
+
+        <div class="link"></div>
+        <div class="frow">
+          <div class="node step">
+            <span class="nk">step · id: auth</span>
+            <span class="nt">Resolve auth — OAuth first, then API key</span>
+            <span class="nd mini">CLAUDE_CODE_OAUTH_TOKEN → mode=oauth<br>ANTHROPIC_API_KEY → mode=apikey</span>
+          </div>
+          <div class="bwrap"><div class="bconn"></div><div class="node fail">
+            <span class="nk">neither secret</span>
+            <span class="nt"><code>::error</code> + summary <code>executed=false</code> + <code>exit 1</code></span>
+            <span class="nd">CHECK GOES RED — "not reviewed"</span>
+          </div></div>
+        </div>
+
+        <div class="link split"><span class="lab oklab">present=true ↓</span></div>
+        <div class="frow"><div class="node step">
+          <span class="nk">step</span>
+          <span class="nt">Checkout — <code>actions/checkout@v4</code></span>
+        </div></div>
+
+        <div class="link"></div>
+        <div class="frow">
+          <div class="node step">
+            <span class="nk">step · one of two, by mode</span>
+            <span class="nt">Review — <code>anthropics/claude-code-action</code></span>
+            <span class="nd mini">@558b1d6cab4085c7753fe402c10bef0fbb92ac7a (v1)<br>prompt: "/security-review"<br>auth: claude_code_oauth_token | anthropic_api_key</span>
+          </div>
+          <div class="bwrap"><div class="bconn"></div><div class="node fail">
+            <span class="nk">step fails</span>
+            <span class="nt">Bad token · plan lockout · action outage</span>
+            <span class="nd">CHECK GOES RED — "not reviewed"</span>
+          </div></div>
+        </div>
+
+        <div class="link"></div>
+        <div class="frow">
+          <div class="node step">
+            <span class="nk">step · if: always() &amp;&amp; auth present</span>
+            <span class="nt">Record execution status</span>
+            <span class="nd"><code>executed=true</code> ONLY if a review step outcome == <code>success</code></span>
+          </div>
+          <div class="bwrap"><div class="bconn"></div><div class="node fail">
+            <span class="nk">review not success</span>
+            <span class="nt"><code>::warning</code> + <code>executed=false</code></span>
+            <span class="nd">does NOT count toward 10-PR promotion tally</span>
+          </div></div>
+        </div>
+
+        <div class="link split"><span class="lab oklab">review succeeded ↓</span></div>
+        <div class="frow"><div class="node good">
+          <span class="nk">verdict</span>
+          <span class="nt">✓ Check GREEN — reviewed. Findings as inline PR review comments.</span>
+          <span class="nd mini">## Claude security review: executed=true (auth=&lt;mode&gt;)</span>
+        </div></div>
+
+      </div></div>
+    </div>
+  </div>
+
+  <p class="sub" style="font-size:13px; margin-top:16px">Shared permissions on both jobs:
+  <code>pull-requests: write</code> (post review comments) · <code>contents: read</code> (checkout) ·
+  <code>id-token: write</code> (the action's default auth mints a short-lived Claude GitHub-App token via OIDC token-exchange — no static PAT).
+  Runner: <code>ubuntu-latest</code>. Neither job carries <code>continue-on-error</code> — by design (see below).</p>
+</section>
+
+<!-- ============ 3. HONEST SIGNAL ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>The honest-signal contract (#233)</h2></div>
+  <div class="hs">
+    <div class="panel before">
+      <span class="tag">Before #233 — the lying green</span>
+      <div class="bigcheck"><span class="strike" style="color:var(--ok)">✓ green</span></div>
+      <p style="font-size:14px">No auth secret → the review <b>never ran</b>, but <code>continue-on-error</code>
+      swallowed the failure. The only trace was a <code>::warning::</code> buried inside a <b>green</b> check.
+      Green looked like "reviewed" when <i>nothing</i> was reviewed.</p>
+    </div>
+    <div class="panel after">
+      <span class="tag">Now — the check outcome IS the signal</span>
+      <table class="truth">
+        <tr>
+          <td style="width:90px"><span class="pill ok">GREEN ✓</span></td>
+          <td>Review actually <b>ran AND succeeded</b>.</td>
+        </tr>
+        <tr>
+          <td><span class="pill bad">RED ✗</span></td>
+          <td>Review did <b>NOT run</b> — no auth secret, bad token, plan lockout, or action outage.</td>
+        </tr>
+      </table>
+      <p class="motto">RED ≠ "found problems".<br>RED = "not reviewed" — and advisory, so it never blocks the merge.</p>
+      <p style="font-size:13px; color:var(--muted); margin-bottom:0">No <code>continue-on-error</code> mask anywhere in either lane; a <code>::warning::</code> inside a green check was judged not enough.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. AUTH & ACTIVATION ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>Auth resolver &amp; activation</h2></div>
+  <div class="grid2">
+    <div class="card">
+      <h3>Resolver priority — identical in both lanes</h3>
+      <div class="ladder">
+        <div class="rung"><div class="rnum">1</div><div class="rbody">
+          <b><code>CLAUDE_CODE_OAUTH_TOKEN</code></b> <span class="pill ok">preferred</span><br>
+          <span style="font-size:13px; color:var(--muted)">Subscription OAuth (Pro/Max). Mint on any machine already logged in to Claude:</span>
+          <pre><code>claude setup-token   # prints a CLAUDE_CODE_OAUTH_TOKEN</code></pre>
+        </div></div>
+        <div class="rung"><div class="rnum">2</div><div class="rbody">
+          <b><code>ANTHROPIC_API_KEY</code></b> <span class="pill warn">fallback</span><br>
+          <span style="font-size:13px; color:var(--muted)">API-key billing — an isolated dollar budget instead of the subscription.</span>
+        </div></div>
+        <div class="rung"><div class="rnum bad">3</div><div class="rbody">
+          <b>Neither present</b> <span class="pill bad">RED — exit 1</span><br>
+          <span style="font-size:13px; color:var(--muted)">Visible skip: <code>::error</code> annotation + <code>executed=false</code> step summary. Never a silent green.</span>
+        </div></div>
+      </div>
+      <p style="font-size:12.5px; color:var(--muted); margin:0">Secrets are referenced by <b>NAME only</b> — never a value in code, commits, issues, or chat.</p>
+    </div>
+    <div class="card">
+      <h3>Activate (one-time, owner)</h3>
+      <p style="font-size:13.5px; margin-top:0">Org-wide covers every current + future repo in one shot (recommended):</p>
+      <pre><code># org-wide — this project's org is 3D-Stories
+gh secret set CLAUDE_CODE_OAUTH_TOKEN --org 3D-Stories --visibility all
+
+# or per-repo, if you don't own the org
+gh secret set CLAUDE_CODE_OAUTH_TOKEN --repo &lt;owner&gt;/&lt;repo&gt;
+
+# API-key fallback variant
+gh secret set ANTHROPIC_API_KEY --org &lt;your-org&gt; --visibility all</code></pre>
+      <p style="font-size:13px; color:var(--muted)"><code>gh</code> prompts for the value — it is never echoed. Either secret activates <b>both</b> lanes.</p>
+      <p style="font-size:13.5px"><b>Zero-secret alternative:</b> run the lanes on a self-hosted runner already logged in to Claude — no repo secret needed. See <code>docs/config-reference.md#ci-review-auth</code>.</p>
+      <div class="callout" style="margin-top:12px; border-color:var(--bad); border-left-color:var(--bad); background:var(--bad-soft)">
+        <b style="color:var(--bad)">SECRET ALONE IS NOT ENOUGH.</b> The <b>Claude Code GitHub App</b>
+        (<code>github.com/apps/claude</code>) must also be installed on the repo/org, or the action fails with
+        <code>401 … not installed on this repository</code>.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. OUTPUTS ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>What a run produces</h2></div>
+  <div class="grid2">
+    <div class="card">
+      <h3>① Inline PR comments — the findings</h3>
+      <p style="font-size:13.5px">Both lanes post Claude's confirmed findings as <b>inline PR review comments</b> on the diff
+      (security lane via the action's <code>classify_inline_comments</code> buffering). This is where the review substance lands — the check status only says whether a review happened.</p>
+      <h3 style="margin-top:18px">② PR check status</h3>
+      <p style="font-size:13.5px; margin-bottom:0">One check per lane: <span class="pill ok">green = reviewed</span> or
+      <span class="pill bad">red = not reviewed</span>. Both <b>advisory</b> — not required checks; red never blocks the merge (until owner opts in, §06).</p>
+    </div>
+    <div class="card">
+      <h3>③ <code>GITHUB_STEP_SUMMARY</code> — exact formats</h3>
+      <p style="font-size:13px; color:var(--muted); margin-top:0">Success (auth mode is <code>oauth</code> or <code>apikey</code>):</p>
+      <pre><code>## Claude code review: executed=true (auth=oauth) — reviewer_kind=builtin_code_review
+## Claude security review: executed=true (auth=oauth)</code></pre>
+      <p style="font-size:13px; color:var(--muted)">No auth secret (both lanes, RED):</p>
+      <pre><code>## Claude &lt;code|security&gt; review: executed=false (no auth secret) — check is
+RED to signal 'not reviewed', never green. Advisory / non-blocking.
+Activate: docs/ci-review-lanes.md</code></pre>
+      <p style="font-size:13px; color:var(--muted)">Auth present but review step failed:</p>
+      <pre><code>## Claude code review: executed=false (review step did not succeed —
+does NOT count toward the #162 A/B sample)
+## Claude security review: executed=false (review step did not succeed —
+does NOT count toward the 10-PR promotion tally)</code></pre>
+    </div>
+  </div>
+  <div class="card" style="margin-top:18px">
+    <h3>④ Telemetry — the #162 A/B experiment</h3>
+    <p style="font-size:13.5px; margin-bottom:0">The code-review lane is the <b><code>builtin_code_review</code></b> arm of the #162 data gate:
+    built-in <code>/code-review</code> vs WF2's <b><code>hand_rolled_multi</code></b> Step&nbsp;11 panel, compared on
+    <b>findings-yield-per-token</b> over ≥10 runs. The Action reports token usage per run; each review is recorded as a
+    run-record gate entry with the usage block (input/output tokens, cost) — see <code>docs/run-records.md#builtin-code-review-capture</code>.
+    A run counts toward the sample <b>only if it executed</b> — failed auth or a failed review step is excluded by the record-status step itself.
+    WF5's Codex cross-model diff pass is unchanged.</p>
+  </div>
+</section>
+
+<!-- ============ 6. TRIAGE & PROMOTION ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>Verify · triage · promote</h2></div>
+  <div class="steps3">
+    <div class="card">
+      <h3><span class="pill acc">VERIFY</span> a run happened</h3>
+      <p style="font-size:13.5px">Open the lane's Action run → <b>Summary</b>. A working lane prints:</p>
+      <pre><code>Claude &lt;security|code&gt; review:
+executed=true (auth=oauth)</code></pre>
+      <p style="font-size:13px; color:var(--muted); margin-bottom:0">Still red with <code>executed=false (no auth secret)</code>? The secret isn't visible to the workflow — wrong org/repo scope, or the App isn't installed.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill warn">TRIAGE</span> a red lane</h3>
+      <p style="font-size:13.5px">Red is a <b>triage question, never an automatic blocker</b>:</p>
+      <ul style="font-size:13.5px; padding-left:18px; margin:8px 0 0">
+        <li><b>Infra red</b> — no secret / bad token / lockout / outage. Nothing was reviewed; fix auth, or rely on WF2's Step 11 / 11.5 which already gated the PR.</li>
+        <li><b>Ran-but-failed</b> — read the run log; the <code>::warning</code> marks it "not a clean signal".</li>
+      </ul>
+      <p style="font-size:13px; color:var(--muted); margin-bottom:0">Findings themselves arrive as PR comments — a lane with findings is still <b>green</b>.</p>
+    </div>
+    <div class="card">
+      <h3><span class="pill ok">PROMOTE</span> to a hard gate (opt-in)</h3>
+      <p style="font-size:13.5px">To make a lane <b>block</b> merges: mark it a <b>required status check</b> in branch protection.
+      Recommended only after <b>~10 clean (<code>executed=true</code>) PRs</b>, per the lanes' own promotion note.</p>
+      <p style="font-size:13px; color:var(--muted); margin-bottom:0">A required red then blocks exactly as intended — the honest signal makes the promotion safe.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 7. SUPPLY CHAIN ============ -->
+<section>
+  <div class="sec-head"><span class="sec-num">07</span><h2>Supply-chain notes</h2></div>
+  <div class="card">
+    <table>
+      <tr><td>SHA pin</td><td><code>anthropics/claude-code-action@558b1d6cab4085c7753fe402c10bef0fbb92ac7a</code> — the <code>v1</code> tag as of 2026-07-05. A mutable <code>@v1</code> tag would float, and this action receives an <b>auth token</b> plus a <b>write <code>GITHUB_TOKEN</code></b>. Bump the pin deliberately, reviewing the diff.</td></tr>
+      <tr><td><code>id-token: write</code></td><td>Lets the action mint a short-lived Claude GitHub-App token via OIDC token-exchange (no static PAT). The action's own PR-review example grants this even under API-key auth; without it the App-token path can't run.</td></tr>
+      <tr><td>Secrets</td><td>Referenced by <b>NAME</b> only (<code>CLAUDE_CODE_OAUTH_TOKEN</code>, <code>ANTHROPIC_API_KEY</code>) — never a value in code, commits, issues, or chat. A gitleaks pre-push hook scans pushed commits.</td></tr>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <p><b>Sources (read verbatim 2026-07-09):</b>
+  <code>projects/rawgentic/.github/workflows/claude-code-review.yml</code> ·
+  <code>projects/rawgentic/.github/workflows/claude-security-review.yml</code> ·
+  <code>projects/rawgentic/docs/ci-review-lanes.md</code>.
+  Issue provenance: #162 (A/B data gate) · #166 (security lane origin) · #195 (OAuth-first migration) · #196 (code lane) · #233 (honest signal).</p>
+  <p><b>YAML-vs-doc discrepancy check:</b> none found. One precision note: the doc's opening line says the lanes run "on every PR to <code>main</code>" — exact for security-review; code-review additionally skips drafts, which the doc's own table does state.</p>
+</footer>
+
+</div>
