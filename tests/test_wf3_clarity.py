@@ -174,8 +174,12 @@ class TestDelegatedReadsWF3:
 
     def test_step8_verify_all_tests_pass_is_a_projection(self):
         # AC1: Step 8's "verify all tests pass" is projection-consumed too.
-        s8 = self._step8()
-        assert "projection" in s8, (
+        # Pinned to the item-4 canonical sentence (not the bare word "projection")
+        # so a reword that drops the discipline while leaving "projection" in a
+        # cross-reference elsewhere in the section still trips this guard.
+        s8 = _norm(self._step8())
+        assert ("consume the run as a **test-output projection** (#314, the same "
+                "discipline as Step 7)") in s8, (
             "Step 8 item 4 (verify all tests pass) must consume the run as a "
             "#314 projection")
 
