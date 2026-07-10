@@ -274,3 +274,21 @@ def test_skill_step3_mandates_at_a_glance():
     assert "references/rubric.md" in step3, (
         "SKILL.md Step 3 must point to the rubric section rather than "
         "duplicate its contents list")
+
+
+# --- #344 Task 5: Step 3 names its render template (design language) ---
+
+def test_skill_step3_names_report_template():
+    """The WF14 render step must name the `report` template so the surface and
+    the renderer's template vocabulary can't silently drift. Header-index-sliced
+    Step 3 section, whitespace-normalized (#344 Task 5)."""
+    s3 = _skill()
+    start = s3.index("## Step 3: Render")
+    end = s3.index("## Step 4: Route")
+    step3 = _norm(s3[start:end])
+    assert (
+        "WF14 reports render with the `report` template (`--style report`) "
+        "per the design language (`docs/design-language.md`)."
+    ) in step3, (
+        "SKILL.md Step 3 must carry the canonical `report`-template sentence "
+        "verbatim (#344 Task 5)")

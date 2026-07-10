@@ -735,3 +735,36 @@ class TestDesignLanguageDoc:
             fixture, title=_EXEMPLAR_TITLE, generated_at=_EXEMPLAR_TS,
             style=_EXEMPLAR_STYLE)
         assert rendered == _DL_HTML.read_text(encoding="utf-8")
+
+
+# --- #344 Task 5: the two OTHER surfaces that name the template vocabulary ---
+# The setup integrations reference and the config-reference designArtifact entry
+# both describe the renderer's template set; these guards live here (not in a WF
+# clarity file) because they pin the SAME design-language template vocabulary the
+# TestDesignLanguageDoc guards above own. Verbatim canonical-sentence pins in one
+# file each, whitespace-normalized (house pattern; repo mistake #6).
+
+_SETUP_INTEGRATIONS = HOOKS.parent / "skills" / "setup" / "references" / "integrations.md"
+_CONFIG_REFERENCE = _DOCS / "config-reference.md"
+
+
+class TestTemplateVocabularySurfaces:
+    def test_setup_integrations_names_seven_templates(self):
+        text = _norm(_SETUP_INTEGRATIONS.read_text(encoding="utf-8"))
+        assert (
+            "The renderer ships seven design-language templates (plain, roadmap, "
+            "report, design, dashboard, review, spec); see "
+            "`docs/design-language.md`."
+        ) in text, (
+            "setup/references/integrations.md must name the seven-template set "
+            "(#344 Task 5)")
+
+    def test_config_reference_designartifact_style_vocabulary(self):
+        text = _norm(_CONFIG_REFERENCE.read_text(encoding="utf-8"))
+        assert (
+            "accepts the seven design-language template names (plain, roadmap, "
+            "report, design, dashboard, review, spec); absent → `design` (the "
+            "documented default); an invalid value → `plain` plus a stderr warning."
+        ) in text, (
+            "config-reference.md designArtifact.style entry must state the "
+            "expanded #344 vocabulary and absent/invalid semantics (#344 Task 5)")

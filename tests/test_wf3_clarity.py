@@ -432,3 +432,30 @@ class TestRunFeedbackWiringWF3:
         assert ("--skill fix-bug --key runFeedback") in self._step14(), (
             "Step 14's runFeedback gate must probe the runFeedback key via "
             "the generic is-enabled parser (#338)")
+
+
+class TestDesignArtifactStyleWF3:
+    """#344 Task 5: WF3's design-artifact render (Step 10) must resolve its
+    template the SAME way WF2 Step 12 does — the pre-#344 asymmetry (WF2 passed
+    `--style`, WF3 did not) is the drift this pins. Header-index-sliced Step 10
+    section, location pin, whitespace-normalized. Companion WF2 guard lives in
+    tests/test_wf2_clarity.py."""
+
+    def _step10(self) -> str:
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        return " ".join(_section(text, "## Step 10:", "## Step 11:").split())
+
+    CANONICAL = (
+        "WF3 design artifacts resolve their template exactly as WF2 Step 12 "
+        "does — `design_artifact_style`, defaulting to `design`."
+    )
+
+    def test_style_resolution_canonical_sentence_present(self):
+        assert self.CANONICAL in self._step10(), (
+            "Step 10 must carry the canonical WF3 style-resolution sentence "
+            "verbatim (#344 Task 5)")
+
+    def test_render_invocation_passes_style_flag(self):
+        assert "--style" in self._step10(), (
+            "Step 10's render invocation must pass `--style` (WF2/WF3 symmetry, "
+            "#344 Task 5)")

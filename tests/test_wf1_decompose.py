@@ -66,3 +66,27 @@ def test_lean_default_optin_wf5():
     s = _step2c()
     assert "quality-bar" in s.lower()
     assert "adversarial-review" in s and "WF5" in s
+
+
+# --- #344 Task 5: Step 4b names its render template (design language) ---
+
+def _step4b() -> str:
+    """Slice the Step 4b (HTML design artifact) section of create-issue's
+    SKILL.md. Location pin (reads SKILL.md directly), header-index-sliced,
+    whitespace-normalized — house pattern (repo mistake #6)."""
+    text = (REPO_ROOT / "skills" / "create-issue" / "SKILL.md").read_text()
+    start = text.index("## Step 4b")
+    end = text.index("## Step 5", start)
+    return " ".join(text[start:end].split())
+
+
+def test_step4b_names_spec_template():
+    """The WF1 issue-spec render must name the `spec` template so the surface
+    and the renderer's template vocabulary can't silently drift (#344 Task 5)."""
+    s4b = _step4b()
+    assert (
+        "Issue specs render with the `spec` template (`--style spec`) per the "
+        "design language."
+    ) in s4b, (
+        "create-issue Step 4b must carry the canonical `spec`-template sentence "
+        "verbatim (#344 Task 5)")
