@@ -115,12 +115,12 @@ class TestRecurrence:
         sigs = [self._sig(SID_A), self._sig(SID_A), self._sig(SID_B),
                 self._sig(SID_C)]
         rec = sm.recurrence(sigs)
-        assert rec["permission denied"].distinct_sessions == 3
+        assert rec[("friction", "permission denied")].distinct_sessions == 3
 
     def test_evidence_only_signals_never_count(self):
         sigs = [self._sig(SID_A), self._sig(None), self._sig(None)]
         rec = sm.recurrence(sigs)
-        assert rec["permission denied"].distinct_sessions == 1
+        assert rec[("friction", "permission denied")].distinct_sessions == 1
 
 
 # ---------------------------------------------------------------- redaction
@@ -475,3 +475,54 @@ class TestStep8aFindings:
         n1 = len(queue.read_text().splitlines())
         run_mine("propose", "--queue", str(queue), "--json")
         assert len(queue.read_text().splitlines()) == n1
+
+
+# ------------------------------------------------------ Step 11 finding tests
+
+class TestStep11Findings:
+    def test_non_object_json_line_is_corruption(self, tmp_path):
+        q = tmp_path / "candidates.jsonl"
+        sm.queue_append(q, ev("k1", "declined"))
+        raw = q.read_text()
+        q.write_text("123\n" + raw)
+        with pytest.raises(sm.QueueCorruption):
+            sm.reduce_queue(q)
+
+    def test_non_object_tail_truncated_not_sealed(self, tmp_path):
+        q = tmp_path / "candidates.jsonl"
+        sm.queue_append(q, ev("k1", "detected"))
+        with q.open("a") as fh:
+            fh.write("123")             # valid JSON, not an event object
+        sm.queue_append(q, ev("k2", "detected"))
+        state, torn = sm.reduce_queue(q)   # must not brick
+        assert set(state) == {"k1", "k2"} and torn is False
+
+    def test_unknown_event_never_overrides_human(self, tmp_path):
+        q = tmp_path / "candidates.jsonl"
+        sm.queue_append(q, ev("k1", "declined"))
+        sm.queue_append(q, ev("k1", "mystery_event"))
+        state, _ = sm.reduce_queue(q)
+        assert state["k1"]["event"] == "declined"
+
+    def test_recurrence_buckets_by_detector(self):
+        sigs = [
+            sm.Signal("friction", "permission denied", SID_A, "", "q", "index"),
+            sm.Signal("friction", "permission denied", SID_B, "", "q", "index"),
+            sm.Signal("note_commands", "permission denied", SID_C, "", "q",
+                      "notes"),
+        ]
+        rec = sm.recurrence(sigs)
+        assert rec[("friction", "permission denied")].distinct_sessions == 2
+        assert rec[("note_commands", "permission denied")].distinct_sessions == 1
+
+    def test_disposition_preserves_evidence(self, mining_env):
+        db, queue, ws = mining_env
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+        r = run_mine("propose", "--queue", str(queue), "--json")
+        key = json.loads(r.stdout)["proposed"][0]["candidate_key"]
+        run_mine("disposition", key, "accepted", "--queue", str(queue))
+        import session_mining_lib as sm2
+        state, _ = sm2.reduce_queue(queue)
+        assert state[key]["event"] == "accepted"
+        assert state[key]["evidence"]  # evidence carried, not dropped

@@ -130,7 +130,8 @@ def _signal_from_row(detector: str, pattern: str, r: dict) -> Signal | None:
         return None
     return Signal(detector=detector, canonical_pattern=normalize_pattern(pattern),
                   session_id=sid, ts=r.get("ts", ""),
-                  quote=r.get("quote") or r.get("snippet", ""), source="index")
+                  quote=r.get("quote") or r.get("snippet", ""),
+                  source=r.get("_quote_source", "index"))
 
 
 def detect_friction(phrase: str, rows: list) -> list:
@@ -175,9 +176,10 @@ def recurrence(signals: list) -> dict:
     signals (session_id None) never count."""
     buckets: dict = {}
     for s in signals:
-        buckets.setdefault(s.canonical_pattern, set())
+        k = (s.detector, s.canonical_pattern)
+        buckets.setdefault(k, set())
         if s.session_id:
-            buckets[s.canonical_pattern].add(s.session_id)
+            buckets[k].add(s.session_id)
     return {p: RecurrenceAssessment(distinct_sessions=len(v),
                                     sessions=frozenset(v))
             for p, v in buckets.items()}
@@ -268,10 +270,13 @@ def queue_append(path, event: dict) -> None:
                 cut = data.rfind(b"\n")
                 tail = data[cut + 1:]
                 try:
-                    json.loads(tail.decode("utf-8"))
+                    parsed = json.loads(tail.decode("utf-8"))
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    parsed = None
+                if isinstance(parsed, dict):
                     fh.write(b"\n")  # complete event, just unterminated
                     # (hand-repair case) — repair, never wipe real data
-                except (json.JSONDecodeError, UnicodeDecodeError):
+                else:
                     fh.truncate(cut + 1 if cut >= 0 else 0)
     event = dict(event)
     if "evidence" in event:
@@ -298,6 +303,9 @@ def reduce_queue(path) -> tuple:
         try:
             e = json.loads(line)
         except json.JSONDecodeError:
+            e = None
+        if not isinstance(e, dict):
+            # non-JSON or valid-JSON-non-object: same corruption semantics
             if i == len(lines) - 1:
                 malformed_tail = True
                 continue
@@ -308,8 +316,8 @@ def reduce_queue(path) -> tuple:
             continue
         prior = state.get(key)
         if (prior and prior.get("event") in HUMAN_EVENTS
-                and e.get("event") in MACHINE_EVENTS):
-            continue  # machine never overrides human
+                and e.get("event") not in HUMAN_EVENTS):
+            continue  # only a human event may follow a human event
         state[key] = e
     return state, malformed_tail
 
@@ -411,10 +419,12 @@ def _resolve_quote(db_path: str, row: dict, phrase: str) -> str:
         # snippet fallback would break AC2's verbatim promise invisibly
         raise SystemExit2(f"quote resolution failed against {db_path}: {e}")
     if not got:
+        row["_quote_source"] = "index-snippet"
         return row.get("snippet", "")
     text = got[0]
     idx = text.lower().find(phrase.lower())
     if idx < 0:
+        row["_quote_source"] = "index-snippet"
         return text[:EVIDENCE_MAX_CHARS]
     start = max(0, idx - 200)
     return text[start:idx + len(phrase) + 200]
@@ -422,12 +432,14 @@ def _resolve_quote(db_path: str, row: dict, phrase: str) -> str:
 
 def _read_notes(workspace_root: Path) -> str:
     parts = []
+    skipped = 0
     docs = workspace_root / "claude_docs"
     for f in sorted(docs.glob("session_notes*")):
         if f.is_file():
             try:
                 parts.append(f.read_text(encoding="utf-8", errors="replace"))
             except OSError:
+                skipped += 1
                 continue
     notes_dir = docs / "session_notes"
     if notes_dir.is_dir():
@@ -435,7 +447,11 @@ def _read_notes(workspace_root: Path) -> str:
             try:
                 parts.append(f.read_text(encoding="utf-8", errors="replace"))
             except OSError:
+                skipped += 1
                 continue
+    if skipped:
+        print(f"warning: {skipped} session-notes file(s) unreadable — "
+              "note-command detection is partial", file=sys.stderr)
     return "\n".join(parts)
 
 
@@ -503,7 +519,8 @@ def cmd_detect(args) -> int:
         by_pattern.setdefault((s.detector, s.canonical_pattern), []).append(s)
     for (detector, pattern), sigs in sorted(by_pattern.items()):
         key = candidate_key(detector, pattern)
-        assess = rec.get(pattern, RecurrenceAssessment(0, frozenset()))
+        assess = rec.get((detector, pattern),
+                         RecurrenceAssessment(0, frozenset()))
         evidence = [{"session_id": s.session_id, "quote": s.quote,
                      "source": s.source} for s in sigs[:5]]
         prior = state.get(key)
@@ -631,7 +648,8 @@ def cmd_disposition(args) -> int:
         "candidate_key": args.candidate_key,
         "detector": prior.get("detector", ""),
         "canonical_pattern": prior.get("canonical_pattern", ""),
-        "title": prior.get("title", ""), "evidence": [],
+        "title": prior.get("title", ""),
+        "evidence": prior.get("evidence", []),
         "distinct_sessions": prior.get("distinct_sessions", 0),
         "coverage": prior.get("coverage", {}),
         "note": args.note or ""})
