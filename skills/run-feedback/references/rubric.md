@@ -108,7 +108,8 @@ drift guards):
 
 Fields audited: `workflow`, `workflow_version`, `issue`, `changes`, `tests` (vs the
 runner's final output — baseline→end delta as recorded?), `gates[]` (findings/resolved
-counts vs actual session-note markers), `security_scan`, `loop_backs` (vs the
+counts vs actual session-note markers, counted per the #340 rule in
+`skills/implement-feature/references/run-record.md`), `security_scan`, `loop_backs` (vs the
 counters file), `outcome`, `usage`, `reviewer_kind`, `dispatches[]`
 (consume-when-present), plus any field the assessor had to guess the shape of,
 null-forever fields, and anything mis-shaped on first summarize.
@@ -119,8 +120,14 @@ Standing known-weak spots — check these EVERY run:
   internally impossible or contradict explicit evidence — never file a defect solely
   because the attribution is broad.
 - **reviewer_kind fidelity**: does the recorded reviewer kind match the reviewers the
-  session actually dispatched?
-- **gate-count honesty**: do `gates[]` findings/resolved counts match the markers?
+  session actually dispatched — judged against the #340 merged-gate precedence rule
+  (the gate-DEFINING mechanism)? A merged gate recording the additive adversarial
+  layer's kind instead of the gate-defining mechanism is a `mismatch`.
+- **gate-count honesty**: do `gates[]` findings/resolved counts match the markers,
+  judged against the #340 counting rule (unique findings across all passes;
+  `resolved` = terminal final disposition at gate close)? Per-pass sums recorded as
+  the gate total are an OVER-count `mismatch`; pre-#340 records carrying per-pass
+  sums are `known-limitation`, not a defect.
 - **Store lag**: the store append lags one PR by design (Step 16 appends pre-merge;
   the JSONL line rides the next branch) — verdict `known-limitation`
   (`store-lag-known`), distinct from a genuinely missing record.
