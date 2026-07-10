@@ -220,10 +220,15 @@ def _create_schema(con: sqlite3.Connection) -> None:
     ])
 
 
+def _ensure_db_dir(db_path: Path) -> None:
+    """Create the DB dir 0700 when absent; never chmod a pre-existing dir
+    (a custom --db may live under a deliberately shared directory)."""
+    if not db_path.parent.exists():
+        db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(db_path.parent, 0o700)
+
+
 def _open_writer(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(db_path.parent, 0o700)
-    existed = db_path.exists()
     con = sqlite3.connect(db_path)
     mode = con.execute("PRAGMA journal_mode=WAL").fetchone()[0]
     if mode != "wal":
@@ -235,7 +240,6 @@ def _open_writer(db_path: Path) -> sqlite3.Connection:
     for sidecar in (f"{db_path}-wal", f"{db_path}-shm"):
         if os.path.exists(sidecar):
             os.chmod(sidecar, 0o600)
-    _ = existed
     return con
 
 
@@ -314,6 +318,83 @@ def _write_file_rows(con, path: str, stat_pair, counts, rows, project) -> None:
               m.uuid, m.text) for ln, m in rows])
 
 
+def _index_pass(con, dirty, projects_dir: Path):
+    """Index every path in `dirty` into `con`. Returns (totals, indexed_files)."""
+    totals = {"message": 0, "malformed": 0, "ignored": 0, "rejected": 0}
+    indexed_files = 0
+    for path in dirty:
+        written = False
+        for _attempt in range(3):
+            try:
+                st = Path(path).stat()
+                pair = (st.st_mtime_ns, st.st_size)
+                counts, rows = _parse_file(path)  # pure read pass
+                st2 = Path(path).stat()
+            except OSError as e:
+                print(f"warning: cannot read {path} ({e}), skipping",
+                      file=sys.stderr)
+                break
+            if (st2.st_mtime_ns, st2.st_size) != pair:
+                continue  # changed mid-read (live session) — retry
+            _write_file_rows(con, path, pair, counts, rows,
+                             _project_of(path, projects_dir))
+            for k in totals:
+                totals[k] += counts[k]
+            indexed_files += 1
+            written = True
+            break
+        else:
+            print(f"warning: {path} kept changing mid-read; keeping "
+                  "prior indexed version (stale — see `status`)",
+                  file=sys.stderr)
+        if written and indexed_files % CHECKPOINT_EVERY_FILES == 0:
+            con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+    return totals, indexed_files
+
+
+def _print_run_summary(totals, indexed_files, unchanged, vanished) -> None:
+    if format_drift_warning(totals["message"], totals["rejected"]):
+        print(f"warning: possible format drift — {totals['rejected']} of "
+              f"{totals['message'] + totals['rejected']} message lines "
+              "failed extraction; check `status` and the format "
+              "assumptions in this module's docstring", file=sys.stderr)
+    print(f"{indexed_files} files indexed, {unchanged} "
+          f"unchanged, {vanished} vanished; "
+          f"{totals['message']} messages added; "
+          f"malformed {totals['malformed']} ignored {totals['ignored']} "
+          f"rejected {totals['rejected']}")
+
+
+def _do_rebuild(db_path: Path, projects_dir: Path) -> int:
+    """Full rebuild into a temp DB, atomically swapped over the old one —
+    concurrent readers keep the complete old index until the single
+    os.replace() (executescript() autocommits, so an in-place DROP+CREATE is
+    NOT one transaction; Step 11 catch, reinstating the peer-consult swap)."""
+    tmp = db_path.with_name(db_path.name + ".rebuild-tmp")
+    for stale in (tmp, Path(f"{tmp}-wal"), Path(f"{tmp}-shm")):
+        stale.unlink(missing_ok=True)
+    con = _open_writer(tmp)
+    try:
+        with con:
+            _create_schema(con)
+        dirty = sorted(_scan_corpus(projects_dir))
+        totals, indexed_files = _index_pass(con, dirty, projects_dir)
+        with con:
+            con.execute("UPDATE meta SET value=? WHERE key='last_run'",
+                        (datetime.now(timezone.utc).isoformat(),))
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        con.close()
+    os.replace(tmp, db_path)
+    # the replaced file's old sidecars are stale (writer lock is held; a
+    # reader already connected keeps its open inodes — POSIX-safe unlink)
+    for stale in (Path(f"{db_path}-wal"), Path(f"{db_path}-shm"),
+                  Path(f"{tmp}-wal"), Path(f"{tmp}-shm")):
+        stale.unlink(missing_ok=True)
+    _print_run_summary(totals, indexed_files, 0, 0)
+    return 0
+
+
 def cmd_index(args) -> int:
     db_path = Path(args.db)
     err = _refuse_symlink(db_path)
@@ -325,8 +406,11 @@ def cmd_index(args) -> int:
                           f"{projects_dir} — refusing to index (a wrong path "
                           "would prune the whole store)")
 
-    db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _ensure_db_dir(db_path)
     lock_path = db_path.parent / (db_path.name + ".lock")
+    err = _refuse_symlink(lock_path)
+    if err:
+        raise SystemExit2(err)
     lock = open(lock_path, "w", encoding="utf-8")
     os.chmod(lock_path, 0o600)
     try:
@@ -336,22 +420,15 @@ def cmd_index(args) -> int:
             print("another index run appears to be in progress "
                   f"(lock: {lock_path})", file=sys.stderr)
             return 3
+
+        if args.rebuild:
+            return _do_rebuild(db_path, projects_dir)
+
         fresh = not db_path.exists()
         con = _open_writer(db_path)
         try:
             if fresh:
                 with con:
-                    _create_schema(con)
-            elif args.rebuild:
-                with con:  # one txn: readers see old or new, never partial
-                    con.executescript(
-                        "DROP TRIGGER IF EXISTS messages_ai;"
-                        "DROP TRIGGER IF EXISTS messages_ad;"
-                        "DROP TRIGGER IF EXISTS messages_au;"
-                        "DROP TABLE IF EXISTS messages_fts;"
-                        "DROP TABLE IF EXISTS messages;"
-                        "DROP TABLE IF EXISTS files;"
-                        "DROP TABLE IF EXISTS meta;")
                     _create_schema(con)
             else:
                 meta = _meta(con)
@@ -367,16 +444,19 @@ def cmd_index(args) -> int:
             stored = {r[0]: (r[1], r[2]) for r in con.execute(
                 "SELECT path, mtime_ns, size FROM files")}
             on_disk = _scan_corpus(projects_dir)
-            if stored and not on_disk:
-                # A readable-but-empty scan of a previously populated corpus
-                # is an environment problem (unreadable dirs, wrong mount) far
-                # more often than "every session legitimately vanished".
-                print(f"refusing mass-vanish: index holds {len(stored)} files "
-                      f"but the corpus scan of {projects_dir} found none — "
-                      "check the path/permissions, or force with "
-                      "`index --rebuild`", file=sys.stderr)
-                return 2
             plan = plan_changes(stored, on_disk)
+            if stored and plan.vanished \
+                    and len(plan.vanished) / len(stored) > 0.5:
+                # A mostly-vanished corpus (incl. a totally empty scan) is an
+                # environment problem — unreadable dirs, a wrong path, a
+                # partial mount — far more often than "most sessions
+                # legitimately vanished". rglob silently skips unreadable
+                # subtrees, so a partial scan looks exactly like this.
+                print(f"refusing mass-vanish: {len(plan.vanished)} of "
+                      f"{len(stored)} indexed files missing from the scan of "
+                      f"{projects_dir} — check the path/permissions, or force "
+                      "a fresh state with `index --rebuild`", file=sys.stderr)
+                return 2
 
             for path in plan.vanished:
                 with con:
@@ -385,35 +465,7 @@ def cmd_index(args) -> int:
                     con.execute("DELETE FROM messages WHERE file_id=?", (fid,))
                     con.execute("DELETE FROM files WHERE id=?", (fid,))
 
-            totals = {"message": 0, "malformed": 0, "ignored": 0, "rejected": 0}
-            indexed_files = 0
-            for path in plan.dirty:
-                written = False
-                for _attempt in range(3):
-                    try:
-                        st = Path(path).stat()
-                        pair = (st.st_mtime_ns, st.st_size)
-                        counts, rows = _parse_file(path)  # pure read pass
-                        st2 = Path(path).stat()
-                    except OSError as e:
-                        print(f"warning: cannot read {path} ({e}), skipping",
-                              file=sys.stderr)
-                        break
-                    if (st2.st_mtime_ns, st2.st_size) != pair:
-                        continue  # changed mid-read (live session) — retry
-                    _write_file_rows(con, path, pair, counts, rows,
-                                     _project_of(path, projects_dir))
-                    for k in totals:
-                        totals[k] += counts[k]
-                    indexed_files += 1
-                    written = True
-                    break
-                else:
-                    print(f"warning: {path} kept changing mid-read; keeping "
-                          "prior indexed version (stale — see `status`)",
-                          file=sys.stderr)
-                if written and indexed_files % CHECKPOINT_EVERY_FILES == 0:
-                    con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            totals, indexed_files = _index_pass(con, plan.dirty, projects_dir)
 
             with con:
                 con.execute("UPDATE meta SET value=? WHERE key='last_run'",
@@ -422,16 +474,8 @@ def cmd_index(args) -> int:
         finally:
             con.close()
 
-        if format_drift_warning(totals["message"], totals["rejected"]):
-            print(f"warning: possible format drift — {totals['rejected']} of "
-                  f"{totals['message'] + totals['rejected']} message lines "
-                  "failed extraction; check `status` and the format "
-                  "assumptions in this module's docstring", file=sys.stderr)
-        print(f"{indexed_files} files indexed, {len(plan.unchanged)} "
-              f"unchanged, {len(plan.vanished)} vanished; "
-              f"{totals['message']} messages added; "
-              f"malformed {totals['malformed']} ignored {totals['ignored']} "
-              f"rejected {totals['rejected']}")
+        _print_run_summary(totals, indexed_files,
+                           len(plan.unchanged), len(plan.vanished))
         return 0
     finally:
         lock.close()
@@ -443,7 +487,21 @@ def _open_reader(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         raise SystemExit2(f"no index at {db_path} — run `session_index.py "
                           "index` first")
-    return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    # Readers must not silently serve rows extracted under an old parser: the
+    # incremental indexer skips fresh files, so after a plugin upgrade only
+    # this warning tells the user the index needs a rebuild.
+    try:
+        meta = _meta(con)
+        if (meta.get("schema_version") != str(SCHEMA_VERSION)
+                or meta.get("parser_version") != str(PARSER_VERSION)):
+            print(f"warning: index built at schema/parser "
+                  f"{meta.get('schema_version')}/{meta.get('parser_version')} "
+                  f"but code is {SCHEMA_VERSION}/{PARSER_VERSION} — results "
+                  "may be stale; run `index --rebuild`", file=sys.stderr)
+    except sqlite3.Error:
+        pass  # unreadable meta surfaces via the actual query
+    return con
 
 
 def cmd_search(args) -> int:
@@ -573,8 +631,12 @@ def main(argv) -> int:
     # argparse doesn't read the value as a flag.
     argv = list(argv)
     for i, a in enumerate(argv[:-1]):
-        if a == "--project" and argv[i + 1].startswith("-"):
-            argv[i:i + 2] = [f"--project={argv[i + 1]}"]
+        nxt = argv[i + 1]
+        # merge only corpus-shaped values ("-home-user-proj"), never another
+        # option ("--json") — a swallowed flag would silently mis-filter
+        if a == "--project" and nxt.startswith("-") \
+                and not nxt.startswith("--"):
+            argv[i:i + 2] = [f"--project={nxt}"]
             break
     args = ap.parse_args(argv)
     if not args.db:

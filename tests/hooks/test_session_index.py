@@ -538,3 +538,86 @@ class TestNoIndexDataInRepo:
                 and (".session-index" in p.name or
                      p.name.startswith("sessions.db"))]
         assert hits == [], f"index artifacts inside repo: {hits}"
+
+
+# ------------------------------------------------------ Step 11 finding tests
+
+class TestStep11Findings:
+    def test_rebuild_swaps_atomically_and_cleans_tmp(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        ino_before = db.stat().st_ino
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db),
+                    "--rebuild")
+        assert r.returncode == 0, r.stderr
+        assert db.stat().st_ino != ino_before  # new file swapped into place
+        assert not list(db.parent.glob("*.rebuild-tmp*"))
+        rj = run_cli("search", "fox", "--db", str(db), "--json")
+        assert len(json.loads(rj.stdout)["results"]) == 1
+
+    def test_partial_vanish_ratio_refused(self, env, tmp_path):
+        corpus = tmp_path / "big-corpus"
+        for i in range(10):
+            make_corpus(corpus, "-proj-x", f"s{i}", [msg(f"content {i}",
+                                                         sid=f"s{i}")])
+        db = tmp_path / "big-idx" / "sessions.db"
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        for i in range(8):  # 80% vanish — env problem far likelier
+            (corpus / "-proj-x" / f"s{i}.jsonl").unlink()
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 2
+        assert "vanish" in r.stderr.lower()
+        con = sqlite3.connect(db)
+        assert con.execute("SELECT count(*) FROM messages").fetchone()[0] == 10
+        r2 = run_cli("index", "--projects-dir", str(corpus), "--db", str(db),
+                     "--rebuild")
+        assert r2.returncode == 0
+        con2 = sqlite3.connect(db)
+        assert con2.execute("SELECT count(*) FROM messages").fetchone()[0] == 2
+
+    def test_small_vanish_still_pruned(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        (corpus / "-proj-beta" / "sess2.jsonl").unlink()  # 1 of 2 files, but
+        # with few stored files the ratio guard must not block normal churn
+        make_corpus(corpus, "-proj-beta", "sess9", [msg("fresh", sid="s-9")])
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 0
+        rj = run_cli("search", "lazy dog", "--db", str(db), "--json")
+        assert json.loads(rj.stdout)["results"] == []
+
+    def test_reader_warns_on_version_mismatch(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        con = sqlite3.connect(db)
+        con.execute("UPDATE meta SET value='0' WHERE key='parser_version'")
+        con.commit(); con.close()
+        r = run_cli("search", "fox", "--db", str(db), "--json")
+        assert r.returncode == 0  # read still works
+        assert "rebuild" in r.stderr.lower()  # but the staleness is loud
+
+    def test_lock_path_symlink_refused(self, env, tmp_path):
+        corpus, db = env
+        db.parent.mkdir(parents=True, exist_ok=True)
+        target = tmp_path / "innocent"
+        target.touch()
+        (db.parent / (db.name + ".lock")).symlink_to(target)
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 2
+        assert "symlink" in r.stderr.lower()
+
+    def test_existing_custom_dir_mode_not_forced(self, env, tmp_path):
+        corpus, _ = env
+        shared = tmp_path / "shared-dir"
+        shared.mkdir(mode=0o755)
+        db = shared / "custom.db"
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 0, r.stderr
+        assert oct(shared.stat().st_mode & 0o777) == "0o755"  # untouched
+        assert oct(db.stat().st_mode & 0o777) == "0o600"      # file still tight
+
+    def test_project_flag_not_swallowed_by_option(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        r = run_cli("search", "fox", "--db", str(db), "--project", "--json")
+        assert r.returncode == 2  # argparse error, not a silent bogus filter

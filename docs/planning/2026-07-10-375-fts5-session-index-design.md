@@ -166,19 +166,26 @@ same pure extractor (pinned by `parser_version`), an incremental pass and a
 from-scratch rebuild converge to identical rows → identical search results (AC1
 test compares result sets, using the deterministic ordering below).
 
-`--rebuild` executes DROP + CREATE (tables and triggers) + full repopulation
-as **one transaction** — SQLite supports transactional DDL, so concurrent
-readers see either the old complete index or the new complete index at the
-single commit point, never missing/partial tables (verified in the 2026-07-10
-exact-schema spike; the AC4 test also exercises search-during-rebuild).
-Derived store — a crashed rebuild is recovered by re-running.
-**Acknowledged operational caveat:** a single rebuild transaction cannot be
-checkpointed until commit, so the WAL transiently grows to roughly the full
-new index size (potentially GBs on this corpus) — a deliberate trade against
-the peer's temp-DB swap complexity; disk headroom ≈ 2× final DB size is the
-documented requirement for `--rebuild`, stated in the module docstring and
-README entry. Incremental runs are unaffected (per-file transactions +
-periodic passive checkpoints).
+`--rebuild` builds the new index in a **temp DB** (`sessions.db.rebuild-tmp`,
+fully checkpointed with TRUNCATE and closed) and atomically `os.replace()`s it
+over the old file, then unlinks the replaced file's stale WAL/SHM sidecars —
+concurrent readers keep the complete OLD index until the single swap instant.
+**Step 11 reversal note (honesty):** the earlier "one-transaction in-place
+DROP+CREATE" approach was WRONG — Python's `executescript()` implicitly
+commits, so the in-place rebuild was never atomic (adversarial diff review
+Critical + two same-model reviewers converged on it); the peer consult's
+temp-DB swap, originally rejected as over-complex, was correct and is now the
+implementation. Disk headroom ≈ 2× final DB size still applies (old + new
+coexist until the swap), stated in the module docstring and README entry.
+Incremental runs are unaffected (per-file transactions + periodic passive
+checkpoints). A mostly-vanished corpus scan (>50% of indexed files missing —
+unreadable dirs, wrong path, partial mount; `rglob` silently skips unreadable
+subtrees) is refused with exit 2 rather than pruned. Readers (`search`/
+`status`) print a loud staleness warning when the stored schema/parser
+versions trail the code (only `index` hard-gates). The sibling lock path is
+symlink-refused like the DB path, and a pre-existing custom `--db` parent
+directory keeps its own permissions (0700 is set only on directories this
+tool creates).
 
 ## Concurrency (AC4)
 
