@@ -292,7 +292,17 @@ class TestPerSlotFallbackChain:
         sentence = (
             "A reviewer return that is vacuous (no findings AND no substantive "
             "content) is a DEAD dispatch, not a clean pass — relaunch that slot "
-            "once at the same tier; on a second death follow the existing "
-            "dispatch-failure path.")
+            "once at the same tier; on a second death, record the slot as "
+            "REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's "
+            "ERROR protocol — the gate never proceeds with fewer than two live "
+            "reviews.")
         assert sentence in s9, (
             "Step 9 must carry the #331 canonical dead-return detection sentence")
+
+    def test_step9_failure_mode_bullets_present(self):
+        """8a hardening (#331): the failure-mode bullets carry the terminal
+        action — deleting them must fail a test, not just the bold blocks."""
+        s9 = self._step9()
+        assert ("Named agent type does not resolve → per-slot fallback chain" in s9)
+        assert ("Reviewer returns vacuous success → dead-return relaunch once, "
+                "then REVIEW_DISPATCH_FAILED + the workflow's ERROR protocol") in s9
