@@ -526,3 +526,15 @@ class TestIndexGuards:
         os.chmod(db, 0o644)
         run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
         assert oct(db.stat().st_mode & 0o777) == "0o600"
+
+
+class TestNoIndexDataInRepo:
+    def test_repo_tree_contains_no_index_artifacts(self):
+        """AC7: the DB is a derived store outside the repo — no index file may
+        ever land in the repo tree."""
+        repo = Path(__file__).resolve().parents[2]
+        hits = [p for p in repo.rglob("*")
+                if ".git" not in p.parts
+                and (".session-index" in p.name or
+                     p.name.startswith("sessions.db"))]
+        assert hits == [], f"index artifacts inside repo: {hits}"
