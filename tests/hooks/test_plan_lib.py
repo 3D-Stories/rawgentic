@@ -501,6 +501,13 @@ class TestFormatPromotionNote:
 # --- review log + deferrals + assertions ---
 
 class TestReviewLog:
+    def test_issue_hash_prefixed_string_normalized(self):
+        """#341 Step 11 hardening: issue="#341" must emit exactly one '#'
+        (a "##341" token would never match the canonical #<n> key shape)."""
+        import plan_lib
+        note = plan_lib.format_promotion_note("3", "c", "r", issue="#341")
+        assert "#341: " in note and "##341" not in note
+
     def test_append_creates_file(self, tmp_path):
         mod = _reload_plan_lib()
         log = tmp_path / "review_log.jsonl"

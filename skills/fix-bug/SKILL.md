@@ -213,7 +213,9 @@ On every marker line the run key is read from the marker type's canonical slot â
 concurrent runs share one notes file and un-keyed markers are mechanically
 un-attributable (#341). The key is read ONLY from that marker type's slot (below); a
 `#N` in a free-text tail is never the key, and a marker whose slot holds no `#<n>` is
-legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error).
+legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error). The fallback exists for PRE-#341 notes and
+stale-cache (â‰¤3.27) emitters ONLY: a run executing THIS contract that emits a
+prescribed marker without its slot key has violated the contract.
 
 | Marker type | Canonical key slot |
 | --- | --- |

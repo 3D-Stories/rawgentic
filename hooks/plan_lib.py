@@ -916,7 +916,9 @@ def format_promotion_note(
     """
     detail = f"standard -> high (criterion: {criterion}; rationale: {rationale})"
     if issue is not None:
-        detail = f"#{issue}: {detail}"
+        # accept both 341 and "#341" — emit exactly one '#' (a "##341" token
+        # would never match the canonical #<n> key shape, #341 review catch)
+        detail = f"#{str(issue).lstrip('#')}: {detail}"
     return f"### WF2 Step {step} — Promoted {task_id}: {detail}"
 
 

@@ -280,6 +280,9 @@ concurrent runs share one notes file and un-keyed markers are mechanically
 un-attributable (#341). The key is read ONLY from that marker type's slot (below); a
 `#N` in a free-text tail is never the key, and a marker whose slot holds no `#<n>` is
 legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error).
+The fallback exists for PRE-#341 notes and stale-cache (≤3.27) emitters ONLY: a run
+executing THIS contract that emits a prescribed marker without its slot key has
+violated the contract — fix the emission, do not lean on the fallback.
 
 | Marker type | Canonical key slot |
 | --- | --- |
@@ -287,7 +290,8 @@ legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error)
 | enum-parens with trailing detail (Step 1b) | first token of the trailing detail: `(set\|deferred\|skipped): #<issue> — <detail>` |
 | bare-enum, no trailing detail (Step 12 design artifact) | post-label, pre-enum: `— design artifact #<issue> (updated\|skipped)` |
 | label-colon (Step 11 adversarial diff) | immediately after the colon: `Adversarial Diff Review: #<issue> findings_present …` |
-| parens-state (Step 4 adversarial, Step 8 delegation) | key leads inside the parens: `(#<issue>, invoked\|skipped)` / `whole-issue-delegation (#<issue>):` |
+| parens-state (Step 4/6 adversarial incl. the discarded variant, Step 8 delegation) | key leads inside the parens: `(#<issue>, invoked\|skipped)` / `(#<issue>, discarded: <reason>)` / `whole-issue-delegation (#<issue>):` |
+| hook-emitted promotion note (`format_promotion_note`) | key leads the detail after the task colon: `— Promoted <id>: #<issue>: <detail>` |
 
 This slot table is AUTHORITATIVE: every prescribed marker literal in references/ must
 conform to its type's slot, and when a literal and this table diverge the table wins.
