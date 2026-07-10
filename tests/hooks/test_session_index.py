@@ -99,20 +99,31 @@ class TestExtractMessage:
     def test_unparseable_timestamp_rejected(self):
         assert si.extract_message(self._line(timestamp="garbage")) is si.REJECTED
 
-    def test_empty_text_rejected(self):
+    def test_textless_with_good_provenance_ignored(self):
+        # tool_result/tool_use/thinking-only messages are EXPECTED shapes on
+        # the real corpus (77% of message lines) — ignored, never "rejected",
+        # so the format-drift guard measures real shape failures only.
         assert si.extract_message(self._line(
-            message={"role": "user", "content": ""})) is si.REJECTED
+            message={"role": "user", "content": ""})) is si.IGNORED
         assert si.extract_message(self._line(
             type="assistant",
             message={"role": "assistant", "content": [
-                {"type": "tool_use", "name": "X", "input": {}}]})) is si.REJECTED
+                {"type": "tool_use", "name": "X", "input": {}}]})) is si.IGNORED
+        assert si.extract_message(self._line(
+            message={"role": "user", "content": [
+                {"type": "tool_result", "content": "big blob"}]})) is si.IGNORED
 
-    def test_weird_shapes_never_raise(self):
-        for content in (None, 42, {"a": 1}, [None, 42, {"type": "text"}]):
-            si.extract_message(self._line(
-                message={"role": "user", "content": content}))
-        si.extract_message(self._line(message=None))
-        si.extract_message(self._line(message="odd"))
+    def test_weird_content_shapes_rejected_never_raise(self):
+        for content in (None, 42, {"a": 1}):
+            assert si.extract_message(self._line(
+                message={"role": "user", "content": content})) is si.REJECTED
+        assert si.extract_message(self._line(message=None)) is si.REJECTED
+        assert si.extract_message(self._line(message="odd")) is si.REJECTED
+        # a block list with junk entries but one good text block still extracts
+        m = si.extract_message(self._line(
+            message={"role": "user",
+                     "content": [None, 42, {"type": "text", "text": "ok"}]}))
+        assert m.text == "ok"
 
 
 class TestLiteralQuote:
@@ -197,9 +208,10 @@ def env(tmp_path):
     make_corpus(corpus, "-proj-alpha", "sess1", [
         msg("the quick brown fox"),
         msg("assistant answer about databases", typ="assistant"),
-        {"type": "mode", "mode": "normal"},                 # ignored
+        {"type": "mode", "mode": "normal"},                 # ignored (non-message)
         "{ this is not json",                                # malformed
-        msg("", sid="s-1"),                                  # rejected (empty)
+        {"type": "user", "sessionId": "s-1", "timestamp": REAL_TS,
+         "message": {"role": "user", "content": 42}},        # rejected (shape)
     ])
     make_corpus(corpus, "-proj-beta", "sess2", [
         msg("lazy dog sleeps", sid="s-2", ts="2026-07-01T10:00:00.000Z"),
@@ -420,6 +432,23 @@ class TestStatusCLI:
         make_corpus(corpus, "-proj-alpha", "sessNEW", [msg("new stuff")])
         r = run_cli("status", "--db", str(db), "--projects-dir", str(corpus))
         assert "new: 1" in r.stdout
+
+
+class TestNestedCorpus:
+    def test_subagent_files_indexed_with_top_project(self, env):
+        """Real corpus nests: project/session-dir/subagents/agent-X.jsonl."""
+        corpus, db = env
+        nested = corpus / "-proj-alpha" / "sess-dir" / "subagents"
+        nested.mkdir(parents=True)
+        (nested / "agent-1.jsonl").write_text(
+            json.dumps(msg("nested subagent wisdom", sid="s-sub")) + "\n")
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 0, r.stderr
+        rj = run_cli("search", "nested subagent wisdom", "--db", str(db),
+                     "--literal", "--json")
+        rows = json.loads(rj.stdout)["results"]
+        assert len(rows) == 1
+        assert rows[0]["project"] == "-proj-alpha"  # top-level dir, not "subagents"
 
     def test_status_never_mutates(self, env):
         corpus, db = env

@@ -93,19 +93,30 @@ def _block_text(content) -> str:
 
 
 def extract_message(obj):
-    """One parsed JSONL line -> ExtractedMsg | IGNORED | REJECTED. Total."""
+    """One parsed JSONL line -> ExtractedMsg | IGNORED | REJECTED. Total.
+
+    IGNORED = expected non-indexable shapes (non-message types; textless
+    messages — tool_use/tool_result/thinking-only make up ~77% of real message
+    lines). REJECTED = unexpected shape or missing/bad provenance — the
+    format-drift signal.
+    """
     if not isinstance(obj, dict):
         return REJECTED
     typ = obj.get("type")
     if typ not in ("user", "assistant"):
         return IGNORED
+    message = obj.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, (str, list)):
+        return REJECTED  # shape drift
     session_id = obj.get("sessionId")
     ts = obj.get("timestamp")
     ts_us = parse_ts_us(ts)
-    message = obj.get("message")
-    text = _block_text(message.get("content")) if isinstance(message, dict) else ""
-    if not session_id or ts_us is None or not text:
-        return REJECTED
+    if not session_id or ts_us is None:
+        return REJECTED  # provenance drift
+    text = _block_text(content)
+    if not text:
+        return IGNORED  # expected textless message
     uuid = obj.get("uuid")
     # JSON can carry lone-surrogate escapes (\udXXX) that SQLite cannot
     # UTF-8-encode — sanitize so one weird message never aborts a run (AC3).
@@ -237,14 +248,23 @@ def _meta(con) -> dict:
 
 
 def _scan_corpus(projects_dir: Path) -> dict:
+    # rglob: the real corpus nests (project/session-dir/subagents/*.jsonl)
     on_disk = {}
-    for f in projects_dir.glob("*/*.jsonl"):
+    for f in projects_dir.rglob("*.jsonl"):
         try:
             st = f.stat()
         except OSError:
             continue
         on_disk[str(f)] = (st.st_mtime_ns, st.st_size)
     return on_disk
+
+
+def _project_of(path: str, projects_dir: Path) -> str:
+    """Project = first path component under the corpus root (nesting-safe)."""
+    try:
+        return Path(path).relative_to(projects_dir).parts[0]
+    except (ValueError, IndexError):
+        return Path(path).parent.name
 
 
 def _parse_file(path: str):
@@ -272,9 +292,8 @@ def _parse_file(path: str):
     return counts, rows
 
 
-def _write_file_rows(con, path: str, stat_pair, counts, rows) -> None:
+def _write_file_rows(con, path: str, stat_pair, counts, rows, project) -> None:
     """Replace one file's rows in one transaction (write pass only)."""
-    project = Path(path).parent.name
     now = datetime.now(timezone.utc).isoformat()
     with con:  # one transaction per file
         old = con.execute("SELECT id FROM files WHERE path=?", (path,)).fetchone()
@@ -382,7 +401,8 @@ def cmd_index(args) -> int:
                         break
                     if (st2.st_mtime_ns, st2.st_size) != pair:
                         continue  # changed mid-read (live session) — retry
-                    _write_file_rows(con, path, pair, counts, rows)
+                    _write_file_rows(con, path, pair, counts, rows,
+                                     _project_of(path, projects_dir))
                     for k in totals:
                         totals[k] += counts[k]
                     indexed_files += 1
