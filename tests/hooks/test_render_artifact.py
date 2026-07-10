@@ -634,3 +634,20 @@ class TestTemplates:
         assert 'class="chip c-conf"' in h
         assert 'class="chip c-defer"' in h
         assert 'class="chip c-plan"' in h
+
+
+class TestStep8aFixes:
+    # 8a T2 review: a two-space hard break between MUST and NOT must still read as
+    # the prohibition (req-must-not), never a positive MUST badge.
+    def test_requirement_badge_bridges_hard_break(self):
+        h = _render("MUST  \nNOT retry", style="spec")
+        assert 'req-must-not' in h
+        assert 'class="req req-must"' not in h
+
+    # 8a T2 review: unknown style on the LIBRARY path falls back to plain but warns
+    # on stderr (the CLI argparse-rejects; the library must not silently restyle).
+    def test_unknown_style_warns_and_falls_back(self, capsys):
+        h = _render("body", style="not-a-template")
+        err = capsys.readouterr().err
+        assert "unknown style 'not-a-template'" in err
+        assert "tpl-" not in h

@@ -354,11 +354,15 @@ def _decorate_severity(fragment: str) -> str:
 def _decorate_requirements(fragment: str) -> str:
     """Wrap RFC-2119 keywords in a ``.req .req-<slug>`` badge. Longest-first alternation
     so ``MUST NOT`` becomes ONE ``req-must-not`` span, never a nested ``MUST`` span."""
+    # [ \x00]+ (not a literal space) so a two-space hard break falling between
+    # MUST/SHOULD and NOT — the \x00 placeholder at decoration time — still reads
+    # as the prohibition, not a positive MUST (#344 8a review).
     return _decorate_outside_code(
         fragment,
         lambda seg: re.sub(
-            r"\b(MUST NOT|SHOULD NOT|MUST|SHOULD|MAY)\b",
-            lambda m: f'<span class="req req-{m.group(1).lower().replace(" ", "-")}">{m.group(1)}</span>',
+            r"\b(MUST[ \x00]+NOT|SHOULD[ \x00]+NOT|MUST|SHOULD|MAY)\b",
+            lambda m: '<span class="req req-{}">{}</span>'.format(
+                "-".join(m.group(1).replace("\x00", " ").lower().split()), m.group(1)),
             seg))
 
 
@@ -366,7 +370,12 @@ def _render_body(markdown: str, style: str = "plain") -> str:
     """Dispatch on style via the ``_TEMPLATES`` registry (defined below with the CSS
     blocks). ``plain`` (default) is byte-for-byte the pre-#199 renderer. A decorator,
     if the template has one, is composed after ``_inline`` and applied wherever the
-    body renderer runs its inline pass. Unknown styles fall back to plain."""
+    body renderer runs its inline pass. Unknown styles fall back to plain WITH a
+    stderr warning (the CLI argparse-rejects them; library callers get the loud
+    fallback instead of a silent restyle — #344 8a review)."""
+    if style not in _TEMPLATES:
+        print(f"render_artifact: WARNING unknown style {style!r} — falling back to "
+              f"plain (choose one of {tuple(_TEMPLATES)})", file=sys.stderr)
     renderer, _css, dec = _TEMPLATES.get(style, _TEMPLATES["plain"])
     inline_fn = (lambda esc: dec(_inline(esc))) if dec else _inline
     return renderer(markdown, inline_fn=inline_fn)
