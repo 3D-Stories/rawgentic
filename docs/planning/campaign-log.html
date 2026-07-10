@@ -33,6 +33,20 @@ th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);verti
 .telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
 footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
 
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
 :root{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#a16207;--defer-bg:#f8f2e2}
 @media(prefers-color-scheme:dark){:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}}
 :root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
@@ -45,488 +59,157 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 .c-plan{color:var(--ink-2);background:var(--code)}
 </style>
 </head>
-<body>
+<body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 01:33 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 05:03 MDT</div>
 <h1>Epic campaign log — rawgentic</h1>
 
 </header>
 <main>
 <h1>Rawgentic modernization — campaign log</h1>
-<p>Rolling design-artifact log for the autonomous workflow-modernization campaign</p>
-<p>(dogfood: rawgentic builds rawgentic). One section per implemented slot, updated</p>
-<p>in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives</p>
-<p>separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this</p>
-<p>log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded</p>
-<p>run-record telemetry.</p>
-<p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) ·</p>
-<p><strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot</p>
-<p>shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong></p>
-<p>(WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
+<p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
+<p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
 <section class="mstone"><h3>Epic #333 — subagent-dispatch observability + review-gate hardening (auto-run) <span class="chip c-conf">SHIPPED</span></h3><h3>#329 — structured dispatches[] in the run-record schema + aggregate rollup · v3.26.0</h3>
-<p><strong>Issue.</strong> #329 (feature, epic #333 child 1/10): the #328 dispatch audit needed ~2.3 GB</p>
-<p>of transcript archaeology to answer &quot;did subagents run?&quot; — <code>run_records.jsonl</code> had no</p>
-<p>structured dispatch field.</p>
-<p><strong>What shipped.</strong> Optional, present-is-strict <code>dispatches[]</code> in the run-record schema</p>
-<p>(<code>hooks/work_summary.py</code> validate_record — the usage #155 / goal_guard #156 precedent):</p>
-<p>per-entry <code>role</code>/<code>subagent_type</code>/<code>model</code>/<code>effort</code> + orthogonal <code>outcome</code></p>
-<p>(ok/error/retried/dead; dead = vacuous return) vs <code>resolution</code> (primary/fallback/generic).</p>
-<p>Aggregate rollup: counts by role/model (null model → <code>&quot;(none)&quot;</code>), dead rate, fallback</p>
-<p>rate, <code>runs_with_dispatches</code>; the section is omitted ENTIRELY when no record carries the</p>
-<p>field (single contract, per-partition under <code>--group-by</code>). Documented in</p>
-<p><code>docs/run-records.md</code>. Emission wired by follow-up #330.</p>
-<p><strong>Reviews.</strong> Step 4 quality-bar (opus): 2 Low ambiguous, both resolved in-gate from repo</p>
-<p>conventions (&quot;(none)&quot; sentinel; per-partition omit). Step 8a on the high-risk validation</p>
-<p>task: 2 reviewers, clean. Step 11: 2 opus reviewers NO FINDINGS + codex adversarial diff</p>
-<p>2 Medium @0.7 — dropped by the severity band and refuted against code. Security scan:</p>
-<p>0 blocking / 0 advisory (iac n/a, sca nothing-to-scan). Lane: small-standard (3 impl</p>
-<p>files). Suite 2435+1skip → 2503+1skip (+68). No spine change → no diagram REV.</p>
+<p><strong>Issue.</strong> #329 (feature, epic #333 child 1/10): the #328 dispatch audit needed ~2.3 GB of transcript archaeology to answer &quot;did subagents run?&quot; — <code>run_records.jsonl</code> had no structured dispatch field.</p>
+<p><strong>What shipped.</strong> Optional, present-is-strict <code>dispatches[]</code> in the run-record schema (<code>hooks/work_summary.py</code> validate_record — the usage #155 / goal_guard #156 precedent): per-entry <code>role</code>/<code>subagent_type</code>/<code>model</code>/<code>effort</code> + orthogonal <code>outcome</code> (ok/error/retried/dead; dead = vacuous return) vs <code>resolution</code> (primary/fallback/generic). Aggregate rollup: counts by role/model (null model → <code>&quot;(none)&quot;</code>), dead rate, fallback rate, <code>runs_with_dispatches</code>; the section is omitted ENTIRELY when no record carries the field (single contract, per-partition under <code>--group-by</code>). Documented in <code>docs/run-records.md</code>. Emission wired by follow-up #330.</p>
+<p><strong>Reviews.</strong> Step 4 quality-bar (opus): 2 Low ambiguous, both resolved in-gate from repo conventions (&quot;(none)&quot; sentinel; per-partition omit). Step 8a on the high-risk validation task: 2 reviewers, clean. Step 11: 2 opus reviewers NO FINDINGS + codex adversarial diff 2 Medium @0.7 — dropped by the severity band and refuted against code. Security scan: 0 blocking / 0 advisory (iac n/a, sca nothing-to-scan). Lane: small-standard (3 impl files). Suite 2435+1skip → 2503+1skip (+68). No spine change → no diagram REV.</p>
 <p><strong>PR.</strong> #347 — merged 839f5a2, all 4 CI checks green (test, lint, code-review, security-review).</p>
 <h3>#330 — emit dispatches[] from the workflow completion steps · v3.27.0</h3>
-<p><strong>Issue.</strong> #330 (feature, epic #333 child 2/10, depends on #329): the schema existed but</p>
-<p>nothing wrote it — the audit line prescribed by the dispatch prescriptions carried no</p>
-<p>subagent_type/outcome/resolution and never reached the run-record.</p>
-<p><strong>What shipped.</strong> Canonical completion-time audit line `DISPATCH issue=&lt;n&gt; role=… type=…</p>
-<p>model=… effort=… outcome=… resolution=…` in the dispatch prescriptions (shared block →</p>
-<p>synced WF2 SKILL.md; bespoke review-only WF3 variant), with per-invocation / flush-left /</p>
-<p>retry / pre-suspend emission rules and a resolution decision table (<code>fallback</code> =</p>
-<p>carried-never-emitted). Assembly at WF2 Step 16 item 2d / WF3 Step 14 item 3b: grep</p>
-<p><code>^DISPATCH issue=&lt;n&gt;</code> from session notes, null→JSON null, never dedup, malformed lines</p>
-<p>counted (incl. indented rescues), zero→omit; under-count detection owned by WF14.</p>
-<p>Capture contract + worked example in <code>docs/run-records.md ### Capture (#330)</code>. 9 drift</p>
-<p>guards incl. regex byte-identity.</p>
-<p><strong>Reviews.</strong> Step 4 took the FULL loop-back budget (3/3): 2 design loop-backs (run-header</p>
-<p>scoping anchor matched nothing in the real notes corpus → issue-scoped lines; resolution</p>
-<p>ladder unmapped → decision table) + 1 spec-tighten (stale cross-references), final</p>
-<p>verifier CLEAN. Step 6 adversarial-on-plan: 2 Medium plan clarifications. 8a: 5 prose</p>
-<p>hardenings applied. Step 11 (re-dispatched after a session-limit kill — 3 dead agents +</p>
-<p>1 dead memorize recorded as outcome=dead DISPATCH lines): 1 Medium changelog inversion</p>
-<p>fixed + 3 Low hardenings + adversarial 1 applied / 2 refuted. Scan 0/0. DOGFOOD: this</p>
-<p>run&#x27;s own record carries 19 assembled dispatches[] entries (4 dead from the limit kill).</p>
-<p>Suite 2503+1skip → 2512+1skip. No spine change → no diagram REV.</p>
+<p><strong>Issue.</strong> #330 (feature, epic #333 child 2/10, depends on #329): the schema existed but nothing wrote it — the audit line prescribed by the dispatch prescriptions carried no subagent_type/outcome/resolution and never reached the run-record.</p>
+<p><strong>What shipped.</strong> Canonical completion-time audit line <code>DISPATCH issue=&lt;n&gt; role=… type=… model=… effort=… outcome=… resolution=…</code> in the dispatch prescriptions (shared block → synced WF2 SKILL.md; bespoke review-only WF3 variant), with per-invocation / flush-left / retry / pre-suspend emission rules and a resolution decision table (<code>fallback</code> = carried-never-emitted). Assembly at WF2 Step 16 item 2d / WF3 Step 14 item 3b: grep <code>^DISPATCH issue=&lt;n&gt;</code> from session notes, null→JSON null, never dedup, malformed lines counted (incl. indented rescues), zero→omit; under-count detection owned by WF14. Capture contract + worked example in <code>docs/run-records.md ### Capture (#330)</code>. 9 drift guards incl. regex byte-identity.</p>
+<p><strong>Reviews.</strong> Step 4 took the FULL loop-back budget (3/3): 2 design loop-backs (run-header scoping anchor matched nothing in the real notes corpus → issue-scoped lines; resolution ladder unmapped → decision table) + 1 spec-tighten (stale cross-references), final verifier CLEAN. Step 6 adversarial-on-plan: 2 Medium plan clarifications. 8a: 5 prose hardenings applied. Step 11 (re-dispatched after a session-limit kill — 3 dead agents + 1 dead memorize recorded as outcome=dead DISPATCH lines): 1 Medium changelog inversion fixed + 3 Low hardenings + adversarial 1 applied / 2 refuted. Scan 0/0. DOGFOOD: this run&#x27;s own record carries 19 assembled dispatches[] entries (4 dead from the limit kill). Suite 2503+1skip → 2512+1skip. No spine change → no diagram REV.</p>
 <p><strong>PR.</strong> #349 — merged 4a629df, all 4 CI checks green.</p>
 <h3>#331 — WF3 Step 9 per-slot fallback chain + dead-return detection · v3.27.1</h3>
-<p><strong>Issue.</strong> #331 (fix, epic #333 child 3/10): WF3&#x27;s NON-NEGOTIABLE Step 9 gate named only</p>
-<p>two external-plugin agents with no declared fallback and no vacuous-return handling — a</p>
-<p>mandatory gate with an undeclared single point of failure.</p>
-<p><strong>What shipped.</strong> Declared per-slot three-tier chain (pr-review-toolkit named →</p>
-<p>rawgentic-reviewer substitute → generic inline; never collapses two reviews to one;</p>
-<p>both-slots-tier-2 distinct briefs) + dead-return detection (vacuous = DEAD, relaunch</p>
-<p>once, second death → REVIEW_DISPATCH_FAILED + ERROR protocol; mid-tier runtime error</p>
-<p>retries once then descends) + two named failure modes + headless Step 9 ERROR entry.</p>
-<p>WF3 resolution table reconciled (tier1=primary, tier2=fallback — the first real</p>
-<p>producer, tier3=generic; the pre-existing #330 table mismatch fixed). Descent emission</p>
-<p>split by trigger (resolve-failure emits no line for a tier that never ran — no</p>
-<p>fabricated audit records; runtime-error descent carries the abandoned tier&#x27;s own</p>
-<p>resolution). WF2&#x27;s 8a + Step 11 reviewer sites gained the same dead-return rule —</p>
-<p>this session&#x27;s own limit-kill (3 dead reviewers) is the live case. WF3 diagram</p>
-<p>REV 3.27.1, full-page snapshots re-verified 1440×2586 both themes. Suite</p>
-<p>2512+1skip → 2518+1skip. Reviews caught real: pass-1 design collided with the</p>
-<p>#330 tables merged 30 minutes earlier; Step 11 caught the fabricated-audit-line</p>
-<p>semantics. Loop-backs 1/3.</p>
+<p><strong>Issue.</strong> #331 (fix, epic #333 child 3/10): WF3&#x27;s NON-NEGOTIABLE Step 9 gate named only two external-plugin agents with no declared fallback and no vacuous-return handling — a mandatory gate with an undeclared single point of failure.</p>
+<p><strong>What shipped.</strong> Declared per-slot three-tier chain (pr-review-toolkit named → rawgentic-reviewer substitute → generic inline; never collapses two reviews to one; both-slots-tier-2 distinct briefs) + dead-return detection (vacuous = DEAD, relaunch once, second death → REVIEW_DISPATCH_FAILED + ERROR protocol; mid-tier runtime error retries once then descends) + two named failure modes + headless Step 9 ERROR entry. WF3 resolution table reconciled (tier1=primary, tier2=fallback — the first real producer, tier3=generic; the pre-existing #330 table mismatch fixed). Descent emission split by trigger (resolve-failure emits no line for a tier that never ran — no fabricated audit records; runtime-error descent carries the abandoned tier&#x27;s own resolution). WF2&#x27;s 8a + Step 11 reviewer sites gained the same dead-return rule — this session&#x27;s own limit-kill (3 dead reviewers) is the live case. WF3 diagram REV 3.27.1, full-page snapshots re-verified 1440×2586 both themes. Suite 2512+1skip → 2518+1skip. Reviews caught real: pass-1 design collided with the #330 tables merged 30 minutes earlier; Step 11 caught the fabricated-audit-line semantics. Loop-backs 1/3.</p>
 <p><strong>PR.</strong> #351 — merged 70e7d75, all 4 CI checks green.</p>
 <h3>#341 — issue-keyed step markers · v3.28.0</h3>
-<p><strong>Issue.</strong> #341 (feature, epic #333 child 4/10, WF14 dogfood finding): step markers</p>
-<p>carried no issue key — concurrent runs sharing one notes file were mechanically</p>
-<p>un-attributable (reproduced THREE times across this epic&#x27;s own runs).</p>
-<p><strong>What shipped.</strong> Per-marker-type canonical key-slot contract (5 classes + the</p>
-<p>hook-emitted promotion shape) with an AUTHORITATIVE slot table, emitter caution, and</p>
-<p>declared deferrals in both <code>&lt;step-tracking&gt;</code> blocks; 14 keyed prescribed literals</p>
-<p>(incl. the Step 4-discard and Step 6 adversarial siblings the 8a review caught);</p>
-<p><code>format_promotion_note</code> gains a backward-compatible <code>issue</code> kwarg (TDD, <code>#</code>-input</p>
-<p>normalized); run-scoped consumer rules at all three read sites (WF2 MARKERS_COMPLETE,</p>
-<p>WF3 §Workflow Resumption, WF14 attribution with inlined slots — cache blocks</p>
-<p>cross-skill reads); legacy fallback tightened to pre-#341/stale-cache only;</p>
-<p><code>docs/session-notes.md</code> updated. Lane-widened honestly noted (9 impl files &gt; 7 after</p>
-<p>8a hardening). Suite 2518+1skip → 2534+1skip. Reviews caught real: unpinned slot</p>
-<p>table, stale canonical doc, wrong changelog file refs, fail-open fallback framing.</p>
-<p>Loop-backs 2/3. No spine change → no diagram REV.</p>
-<p><strong>PR.</strong> *(backfilled by #340&#x27;s pass)* PR #352 squash-merged <code>27aab30</code>, all CI checks</p>
-<p>green.</p>
+<p><strong>Issue.</strong> #341 (feature, epic #333 child 4/10, WF14 dogfood finding): step markers carried no issue key — concurrent runs sharing one notes file were mechanically un-attributable (reproduced THREE times across this epic&#x27;s own runs).</p>
+<p><strong>What shipped.</strong> Per-marker-type canonical key-slot contract (5 classes + the hook-emitted promotion shape) with an AUTHORITATIVE slot table, emitter caution, and declared deferrals in both <code>&lt;step-tracking&gt;</code> blocks; 14 keyed prescribed literals (incl. the Step 4-discard and Step 6 adversarial siblings the 8a review caught); <code>format_promotion_note</code> gains a backward-compatible <code>issue</code> kwarg (TDD, <code>#</code>-input normalized); run-scoped consumer rules at all three read sites (WF2 MARKERS_COMPLETE, WF3 §Workflow Resumption, WF14 attribution with inlined slots — cache blocks cross-skill reads); legacy fallback tightened to pre-#341/stale-cache only; <code>docs/session-notes.md</code> updated. Lane-widened honestly noted (9 impl files &gt; 7 after 8a hardening). Suite 2518+1skip → 2534+1skip. Reviews caught real: unpinned slot table, stale canonical doc, wrong changelog file refs, fail-open fallback framing. Loop-backs 2/3. No spine change → no diagram REV.</p>
+<p><strong>PR.</strong> *(backfilled by #340&#x27;s pass)* PR #352 squash-merged <code>27aab30</code>, all CI checks green.</p>
 <p>---</p>
 <h3>#340 — multi-pass gate counting rule + merged-gate reviewer_kind precedence · v3.29.0</h3>
-<p><strong>Issue.</strong> #340 (feature, epic #333 child 5/10, WF14 dogfood finding F-1): the run-record</p>
-<p>schema gave multi-pass gates no counting rule (the #337 record shipped an eyeballed 14/14</p>
-<p>matching no defensible derivation) and single-slot <code>reviewer_kind</code> could not describe a</p>
-<p>merged self-review+codex gate.</p>
-<p><strong>What shipped.</strong> Two documented-and-guarded semantics rules: (1) <code>findings</code> = UNIQUE</p>
-<p>findings across all passes (identity = same artifact location AND same required change),</p>
-<p><code>resolved</code> = terminal FINAL disposition at gate close (applied / fixed-in-gate /</p>
-<p>refuted-with-cited-evidence / dropped-by-band; band-drops count in both), computed at</p>
-<p>gate close and persisted — assembly reads, never re-derives; (2) merged-gate</p>
-<p><code>reviewer_kind</code> records the gate-DEFINING mechanism (Step 4/6 → <code>inline</code>, Step 11 →</p>
-<p><code>hand_rolled_multi</code>; <code>→ codex</code> scoped to sole-mechanism gates; skipped gate omits the</p>
-<p>key). Canonical prose + worked example in <code>run-record.md</code>; WF3 §14 pointer;</p>
-<p><code>docs/run-records.md</code> subsection; WF14 rubric weak-spot checks audit against both rules</p>
-<p>(pre-#340 records = <code>known-limitation</code>). No validator change — shape untouched.</p>
-<p><strong>Reviews.</strong> Step 8a (T1 high): 2 opus reviewers — R2 High @0.8 real (rule landed where</p>
-<p>per-finding input no longer exists → compute-at-gate-close persistence added). Step 11:</p>
-<p>R1 1 Med confirmed (changelog test count), R2 clean; codex adversarial 3 — A1 High</p>
-<p>(disposition-alias escape clause reopened the closed set → closed), A2 Med (pre-#340</p>
-<p>reviewer_kind legacy carve-out → added), A3 Low = issue #343&#x27;s exact subject (tracked,</p>
-<p>not fixed here). Security scan 0/0 (iac n/a, sca nothing-to-scan). Lane: small-standard</p>
-<p>(5 impl files ≤ 7). 6 new drift guards. Suite 2534+1skip → 2540+1skip. Loop-backs 1/3.</p>
-<p>No spine change → no diagram REV.</p>
-<p><strong>PR.</strong> *(backfilled by #338&#x27;s pass)* PR #353 squash-merged <code>5cd28b4</code>, all 4 CI checks</p>
-<p>green.</p>
+<p><strong>Issue.</strong> #340 (feature, epic #333 child 5/10, WF14 dogfood finding F-1): the run-record schema gave multi-pass gates no counting rule (the #337 record shipped an eyeballed 14/14 matching no defensible derivation) and single-slot <code>reviewer_kind</code> could not describe a merged self-review+codex gate.</p>
+<p><strong>What shipped.</strong> Two documented-and-guarded semantics rules: (1) <code>findings</code> = UNIQUE findings across all passes (identity = same artifact location AND same required change), <code>resolved</code> = terminal FINAL disposition at gate close (applied / fixed-in-gate / refuted-with-cited-evidence / dropped-by-band; band-drops count in both), computed at gate close and persisted — assembly reads, never re-derives; (2) merged-gate <code>reviewer_kind</code> records the gate-DEFINING mechanism (Step 4/6 → <code>inline</code>, Step 11 → <code>hand_rolled_multi</code>; <code>→ codex</code> scoped to sole-mechanism gates; skipped gate omits the key). Canonical prose + worked example in <code>run-record.md</code>; WF3 §14 pointer; <code>docs/run-records.md</code> subsection; WF14 rubric weak-spot checks audit against both rules (pre-#340 records = <code>known-limitation</code>). No validator change — shape untouched.</p>
+<p><strong>Reviews.</strong> Step 8a (T1 high): 2 opus reviewers — R2 High @0.8 real (rule landed where per-finding input no longer exists → compute-at-gate-close persistence added). Step 11: R1 1 Med confirmed (changelog test count), R2 clean; codex adversarial 3 — A1 High (disposition-alias escape clause reopened the closed set → closed), A2 Med (pre-#340 reviewer_kind legacy carve-out → added), A3 Low = issue #343&#x27;s exact subject (tracked, not fixed here). Security scan 0/0 (iac n/a, sca nothing-to-scan). Lane: small-standard (5 impl files ≤ 7). 6 new drift guards. Suite 2534+1skip → 2540+1skip. Loop-backs 1/3. No spine change → no diagram REV.</p>
+<p><strong>PR.</strong> *(backfilled by #338&#x27;s pass)* PR #353 squash-merged <code>5cd28b4</code>, all 4 CI checks green.</p>
 <p>---</p>
 <h3>#338 — runFeedback embedded invocation wired into WF2/WF3 completion · v3.30.0</h3>
-<p><strong>Issue.</strong> #338 (feature, epic #333 child 6/10, follow-up to #337): the WF14</p>
-<p>run-feedback skill shipped embed-ready but deliberately unwired — every assessment this</p>
-<p>epic ran was a manual invocation.</p>
-<p><strong>What shipped.</strong> Opt-in embedded self-assessment item in WF2 Step 16 (item 5) and WF3</p>
-<p>Step 14 (item 6): gate on <code>adversarial_review_lib.py is-enabled --key runFeedback</code></p>
-<p>(generic key parser, live-probed, no code change), silent skip on absent/disabled (the</p>
-<p>peerConsult pattern), enabled → invoke the <code>/rawgentic:run-feedback</code> core path with</p>
-<p>explicit <code>--record /tmp/wf{2,3}-run-record.json --wf &lt;n&gt; --session-notes &lt;notes-path&gt;</code>.</p>
-<p>Fail-open (AC3): assessment failure logs + continues; runs regardless of summarize rc</p>
-<p>(degraded mode covers schema-invalid records); report-only for the plugin source +</p>
-<p>PR-terminal-safe → runs in headless, where WF14&#x27;s outward writes (report pair, ≤3</p>
-<p>filed issues, mempalace memory) proceed autonomously. Stale not-wired prose retired in run-feedback SKILL.md +</p>
-<p>config-reference.md.</p>
-<p><strong>Reviews.</strong> (filled at Step 11) Lane: small-standard. 4 new drift guards. Suite</p>
-<p>2540+1skip → 2544+1skip.</p>
-<p><strong>PR.</strong> *(backfilled by #343&#x27;s pass)* PR #354 squash-merged <code>03ac4fe</code>, all CI checks</p>
-<p>green.</p>
+<p><strong>Issue.</strong> #338 (feature, epic #333 child 6/10, follow-up to #337): the WF14 run-feedback skill shipped embed-ready but deliberately unwired — every assessment this epic ran was a manual invocation.</p>
+<p><strong>What shipped.</strong> Opt-in embedded self-assessment item in WF2 Step 16 (item 5) and WF3 Step 14 (item 6): gate on <code>adversarial_review_lib.py is-enabled --key runFeedback</code> (generic key parser, live-probed, no code change), silent skip on absent/disabled (the peerConsult pattern), enabled → invoke the <code>/rawgentic:run-feedback</code> core path with explicit <code>--record /tmp/wf{2,3}-run-record.json --wf &lt;n&gt; --session-notes &lt;notes-path&gt;</code>. Fail-open (AC3): assessment failure logs + continues; runs regardless of summarize rc (degraded mode covers schema-invalid records); report-only for the plugin source + PR-terminal-safe → runs in headless, where WF14&#x27;s outward writes (report pair, ≤3 filed issues, mempalace memory) proceed autonomously. Stale not-wired prose retired in run-feedback SKILL.md + config-reference.md.</p>
+<p><strong>Reviews.</strong> (filled at Step 11) Lane: small-standard. 4 new drift guards. Suite 2540+1skip → 2544+1skip.</p>
+<p><strong>PR.</strong> *(backfilled by #343&#x27;s pass)* PR #354 squash-merged <code>03ac4fe</code>, all CI checks green.</p>
 <h3>#343 — markdown-table rendering + human-first at-a-glance report structure · v3.31.0</h3>
-<p><strong>Issue.</strong> #343 (feature, epic #333 child 7/10, owner request from the first WF14</p>
-<p>dogfood + A3 in #340&#x27;s Step 11): <code>_render_body_plain</code> had no markdown-table branch —</p>
-<p>every table row in a <code>--style plain</code> artifact (WF14 reports, WF5 reviews, design docs)</p>
-<p>rendered as a literal <code>&lt;p&gt;| ... |&lt;/p&gt;</code> paragraph; and the WF14 report template never</p>
-<p>mandated a human-first structure.</p>
-<p><strong>What shipped.</strong> GFM table branch in <code>hooks/render_artifact.py</code> (header +</p>
-<p><code>| --- | :-: |</code> separator detection, contiguous pipe rows, escape-first per-cell via</p>
-<p><code>_inline(html.escape(...))</code>, <code>close_list()</code> before emission; pipe row with no</p>
-<p>separator stays a paragraph; fenced tables stay code; existing table CSS reused —</p>
-<p>roadmap cards get tables for free). WF14 report structure made explicitly human-first:</p>
-<p>rubric.md gains &quot;Report structure — human-first&quot; (canonical sentence, drift-guarded)</p>
-<p>mandating the <code>## At a glance</code> opener (bolded verdict, six dimension scores with</p>
-<p>one-line verdicts, best catch, worst friction, routed line) before evidence detail;</p>
-<p>SKILL.md Step 3 points there. Real-thing check: rendering the committed #338 WF14</p>
-<p>report produced 3 <code>&lt;table&gt;</code>, 0 raw pipe paragraphs.</p>
-<p><strong>Reviews.</strong> (filled at Step 11) Lane: small-standard. 9 renderer tests (red 5-failed</p>
-<p>evidence) + 3 drift guards. Suite 2544+1skip → 2556+1skip.</p>
+<p><strong>Issue.</strong> #343 (feature, epic #333 child 7/10, owner request from the first WF14 dogfood + A3 in #340&#x27;s Step 11): <code>_render_body_plain</code> had no markdown-table branch — every table row in a <code>--style plain</code> artifact (WF14 reports, WF5 reviews, design docs) rendered as a literal <code>&lt;p&gt;| ... |&lt;/p&gt;</code> paragraph; and the WF14 report template never mandated a human-first structure.</p>
+<p><strong>What shipped.</strong> GFM table branch in <code>hooks/render_artifact.py</code> (header + <code>| --- | :-: |</code> separator detection, contiguous pipe rows, escape-first per-cell via <code>_inline(html.escape(...))</code>, <code>close_list()</code> before emission; pipe row with no separator stays a paragraph; fenced tables stay code; existing table CSS reused — roadmap cards get tables for free). WF14 report structure made explicitly human-first: rubric.md gains &quot;Report structure — human-first&quot; (canonical sentence, drift-guarded) mandating the <code>## At a glance</code> opener (bolded verdict, six dimension scores with one-line verdicts, best catch, worst friction, routed line) before evidence detail; SKILL.md Step 3 points there. Real-thing check: rendering the committed #338 WF14 report produced 3 <code>&lt;table&gt;</code>, 0 raw pipe paragraphs.</p>
+<p><strong>Reviews.</strong> (filled at Step 11) Lane: small-standard. 9 renderer tests (red 5-failed evidence) + 3 drift guards. Suite 2544+1skip → 2556+1skip.</p>
+<p><strong>PR.</strong> *(backfilled by #344&#x27;s pass)* PR #367 squash-merged <code>912a629</code>, all 4 CI checks green.</p>
+<h3>#344 — visual design language + per-artifact-type templates · v3.32.0</h3>
+<p><strong>Issue.</strong> #344 (feature, epic #333 child 8/10, depends on #343): six artifact surfaces funnel through a renderer with two styles and a minimal markdown subset — artifacts looked inconsistent and each skill invented its own document structure.</p>
+<p><strong>What shipped.</strong> Seven-template registry in <code>hooks/render_artifact.py</code> (plain, roadmap, report, design, dashboard, review, spec): one shared escape-first block renderer, per-template CSS layers over a component stylesheet (score chips, severity badges, RFC-2119 requirement badges — light+dark), <code>tpl-&lt;name&gt;</code> body classes, narrow inline-stage decorators (code-span-skipping, hard-break-bridging). Paragraphs gained standard soft-wrap semantics (multi-line bold fixed, two-space hard breaks, CR normalization). <code>design_artifact_style</code>: full vocabulary, absent→design, invalid→plain +warning, never-raises hardened. <code>docs/design-language.md</code> + byte-reproducible exemplar; five in-repo surfaces name their template with drift-guarded canonical sentences (WF3&#x27;s missing style resolution fixed — the WF2/WF3 asymmetry). Workspace design-doc-publish updated in place (stated gap: outside the repo, no CI guard).</p>
+<p><strong>Reviews.</strong> Full spine. Step 4: 2 adversarial passes (9 High/Medium pass 1 → design loop-back consumed → 7 Medium pass 2, dispositioned). Step 6 adversarial-on-plan: 6 Medium dispositioned. 8a on both high-risk tasks: 3 Low applied (CRLF, MUST-NOT bridge, unknown-style warning). Step 11 (3 agents + adversarial diff): 4 fixed incl. a confirmed never-raises violation (non-list <code>projects</code> TypeError), 1 refuted (CSP-inline claim vs the established no-external-hosts contract). Loop-backs 1/3. Suite 2556+1skip → 2611+1skip.</p>
 <p><strong>PR.</strong> _PR # and CI filled by the next slot&#x27;s pass._</p>
 <p>---</p></section>
 <section class="mstone"><h3>Standalone — codex reliability (audit #328 fallout) <span class="chip c-conf">SHIPPED</span></h3><h3>#334 — codex thought-partner dispatches hang: routing rule + dead-job protocol + userns runbook · v3.24.26</h3>
-<p><strong>Issue.</strong> #334 (bug): two same-day cross-model &quot;thought partner&quot; dispatches via the</p>
-<p>third-party <code>codex:codex-rescue</code> path failed — Codex&#x27;s bwrap sandbox died on Ubuntu</p>
-<p>24.04&#x27;s <code>apparmor_restrict_unprivileged_userns=1</code> (kernel-audit evidence on the</p>
-<p>issue), then the connector fallback hung &gt;21 min with no watchdog anywhere</p>
-<p>(<code>codex-companion.mjs</code> has only a 240s status-poll wait).</p>
-<p><strong>RCA pivot.</strong> The issue as filed proposed building a timeout-enforced consult path —</p>
-<p>Step 2 found it <strong>already exists</strong> (WF13 <code>peer-consult</code> + the <code>consult</code> CLI, 600s</p>
-<p>fail-closed, 12 lib tests). Root cause reclassified: a routing/guidance gap, not</p>
-<p>missing code. Scope-correction comment posted on the issue.</p>
-<p><strong>What shipped.</strong> <code>docs/codex-reliability.md</code> — canonical routing rule (load-bearing</p>
-<p>consults go through WF13/<code>consult</code>, never bare <code>codex-rescue</code>), dead-job protocol</p>
-<p>(absolute wall-clock ceiling + output-silence signal, mirrors #331&#x27;s dead-agent</p>
-<p>rule), field-tested AppArmor bwrap-userns host runbook (applied + verified on the</p>
-<p>dev host same day). Repo-manual §8 pointer so sessions load the rule.</p>
-<p><code>tests/test_codex_reliability_doc.py</code> — 5 guards, red before the doc existed.</p>
-<p><strong>Reviews.</strong> Step 4 reflect + cross-model adversarial (codex, <code>plan</code> type): 0C/2H/3M,</p>
-<p>all 5 applied (dispatch-surface pointer, platform_apis declaration, version/test</p>
-<p>naming, 3-piece drift guard, per-slot detail). Step 9: <code>silent-failure-hunter</code> +</p>
-<p><code>code-reviewer</code> (both Opus): 0C/0H/0M/4L, all 4 applied (absolute-deadline semantics,</p>
-<p>recipe-token guard, RCA artifacts committed, sandbox parenthetical softened).</p>
-<p>Security scan PASS (iac/sca visible skips).</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below.</p>
+<p><strong>Issue.</strong> #334 (bug): two same-day cross-model &quot;thought partner&quot; dispatches via the third-party <code>codex:codex-rescue</code> path failed — Codex&#x27;s bwrap sandbox died on Ubuntu 24.04&#x27;s <code>apparmor_restrict_unprivileged_userns=1</code> (kernel-audit evidence on the issue), then the connector fallback hung &gt;21 min with no watchdog anywhere (<code>codex-companion.mjs</code> has only a 240s status-poll wait).</p>
+<p><strong>RCA pivot.</strong> The issue as filed proposed building a timeout-enforced consult path — Step 2 found it <strong>already exists</strong> (WF13 <code>peer-consult</code> + the <code>consult</code> CLI, 600s fail-closed, 12 lib tests). Root cause reclassified: a routing/guidance gap, not missing code. Scope-correction comment posted on the issue.</p>
+<p><strong>What shipped.</strong> <code>docs/codex-reliability.md</code> — canonical routing rule (load-bearing consults go through WF13/<code>consult</code>, never bare <code>codex-rescue</code>), dead-job protocol (absolute wall-clock ceiling + output-silence signal, mirrors #331&#x27;s dead-agent rule), field-tested AppArmor bwrap-userns host runbook (applied + verified on the dev host same day). Repo-manual §8 pointer so sessions load the rule. <code>tests/test_codex_reliability_doc.py</code> — 5 guards, red before the doc existed.</p>
+<p><strong>Reviews.</strong> Step 4 reflect + cross-model adversarial (codex, <code>plan</code> type): 0C/2H/3M, all 5 applied (dispatch-surface pointer, platform_apis declaration, version/test naming, 3-piece drift guard, per-slot detail). Step 9: <code>silent-failure-hunter</code> + <code>code-reviewer</code> (both Opus): 0C/0H/0M/4L, all 4 applied (absolute-deadline semantics, recipe-token guard, RCA artifacts committed, sandbox parenthetical softened). Security scan PASS (iac/sca visible skips).</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry embedded below.</p>
 <p>---</p></section>
-<section class="mstone"><h3>Epic #309 — harness safety, memory consolidation &amp; workspace janitor <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-07 unified-review scope that was never filed (children #300–#308,</p>
-<p>mostly supervised live-config items). Repo children run WF2/WF3 under the owner&#x27;s</p>
-<p>2026-07-08 scoped unsupervised grant; live-config children apply with timestamped</p>
-<p>backups and close on-issue.</p>
+<section class="mstone"><h3>Epic #309 — harness safety, memory consolidation &amp; workspace janitor <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-07 unified-review scope that was never filed (children #300–#308, mostly supervised live-config items). Repo children run WF2/WF3 under the owner&#x27;s 2026-07-08 scoped unsupervised grant; live-config children apply with timestamped backups and close on-issue.</p>
 <h3>#320 — port the #314 mechanical-projection read discipline to WF3 · v3.24.23 &lt;br&gt;*(status backfill: PR #321 squash-merged <code>4e6a723</code>)*</h3>
-<p><strong>Issue.</strong> #320 (epic #309): PR #319 (#314, option 3) shipped fail-closed</p>
-<p><strong>projection</strong> read discipline in WF2 — token-heavy runner/scan/CI output consumed</p>
-<p>as a bounded reduction, never a full-log dump into the orchestrator&#x27;s context — but</p>
-<p><code>skills/fix-bug/</code> had zero #314 wiring while WF3 has the same heavy read points</p>
-<p>(reproduce-first TDD runs, the full-suite gate, CI <code>--log-failed</code>). A prose + drift-</p>
-<p>guard port; no hook changes (the <code>plan_lib</code> byte-threshold constants are skill-</p>
-<p>agnostic and already shipped in #319). WF3 has no security-scan step, so the WF2</p>
-<p>Step-11.5 projection has no WF3 equivalent (out of scope).</p>
-<p><strong>What shipped.</strong> <code>skills/fix-bug/references/steps.md</code>: Step 7 (RED reproduction run</p>
-<p>+ full-suite regression) and Step 8 item 4 now consume test runs as <strong>projections</strong> —</p>
-<p>the runner&#x27;s final-summary tail (pass/fail counts + failing test ids + first assertion</p>
-<p>lines), the exit code as the verdict, and targeted reads of the named failing tests</p>
-<p>for diagnosis — with the fail-closed rule that an empty/malformed/command-failed</p>
-<p>projection on a failing run falls back to the inline raw read (logged). Step 11 item 3</p>
-<p>consumes <code>gh run view --log-failed</code> as a bounded grep (failing job/step +</p>
-<p>assertion/traceback first lines) when over <code>WF2_READ_DELEGATE_BYTES_LOG</code>, measured</p>
-<p>with a piped <code>wc -c</code>, same fail-closed fallback. <code>tests/test_wf3_clarity.py</code> gains</p>
-<p><code>TestDelegatedReadsWF3</code> — 5 section-sliced, one-canonical-sentence-per-guard drift</p>
-<p>guards (repo mistake #6). Option-3 scope held: no LLM reader surface (no</p>
-<p><code>validate_index</code>, no <code>.rawgentic-read-</code> in WF3); the Step 9 diff read stays inline.</p>
-<p><strong>Path.</strong> Small-standard lane (simple_change, 3 impl files) — collapsed design note +</p>
-<p>quality-bar rubric + checklist plan + evidence-only drift; Step 6 skipped; TDD +</p>
-<p>2-reviewer code review + security scan retained.</p>
-<p><strong>Reviews.</strong> Two <code>rawgentic-reviewer</code> agents (Opus) over the diff: both CLEAN on</p>
-<p>correctness/prose/scope; one shared Low (the Step 8 guard was a bare-word <code>projection</code></p>
-<p>check, blind to its own drift target) — fixed in-run by pinning the item-4 canonical</p>
-<p>sentence. Adversarial diff review enabled but skipped (<code>no security surface</code> — 0</p>
-<p>high-risk paths/tasks). Security scan clean (0 findings; iac/sca skipped, no lockfile).</p>
-<p><strong>Decisions (this slot).</strong> No workflow-spine change (read-discipline within existing</p>
-<p>WF3 Steps 7/8/11, no station/gate/loop-back delta) → <strong>no diagram REV</strong>.</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry for this slot is embedded below.</p>
+<p><strong>Issue.</strong> #320 (epic #309): PR #319 (#314, option 3) shipped fail-closed <strong>projection</strong> read discipline in WF2 — token-heavy runner/scan/CI output consumed as a bounded reduction, never a full-log dump into the orchestrator&#x27;s context — but <code>skills/fix-bug/</code> had zero #314 wiring while WF3 has the same heavy read points (reproduce-first TDD runs, the full-suite gate, CI <code>--log-failed</code>). A prose + drift- guard port; no hook changes (the <code>plan_lib</code> byte-threshold constants are skill- agnostic and already shipped in #319). WF3 has no security-scan step, so the WF2 Step-11.5 projection has no WF3 equivalent (out of scope).</p>
+<p><strong>What shipped.</strong> <code>skills/fix-bug/references/steps.md</code>: Step 7 (RED reproduction run + full-suite regression) and Step 8 item 4 now consume test runs as <strong>projections</strong> — the runner&#x27;s final-summary tail (pass/fail counts + failing test ids + first assertion lines), the exit code as the verdict, and targeted reads of the named failing tests for diagnosis — with the fail-closed rule that an empty/malformed/command-failed projection on a failing run falls back to the inline raw read (logged). Step 11 item 3 consumes <code>gh run view --log-failed</code> as a bounded grep (failing job/step + assertion/traceback first lines) when over <code>WF2_READ_DELEGATE_BYTES_LOG</code>, measured with a piped <code>wc -c</code>, same fail-closed fallback. <code>tests/test_wf3_clarity.py</code> gains <code>TestDelegatedReadsWF3</code> — 5 section-sliced, one-canonical-sentence-per-guard drift guards (repo mistake #6). Option-3 scope held: no LLM reader surface (no <code>validate_index</code>, no <code>.rawgentic-read-</code> in WF3); the Step 9 diff read stays inline.</p>
+<p><strong>Path.</strong> Small-standard lane (simple_change, 3 impl files) — collapsed design note + quality-bar rubric + checklist plan + evidence-only drift; Step 6 skipped; TDD + 2-reviewer code review + security scan retained.</p>
+<p><strong>Reviews.</strong> Two <code>rawgentic-reviewer</code> agents (Opus) over the diff: both CLEAN on correctness/prose/scope; one shared Low (the Step 8 guard was a bare-word <code>projection</code> check, blind to its own drift target) — fixed in-run by pinning the item-4 canonical sentence. Adversarial diff review enabled but skipped (<code>no security surface</code> — 0 high-risk paths/tasks). Security scan clean (0 findings; iac/sca skipped, no lockfile).</p>
+<p><strong>Decisions (this slot).</strong> No workflow-spine change (read-discipline within existing WF3 Steps 7/8/11, no station/gate/loop-back delta) → <strong>no diagram REV</strong>.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p>
 <h3>#303 — WAL recovery report expires stale INTENTs · v3.24.20</h3>
-<p><strong>Issue.</strong> #303 (epic #309, review 2a): the SessionStart recovery notice</p>
-<p>re-announced every incomplete INTENT forever (~20/session, oldest March 2026,</p>
-<p>188 total live) — permanent noise desensitizing against real fresh crash INTENTs.</p>
-<p><strong>What shipped.</strong> <code>hooks/session-start</code> announce filter hides incomplete INTENTs</p>
-<p>older than <code>WAL_RECOVERY_MAX_AGE_DAYS</code> (default 7, clamped [1,365]) behind a</p>
-<p>visible suppressed-count line; hidden entries stay on disk (rotation already</p>
-<p>preserves incomplete entries regardless of age). Fail-open everywhere: undated</p>
-<p>entries, a failed date computation, a filter jq error, and a malformed env value</p>
-<p>all announce MORE, never less — with the malformed value noted visibly in the</p>
-<p>session context (the hook&#x27;s stderr is discarded at its callsite). Version</p>
-<p>3.24.20 ×3 surfaces. No workflow-spine change → no diagram REV.</p>
-<p><strong>Reviews.</strong> Small-standard lane. Step 8a (2 opus reviewers over the hook commit):</p>
-<p>1 Medium applied — the filter&#x27;s jq-error path failed CLOSED against its own</p>
-<p>fail-open contract; now exit-code gated. Step 11 (1 opus reviewer + cross-model</p>
-<p>Codex diff review, report committed at</p>
-<p><code>docs/reviews/rawgentic-diff-review-303-e466f037-patch-2026-07-08.md</code>): both</p>
-<p>reviewers independently converged on the dead-stderr-warning finding (fixed +</p>
-<p>red-first assert); Codex&#x27;s all-suppressed-framing Medium refuted with grep</p>
-<p>evidence (no programmatic consumer). Security scan PASS (visible skips: iac</p>
-<p>not-applicable, sca nothing-to-scan). 8 boundary tests red-before-green.</p>
-<p>Suite 2345+1skip → 2353+1skip, 0 failing.</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry embedded below.</p></section>
-<section class="mstone"><h3>Epic #280 — unified-review EPIC 6 close-out <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report:</p>
-<p><code>docs/reviews/2026-07-08-unified-review-backlog-run-report.md</code>); child 6a (#274)</p>
-<p>was owner-gated on a wire-or-delete decision and closes the epic.</p>
+<p><strong>Issue.</strong> #303 (epic #309, review 2a): the SessionStart recovery notice re-announced every incomplete INTENT forever (~20/session, oldest March 2026, 188 total live) — permanent noise desensitizing against real fresh crash INTENTs.</p>
+<p><strong>What shipped.</strong> <code>hooks/session-start</code> announce filter hides incomplete INTENTs older than <code>WAL_RECOVERY_MAX_AGE_DAYS</code> (default 7, clamped [1,365]) behind a visible suppressed-count line; hidden entries stay on disk (rotation already preserves incomplete entries regardless of age). Fail-open everywhere: undated entries, a failed date computation, a filter jq error, and a malformed env value all announce MORE, never less — with the malformed value noted visibly in the session context (the hook&#x27;s stderr is discarded at its callsite). Version 3.24.20 ×3 surfaces. No workflow-spine change → no diagram REV.</p>
+<p><strong>Reviews.</strong> Small-standard lane. Step 8a (2 opus reviewers over the hook commit): 1 Medium applied — the filter&#x27;s jq-error path failed CLOSED against its own fail-open contract; now exit-code gated. Step 11 (1 opus reviewer + cross-model Codex diff review, report committed at <code>docs/reviews/rawgentic-diff-review-303-e466f037-patch-2026-07-08.md</code>): both reviewers independently converged on the dead-stderr-warning finding (fixed + red-first assert); Codex&#x27;s all-suppressed-framing Medium refuted with grep evidence (no programmatic consumer). Security scan PASS (visible skips: iac not-applicable, sca nothing-to-scan). 8 boundary tests red-before-green. Suite 2345+1skip → 2353+1skip, 0 failing.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry embedded below.</p></section>
+<section class="mstone"><h3>Epic #280 — unified-review EPIC 6 close-out <span class="chip c-conf">SHIPPED</span></h3><p>The 2026-07-08 backlog run shipped children 6b/6c/6d′ (PRs #281–#298, report: <code>docs/reviews/2026-07-08-unified-review-backlog-run-report.md</code>); child 6a (#274) was owner-gated on a wire-or-delete decision and closes the epic.</p>
 <h3>#274 — wire-or-delete external_ref_lib → DELETE · v3.24.18</h3>
-<p><strong>Issue.</strong> #274 (epic #280, review 6a): <code>hooks/external_ref_lib.py</code> was complete,</p>
-<p>tested (16 tests), and documented — with zero production consumers. The intended</p>
-<p>consumer (#196/#162 post-PR <code>/code-review</code> gate) shipped as a GitHub Action that</p>
-<p>never called it.</p>
-<p><strong>Decision.</strong> Owner directed a Codex consult first, then follow it. Codex</p>
-<p>recommended <strong>DELETE</strong> (fresh thread; verdict recorded on the issue): wiring now</p>
-<p>would create behavior just to justify existing code, reopening an abandoned gate</p>
-<p>design with no scheduled owner. First consult attempt is its own lesson — the task</p>
-<p>went web-spelunking and its process died leaving a zombie &quot;running&quot; job (23 min);</p>
-<p>the scoped no-research retry answered in ~1 minute (memorized).</p>
-<p><strong>What shipped.</strong> Removed <code>hooks/external_ref_lib.py</code>,</p>
-<p><code>tests/hooks/test_external_ref_lib.py</code>, <code>docs/external-references.md</code>; dropped the</p>
-<p>two structural parametrization references in <code>tests/hooks/test_atomic_write_lib.py</code>.</p>
-<p>Historical changelog/campaign/review references stay (append-only history). Version</p>
-<p>3.24.18 ×3 surfaces. No workflow-spine change → no diagram REV.</p>
-<p><strong>Reviews.</strong> Small-standard lane. Step 11 (1 opus reviewer, all 3 lenses): CLEAN,</p>
-<p>0 findings; suite-delta arithmetic independently confirmed (16+2+1=19). Adversarial</p>
-<p>diff review: skipped (no security surface). Security scan PASS (visible skips: iac</p>
-<p>not-applicable, sca nothing-to-scan). Suite 2359+1skip → 2340+1skip, 0 failing.</p>
+<p><strong>Issue.</strong> #274 (epic #280, review 6a): <code>hooks/external_ref_lib.py</code> was complete, tested (16 tests), and documented — with zero production consumers. The intended consumer (#196/#162 post-PR <code>/code-review</code> gate) shipped as a GitHub Action that never called it.</p>
+<p><strong>Decision.</strong> Owner directed a Codex consult first, then follow it. Codex recommended <strong>DELETE</strong> (fresh thread; verdict recorded on the issue): wiring now would create behavior just to justify existing code, reopening an abandoned gate design with no scheduled owner. First consult attempt is its own lesson — the task went web-spelunking and its process died leaving a zombie &quot;running&quot; job (23 min); the scoped no-research retry answered in ~1 minute (memorized).</p>
+<p><strong>What shipped.</strong> Removed <code>hooks/external_ref_lib.py</code>, <code>tests/hooks/test_external_ref_lib.py</code>, <code>docs/external-references.md</code>; dropped the two structural parametrization references in <code>tests/hooks/test_atomic_write_lib.py</code>. Historical changelog/campaign/review references stay (append-only history). Version 3.24.18 ×3 surfaces. No workflow-spine change → no diagram REV.</p>
+<p><strong>Reviews.</strong> Small-standard lane. Step 11 (1 opus reviewer, all 3 lenses): CLEAN, 0 findings; suite-delta arithmetic independently confirmed (16+2+1=19). Adversarial diff review: skipped (no security surface). Security scan PASS (visible skips: iac not-applicable, sca nothing-to-scan). Suite 2359+1skip → 2340+1skip, 0 failing.</p>
 <h3>#310 — wal-guard deny() fails closed on huge commands · v3.24.19</h3>
-<p><strong>Issue.</strong> #310 (found by #267 R2): deny() passed the full blocked command as one</p>
-<p>jq exec argument; over Linux <code>MAX_ARG_STRLEN</code> (~128KiB) the exec failed (E2BIG,</p>
-<p>rc 126) — empty stdout = ALLOW. The deliberately fail-closed guard failed open.</p>
-<p><strong>What shipped.</strong> Command bounded at deny() entry (<code>${cmd:0:2000}</code> + visible</p>
-<p><code>[truncated: total N chars]</code>, pure parameter expansion — a first-cut <code>printf|head</code></p>
-<p>pipe died of SIGPIPE under pipefail and failed open again, caught red-first).</p>
-<p>Review hardening applied: printf-builtin fallback deny on the decision call (ANY</p>
-<p>serializer failure previously = allow) + guarded audit <code>ts=</code> assignment.</p>
-<p><strong>Reviews.</strong> WF3: 2-reviewer Step 9 (opus — silent-failure hunter + standards;</p>
-<p>standards CLEAN, hunter&#x27;s <code>ts=</code> finding applied) + cross-model adversarial on the</p>
-<p>RCA (report: <code>docs/reviews/rawgentic-rca-310-md-2026-07-08.md</code>; High applied).</p>
-<p>5 tests red-before-green. Suite 2340+1skip → 2345+1skip, 0 failing. PR #311.</p></section>
-<section class="mstone"><h3>Epic #188 fast-follow (post-M4) <span class="chip c-conf">SHIPPED</span></h3><p>WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped</p>
-<p>(folded in as slot 12). Ordered slots #190 → #191 → #192 → #193 → #194 → #195</p>
-<p>→ #196 → #197 (+ owner-added #205) — <strong>all shipped</strong>; epic #188 closes with #197.</p>
-<p>Follow-up #206 (memory migration) remains conditional, outside the ordered list.</p>
+<p><strong>Issue.</strong> #310 (found by #267 R2): deny() passed the full blocked command as one jq exec argument; over Linux <code>MAX_ARG_STRLEN</code> (~128KiB) the exec failed (E2BIG, rc 126) — empty stdout = ALLOW. The deliberately fail-closed guard failed open.</p>
+<p><strong>What shipped.</strong> Command bounded at deny() entry (<code>${cmd:0:2000}</code> + visible <code>[truncated: total N chars]</code>, pure parameter expansion — a first-cut <code>printf|head</code> pipe died of SIGPIPE under pipefail and failed open again, caught red-first). Review hardening applied: printf-builtin fallback deny on the decision call (ANY serializer failure previously = allow) + guarded audit <code>ts=</code> assignment.</p>
+<p><strong>Reviews.</strong> WF3: 2-reviewer Step 9 (opus — silent-failure hunter + standards; standards CLEAN, hunter&#x27;s <code>ts=</code> finding applied) + cross-model adversarial on the RCA (report: <code>docs/reviews/rawgentic-rca-310-md-2026-07-08.md</code>; High applied). 5 tests red-before-green. Suite 2340+1skip → 2345+1skip, 0 failing. PR #311.</p></section>
+<section class="mstone"><h3>Epic #188 fast-follow (post-M4) <span class="chip c-conf">SHIPPED</span></h3><p>WF2 hardening + epic-native workflows + OAuth Action reviews. #189 already shipped (folded in as slot 12). Ordered slots #190 → #191 → #192 → #193 → #194 → #195 → #196 → #197 (+ owner-added #205) — <strong>all shipped</strong>; epic #188 closes with #197. Follow-up #206 (memory migration) remains conditional, outside the ordered list.</p>
 <h3>#190 — retire WF2 Step 4 3-judge reflexion panel → reflect-only · v3.2.0</h3>
-<p><strong>Issue.</strong> #190 (epic #188 P2): the full-spine Step 4 still ran the same-model</p>
-<p>3-judge <code>/reflexion:critique</code> panel; owner telemetry measured ≈ 0 gain and the lean</p>
-<p>spine shipped 10/10 with 0 loop-backs. Severed AC1 of the abandoned #162.</p>
-<p><strong>What shipped.</strong> WF2 Step 4 runs <code>/reflexion:reflect</code> for all lanes; the panel is</p>
-<p>removed. Full spine keeps its opt-in cross-model adversarial-on-design sub-step</p>
-<p>(WF5, AC2) — high-stakes scrutiny lives there now. Ambiguity breaker, volume</p>
-<p>thresholds, and the <code>design</code> loop-back budget retained (sourced from reflect, or</p>
-<p>merged reflect+adversarial); <code>critiqueMethod</code> preamble removed from WF2 (<code>setup</code></p>
-<p>keeps it). Fast-path table + SKILL spine one-liner + run-record reviewer_kind</p>
-<p>mapping + config-reference + README (feature tables + changelog) all updated.</p>
-<p><strong>Reviews.</strong> Small-standard lane. 2 red-first §4 drift guards (no panel / table</p>
-<p>both-reflect) + a README regression guard. Step 11 (1 opus, both lenses): logic</p>
-<p>NO FINDINGS (item-numbering resolves, breaker-runs-once holds across all 4 rows);</p>
-<p>1 Medium leftover — README feature tables still listed WF2 under</p>
-<p><code>/reflexion:critique</code> (the #161-class miss) — FIXED + guarded. Security scan clean.</p>
-<p>Suite 1970/0 → 1972/0.</p>
-<p><strong>Owner decision (mid-slot).</strong> Go further than #190: <strong>full reflexion removal</strong> —</p>
-<p>replace reflect (WF2 4/9 + WF3), critique (WF1 + setup), and memorize (Step 10)</p>
-<p>with in-repo prompts; use <strong>mempalace</strong> for memory instead of <code>reflexion:memorize</code>;</p>
-<p>follow-up issue to migrate existing rawgentic memories to mempalace if required.</p>
-<p>Sequenced as the next slot after #190 (kept out of #190 to preserve its narrow,</p>
-<p>reviewed scope).</p>
+<p><strong>Issue.</strong> #190 (epic #188 P2): the full-spine Step 4 still ran the same-model 3-judge <code>/reflexion:critique</code> panel; owner telemetry measured ≈ 0 gain and the lean spine shipped 10/10 with 0 loop-backs. Severed AC1 of the abandoned #162.</p>
+<p><strong>What shipped.</strong> WF2 Step 4 runs <code>/reflexion:reflect</code> for all lanes; the panel is removed. Full spine keeps its opt-in cross-model adversarial-on-design sub-step (WF5, AC2) — high-stakes scrutiny lives there now. Ambiguity breaker, volume thresholds, and the <code>design</code> loop-back budget retained (sourced from reflect, or merged reflect+adversarial); <code>critiqueMethod</code> preamble removed from WF2 (<code>setup</code> keeps it). Fast-path table + SKILL spine one-liner + run-record reviewer_kind mapping + config-reference + README (feature tables + changelog) all updated.</p>
+<p><strong>Reviews.</strong> Small-standard lane. 2 red-first §4 drift guards (no panel / table both-reflect) + a README regression guard. Step 11 (1 opus, both lenses): logic NO FINDINGS (item-numbering resolves, breaker-runs-once holds across all 4 rows); 1 Medium leftover — README feature tables still listed WF2 under <code>/reflexion:critique</code> (the #161-class miss) — FIXED + guarded. Security scan clean. Suite 1970/0 → 1972/0.</p>
+<p><strong>Owner decision (mid-slot).</strong> Go further than #190: <strong>full reflexion removal</strong> — replace reflect (WF2 4/9 + WF3), critique (WF1 + setup), and memorize (Step 10) with in-repo prompts; use <strong>mempalace</strong> for memory instead of <code>reflexion:memorize</code>; follow-up issue to migrate existing rawgentic memories to mempalace if required. Sequenced as the next slot after #190 (kept out of #190 to preserve its narrow, reviewed scope).</p>
 <p><strong>Status.</strong> PR #204 squash-merged <code>cd1fe1b</code>, v3.2.0, issue closed.</p>
 <h3>#205 — remove the reflexion plugin dependency · v3.3.0 (owner-expanded from #190 P3)</h3>
-<p><strong>Issue.</strong> Mid-#190 the owner asked: why still depend on reflexion at all? Investigation:</p>
-<p><code>/reflexion:reflect|critique|memorize</code> are prompt-only (a rubric behind a slash command;</p>
-<p>no code we called) and fail open to *unreviewed* when the plugin is absent. Decision: full</p>
-<p>removal + use mempalace for memory.</p>
-<p><strong>What shipped.</strong> An in-repo <strong>quality-bar rubric</strong> (<code>skills/*/references/quality-bar.md</code> —</p>
-<p>skeptical-gatekeeper stance + depth triage + finding shape) replaces reflect/critique at every</p>
-<p>gate: WF2 Steps 4/6/9/15, WF3, incident, and setup&#x27;s config critique. Memorize (WF2 Step 10,</p>
-<p>WF3, incident) curates into <strong>mempalace</strong> (<code>mcp__mempalace__*</code>) when available, falling back</p>
-<p>to <code>CLAUDE.md</code>/<code>MEMORY.md</code> on absence <strong>or store failure</strong>. <code>critiqueMethod</code> deprecated/inert;</p>
-<p>reflexion prerequisite, add-on row, and troubleshooting entry removed. No active skill invokes</p>
-<p><code>/reflexion:*</code> (drift-guarded).</p>
-<p><strong>Reviews.</strong> 2 opus reviewers (leftover + logic lenses), converging independently on the same</p>
-<p>Medium: &quot;reflect&quot; was the retired skill&#x27;s own name, so keeping it as the replacement&#x27;s name</p>
-<p>undercut the removal — swept WF2 §4/§6/§9 to &quot;self-review&quot; (WF3 keeps its consistent</p>
-<p>&quot;Lightweight Reflect&quot; gate name). Also fixed: SKILL.md mandatory-steps stale &quot;full critique&quot;</p>
-<p>tier, memorize store-failure fallback, and the quality-bar finding-shape override contract.</p>
-<p>Security scan clean. Suite 1972/0 (2 red-first guards: reflexion-freedom + §4 quality-bar).</p>
+<p><strong>Issue.</strong> Mid-#190 the owner asked: why still depend on reflexion at all? Investigation: <code>/reflexion:reflect|critique|memorize</code> are prompt-only (a rubric behind a slash command; no code we called) and fail open to *unreviewed* when the plugin is absent. Decision: full removal + use mempalace for memory.</p>
+<p><strong>What shipped.</strong> An in-repo <strong>quality-bar rubric</strong> (<code>skills/*/references/quality-bar.md</code> — skeptical-gatekeeper stance + depth triage + finding shape) replaces reflect/critique at every gate: WF2 Steps 4/6/9/15, WF3, incident, and setup&#x27;s config critique. Memorize (WF2 Step 10, WF3, incident) curates into <strong>mempalace</strong> (<code>mcp__mempalace__*</code>) when available, falling back to <code>CLAUDE.md</code>/<code>MEMORY.md</code> on absence <strong>or store failure</strong>. <code>critiqueMethod</code> deprecated/inert; reflexion prerequisite, add-on row, and troubleshooting entry removed. No active skill invokes <code>/reflexion:*</code> (drift-guarded).</p>
+<p><strong>Reviews.</strong> 2 opus reviewers (leftover + logic lenses), converging independently on the same Medium: &quot;reflect&quot; was the retired skill&#x27;s own name, so keeping it as the replacement&#x27;s name undercut the removal — swept WF2 §4/§6/§9 to &quot;self-review&quot; (WF3 keeps its consistent &quot;Lightweight Reflect&quot; gate name). Also fixed: SKILL.md mandatory-steps stale &quot;full critique&quot; tier, memorize store-failure fallback, and the quality-bar finding-shape override contract. Security scan clean. Suite 1972/0 (2 red-first guards: reflexion-freedom + §4 quality-bar).</p>
 <p><strong>Follow-up.</strong> #206 — migrate existing rawgentic memories into mempalace if warranted.</p>
 <p><strong>Status.</strong> PR #207 squash-merged <code>f5786a3</code>, v3.3.0, issue closed.</p>
 <h3>#191 — WF2 Step 1b always emits the /goal prompt · v3.4.0</h3>
-<p><strong>Issue.</strong> #191 (P4): Step 1b skipped emitting the constructed <code>/goal</code> when a prior goal</p>
-<p>might be active (observed on #162) — but a skill can&#x27;t observe or set the session goal, so</p>
-<p>the reliable behavior is to always emit.</p>
-<p><strong>What shipped.</strong> Step 1b ALWAYS emits the per-issue <code>/goal</code> prompt; it no longer suppresses</p>
-<p>on the guess that a prior goal is active. Exception: under an epic campaign</p>
-<p>(<code>RAWGENTIC_EPIC_GOAL</code> env set — the driver sets it, forward-declared for #192) it <strong>defers</strong></p>
-<p>to the active epic-level goal rather than clobbering it, logged <code>(deferred: epic #N)</code>. New</p>
-<p><code>deferred</code> value in the run-record <code>goal_guard</code> vocab. Reviewer flagged WF3 parity as a #192</p>
-<p>follow-up (WF3 will need the same defer once epics drive its sub-issues).</p>
-<p><strong>Reviews.</strong> Small-standard lane. 1 opus: NO FINDINGS (item-4/5 coherent, vocab consistent</p>
-<p>across steps.md/run-record.md/work_summary.py/README, forward-declaration honest, validation</p>
-<p>fail-closed). red-first: goal_guard <code>deferred</code> + Step-1b always-emit drift guard. Scan clean.</p>
-<p>Suite 1972/0 → 1974/0.</p>
+<p><strong>Issue.</strong> #191 (P4): Step 1b skipped emitting the constructed <code>/goal</code> when a prior goal might be active (observed on #162) — but a skill can&#x27;t observe or set the session goal, so the reliable behavior is to always emit.</p>
+<p><strong>What shipped.</strong> Step 1b ALWAYS emits the per-issue <code>/goal</code> prompt; it no longer suppresses on the guess that a prior goal is active. Exception: under an epic campaign (<code>RAWGENTIC_EPIC_GOAL</code> env set — the driver sets it, forward-declared for #192) it <strong>defers</strong> to the active epic-level goal rather than clobbering it, logged <code>(deferred: epic #N)</code>. New <code>deferred</code> value in the run-record <code>goal_guard</code> vocab. Reviewer flagged WF3 parity as a #192 follow-up (WF3 will need the same defer once epics drive its sub-issues).</p>
+<p><strong>Reviews.</strong> Small-standard lane. 1 opus: NO FINDINGS (item-4/5 coherent, vocab consistent across steps.md/run-record.md/work_summary.py/README, forward-declaration honest, validation fail-closed). red-first: goal_guard <code>deferred</code> + Step-1b always-emit drift guard. Scan clean. Suite 1972/0 → 1974/0.</p>
 <p><strong>Status.</strong> PR #208 squash-merged <code>b132c51</code>, v3.4.0, issue closed.</p>
 <h3>#192 — driver epic-level goal guard + tolerant escape clause · v3.5.0</h3>
-<p><strong>Issue.</strong> #192 (P5, depends on #191): the <code>/goal</code> guard belongs at the epic/campaign</p>
-<p>level, not per-issue — a per-issue goal lets the session quit after any single slot, and</p>
-<p>same-session <code>/goal</code> overwrite is documented-unverified. And this campaign hit the stale-goal</p>
-<p>failure directly (the goal fired relentlessly after each slot).</p>
-<p><strong>What shipped.</strong> <code>plan_lib.build_goal_text</code> gains a <code>campaign</code> variant enumerating an epic&#x27;s</p>
-<p>topo-ordered children into ONE goal (≤4000-char fallback), with a <strong>tolerant escape clause</strong>:</p>
-<p>&quot;a child closed not-planned per its own acceptance criteria counts as satisfied, and the owner</p>
-<p>may pause the campaign at any time.&quot; <code>driver_lib.campaign_goal_text(state)</code> is the kickoff seam</p>
-<p>(epic anchor + topo children; raises on missing epic / dependency cycle). The driver emits the</p>
-<p>goal (owner-run — a skill can&#x27;t self-set <code>/goal</code>) and exports <code>RAWGENTIC_EPIC_GOAL=&lt;epic&gt;</code>,</p>
-<p>which WF2 <strong>and</strong> WF3 Step 1b defer to (the #191 contract, extended to fix-bug per its review).</p>
-<p><strong>Reviews.</strong> Small-standard lane (2 impl .py). 1 opus: 1 Medium (my changelog insertion garbled</p>
-<p>a v3.4.0 line — fixed), everything else clean (cap enforced, no import cycle, epic guard rejects</p>
-<p>bool, escape-clause wording consistent across code/doc/changelog, RAWGENTIC_EPIC_GOAL honestly</p>
-<p>scoped as driver-set). red-first campaign + driver tests. Scan clean. Suite 1974/0 → 1984/0.</p>
+<p><strong>Issue.</strong> #192 (P5, depends on #191): the <code>/goal</code> guard belongs at the epic/campaign level, not per-issue — a per-issue goal lets the session quit after any single slot, and same-session <code>/goal</code> overwrite is documented-unverified. And this campaign hit the stale-goal failure directly (the goal fired relentlessly after each slot).</p>
+<p><strong>What shipped.</strong> <code>plan_lib.build_goal_text</code> gains a <code>campaign</code> variant enumerating an epic&#x27;s topo-ordered children into ONE goal (≤4000-char fallback), with a <strong>tolerant escape clause</strong>: &quot;a child closed not-planned per its own acceptance criteria counts as satisfied, and the owner may pause the campaign at any time.&quot; <code>driver_lib.campaign_goal_text(state)</code> is the kickoff seam (epic anchor + topo children; raises on missing epic / dependency cycle). The driver emits the goal (owner-run — a skill can&#x27;t self-set <code>/goal</code>) and exports <code>RAWGENTIC_EPIC_GOAL=&lt;epic&gt;</code>, which WF2 <strong>and</strong> WF3 Step 1b defer to (the #191 contract, extended to fix-bug per its review).</p>
+<p><strong>Reviews.</strong> Small-standard lane (2 impl .py). 1 opus: 1 Medium (my changelog insertion garbled a v3.4.0 line — fixed), everything else clean (cap enforced, no import cycle, epic guard rejects bool, escape-clause wording consistent across code/doc/changelog, RAWGENTIC_EPIC_GOAL honestly scoped as driver-set). red-first campaign + driver tests. Scan clean. Suite 1974/0 → 1984/0.</p>
 <p><strong>Status.</strong> PR #209 squash-merged <code>1b3b3fd</code>, v3.5.0, issue closed.</p>
 <h3>#193 — WF1 decompose an over-large ask → epic + children · v3.6.0</h3>
-<p><strong>Issue.</strong> #193 (P6): WF1 only *suggested* splitting an over-large ask and filed one issue —</p>
-<p>enhance it to emit a driver-consumable epic + ordered children (the missing front-end for the</p>
-<p>#163 epic/driver machinery).</p>
-<p><strong>What shipped.</strong> create-issue Step 1 detects over-large (≥3 shippable deliverables / many</p>
-<p>concerns) and OFFERS to decompose (new Step 2c): an epic (<code>epic:</code> label + <code>- [ ] #N</code> task-list)</p>
-<p>+ children with <code>Depends on #N</code> edges (<code>driver_lib.parse_depends_on</code> reads them). Hard approval</p>
-<p>gate — the whole decomposition is presented and NOTHING is filed until &quot;go&quot;; children file in</p>
-<p>topo order, epic last. Threshold: ≥3 → epic, 2 → cross-linked, 1 → single issue. Lean single-pass</p>
-<p>+ inline quality-bar; opt-in WF5 for architectural asks.</p>
-<p><strong>Reviews.</strong> Small-standard lane (prose). 1 opus: 1 Medium (partial-decomposition resumption gap</p>
-<p>— &lt;resumption&gt; now records per-child + COMPLETE markers and resumes without re-filing) + 3 Low</p>
-<p>(pre-approval label creation moved to filing; threshold-seam clarified; test pins <code>- [ ] #N</code>) —</p>
-<p>all fixed. Driver-consumability verified against parse_depends_on + the epic task-list regex. Scan</p>
-<p>clean. Suite 1984/0 → 1990/0.</p>
+<p><strong>Issue.</strong> #193 (P6): WF1 only *suggested* splitting an over-large ask and filed one issue — enhance it to emit a driver-consumable epic + ordered children (the missing front-end for the #163 epic/driver machinery).</p>
+<p><strong>What shipped.</strong> create-issue Step 1 detects over-large (≥3 shippable deliverables / many concerns) and OFFERS to decompose (new Step 2c): an epic (<code>epic:</code> label + <code>- [ ] #N</code> task-list) + children with <code>Depends on #N</code> edges (<code>driver_lib.parse_depends_on</code> reads them). Hard approval gate — the whole decomposition is presented and NOTHING is filed until &quot;go&quot;; children file in topo order, epic last. Threshold: ≥3 → epic, 2 → cross-linked, 1 → single issue. Lean single-pass + inline quality-bar; opt-in WF5 for architectural asks.</p>
+<p><strong>Reviews.</strong> Small-standard lane (prose). 1 opus: 1 Medium (partial-decomposition resumption gap — &lt;resumption&gt; now records per-child + COMPLETE markers and resumes without re-filing) + 3 Low (pre-approval label creation moved to filing; threshold-seam clarified; test pins <code>- [ ] #N</code>) — all fixed. Driver-consumability verified against parse_depends_on + the epic task-list regex. Scan clean. Suite 1984/0 → 1990/0.</p>
 <p><strong>Status.</strong> PR #210 squash-merged <code>4a54482</code>, v3.6.0, issue closed.</p>
 <h3>#194 — reliable external skill/command use (probe + vendored-copy) · v3.7.0</h3>
-<p><strong>Issue.</strong> #194 (P8+P10): nothing verified a built-in/plugin skill existed before a gate</p>
-<p>relied on it (the #162 trap), and running an external command by hard cache path is brittle.</p>
-<p>Build ONE primitive.</p>
-<p><strong>What shipped.</strong> <code>hooks/external_ref_lib.py</code>: <code>probe(kind, name)</code> (version-independent cache</p>
-<p>lookup — numeric version sort, not lexicographic — reports exists/trusted; a miss is a VISIBLE</p>
-<p>skip), <code>vendor_copy(...)</code> (durable gitignored copy + sha256-manifest refresh + retained</p>
-<p><code>vanished</code> alert), and a trust-gate (<code>is_trusted</code> + <code>RAWGENTIC_TRUSTED_MARKETPLACES</code>) because</p>
-<p>an external command is third-party prompt content. CLI probe/vendor/is-trusted;</p>
-<p><code>docs/external-references.md</code>; <code>.rawgentic-vendored/</code> gitignored. First real consumer is #196.</p>
-<p><strong>Reviews.</strong> Small-standard lane (new .py primitive). 1 opus: 2 Medium — lexicographic version</p>
-<p>pick (3.10.0&lt;3.9.0) → numeric sort; path-traversal via <code>name</code> → bare-name guard on probe+vendor</p>
-<p>— both fixed with tests. Also caught + fixed two spliced changelog headings from earlier slots</p>
-<p>and added a permanent garble drift guard. Scan clean. Suite 1990/0 → 2007/0.</p>
+<p><strong>Issue.</strong> #194 (P8+P10): nothing verified a built-in/plugin skill existed before a gate relied on it (the #162 trap), and running an external command by hard cache path is brittle. Build ONE primitive.</p>
+<p><strong>What shipped.</strong> <code>hooks/external_ref_lib.py</code>: <code>probe(kind, name)</code> (version-independent cache lookup — numeric version sort, not lexicographic — reports exists/trusted; a miss is a VISIBLE skip), <code>vendor_copy(...)</code> (durable gitignored copy + sha256-manifest refresh + retained <code>vanished</code> alert), and a trust-gate (<code>is_trusted</code> + <code>RAWGENTIC_TRUSTED_MARKETPLACES</code>) because an external command is third-party prompt content. CLI probe/vendor/is-trusted; <code>docs/external-references.md</code>; <code>.rawgentic-vendored/</code> gitignored. First real consumer is #196.</p>
+<p><strong>Reviews.</strong> Small-standard lane (new .py primitive). 1 opus: 2 Medium — lexicographic version pick (3.10.0&lt;3.9.0) → numeric sort; path-traversal via <code>name</code> → bare-name guard on probe+vendor — both fixed with tests. Also caught + fixed two spliced changelog headings from earlier slots and added a permanent garble drift guard. Scan clean. Suite 1990/0 → 2007/0.</p>
 <p><strong>Status.</strong> PR #211 squash-merged <code>f8d2252</code>, v3.7.0, issue closed.</p>
 <h3>#195 — OAuth-first authenticated Action reviews; migrate #166 · v3.8.0</h3>
-<p><strong>Issue.</strong> #195 (P12, folds P11): run reviews as GitHub Actions authenticated by subscription</p>
-<p>OAuth first, API-key fallback. The dedicated <code>claude-code-security-review</code> action is API-key-only,</p>
-<p>so route security review through <code>claude-code-action@v1</code> too.</p>
-<p><strong>What shipped.</strong> <code>.github/workflows/claude-security-review.yml</code> migrated off the API-key-only</p>
-<p>action to <code>claude-code-action@v1</code> (SHA-pinned) running <code>/security-review</code>. Auth resolves</p>
-<p>OAuth-first: <code>CLAUDE_CODE_OAUTH_TOKEN</code> → <code>ANTHROPIC_API_KEY</code> → visible skip (<code>executed=false</code>).</p>
-<p>Non-blocking + 10-PR tally preserved; <code>executed=true</code> gated on the review actually succeeding.</p>
-<p>Output shape doc-verified (inline PR comments via <code>classify_inline_comments</code>); live run</p>
-<p>owner-gated. Owner setup + self-hosted zero-secret alternative in <code>docs/config-reference.md</code>.</p>
-<p><strong>Reviews.</strong> Small-standard lane (CI yml). 1 opus: 2 Medium — missing <code>id-token: write</code> (the</p>
-<p>action&#x27;s default App-OIDC auth needs it) + <code>executed=true</code> emitted from secret-presence not</p>
-<p>review-success — both fixed; 1 Low (inline posting doc-verified, owner-gated). AC3 honesty</p>
-<p>confirmed. Scan clean. Suite 2007/0 → 2011/0.</p>
+<p><strong>Issue.</strong> #195 (P12, folds P11): run reviews as GitHub Actions authenticated by subscription OAuth first, API-key fallback. The dedicated <code>claude-code-security-review</code> action is API-key-only, so route security review through <code>claude-code-action@v1</code> too.</p>
+<p><strong>What shipped.</strong> <code>.github/workflows/claude-security-review.yml</code> migrated off the API-key-only action to <code>claude-code-action@v1</code> (SHA-pinned) running <code>/security-review</code>. Auth resolves OAuth-first: <code>CLAUDE_CODE_OAUTH_TOKEN</code> → <code>ANTHROPIC_API_KEY</code> → visible skip (<code>executed=false</code>). Non-blocking + 10-PR tally preserved; <code>executed=true</code> gated on the review actually succeeding. Output shape doc-verified (inline PR comments via <code>classify_inline_comments</code>); live run owner-gated. Owner setup + self-hosted zero-secret alternative in <code>docs/config-reference.md</code>.</p>
+<p><strong>Reviews.</strong> Small-standard lane (CI yml). 1 opus: 2 Medium — missing <code>id-token: write</code> (the action&#x27;s default App-OIDC auth needs it) + <code>executed=true</code> emitted from secret-presence not review-success — both fixed; 1 Low (inline posting doc-verified, owner-gated). AC3 honesty confirmed. Scan clean. Suite 2007/0 → 2011/0.</p>
 <p><strong>Status.</strong> PR #212 squash-merged <code>36aa09a</code>, v3.8.0, issue closed.</p>
 <h3>#196 — reopen #162: post-PR code-review via the Action · v3.9.0</h3>
-<p><strong>Issue.</strong> #196 (P9, depends on #189 ✓ + #195 ✓): reopen the #162 review-switch with a mechanism</p>
-<p>that works. <code>/code-review</code> can&#x27;t be called from a skill, but claude-code-action@v1 can run it</p>
-<p>post-PR (OAuth), capturing findings as <code>builtin_code_review</code> for the A/B #162 couldn&#x27;t run.</p>
-<p><strong>What shipped.</strong> <code>.github/workflows/claude-code-review.yml</code>: post-PR built-in <code>/code-review</code> via</p>
-<p>claude-code-action@v1 (OAuth-first, draft-gated + <code>ready_for_review</code>, SHA-pinned, non-blocking) —</p>
-<p>the candidate <code>builtin_code_review</code> arm running <strong>additively</strong> to WF2&#x27;s hand-rolled Step 11 (coverage</p>
-<p>never drops), which breaks #162&#x27;s circular gate. With #189&#x27;s telemetry, the AC4 A/B is now</p>
-<p><strong>computable</strong>; the #162 decision doc is reopened as &quot;computable, pending owner-gated data.&quot; Capture</p>
-<p>mechanism documented (run-records.md). WF5 diff pass unchanged.</p>
-<p><strong>Reviews.</strong> Small-standard lane (CI yml). 1 opus: 1 Medium — draft-gate missing <code>ready_for_review</code></p>
-<p>trigger type (draft→ready transition wouldn&#x27;t fire) — fixed + guarded; everything else clean</p>
-<p>(additive verified, original ABANDONED record preserved, AC2/AC3 honestly scoped). Scan clean.</p>
-<p>Suite 2011/0 → 2020/0.</p>
-<p><strong>Status.</strong> PR #213 squash-merged <code>35413a7</code>, CI green, suite 2020/0, issue closed</p>
-<p>(backfilled by the #197 pass).</p>
+<p><strong>Issue.</strong> #196 (P9, depends on #189 ✓ + #195 ✓): reopen the #162 review-switch with a mechanism that works. <code>/code-review</code> can&#x27;t be called from a skill, but claude-code-action@v1 can run it post-PR (OAuth), capturing findings as <code>builtin_code_review</code> for the A/B #162 couldn&#x27;t run.</p>
+<p><strong>What shipped.</strong> <code>.github/workflows/claude-code-review.yml</code>: post-PR built-in <code>/code-review</code> via claude-code-action@v1 (OAuth-first, draft-gated + <code>ready_for_review</code>, SHA-pinned, non-blocking) — the candidate <code>builtin_code_review</code> arm running <strong>additively</strong> to WF2&#x27;s hand-rolled Step 11 (coverage never drops), which breaks #162&#x27;s circular gate. With #189&#x27;s telemetry, the AC4 A/B is now <strong>computable</strong>; the #162 decision doc is reopened as &quot;computable, pending owner-gated data.&quot; Capture mechanism documented (run-records.md). WF5 diff pass unchanged.</p>
+<p><strong>Reviews.</strong> Small-standard lane (CI yml). 1 opus: 1 Medium — draft-gate missing <code>ready_for_review</code> trigger type (draft→ready transition wouldn&#x27;t fire) — fixed + guarded; everything else clean (additive verified, original ABANDONED record preserved, AC2/AC3 honestly scoped). Scan clean. Suite 2011/0 → 2020/0.</p>
+<p><strong>Status.</strong> PR #213 squash-merged <code>35413a7</code>, CI green, suite 2020/0, issue closed (backfilled by the #197 pass).</p>
 <p>---</p>
 <h3>#197 — official versioned workflow diagram · v3.10.0 — LAST epic-#188 slot</h3>
-<p><strong>Issue.</strong> #197: the canonical, versioned workflow diagram — workflow-only view,</p>
-<p>clickable per-phase drill-down, version history, committed to the repo. Separate from</p>
-<p>the health/proposals overlay. Owner: build with Fable, award-grade showcase visual.</p>
-<p><strong>What shipped.</strong> <code>docs/workflow-diagram.html</code> — self-contained hash-routed SPA styled</p>
-<p>as an engineering drafting document (title block, REV stamps as the version selector,</p>
-<p>revision triangles Δ, loop-back return arcs; colored-ink vellum light / luminous</p>
-<p>blueprint dark; embedded OFL fonts, zero external requests, DOM-builder rendering — no</p>
-<p><code>innerHTML</code>, test-enforced). Full 19-station WF2 drill-down (purpose, sub-steps, gate</p>
-<p>facts, lane behavior per station) at REV 3.10.0 + the pre-campaign 3.1.0 snapshot</p>
-<p>(SUPERSEDED stamp, per-station overrides incl. facts/lane); WF1 (7) / WF3 (15) / WF5</p>
-<p>(5) skeletal phase sheets from their pinned skills. README embeds theme-aware</p>
-<p>snapshots (<code>docs/assets/workflow-diagram-{light,dark}.png</code>, GitHub <code>&lt;picture&gt;</code></p>
-<p>pattern) linking to the interactive page; <code>docs/workflow-diagram.md</code> carries the</p>
-<p>append-a-revision + snapshot-regeneration recipes; GitHub Pages (main + <code>/docs</code>)</p>
-<p>serves it live once owner-enabled. Guarded by <code>tests/test_workflow_diagram.py</code>.</p>
-<p><strong>Process.</strong> Owner-gated design round: mockup approved after 3 rounds (drafting</p>
-<p>concept → color enrichment per &quot;too plain/too white-black&quot; → WF1 tab first); final</p>
-<p>artifact stored in <code>docs/</code> base per owner override of the AC4 <code>docs/planning/</code> path.</p>
-<p><strong>Status.</strong> PR #214 squash-merged <code>2fe2e0e</code>, CI green (incl. first live firing of the</p>
-<p>#195/#196 Action review lanes), suite 2034/0. Issues #197 AND epic #188 closed —</p>
-<p><strong>campaign complete, 9/9 slots.</strong> Telemetry embedded below.</p>
+<p><strong>Issue.</strong> #197: the canonical, versioned workflow diagram — workflow-only view, clickable per-phase drill-down, version history, committed to the repo. Separate from the health/proposals overlay. Owner: build with Fable, award-grade showcase visual.</p>
+<p><strong>What shipped.</strong> <code>docs/workflow-diagram.html</code> — self-contained hash-routed SPA styled as an engineering drafting document (title block, REV stamps as the version selector, revision triangles Δ, loop-back return arcs; colored-ink vellum light / luminous blueprint dark; embedded OFL fonts, zero external requests, DOM-builder rendering — no <code>innerHTML</code>, test-enforced). Full 19-station WF2 drill-down (purpose, sub-steps, gate facts, lane behavior per station) at REV 3.10.0 + the pre-campaign 3.1.0 snapshot (SUPERSEDED stamp, per-station overrides incl. facts/lane); WF1 (7) / WF3 (15) / WF5 (5) skeletal phase sheets from their pinned skills. README embeds theme-aware snapshots (<code>docs/assets/workflow-diagram-{light,dark}.png</code>, GitHub <code>&lt;picture&gt;</code> pattern) linking to the interactive page; <code>docs/workflow-diagram.md</code> carries the append-a-revision + snapshot-regeneration recipes; GitHub Pages (main + <code>/docs</code>) serves it live once owner-enabled. Guarded by <code>tests/test_workflow_diagram.py</code>.</p>
+<p><strong>Process.</strong> Owner-gated design round: mockup approved after 3 rounds (drafting concept → color enrichment per &quot;too plain/too white-black&quot; → WF1 tab first); final artifact stored in <code>docs/</code> base per owner override of the AC4 <code>docs/planning/</code> path.</p>
+<p><strong>Status.</strong> PR #214 squash-merged <code>2fe2e0e</code>, CI green (incl. first live firing of the #195/#196 Action review lanes), suite 2034/0. Issues #197 AND epic #188 closed — <strong>campaign complete, 9/9 slots.</strong> Telemetry embedded below.</p>
 <p>---</p></section>
-<section class="mstone"><h3>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling</p>
-<p>(claude-code-action v1), folding #48 (STATUS comments), #51 (large-PR warning),</p>
-<p>#52 (progress guardrails). The overnight end-state: label an issue, get a PR.</p>
+<section class="mstone"><h3>Slot 15 — #165: headless Action pilot · v3.1.0 — M4 crown, campaign capstone <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #165 (M4): label-triggered headless WF2 on GA tooling (claude-code-action v1), folding #48 (STATUS comments), #51 (large-PR warning), #52 (progress guardrails). The overnight end-state: label an issue, get a PR.</p>
 <p><strong>What shipped.</strong></p>
 <ul>
 <li><code>.github/workflows/rawgentic-auto.yml</code>: <code>rawgentic:auto</code> label → headless</li>
 </ul>
-<p>  <code>/rawgentic:implement-feature &lt;n&gt;</code>, PR-terminal. Job-level label gate,</p>
-<p>  per-issue concurrency, <code>timeout-minutes: 120</code>, SHA-pinned action,</p>
-<p>  subscription-OAuth secret by NAME, runner-local workspace bootstrap (WF2</p>
-<p>  config-loading needs a workspace file; the checkout is the project repo),</p>
-<p>  <code>plugins</code>/<code>plugin_marketplaces</code> from the repo&#x27;s own PUBLIC marketplace —</p>
-<p>  every external contract read from the action&#x27;s own action.yml, not memory.</p>
+<p>  <code>/rawgentic:implement-feature &lt;n&gt;</code>, PR-terminal. Job-level label gate,   per-issue concurrency, <code>timeout-minutes: 120</code>, SHA-pinned action,   subscription-OAuth secret by NAME, runner-local workspace bootstrap (WF2   config-loading needs a workspace file; the checkout is the project repo),   <code>plugins</code>/<code>plugin_marketplaces</code> from the repo&#x27;s own PUBLIC marketplace —   every external contract read from the action&#x27;s own action.yml, not memory.</p>
 <ul>
 <li><code>headlessEnabled</code> object shape: <code>{&quot;enabled&quot;, &quot;triggers&quot;, &quot;auth&quot;}</code> — fail-closed</li>
 </ul>
-<p>  per-trigger allowlist against <code>RAWGENTIC_HEADLESS_TRIGGER</code> in session-start</p>
-<p>  (jq verdict, 9 exotic inputs probed fail-closed), mirrored in <code>/switch</code> +</p>
-<p>  setup Step 2c prose; auth-mode decision recorded per repo (AC5/AC7).</p>
+<p>  per-trigger allowlist against <code>RAWGENTIC_HEADLESS_TRIGGER</code> in session-start   (jq verdict, 9 exotic inputs probed fail-closed), mirrored in <code>/switch</code> +   setup Step 2c prose; auth-mode decision recorded per repo (AC5/AC7).</p>
 <ul>
 <li>STATUS comment type (#48): <code>format_status_comment()</code> + CLI <code>--type status</code> —</li>
 </ul>
-<p>  non-blocking, metadata carries NO question_id so the resume path can never</p>
-<p>  mistake it for a pending question; five step-boundary posts in headless.md.</p>
+<p>  non-blocking, metadata carries NO question_id so the resume path can never   mistake it for a pending question; five step-boundary posts in headless.md.</p>
 <ul>
 <li>Large-PR warning (#51): Step-12 PR comment past <code>RAWGENTIC_LARGE_PR_FILES</code></li>
 </ul>
-<p>  (default 50, the issue&#x27;s own default). Guardrails (#52): job timeout as the</p>
-<p>  hard wall + STATUS heartbeat as the liveness signal.</p>
+<p>  (default 50, the issue&#x27;s own default). Guardrails (#52): job timeout as the   hard wall + STATUS heartbeat as the liveness signal.</p>
 <ul>
 <li>Suite 1936/0 → 1970/0 (34 new: 12 yml-structural, 9 shape, 5 STATUS,</li>
 </ul>
@@ -544,79 +227,40 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li>Never echo the trigger env value in the BLOCKED message (8a F1): the deny</li>
 </ul>
 <p>  path writes to the model&#x27;s instruction channel; any echo is an injection rider.</p>
-<p><strong>Reviews.</strong> Step 8a fired twice (T2 gate, T3 yml; 2 opus each): trigger-env</p>
-<p>prompt-injection High fixed, concurrency/SHA-pin/label-approval-contract</p>
-<p>hardening applied; **HIGH environmental finding — <code>main</code> had no branch</p>
-<p>protection** (verified 404 + empty rulesets): ruleset creation was</p>
-<p>permission-gated in-session, handed to owner as an exact command; **the pilot</p>
-<p>must not go live before it.** Step 11 (2 opus): 1 Medium config-reference</p>
-<p>field-table leftover (the #161 Critical&#x27;s exact class — caught this time) +</p>
-<p>threshold 25→50 correction; runtime reviewer probed the jq gate and bootstrap</p>
-<p>end-to-end, no material findings. Security scan clean.</p>
-<p><strong>Status.</strong> PR + CI + merge SHA recorded post-merge this session. Live</p>
-<p>end-to-end success metric (1 issue, zero touches) is owner-gated: repo secret</p>
-<p><code>CLAUDE_CODE_OAUTH_TOKEN</code> (<code>claude setup-token</code>), the main-branch ruleset, then</p>
-<p>label a real issue <code>rawgentic:auto</code>. Telemetry embedded below.</p>
+<p><strong>Reviews.</strong> Step 8a fired twice (T2 gate, T3 yml; 2 opus each): trigger-env prompt-injection High fixed, concurrency/SHA-pin/label-approval-contract hardening applied; <strong>HIGH environmental finding — <code>main</code> had no branch protection</strong> (verified 404 + empty rulesets): ruleset creation was permission-gated in-session, handed to owner as an exact command; <strong>the pilot must not go live before it.</strong> Step 11 (2 opus): 1 Medium config-reference field-table leftover (the #161 Critical&#x27;s exact class — caught this time) + threshold 25→50 correction; runtime reviewer probed the jq gate and bootstrap end-to-end, no material findings. Security scan clean.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA recorded post-merge this session. Live end-to-end success metric (1 issue, zero touches) is owner-gated: repo secret <code>CLAUDE_CODE_OAUTH_TOKEN</code> (<code>claude setup-token</code>), the main-branch ruleset, then label a real issue <code>rawgentic:auto</code>. Telemetry embedded below.</p>
 <p>---</p></section>
-<section class="mstone"><h3>Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0</p>
-<p>boundary — one migration event for consumers instead of a drip.</p>
+<section class="mstone"><h3>Slot 14 — #161: v3.0.0 — six workflows removed, upgrade guide shipped <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #161 (M3 capstone): bundle the 2.x breaking changes into one v3.0.0 boundary — one migration event for consumers instead of a drip.</p>
 <p><strong>What shipped.</strong></p>
 <ul>
 <li><strong>BREAKING:</strong> the six workflows deprecated at v2.60.0 (#160) are <strong>removed</strong> —</li>
 </ul>
-<p>  <code>refactor</code> (WF4), <code>update-docs</code> (WF7), <code>update-deps</code> (WF8), <code>security-audit</code></p>
-<p>  (WF9), <code>optimize-perf</code> (WF10), <code>create-tests</code> (WF12) — plus their eval</p>
-<p>  workspaces and their Codex-mirror symlinks; the marketplace <code>skills</code> whitelist</p>
-<p>  drops 19 → 13. Zero STUB-FIRED telemetry across the deprecation cycle backed</p>
-<p>  the verdict.</p>
+<p>  <code>refactor</code> (WF4), <code>update-docs</code> (WF7), <code>update-deps</code> (WF8), <code>security-audit</code>   (WF9), <code>optimize-perf</code> (WF10), <code>create-tests</code> (WF12) — plus their eval   workspaces and their Codex-mirror symlinks; the marketplace <code>skills</code> whitelist   drops 19 → 13. Zero STUB-FIRED telemetry across the deprecation cycle backed   the verdict.</p>
 <ul>
 <li><code>docs/upgrade-3.0.md</code> (AC1): replacement table (verified verbatim against the</li>
 </ul>
-<p>  deleted stubs&#x27; own redirects), what-moved recap, cache-refresh steps, config</p>
-<p>  notes — a removed name left in <code>adversarialReview.workflows</code> is inert</p>
-<p>  (code-verified fail-closed membership matching).</p>
+<p>  deleted stubs&#x27; own redirects), what-moved recap, cache-refresh steps, config   notes — a removed name left in <code>adversarialReview.workflows</code> is inert   (code-verified fail-closed membership matching).</p>
 <ul>
 <li><code>tests/test_v3_removals.py</code> (23 red-first guards) replaces the stub drift</li>
 </ul>
-<p>  guards: gone-stays-gone in BOTH trees, whitelist/description scrub, README</p>
-<p>  body reference-freedom, guide presence.</p>
+<p>  guards: gone-stays-gone in BOTH trees, whitelist/description scrub, README   body reference-freedom, guide presence.</p>
 <ul>
 <li>CHANGELOG: v3.0.0 entry <strong>plus the missing v2.57.0–v2.66.0 backfill</strong></li>
 </ul>
-<p>  (slot-13 follow-up closed; all 12 entries spot-checked against git by a</p>
-<p>  reviewer — no drift).</p>
-<p><strong>Reviews.</strong> Small-standard lane, <strong>lane-widened</strong> honestly logged (real impl</p>
-<p>count 146 vs estimate 4 — deletion mass, not new logic). Step 11 (2 opus):</p>
-<p><strong>1 Critical, independently found by both reviewers</strong> — the README&#x27;s main SDLC</p>
-<p>catalog table still advertised all six removed skills as invocable commands</p>
-<p>(the removal sweep missed it and no test covered it); fixed + a red-first README</p>
-<p>guard added. 2 Medium + 3 Low doc/manifest fixes. Adversarial diff review</p>
-<p>mechanically skipped (no security surface). Security scan clean. Suite</p>
-<p>1941/0 → 1936/0 (stub tests replaced by removal guards).</p>
-<p><strong>Status.</strong> PR #202 squash-merged <code>ea4e048</code>, v3.0.0, issue closed. CI green</p>
-<p>(68s); AC3 verified via Mirror-to-STARS Action success @ea4e048 (evidence</p>
-<p>comment on #161). <strong>M3 COMPLETE.</strong></p>
+<p>  (slot-13 follow-up closed; all 12 entries spot-checked against git by a   reviewer — no drift).</p>
+<p><strong>Reviews.</strong> Small-standard lane, <strong>lane-widened</strong> honestly logged (real impl count 146 vs estimate 4 — deletion mass, not new logic). Step 11 (2 opus): <strong>1 Critical, independently found by both reviewers</strong> — the README&#x27;s main SDLC catalog table still advertised all six removed skills as invocable commands (the removal sweep missed it and no test covered it); fixed + a red-first README guard added. 2 Medium + 3 Low doc/manifest fixes. Adversarial diff review mechanically skipped (no security surface). Security scan clean. Suite 1941/0 → 1936/0 (stub tests replaced by removal guards).</p>
+<p><strong>Status.</strong> PR #202 squash-merged <code>ea4e048</code>, v3.0.0, issue closed. CI green (68s); AC3 verified via Mirror-to-STARS Action success @ea4e048 (evidence comment on #161). <strong>M3 COMPLETE.</strong></p>
 <p>---</p></section>
-<section class="mstone"><h3>Slot 13 — #184: version-aware setup prompt · v2.67.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because</p>
-<p>nothing tells users to re-run <code>/rawgentic:setup</code> after an upgrade — while the</p>
-<p>existing post-update nudge re-nagged about the *same* unconfigured features on</p>
-<p><strong>every</strong> version bump. Fix: prompt only when the upgrade actually shipped a</p>
-<p>setup-requiring feature.</p>
+<section class="mstone"><h3>Slot 13 — #184: version-aware setup prompt · v2.67.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #184 (M3, epic #169): shipped opt-in features sit dark because nothing tells users to re-run <code>/rawgentic:setup</code> after an upgrade — while the existing post-update nudge re-nagged about the *same* unconfigured features on <strong>every</strong> version bump. Fix: prompt only when the upgrade actually shipped a setup-requiring feature.</p>
 <p><strong>What shipped.</strong></p>
 <ul>
 <li><code>hooks/post_update_reconcile.py</code> (the existing SECTION 2f mechanism — extended,</li>
 </ul>
-<p>  not duplicated): <code>FEATURE_MANIFEST</code> entries gain <code>since</code> (the plugin version</p>
-<p>  that introduced each setup step, verified against git history: headlessEnabled</p>
-<p>  2.18.0 · adversarialReview 2.24.0 · modelRouting 2.46.0 · peerConsult 2.46.0 ·</p>
-<p>  designArtifact 2.63.0) and the manifest expands 2 → 5 entries. needs-question</p>
-<p>  nudges fire only when the reconciled-version jump crosses a <code>since</code>; an upgrade</p>
-<p>  shipping nothing new bumps the marker <strong>silently</strong>.</p>
+<p>  not duplicated): <code>FEATURE_MANIFEST</code> entries gain <code>since</code> (the plugin version   that introduced each setup step, verified against git history: headlessEnabled   2.18.0 · adversarialReview 2.24.0 · modelRouting 2.46.0 · peerConsult 2.46.0 ·   designArtifact 2.63.0) and the manifest expands 2 → 5 entries. needs-question   nudges fire only when the reconciled-version jump crosses a <code>since</code>; an upgrade   shipping nothing new bumps the marker <strong>silently</strong>.</p>
 <ul>
 <li>Numeric tuple version compare (never string compare); missing marker = fresh</li>
 </ul>
-<p>  install = version zero; unparseable versions fail <strong>open</strong> toward prompting;</p>
-<p>  <code>since</code>-less override entries keep legacy always-eligible semantics.</p>
+<p>  install = version zero; unparseable versions fail <strong>open</strong> toward prompting;   <code>since</code>-less override entries keep legacy always-eligible semantics.</p>
 <ul>
 <li>Workspace top-level <code>&quot;setupPrompt&quot;: false</code> opt-out — suppresses all output,</li>
 </ul>
@@ -628,42 +272,21 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <ul>
 <li><strong>Drift guard (AC6):</strong> manifest keys must equal the fields staged by setup</li>
 </ul>
-<p>  SKILL.md&#x27;s write-back sentence (anchored extraction, fail-loud), each with a</p>
-<p>  valid <code>since</code> ≤ installed — a new setup opt-in step cannot ship without its</p>
-<p>  manifest entry.</p>
-<p><strong>Decisions (this slot).</strong> Record-at-print marker semantics (a SessionStart hook</p>
-<p>cannot observe accept/decline — the AC4 intent &quot;same version never nags twice&quot;</p>
-<p>holds identically); workspace-level opt-out only (AC5&#x27;s &quot;per-project/workspace&quot;</p>
-<p>read as either-granularity; one kill-switch is the meaningful UX). Pre-existing</p>
-<p>flaw named: README Changelog was missing v2.57.0–v2.66.0 entries — backfill</p>
-<p>logged as a campaign follow-up. Between slots: #199 (PR #200, v2.66.0) shipped</p>
-<p>the roadmap card style this log now renders with.</p>
-<p><strong>Reviews.</strong> Small-standard lane (1 impl file). Step 11: 2 opus reviewers, **0</p>
-<p>Critical/High/Medium**; 3 Low (strict-boolean opt-out ruled working-as-designed</p>
-<p>by both; one advisory test-completeness fix applied — the &quot;won&#x27;t repeat&quot; wording</p>
-<p>is now pinned). All 5 <code>since</code> values independently re-verified against git</p>
-<p>history by reviewer 2. Adversarial diff review mechanically skipped (no security</p>
-<p>surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.</p>
-<p><strong>Status.</strong> *(backfilled by slot 14&#x27;s pass)* PR #201 squash-merged <code>6c375b1</code>,</p>
-<p>CI green, v2.67.0, issue closed. Telemetry embedded below.</p>
+<p>  SKILL.md&#x27;s write-back sentence (anchored extraction, fail-loud), each with a   valid <code>since</code> ≤ installed — a new setup opt-in step cannot ship without its   manifest entry.</p>
+<p><strong>Decisions (this slot).</strong> Record-at-print marker semantics (a SessionStart hook cannot observe accept/decline — the AC4 intent &quot;same version never nags twice&quot; holds identically); workspace-level opt-out only (AC5&#x27;s &quot;per-project/workspace&quot; read as either-granularity; one kill-switch is the meaningful UX). Pre-existing flaw named: README Changelog was missing v2.57.0–v2.66.0 entries — backfill logged as a campaign follow-up. Between slots: #199 (PR #200, v2.66.0) shipped the roadmap card style this log now renders with.</p>
+<p><strong>Reviews.</strong> Small-standard lane (1 impl file). Step 11: 2 opus reviewers, <strong>0 Critical/High/Medium</strong>; 3 Low (strict-boolean opt-out ruled working-as-designed by both; one advisory test-completeness fix applied — the &quot;won&#x27;t repeat&quot; wording is now pinned). All 5 <code>since</code> values independently re-verified against git history by reviewer 2. Adversarial diff review mechanically skipped (no security surface). Security scan clean (iac/sca visible skips). Suite 1927/0 → 1941/0.</p>
+<p><strong>Status.</strong> *(backfilled by slot 14&#x27;s pass)* PR #201 squash-merged <code>6c375b1</code>, CI green, v2.67.0, issue closed. Telemetry embedded below.</p>
 <p>---</p></section>
-<section class="mstone"><h3>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code></p>
-<p>object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> —</p>
-<p>so #162&#x27;s yield-per-token gate was incomputable. Fix: capture real numbers + backfill,</p>
-<p>with <strong>non-vacuous</strong> tests (AC5, explicitly &quot;better than #155&#x27;s schema-only tests&quot;).</p>
+<section class="mstone"><h3>Slot 12 — #189: capture usage token/cost in run-records · v2.65.0 <span class="chip c-conf">SHIPPED</span></h3><p><strong>Issue.</strong> #189 (owner-promoted from fast-follow epic #188): the run-record <code>usage</code> object existed (#155/#172) but nothing populated it — <strong>null in all 24 records</strong> — so #162&#x27;s yield-per-token gate was incomputable. Fix: capture real numbers + backfill, with <strong>non-vacuous</strong> tests (AC5, explicitly &quot;better than #155&#x27;s schema-only tests&quot;).</p>
 <p><strong>What shipped.</strong></p>
 <ul>
 <li><code>hooks/usage_capture.py</code> — parses the Claude Code session transcript directly (same</li>
 </ul>
-<p>  source as <code>ccusage</code>; stdlib-only, deterministic, no network). Sums per-model tokens</p>
-<p>  into <code>model_mix</code> + totals + a rate-card cost, excludes the <code>&lt;synthetic&gt;</code> pseudo-model.</p>
-<p>  <code>capture</code> (live, Step 16) + <code>backfill</code> (historical) subcommands, with a path-traversal</p>
-<p>  guard on the session id and UTF-8-resilient reads (the current log may be mid-write).</p>
+<p>  source as <code>ccusage</code>; stdlib-only, deterministic, no network). Sums per-model tokens   into <code>model_mix</code> + totals + a rate-card cost, excludes the <code>&lt;synthetic&gt;</code> pseudo-model.   <code>capture</code> (live, Step 16) + <code>backfill</code> (historical) subcommands, with a path-traversal   guard on the session id and UTF-8-resilient reads (the current log may be mid-write).</p>
 <ul>
 <li><strong>Validator backstop</strong> (<code>hooks/work_summary.py</code>) — <code>usage.capture_status</code> controlled</li>
 </ul>
-<p>  vocab <code>{captured, unrecoverable, unavailable}</code>; a <code>captured</code> claim REQUIRES positive</p>
-<p>  input + non-negative output, so the #155 null/zero-forever state can no longer persist.</p>
+<p>  vocab <code>{captured, unrecoverable, unavailable}</code>; a <code>captured</code> claim REQUIRES positive   input + non-negative output, so the #155 null/zero-forever state can no longer persist.</p>
 <ul>
 <li><strong>Backfill applied</strong> — the 12 historical usage rows carry no session-id correlator, so</li>
 </ul>
@@ -672,98 +295,47 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li>Step 16 capture wiring documented + <strong>pinned by a corpus drift-guard</strong>; AC3 store</li>
 </ul>
 <p>  drift-guard forbids any usage object with null/zero tokens and no marker.</p>
-<p><strong>Non-vacuity (AC5).</strong> Tests assert real-fixture known-value totals (865/90), end-to-end</p>
-<p>capture, backfill against known values, and <strong>red-before-green</strong> guards for the</p>
-<p>present-but-zero and zero-token-no-marker paths — the #155 failure mode in its new forms.</p>
-<p><strong>Reviews.</strong> Step 8a on both high-risk tasks caught <strong>2 empirically-confirmed High</strong> bugs</p>
-<p>(non-vacuity guard checked block-count not token-sum = the #155 mode recurring; UTF-8</p>
-<p>crash on a mid-write log) — both fixed. Step 11 (2 opus reviewers) caught <strong>3 Medium</strong></p>
-<p>(drift-guard zero-token blind spot; unpinned wiring; captured input=0) + 1 Low — all</p>
-<p>fixed. Security scan clean (iac/sca visible skips).</p>
-<p><strong>First real telemetry.</strong> This slot&#x27;s own run-record is the **first with non-null captured</p>
-<p>tokens** (session-scoped — a documented granularity limitation). Suite 1907/0.</p>
-<p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* PR #198 squash-merged <code>f6e2682</code>, CI</p>
-<p>green, v2.65.0, issue closed. Telemetry embedded below.</p>
+<p><strong>Non-vacuity (AC5).</strong> Tests assert real-fixture known-value totals (865/90), end-to-end capture, backfill against known values, and <strong>red-before-green</strong> guards for the present-but-zero and zero-token-no-marker paths — the #155 failure mode in its new forms.</p>
+<p><strong>Reviews.</strong> Step 8a on both high-risk tasks caught <strong>2 empirically-confirmed High</strong> bugs (non-vacuity guard checked block-count not token-sum = the #155 mode recurring; UTF-8 crash on a mid-write log) — both fixed. Step 11 (2 opus reviewers) caught <strong>3 Medium</strong> (drift-guard zero-token blind spot; unpinned wiring; captured input=0) + 1 Low — all fixed. Security scan clean (iac/sca visible skips).</p>
+<p><strong>First real telemetry.</strong> This slot&#x27;s own run-record is the <strong>first with non-null captured tokens</strong> (session-scoped — a documented granularity limitation). Suite 1907/0.</p>
+<p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* PR #198 squash-merged <code>f6e2682</code>, CI green, v2.65.0, issue closed. Telemetry embedded below.</p>
 <p>---</p></section>
-<section class="mstone"><h3>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2 <span class="chip c-defer">ABANDONED</span></h3><p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff</p>
-<p>pass) was <strong>data-gated</strong> by its own header (&quot;no A/B evidence, no switch&quot;) and</p>
-<p>AC4 (&quot;matched hand-rolled yield over ≥10 runs at lower cost … otherwise abandon</p>
-<p>this issue with the data cited&quot;).</p>
-<p><strong>The data (23 run-records as of 2026-07-04).</strong> The candidate arm</p>
-<p>(<code>builtin_code_review</code>) has <strong>0 gate-instances</strong> — it never ran (≥10 required).</p>
-<p>Token/cost telemetry (<code>usage.input_tokens</code>/<code>output_tokens</code>/<code>cost_estimate_usd</code>)</p>
-<p>is <strong>null in all 23 records</strong>, so the success metric (findings-yield per token)</p>
-<p>is incomputable for *any* arm. Incumbent arms: hand_rolled_multi 41 findings/11</p>
-<p>gates · codex 16/4 · inline 19/13.</p>
-<p><strong>Decision.</strong> Abandon per AC4&#x27;s explicit branch — a **deferral pending</p>
-<p>telemetry, not a rejection** of built-in <code>/code-review</code> (Codex peer-consult</p>
-<p>concurred). The roadmap&#x27;s &quot;the program is its own A/B&quot; assumption was circular:</p>
-<p>campaign runs could only generate candidate-arm data *after* the switch this</p>
-<p>gate blocks. Reopen conditions: pilot built-in <code>/code-review</code> as an *additional*</p>
-<p>Step 11 reviewer for ≥10 runs + backfill token telemetry. Full record:</p>
-<p><code>docs/measurements/2026-07-05-issue-162-data-gate-decision.md</code> (drift-guarded</p>
-<p>by <code>tests/test_decision_records.py</code>, which recomputes the evidence basis from</p>
-<p><code>run_records.jsonl</code> records[:23]).</p>
-<p><strong>What shipped.</strong> Decision record + 3 drift-guard tests (one recomputes the</p>
-<p>evidence from the store) · README/roadmap/dashboard annotations · v2.64.2.</p>
-<p><strong>Owner directives (mid-slot).</strong> #184 (version-aware setup prompt) inserted</p>
-<p>into the campaign as <strong>slot 12, before #161</strong> — slots renumbered 12=#184,</p>
-<p>13=#161, 14=#165; run doc, dashboard, roadmap updated.</p>
-<p><strong>Reviews.</strong> Step 11: opus reviewer (2 Low: citation + count fix, both applied)</p>
-<p>+ Codex adversarial diff pass (2 Medium: drift-guard vacuity — test now parses</p>
-<p>the store; applied). Security scan clean (iac/sca visible skips).</p>
-<p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* decision-record PR #187</p>
-<p>squash-merged <code>e7aadf7</code>, CI green, v2.64.2. Telemetry embedded below. Issue</p>
-<p>closed as *not planned*, data cited.</p>
+<section class="mstone"><h3>Slot 11 — #162: review switch — ABANDONED per AC4 data gate · v2.64.2 <span class="chip c-defer">ABANDONED</span></h3><p><strong>Issue.</strong> #162 (Step 4 reflect-only + Step 11 built-in /code-review + WF5 diff pass) was <strong>data-gated</strong> by its own header (&quot;no A/B evidence, no switch&quot;) and AC4 (&quot;matched hand-rolled yield over ≥10 runs at lower cost … otherwise abandon this issue with the data cited&quot;).</p>
+<p><strong>The data (23 run-records as of 2026-07-04).</strong> The candidate arm (<code>builtin_code_review</code>) has <strong>0 gate-instances</strong> — it never ran (≥10 required). Token/cost telemetry (<code>usage.input_tokens</code>/<code>output_tokens</code>/<code>cost_estimate_usd</code>) is <strong>null in all 23 records</strong>, so the success metric (findings-yield per token) is incomputable for *any* arm. Incumbent arms: hand_rolled_multi 41 findings/11 gates · codex 16/4 · inline 19/13.</p>
+<p><strong>Decision.</strong> Abandon per AC4&#x27;s explicit branch — a <strong>deferral pending telemetry, not a rejection</strong> of built-in <code>/code-review</code> (Codex peer-consult concurred). The roadmap&#x27;s &quot;the program is its own A/B&quot; assumption was circular: campaign runs could only generate candidate-arm data *after* the switch this gate blocks. Reopen conditions: pilot built-in <code>/code-review</code> as an *additional* Step 11 reviewer for ≥10 runs + backfill token telemetry. Full record: <code>docs/measurements/2026-07-05-issue-162-data-gate-decision.md</code> (drift-guarded by <code>tests/test_decision_records.py</code>, which recomputes the evidence basis from <code>run_records.jsonl</code> records[:23]).</p>
+<p><strong>What shipped.</strong> Decision record + 3 drift-guard tests (one recomputes the evidence from the store) · README/roadmap/dashboard annotations · v2.64.2.</p>
+<p><strong>Owner directives (mid-slot).</strong> #184 (version-aware setup prompt) inserted into the campaign as <strong>slot 12, before #161</strong> — slots renumbered 12=#184, 13=#161, 14=#165; run doc, dashboard, roadmap updated.</p>
+<p><strong>Reviews.</strong> Step 11: opus reviewer (2 Low: citation + count fix, both applied) + Codex adversarial diff pass (2 Medium: drift-guard vacuity — test now parses the store; applied). Security scan clean (iac/sca visible skips).</p>
+<p><strong>Status.</strong> *(backfilled by slot 13&#x27;s pass)* decision-record PR #187 squash-merged <code>e7aadf7</code>, CI green, v2.64.2. Telemetry embedded below. Issue closed as *not planned*, data cited.</p>
 <p>---</p></section>
-<section class="mstone"><h3>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)* <span class="chip c-conf">MERGED</span></h3><p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue</p>
-<p>state schema, from design #134) and #163 (dependency-DAG + epic anchor,</p>
-<p>schema v2) — implemented together in one PR (#163 extends #148&#x27;s queue).</p>
+<section class="mstone"><h3>Slot 10 — #148 + #163: multi-issue driver (M3 start) · v2.64.0 &lt;br&gt;*(status backfill: PR #185 squash-merged <code>d7ea584</code>; post-merge hardening review → PR #186 <code>5e15862</code>, 7 findings fixed, v2.64.1, suite 1863/0)* <span class="chip c-conf">MERGED</span></h3><p><strong>Issues.</strong> #148 (build the multi-issue driver as a documented pattern + queue state schema, from design #134) and #163 (dependency-DAG + epic anchor, schema v2) — implemented together in one PR (#163 extends #148&#x27;s queue).</p>
 <p><strong>What shipped.</strong></p>
 <ul>
 <li><code>docs/multi-issue-driver.md</code> — the documented driver <strong>pattern</strong>: the loop</li>
 </ul>
-<p>  (WF2 fresh per issue; advance on merge / <code>pr_open</code> when headless; park on</p>
-<p>  DEFER), policy (order / deploy / review-budget / never-Haiku), the DEFER</p>
-<p>  taxonomy + deterministic branch-preservation rule, the rollback-anchor</p>
-<p>  protocol, the dependency-DAG ordering, the epic anchor, and the resumption</p>
-<p>  reconciliation table (intra-WF2 resume delegated to <code>resume_lib</code>). Explicitly</p>
-<p>  does <strong>not</strong> weaken WF2 — each iteration is a full run terminating at Step 16.</p>
+<p>  (WF2 fresh per issue; advance on merge / <code>pr_open</code> when headless; park on   DEFER), policy (order / deploy / review-budget / never-Haiku), the DEFER   taxonomy + deterministic branch-preservation rule, the rollback-anchor   protocol, the dependency-DAG ordering, the epic anchor, and the resumption   reconciliation table (intra-WF2 resume delegated to <code>resume_lib</code>). Explicitly   does <strong>not</strong> weaken WF2 — each iteration is a full run terminating at Step 16.</p>
 <ul>
 <li><code>hooks/driver_lib.py</code> — the narrow, unit-tested DAG surface: <code>parse_depends_on</code></li>
 </ul>
-<p>  (word-boundary, negation-aware, sentence-bounded), <code>topo_sort_issues</code> (Kahn,</p>
-<p>  fail-closed on cycle), <code>next_ready_issue</code> (deps-satisfied advance rule +</p>
-<p>  <code>deps_satisfied_by</code> knob), <code>validate_driver_state</code> (v1/v2 readability +</p>
-<p>  serial-active invariant), <code>validate_campaign_start</code> (headless-requires-epic).</p>
-<p>  The fuller state-transition validator stays deferred (design #134 follow-up #2).</p>
+<p>  (word-boundary, negation-aware, sentence-bounded), <code>topo_sort_issues</code> (Kahn,   fail-closed on cycle), <code>next_ready_issue</code> (deps-satisfied advance rule +   <code>deps_satisfied_by</code> knob), <code>validate_driver_state</code> (v1/v2 readability +   serial-active invariant), <code>validate_campaign_start</code> (headless-requires-epic).   The fuller state-transition validator stays deferred (design #134 follow-up #2).</p>
 <ul>
 <li><code>docs/driver-state/</code> — the git-tracked schema (<code>queue.schema.json</code>) + v1/v2</li>
 </ul>
-<p>  example campaign files (live per-campaign state is disk-persisted under the</p>
-<p>  gitignored <code>claude_docs/.driver-state/</code>).</p>
+<p>  example campaign files (live per-campaign state is disk-persisted under the   gitignored <code>claude_docs/.driver-state/</code>).</p>
 <p><strong>Decisions (this slot).</strong></p>
 <ul>
 <li>#163 DAG fork (Codex-consulted → option C): #148 stays pure-doc; #163 ships the</li>
 </ul>
-<p>  *narrow* DAG helper only. Its algorithmic ACs (&quot;cycles halt fail-closed&quot;,</p>
-<p>  &quot;0 ordering violations&quot;, &quot;v1 readable&quot;) can&#x27;t be verified as prose.</p>
+<p>  *narrow* DAG helper only. Its algorithmic ACs (&quot;cycles halt fail-closed&quot;,   &quot;0 ordering violations&quot;, &quot;v1 readable&quot;) can&#x27;t be verified as prose.</p>
 <ul>
 <li>&quot;Committed&quot; queue state reconciled with the gitignored <code>claude_docs/</code>: the</li>
 </ul>
-<p>  live state file is *durably persisted to disk* (the resumption substrate); the</p>
-<p>  git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
-<p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed</p>
-<p>number guards. Step-11 Codex diff review (owner-directed) applied 4 findings</p>
-<p>(sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>,</p>
-<p>persist-topo-order-in-doc); concurrent Claude review reworded the overstated</p>
-<p>&quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan</p>
-<p>clean.</p>
-<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
-<p>convention). Telemetry for this slot is embedded below.</p></section>
-
+<p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
+<p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
+<p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#165 (feature, standard)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>32 added · 339/339 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR 178 · merged: True · CI: passed</td></tr><tr><th>Usage</th><td>in 144897161 / out 406745 tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>10</td><td>10</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>1</td><td>1</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>6</td><td>6</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-10 01:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-10 05:03 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

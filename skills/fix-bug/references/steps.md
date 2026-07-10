@@ -447,11 +447,15 @@ Review-clean code + optional project knowledge updates.
    and commit BOTH inside THIS fix PR (one PR per issue). Render with the shared helper — never hand-roll HTML — embedding
    this run's **telemetry** read from the run-record structure (the Step 14
    run-record; gates, tests + suite delta, security-scan, lane, `usage`), never
-   hand-retyped:
+   hand-retyped. WF3 design artifacts resolve their template exactly as WF2 Step 12
+   does — `design_artifact_style`, defaulting to `design`. Resolve `<style>` via
+   `adversarial_review_lib.design_artifact_style('.rawgentic_workspace.json', '<name>')`
+   (any of the seven template names; an absent key → `design`, an invalid value →
+   `plain` plus a stderr warning) and pass it as `--style <style>`:
    ```bash
    python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
      --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
-     --telemetry /tmp/wf3-run-record.json
+     --telemetry /tmp/wf3-run-record.json --style <style>
    git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
    ```
    Fields not knowable pre-PR (PR #, CI, merge SHA) fill on the next slot's pass.

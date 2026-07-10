@@ -451,3 +451,329 @@ class TestMarkdownTables:
         h = _render(md, style="roadmap")
         assert '<section class="mstone">' in h
         assert "<table>" in h
+
+
+# --- #344: paragraph buffering + hard breaks + multi-line emphasis ---
+
+class TestParagraphsAndEmphasis:
+    def test_two_adjacent_lines_form_one_paragraph(self):
+        h = _render("line one\nline two")
+        assert "<p>line one line two</p>" in h
+        assert "<p>line one</p>" not in h
+        assert "<p>line two</p>" not in h
+
+    def test_bold_across_soft_wrap(self):
+        h = _render("**a\nb**")
+        assert "<strong>a b</strong>" in h
+
+    def test_bold_across_hard_break(self):
+        h = _render("**a  \nb**")
+        assert "<strong>a<br>b</strong>" in h
+
+    def test_three_lines_all_hard_breaks(self):
+        h = _render("a  \nb  \nc")
+        assert "<p>a<br>b<br>c</p>" in h
+
+    def test_hard_break_on_last_line_dropped(self):
+        h = _render("a\nb  ")
+        assert "<p>a b</p>" in h
+        assert "<br>" not in h
+
+    def test_script_split_across_lines_stays_escaped(self):
+        h = _render("<script>\nalert(1)</script>")
+        assert "<script>" not in h
+        assert "&lt;script&gt;" in h
+        assert "&lt;/script&gt;" in h
+
+    def test_literal_null_char_sanitized_no_break(self):
+        h = _render("a\x00b\nc more")
+        assert "<br>" not in h
+        assert "\x00" not in h
+        assert "ab c more" in h
+
+    def test_code_span_across_hard_break(self):
+        # Deterministic pin: the joined code span keeps the <br> the hard break
+        # inserts; content stays escaped, markup well-formed.
+        h = _render("`a  \nb`")
+        assert "<code>a<br>b</code>" in h
+
+    def test_paragraph_flushes_before_each_block(self):
+        for block, marker in (
+            ("# Heading", "<h1>"),
+            ("- item", "<ul>"),
+            ("> quote", "<blockquote>"),
+            ("```\ncode\n```", "<pre><code>"),
+        ):
+            h = _render("para\n" + block)
+            assert "<p>para</p>" in h, block
+            assert marker in h, block
+        # table (needs header + separator rows)
+        h = _render("para\n| A | B |\n| --- | --- |\n| 1 | 2 |")
+        assert "<p>para</p>" in h
+        assert "<table>" in h
+
+    def test_single_line_paragraph_unchanged(self):
+        h = _render("just one line")
+        assert "<p>just one line</p>" in h
+
+
+# --- #344: template registry, component CSS, body classes, decorators ---
+
+# name -> its own accent MARKER selector, present in that template's CSS only.
+_TEMPLATE_MARKERS = {
+    "roadmap": ".mstone",
+    "report": ".tpl-report",
+    "design": ".tpl-design",
+    "dashboard": ".tpl-dashboard",
+    "review": ".tpl-review",
+    "spec": ".tpl-spec",
+}
+# every "new" CSS marker string that must NEVER appear in plain output.
+_ALL_NEW_MARKERS = [".mstone", "--chip-c", ".tpl-report", ".tpl-design",
+                    ".tpl-dashboard", ".tpl-review", ".tpl-spec"]
+
+
+class TestTemplates:
+    def test_six_nonplain_templates_body_class_and_marker(self):
+        for name, marker in _TEMPLATE_MARKERS.items():
+            h = _render("# Doc\n\n## Section\n\nbody text", style=name)
+            assert f'class="tpl-{name}"' in h, name
+            assert marker in h, (name, marker)
+
+    def test_plain_has_no_template_class_or_new_markers(self):
+        h = _render("# Doc\n\n## Section\n\n5/5 Severity: High MUST NOT", style="plain")
+        assert "tpl-" not in h
+        for marker in _ALL_NEW_MARKERS:
+            assert marker not in h, marker
+
+    def test_dashboard_has_roadmap_markup_and_own_marker(self):
+        h = _render("## Slot 1 — DONE\n\nbody", style="dashboard")
+        assert '<section class="mstone">' in h
+        assert 'class="chip' in h
+        assert ".tpl-dashboard" in h
+
+    def test_roadmap_does_not_carry_dashboard_style(self):
+        h = _render("## Slot 1 — DONE\n\nbody", style="roadmap")
+        assert '<section class="mstone">' in h
+        assert ".tpl-dashboard" not in h
+
+    def test_report_decorates_scores(self):
+        h = _render("Fidelity 3/5 overall", style="report")
+        assert '<span class="score">3/5</span>' in h
+
+    def test_scores_not_decorated_in_plain_or_design(self):
+        for style in ("plain", "design"):
+            h = _render("Fidelity 3/5 overall", style=style)
+            assert '<span class="score">' not in h, style
+            assert "3/5" in h, style
+
+    def test_review_decorates_severity_in_list_item(self):
+        h = _render("- Severity: High — needs a fix", style="review")
+        assert '<span class="sev sev-high">High</span>' in h
+
+    def test_review_severity_in_code_span_undecorated(self):
+        h = _render("check `Severity: High` literal", style="review")
+        assert '<span class="sev' not in h
+        assert "<code>Severity: High</code>" in h
+
+    def test_spec_decorates_requirements_single_span_no_nesting(self):
+        h = _render("The client MUST NOT retry. It SHOULD NOT block. It MAY log.",
+                    style="spec")
+        assert '<span class="req req-must-not">MUST NOT</span>' in h
+        assert '<span class="req req-should-not">SHOULD NOT</span>' in h
+        assert '<span class="req req-may">MAY</span>' in h
+        # MUST NOT must be ONE span, never a nested req-must inside it
+        assert '<span class="req req-must">MUST</span> NOT' not in h
+        assert h.count('class="req') == 3
+
+    def test_spec_requirement_in_code_span_undecorated(self):
+        h = _render("use `MUST` here", style="spec")
+        assert '<span class="req' not in h
+        assert "<code>MUST</code>" in h
+
+    def test_report_injection_stays_escaped_score_decorated(self):
+        h = _render("**<script>** 5/5", style="report")
+        assert "<script>" not in h
+        assert "&lt;script&gt;" in h
+        assert '<span class="score">5/5</span>' in h
+
+    def test_cli_report_style_end_to_end(self, tmp_path):
+        md = tmp_path / "in.md"; md.write_text("Fidelity 3/5")
+        out = tmp_path / "out.html"
+        rc = render_artifact.main(["--md", str(md), "--out", str(out),
+                                   "--title", "T", "--style", "report"])
+        assert rc == 0
+        html_out = out.read_text()
+        assert 'class="tpl-report"' in html_out
+        assert '<span class="score">3/5</span>' in html_out
+
+    def test_cli_junk_style_rejected(self, tmp_path):
+        md = tmp_path / "in.md"; md.write_text("x")
+        out = tmp_path / "out.html"
+        with pytest.raises(SystemExit):
+            render_artifact.main(["--md", str(md), "--out", str(out),
+                                  "--title", "T", "--style", "nonsense"])
+
+    def test_inline_closed_grammar_guard(self):
+        # Safety precondition for the decorators' code-span split: _inline output
+        # may contain ONLY attribute-free <code>/<strong> tags. If _inline ever
+        # grows link/attribute support, this fails and forces revisiting decorators.
+        import html as _html
+        allowed = {"<code>", "</code>", "<strong>", "</strong>"}
+        inputs = ["plain text", "`code`", "**bold**", "a `x` b **y** c",
+                  "<script>alert(1)</script>", "**`nested`**",
+                  "5/5 Severity: High MUST NOT", "a & b < c > d"]
+        for s in inputs:
+            out = render_artifact._inline(_html.escape(s))
+            for tag in re.findall(r"</?[a-zA-Z][^>]*>", out):
+                assert tag in allowed, (s, tag, out)
+
+    def test_existing_roadmap_chip_literals_untouched(self):
+        h = _render("## Slot 1 — DONE\n\n## Slot 2 — blocked\n\n## Slot 3 — planned",
+                    style="roadmap")
+        assert 'class="chip c-conf"' in h
+        assert 'class="chip c-defer"' in h
+        assert 'class="chip c-plan"' in h
+
+
+class TestStep8aFixes:
+    # 8a T2 review: a two-space hard break between MUST and NOT must still read as
+    # the prohibition (req-must-not), never a positive MUST badge.
+    def test_requirement_badge_bridges_hard_break(self):
+        h = _render("MUST  \nNOT retry", style="spec")
+        assert 'req-must-not' in h
+        assert 'class="req req-must"' not in h
+
+    # 8a T2 review: unknown style on the LIBRARY path falls back to plain but warns
+    # on stderr (the CLI argparse-rejects; the library must not silently restyle).
+    def test_unknown_style_warns_and_falls_back(self, capsys):
+        h = _render("body", style="not-a-template")
+        err = capsys.readouterr().err
+        assert "unknown style 'not-a-template'" in err
+        assert "tpl-" not in h
+
+
+# --- #344 Task 4: the design-language doc + reproducible exemplar ---
+
+_DOCS = HOOKS.parent / "docs"
+_DL_DOC = _DOCS / "design-language.md"
+_DL_FIXTURE = _DOCS / "design-language-example.md"
+_DL_HTML = _DOCS / "design-language-example.html"
+
+# Pinned stamp + style + title for the exemplar — must match the regeneration
+# one-liner recorded in the doc's Exemplar section (docs/design-language.md).
+_EXEMPLAR_TS = "2026-07-10 12:00 MDT"
+_EXEMPLAR_TITLE = "Design-language exemplar"
+_EXEMPLAR_STYLE = "design"
+
+# The canonical human-first sentence — the drift-guard target. Any edit to this
+# sentence in the doc must be a deliberate edit here too.
+_HUMAN_FIRST_SENTENCE = (
+    "Every templated artifact opens with its verdict-first lead section — the "
+    "at-a-glance summary, decision, status, or verdict — before any evidence or "
+    "detail, so the document reads top-down for a human."
+)
+
+
+def _norm(text: str) -> str:
+    """Collapse all whitespace runs to single spaces (wrapped-prose tolerant)."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _section(doc: str, header: str) -> str:
+    """Return the body of the ``## <header>`` section: everything from that h2
+    line up to (not including) the next h2. House drift-guard pattern — slice by
+    header index so a stray match elsewhere in the doc can't satisfy the pin."""
+    lines = doc.split("\n")
+    start = None
+    for idx, ln in enumerate(lines):
+        if ln.strip() == f"## {header}":
+            start = idx
+            break
+    assert start is not None, f"section '## {header}' not found"
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        if re.match(r"##(?!#)\s", lines[idx]):
+            end = idx
+            break
+    return "\n".join(lines[start:end])
+
+
+class TestDesignLanguageDoc:
+    def test_doc_exists(self):
+        assert _DL_DOC.is_file(), _DL_DOC
+
+    def test_human_first_canonical_sentence_present(self):
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Human-first skeleton")
+        assert _norm(_HUMAN_FIRST_SENTENCE) in _norm(section)
+
+    def test_five_lead_section_names_present(self):
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Human-first skeleton")
+        for name in ("At a glance", "Decision", "Status", "Verdict", "Summary"):
+            assert name in section, name
+
+    def test_templates_section_lists_all_registry_names(self):
+        # computed, not hand-pinned: compare against the live registry order.
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Templates")
+        for name in tuple(render_artifact._TEMPLATES):
+            assert name in section, name
+
+    def test_token_names_honest_against_component_style(self):
+        # every --sev-*/--req-* token the Tokens section names must actually exist
+        # in _COMPONENT_STYLE (computed check — no invented tokens).
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Tokens")
+        named = set(re.findall(r"--(?:sev|req)[a-z-]*", section))
+        assert named, "Tokens section names no --sev-*/--req-* tokens"
+        for tok in named:
+            assert tok in render_artifact._COMPONENT_STYLE, tok
+
+    def test_exemplar_reproducible_byte_for_byte(self):
+        # Re-render the committed fixture with the pinned stamp+style+title and
+        # byte-compare to the committed HTML — the reproducibility contract.
+        fixture = _DL_FIXTURE.read_text(encoding="utf-8")
+        rendered = render_artifact.render_artifact(
+            fixture, title=_EXEMPLAR_TITLE, generated_at=_EXEMPLAR_TS,
+            style=_EXEMPLAR_STYLE)
+        assert rendered == _DL_HTML.read_text(encoding="utf-8")
+
+
+# --- #344 Task 5: the two OTHER surfaces that name the template vocabulary ---
+# The setup integrations reference and the config-reference designArtifact entry
+# both describe the renderer's template set; these guards live here (not in a WF
+# clarity file) because they pin the SAME design-language template vocabulary the
+# TestDesignLanguageDoc guards above own. Verbatim canonical-sentence pins in one
+# file each, whitespace-normalized (house pattern; repo mistake #6).
+
+_SETUP_INTEGRATIONS = HOOKS.parent / "skills" / "setup" / "references" / "integrations.md"
+_CONFIG_REFERENCE = _DOCS / "config-reference.md"
+
+
+class TestTemplateVocabularySurfaces:
+    def test_setup_integrations_names_seven_templates(self):
+        text = _norm(_SETUP_INTEGRATIONS.read_text(encoding="utf-8"))
+        assert (
+            "The renderer ships seven design-language templates (plain, roadmap, "
+            "report, design, dashboard, review, spec); see "
+            "`docs/design-language.md`."
+        ) in text, (
+            "setup/references/integrations.md must name the seven-template set "
+            "(#344 Task 5)")
+
+    def test_config_reference_designartifact_style_vocabulary(self):
+        text = _norm(_CONFIG_REFERENCE.read_text(encoding="utf-8"))
+        assert (
+            "accepts the seven design-language template names (plain, roadmap, "
+            "report, design, dashboard, review, spec); absent → `design` (the "
+            "documented default); an invalid value → `plain` plus a stderr warning."
+        ) in text, (
+            "config-reference.md designArtifact.style entry must state the "
+            "expanded #344 vocabulary and absent/invalid semantics (#344 Task 5)")
+
+
+class TestStep11Fixes:
+    # Step 11 review: CR normalization must cover the roadmap family too — a raw-CRLF
+    # library string must not leak \r into an mstone heading.
+    def test_roadmap_heading_crlf_normalized(self):
+        h = _render("## Slot 1 — DONE\r\n\r\nbody\r\n", style="roadmap")
+        assert "\r" not in h
+        assert "Slot 1 — DONE" in h

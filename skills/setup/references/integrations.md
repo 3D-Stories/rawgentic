@@ -186,8 +186,9 @@ The design-artifact lifecycle gives each issue a browsable HTML design doc: WF1
 renders + publishes the issue spec and comments the URL; WF2/WF3 create-or-update
 the `.md`+`.html` (with this run's telemetry embedded) inside the feature PR before
 `gh pr create`. Rendering is `hooks/render_artifact.py` — self-contained, CSP-safe,
-escape-first, with a mountain-time datetime stamp. Default OFF (byte-identical when
-declined).
+escape-first, with a mountain-time datetime stamp. The renderer ships seven
+design-language templates (plain, roadmap, report, design, dashboard, review, spec);
+see `docs/design-language.md`. Default OFF (byte-identical when declined).
 
 - **If `designArtifact` is not set** (first-time configuration): ask two questions:
   1. "Give each issue a living HTML design artifact (rendered spec + run telemetry,

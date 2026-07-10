@@ -235,9 +235,10 @@ projects). When enabled:
    - **per-issue** (default, sharedDoc unset): write the issue spec markdown to
      `<activeProject.path>/docs/planning/<issue>-<slug>.md`.
 2. Render it to a self-contained, CSP-safe HTML artifact with the shared helper —
-   never hand-roll HTML:
+   never hand-roll HTML. Issue specs render with the `spec` template (`--style spec`)
+   per the design language.
    ```bash
-   python3 hooks/render_artifact.py --md <doc>.md --out <doc>.html --title "#<issue> <title>"
+   python3 hooks/render_artifact.py --md <doc>.md --out <doc>.html --title "#<issue> <title>" --style spec
    ```
    (The helper escape-first-renders the markdown and stamps a mountain-time datetime.)
 3. Publish the `.html` with the Artifact tool and post the artifact URL as an issue

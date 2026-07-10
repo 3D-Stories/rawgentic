@@ -173,10 +173,11 @@ the token is `noissue` and the report header states the missing provenance. If t
 path already exists (same-day rerun), suffix `-2`, `-3`, … — never overwrite an
 earlier assessment's evidence.
 
-HTML via the repo's renderer — never hand-rolled:
+HTML via the repo's renderer — never hand-rolled. WF14 reports render with the
+`report` template (`--style report`) per the design language (`docs/design-language.md`).
 ```bash
 python3 hooks/render_artifact.py --md <report>.md --out <report>.html \
-  --title "WF14 run-feedback — WF<n> #<issue>"
+  --title "WF14 run-feedback — WF<n> #<issue>" --style report
 ```
 A render failure never voids the assessment: record the failure in the report's own
 text and preserve the `.md` (the `.html` becomes a stated gap).

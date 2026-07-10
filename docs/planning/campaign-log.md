@@ -193,6 +193,35 @@ report produced 3 `<table>`, 0 raw pipe paragraphs.
 **Reviews.** (filled at Step 11) Lane: small-standard. 9 renderer tests (red 5-failed
 evidence) + 3 drift guards. Suite 2544+1skip → 2556+1skip.
 
+**PR.** *(backfilled by #344's pass)* PR #367 squash-merged `912a629`, all 4 CI checks
+green.
+
+### #344 — visual design language + per-artifact-type templates · v3.32.0
+
+**Issue.** #344 (feature, epic #333 child 8/10, depends on #343): six artifact surfaces
+funnel through a renderer with two styles and a minimal markdown subset — artifacts
+looked inconsistent and each skill invented its own document structure.
+
+**What shipped.** Seven-template registry in `hooks/render_artifact.py` (plain, roadmap,
+report, design, dashboard, review, spec): one shared escape-first block renderer,
+per-template CSS layers over a component stylesheet (score chips, severity badges,
+RFC-2119 requirement badges — light+dark), `tpl-<name>` body classes, narrow
+inline-stage decorators (code-span-skipping, hard-break-bridging). Paragraphs gained
+standard soft-wrap semantics (multi-line bold fixed, two-space hard breaks, CR
+normalization). `design_artifact_style`: full vocabulary, absent→design, invalid→plain
++warning, never-raises hardened. `docs/design-language.md` + byte-reproducible exemplar;
+five in-repo surfaces name their template with drift-guarded canonical sentences
+(WF3's missing style resolution fixed — the WF2/WF3 asymmetry). Workspace
+design-doc-publish updated in place (stated gap: outside the repo, no CI guard).
+
+**Reviews.** Full spine. Step 4: 2 adversarial passes (9 High/Medium pass 1 → design
+loop-back consumed → 7 Medium pass 2, dispositioned). Step 6 adversarial-on-plan:
+6 Medium dispositioned. 8a on both high-risk tasks: 3 Low applied (CRLF, MUST-NOT
+bridge, unknown-style warning). Step 11 (3 agents + adversarial diff): 4 fixed incl.
+a confirmed never-raises violation (non-list `projects` TypeError), 1 refuted
+(CSP-inline claim vs the established no-external-hosts contract). Loop-backs 1/3.
+Suite 2556+1skip → 2611+1skip.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---

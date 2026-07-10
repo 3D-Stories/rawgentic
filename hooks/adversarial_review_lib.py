@@ -287,7 +287,10 @@ def design_artifact_shared_doc(workspace_path: str, project_name: str):
         return None
     if not isinstance(data, dict):
         return None
-    for proj in data.get("projects", []) or []:
+    projects = data.get("projects")
+    if not isinstance(projects, list):
+        return None
+    for proj in projects:
         if isinstance(proj, dict) and proj.get("name") == project_name:
             block = proj.get("designArtifact")
             if not isinstance(block, dict):
@@ -309,29 +312,82 @@ def design_artifact_shared_doc(workspace_path: str, project_name: str):
     return None
 
 
-def design_artifact_style(workspace_path: str, project_name: str) -> str:
-    """Return the project's `designArtifact.style` (#199): `"roadmap"` or `"plain"`.
+# Literal template-name vocabulary, used ONLY when render_artifact cannot be
+# imported (see design_artifact_style). Drift-guarded to equal
+# tuple(render_artifact._TEMPLATES) by test_artifact_lifecycle.py.
+_FALLBACK_TEMPLATE_STYLES: Final = (
+    "plain", "roadmap", "report", "design", "dashboard", "review", "spec")
 
-    `roadmap` renders h2 sections as dashboard-style bubble cards with completion
-    chips (render_artifact `--style roadmap`); `plain` (the default) is the
-    byte-identical document style. Fail-safe to `"plain"` on ANY problem (missing
-    file/project/block, malformed JSON, unknown value) — a bad config never
-    silently changes rendering. Never raises.
+
+def design_artifact_style(workspace_path: str, project_name: str) -> str:
+    """Return the project's `designArtifact.style` (#199, vocabulary expanded #344).
+
+    Valid values are the render_artifact `--style` template names (plain, roadmap,
+    report, design, dashboard, review, spec); the configured value is returned
+    verbatim. Absent-vs-invalid semantics (#344):
+
+    - Key ABSENT (config read OK, project present, no designArtifact block or no
+      `style` key) → `"design"` SILENTLY — the documented default for design
+      artifacts (changed from the pre-#344 `"plain"`).
+    - Config UNREADABLE/MALFORMED (missing file, JSON parse error, non-dict shape,
+      project entry not found) → `"design"` PLUS a stderr warning (an operational
+      failure must be visible).
+    - Key PRESENT and VALID → returned verbatim.
+    - Key PRESENT and INVALID (not a known template name) → `"plain"` (conservative
+      fail-safe) PLUS a stderr warning naming the rejected value.
+
+    Never raises.
     """
+    try:
+        from render_artifact import _TEMPLATES  # noqa: PLC0415  (lazy: avoid import cost/cycle)
+        valid = tuple(_TEMPLATES)
+    except ModuleNotFoundError as e:
+        if e.name != "render_artifact":
+            raise
+        valid = _FALLBACK_TEMPLATE_STYLES
+        print("adversarial_review_lib: render_artifact unavailable; using literal "
+              "template-name fallback for design_artifact_style", file=sys.stderr)
+
     try:
         with open(workspace_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, ValueError):
-        return "plain"
+    except (OSError, ValueError) as e:
+        print(f"adversarial_review_lib: cannot read workspace config {workspace_path!r} "
+              f"({e}); defaulting design_artifact_style to 'design'", file=sys.stderr)
+        return "design"
     if not isinstance(data, dict):
-        return "plain"
-    for proj in data.get("projects", []) or []:
+        print(f"adversarial_review_lib: workspace config {workspace_path!r} is not a "
+              "JSON object; defaulting design_artifact_style to 'design'", file=sys.stderr)
+        return "design"
+    projects = data.get("projects")
+    if not isinstance(projects, list):
+        # e.g. {"projects": 1} — malformed shape must not raise (never-raises contract)
+        print(f"adversarial_review_lib: workspace config {workspace_path!r} has a "
+              "non-list 'projects'; defaulting design_artifact_style to 'design'",
+              file=sys.stderr)
+        return "design"
+    for proj in projects:
         if isinstance(proj, dict) and proj.get("name") == project_name:
             block = proj.get("designArtifact")
-            if isinstance(block, dict) and block.get("style") == "roadmap":
-                return "roadmap"
+            if block is None:
+                return "design"  # no designArtifact block — silent default
+            if not isinstance(block, dict):
+                print(f"adversarial_review_lib: designArtifact for {project_name!r} is "
+                      "not an object; defaulting design_artifact_style to 'design'",
+                      file=sys.stderr)
+                return "design"
+            style = block.get("style")
+            if style is None:
+                return "design"  # no style key — silent default
+            if style in valid:
+                return style
+            print(f"adversarial_review_lib: unknown designArtifact.style {style!r} for "
+                  f"{project_name!r}; falling back to 'plain'", file=sys.stderr)
             return "plain"
-    return "plain"
+    print(f"adversarial_review_lib: project {project_name!r} not found in workspace "
+          f"config {workspace_path!r}; defaulting design_artifact_style to 'design'",
+          file=sys.stderr)
+    return "design"
 
 
 # ============================================================================

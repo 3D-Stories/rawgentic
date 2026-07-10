@@ -730,6 +730,28 @@ class TestDelegatedReads:
             "post-creation asserts")
 
 
+# --- #344 Task 5: Step 12 design-artifact style-resolution vocabulary ---
+
+class TestDesignArtifactStyleVocabulary:
+    """Drift guard for the #344 Step 12/2b style-resolution contract. When the
+    design-artifact template vocabulary expanded (plain-only default → the full
+    seven-template set defaulting to `design`), the WF2 render prose had to state
+    the new contract. Content pin on the implement-feature corpus (the sentence
+    lives in references/steps.md), whitespace-normalized (prose hard-wraps)."""
+
+    CANONICAL = (
+        "Design artifacts render with the template resolved by "
+        "`design_artifact_style` — the full design-language vocabulary, "
+        "defaulting to `design` when the config sets no style."
+    )
+
+    def test_style_resolution_canonical_sentence_present(self):
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        assert self.CANONICAL in corpus, (
+            "the #344 Step 12 design-artifact style-resolution sentence must be "
+            "present in the implement-feature corpus")
+
+
 # --- #330: canonical DISPATCH completion-time audit-line grammar ---
 
 class TestDispatchGrammar:
