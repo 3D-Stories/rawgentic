@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #340</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 00:33 MDT</div>
+<h1>WF14 run-feedback — WF2 #340</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #340 (gate counting + reviewer_kind)</h1>
+<p>Assessed under <strong>rubric v1</strong> (2026-07-09, #337). Assessor session d3d189d8 (bound saystory; report path-bound to the rawgentic root per WF14 contract). Run under assessment: WF2 #340 → PR #353 (merged 5cd28b4), epic #333 auto-run child 5/10, small-standard lane, plugin <strong>3.29.0</strong> (record <code>workflow_version</code>); defects verified on main @ <strong>3.30.0</strong>.</p>
+<p><strong>Mode: full</strong> · Record: <code>latest</code> = <code>docs/measurements/run_records.jsonl</code> line 86 — provenance sanity-check PASSED (workflow/issue/date match session-note markers; the assessing session is a different session, but the shared workspace <code>claude_docs/session_notes.md</code> carries the run&#x27;s full keyed marker trail, lines 4199–4351).</p>
+<p>Meta note: #340 was itself filed by the previous WF14 run (assessment of #337). This report assesses the run that implemented it — the first record assembled under the #340 counting rules.</p>
+<h2>Evidence ledger (all quotes verbatim from workspace <code>claude_docs/session_notes.md</code>)</h2>
+<p>| # | Fact | Tag | Evidence |</p>
+<p>|---|---|---|---|</p>
+<p>| E1 | All mandatory steps ran | confirmed | <code>### WF2 Step N … — DONE (#340: …)</code> markers at lines 4206, 4225, 4253, 4255, 4257, 4259, 4305, 4318, 4333, 4339, 4342, 4346, 4348, 4349, 4351 |</p>
+<p>| E2 | Step 6 skip justified | confirmed | line 4258 <code>### WF2 Step 6: Plan Drift — SKIPPED (#340: small-standard lane)</code> |</p>
+<p>| E3 | Step 4 adversarial skip justified | confirmed | line 4254 <code>— Adversarial Review (#340, skipped): lane run — adversarial-on-design not applicable</code> |</p>
+<p>| E4 | Design gate caught real defects | confirmed | line 4247: F1 High &quot;WF3 §14 gates DUPLICATED inline&quot;, F2 High &quot;existing mapping contradicts the new precedence rule&quot;, F3 Med &quot;dispatches[]-visibility premise WRONG: 0 codex entries&quot; |</p>
+<p>| E5 | 8a caught a real High | confirmed | line 4276: &quot;R2 1H@0.8 [rule landed where per-finding input no longer exists — fixed: compute-at-gate-close + persist]&quot; |</p>
+<p>| E6 | Step 11 caught a High + a factual Med | confirmed | line 4338: &quot;A1 High [disposition-alias &#x27;unless it cites evidence&#x27; reopened closed set — CLOSED]&quot;; &quot;R1 opus 1 Med confirmed [changelog said 8 new tests, truth 6 — fixed]&quot; |</p>
+<p>| E7 | One implementation dispatch died and was retried | confirmed | lines 4268/4277: <code>DISPATCH issue=340 … outcome=dead resolution=primary</code> then <code>outcome=retried</code>; line 4275 &quot;impl task 1 (opus, retry after limit-kill)&quot; |</p>
+<p>| E8 | 8 dispatches evidenced | confirmed | 8 keyed <code>DISPATCH issue=340</code> lines (4250, 4251, 4268, 4277, 4278, 4279, 4340, 4341); Step 16 marker (4351) &quot;8 dispatches assembled&quot; |</p>
+<p>| E9 | Record persisted 2 dispatches | confirmed | <code>run_records.jsonl</code> line 86: <code>dispatches</code> = 2 × <code>role=review, outcome=ok</code> |</p>
+<p>| E10 | Duplicate record line appended by second summarize, hand-discarded | confirmed | line 4349: &quot;discarded uncommitted DUPLICATE … jsonl line [second summarize appended dup @05:02:40 — committed 03:55:10 line canonical]&quot; |</p>
+<p>| E11 | Store has exactly 1 committed #340 line | confirmed | JSON audit: 87 lines, <code>issue.number==340</code> only at line 86 |</p>
+<p>| E12 | <code>persist_record</code> has no idempotency guard | confirmed | <code>hooks/work_summary.py:703-709</code> @ main 3.30.0 — unconditional <code>open(p, &quot;a&quot;)</code> + write |</p>
+<p>| E13 | Run spanned two sessions (first crashed) | confirmed | record <code>extra</code> &quot;run spanned two sessions (82e1cde5 crashed…)&quot;; Step 16 marker &quot;usage captured this-session-only&quot; |</p>
+<p>| E14 | Marker interleaving with concurrent runs | confirmed | <code>DISPATCH issue=340</code> line 4268 sits inside the sentinel #25 section — the exact contamination #341 (CLOSED, shipped) addresses; keyed tokens made attribution mechanical here |</p>
+<p>| E15 | Loop-back accounting | confirmed | record <code>loop_backs 1/3</code>; markers 4247 &quot;consume_loopback design #1 (total 1/3)&quot;, 4253 &quot;rev 2 after 1 loop-back&quot; — one loop-back, reported at both its consumption and its gate |</p>
+<h2>Dimension scores</h2>
+<p>1. <strong>Fidelity 5/5</strong> — every mandatory marker present (E1); both skips quote their met condition (E2, E3); Step 15 skip consistent with <code>deploy: not_applicable</code>.</p>
+<p>2. <strong>Gate value 5/5</strong> — ≥3 named real catches with finding text quoted (E4, E5, E6). Best: design pass-1 F3 killed a wrong premise (the design assumed codex runs appear in <code>dispatches[]</code>; evidence showed 0 across all epic records) before any code was written.</p>
+<p>3. <strong>Clarity 4/5</strong> — no command failed as written; one improvisation: multi-session record assembly has no prescribed procedure — the orchestrator invented the honest-but-ad-hoc &quot;usage captured this-session-only&quot; note (E13). No skill sentence covers a crashed-session reassembly, so the honesty was orchestrator discipline, not machinery.</p>
+<p>4. <strong>Dispatch 3/5</strong> — one implementer died on a session limit-kill and was visibly retried per the documented fallback, with honest <code>dead</code>/<code>retried</code> DISPATCH lines (E7). Not higher: a dispatch died; not lower: nothing vacuous was trusted.</p>
+<p>5. <strong>Telemetry 2/5</strong> — one persisted field contradicts session evidence: <code>dispatches[]</code> = 2 vs 8 evidenced, and the dropped entries are precisely the <code>dead</code>/<code>retried</code> pair (E8, E9) → <strong>mismatch</strong>. A second summarize also appended a duplicate line requiring manual discard (E10, E12). Everything else audits clean (table below), and the record self-declares its usage limitation — hence 2, not 1.</p>
+<p>6. <strong>Cost 4/5</strong> — lane skips demonstrably applied (E2; no 8a on tasks 2–3 per lane contract, line 4297). Heaviest-least-value step: 8a R1 on task 1 — &quot;NO FINDINGS 6/6 checks&quot; (line 4276) while R2 caught the High. Usage $28.28 / 58.4M input tokens is heavy for a 20-file telemetry change but spanned a crash-restart; attribution is session-level (known-limitation) so no cost defect claimable.</p>
+<h2>Telemetry audit (record line 86 vs session evidence)</h2>
+<p>| field | recorded_value | session_evidence | verdict | impact | routing |</p>
+<p>|---|---|---|---|---|---|</p>
+<p>| workflow / workflow_version | implement-feature / 3.29.0 | WF2 markers; cache 3.29.0 loaded | match | — | — |</p>
+<p>| issue | 340 / feature / standard | markers E1; lane markers | match | — | — |</p>
+<p>| changes | 20 files, 7 commits, +882/−14 | commits listed line 4305 + fix commits 4f02142, T3 | unverifiable (diff not re-derived) | low | none — not re-derived; PR merged, counts plausible |</p>
+<p>| tests | added 6, passing 2540, total 2541 | Step 11 &quot;suite 2540p/1s post-fix&quot;; R1 Med corrected 8→6 (E6) | match | — | note: record reflects the post-review corrected count — the gate fixed the record&#x27;s input |</p>
+<p>| gates[] step 4 | findings 9 resolved 9, inline | pass1 F1–F8 (8) + pass2 1 new Low = 9 unique, all terminal (4247-4248) | match | — | first record under the #340 unique-across-passes rule — rule works |</p>
+<p>| gates[] step 8a | 5/5 hand_rolled_multi | 4276 detail lists &quot;1H + 1M aliases + 2L&quot; = 4 unique; recorded 5 | unverifiable | low | pass-detail line may omit one finding; not claimable as mismatch from the marker alone |</p>
+<p>| gates[] step 11 | 4/3 hand_rolled_multi | R1 1 Med + A1 High + A2 Med + A3 Low = 4; resolved 3, A3 = tracked deferral to #343 (E6, 4338) | match | — | honest unresolved-deferral accounting |</p>
+<p>| loop_backs | 1/3 | E15 | match | — | — |</p>
+<p>| outcome | PR #353 merged, ci passed | 4346-4349 | match | — | — |</p>
+<p>| security_scan | ran, 0/0, skipped iac+sca | 4342 | match | — | — |</p>
+<p>| usage | 58.4M in / 221k out / $28.28, captured | E13 — this-session-only, prior session crashed | known-limitation | med | standing weak spot (session-level attribution); record self-declares |</p>
+<p>| reviewer_kind | 4=inline, 8a/11=hand_rolled_multi | dispatch lines: opus reviewers at 8a+11; design gate inline-orchestrated | match | — | first record under #340 precedence rule — rule works |</p>
+<p>| dispatches[] | 2 entries, both review/ok | 8 keyed lines incl. dead+retried implementer (E7, E8) | <strong>mismatch</strong> | <strong>high</strong> — false-clean dispatch history hides a died-and-retried implementer | <strong>filed #356</strong> |</p>
+<p>| (store behavior) | 1 committed line | duplicate appended by 2nd summarize, hand-discarded (E10) | mismatch (store lane) | med — silent double-record on any Step-16 re-run | <strong>filed #355</strong> |</p>
+<p>Verdict counts: match 8 · mismatch 2 · unverifiable 2 · known-limitation 1 · missing-in-record 0 · missing-in-session 0.</p>
+<h2>Findings and classification</h2>
+<p>| Finding | Class | Routing |</p>
+<p>|---|---|---|</p>
+<p>| <code>dispatches[]</code> persisted 2/8; dead/retried implementer pair dropped; no truncation flag while marker claims 8 | PLUGIN DEFECT (telemetry lane) | filed <strong>#356</strong> (bug, framework, wf-feedback) |</p>
+<p>| <code>persist_record</code> blind append — re-summarize duplicates record lines; recovery was manual eyeballing | PLUGIN DEFECT (telemetry lane) | filed <strong>#355</strong> (bug, framework, wf-feedback) |</p>
+<p>| Marker interleaving across 3 concurrent runs in shared notes (E14) | WORKING AS DESIGNED post-#341 (keyed tokens attributed mechanically) | linked, not refiled — #341 CLOSED |</p>
+<p>| No prescribed multi-session record-assembly procedure (crashed-session seam) | PLUGIN FRICTION (borderline) | <strong>not memorized</strong> — the concrete failure it produced is exactly #356&#x27;s subject; a separate friction memory would duplicate the issue. Dropped with this reason |</p>
+<p>| 8a R1 zero-findings pass (cost) | WORKING AS DESIGNED (multi-reviewer redundancy is the design; R2 caught the High the same pass) | none |</p>
+<p>| Usage session-level attribution | known-limitation (standing weak spot) | none — rubric standing item |</p>
+<p>Cap accounting: 2 of 3 filed; 0 findings beyond cap.</p>
+<h2>Claims intentionally not made</h2>
+<ul>
+<li><code>changes</code> counts not re-derived from the merged diff (unverifiable, low impact).</li>
+<li>Step-8a gate count (5 vs 4 in the marker detail) left <code>unverifiable</code> — the marker may compress a finding; refiling on marker-prose alone would be noise.</li>
+<li>No per-run cost claim beyond the recorded session-level figure.</li>
+</ul>
+<h2>Routing summary</h2>
+<ul>
+<li><strong>#355</strong> — fix(telemetry): persist_record blind-appends — re-summarize duplicates run-record lines, recovery is manual</li>
+<li><strong>#356</strong> — fix(telemetry): dispatches[] loses cross-session entries — #340 record persisted 2 of 8, dead-dispatch evidence dropped</li>
+<li>Friction memory: skipped with reason (see table) — mempalace was available (verified writable this session); the skip is a dedup decision, not an availability failure.</li>
+<li>Both issues cross-linked to the #329/#330 lineage in their bodies; epic #333 conventions followed.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-10 00:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

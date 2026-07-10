@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #337</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 13:33 MDT</div>
+<h1>WF14 run-feedback — WF2 #337</h1>
+<p class="sub">Post-run workflow self-assessment (rubric v1) — first dogfood</p>
+</header>
+<main>
+<h1>WF14 Run-Feedback — WF2 #337 (PR #339) · rubric v1</h1>
+<h2>At a glance</h2>
+<p><strong>The workflow ran faithfully and its gates caught three real defects — but the telemetry it recorded about itself has two honest mismatches, and the design gate spent the entire loop-back budget before a line of code was written.</strong></p>
+<ul>
+<li><strong>Step fidelity 5/5</strong> — every mandatory step ran; every skip quotes its condition</li>
+<li><strong>Gate value 5/5</strong> — three named real catches; none of the gates were ceremony</li>
+<li><strong>Prose clarity 4/5</strong> — two spots needed interpretation (sidecar path, stale line pointer)</li>
+<li><strong>Dispatch reliability 5/5</strong> — 15 dispatches, zero vacuous, zero substitutions</li>
+<li><strong>Telemetry honesty 2/5</strong> — record valid on first try, but 2 fields don&#x27;t survive audit</li>
+<li><strong>Cost sanity 3/5</strong> — full spine justified by ACs; design-gate pass 3 was the low-value heavyweight</li>
+</ul>
+<p><strong>Best catch:</strong> the design gate found that an &quot;empty skeletal&quot; diagram entry would crash the SPA tab on click — caught before it shipped, now a committed guard test.</p>
+<p><strong>Worst friction:</strong> the run-record schema has no rule for counting findings on a multi-pass gate, so the number recorded was an eyeball.</p>
+<p><strong>Routed:</strong> 3 issues filed — #340 (telemetry counting), #341 (issue-keyed markers), #342 (doc-rot batch) · 1 friction memory saved · not a clean run.</p>
+<h2>Run facts</h2>
+<ul>
+<li>Assessed run: WF2 implement-feature · issue #337 · PR #339 · lane <strong>full</strong> · 2026-07-09</li>
+<li>Plugin cache the run loaded: <strong>3.24.26</strong> (confirmed: the skill invocation&#x27;s base dir) · current main: 3.25.0 (<code>70b906f</code>)</li>
+<li>Mode: <strong>full</strong> · Record: <code>latest</code> — tail line of <code>docs/measurements/run_records.jsonl</code>; <code>validate_record(strict=True)</code> returned no errors; provenance sanity-check (workflow/issue/PR vs session evidence): confirmed</li>
+</ul>
+<blockquote><strong>Bias caveat (stated, not waived):</strong> the assessor is the same orchestrator that ran the assessed WF2. Scores lean on mechanical evidence (markers with line numbers, runner output, counters file) rather than recollection; the two telemetry mismatches below are self-reported orchestrator errors.</blockquote>
+<h2>Evidence ledger (summary)</h2>
+<p>All 16 mandatory/conditional step markers for the #337 run were located in <code>claude_docs/session_notes.md</code> (lines ~3390–3520), each disambiguated by content — <strong>necessary because the shared notes file interleaves THREE concurrent runs</strong> (this #337 run; a sentinel #13 run with PR #14; a saystory-area run with PRs #142/#143) and most <code>### WF2 Step N</code> markers carry no issue key (Finding F-2).</p>
+<p>Confirmed facts (each with its evidence):</p>
+<ul>
+<li>All mandatory steps ran (1, 2, 3, 4, 5, 7, 8, 9, 11, 11.5, 12, 16) — markers <code>### WF2 Step N: … — DONE</code> with #337-keyed detail</li>
+<li>Skips justified — 8a: &quot;0 high-risk tasks&quot;; 14: &quot;no user merge request&quot;; 15: &quot;no deployment occurred&quot;</li>
+<li>Adversarial diff review 4-state marker present — <code>skipped (no security surface) — should_run_diff_review(True, 20 paths, False)</code></li>
+<li>Suite baseline→end 2418+1skip → 2435+1skip, 0 failing — runner final lines quoted at Steps 2/9/11</li>
+<li>Loop-backs 3/3 (design 2 + spec_tighten 1) — <code>claude_docs/.wf2-state/337/loopback_counters.json</code></li>
+<li>CI 4/4 lanes green on PR #339 — <code>gh pr checks</code> output at Step 13</li>
+<li>Goal guard set — Stop-hook activation + Step 1b marker</li>
+</ul>
+<p>Unverifiable per-run: cost attribution (usage is whole-session — known limitation).</p>
+<h2>Dimension detail</h2>
+<p><strong>Fidelity 5/5.</strong> Every mandatory marker present; every skip quotes its met condition.</p>
+<p><strong>Gates 5/5.</strong> Named real catches: (1) design-gate pass 1 caught the wf14-empty-skeletal SPA-crash class (reviewer traced the renderer JS; became the committed DATA-shape guard); (2) the whole-suite gate caught a 4th <code>&quot;6 SDLC workflow skills&quot;</code> pin (<code>tests/test_interview_skill.py:65</code>) that BOTH Step-2 analysis agents and the add-skill checklist missed; (3) Step-11 reviewer 3 caught the clipped README snapshots (1440×1200 viewport vs required full-page 1440×2981).</p>
+<p><strong>Clarity 4/5.</strong> Executable throughout; two interpreted points: (a) <code>adversarial_review_lib.py review --findings-json</code> requires an under-project-root sidecar — lib-enforced, but WF2 Step-4 item-7 prose never states it (one failed dispatch, exit 2 &quot;sidecar path escapes project root&quot;); (b) repo CLAUDE.md mistake #2 cites <code>test_headless.py:1348</code>, live location <code>:1306</code> (stale pointer, cost a reviewer detour).</p>
+<p><strong>Dispatch 5/5.</strong> All agent dispatches resolved first-try, non-vacuous, models as routed (analysis=sonnet ×3, review=opus ×7, codex ×5, all exit 0). The one retry was the sidecar-path command error, not an agent failure.</p>
+<p><strong>Telemetry 2/5.</strong> Record valid on first summarize (rc=0), but the audit finds two genuine mismatches (gate-count derivability; reviewer_kind mapping).</p>
+<p><strong>Cost 3/5.</strong> Proportional overall given issue-L + AC5 (user elected the full spine over the mechanically-eligible lane — AC5 requires peer consult + adversarial design gate, which the lane drops). Heaviest-least-value step: <strong>design-gate pass 3</strong>, a full fresh adversarial review whose only High was a contradiction pass-2&#x27;s own edits introduced; the targeted delta-verifier gave the same assurance far cheaper. The 3-pass design gate consumed the ENTIRE global loop-back budget (3/3) before implementation began.</p>
+<h2>Telemetry audit — field by field</h2>
+<p>Verdicts use the canonical set: match | mismatch | missing-in-record | missing-in-session | unverifiable | known-limitation.</p>
+<p><strong>match (12 fields).</strong> <code>workflow</code>, <code>workflow_version</code> (3.25.0 = shipped version per schema; the cache that RAN was 3.24.26 — the schema field means shipped), <code>issue</code>, <code>changes</code> (23f/+1004/−22/8c vs captured shortstat), <code>tests</code> (17 added, 2435/2436 vs runner final line), <code>gates[6]</code> (6 dispositioned: 5 applied + 1 refuted-with-evidence), <code>gates[8a]</code>, <code>gates[9]</code>, <code>gates[11]</code>, <code>gates[15]</code>, <code>security_scan</code> (ran, skips [iac, sca] visible), <code>loop_backs</code> (3/3 vs counters file), <code>outcome.ci</code>/<code>pr</code>, <code>goal_guard</code> (set — note: the Stop-hook actually FIRED once mid-run, blocking a premature stop at the Step 7→8 seam; <code>fired</code> would be the truer value but is manual-only per the schema&#x27;s own named limitation).</p>
+<p><strong>mismatch (2).</strong></p>
+<ul>
+<li><code>gates[4].findings/resolved</code> recorded 14/14 — session evidence: pass-1 8 merged, pass-2 6 (1 dup), pass-3 8 raw ≈ 19–22 raw; 14 is not derivable under any stated counting rule. Impact: trend data understates gate volume. → Finding F-1, filed as #340.</li>
+<li><code>gates[4].reviewer_kind</code> recorded <code>codex</code> — the documented mapping says Step-4 self-review → <code>inline</code>; codex is the adversarial layer; one slot cannot carry both. → merged into #340.</li>
+</ul>
+<p><strong>missing-in-record (1).</strong> <code>dispatches[]</code> absent while session evidence shows ≥15 dispatches — the field hasn&#x27;t landed (#329/#330 open); linked, NOT refiled.</p>
+<p><strong>known-limitation (2).</strong> <code>usage</code> (whole-session tokens, values internally plausible — standing weak spot); <code>outcome.merged: false</code> (snapshot-at-persist; the PR merged after the record was written — store-lag-known semantics).</p>
+<p>Improvements not filed, with reasons: <code>outcome.merged</code> staleness — working-as-designed snapshot semantics with an existing <code>chore(telemetry)</code> backfill lane; <code>goal_guard: fired</code> under-capture — already a named schema limitation (run-record.md, &quot;MANUAL-ONLY … aspirational&quot;).</p>
+<h2>Findings (classified)</h2>
+<ul>
+<li><strong>F-1 · orchestrator-error (plugin-friction rider) · telemetry lane → FILED #340.</strong> gates[4] recorded 14/14 by eyeball; no counting rule exists for multi-pass gates, nor a <code>reviewer_kind</code> convention for merged self-review+adversarial gates. The error is the orchestrator&#x27;s; the schema&#x27;s silence invited it (inviting text: run-record.md <code>&quot;findings&quot;: N, &quot;resolved&quot;: N</code>).</li>
+<li><strong>F-2 · plugin-friction (defect-adjacent for WF14/resume) → FILED #341.</strong> Most <code>### WF2 Step N</code> markers carry no issue key; three concurrent runs interleaved in the shared session-notes file today. WF14&#x27;s Step-1 gather and the resume protocol&#x27;s markers-complete grep can mis-attribute markers across runs.</li>
+<li><strong>F-3 · plugin-friction (doc-rot batch) → FILED #342.</strong> Stale <code>test_headless.py:1348</code> pointer (live <code>:1306</code>); <code>load_adversarial_review_config</code> docstring omits the live <code>runFeedback</code> key; codex <code>longDescription</code> count un-guarded. All verified on main <code>70b906f</code>.</li>
+<li><strong>F-4 · plugin-friction → friction memory.</strong> WF2 Step-4 item-7 prose omits the findings-json under-project-root constraint the lib enforces (one failed dispatch this run).</li>
+<li><strong>F-5 · working-as-designed.</strong> Global loop-back cap (3) binding before per-source caps let the design gate exhaust the whole budget pre-implementation — a pinned, documented trade-off. Surprising, correct, no action (already memorized at Step 10).</li>
+</ul>
+<h2>Fixed summary block</h2>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.24.26 (issue #337, PR #339, lane full) · rubric v1
+Fidelity 5/5 · Gates 5/5 · Clarity 4/5 · Dispatch 5/5 · Telemetry 2/5 · Cost 3/5
+Mode: full · Record: latest (validated)
+Best catch: wf14 empty-skeletal SPA-crash class (design gate pass 1 → committed DATA-shape guard)
+Worst friction: run-record gates[] has no multi-pass counting rule — references/run-record.md (&quot;findings&quot;: N)
+Telemetry verdicts: match 12 · mismatch 2 · missing-in-record 1 · missing-in-session 0 · unverifiable 0 · known-limitation 2
+Defects filed: #342 | Telemetry filed: #340, #341 | Not filed (cap): 0 | Friction memorized: drawer_rawgentic_process-conventions_fb032078851501f4f034404d (saved, id-verified) | Clean run: no
+Report: docs/reviews/run-feedback-wf2-337-2026-07-09.md
+Inferred (unconfirmed) claims: per-run cost share of the $50.15 session figure; goal-guard fired-count (manual-only)</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-09 13:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
