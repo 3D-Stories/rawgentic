@@ -227,29 +227,34 @@ class TestDispatchGrammar:
 
     def test_wf3_per_invocation_emission_rule_present(self):
         """#330 8a hardening: two review agents must mean two DISPATCH lines.
-        #331 qualifies this at a single tier — a slot that falls back adds the
-        abandoned tier's terminal line."""
+        #331 (Step 11 refinement) splits descent emission by trigger — a
+        runtime-error descent adds the abandoned tier's terminal line; a
+        resolve-failure descent adds none (an unresolvable tier never ran)."""
         corpus = " ".join(skill_corpus("fix-bug").split())
         rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
                 "— WF3 Step 9's two review agents = two lines at a single "
-                "tier; a slot that falls back adds the abandoned tier's "
-                "terminal line.")
+                "tier; a slot that descends on a RUNTIME ERROR adds the "
+                "abandoned tier's terminal line, while a resolve-failure "
+                "descent adds none (an unresolvable tier never ran).")
         assert rule in corpus, (
             "the WF3 per-invocation DISPATCH emission rule must be present in "
-            "the fix-bug corpus, qualified at a single tier per #331")
+            "the fix-bug corpus, split by descent trigger per #331")
 
-    def test_wf3_fallback_qualifier_phrase_present(self):
-        """#331: pin the qualifier phrase itself, not just the pre-#331 "two
-        lines" substring — that old substring survives an appended qualifier,
-        so re-asserting it alone would never go red against pre-edit prose."""
+    def test_wf3_descent_trigger_split_present(self):
+        """#331 Step 11 refinement: a resolve-failure descent must never
+        fabricate an 'attempted and errored' audit line for a tier that never
+        ran; the runtime-error descent carries the abandoned tier's OWN
+        resolution value. Pins the load-bearing clauses of the split rule."""
         corpus = " ".join(skill_corpus("fix-bug").split())
-        qualifier = (
-            "WF3 Step 9's two review agents = two lines at a single tier; "
-            "a slot that falls back adds the abandoned tier's terminal line."
-        )
-        assert qualifier in corpus, (
-            "the WF3 Step 9 fallback qualifier sentence must be present in "
-            "the fix-bug corpus (#331)")
+        assert ("a RESOLVE-FAILURE descent (the tier's agent type is not "
+                "installed / does not resolve) emits NO line for the "
+                "unresolved tier") in corpus, (
+            "the resolve-failure no-line clause must be present (#331)")
+        assert ("the abandoned tier's terminal line with `outcome=error` and "
+                "THAT TIER's own resolution value (tier 1 → "
+                "`resolution=primary`, tier 2 → `resolution=fallback`)") in corpus, (
+            "the runtime-error two-line clause with per-tier resolution "
+            "values must be present (#331)")
 
 
 # --- #330: dispatches[] assembly instruction at WF3 Step 14 ---
