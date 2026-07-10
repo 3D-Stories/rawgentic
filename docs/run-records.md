@@ -87,8 +87,8 @@ completion step points there too).
   codex. A fully-skipped gate omits `reviewer_kind` entirely.
 
 Historical records assembled before #340 remain valid — the rules govern
-assembly going forward; WF14's telemetry audit flags legacy per-pass sums as
-`known-limitation`, not defects.
+assembly going forward; WF14's telemetry audit flags legacy per-pass sums AND
+legacy additive-layer `reviewer_kind` values as `known-limitation`, not defects.
 
 ## The store
 

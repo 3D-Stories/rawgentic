@@ -122,7 +122,9 @@ Standing known-weak spots — check these EVERY run:
 - **reviewer_kind fidelity**: does the recorded reviewer kind match the reviewers the
   session actually dispatched — judged against the #340 merged-gate precedence rule
   (the gate-DEFINING mechanism)? A merged gate recording the additive adversarial
-  layer's kind instead of the gate-defining mechanism is a `mismatch`.
+  layer's kind instead of the gate-defining mechanism is a `mismatch` — for records
+  assembled under #340; a pre-#340 record's additive-layer value is
+  `known-limitation`, same as legacy per-pass sums.
 - **gate-count honesty**: do `gates[]` findings/resolved counts match the markers,
   judged against the #340 counting rule (unique findings across all passes;
   `resolved` = terminal final disposition at gate close)? Per-pass sums recorded as

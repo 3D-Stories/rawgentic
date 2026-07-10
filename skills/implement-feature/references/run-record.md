@@ -90,7 +90,8 @@ with an `extra` note naming the gap rather than presenting it as deduped. Dispos
 (the phrases session evidence actually uses): "resolved-in-gate" = fixed-in-gate;
 "subsumed" = identity-merged into another finding (not a separate finding at all);
 "accepted-as-tightening" / "satisfied-by-verification" = applied-class terminal;
-any phrase outside this closed set is UNRESOLVED unless it cites evidence.
+any phrase outside this closed set is UNRESOLVED — the set never reopens; the only
+evidence-based terminal disposition is "refuted with cited evidence" itself.
 
 **`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
 `"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`
