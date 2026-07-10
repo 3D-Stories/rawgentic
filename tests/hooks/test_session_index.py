@@ -428,3 +428,72 @@ class TestStatusCLI:
         make_corpus(corpus, "-proj-alpha", "sessNEW", [msg("new stuff")])
         run_cli("status", "--db", str(db), "--projects-dir", str(corpus))
         assert db.read_bytes() == before
+
+
+# ----------------------------------------------------- Step 8a finding tests
+
+class TestIndexGuards:
+    def test_missing_projects_dir_exit_2_no_prune(self, env, tmp_path):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        r = run_cli("index", "--projects-dir", str(tmp_path / "typo-nope"),
+                    "--db", str(db))
+        assert r.returncode == 2
+        assert "projects" in r.stderr.lower()
+        con = sqlite3.connect(db)
+        assert con.execute("SELECT count(*) FROM messages").fetchone()[0] == 3
+
+    def test_mass_vanish_refused(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        for f in corpus.glob("*/*.jsonl"):
+            f.unlink()
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 2
+        assert "vanish" in r.stderr.lower()
+        con = sqlite3.connect(db)
+        assert con.execute("SELECT count(*) FROM messages").fetchone()[0] == 3
+        r2 = run_cli("index", "--projects-dir", str(corpus), "--db", str(db),
+                     "--rebuild")
+        assert r2.returncode == 0
+        con2 = sqlite3.connect(db)
+        assert con2.execute("SELECT count(*) FROM messages").fetchone()[0] == 0
+
+    def test_lone_surrogate_fails_soft(self, env, tmp_path):
+        corpus, db = env
+        make_corpus(corpus, "-proj-alpha", "surr", [
+            msg("good line before"),
+            json.dumps({"type": "user", "sessionId": "s-9",
+                        "timestamp": REAL_TS, "uuid": "u-9",
+                        "message": {"role": "user",
+                                    "content": "bad \ud800 text"}}),
+            msg("good line after", sid="s-9"),
+        ])
+        r = run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert r.returncode == 0, r.stderr
+        assert "Traceback" not in r.stderr
+        rj = run_cli("search", "good line", "--db", str(db), "--json",
+                     "--literal")
+        # both good lines indexed; surrogate line stored sanitized or rejected
+        assert len(json.loads(rj.stdout)["results"]) == 2
+
+    def test_bad_date_filter_exit_2(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        for flag in ("--since", "--until"):
+            r = run_cli("search", "fox", "--db", str(db), flag, "2026-13-45")
+            assert r.returncode == 2, (flag, r.stdout)
+            assert "date" in r.stderr.lower()
+
+    def test_limit_must_be_positive(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        r = run_cli("search", "fox", "--db", str(db), "--limit", "-1")
+        assert r.returncode == 2
+
+    def test_existing_db_perms_retightened(self, env):
+        corpus, db = env
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        os.chmod(db, 0o644)
+        run_cli("index", "--projects-dir", str(corpus), "--db", str(db))
+        assert oct(db.stat().st_mode & 0o777) == "0o600"

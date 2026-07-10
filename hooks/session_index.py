@@ -107,6 +107,9 @@ def extract_message(obj):
     if not session_id or ts_us is None or not text:
         return REJECTED
     uuid = obj.get("uuid")
+    # JSON can carry lone-surrogate escapes (\udXXX) that SQLite cannot
+    # UTF-8-encode — sanitize so one weird message never aborts a run (AC3).
+    text = text.encode("utf-8", "replace").decode("utf-8")
     return ExtractedMsg(role=typ, text=text, session_id=session_id, ts=ts,
                         ts_us=ts_us, uuid=uuid if isinstance(uuid, str) else None)
 
@@ -217,8 +220,11 @@ def _open_writer(db_path: Path) -> sqlite3.Connection:
         raise SystemExit2(f"journal_mode is {mode!r}, not 'wal' — filesystem "
                           "may not support WAL; refusing to index")
     con.execute("PRAGMA busy_timeout=5000")
-    if not existed:
-        os.chmod(db_path, 0o600)
+    os.chmod(db_path, 0o600)  # unconditional — re-tighten pre-existing DBs
+    for sidecar in (f"{db_path}-wal", f"{db_path}-shm"):
+        if os.path.exists(sidecar):
+            os.chmod(sidecar, 0o600)
+    _ = existed
     return con
 
 
@@ -241,12 +247,11 @@ def _scan_corpus(projects_dir: Path) -> dict:
     return on_disk
 
 
-def _index_file(con, path: str, stat_pair) -> tuple:
-    """Replace one file's rows in one transaction. Returns per-file counts."""
-    p = Path(path)
+def _parse_file(path: str):
+    """Pure read pass: parse one JSONL file -> (counts, rows). No DB writes."""
     counts = {"message": 0, "malformed": 0, "ignored": 0, "rejected": 0}
     rows = []
-    with p.open(encoding="utf-8", errors="replace") as fh:
+    with Path(path).open(encoding="utf-8", errors="replace") as fh:
         for line_no, line in enumerate(fh, start=1):
             line = line.strip()
             if not line:
@@ -264,7 +269,12 @@ def _index_file(con, path: str, stat_pair) -> tuple:
             else:
                 counts["message"] += 1
                 rows.append((line_no, m))
-    project = p.parent.name
+    return counts, rows
+
+
+def _write_file_rows(con, path: str, stat_pair, counts, rows) -> None:
+    """Replace one file's rows in one transaction (write pass only)."""
+    project = Path(path).parent.name
     now = datetime.now(timezone.utc).isoformat()
     with con:  # one transaction per file
         old = con.execute("SELECT id FROM files WHERE path=?", (path,)).fetchone()
@@ -283,7 +293,6 @@ def _index_file(con, path: str, stat_pair) -> tuple:
             "project, role, uuid, text) VALUES (?,?,?,?,?,?,?,?,?)",
             [(file_id, ln, m.session_id, m.ts, m.ts_us, project, m.role,
               m.uuid, m.text) for ln, m in rows])
-    return counts
 
 
 def cmd_index(args) -> int:
@@ -292,85 +301,106 @@ def cmd_index(args) -> int:
     if err:
         raise SystemExit2(err)
     projects_dir = Path(args.projects_dir)
+    if not projects_dir.is_dir():
+        raise SystemExit2(f"projects dir not found or not a directory: "
+                          f"{projects_dir} — refusing to index (a wrong path "
+                          "would prune the whole store)")
 
     db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     lock_path = db_path.parent / (db_path.name + ".lock")
     lock = open(lock_path, "w", encoding="utf-8")
     os.chmod(lock_path, 0o600)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("another index run appears to be in progress "
-              f"(lock: {lock_path})", file=sys.stderr)
-        return 3
-
-    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("another index run appears to be in progress "
+                  f"(lock: {lock_path})", file=sys.stderr)
+            return 3
         fresh = not db_path.exists()
         con = _open_writer(db_path)
-        if fresh:
-            with con:
-                _create_schema(con)
-        elif args.rebuild:
-            with con:  # one transaction: readers see old or new, never partial
-                con.executescript(
-                    "DROP TRIGGER IF EXISTS messages_ai;"
-                    "DROP TRIGGER IF EXISTS messages_ad;"
-                    "DROP TRIGGER IF EXISTS messages_au;"
-                    "DROP TABLE IF EXISTS messages_fts;"
-                    "DROP TABLE IF EXISTS messages;"
-                    "DROP TABLE IF EXISTS files;"
-                    "DROP TABLE IF EXISTS meta;")
-                _create_schema(con)
-        else:
-            meta = _meta(con)
-            if (meta.get("schema_version") != str(SCHEMA_VERSION)
-                    or meta.get("parser_version") != str(PARSER_VERSION)):
-                print(f"index version mismatch (stored schema="
-                      f"{meta.get('schema_version')} parser="
-                      f"{meta.get('parser_version')}, code {SCHEMA_VERSION}/"
-                      f"{PARSER_VERSION}) — run `index --rebuild`",
-                      file=sys.stderr)
+        try:
+            if fresh:
+                with con:
+                    _create_schema(con)
+            elif args.rebuild:
+                with con:  # one txn: readers see old or new, never partial
+                    con.executescript(
+                        "DROP TRIGGER IF EXISTS messages_ai;"
+                        "DROP TRIGGER IF EXISTS messages_ad;"
+                        "DROP TRIGGER IF EXISTS messages_au;"
+                        "DROP TABLE IF EXISTS messages_fts;"
+                        "DROP TABLE IF EXISTS messages;"
+                        "DROP TABLE IF EXISTS files;"
+                        "DROP TABLE IF EXISTS meta;")
+                    _create_schema(con)
+            else:
+                meta = _meta(con)
+                if (meta.get("schema_version") != str(SCHEMA_VERSION)
+                        or meta.get("parser_version") != str(PARSER_VERSION)):
+                    print(f"index version mismatch (stored schema="
+                          f"{meta.get('schema_version')} parser="
+                          f"{meta.get('parser_version')}, code "
+                          f"{SCHEMA_VERSION}/{PARSER_VERSION}) — run "
+                          "`index --rebuild`", file=sys.stderr)
+                    return 2
+
+            stored = {r[0]: (r[1], r[2]) for r in con.execute(
+                "SELECT path, mtime_ns, size FROM files")}
+            on_disk = _scan_corpus(projects_dir)
+            if stored and not on_disk:
+                # A readable-but-empty scan of a previously populated corpus
+                # is an environment problem (unreadable dirs, wrong mount) far
+                # more often than "every session legitimately vanished".
+                print(f"refusing mass-vanish: index holds {len(stored)} files "
+                      f"but the corpus scan of {projects_dir} found none — "
+                      "check the path/permissions, or force with "
+                      "`index --rebuild`", file=sys.stderr)
                 return 2
+            plan = plan_changes(stored, on_disk)
 
-        stored = {r[0]: (r[1], r[2]) for r in con.execute(
-            "SELECT path, mtime_ns, size FROM files")}
-        plan = plan_changes(stored, _scan_corpus(projects_dir))
+            for path in plan.vanished:
+                with con:
+                    fid = con.execute("SELECT id FROM files WHERE path=?",
+                                      (path,)).fetchone()[0]
+                    con.execute("DELETE FROM messages WHERE file_id=?", (fid,))
+                    con.execute("DELETE FROM files WHERE id=?", (fid,))
 
-        for path in plan.vanished:
-            with con:
-                fid = con.execute("SELECT id FROM files WHERE path=?",
-                                  (path,)).fetchone()[0]
-                con.execute("DELETE FROM messages WHERE file_id=?", (fid,))
-                con.execute("DELETE FROM files WHERE id=?", (fid,))
-
-        totals = {"message": 0, "malformed": 0, "ignored": 0, "rejected": 0}
-        indexed_files = 0
-        for path in plan.dirty:
-            for _attempt in range(3):
-                try:
-                    st = Path(path).stat()
-                except OSError:
-                    print(f"warning: cannot stat {path}, skipping",
-                          file=sys.stderr)
-                    break
-                pair = (st.st_mtime_ns, st.st_size)
-                counts = _index_file(con, path, pair)
-                st2 = Path(path).stat()
-                if (st2.st_mtime_ns, st2.st_size) == pair:
+            totals = {"message": 0, "malformed": 0, "ignored": 0, "rejected": 0}
+            indexed_files = 0
+            for path in plan.dirty:
+                written = False
+                for _attempt in range(3):
+                    try:
+                        st = Path(path).stat()
+                        pair = (st.st_mtime_ns, st.st_size)
+                        counts, rows = _parse_file(path)  # pure read pass
+                        st2 = Path(path).stat()
+                    except OSError as e:
+                        print(f"warning: cannot read {path} ({e}), skipping",
+                              file=sys.stderr)
+                        break
+                    if (st2.st_mtime_ns, st2.st_size) != pair:
+                        continue  # changed mid-read (live session) — retry
+                    _write_file_rows(con, path, pair, counts, rows)
                     for k in totals:
                         totals[k] += counts[k]
                     indexed_files += 1
+                    written = True
                     break
-                # file changed mid-read (live session) — retry, else keep
-                # prior version stale (visible in status)
-            if indexed_files and indexed_files % CHECKPOINT_EVERY_FILES == 0:
-                con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                else:
+                    print(f"warning: {path} kept changing mid-read; keeping "
+                          "prior indexed version (stale — see `status`)",
+                          file=sys.stderr)
+                if written and indexed_files % CHECKPOINT_EVERY_FILES == 0:
+                    con.execute("PRAGMA wal_checkpoint(PASSIVE)")
 
-        with con:
-            con.execute("UPDATE meta SET value=? WHERE key='last_run'",
-                        (datetime.now(timezone.utc).isoformat(),))
-        con.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        con.close()
+            with con:
+                con.execute("UPDATE meta SET value=? WHERE key='last_run'",
+                            (datetime.now(timezone.utc).isoformat(),))
+            con.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        finally:
+            con.close()
 
         if format_drift_warning(totals["message"], totals["rejected"]):
             print(f"warning: possible format drift — {totals['rejected']} of "
@@ -410,6 +440,14 @@ def cmd_search(args) -> int:
         sql += " AND m.project = ?"
         params.append(args.project)
     lo, hi = day_bounds_us(args.since, args.until)
+    if args.since and lo is None:
+        print(f"invalid --since date: {args.since!r} (expected YYYY-MM-DD)",
+              file=sys.stderr)
+        return 2
+    if args.until and hi is None:
+        print(f"invalid --until date: {args.until!r} (expected YYYY-MM-DD)",
+              file=sys.stderr)
+        return 2
     if lo is not None:
         sql += " AND m.ts_us >= ?"
         params.append(lo)
@@ -467,6 +505,13 @@ def cmd_status(args) -> int:
 
 # ---------------------------------------------------------------------- CLI
 
+def _positive_int(value: str) -> int:
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return n
+
+
 def _default_db() -> str | None:
     root = resolve_workspace_root(Path.cwd())
     return str(root / DB_RELPATH) if root else None
@@ -493,7 +538,7 @@ def main(argv) -> int:
     p_search.add_argument("--project")
     p_search.add_argument("--since", metavar="YYYY-MM-DD")
     p_search.add_argument("--until", metavar="YYYY-MM-DD")
-    p_search.add_argument("--limit", type=int, default=20)
+    p_search.add_argument("--limit", type=_positive_int, default=20)
     p_search.add_argument("--literal", action="store_true")
     p_search.add_argument("--json", action="store_true")
     p_search.set_defaults(fn=cmd_search)
