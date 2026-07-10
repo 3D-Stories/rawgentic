@@ -233,7 +233,8 @@ def load_adversarial_review_config(
     """Read the project's <key> config block from the workspace file.
 
     `key` selects the per-project field: "adversarialReview" (default, backward
-    compatible) or "peerConsult". Both use the same {enabled, workflows} shape.
+    compatible), "peerConsult", or "runFeedback" (#338). All use the same
+    {enabled, workflows} shape.
 
     FAIL-CLOSED: missing file, malformed JSON, missing project, missing field,
     or bad value all resolve to disabled. Never raises.

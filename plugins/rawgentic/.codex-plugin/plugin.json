@@ -27,7 +27,7 @@
   "interface": {
     "displayName": "Rawgentic",
     "shortDescription": "SDLC workflow skills with TDD, quality gates, and project config.",
-    "longDescription": "Rawgentic packages 20 workflow and workspace skills for disciplined software delivery. This Codex Phase 1 package exposes the skills through a private marketplace while Codex hook support is planned for Phase 2.",
+    "longDescription": "Rawgentic packages 16 workflow and workspace skills for disciplined software delivery. This Codex Phase 1 package exposes the skills through a private marketplace while Codex hook support is planned for Phase 2.",
     "developerName": "3D-Stories",
     "category": "Productivity",
     "capabilities": [
