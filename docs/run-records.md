@@ -33,7 +33,7 @@ exceed `findings`, `passing` may not exceed `total`, `used` may not exceed
 | `issue` | object | `number` (int\|null), `type` (`feature`/`bug`/`chore`/`other`), `complexity` (`trivial`/`standard`/`complex`\|null). |
 | `changes` | object | `files_changed`, `commits` (ints); `insertions`, `deletions` (int\|null). |
 | `tests` | object | `added` (int); `passing`, `total` (int\|null). |
-| `gates` | array | Each `{step, name, findings, resolved, status}`; `status` ∈ `pass`/`fail`/`skipped`/`fast_path`. Optional per-gate `reviewer_kind` (#155) ∈ `inline`/`reflexion`/`builtin_code_review`/`codex`/`hand_rolled_multi` when present — free text is rejected. Step 11.5 is captured in `security_scan`, not here. |
+| `gates` | array | Each `{step, name, findings, resolved, status}`; `status` ∈ `pass`/`fail`/`skipped`/`fast_path`. Optional per-gate `reviewer_kind` (#155) ∈ `inline`/`reflexion`/`builtin_code_review`/`codex`/`hand_rolled_multi` when present — free text is rejected. Step 11.5 is captured in `security_scan`, not here. Multi-pass gates count per the [#340 rules below](#gate-counting-340). |
 | `security_scan` | object | `ran` (bool), `blocking_resolved`, `advisory` (ints), `skipped` (list of strings). Mirrors the [Step 11.5 gate](security-scan.md). |
 | `loop_backs` | object | `used`, `budget` (ints). |
 | `outcome` | object | `pr_number` (int\|null), `pr_url` (string\|null), `merged` (bool\|null), `ci` (`passed`/`failed`/`not_configured`/`skipped`), `deploy` (`success`/`manual`/`failed`/`not_applicable`). |
@@ -61,6 +61,34 @@ Validation is hand-rolled (no runtime `jsonschema` dependency) and adversarially
 unit-tested — notably it rejects `bool` where an int is expected, since `bool` is
 a subclass of `int` in Python and a naive check would let `findings: true`
 corrupt the substrate.
+
+### Gate counting + merged-gate reviewer_kind (#340) {#gate-counting-340}
+
+Two semantics rules govern `gates[]` assembly; the canonical, worked-example
+version lives in `skills/implement-feature/references/run-record.md` (WF3's
+completion step points there too).
+
+- **Counting rule (multi-pass gates).** `findings` counts UNIQUE findings across
+  all passes of the gate — finding identity is mechanical: same artifact location
+  (file/section/line-range) AND same required change; reviewer wording and
+  `source` tag are irrelevant, so a re-raise or re-litigation never adds.
+  `resolved` counts findings whose FINAL disposition at gate close is terminal:
+  applied, fixed-in-gate, refuted with cited evidence, or dropped by the
+  confidence band (band-drops count in BOTH `findings` and `resolved`; an
+  unresolved deferral counts in `findings` only). The deduped pair is computed at
+  gate close and persisted in that gate's session-note evidence; completion-step
+  assembly reads the persisted figures and never re-derives them.
+- **reviewer_kind precedence (merged gates).** `reviewer_kind` stays a single
+  value: record the gate-DEFINING mechanism — the mechanism whose absence would
+  void the gate per the skill's own contract. The additive opt-in adversarial
+  layer is skippable-on-failure by contract and therefore never changes
+  `reviewer_kind` (WF2: Step 4 and Step 6 → `inline`, Step 11 →
+  `hand_rolled_multi`). `codex` applies only to a gate whose SOLE mechanism is
+  codex. A fully-skipped gate omits `reviewer_kind` entirely.
+
+Historical records assembled before #340 remain valid — the rules govern
+assembly going forward; WF14's telemetry audit flags legacy per-pass sums AND
+legacy additive-layer `reviewer_kind` values as `known-limitation`, not defects.
 
 ## The store
 

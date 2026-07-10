@@ -972,3 +972,49 @@ class TestIssueKeyedMarkers:
         ) in norm, (
             "state-and-resume.md must state the run-scoped MARKERS_COMPLETE "
             "counting rule verbatim")
+
+
+# --- #340: multi-pass gate counting rule + merged-gate reviewer_kind precedence ---
+
+class TestMultiPassGateCounting:
+    """#340: run-record.md (in skill_corpus("implement-feature")) must carry
+    (a) the canonical multi-pass gate counting rule and (b) the merged-gate
+    reviewer_kind precedence rule, both verbatim. Whitespace-normalized per the
+    repo convention (prose hard-wraps mid-sentence)."""
+
+    COUNTING = (
+        "For a multi-pass gate, `findings` counts UNIQUE findings across all "
+        "passes (identity = same artifact location AND same required change) "
+        "and `resolved` counts findings whose FINAL disposition at gate close "
+        "is terminal — applied, fixed-in-gate, refuted with cited evidence, or "
+        "dropped by the confidence band."
+    )
+
+    PRECEDENCE = (
+        "For a merged gate, record the gate-DEFINING mechanism — the mechanism "
+        "whose absence would void the gate; the additive opt-in adversarial "
+        "layer is skippable by contract and never changes `reviewer_kind`."
+    )
+
+    def test_counting_rule_sentence_present(self):
+        corpus = " ".join(_text().split())
+        assert self.COUNTING in corpus, (
+            "run-record.md must carry the #340 canonical multi-pass counting "
+            "sentence verbatim")
+
+    def test_precedence_sentence_present(self):
+        corpus = " ".join(_text().split())
+        assert self.PRECEDENCE in corpus, (
+            "run-record.md must carry the #340 canonical merged-gate "
+            "reviewer_kind precedence sentence verbatim")
+
+    def test_compute_at_gate_close_persisted(self):
+        """#340 8a hardening: the dedup needs per-finding data that only exists
+        at gate close — the rule must mandate compute-at-close + persist, or
+        assembly silently degrades to summing per-pass counts."""
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        assert ("the deduped `findings`/`resolved` pair is computed AT GATE "
+                "CLOSE (while the finding text is in context) and persisted in "
+                "that gate's session-note evidence") in corpus
+        assert ("Gate close = the last circuit-breaker resolution before the "
+                "workflow advances past the step") in corpus

@@ -129,6 +129,27 @@ def test_known_weak_spots_named():
         "genuinely missing record")
 
 
+# --- #340 counting + precedence rules wired into the telemetry audit ---
+
+def test_weak_spots_audit_against_340_rules():
+    s = _norm(_rubric())
+    assert ("against the #340 counting rule (unique findings across all passes; "
+            "`resolved` = terminal final disposition at gate close)") in s, (
+        "The gate-count honesty check must audit against the #340 counting rule")
+    assert ("against the #340 merged-gate precedence rule (the gate-DEFINING "
+            "mechanism)") in s, (
+        "The reviewer_kind fidelity check must audit against the #340 "
+        "merged-gate precedence rule")
+
+
+def test_gates_field_entry_cites_340_rule():
+    s = _norm(_rubric())
+    assert ("counted per the #340 rule in "
+            "`skills/implement-feature/references/run-record.md`") in s, (
+        "The fields-audited list's gates[] entry must cite the #340 counting "
+        "rule's canonical home")
+
+
 # --- dispatches[] consume-when-present (#329/#330 not landed) ---
 
 def test_dispatches_consume_when_present():

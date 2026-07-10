@@ -62,6 +62,37 @@ sessions. `security_scan.skipped[]` must be a scanner **KIND** from `work_summar
 fail-closed at write time (`validate_record(..., strict=True)`); historical free-text records
 still load (lenient read).
 
+**Multi-pass gate counting (#340).** For a multi-pass gate, `findings` counts UNIQUE findings
+across all passes (identity = same artifact location AND same required change) and `resolved`
+counts findings whose FINAL disposition at gate close is terminal — applied, fixed-in-gate,
+refuted with cited evidence, or dropped by the confidence band. The identity test is mechanical:
+same artifact location (file/section/line-range) AND same required change — reviewer wording and
+the `source` tag are irrelevant, so a re-raise or re-litigation of an already-counted finding
+never adds. FINAL-disposition-at-close governs `resolved`: a finding refuted in pass 2 then
+re-opened in pass 3 and left open reverts to unresolved (unresolved deferral without concurrence
+counts in `findings` only). Band-drops count in BOTH `findings` and `resolved` because the banded
+filter is itself a documented disposition mechanism — excluding drops would make two identical runs
+disagree on `findings` merely by confidence phrasing. Worked example: a gate runs 2 passes — pass 1
+self-review finds A, B and adversarial finds B' (same location+change as B → identity-merged) and C;
+pass 2 self-review re-raises C (no add) and finds D while adversarial re-litigates A's refutation
+(no add) → unique findings {A, B, C, D}, `findings: 4`; at close A refuted-with-evidence, B applied,
+C applied, D dropped-by-band → `resolved: 4`.
+
+**Compute at gate close, persist, never re-derive (#340 8a).** The identity dedup needs the
+per-finding location+change data that lives only in the reviewer results — session-note markers
+persist COUNTS, not findings. So the deduped `findings`/`resolved` pair is computed AT GATE
+CLOSE (while the finding text is in context) and persisted in that gate's session-note evidence
+(the gate's `— DONE` marker detail or its evidence block); Step 16 / WF3 Step 14 assembly READS
+the persisted per-gate figures and never re-derives them. Gate close = the last circuit-breaker
+resolution before the workflow advances past the step; intermediate loop-back passes do not close
+the gate. If a legacy section carries only per-pass counts, their sum is an OVER-count — record it
+with an `extra` note naming the gap rather than presenting it as deduped. Disposition aliases
+(the phrases session evidence actually uses): "resolved-in-gate" = fixed-in-gate;
+"subsumed" = identity-merged into another finding (not a separate finding at all);
+"accepted-as-tightening" / "satisfied-by-verification" = applied-class terminal;
+any phrase outside this closed set is UNRESOLVED — the set never reopens; the only
+evidence-based terminal disposition is "refuted with cited evidence" itself.
+
 **`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
 `"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`
 in `hooks/work_summary.py` only checks the keys it knows about and does not reject unrecognized
@@ -153,9 +184,21 @@ present, it doesn't require the key or accept a null placeholder.
 For WF2 assembly, map the actual review mechanism used at each gate: Step 4 design self-review
 (the in-repo quality-bar rubric, all lanes since #190/#205 — the 3-judge panel and the external
 reflexion dependency were retired) → `inline`; Step 11 three-agent panel → `hand_rolled_multi`;
-builtin `/code-review` → `builtin_code_review`; Codex adversarial review (Step 4 adversarial-on-design
-or Step 11 diff) → `codex`. (The `reflexion` vocab member remains valid for legacy records but is
-no longer produced by WF2.)
+builtin `/code-review` → `builtin_code_review`; Codex adversarial review → `codex` applies only to
+a gate whose SOLE mechanism is codex — not present in current WF2; a merged self-review+codex gate
+records the gate-defining mechanism per the precedence rule below. (The `reflexion` vocab member
+remains valid for legacy records but is no longer produced by WF2.)
+
+**Merged-gate precedence (#340).** For a merged gate, record the gate-DEFINING mechanism — the
+mechanism whose absence would void the gate; the additive opt-in adversarial layer is skippable by
+contract and never changes `reviewer_kind`. The operative rule is the enumeration:
+Step 4 all lanes → `inline`, Step 6 → `inline`, Step 11 → `hand_rolled_multi` (the adversarial
+layers at Steps 4/6/11 are skippable-on-failure by contract, therefore never gate-defining). A
+fully-skipped gate (`status: "skipped"`) OMITS `reviewer_kind` entirely — the field is
+omit-not-null. The cross-model layer's per-gate
+visibility is the existing session-note markers — Step 11's 4-state diff-review marker and the
+Step 4/6 `(invoked|skipped|discarded)` parens markers — NOT a `dispatches[]` entry today;
+prescribing a DISPATCH line for adversarial-review invocations is a named follow-up.
 
 **`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
 pattern as `usage` — absent ⇒ old records stay valid, no schema version bump; present ⇒ strict

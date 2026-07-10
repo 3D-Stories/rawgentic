@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #331</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 20:31 MDT</div>
+<h1>WF14 run-feedback — WF2 #331</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #331 (WF3 review-gate per-slot fallback chain + dead-return)</h1>
+<p>Assessed under <strong>rubric v1</strong>. Mode: <strong>full</strong>. Record: <code>--record</code> (final persisted record;</p>
+<p>store line rides the next child&#x27;s PR — store-lag-known; schema-VALID). Run&#x27;s loaded</p>
+<p>cache: 3.26.0 spine / 3.25.0-era prose (mid-session cache states; DISPATCH emission</p>
+<p>executed manually from the just-merged #330 repo contract). Current main: 3.27.1 =</p>
+<p>this run&#x27;s own release. Small-standard lane, PR #351 merged 70e7d75, suite</p>
+<p>2512+1skip→2518+1skip, WF3 diagram REV 3.27.1.</p>
+<h2>Evidence ledger</h2>
+<ul>
+<li><code>confirmed</code> — all mandatory markers present in the <code>## WF2 run: rawgentic #331</code></li>
+</ul>
+<p>  section; Step 6 skip quotes the lane; Step 15 quotes no-deploy; Step 10</p>
+<p>  SKIPPED-VISIBLE (mempalace lock, later cleared — the queued memories were saved at</p>
+<p>  checkpoint 1). 11 DISPATCH lines in-section.</p>
+<ul>
+<li><code>confirmed</code> — 1 design loop-back (counters file: design=1, total=1/3) tied to the</li>
+</ul>
+<p>  quoted pass-1 High: the design collided with the #330 resolution tables merged ~30</p>
+<p>  minutes earlier (SKILL.md:133-136 named <code>rawgentic-reviewer</code> the WF3 primary while</p>
+<p>  Step 9 dispatches the toolkit — a PRE-EXISTING #330 defect this run reconciled).</p>
+<ul>
+<li><code>confirmed</code> — Step 8a convergent High (R2 @0.8): the shipped prose&#x27;s &quot;existing</li>
+</ul>
+<p>  dispatch-failure path&quot; had NO referent in WF3 (grep-verified) — fixed in-run with the</p>
+<p>  concrete REVIEW_DISPATCH_FAILED + ERROR-protocol terminal action (e095385).</p>
+<ul>
+<li><code>confirmed</code> — Step 11 R-A catch: the emission rule as shipped by T2 would FABRICATE</li>
+</ul>
+<p>  audit lines (a resolve-failure descent emitting &quot;ran and errored&quot; for a never-installed</p>
+<p>  agent) — fixed by splitting descent emission by trigger (afe30db).</p>
+<h2>Dimension scores</h2>
+<p>| Dimension | Score | Evidence |</p>
+<p>|---|---|---|</p>
+<p>| Step fidelity | 5/5 | Every mandatory marker present; skips quote conditions; task order deliberately re-sequenced (version bump before diagram REV) with rationale logged. |</p>
+<p>| Gate value | 5/5 | Three named catches with quoted findings across three different gates: pass-1 design collision with 30-minute-old #330 tables; 8a&#x27;s dangling terminal-path reference; Step 11&#x27;s fabricated-audit-line semantics. Each fixed pre-merge. |</p>
+<p>| Prose clarity | 4/5 | One interpretation: the issue&#x27;s own AC2 wording (&quot;second death → existing dispatch-failure path&quot;) assumed a WF3 path that doesn&#x27;t exist — the gate caught it, but the orchestrator had to define the terminal action rather than transcribe it. |</p>
+<p>| Dispatch reliability | 5/5 | All 11 dispatches resolved first-try, non-vacuous, models as routed; one implementer CORRECTED its stale brief (version 3.26.1 not 3.26.0 — concurrent session&#x27;s #348 had landed) instead of blindly applying it. |</p>
+<p>| Telemetry honesty | 4/5 | Valid on first summarize (rc=0); Step-4 <code>6 findings</code> spans 2 passes and Step-11 <code>7</code> mixes applied/refuted — #340&#x27;s counting question (<code>known-limitation</code>); usage honest-null (crashed-session id). |</p>
+<p>| Cost sanity | 4/5 | Lane election held (7 impl files = ceiling, cross-checked); 1 loop-back bought a real reconciliation; heaviest-least-value: the adversarial diff review (its one surviving non-dup finding — tier-1 slugs &quot;missing&quot; — was diff-context blindness, refuted with file evidence). |</p>
+<h2>Telemetry audit</h2>
+<p>| field | recorded_value | session_evidence | verdict | impact | routing |</p>
+<p>|---|---|---|---|---|---|</p>
+<p>| tests | 6/2518/2519 | runner finals 2512→2518 | match | — | — |</p>
+<p>| gates[4] | 6/6 pass | pass1 3 + pass2 3 (2 passes) | known-limitation | multi-pass counting | dup → #340 |</p>
+<p>| gates[8a] | 7/7 | R1 2 + R2 4 + 1 applied-anyway cluster | known-limitation | dropped-but-applied counting | dup → #340 |</p>
+<p>| gates[11] | 7/7 | R-A 1 + R-B 2 + adversarial 4 (2 applied/1 refuted/1 satisfied) | known-limitation | same | dup → #340 |</p>
+<p>| loop_backs | 1/3 | counters design=1 | match | — | — |</p>
+<p>| outcome | PR 351 merged, ci passed | gh MERGED 70e7d75, 4 checks | match | — | — |</p>
+<p>| security_scan | ran 0/0 skip iac+sca | Step 11.5 marker | match | — | — |</p>
+<p>| usage | unavailable | crashed-session id | match (honest null) | — | standing weak spot |</p>
+<p>| dispatches[] | 11 | 11 lines in-section, all ok/primary | match | resolve-failure split shipped THIS run keeps future records honest | — |</p>
+<h2>Findings and classification</h2>
+<p>1. <strong>WORKING AS DESIGNED (notable)</strong> — the gate stack caught a defect introduced by the</p>
+<p>   EPIC&#x27;S OWN previous child 30 minutes earlier (the #330 table naming the wrong WF3</p>
+<p>   primary). Fast-moving sequential epics create exactly this hazard; the design gate</p>
+<p>   absorbed it. No action — evidence the review cost is buying real safety on this epic.</p>
+<p>2. <strong>PLUGIN FRICTION (upstream)</strong> — the ISSUE TEMPLATE wording (&quot;follow the existing</p>
+<p>   dispatch-failure path&quot;) transcribed an assumption the codebase didn&#x27;t satisfy; the</p>
+<p>   prose faithfully copied it and 8a had to catch it. Friction lives in WF1/adversarial</p>
+<p>   issue review not validating referenced mechanisms exist. Folded into this run&#x27;s</p>
+<p>   memory.</p>
+<p>3. <strong>ORCHESTRATOR ERROR (owned)</strong> — the rev-2 emission rule I authored fabricated audit</p>
+<p>   lines for never-ran tiers; Step 11 R-A caught it. The prose didn&#x27;t invite it; owned.</p>
+<h2>Routing</h2>
+<ul>
+<li>Defects filed: <strong>none</strong> (counting → #340 dup; nothing else reproducible on main —</li>
+</ul>
+<p>  the run&#x27;s own catches were all fixed in the shipped PR).</p>
+<ul>
+<li>Telemetry improvements: none beyond dups.</li>
+<li>Friction: ONE memory (item 2), id in the summary block.</li>
+</ul>
+<h2>Intentionally not claimed</h2>
+<ul>
+<li>Per-run cost (usage null). Whether refuted findings should count in <code>resolved</code> (#340&#x27;s call).</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-09 20:31 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
