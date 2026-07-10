@@ -186,7 +186,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
    whitelist, the README prose, AND the description breakdown — the guards tell
    you which surface is stale. Still hand-pinned: "All 7 config-driven skills",
    "6 workspace management". If the skill carries `<config-loading>`: also bump
-   `EXPECTED_CONFIG_LOADING_COUNT` (`tests/hooks/test_headless.py:1348`) and register the
+   `EXPECTED_CONFIG_LOADING_COUNT` (`tests/hooks/test_headless.py:1306`) and register the
    block in `scripts/sync_shared_blocks.py`'s MANIFEST + run the sync. Use the
    `add-skill` workspace skill — it executes this whole list.
 3. **Claiming green from a scoped run or grep.** Rule: whole suite, real exit code,

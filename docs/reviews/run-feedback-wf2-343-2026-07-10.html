@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #343</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 07:44 MDT</div>
+<h1>WF14 run-feedback — WF2 #343</h1>
+
+</header>
+<main>
+<h1>WF14 Run-Feedback — WF2 #343 (PR #367) · rubric v1</h1>
+<h2>At a glance</h2>
+<p><strong>A clean small-standard-lane run: every step ran or quoted its skip condition, the gates caught two real (if modest) defects pre-merge, telemetry survived its audit with only the standing usage caveat — the one friction point was a branch-protection probe whose prose doesn&#x27;t say the classifier needs a parsed dict.</strong></p>
+<ul>
+<li><strong>Step fidelity <span class="score">5/5</span></strong> — all 12 mandatory + every conditional marker present and issue-keyed; every skip quotes its met condition</li>
+<li><strong>Gate value <span class="score">4/5</span></strong> — two named real catches (design: <code>close_list()</code> before table emission; review: stale docstring block list), both modest severity</li>
+<li><strong>Prose clarity <span class="score">4/5</span></strong> — one interpreted spot: the Step 1 branch-protection probe (classifier wants a dict, prose pipes it raw text)</li>
+<li><strong>Dispatch reliability <span class="score">4/5</span></strong> — 5 dispatches, 0 dead, 0 substitutions; one 529-retry (declared, succeeded)</li>
+<li><strong>Telemetry honesty <span class="score">4/5</span></strong> — record valid on first summarize; 7 fields match, usage is the standing session-level known-limitation</li>
+<li><strong>Cost sanity <span class="score">3/5</span></strong> — lane election collapsed design ceremony correctly; capped at 3 (usage is session-cumulative, per-run cost unattributable)</li>
+</ul>
+<p><strong>Best catch:</strong> Step 4 self-review — &quot;table branch must call close_list() before emitting (open <code>&lt;ul&gt;</code> otherwise wraps table)&quot; — a real nesting defect prevented before a line of code existed; Step 11 fixed the stale module-docstring block list the same run.</p>
+<p><strong>Worst friction:</strong> WF2 Step 1 item 9 (<code>references/steps.md</code>) — the probe prose captures <code>gh api -i</code> output (headers + body text) but <code>plan_lib.classify_branch_protection</code> requires a PARSED dict body; the run needed three attempts (stderr contamination, string body) before classifying <code>unprotected</code>.</p>
+<p><strong>Routed:</strong> 0 issues filed (nothing crossed the defect bar; friction is report-only — mempalace unavailable this session) · not fully clean (1 friction, 1 environment note).</p>
+<h2>Run facts</h2>
+<ul>
+<li>Assessed run: WF2 implement-feature · issue #343 · PR #367 (merged <code>912a629</code>, all 4 CI green) · lane <strong>small-standard</strong> · 2026-07-10</li>
+<li>Plugin cache the run loaded: <strong>3.28.0</strong> (skill invocation base dir) · current main at assessment: 3.32.1 (<code>f8434bf</code>)</li>
+<li>Mode: <strong>full</strong> · Record: <code>claude_docs/.epic-333-scratch/record-343.json</code> — validated at persist time (<code>work_summary.py summarize</code> rc=0, first attempt); provenance sanity-check (workflow/issue/PR vs session markers): confirmed</li>
+<li>Record telemetry: 20 files / 7 commits / +1058-9 · tests 2544→2556 (+12) · loop_backs 0/3 · lane small-standard · 5 dispatches · goal_guard deferred (epic #333)</li>
+</ul>
+<blockquote><strong>Bias caveat (stated, not waived):</strong> the assessor is the same orchestrator that ran the assessed WF2, in the same session. Scores lean on mechanical evidence — issue-keyed markers with line numbers, runner final outputs, the persisted record — not recollection.</blockquote>
+<h2>Evidence ledger (summary)</h2>
+<p>All markers located in <code>claude_docs/session_notes.md</code> lines 4470–4569, every one carrying the <code>#343</code> key in its canonical slot (the #341 contract working as designed — attribution was mechanical despite three earlier runs sharing the file). Confirmed facts:</p>
+<ul>
+<li>Steps 1, 1b(deferred: epic #333), 2 (+path-estimate line), 3, 4, 5, 7, 8, 9, 11, 11.5, 12 (+design-artifact <code>updated</code>), 13, 14, 16 — <code>— DONE</code> markers with #343-keyed detail [confirmed: lines 4470–4569]</li>
+<li>Skips justified verbatim: Step 6 &quot;small-standard lane folds Step 6&quot;; 8a &quot;0 high-risk → no 8a&quot; (plan had 0 high tasks); Step 10 &quot;mempalace MCP disconnected&quot;; Step 15 &quot;no deployment target&quot;; adversarial diff &quot;skipped (no security surface) — should_run_diff_review(True, 9 paths, False)&quot; [confirmed]</li>
+<li>Suite trajectory quoted from runner tails: baseline 2544+1skip (pre-code), 2553 after T1, 2556 after T2/T3, 2556 at Steps 9/12 — exit 0 each, solo runs [confirmed]</li>
+<li>Red-before-green: T1 &quot;5 failed&quot; pre-impl; T2 &quot;3 failed&quot; pre-prose [confirmed: implementer returns quoted in notes]</li>
+<li>Real-thing check: rendering the committed #338 WF14 report produced 3 <code>&lt;table&gt;</code>, 0 <code>&lt;p&gt;|</code> paragraphs [confirmed: command output in notes]</li>
+<li>Merge verified on origin/main (912a629), remote branch deleted post-verification [confirmed]</li>
+</ul>
+<h2>Dimension scores (evidence per rubric v1)</h2>
+<p>1. <strong>Step fidelity <span class="score">5/5</span></strong> — every mandatory marker present AND every skip quotes its met condition (see ledger). 2. <strong>Gate value <span class="score">4/5</span></strong> — real catches: Step 4 F1 (close_list nesting defect, applied to design before implementation); Step 11 (docstring block list missing &quot;tables&quot;, fixed <code>bba30dc</code>). Both genuine but Low/Medium — a 5 is reserved here for a catch that would have shipped observable breakage; the ragged-row findings were band-dropped and honestly recorded as a follow-up. 3. <strong>Prose clarity <span class="score">4/5</span></strong> — one improvisation: Step 1 item 9&#x27;s probe block (<code>BR_ENC=$(...) &amp;&amp; gh api ... -i</code>) yields status+headers+body text, but <code>classify_branch_protection(status, body)</code> returns <code>unknown</code> unless <code>body</code> is a parsed dict — the run burned three attempts (2&gt;&amp;1 stderr contamination, then string body) before <code>json.load</code> produced <code>unprotected</code>. The prose never says &quot;parse the body to JSON first&quot;. Quoted sentence: &quot;Capture the HTTP status AND body, then classify with <code>plan_lib.classify_branch_protection(status, body)</code>&quot;. 4. <strong>Dispatch reliability <span class="score">4/5</span></strong> — 5 dispatches (3 impl sonnet, 2 review opus), all named-agent worktree-isolated (<code>resolution=primary</code>), 0 vacuous/dead; one 529-Overloaded first attempt retried-once-succeeded (<code>outcome=retried</code>, correctly single-lined per the #330 retry rule). Not 5: not all first-try. 5. <strong>Telemetry honesty <span class="score">4/5</span></strong> — audit table below: 7 match, 1 known-limitation, 0 mismatch. Valid on first summarize. 6. <strong>Cost sanity <span class="score">3/5</span> (capped)</strong> — lane election was the right cost call (5 impl files, design panel collapsed, 2+2 agents ≈ the Step 2 estimate); heaviest-least-value step this run: the third whole-suite re-run at Step 12 (identical tree already verified at Step 11-fix time — 80s, contract-required). Cap: usage is session-cumulative (42.7M input tokens spans three prior runs this session), so per-run cost claims stay <code>known-limitation</code>.</p>
+<h2>Telemetry audit</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th><th>impact</th><th>routing</th></tr></thead>
+<tbody>
+<tr><td>tests</td><td>12/2556/2557</td><td>runner tails 2544→2556, +9 renderer +3 guards</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>gates[] step 4</td><td>2/2 inline</td><td>notes: 2 findings (M applied, L scoped-out terminal)</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>gates[] step 11</td><td>3/3 hand_rolled_multi</td><td>4 raw → 1 duplicate merged (ragged-row ×2 reviewers) = 3 unique; 1 applied + 2 band-dropped (count per #340: drops are terminal)</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>loop_backs</td><td>0/3</td><td>no consume_loopback calls in notes</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>outcome</td><td>PR 367 merged, ci passed</td><td>gh outputs quoted</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>security_scan</td><td>ran, 0/0, skipped iac+sca</td><td>scan JSON quoted</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>reviewer_kind</td><td>inline (4), hand_rolled_multi (11)</td><td>gate-defining mechanisms per #340 precedence</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>dispatches[]</td><td>5 entries</td><td>5 flush-left <code>DISPATCH issue=343</code> lines, order preserved</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>usage</td><td>42.7M in / 143k out / $22.10 captured</td><td>session-cumulative (3 prior runs same session)</td><td>known-limitation</td><td>per-run cost unattributable</td><td>standing weak spot, not refiled</td></tr>
+</tbody>
+</table>
+<h2>Findings and classification</h2>
+<ul>
+<li><strong>F1 · PLUGIN FRICTION</strong> — branch-protection probe prose (WF2 <code>references/steps.md</code> Step 1 item 9): classifier requires parsed-dict body; prose hands it raw <code>gh api -i</code> text. Works after interpretation; wasted two round-trips. Routing: report-only (below the defect bar — advisory probe, fail-open by design; mempalace unavailable for a friction memory this session).</li>
+<li><strong>F2 · ENVIRONMENT</strong> — one 529 Overloaded on the first Task-1 dispatch; retried once, succeeded. No plugin action.</li>
+<li><strong>F3 · WORKING AS DESIGNED</strong> — embedded runFeedback gate silently skipped (key absent on the rawgentic workspace entry) — exactly the #338 contract; noted because a future reader may expect the embedded assessment to have fired.</li>
+</ul>
+<h2>Routing</h2>
+<ul>
+<li>Defects filed: none (nothing reproducible crosses the defect bar; F1 is friction).</li>
+<li>Telemetry improvements: none proposed — all audited fields match; the usage-attribution limitation is a standing known-weak-spot already tracked by the rubric itself.</li>
+<li>Friction memory: <strong>mempalace unavailable — friction memory SKIPPED</strong> (MCP server disconnected this session; F1 preserved in this report).</li>
+<li>Artifact publish: deferred to the end-of-run aggregate review (owner directive 2026-07-10) — committed <code>.md</code>+<code>.html</code> pair is the deliverable of record.</li>
+</ul>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.31.0 (issue #343, PR #367, lane small-standard) · rubric v1
+Fidelity 5/5 · Gates 4/5 · Clarity 4/5 · Dispatch 4/5 · Telemetry 4/5 · Cost 3/5
+Mode: full · Record: claude_docs/.epic-333-scratch/record-343.json
+Best catch: Step 4 close_list()-before-table nesting defect, caught pre-implementation
+Worst friction: Step 1 item 9 probe prose omits the parse-body-to-dict requirement (3 attempts to classify)
+Telemetry verdicts: 8 match / 0 mismatch / 0 missing-in-record / 0 missing-in-session / 0 unverifiable / 1 known-limitation
+Defects filed: none | Telemetry filed: none | Not filed (cap): 0 | Friction memorized: SKIPPED (mempalace unavailable) | Clean run: no (1 friction)
+Report: docs/reviews/run-feedback-wf2-343-2026-07-10.md · Artifact: deferred to end-of-run aggregate (owner directive)
+Inferred (unconfirmed) claims: none — all load-bearing claims carry ledger evidence</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-10 07:44 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

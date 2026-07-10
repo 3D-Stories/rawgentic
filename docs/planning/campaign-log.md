@@ -222,7 +222,39 @@ a confirmed never-raises violation (non-list `projects` TypeError), 1 refuted
 (CSP-inline claim vs the established no-external-hosts contract). Loop-backs 1/3.
 Suite 2556+1skip → 2611+1skip.
 
-**PR.** _PR # and CI filled by the next slot's pass._
+**PR.** *(backfilled by #342's pass)* PR #368 squash-merged `7bb8928`, all 4 CI checks
+green.
+
+### #332 — Step 8 inline-vs-delegated expectation documented · v3.32.1
+
+**Issue.** #332 (docs, epic #333 child 9/10, #328 audit follow-up): the skill text
+implied delegation was obligatory whenever `implementation` resolved non-`inherit`,
+while the audit measured 6/6 genuine runs inline — doc/behavior misalignment.
+
+**What shipped.** One Step 8 paragraph: when the resolved implementation model equals
+the session/orchestrator model, inline is an expected, acceptable outcome (delegation =
+isolation/parallelism, not obligation), citing the audit, honesty-bounded (the sonnet
+falsification experiment stays open). 2 drift guards. Reviewer verified every claim
+against the audit primary source. Lane small-standard; loop-backs 0/3. Suite
+2611+1skip → 2613+1skip. *(Slot added by #342's pass — a convention bend owned in
+#332's WF14 report: the slot should have ridden PR #369.)*
+
+**PR.** #369 — merged `f8434bf`, all 4 CI checks green.
+
+### #342 — doc-rot batch · v3.32.2
+
+**Issue.** #342 (fix, epic #333 child 10/10, WF14 dogfood F-3): three stale/un-guarded
+doc surfaces batched so none is lost silently.
+
+**What shipped.** CLAUDE.md pointer `:1348`→`:1306`; `load_adversarial_review_config`
+docstring gains the live `runFeedback` key (the issue's cited `is_enabled_for` was
+already fixed by #338 — honest citation delta recorded); Codex manifest
+`longDescription` count corrected 20→16 AND converted to a computed disk-glob guard
+(#271 pattern, red at 20≠16). Workspace `add-skill` stale hand-pinned count replaced
+with read-from-test guidance in place. Lane small-standard; loop-backs 0/3. Suite
+2613+1skip → 2614+1skip.
+
+**PR.** _PR # and CI filled by the epic close-out._
 
 ---
 

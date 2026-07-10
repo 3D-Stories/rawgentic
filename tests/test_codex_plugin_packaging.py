@@ -100,3 +100,16 @@ def test_codex_skill_package_excludes_eval_workspaces():
     packaged = {p.name for p in CODEX_SKILLS.iterdir()}
     assert packaged == {Path(rel).name for rel in _claude_skill_paths()}
     assert all(not name.endswith("-workspace") for name in packaged)
+
+
+def test_codex_long_description_skill_count_matches_disk():
+    manifest = _load(CODEX_PLUGIN)
+    long_description = manifest["interface"]["longDescription"]
+    match = re.search(r"(\d+) workflow and workspace skills", long_description)
+    assert match, f"longDescription missing 'N workflow and workspace skills': {long_description!r}"
+    claimed_count = int(match.group(1))
+    actual_count = len(list((REPO_ROOT / "skills").glob("*/SKILL.md")))
+    assert claimed_count == actual_count, (
+        f"longDescription claims {claimed_count} skills but "
+        f"skills/*/SKILL.md has {actual_count}"
+    )
