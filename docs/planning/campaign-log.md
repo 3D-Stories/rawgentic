@@ -94,7 +94,7 @@ boundary pinned (index SUPPLEMENTS; Step 1 marker-grep stays SOLE run-fact sourc
 v1 stamp pin updated. Lane gates: single-reviewer Step 11 PASS (2 Low prose nits fixed:
 a splice-duplicated clause, a --limit undercount note); adversarial diff mechanically
 skipped (no security surface); 0 loop-backs. Suite 2723+1skip→2727+1skip. No diagram
-REV (skeletal wf14 sheet, prose-only). *(PR/CI/merge fields: filled at epic close.)*
+REV (skeletal wf14 sheet, prose-only). PR #388 squash-merged `637f66c`, CI 4/4 green, issue auto-closed. Epic #378: all 3 children shipped (v3.33.0–v3.35.0).
 
 ---
 
