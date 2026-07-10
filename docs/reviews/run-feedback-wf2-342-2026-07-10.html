@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #342</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 08:19 MDT</div>
+<h1>WF14 run-feedback — WF2 #342</h1>
+
+</header>
+<main>
+<h1>WF14 Run-Feedback — WF2 #342 (PR #373) · rubric v1</h1>
+<h2>At a glance</h2>
+<p><strong>A disciplined close-out run: the machinery&#x27;s best moment was Step 1&#x27;s live re-verification catching that one filed rot claim was already fixed and another had drifted worse — the fixes then landed clean with a computed guard, a NO-FINDINGS review that actually verified, and telemetry that matches; the one blemish is orchestrator-owned (a transient suite failure whose name went uncaptured).</strong></p>
+<ul>
+<li><strong>Step fidelity <span class="score">5/5</span></strong> — complete keyed marker set; the design-artifact slot rode this PR (and carried #332&#x27;s owed slot with the bend owned in prose)</li>
+<li><strong>Gate value <span class="score">3/5</span></strong> — nothing to catch in a rot batch; the reviewer&#x27;s NO FINDINGS came WITH primary-tree verification of every claim, and Step 1&#x27;s re-verification prevented fixing an already-fixed docstring</li>
+<li><strong>Prose clarity <span class="score">5/5</span></strong> — zero improvisation on well-worn paths</li>
+<li><strong>Dispatch reliability <span class="score">5/5</span></strong> — 3/3 first-try, models as routed</li>
+<li><strong>Telemetry honesty <span class="score">4/5</span></strong> — rc=0 first summarize; all fields match; standing usage caveat</li>
+<li><strong>Cost sanity <span class="score">3/5</span></strong> — lane floor for this repo&#x27;s gates; capped by session-level usage</li>
+</ul>
+<p><strong>Best catch:</strong> Step 1&#x27;s re-verify-before-fix — &quot;the issue&#x27;s cited <code>is_enabled_for</code> docstring was already fixed by #338; the SIBLING loader docstring has the same rot&quot; and &quot;count drift worse than filed (20 vs 16)&quot; — the never-fix-a-stale-report discipline working.</p>
+<p><strong>Worst friction:</strong> none in machinery; the orchestrator ran one suite pass with tail-only capture and could not name the single transient failure it saw (F1, owned).</p>
+<p><strong>Routed:</strong> 0 filed · friction memory SKIPPED (mempalace unavailable) · effectively clean.</p>
+<h2>Run facts</h2>
+<ul>
+<li>Assessed run: WF2 implement-feature · issue #342 · PR #373 (merged <code>e4d6aa2</code>, all 4 CI green) · lane <strong>small-standard</strong> · 2026-07-10 · epic #333 child 10/10 (final)</li>
+<li>Plugin cache: <strong>3.28.0</strong> · current main at assessment: 3.32.2 (<code>e4d6aa2</code>)</li>
+<li>Mode: <strong>full</strong> · Record: <code>claude_docs/.epic-333-scratch/record-342.json</code> — summarize rc=0 first attempt; provenance confirmed</li>
+<li>Record: 16 files / 5 commits / +697-11 · tests 2613→2614 (+1 computed guard) · loop_backs 0/3 · 3 dispatches · goal_guard deferred</li>
+</ul>
+<blockquote><strong>Bias caveat (stated, not waived):</strong> same-orchestrator assessment; mechanical evidence only.</blockquote>
+<h2>Evidence ledger (summary)</h2>
+<p>All #342-keyed markers present (compact Steps 1–7 block + per-step tail): 1, 1b(deferred), 2, 3, 4, 5, 7, 8 (whole-issue SKIPPED + 2 task logs), 9, 10 SKIPPED, 11 (+adversarial <code>skipped (no security surface)</code>), 11.5, 12 (+design artifact <code>updated</code>), 13, 14, 15 SKIPPED, 16 [confirmed]. Red evidence: computed guard failed at &quot;claims 20 skills but skills/*/SKILL.md has 16&quot; [confirmed: implementer return]. Suite: 2613 baseline → 2614 final, exit 0, solo; one anomalous 1-failed run logged with its non-reproduction evidence (two consecutive solo greens) [confirmed]. Workspace <code>add-skill</code> in-place fix (stale <code>(currently 7)</code> count → read-from-test guidance) [confirmed: edit + grep].</p>
+<h2>Dimension scores</h2>
+<p>1. <strong>Step fidelity <span class="score">5/5</span></strong> — full marker set, skips quoted; the #332 report&#x27;s F1 (deferred slot) was honored: this PR carried the owed slot with the bend named in the campaign log itself. 2. <strong>Gate value <span class="score">3/5</span></strong> — gates ran and dispositioned; no defect existed to catch (per anchor 3). Step 1&#x27;s live re-verification (citation delta + worse drift) is process value the rubric attributes to fidelity rather than gates, noted here for the record. 3. <strong>Prose clarity <span class="score">5/5</span></strong> — every command ran as written. 4. <strong>Dispatch reliability <span class="score">5/5</span></strong> — 3 dispatches (2 impl sonnet down-routed, 1 review opus), first-try, worktree-isolated, zero vacuous. 5. <strong>Telemetry honesty <span class="score">4/5</span></strong> — tests match (runner tails), gates match (Step 4 1/1, Step 11 0/0 — a NO FINDINGS review recorded as 0/0 pass), loop_backs 0 match, outcome/scan/reviewer_kind/dispatches match; usage known-limitation (session-cumulative 202.3M in across 6 runs). 0 mismatch. 6. <strong>Cost sanity <span class="score">3/5</span> (capped)</strong> — lane election right; heaviest-least-value: the fourth whole-suite run (flake triage — necessary given the anomaly). Cap: usage attribution.</p>
+<h2>Findings and classification</h2>
+<ul>
+<li><strong>F1 · ORCHESTRATOR ERROR (owned, minor)</strong> — one suite run reported <code>1 failed</code> but the invocation captured only the tail line, so the failing test&#x27;s NAME is unrecoverable; two consecutive solo full runs were green (2614/1skip) and CI passed, so it is treated as transient — but an unnamed flake is a weaker record than a named one. Rule already exists (capture failure names); the orchestrator&#x27;s tail-only pipe dropped them. Recorded in the run-record follow_ups.</li>
+<li><strong>F2 · WORKING AS DESIGNED</strong> — the issue&#x27;s cited docstring being already-fixed is the normal consequence of a 3.25.0-era filing landing after 7 intervening releases; Step 1&#x27;s re-verification handled it exactly as intended.</li>
+</ul>
+<h2>Routing</h2>
+<ul>
+<li>Defects filed: none. Telemetry: none (all match). Friction memory: <strong>mempalace unavailable — friction memory SKIPPED</strong>. Artifact publish: deferred to the end-of-run aggregate (owner directive).</li>
+</ul>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.32.2 (issue #342, PR #373, lane small-standard) · rubric v1
+Fidelity 5/5 · Gates 3/5 · Clarity 5/5 · Dispatch 5/5 · Telemetry 4/5 · Cost 3/5
+Mode: full · Record: claude_docs/.epic-333-scratch/record-342.json
+Best catch: Step 1 live re-verification — already-fixed citation + worse-than-filed count drift, caught before fixing stale claims
+Worst friction: none in machinery; unnamed transient suite failure is orchestrator-owned (F1)
+Telemetry verdicts: 8 match / 0 mismatch / 0 missing-in-record / 0 missing-in-session / 0 unverifiable / 1 known-limitation
+Defects filed: none | Telemetry filed: none | Not filed (cap): 0 | Friction memorized: SKIPPED (mempalace unavailable) | Clean run: yes (1 owned orchestrator note)
+Report: docs/reviews/run-feedback-wf2-342-2026-07-10.md · Artifact: deferred to end-of-run aggregate (owner directive)
+Inferred (unconfirmed) claims: the transient failure&#x27;s cause (never named — capture gap, stated)</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-10 08:19 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

@@ -254,7 +254,7 @@ already fixed by #338 — honest citation delta recorded); Codex manifest
 with read-from-test guidance in place. Lane small-standard; loop-backs 0/3. Suite
 2613+1skip → 2614+1skip.
 
-**PR.** _PR # and CI filled by the epic close-out._
+**PR.** #373 — merged `e4d6aa2`, all 4 CI checks green. Epic #333 auto-run complete: 10/10 children shipped, 4 WF14 checkpoints run, aggregate review `docs/reviews/2026-07-10-epic333-wf14-aggregate.{md,html}`.
 
 ---
 

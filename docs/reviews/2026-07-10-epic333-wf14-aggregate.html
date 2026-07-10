@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #333 — WF14 aggregate review</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 08:21 MDT</div>
+<h1>Epic #333 — WF14 aggregate review</h1>
+
+</header>
+<main>
+<h1>Epic #333 — WF14 aggregate review · 9 assessed WF2 runs · rubric v1</h1>
+<h2>At a glance</h2>
+<p><strong>Across the epic&#x27;s ten shipped children (nine WF14-assessed runs incl. the #337 precursor), the workflow machinery held its floor everywhere — fidelity never dropped below <span class="score">4/5</span>, no gate was ever skipped silently, and zero dead dispatches were ever trusted — while the epic measurably fixed its own worst telemetry problems mid-flight: the dispatch audit trail went from unmeasurable (#329) to a 15/15 field-match (#344), and gate counting went from an eyeballed number (#337) to a rule every later record audits against.</strong></p>
+<ul>
+<li><strong>Step fidelity — 5,5,5,5,5,5,5,4,5</strong> — the floor never cracked; the one 4 (#332) is an owned convention bend (deferred campaign-log slot), logged at the time and repaired one PR later</li>
+<li><strong>Gate value — 3,5,5,5,5,4,5,3,3</strong> — every full-spine or contested run produced named, quoted, pre-merge catches; the 3s are honest &quot;nothing to catch&quot; docs/schema runs, not ceremony</li>
+<li><strong>Prose clarity — 3,3,4,4,5,4,4,5,5</strong> — a visible upward trend: the early interpretation costs (probe body parse, sidecar containment, feasibility line shape) stopped recurring once learned, and two became filed/fixed prose</li>
+<li><strong>Dispatch reliability — 5,3,5,3,5,4,5,5,5</strong> — 79 total dispatches across the epic; every sub-5 score is session-limit environment deaths, all detected, none trusted, all visibly re-dispatched</li>
+<li><strong>Telemetry honesty — 4,3,4,2,3,4,4,4,4</strong> — the #340 <span class="score">2/5</span> (dispatches[] mismatch + duplicate store line) is the epic&#x27;s only recorded mismatch, and it produced the #340/#355 fixes that made every later record audit clean</li>
+<li><strong>Cost sanity — 4,3,4,4,4,3,3,3,3</strong> — capped at ≤4 epic-wide by the standing session-level usage attribution; lane election was correct on all six eligible children</li>
+</ul>
+<p><strong>Best catch of the epic:</strong> #344&#x27;s Step 11 adversarial diff review — a syntactically valid <code>{&quot;projects&quot;: 1}</code> config raising <code>TypeError</code> in violation of <code>design_artifact_style</code>&#x27;s never-raises contract — confirmed live, guarded at both call sites, regression-tested. Runner-up: #330&#x27;s pass-1 design review proving the assembly design&#x27;s scoping anchor &quot;matches NOTHING in the notes corpus&quot; before any code existed.</p>
+<p><strong>Worst systemic friction (now filed):</strong> the ambiguity circuit breaker&#x27;s mechanical <code>ambiguity_flag</code> trigger vs determinable internal-consistency findings under autonomous campaigns — fired repeatedly on #344, resolved-and-logged each time, filed as <strong>#370</strong>.</p>
+<p><strong>Routed across the epic:</strong> issues #340, #341, #342, #343, #344 (all dogfood-found, ALL now shipped inside the same epic — the feedback loop closed on itself) · #355 (blind-append duplicate, open) · #356 (refuted with evidence, close recommended) · #370 (breaker semantics, new) · plus the #345/#346 telemetry improvements from checkpoint 1.</p>
+<h2>Scorecard</h2>
+<table>
+<thead><tr><th>Run</th><th>Issue · PR</th><th>Version</th><th>Lane</th><th>Fid</th><th>Gate</th><th>Clar</th><th>Disp</th><th>Tel</th><th>Cost</th><th>Filed</th></tr></thead>
+<tbody>
+<tr><td>pre-epic</td><td>#337 · #339</td><td>3.24.26</td><td>full</td><td>5</td><td>5</td><td>4</td><td>5</td><td>2</td><td>3</td><td>#340 #341 #342</td></tr>
+<tr><td>CP1</td><td>#329 · #347</td><td>3.26.0</td><td>small-standard</td><td>5</td><td>3</td><td>3</td><td>5</td><td>4</td><td>4</td><td>none (dups)</td></tr>
+<tr><td>CP1</td><td>#330 · #349</td><td>3.27.0</td><td>full</td><td>5</td><td>5</td><td>3</td><td>3</td><td>3</td><td>3</td><td>none (dups)</td></tr>
+<tr><td>CP1</td><td>#331 · #351</td><td>3.27.1</td><td>small-standard</td><td>5</td><td>5</td><td>4</td><td>5</td><td>4</td><td>4</td><td>none</td></tr>
+<tr><td>CP2</td><td>#341 · #352</td><td>3.28.0</td><td>small-standard</td><td>5</td><td>5</td><td>4</td><td>4</td><td>3</td><td>3</td><td>none</td></tr>
+<tr><td>CP2</td><td>#340 · #353</td><td>3.29.0</td><td>small-standard</td><td>5</td><td>5</td><td>4</td><td>3</td><td>2</td><td>4</td><td>#355 #356 (concurrent session)</td></tr>
+<tr><td>CP2</td><td>#338 · #354</td><td>3.30.0</td><td>small-standard</td><td>5</td><td>5</td><td>5</td><td>5</td><td>3</td><td>4</td><td>none</td></tr>
+<tr><td>CP3</td><td>#343 · #367</td><td>3.31.0</td><td>small-standard</td><td>5</td><td>4</td><td>4</td><td>4</td><td>4</td><td>3</td><td>none</td></tr>
+<tr><td>CP3</td><td>#344 · #368</td><td>3.32.0</td><td>full</td><td>5</td><td>5</td><td>4</td><td>5</td><td>4</td><td>3</td><td>#370</td></tr>
+<tr><td>CP3</td><td>#332 · #369</td><td>3.32.1</td><td>small-standard</td><td>4</td><td>3</td><td>5</td><td>5</td><td>4</td><td>3</td><td>none</td></tr>
+<tr><td>CP4</td><td>#342 · #373</td><td>3.32.2</td><td>small-standard</td><td>5</td><td>3</td><td>5</td><td>5</td><td>4</td><td>3</td><td>none</td></tr>
+</tbody>
+</table>
+<p>(11 rows: #337 was the dogfood precursor that spawned three of the epic&#x27;s children; the epic&#x27;s own ten children are #329–#332, #338, #340–#344.)</p>
+<h2>The loop closed on itself</h2>
+<p>The epic&#x27;s defining property: <strong>its later children fixed what its earlier assessments found, and its later assessments then measured the fixes working.</strong></p>
+<ul>
+<li>#337&#x27;s assessment found gate counting was &quot;an eyeball&quot; → <strong>#340 shipped the counting rule</strong> → every CP3/CP4 record&#x27;s <code>gates[]</code> audits <code>match</code> against it.</li>
+<li>#337&#x27;s assessment found markers mechanically un-attributable across concurrent runs → <strong>#341 shipped issue-keyed slots</strong> → CP3/CP4 attribution was mechanical despite four runs sharing one notes file.</li>
+<li>#337&#x27;s report &quot;rendered like a raw .md file&quot; → <strong>#343 shipped table rendering + the at-a-glance mandate</strong> → this aggregate and all CP3/CP4 reports render their tables and open verdict-first.</li>
+<li>#343&#x27;s structure half generalized → <strong>#344 shipped the design language</strong> → CP3/CP4 reports render with <code>--style report</code> (score chips live in the HTML of the very reports that assessed the feature).</li>
+<li>#337&#x27;s F-3 rot list → <strong>#342 fixed it</strong> (with one already-fixed citation honestly delta&#x27;d).</li>
+<li>#329/#330 shipped <code>dispatches[]</code> → #340&#x27;s assessment caught the first real <code>dispatches[]</code> mismatch (2 recorded vs 8 evidenced) → later records assemble from the canonical grep and audit 15/15.</li>
+</ul>
+<h2>Systemic observations (cross-run, not per-run)</h2>
+<p>1. <strong>The severity-banded confidence filter did its job both ways:</strong> it dropped 10+ sub-band findings across the epic without losing anything real (band-dropped items that mattered — the changelog count, ragged-row parity — were still fixed as cheap advisories or recorded as follow-ups), and it never suppressed a Critical/High. 2. <strong>Environment, not machinery, caused every dispatch death:</strong> session-limit kills (#330: 4, #340: 1) and one 529 (#343). Detection worked every time; the #331-shipped dead-return rule was exercised live in the same epic that wrote it. 3. <strong>The standing telemetry ceiling is usage attribution</strong> — session-cumulative tokens cap Cost at 3–4 on every run. Per-run attribution is the single highest-leverage telemetry improvement left (known-limitation in every audit; already on the #333 follow-up surface). 4. <strong>Orchestrator errors were owned, not laundered:</strong> the concurrent-pytest collision (#344), the deferred campaign-log slot (#332), the unnamed transient failure (#342) — each classified ORCHESTRATOR ERROR in its own report with the rule it violated named. 5. <strong>Cross-model gates earned their cost exactly where the design said they would:</strong> on the two full-spine runs (#330, #344) the adversarial passes forced design loop-backs that fixed High-severity flaws pre-code; on lane runs the collapsed ceremony lost nothing (no lane run later surfaced a design defect the panel would have caught).</p>
+<h2>Open items for the owner</h2>
+<ul>
+<li><strong>#355</strong> (persist_record blind-append duplicates) — real, reproduced live; open.</li>
+<li><strong>#356</strong> — refuted with evidence (off-by-one store read); close recommended, owner decides.</li>
+<li><strong>#370</strong> — breaker semantics under autonomous campaigns (new, from #344&#x27;s run).</li>
+<li><strong>runFeedback key</strong> still enabled on NO project entry — the #338 wiring is live but dormant everywhere; enabling it on rawgentic is an owner config decision.</li>
+<li><strong>Falsification experiment</strong> (route <code>implementation</code> to sonnet, re-measure delegation) — documented as open by #332; unrun.</li>
+</ul>
+<p>Provenance: individual reports <code>docs/reviews/run-feedback-wf2-{337,329,330,331,341,340,338,343,344,332,342}-*.{md,html}</code> · records <code>claude_docs/.epic-333-scratch/record-*.json</code> + <code>docs/measurements/run_records.jsonl</code> · assessed under rubric v1 by the same orchestrator that ran the runs (bias stated in every report).</p>
+
+</main>
+<footer>Last updated: 2026-07-10 08:21 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
