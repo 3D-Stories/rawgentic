@@ -138,8 +138,10 @@ Apply `references/rubric.md` (read it in full first):
   working-as-designed).
 - **Recurrence tag (rubric v2, #377).** A friction finding MAY carry
   `recurrence: <n> runs (index query, quoted)` — a session-index (#375) query
-  (`hooks/session_index.py search "<friction phrase>" --literal --json`,
-  distinct sessions counted) showing the same friction in prior runs upgrades a
+  (`hooks/session_index.py search "<friction phrase>" --literal --json --limit 200`,
+  distinct sessions counted — raise `--limit` past its default 20, which is
+  bm25-ranked and can undercount sessions) showing the same friction in prior
+  runs upgrades a
   one-off observation to a confirmed pattern, feeding the prose-clarity and
   cost-sanity anchors at higher confidence. The `recurrence` tag is OPTIONAL —
   an assessment run without a session index remains fully valid; degraded-mode
@@ -223,8 +225,7 @@ PR picks them up (WF5 convention).
    body as a cross-link. WF17 (#376) skill candidates that reach recurrence ≥ 3 runs
    may be filed via WF1 and then SHARE the MAX_FEEDBACK_ISSUES_PER_RUN pool; below
    threshold they stay in the WF17 report/queue — a candidate never crowds out a
-   defect. The cap must never hide
-   systemic failures. Any `gh` failure: print the exact failed command + stderr in the
+   defect. Any `gh` failure: print the exact failed command + stderr in the
    routing section; a filing error never voids the assessment.
 2. **Telemetry improvements**: the Step-2b lane — same dup-check, same cap pool,
    cross-linked to #329/#330/#333.
