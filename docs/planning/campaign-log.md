@@ -111,6 +111,38 @@ cross-skill reads); legacy fallback tightened to pre-#341/stale-cache only;
 table, stale canonical doc, wrong changelog file refs, fail-open fallback framing.
 Loop-backs 2/3. No spine change → no diagram REV.
 
+**PR.** *(backfilled by #340's pass)* PR #352 squash-merged `27aab30`, all CI checks
+green.
+
+---
+
+### #340 — multi-pass gate counting rule + merged-gate reviewer_kind precedence · v3.29.0
+
+**Issue.** #340 (feature, epic #333 child 5/10, WF14 dogfood finding F-1): the run-record
+schema gave multi-pass gates no counting rule (the #337 record shipped an eyeballed 14/14
+matching no defensible derivation) and single-slot `reviewer_kind` could not describe a
+merged self-review+codex gate.
+
+**What shipped.** Two documented-and-guarded semantics rules: (1) `findings` = UNIQUE
+findings across all passes (identity = same artifact location AND same required change),
+`resolved` = terminal FINAL disposition at gate close (applied / fixed-in-gate /
+refuted-with-cited-evidence / dropped-by-band; band-drops count in both), computed at
+gate close and persisted — assembly reads, never re-derives; (2) merged-gate
+`reviewer_kind` records the gate-DEFINING mechanism (Step 4/6 → `inline`, Step 11 →
+`hand_rolled_multi`; `→ codex` scoped to sole-mechanism gates; skipped gate omits the
+key). Canonical prose + worked example in `run-record.md`; WF3 §14 pointer;
+`docs/run-records.md` subsection; WF14 rubric weak-spot checks audit against both rules
+(pre-#340 records = `known-limitation`). No validator change — shape untouched.
+
+**Reviews.** Step 8a (T1 high): 2 opus reviewers — R2 High @0.8 real (rule landed where
+per-finding input no longer exists → compute-at-gate-close persistence added). Step 11:
+R1 1 Med confirmed (changelog test count), R2 clean; codex adversarial 3 — A1 High
+(disposition-alias escape clause reopened the closed set → closed), A2 Med (pre-#340
+reviewer_kind legacy carve-out → added), A3 Low = issue #343's exact subject (tracked,
+not fixed here). Security scan 0/0 (iac n/a, sca nothing-to-scan). Lane: small-standard
+(5 impl files ≤ 7). 6 new drift guards. Suite 2534+1skip → 2540+1skip. Loop-backs 1/3.
+No spine change → no diagram REV.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---
