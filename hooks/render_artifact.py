@@ -57,6 +57,27 @@ def _inline(escaped: str) -> str:
     return escaped
 
 
+# --- table detection helpers (escape-first callers still html.escape each cell) ---
+
+_TABLE_SEP_CELL = re.compile(r"^:?-+:?$")
+
+
+def _is_table_separator(line: str) -> bool:
+    """A GFM separator row: pipe-delimited cells each matching ``:?-+:?`` (dashes
+    with optional leading/trailing alignment colon), e.g. ``| --- | :-: |``."""
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2):
+        return False
+    cells = stripped.strip("|").split("|")
+    return bool(cells) and all(_TABLE_SEP_CELL.match(c.strip()) for c in cells)
+
+
+def _split_table_row(line: str) -> list[str]:
+    """Split a ``| a | b |`` row into stripped cells, dropping the empty cells
+    the leading/trailing pipes produce."""
+    return [c.strip() for c in line.strip().strip("|").split("|")]
+
+
 def _render_body_plain(markdown: str) -> str:
     """Escape-first block renderer. Every line is escaped before classification;
     transforms only wrap escaped text in whitelisted tags."""
@@ -129,6 +150,30 @@ def _render_body_plain(markdown: str) -> str:
             quote = re.sub(r"^>\s?", "", stripped)
             out.append(f"<blockquote>{_inline(html.escape(quote))}</blockquote>")
             i += 1
+            continue
+
+        # table: a "| ... |" header row immediately followed by a "| --- | :-: |"
+        # separator row. A pipe row with no separator next is NOT a table (falls
+        # through to the paragraph branch below, unchanged).
+        if (stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
+                and i + 1 < len(lines) and _is_table_separator(lines[i + 1])):
+            close_list()
+            header_cells = _split_table_row(lines[i])
+            out.append("<table>")
+            out.append("<thead><tr>" + "".join(
+                f"<th>{_inline(html.escape(c))}</th>" for c in header_cells) + "</tr></thead>")
+            i += 2  # skip header + separator
+            body_rows = []
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                body_rows.append(_split_table_row(lines[i]))
+                i += 1
+            if body_rows:
+                out.append("<tbody>")
+                for cells in body_rows:
+                    out.append("<tr>" + "".join(
+                        f"<td>{_inline(html.escape(c))}</td>" for c in cells) + "</tr>")
+                out.append("</tbody>")
+            out.append("</table>")
             continue
 
         close_list()

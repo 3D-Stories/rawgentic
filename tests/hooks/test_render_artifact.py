@@ -358,3 +358,96 @@ class TestRoadmapStyle:
         out = tmp_path / "out.html"
         render_artifact.main(["--md", str(md), "--out", str(out), "--title", "T"])
         assert "mstone" not in out.read_text()
+
+
+# --- #343: markdown-table rendering in _render_body_plain ---
+
+class TestMarkdownTables:
+    def test_table_renders_thead_tbody(self):
+        md = (
+            "| Name | Age |\n"
+            "| --- | --- |\n"
+            "| Alice | 30 |\n"
+            "| Bob | 40 |\n"
+        )
+        h = _render(md)
+        assert "<table>" in h
+        assert "<thead>" in h and "<th>Name</th>" in h and "<th>Age</th>" in h
+        assert "<tbody>" in h
+        assert "<td>Alice</td>" in h and "<td>30</td>" in h
+        assert "<td>Bob</td>" in h and "<td>40</td>" in h
+        assert "<p>|" not in h
+
+    def test_alignment_colon_separator_accepted(self):
+        md = (
+            "| A | B | C |\n"
+            "| :-- | :-: | --: |\n"
+            "| 1 | 2 | 3 |\n"
+        )
+        h = _render(md)
+        assert "<table>" in h
+        assert "<td>1</td>" in h and "<td>2</td>" in h and "<td>3</td>" in h
+
+    def test_pipe_line_without_separator_stays_paragraph(self):
+        md = "| not a table | just text |"
+        h = _render(md)
+        assert "<table>" not in h
+        assert "<p>" in h and "| not a table | just text |" in h
+
+    def test_table_inside_fence_not_converted(self):
+        md = "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```"
+        h = _render(md)
+        assert "<table>" not in h
+        assert "<pre><code>" in h
+        assert "| A | B |" in h
+
+    def test_table_cell_script_escaped(self):
+        md = (
+            "| Col |\n"
+            "| --- |\n"
+            "| <script>alert(1)</script> |\n"
+        )
+        h = _render(md)
+        assert "<script>alert(1)</script>" not in h
+        assert "&lt;script&gt;" in h
+
+    def test_table_cell_inline_markdown(self):
+        md = (
+            "| Col |\n"
+            "| --- |\n"
+            "| **bold** and `code` |\n"
+        )
+        h = _render(md)
+        assert "<strong>bold</strong>" in h
+        assert "<code>code</code>" in h
+
+    def test_table_after_list_closes_ul_first(self):
+        md = (
+            "- item one\n"
+            "- item two\n"
+            "\n"
+            "| A | B |\n"
+            "| --- | --- |\n"
+            "| 1 | 2 |\n"
+        )
+        h = _render(md)
+        assert "</ul>" in h
+        assert h.index("</ul>") < h.index("<table>")
+        assert "<table>" not in h.split("</ul>")[0]
+
+    def test_table_with_only_header_and_separator_no_body_rows(self):
+        md = "| A | B |\n| --- | --- |\n"
+        h = _render(md)
+        assert "<table>" in h
+        assert "<th>A</th>" in h and "<th>B</th>" in h
+
+    def test_roadmap_style_table_inside_section(self):
+        md = (
+            "## Slot 1 — DONE\n\n"
+            "| A | B |\n"
+            "| --- | --- |\n"
+            "| 1 | 2 |\n"
+        )
+        h = _render(md, style="roadmap")
+        assert '<section class="mstone">' in h
+        assert "<table>" in h
