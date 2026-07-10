@@ -246,7 +246,7 @@ dialog.modal .sheet{margin-top:0;border:0;box-shadow:none;animation:none}
   <main id="app"></main>
 
   <div class="prov">
-    <span>SOURCE OF TRUTH · skills/&lt;workflow&gt;/SKILL.md + references/steps.md @ plugin 3.25.0</span>
+    <span>SOURCE OF TRUTH · skills/&lt;workflow&gt;/SKILL.md + references/steps.md @ plugin 3.27.1</span>
     <span>SEPARATE FROM the health/proposals overlay — this sheet is the canonical reference</span>
   </div>
 </div>
@@ -503,8 +503,9 @@ const DATA = {
   },
   wf3: {
     code:"WF3", name:"Fix Bug", skill:"skills/fix-bug", skeletal:true,
-    revs:["3.10.0"], loopbacks:[], loopnote:null,
-    versions: {"3.10.0": {superseded:false, steps:[
+    revs:["3.27.1","3.10.0"], loopbacks:[], loopnote:null,
+    versions: {
+      "3.27.1": {superseded:false, steps:[
       {id:"1",num:"01",name:"Receive Bug Report",kind:"step",mand:true,sum:"Config + environment; fetch/validate the issue (STRIDE-aware); memory-search bug history.",pending:true},
       {id:"1b",num:"1b",name:"Goal Guard (/goal)",kind:"step",mand:false,cond:"optional guard · never blocks",sum:"plan_lib.build_goal_text(variant=\"wf3\") folded into Step 1's confirmation — WF2 parity.",pending:true},
       {id:"2",num:"02",name:"Analyze & Classify",kind:"step",mand:true,sum:"Trace the reproduce path, blast radius, test inventory; complex_bug UPGRADES to WF2 automatically.",pending:true},
@@ -514,13 +515,20 @@ const DATA = {
       {id:"6",num:"06",name:"Create Fix Branch",kind:"step",mand:true,sum:"Branch from a freshly-fetched origin/<default>; pre-flight dependency install.",pending:true},
       {id:"7",num:"07",name:"TDD Bug Fix (Reproduce-First)",kind:"step",mand:true,sum:"RED reproduction test → GREEN minimal fix → minimal refactor → regression tests → full suite.",pending:true},
       {id:"8",num:"08",name:"Gate · Lightweight Verification",kind:"gate",mand:true,sum:"Self-check: ACs addressed, reproduction genuine, no stray changes, all tests pass.",pending:true},
-      {id:"9",num:"09",name:"Code Review + Memorize",kind:"gate",mand:true,nonneg:true,sum:"2-agent review (silent-failure-hunter + code-reviewer); conditional mempalace memorization. NON-NEGOTIABLE.",pending:true},
+      {id:"9",num:"09",name:"Code Review + Memorize",kind:"gate",mand:true,nonneg:true,
+       rev:{delta:"Step 9 (WF3): declared per-slot 3-tier fallback chain (toolkit→bundled substitute→generic) + dead-return detection (vacuous = dead, relaunch once, then REVIEW_DISPATCH_FAILED + ERROR protocol).", refs:["#331"]},
+       sum:"2-agent review (silent-failure-hunter + code-reviewer) via a declared per-slot 3-tier fallback (pr-review-toolkit named → rawgentic:rawgentic-reviewer substitute → generic inline-prompt; a slot falling back never collapses two reviews to one) + dead-return detection (vacuous return = DEAD, relaunch once, second death → REVIEW_DISPATCH_FAILED + ERROR protocol); conditional mempalace memorization. NON-NEGOTIABLE.",pending:true},
       {id:"10",num:"10",name:"Create PR",kind:"step",mand:true,sum:"Conventional fix(scope) commit closing the issue; templated PR body.",pending:true},
       {id:"11",num:"11",name:"CI Verification",kind:"step",mand:false,cond:"has_ci",sum:"Monitor/fix CI; quarantine handled as a visible non-gate with a trust guard.",pending:true},
       {id:"12",num:"12",name:"Merge & Deploy",kind:"step",mand:false,cond:"user-requested",sum:"Squash-merge, deploy, migration — only on explicit request.",pending:true},
       {id:"13",num:"13",name:"Post-Deploy Verification",kind:"step",mand:false,cond:"a deployment happened",sum:"Symptom re-check + E2E + health + same-class bug scan.",pending:true},
       {id:"14",num:"14",name:"Summary + Run-Record",kind:"step",mand:true,sum:"Run-record assembled and rendered via work_summary.py — same telemetry substrate as WF2.",pending:true}
-    ]}}
+      ]},
+      "3.10.0": {superseded:"3.27.1", steps:null,
+        overrides: {
+          "9": {sum:"2-agent review (silent-failure-hunter + code-reviewer); conditional mempalace memorization. NON-NEGOTIABLE.",pending:true}
+        }}
+    }
   },
   wf5: {
     code:"WF5", name:"Adversarial Review", skill:"skills/adversarial-review", skeletal:true,

@@ -66,6 +66,30 @@ fixed + 3 Low hardenings + adversarial 1 applied / 2 refuted. Scan 0/0. DOGFOOD:
 run's own record carries 19 assembled dispatches[] entries (4 dead from the limit kill).
 Suite 2503+1skip → 2512+1skip. No spine change → no diagram REV.
 
+**PR.** #349 — merged 4a629df, all 4 CI checks green.
+
+### #331 — WF3 Step 9 per-slot fallback chain + dead-return detection · v3.27.1
+
+**Issue.** #331 (fix, epic #333 child 3/10): WF3's NON-NEGOTIABLE Step 9 gate named only
+two external-plugin agents with no declared fallback and no vacuous-return handling — a
+mandatory gate with an undeclared single point of failure.
+
+**What shipped.** Declared per-slot three-tier chain (pr-review-toolkit named →
+rawgentic-reviewer substitute → generic inline; never collapses two reviews to one;
+both-slots-tier-2 distinct briefs) + dead-return detection (vacuous = DEAD, relaunch
+once, second death → REVIEW_DISPATCH_FAILED + ERROR protocol; mid-tier runtime error
+retries once then descends) + two named failure modes + headless Step 9 ERROR entry.
+WF3 resolution table reconciled (tier1=primary, tier2=fallback — the first real
+producer, tier3=generic; the pre-existing #330 table mismatch fixed). Descent emission
+split by trigger (resolve-failure emits no line for a tier that never ran — no
+fabricated audit records; runtime-error descent carries the abandoned tier's own
+resolution). WF2's 8a + Step 11 reviewer sites gained the same dead-return rule —
+this session's own limit-kill (3 dead reviewers) is the live case. WF3 diagram
+REV 3.27.1, full-page snapshots re-verified 1440×2586 both themes. Suite
+2512+1skip → 2518+1skip. Reviews caught real: pass-1 design collided with the
+#330 tables merged 30 minutes earlier; Step 11 caught the fabricated-audit-line
+semantics. Loop-backs 1/3.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---

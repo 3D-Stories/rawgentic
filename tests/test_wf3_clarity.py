@@ -226,13 +226,35 @@ class TestDispatchGrammar:
             "in the fix-bug corpus")
 
     def test_wf3_per_invocation_emission_rule_present(self):
-        """#330 8a hardening: two review agents must mean two DISPATCH lines."""
+        """#330 8a hardening: two review agents must mean two DISPATCH lines.
+        #331 (Step 11 refinement) splits descent emission by trigger — a
+        runtime-error descent adds the abandoned tier's terminal line; a
+        resolve-failure descent adds none (an unresolvable tier never ran)."""
         corpus = " ".join(skill_corpus("fix-bug").split())
         rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
-                "— WF3 Step 9's two review agents = two lines")
+                "— WF3 Step 9's two review agents = two lines at a single "
+                "tier; a slot that descends on a RUNTIME ERROR adds the "
+                "abandoned tier's terminal line, while a resolve-failure "
+                "descent adds none (an unresolvable tier never ran).")
         assert rule in corpus, (
             "the WF3 per-invocation DISPATCH emission rule must be present in "
-            "the fix-bug corpus")
+            "the fix-bug corpus, split by descent trigger per #331")
+
+    def test_wf3_descent_trigger_split_present(self):
+        """#331 Step 11 refinement: a resolve-failure descent must never
+        fabricate an 'attempted and errored' audit line for a tier that never
+        ran; the runtime-error descent carries the abandoned tier's OWN
+        resolution value. Pins the load-bearing clauses of the split rule."""
+        corpus = " ".join(skill_corpus("fix-bug").split())
+        assert ("a RESOLVE-FAILURE descent (the tier's agent type is not "
+                "installed / does not resolve) emits NO line for the "
+                "unresolved tier") in corpus, (
+            "the resolve-failure no-line clause must be present (#331)")
+        assert ("the abandoned tier's terminal line with `outcome=error` and "
+                "THAT TIER's own resolution value (tier 1 → "
+                "`resolution=primary`, tier 2 → `resolution=fallback`)") in corpus, (
+            "the runtime-error two-line clause with per-tier resolution "
+            "values must be present (#331)")
 
 
 # --- #330: dispatches[] assembly instruction at WF3 Step 14 ---
@@ -257,3 +279,52 @@ class TestDispatchesAssembly:
         assert sentence in s14, (
             "Step 14 must contain the canonical #330 dispatches[] assembly "
             "sentence")
+
+
+# --- #331: per-slot fallback chain + dead-return detection at the Step 9 gate ---
+
+class TestPerSlotFallbackChain:
+    """Header-index-sliced guard (repo convention: TestDispatchesAssembly /
+    test_wf2_clarity.py's TestTieredLoopback, :444-454). Pins the two #331
+    canonical sentences the Step 9 review gate must carry: the per-slot
+    three-tier fallback chain (a fallback in one slot never collapses the gate
+    from two reviews to one) and the dead-return relaunch rule (a vacuous
+    reviewer return is a DEAD dispatch, not a clean pass). Location pin (reads
+    steps.md directly), whitespace-normalized so wrapped prose compares equal."""
+
+    def _step9(self) -> str:
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        return " ".join(_section(text, "## Step 9:", "## Step 10:").split())
+
+    def test_per_slot_fallback_chain_sentence_present(self):
+        s9 = self._step9()
+        sentence = (
+            "For EACH reviewer slot independently: dispatch the named "
+            "`pr-review-toolkit` agent; if THAT slot's agent type fails to "
+            "resolve, dispatch `rawgentic:rawgentic-reviewer` with that slot's "
+            "brief; if that also fails, use a generic inline-prompt dispatch "
+            "with that slot's brief — fallback in one slot never collapses the "
+            "gate from two reviews to one.")
+        assert sentence in s9, (
+            "Step 9 must carry the #331 canonical per-slot three-tier fallback "
+            "chain sentence")
+
+    def test_dead_return_detection_sentence_present(self):
+        s9 = self._step9()
+        sentence = (
+            "A reviewer return that is vacuous (no findings AND no substantive "
+            "content) is a DEAD dispatch, not a clean pass — relaunch that slot "
+            "once at the same tier; on a second death, record the slot as "
+            "REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's "
+            "ERROR protocol — the gate never proceeds with fewer than two live "
+            "reviews.")
+        assert sentence in s9, (
+            "Step 9 must carry the #331 canonical dead-return detection sentence")
+
+    def test_step9_failure_mode_bullets_present(self):
+        """8a hardening (#331): the failure-mode bullets carry the terminal
+        action — deleting them must fail a test, not just the bold blocks."""
+        s9 = self._step9()
+        assert ("Named agent type does not resolve → per-slot fallback chain" in s9)
+        assert ("Reviewer returns vacuous success → dead-return relaunch once, "
+                "then REVIEW_DISPATCH_FAILED + the workflow's ERROR protocol") in s9

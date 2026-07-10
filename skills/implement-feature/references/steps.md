@@ -1047,7 +1047,7 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
    - **Medium/Low:** advisory; log to review log only.
 5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
 6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
-7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**.
+7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
 8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` where entry is:
    ```json
    {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
@@ -1221,7 +1221,7 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
 <!-- model-routing: role=review -->
 Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
 
-2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s.
+2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that agent once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
 
    **Agent 1: Style & Convention Compliance**
    - Code style rules from project conventions and config.formatting

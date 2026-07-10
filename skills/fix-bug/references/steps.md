@@ -398,6 +398,10 @@ Launch a focused 2-agent code review in parallel using Agent tool calls (subagen
 
 For bug fixes, focus reviewers on: (a) is the fix correct and complete, (b) are there any new silent failures, (c) is the code simple and focused. Type design and code simplification are deferred — bug fixes should be minimal and targeted.
 
+**Per-slot fallback chain (#331).** For EACH reviewer slot independently: dispatch the named `pr-review-toolkit` agent; if THAT slot's agent type fails to resolve, dispatch `rawgentic:rawgentic-reviewer` with that slot's brief; if that also fails, use a generic inline-prompt dispatch with that slot's brief — fallback in one slot never collapses the gate from two reviews to one. On a toolkit-absent machine BOTH slots run `rawgentic:rawgentic-reviewer` with their respective DISTINCT briefs (silent-failure-hunt brief + code-review brief) — two invocations, two reviews, never merged. Log which tier each slot ran; tiers map to #330's resolution: tier 1 `primary`, tier 2 `fallback`, tier 3 `generic`.
+
+**Dead-return detection (#331).** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that slot once at the same tier; on a second death, record the slot as REVIEW_DISPATCH_FAILED in session notes and invoke the workflow's ERROR protocol — the gate never proceeds with fewer than two live reviews. A dispatch that ERRORS mid-tier (a runtime failure, not a resolve-failure and not a vacuous return) retries once at that tier, then descends the chain; a tier-3 error takes the same REVIEW_DISPATCH_FAILED terminal action. (The same vacuous-return rule is applied to WF2's review sites — Steps 8a and 11 — by this change; WF2's pre-existing analog is the implementation-delegation rule at its Step 8 item 4.)
+
 Apply findings automatically. Circuit breaker on ambiguity.
 
 **Part B: Conditional Memorize**
@@ -420,6 +424,8 @@ Review-clean code + optional project knowledge updates.
 
 - Review finds fundamental flaw → loop back to Step 3 (max 1 time per loop-back budget)
 - Review agents hit rate limit → log partial results, resume after reset
+- Named agent type does not resolve → per-slot fallback chain (never stall, never skip the gate)
+- Reviewer returns vacuous success → dead-return relaunch once, then REVIEW_DISPATCH_FAILED + the workflow's ERROR protocol (the gate never proceeds with fewer than two live reviews)
 
 ---
 

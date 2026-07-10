@@ -33,6 +33,7 @@ ERROR interactions (post error comment, exit WITHOUT ai-waiting label):
 - Step 4: Loop-back budget exhausted
 - Step 11: CI timeout (after 2x wait)
 - Step 9: Design flaw + budget exhausted
+- Step 9: REVIEW_DISPATCH_FAILED (dead-return ×2 or tier-3 runtime error — #331)
 
 **Protocol details are identical to WF2's `<headless-interaction>` block.**
 See implement-feature SKILL.md for the full QUESTION protocol (post → label →

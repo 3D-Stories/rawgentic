@@ -843,3 +843,34 @@ class TestDispatchRegexIdentity:
         assert narrow in wf3, (
             "fix-bug SKILL.md must carry the canonical regex narrowed ONLY in "
             "the role group (role=(review))")
+
+
+# --- #331: dead-return detection at WF2's reviewer dispatch sites (Step 8a item 7 ---
+# --- and Step 11 item 2) — a vacuous reviewer return (no findings AND no substantive ---
+# --- content) must be relaunched once rather than silently counted as a clean pass. ---
+
+class TestDeadReturnDetection:
+    """Drift guard for the #331 dead-return rule: this session's own Step 11
+    limit-kill (agents dying on session limits and returning empty bodies) is the
+    live case study that motivated it. Section-sliced per repo convention
+    (TestTieredLoopback, :444-454) so the pin can't false-positive elsewhere in
+    the corpus."""
+
+    CANONICAL_8A = (
+        "A reviewer return that is vacuous (no findings AND no substantive "
+        "content) is a DEAD dispatch, not a clean pass — relaunch that reviewer "
+        "once; on a second death treat it as a dispatch failure (item 7's "
+        "REVIEW_DISPATCH_FAILED path)."
+    )
+
+    def test_step_8a_carries_canonical_dead_return_sentence(self):
+        step8 = _section(_text(), "## Step 8:", "## Step 9:")
+        assert self.CANONICAL_8A in step8, (
+            "Step 8a item 7 must carry the canonical dead-return-detection "
+            "sentence pinned verbatim")
+
+    def test_step_11_carries_dead_return_rule(self):
+        step11 = _section(_text(), "## Step 11:", "## Step 11.5:")
+        assert "is a DEAD dispatch, not a clean pass" in step11, (
+            "Step 11 item 2 must carry the same dead-return rule (adapted "
+            "wording is fine, but the core phrase must survive)")
