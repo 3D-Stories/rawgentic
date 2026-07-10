@@ -651,3 +651,87 @@ class TestStep8aFixes:
         err = capsys.readouterr().err
         assert "unknown style 'not-a-template'" in err
         assert "tpl-" not in h
+
+
+# --- #344 Task 4: the design-language doc + reproducible exemplar ---
+
+_DOCS = HOOKS.parent / "docs"
+_DL_DOC = _DOCS / "design-language.md"
+_DL_FIXTURE = _DOCS / "design-language-example.md"
+_DL_HTML = _DOCS / "design-language-example.html"
+
+# Pinned stamp + style + title for the exemplar — must match the regeneration
+# one-liner recorded in the doc's Exemplar section (docs/design-language.md).
+_EXEMPLAR_TS = "2026-07-10 12:00 MDT"
+_EXEMPLAR_TITLE = "Design-language exemplar"
+_EXEMPLAR_STYLE = "design"
+
+# The canonical human-first sentence — the drift-guard target. Any edit to this
+# sentence in the doc must be a deliberate edit here too.
+_HUMAN_FIRST_SENTENCE = (
+    "Every templated artifact opens with its verdict-first lead section — the "
+    "at-a-glance summary, decision, status, or verdict — before any evidence or "
+    "detail, so the document reads top-down for a human."
+)
+
+
+def _norm(text: str) -> str:
+    """Collapse all whitespace runs to single spaces (wrapped-prose tolerant)."""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _section(doc: str, header: str) -> str:
+    """Return the body of the ``## <header>`` section: everything from that h2
+    line up to (not including) the next h2. House drift-guard pattern — slice by
+    header index so a stray match elsewhere in the doc can't satisfy the pin."""
+    lines = doc.split("\n")
+    start = None
+    for idx, ln in enumerate(lines):
+        if ln.strip() == f"## {header}":
+            start = idx
+            break
+    assert start is not None, f"section '## {header}' not found"
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        if re.match(r"##(?!#)\s", lines[idx]):
+            end = idx
+            break
+    return "\n".join(lines[start:end])
+
+
+class TestDesignLanguageDoc:
+    def test_doc_exists(self):
+        assert _DL_DOC.is_file(), _DL_DOC
+
+    def test_human_first_canonical_sentence_present(self):
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Human-first skeleton")
+        assert _norm(_HUMAN_FIRST_SENTENCE) in _norm(section)
+
+    def test_five_lead_section_names_present(self):
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Human-first skeleton")
+        for name in ("At a glance", "Decision", "Status", "Verdict", "Summary"):
+            assert name in section, name
+
+    def test_templates_section_lists_all_registry_names(self):
+        # computed, not hand-pinned: compare against the live registry order.
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Templates")
+        for name in tuple(render_artifact._TEMPLATES):
+            assert name in section, name
+
+    def test_token_names_honest_against_component_style(self):
+        # every --sev-*/--req-* token the Tokens section names must actually exist
+        # in _COMPONENT_STYLE (computed check — no invented tokens).
+        section = _section(_DL_DOC.read_text(encoding="utf-8"), "Tokens")
+        named = set(re.findall(r"--(?:sev|req)[a-z-]*", section))
+        assert named, "Tokens section names no --sev-*/--req-* tokens"
+        for tok in named:
+            assert tok in render_artifact._COMPONENT_STYLE, tok
+
+    def test_exemplar_reproducible_byte_for_byte(self):
+        # Re-render the committed fixture with the pinned stamp+style+title and
+        # byte-compare to the committed HTML — the reproducibility contract.
+        fixture = _DL_FIXTURE.read_text(encoding="utf-8")
+        rendered = render_artifact.render_artifact(
+            fixture, title=_EXEMPLAR_TITLE, generated_at=_EXEMPLAR_TS,
+            style=_EXEMPLAR_STYLE)
+        assert rendered == _DL_HTML.read_text(encoding="utf-8")
