@@ -1018,3 +1018,29 @@ class TestMultiPassGateCounting:
                 "that gate's session-note evidence") in corpus
         assert ("Gate close = the last circuit-breaker resolution before the "
                 "workflow advances past the step") in corpus
+
+
+class TestRunFeedbackWiring:
+    """#338: Step 16 must carry the runFeedback embedded-invocation wiring —
+    the opt-in gate plus the canonical invocation-and-fail-open sentence —
+    verbatim (whitespace-normalized). Companion WF3 guard lives in
+    tests/test_wf3_clarity.py."""
+
+    WIRING = (
+        "When enabled, invoke the run-feedback core path non-interactively "
+        "with explicit `--record /tmp/wf2-run-record.json --wf 2 "
+        "--session-notes <notes-path>`; an assessment failure never blocks "
+        "workflow completion — log and continue."
+    )
+
+    def test_wiring_sentence_present(self):
+        corpus = " ".join(_text().split())
+        assert self.WIRING in corpus, (
+            "Step 16 must carry the #338 canonical runFeedback wiring "
+            "sentence verbatim")
+
+    def test_gate_command_uses_runfeedback_key(self):
+        corpus = " ".join(_text().split())
+        assert ("--skill implement-feature --key runFeedback") in corpus, (
+            "Step 16's runFeedback gate must probe the runFeedback key via "
+            "the generic is-enabled parser (#338)")
