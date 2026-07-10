@@ -365,6 +365,14 @@ def _default_queue():
     return str(root / QUEUE_RELPATH) if root else None
 
 
+def _default_db():
+    """Default #375 DB path — quote resolution must not silently degrade to
+    marked-up snippets just because --db was omitted (live-run catch)."""
+    root = resolve_workspace_root(Path.cwd())
+    db = root / "claude_docs" / ".session-index" / "sessions.db" if root else None
+    return str(db) if db and db.exists() else None
+
+
 def _session_index_cli() -> Path:
     return Path(__file__).resolve().parent / "session_index.py"
 
@@ -637,9 +645,10 @@ def main(argv) -> int:
 
     p_detect = sub.add_parser("detect")
     p_detect.add_argument("--queue", default=_default_queue())
-    p_detect.add_argument("--db", default=None,
-                          help="session-index DB (default: resolved by "
-                               "session_index.py)")
+    p_detect.add_argument("--db", default=_default_db(),
+                          help="session-index DB (default: the workspace "
+                               "claude_docs/.session-index/sessions.db when "
+                               "present)")
     p_detect.add_argument("--run-id", default=None)
     p_detect.add_argument("--workspace-root", default=None,
                           help="override workspace root for notes reading "
