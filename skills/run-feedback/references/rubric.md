@@ -1,8 +1,14 @@
 # WF14 Run-Feedback Assessment Rubric
 
-Rubric version: v1 (2026-07-09, #337 — seeded from the workspace prompt
+Rubric version: v2 (2026-07-10, #377 — v1 + cross-session recurrence evidence
+wiring; v1 was 2026-07-09, #337, seeded from the workspace prompt
 `claude_docs/prompts/wf-run-feedback.md`, enhanced per the #337 design's peer consult).
 Every report quotes the rubric version it was assessed under.
+Comparability: v2 adds only the OPTIONAL recurrence tag and changes no anchors —
+reports assessed under v1 remain comparable per-dimension. A recurrence-tagged
+friction finding may raise the assessor's CONFIDENCE in an existing anchor
+placement (a confirmed cross-run pattern vs a one-off observation); it never
+moves the anchors themselves.
 
 ## Scope rules
 

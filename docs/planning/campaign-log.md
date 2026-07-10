@@ -77,7 +77,24 @@ leak + accepted-evidence loss; one High rejected with rationale (torn-tail-as-de
 write-time visibility). Live verification against the real corpus (temp queue): 1,031
 signals → 177 patterns → 10 proposals with verbatim evidence, AC4 decline-then-re-propose
 verified live. Suite 2670+1skip→2723+1skip. WF17 skeletal diagram entry, no WF2-spine
-REV. *(PR/CI/merge fields: filled by the next slot's pass.)*
+REV. PR #387 squash-merged `ccebaf4`, CI 4/4 green, issue auto-closed.
+
+### #377 — WF14 rubric v2: cross-session recurrence evidence wiring · v3.35.0
+
+**Issue.** #377 (feature, epic #378 child 3/3, complexity S): wire #375/#376's
+recurrence evidence into WF14 run-feedback — prose-only, no hook code.
+
+**What shipped.** Small-standard LANE run (the epic's first; D11). WF14 Step 2 friction
+findings gain an OPTIONAL `recurrence: <n> runs (index query, quoted)` tag (#375 index
+query, distinct sessions, --limit raised past the bm25 default); rubric stamped v2 with
+a comparability note (no anchors moved — recurrence raises CONFIDENCE only); provenance
+boundary pinned (index SUPPLEMENTS; Step 1 marker-grep stays SOLE run-fact source; Step
+1 prose byte-identical); Step 4 cap-sharing (WF17 candidates at ≥ 3 runs share the
+3-issue pool; below threshold never crowd out a defect). 4 new drift-guard pins + the
+v1 stamp pin updated. Lane gates: single-reviewer Step 11 PASS (2 Low prose nits fixed:
+a splice-duplicated clause, a --limit undercount note); adversarial diff mechanically
+skipped (no security surface); 0 loop-backs. Suite 2723+1skip→2727+1skip. No diagram
+REV (skeletal wf14 sheet, prose-only). *(PR/CI/merge fields: filled at epic close.)*
 
 ---
 
