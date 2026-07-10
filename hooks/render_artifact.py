@@ -18,7 +18,10 @@ STDLIB ONLY: the CI env installs just pytest + jsonschema, so this pulls in no
 markdown library. The renderer handles the common blocks (headings, lists,
 fenced code, blockquotes, tables, bold/inline-code, paragraphs) and leaves
 anything else as an escaped paragraph — a lossy-but-safe floor, never an
-injection.
+injection. Consecutive plain lines (no blank/block line between them) form ONE
+paragraph with soft-wrap joining — a single space between lines — and two-space
+hard breaks (a line ending in 2+ spaces becomes a `<br>`), standard markdown
+semantics (changed in #344; single-line paragraphs are unchanged).
 
 Datetime default is mountain time (owner preference for rawgentic reports,
 #174); pass `generated_at` for a deterministic stamp.
@@ -86,6 +89,7 @@ def _render_body_plain(markdown: str) -> str:
     out: list[str] = []
     i = 0
     in_list = False
+    para: list[str] = []  # buffered consecutive plain source lines
 
     def close_list():
         nonlocal in_list
@@ -93,11 +97,40 @@ def _render_body_plain(markdown: str) -> str:
             out.append("</ul>")
             in_list = False
 
+    def flush_para():
+        """Emit the buffered plain lines as one <p>. Single-line buffers stay
+        byte-identical to the pre-#344 renderer (escape the raw line, inline once).
+        Multi-line buffers join with soft-wrap spaces, honouring two-space hard
+        breaks (standard markdown): the placeholder \\x00 marks a hard break in the
+        joined string, survives the single inline pass, then becomes <br>. Source
+        \\x00 is stripped first so a literal null in the input can't forge a break."""
+        if not para:
+            return
+        buf = para[:]
+        para.clear()
+        if len(buf) == 1:
+            out.append(f"<p>{_inline(html.escape(buf[0]))}</p>")
+            return
+        src = [ln.replace("\x00", "") for ln in buf]  # (a) collision guard
+        n = len(src)
+        parts: list[str] = []
+        for idx, ln in enumerate(src):
+            hard = bool(re.search(r" {2,}$", ln))  # (b) 2+ trailing spaces
+            if hard:
+                ln = ln.rstrip(" ")
+            parts.append(html.escape(ln))          # (c) escape each line
+            if idx < n - 1:                         # separator; last-line break dropped
+                parts.append("\x00" if hard else " ")
+        joined = _inline("".join(parts))            # (d) inline ONCE over the whole
+        joined = joined.replace("\x00", "<br>")     # (e) placeholder -> <br>
+        out.append(f"<p>{joined}</p>")              # (f)
+
     while i < len(lines):
         raw = lines[i]
 
         # fenced code block — capture verbatim, escape the whole thing, no inline
         if raw.strip().startswith("```"):
+            flush_para()
             close_list()
             i += 1
             code: list[str] = []
@@ -123,14 +156,14 @@ def _render_body_plain(markdown: str) -> str:
 
         stripped = raw.strip()
         if not stripped:
+            flush_para()
             close_list()
             i += 1
             continue
 
-        esc = html.escape(raw)
-
         m = re.match(r"(#{1,6})\s+(.*)", raw)
         if m:
+            flush_para()
             close_list()
             level = len(m.group(1))
             out.append(f"<h{level}>{_inline(html.escape(m.group(2)))}</h{level}>")
@@ -138,6 +171,7 @@ def _render_body_plain(markdown: str) -> str:
             continue
 
         if re.match(r"[-*]\s+", stripped):
+            flush_para()
             if not in_list:
                 out.append("<ul>")
                 in_list = True
@@ -147,6 +181,7 @@ def _render_body_plain(markdown: str) -> str:
             continue
 
         if stripped.startswith(">"):
+            flush_para()
             close_list()
             quote = re.sub(r"^>\s?", "", stripped)
             out.append(f"<blockquote>{_inline(html.escape(quote))}</blockquote>")
@@ -158,6 +193,7 @@ def _render_body_plain(markdown: str) -> str:
         # through to the paragraph branch below, unchanged).
         if (stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
                 and i + 1 < len(lines) and _is_table_separator(lines[i + 1])):
+            flush_para()
             close_list()
             header_cells = _split_table_row(lines[i])
             out.append("<table>")
@@ -177,10 +213,13 @@ def _render_body_plain(markdown: str) -> str:
             out.append("</table>")
             continue
 
+        # plain line: no block pattern matched — buffer it; flushed on the next
+        # blank/block boundary or EOF into ONE <p> (soft-wrap join + hard breaks).
         close_list()
-        out.append(f"<p>{_inline(esc)}</p>")
+        para.append(raw)
         i += 1
 
+    flush_para()
     close_list()
     return "\n".join(out)
 

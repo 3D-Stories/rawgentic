@@ -451,3 +451,67 @@ class TestMarkdownTables:
         h = _render(md, style="roadmap")
         assert '<section class="mstone">' in h
         assert "<table>" in h
+
+
+# --- #344: paragraph buffering + hard breaks + multi-line emphasis ---
+
+class TestParagraphsAndEmphasis:
+    def test_two_adjacent_lines_form_one_paragraph(self):
+        h = _render("line one\nline two")
+        assert "<p>line one line two</p>" in h
+        assert "<p>line one</p>" not in h
+        assert "<p>line two</p>" not in h
+
+    def test_bold_across_soft_wrap(self):
+        h = _render("**a\nb**")
+        assert "<strong>a b</strong>" in h
+
+    def test_bold_across_hard_break(self):
+        h = _render("**a  \nb**")
+        assert "<strong>a<br>b</strong>" in h
+
+    def test_three_lines_all_hard_breaks(self):
+        h = _render("a  \nb  \nc")
+        assert "<p>a<br>b<br>c</p>" in h
+
+    def test_hard_break_on_last_line_dropped(self):
+        h = _render("a\nb  ")
+        assert "<p>a b</p>" in h
+        assert "<br>" not in h
+
+    def test_script_split_across_lines_stays_escaped(self):
+        h = _render("<script>\nalert(1)</script>")
+        assert "<script>" not in h
+        assert "&lt;script&gt;" in h
+        assert "&lt;/script&gt;" in h
+
+    def test_literal_null_char_sanitized_no_break(self):
+        h = _render("a\x00b\nc more")
+        assert "<br>" not in h
+        assert "\x00" not in h
+        assert "ab c more" in h
+
+    def test_code_span_across_hard_break(self):
+        # Deterministic pin: the joined code span keeps the <br> the hard break
+        # inserts; content stays escaped, markup well-formed.
+        h = _render("`a  \nb`")
+        assert "<code>a<br>b</code>" in h
+
+    def test_paragraph_flushes_before_each_block(self):
+        for block, marker in (
+            ("# Heading", "<h1>"),
+            ("- item", "<ul>"),
+            ("> quote", "<blockquote>"),
+            ("```\ncode\n```", "<pre><code>"),
+        ):
+            h = _render("para\n" + block)
+            assert "<p>para</p>" in h, block
+            assert marker in h, block
+        # table (needs header + separator rows)
+        h = _render("para\n| A | B |\n| --- | --- |\n| 1 | 2 |")
+        assert "<p>para</p>" in h
+        assert "<table>" in h
+
+    def test_single_line_paragraph_unchanged(self):
+        h = _render("just one line")
+        assert "<p>just one line</p>" in h
