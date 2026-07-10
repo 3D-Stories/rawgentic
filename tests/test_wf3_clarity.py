@@ -366,3 +366,17 @@ class TestIssueKeyedMarkersWF3:
         corpus = _text()
         for lit in self.KEYED_LITERALS:
             assert lit in corpus, f"missing keyed WF3 marker literal: {lit!r}"
+
+    def test_markers_complete_is_run_scoped(self):
+        """#341 Task 3: WF3's own §Workflow Resumption prose must state the
+        same run-scoped counting rule as WF2's state-and-resume.md — WF3
+        cannot inherit WF2's reference file (cache blocks cross-skill reads),
+        so the rule is restated here verbatim."""
+        norm = " ".join(_text().split())
+        assert (
+            "MARKERS_COMPLETE counts only markers whose canonical-slot key names "
+            "the resuming issue; legacy un-keyed markers count only when the "
+            "containing run-section header names the issue."
+        ) in norm, (
+            "fix-bug/references/steps.md §Workflow Resumption must state the "
+            "run-scoped MARKERS_COMPLETE counting rule verbatim")

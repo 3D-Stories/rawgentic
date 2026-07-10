@@ -104,7 +104,10 @@ is deliberately NOT part of this skill (named follow-up issue).
    markers. Marker-acceptance boundaries: only line-start markdown headings count;
    anything inside code fences or quoted/example text is ignored; every accepted
    marker is quoted verbatim (with its source line) in the report's evidence ledger —
-   wording that doesn't match is `unverifiable`, never guessed. Also gather: test-runner
+   wording that doesn't match is `unverifiable`, never guessed. Keyed markers attribute
+   mechanically by their canonical-slot issue-token; un-keyed markers inside the run's
+   section are recorded as attribution-ambiguous in the evidence ledger, and an
+   in-tail `#N` outside the slot never attributes. (#341) Also gather: test-runner
    final outputs, dispatch mentions, gate findings/resolutions, loop-back consumptions.
 
 3. **Version facts.** Record the plugin version the run actually loaded (the cache:

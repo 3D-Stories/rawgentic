@@ -953,3 +953,22 @@ class TestIssueKeyedMarkers:
         steps = (REPO_ROOT / "skills" / "implement-feature" / "references" / "steps.md").read_text()
         assert "### WF2 Step 4 — Adversarial Review (#<issue>, discarded: superseded by volume loop-back)" in steps
         assert "### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>" in steps
+
+    def test_markers_complete_is_run_scoped(self):
+        """#341 Task 3: MARKERS_COMPLETE must count only markers keyed to the
+        resuming issue (or, for legacy un-keyed markers, whose containing
+        run-section header names it) — not every marker in a shared
+        session-notes file. Pinned in state-and-resume.md's MARKERS_COMPLETE
+        description block."""
+        resume = (
+            REPO_ROOT / "skills" / "implement-feature" / "references"
+            / "state-and-resume.md"
+        ).read_text()
+        norm = " ".join(resume.split())
+        assert (
+            "MARKERS_COMPLETE counts only markers whose canonical-slot key names "
+            "the resuming issue; legacy un-keyed markers count only when the "
+            "containing run-section header names the issue."
+        ) in norm, (
+            "state-and-resume.md must state the run-scoped MARKERS_COMPLETE "
+            "counting rule verbatim")

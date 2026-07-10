@@ -724,6 +724,10 @@ If this skill is invoked mid-conversation, detect the current state:
 7. RCA in session notes? → Step 5 (plan)
 8. None → Step 1 (start from scratch)
 
+Item 0's "all step markers present" is run-scoped (#341): MARKERS_COMPLETE counts
+only markers whose canonical-slot key names the resuming issue; legacy un-keyed
+markers count only when the containing run-section header names the issue.
+
 Announce the detected state before resuming: "Detected prior progress. Resuming at Step N."
 
 ---
