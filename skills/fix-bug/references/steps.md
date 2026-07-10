@@ -717,8 +717,12 @@ read once.
    continue. Run it regardless of item 5's rc — the record FILE exists on rc 1 too,
    and WF14 routes a schema-invalid record to degraded mode; on rc 2 WF14's own
    `--record` fail-closed path yields a degraded/unscored assessment. The
-   assessment is report-only and PR-terminal-safe, so it runs unchanged in
-   headless mode.
+   assessment is report-only for the plugin SOURCE (never edits skills/hooks/docs
+   mid-assessment) and PR-terminal-safe (never touches the just-created PR), so it
+   runs in headless mode too — but its outward writes are WF14's own Step 4
+   actions and run autonomously there: the report pair + session-note marker (the
+   only FILE writes), up to 3 filed issues against `3D-Stories/rawgentic`, and one
+   mempalace memory.
 
 Log a marker in `claude_docs/session_notes.md`:
 `### WF3 Step 14: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)`

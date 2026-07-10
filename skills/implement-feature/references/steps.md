@@ -1708,9 +1708,13 @@ measurable signal — not just a sentence the user reads once.
    continue. Run it regardless of item 4's rc — the record FILE exists on rc 1 too,
    and WF14 routes a schema-invalid record to degraded mode (an assessed degraded
    run beats an unassessed one); on rc 2 WF14's own `--record` fail-closed path
-   yields a degraded/unscored assessment. The assessment is report-only (WF14's
-   own report pair + session-note marker are its only writes) and PR-terminal-safe,
-   so it runs unchanged in headless mode.
+   yields a degraded/unscored assessment. The assessment is report-only for the
+   plugin SOURCE (it never edits skills/hooks/docs mid-assessment) and
+   PR-terminal-safe (it never touches the just-created PR), so it runs in headless
+   mode too — but its outward writes are WF14's own Step 4 actions and run
+   autonomously there: the report pair + session-note marker (the only FILE
+   writes), up to 3 filed issues against `3D-Stories/rawgentic`, and one mempalace
+   memory.
 
 Log a marker in `claude_docs/session_notes.md`:
 `### WF2 Step 16: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)`

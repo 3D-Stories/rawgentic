@@ -160,8 +160,9 @@ Step 14 (item 6): gate on `adversarial_review_lib.py is-enabled --key runFeedbac
 peerConsult pattern), enabled → invoke the `/rawgentic:run-feedback` core path with
 explicit `--record /tmp/wf{2,3}-run-record.json --wf <n> --session-notes <notes-path>`.
 Fail-open (AC3): assessment failure logs + continues; runs regardless of summarize rc
-(degraded mode covers schema-invalid records); report-only + PR-terminal-safe →
-unchanged in headless. Stale not-wired prose retired in run-feedback SKILL.md +
+(degraded mode covers schema-invalid records); report-only for the plugin source +
+PR-terminal-safe → runs in headless, where WF14's outward writes (report pair, ≤3
+filed issues, mempalace memory) proceed autonomously. Stale not-wired prose retired in run-feedback SKILL.md +
 config-reference.md.
 
 **Reviews.** (filled at Step 11) Lane: small-standard. 4 new drift guards. Suite
