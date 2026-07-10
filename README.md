@@ -1,6 +1,6 @@
 # rawgentic
 
-**7 SDLC workflow skills + 6 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**7 SDLC workflow skills + 7 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,11 +11,12 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 16 skills organized in three layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 17 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
-- **Workspace management** (6 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, and session-registry housekeeping
-- **SDLC workflows** (7 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a lightweight `interview` skill for pre-build requirements discovery and a post-run `run-feedback` self-assessment (WF14)
-- **Security & infrastructure** (1 skill + hooks) — Security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
+- **Workspace management** (7 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, and full-text session-history recall
+- **SDLC workflows** (7 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14)
+- **Planning** (1 skill) — A lightweight `interview` skill for pre-build requirements discovery
+- **Security & infrastructure** (2 skills + hooks) — Whole-tree security scanning, security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
 All workflow skills share a **config-loading protocol** that reads project configuration from `.rawgentic.json` — no hardcoded constants, no CLAUDE.md templates, no filesystem probing.
 
@@ -159,6 +160,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | `/rawgentic:add-exception`  | Interactively add guard exceptions to `.rawgentic.json` when a WAL or security guard blocks a legitimate operation. |
 | `/rawgentic:install-operating-charter` | **Opt-in.** Install the rawgentic operating charter (quality/verification/honesty discipline) into a chosen `CLAUDE.md` via a one-line `@import`. Scope `{project | global | skip}`; never default, never silently writes global. |
 | `/rawgentic:housekeeping` | Prune stale entries from the append-only session registry older than a configurable TTL (default 30 days, `$RAWGENTIC_REGISTRY_TTL_DAYS`); fail-safe (keeps undatable lines), previews before writing. WAL rotation is handled automatically by session-start. |
+| `/rawgentic:session-recall` | Full-text search over past Claude Code session history (all projects) via a local SQLite FTS5 index (`hooks/session_index.py`: incremental `index`, provenance-carrying `search`, freshness `status`). Derived, rebuildable, gitignored store; explicit invocation only — no hooks, no daemon. Rebuild needs disk headroom ≈ 2× the final DB size. |
 
 ### Planning
 
@@ -652,7 +654,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (9/16 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, and `scan` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (9/17 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
