@@ -65,9 +65,10 @@ HUMAN_EVENTS = ("accepted", "declined", "filed")
 _UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _REDACT_RULES = (
-    ("hex-or-b64", re.compile(r"\b(?=[A-Za-z0-9+/_.-]*[0-9])"
-                              r"(?=[A-Za-z0-9+/_.-]*[A-Za-z])"
-                              r"[A-Za-z0-9+/_.-]{20,}\b")),
+    # no / or . (paths/modules are the evidence signal); UUIDs exempted
+    ("hex-or-b64", re.compile(r"\b(?=[A-Za-z0-9+_-]*[0-9])"
+                              r"(?=[A-Za-z0-9+_-]*[A-Za-z])"
+                              r"[A-Za-z0-9+_-]{20,}\b")),
     ("key-value", re.compile(
         r"\b(\w*(?:TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL)\w*)=(\S+)",
         re.IGNORECASE)),
@@ -188,7 +189,9 @@ def redact_evidence(text: str) -> str:
     out = text
     out = _REDACT_RULES[2][1].sub("[redacted:bearer]", out)
     out = _REDACT_RULES[1][1].sub(r"\1=[redacted:key-value]", out)
-    out = _REDACT_RULES[0][1].sub("[redacted:blob]", out)
+    out = _REDACT_RULES[0][1].sub(
+        lambda m: m.group(0) if _UUID_RE.fullmatch(m.group(0))
+        else "[redacted:blob]", out)
     return out
 
 
@@ -263,7 +266,13 @@ def queue_append(path, event: dict) -> None:
             if fh.read(1) != b"\n":
                 data = path.read_bytes()
                 cut = data.rfind(b"\n")
-                fh.truncate(cut + 1 if cut >= 0 else 0)
+                tail = data[cut + 1:]
+                try:
+                    json.loads(tail.decode("utf-8"))
+                    fh.write(b"\n")  # complete event, just unterminated
+                    # (hand-repair case) — repair, never wipe real data
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    fh.truncate(cut + 1 if cut >= 0 else 0)
     event = dict(event)
     if "evidence" in event:
         event["evidence"] = [
@@ -369,7 +378,10 @@ def _search(phrase: str, db: str | None) -> tuple:
     if r.returncode != 0:
         raise SystemExit2(f"session_index search failed (rc={r.returncode}): "
                           f"{r.stderr.strip()[:300]}")
-    rows = json.loads(r.stdout)["results"]
+    try:
+        rows = json.loads(r.stdout)["results"]
+    except (json.JSONDecodeError, KeyError, TypeError) as e:
+        raise SystemExit2(f"unparseable session_index search output: {e}")
     coverage = {"returned_rows": len(rows), "requested_limit": SEARCH_LIMIT,
                 "limit_hit": len(rows) >= SEARCH_LIMIT}
     return rows, coverage
@@ -379,13 +391,17 @@ def _resolve_quote(db_path: str, row: dict, phrase: str) -> str:
     """Verbatim quote from the #375 DB (read-only) — matched phrase ± window."""
     try:
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        got = con.execute(
-            "SELECT m.text FROM messages m JOIN files f ON f.id = m.file_id "
-            "WHERE f.path = ? AND m.line_no = ?",
-            (row["path"], row["line_no"])).fetchone()
-        con.close()
-    except sqlite3.Error:
-        return row.get("snippet", "")
+        try:
+            got = con.execute(
+                "SELECT m.text FROM messages m JOIN files f ON f.id = m.file_id "
+                "WHERE f.path = ? AND m.line_no = ?",
+                (row["path"], row["line_no"])).fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        # fail-loud per the design's platform_apis declaration — a silent
+        # snippet fallback would break AC2's verbatim promise invisibly
+        raise SystemExit2(f"quote resolution failed against {db_path}: {e}")
     if not got:
         return row.get("snippet", "")
     text = got[0]
@@ -445,6 +461,7 @@ def _now() -> str:
 
 def cmd_detect(args) -> int:
     queue = Path(args.queue)
+    run_id = args.run_id or _now()
     signals: list = []
     coverages: dict = {}
     for phrase in FRICTION_PHRASES:
@@ -485,11 +502,17 @@ def cmd_detect(args) -> int:
         event_name = "detected" if prior is None else "evidence_updated"
         if prior and prior.get("event") in HUMAN_EVENTS:
             continue  # never re-touch human-stated keys
-        if prior and prior.get("distinct_sessions") == assess.distinct_sessions:
-            continue  # nothing materially changed
+        norm_ev = sorted((e["session_id"] or "", redact_evidence(
+            str(e["quote"]))[:EVIDENCE_MAX_CHARS]) for e in evidence)
+        prior_ev = sorted((e.get("session_id") or "", str(e.get("quote", "")))
+                          for e in (prior or {}).get("evidence", []))
+        if (prior
+                and prior.get("distinct_sessions") == assess.distinct_sessions
+                and norm_ev == prior_ev):
+            continue  # nothing materially changed (count AND evidence set)
         queue_append(queue, {
             "schema_version": SCHEMA_VERSION, "ts": _now(),
-            "run_id": args.run_id or _now(), "event": event_name,
+            "run_id": run_id, "event": event_name,
             "candidate_key": key, "detector": detector,
             "canonical_pattern": pattern, "title": pattern,
             "evidence": evidence,
@@ -506,6 +529,7 @@ def cmd_detect(args) -> int:
 
 def cmd_propose(args) -> int:
     queue = Path(args.queue)
+    run_id = args.run_id or _now()
     try:
         state, torn = reduce_queue(queue)
     except QueueCorruption as e:
@@ -549,9 +573,13 @@ def cmd_propose(args) -> int:
             out["borderline"].append(entry)
         else:
             out["proposed"].append(entry)
+        prior = state.get(c.candidate_key, {})
+        if (prior.get("event") == "proposed"
+                and prior.get("distinct_sessions") == c.distinct_sessions):
+            continue  # already proposed at this recurrence — no churn
         queue_append(queue, {
             "schema_version": SCHEMA_VERSION, "ts": _now(),
-            "run_id": args.run_id or _now(), "event": "proposed",
+            "run_id": run_id, "event": "proposed",
             "candidate_key": c.candidate_key, "detector": c.detector,
             "canonical_pattern": c.canonical_pattern, "title": c.title,
             "evidence": c.evidence,

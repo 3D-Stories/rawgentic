@@ -409,3 +409,69 @@ class TestProposeDispositionCLI:
         r = run_mine("propose", cwd=str(tmp_path))
         assert r.returncode == 2
         assert "--queue" in r.stderr
+
+
+# ------------------------------------------------------ Step 8a finding tests
+
+class TestStep8aFindings:
+    def test_valid_unterminated_tail_preserved_not_truncated(self, tmp_path):
+        """R2-H1: a complete JSON event lacking only its trailing newline is
+        real data (hand-repair case) — must be newline-repaired, never wiped."""
+        q = tmp_path / "candidates.jsonl"
+        q.parent.mkdir(parents=True, exist_ok=True)
+        declined = json.dumps(ev("k1", "declined"))
+        q.write_text(declined)  # no trailing newline
+        sm.queue_append(q, ev("k1", "detected"))
+        state, torn = sm.reduce_queue(q)
+        assert torn is False
+        assert state["k1"]["event"] == "declined"  # human state survived
+
+    def test_unparseable_tail_still_truncated(self, tmp_path):
+        q = tmp_path / "candidates.jsonl"
+        q.parent.mkdir(parents=True, exist_ok=True)
+        sm.queue_append(q, ev("k1", "detected"))
+        with q.open("a") as fh:
+            fh.write('{"torn": "frag')
+        sm.queue_append(q, ev("k2", "detected"))
+        state, torn = sm.reduce_queue(q)
+        assert set(state) == {"k1", "k2"} and torn is False
+
+    def test_redaction_preserves_paths_and_uuids(self):
+        """R1-M1: paths/UUIDs are the evidence signal — must survive."""
+        s = ("bash: /home/user/project/scripts/deploy_v2.sh: No such file; "
+             f"session {SID_A} failed")
+        out = sm.redact_evidence(s)
+        assert "/home/user/project/scripts/deploy_v2.sh" in out
+        assert SID_A in out
+
+    def test_redaction_still_masks_secret_blobs(self):
+        out = sm.redact_evidence("ghp_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6")
+        assert "ghp_A1b2C3d4E5f6G7h8" not in out
+
+    def test_evidence_set_change_triggers_evidence_updated(self, mining_env):
+        """R1-M2: same distinct-session count, different sessions → update."""
+        db, queue, ws = mining_env
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+        n1 = len(queue.read_text().splitlines())
+        # rewrite corpus: same number of sessions, one swapped out
+        corpus = db.parent.parent / "projects"
+        old = corpus / "-proj-m" / f"{SID_C}.jsonl"
+        old.unlink()
+        mk_corpus(corpus, "dddddddd-1111-2222-3333-444444444444",
+                  ["hit a wall: permission denied again (new)"])
+        subprocess.run([sys.executable, str(SI_CLI), "index",
+                        "--projects-dir", str(corpus), "--db", str(db)],
+                       capture_output=True, text=True)
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+        assert len(queue.read_text().splitlines()) > n1
+
+    def test_propose_rerun_appends_nothing_new(self, mining_env):
+        db, queue, ws = mining_env
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+        run_mine("propose", "--queue", str(queue), "--json")
+        n1 = len(queue.read_text().splitlines())
+        run_mine("propose", "--queue", str(queue), "--json")
+        assert len(queue.read_text().splitlines()) == n1
