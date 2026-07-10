@@ -161,6 +161,12 @@ with a reason (AC8).
 
 ## Step 3: Render
 
+The report body follows the "Report structure — human-first" mandate in
+`references/rubric.md`: an `## At a glance` section comes first — the bolded verdict,
+the six dimension scores, best catch, worst friction, and the routed line — with all
+evidence detail after it. See the rubric section for the exact contents list; do not
+duplicate it here.
+
 Report md → `<rawgentic-project-root>/docs/reviews/run-feedback-wf<wf>-<issue>-<YYYY-MM-DD>.md`.
 When no issue number is resolvable (record absent AND session evidence names none),
 the token is `noissue` and the report header states the missing provenance. If the

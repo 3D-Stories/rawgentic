@@ -228,3 +228,49 @@ def test_rubric_version_stamp():
     assert ("every report quotes the rubric version it was assessed under") in _norm(
         _corpus()
     ), "Reports must quote the rubric version so assessments stay comparable"
+
+
+# --- #343 Task 2: human-first "At a glance" report structure mandate ---
+
+def _report_structure_section() -> str:
+    """Slice rubric.md's '## Report structure — human-first' section, which
+    must sit BEFORE '## Fixed output block' (house pattern: header-index
+    slicing, not whole-file regex)."""
+    text = _rubric()
+    start = text.index("## Report structure — human-first")
+    end = text.index("## Fixed output block")
+    assert start < end, (
+        "Report structure section must precede the fixed output block")
+    return text[start:end]
+
+
+def test_report_structure_canonical_sentence():
+    section = _norm(_report_structure_section())
+    assert (
+        "Every report opens with an `## At a glance` section — a bolded "
+        "one-sentence verdict, the six dimension scores each with a one-line "
+        "verdict, best catch, worst friction, and the routed line — before "
+        "any evidence detail, so the report reads top-down for a human."
+    ) in section, (
+        "rubric.md must carry the canonical human-first report-structure "
+        "sentence verbatim in its own section (#343 Task 2)")
+
+
+def test_report_structure_points_to_reference_shape():
+    section = _norm(_report_structure_section())
+    assert "docs/reviews/run-feedback-wf2-337-2026-07-09.md" in section, (
+        "The report-structure section must point to the committed reference "
+        "shape doc")
+
+
+def test_skill_step3_mandates_at_a_glance():
+    s3 = _skill()
+    start = s3.index("## Step 3: Render")
+    end = s3.index("## Step 4: Route")
+    step3 = s3[start:end]
+    assert "At a glance" in step3, (
+        "SKILL.md Step 3 must mandate the '## At a glance' report structure "
+        "per the rubric (#343 Task 2)")
+    assert "references/rubric.md" in step3, (
+        "SKILL.md Step 3 must point to the rubric section rather than "
+        "duplicate its contents list")
