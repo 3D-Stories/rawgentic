@@ -1,6 +1,6 @@
 # rawgentic
 
-**7 SDLC workflow skills + 7 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**8 SDLC workflow skills + 7 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 17 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 18 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
 - **Workspace management** (7 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, and full-text session-history recall
-- **SDLC workflows** (7 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14)
+- **SDLC workflows** (8 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14) and human-gated session-history mining (WF17)
 - **Planning** (1 skill) — A lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (2 skills + hooks) — Whole-tree security scanning, security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
@@ -179,6 +179,7 @@ Each add-on unlocks a specific capability. Rawgentic runs without them — you j
 | Incident Response        | `/rawgentic:incident`          | 14    | Production incident: stabilize first, then RCA      |
 | Peer Consult             | `/rawgentic:peer-consult`      | 5     | Independent cross-model design proposal for a problem/spec artifact |
 | Run Feedback             | `/rawgentic:run-feedback`      | 5     | Post-run assessment of the workflow machinery itself (WF14) |
+| Session Mining           | `/rawgentic:session-mining`    | 5     | Mine session history for recurring skill/command candidates — detect→queue→propose→human gate (WF17). Report-only; accepted candidates route to WF1; recurrence ≥ 3 distinct sessions |
 
 <details>
 <summary><strong>Issue Creation (WF1)</strong> — 5 steps</summary>
@@ -654,7 +655,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (9/17 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (9/18 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -705,6 +706,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.34.0 (2026-07-10)
+- **WF17 `/rawgentic:session-mining` — detect→queue→synthesize→gate pipeline (#376, epic #378).** New `hooks/session_mining_lib.py` (pure core + thin CLI): deterministic detectors over the #375 FTS5 index (`--literal` phrase queries; friction phrases + restated-error proxies) and `claude_docs/session_notes*` (fenced/backticked commands with same-section UUID session-id resolution; unresolvable = evidence-only, never counts toward the threshold) — no LLM in detect, coverage-honest (v1 never inspects raw tool payloads and claims no absences). Append-only event-log queue (`claude_docs/.mining/candidates.jsonl`, gitignored at workspace level) with sha256 candidate identity (identity_version-bump invariant), human-over-machine reducer (a routine re-detect can never overwrite a decline; later human events always apply), asymmetric corruption policy (torn tail repaired via tail-parse guard — a valid-but-unterminated hand-repaired line is newline-fixed, never wiped; mid-file corruption fails `propose`/`disposition` closed), best-effort named-rule redaction that preserves paths/UUIDs (the evidence signal), verbatim quotes resolved read-only from the #375 DB (fail-loud). Propose gate: recurrence ≥ 3 distinct sessions, Jaccard dedup vs existing skills (0.6 suppress / 0.3 borderline-surfaced), accepted-unfiled candidates always listed as pending WF1 action. New SDLC-workflow skill `session-mining` mirrors WF14's report-only pattern (write-surface enumeration drift-guarded incl. the Step-1 index refresh); WF1 handoff is a template-shaped draft prompt (WF1 re-drafts; nothing auto-filed). Registration 17→18 (SDLC 7→8 across three description copies + three test literals incl. the WF14-era `test_interview_skill.py` miss). Tests: 48 new red-before-green (unit + subprocess CLI + 7 clarity pins). WF17 skeletal diagram registry entry added (order + wf17 block, 5 stations) — no WF2-spine REV. Suite 2670+1skip→2718+1skip.
 ### v3.33.0 (2026-07-10)
 - **FTS5 session index + `/rawgentic:session-recall` skill (#375, epic #378).** New `hooks/session_index.py` — full-text-searchable SQLite FTS5 index over Claude Code session JSONL history (`~/.claude/projects/**/*.jsonl`, recursive — the real corpus nests `subagents/` trees): incremental `index` via per-file `(mtime_ns, size)` high-water marks with per-file transactions and stat-recheck for live-appending files, provenance-carrying `search` (session id, timestamp, project, role, snippet; `--literal` FTS5-phrase quoting, inclusive date filters, deterministic bm25 ordering), and `status` (versions, counts, staleness, DB/WAL sizes). External-content FTS5 table with sync triggers; single-writer `fcntl.flock` (exit 3 on contention) with WAL concurrent readers; startup schema/parser-version gate (exit 2 → `--rebuild`); mass-vanish and missing-corpus-dir guards; textless messages (tool_use/tool_result/thinking-only — 77% of real message lines) classified ignored so the format-drift warning measures true shape failures; lone-surrogate sanitize; dir 0700 / files 0600. The store is derived, rebuildable, gitignored at the workspace level, and never committed (guard test asserts no index artifact in the repo tree). New workspace-management skill `session-recall` wraps it (secrets-by-NAME discipline, `--literal` default); registration across all surfaces (whitelist between `scan`/`setup`, codex mirror symlink, counts 16→17, workspace management 6→7, codex longDescription). Bonus: README:14 layer-breakdown prose fixed (summed 14, now four layers summing 17). `--rebuild` builds a temp DB and atomically swaps it in (readers keep the old index until the swap; the in-place "one-transaction" variant was refuted by the Step 11 adversarial diff review — `executescript()` autocommits); partial-vanish ratio guard (>50% missing refused); readers warn on stale schema/parser versions. Live-verified against the real 2.35 GB corpus (5,139 files, 76,769 messages indexed, 0 rejected). No workflow-spine change → no diagram REV. Suite 2614+1skip→2670+1skip.
 ### v3.32.2 (2026-07-10)
