@@ -139,6 +139,21 @@ improvement — `feat(telemetry)`/`fix(telemetry)` issues cross-linked to #329/#
 epic #333), dup-checked, sharing the 3-issue cap; improvements not filed are
 explicitly dropped with a reason.
 
+## Report structure — human-first
+
+Every report opens with an `## At a glance` section — a bolded one-sentence verdict,
+the six dimension scores each with a one-line verdict, best catch, worst friction, and
+the routed line — before any evidence detail, so the report reads top-down for a human.
+
+The `## At a glance` section contains, in order:
+- the bolded one-sentence verdict
+- the six dimension scores, each with a one-line verdict
+- best catch
+- worst friction
+- the routed line
+
+Reference shape: `docs/reviews/run-feedback-wf2-337-2026-07-09.md`.
+
 ## Fixed output block — end every assessment with exactly this
 
 ```
