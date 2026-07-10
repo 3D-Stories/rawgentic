@@ -168,6 +168,31 @@ config-reference.md.
 **Reviews.** (filled at Step 11) Lane: small-standard. 4 new drift guards. Suite
 2540+1skip → 2544+1skip.
 
+**PR.** *(backfilled by #343's pass)* PR #354 squash-merged `03ac4fe`, all CI checks
+green.
+
+### #343 — markdown-table rendering + human-first at-a-glance report structure · v3.31.0
+
+**Issue.** #343 (feature, epic #333 child 7/10, owner request from the first WF14
+dogfood + A3 in #340's Step 11): `_render_body_plain` had no markdown-table branch —
+every table row in a `--style plain` artifact (WF14 reports, WF5 reviews, design docs)
+rendered as a literal `<p>| ... |</p>` paragraph; and the WF14 report template never
+mandated a human-first structure.
+
+**What shipped.** GFM table branch in `hooks/render_artifact.py` (header +
+`| --- | :-: |` separator detection, contiguous pipe rows, escape-first per-cell via
+`_inline(html.escape(...))`, `close_list()` before emission; pipe row with no
+separator stays a paragraph; fenced tables stay code; existing table CSS reused —
+roadmap cards get tables for free). WF14 report structure made explicitly human-first:
+rubric.md gains "Report structure — human-first" (canonical sentence, drift-guarded)
+mandating the `## At a glance` opener (bolded verdict, six dimension scores with
+one-line verdicts, best catch, worst friction, routed line) before evidence detail;
+SKILL.md Step 3 points there. Real-thing check: rendering the committed #338 WF14
+report produced 3 `<table>`, 0 raw pipe paragraphs.
+
+**Reviews.** (filled at Step 11) Lane: small-standard. 9 renderer tests (red 5-failed
+evidence) + 3 drift guards. Suite 2544+1skip → 2556+1skip.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---
