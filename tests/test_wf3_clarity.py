@@ -404,3 +404,31 @@ class TestMultiPassGatePointerWF3:
         assert pointer in s14, (
             "Step 14 must carry the #340 multi-pass counting pointer to "
             "run-record.md")
+
+
+class TestRunFeedbackWiringWF3:
+    """#338: WF3 Step 14 must carry the runFeedback embedded-invocation wiring
+    — the opt-in gate plus the canonical invocation-and-fail-open sentence —
+    verbatim. Header-index-sliced (Step 14 section), location pin, whitespace-
+    normalized. Companion WF2 guard lives in tests/test_wf2_clarity.py."""
+
+    def _step14(self) -> str:
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        return " ".join(_section(text, "## Step 14:", "## Workflow Resumption").split())
+
+    WIRING = (
+        "When enabled, invoke the run-feedback core path non-interactively "
+        "with explicit `--record /tmp/wf3-run-record.json --wf 3 "
+        "--session-notes <notes-path>`; an assessment failure never blocks "
+        "workflow completion — log and continue."
+    )
+
+    def test_wiring_sentence_present(self):
+        assert self.WIRING in self._step14(), (
+            "Step 14 must carry the #338 canonical runFeedback wiring "
+            "sentence verbatim")
+
+    def test_gate_command_uses_runfeedback_key(self):
+        assert ("--skill fix-bug --key runFeedback") in self._step14(), (
+            "Step 14's runFeedback gate must probe the runFeedback key via "
+            "the generic is-enabled parser (#338)")

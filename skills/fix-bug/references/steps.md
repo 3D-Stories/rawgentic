@@ -702,6 +702,24 @@ read once.
      genuinely can't be fixed, record the gap in session notes.
    - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
+6. **Embedded WF14 self-assessment (opt-in, #338).** After the exit-code handling
+   above, gate on the runFeedback key via the generic is-enabled parser:
+   ```bash
+   python3 hooks/adversarial_review_lib.py is-enabled \
+     --workspace .rawgentic_workspace.json --project <name> --skill fix-bug --key runFeedback
+   ```
+   Non-zero exit (key absent, disabled, or workflow not listed) → skip SILENTLY —
+   the peerConsult opt-in pattern, no marker noise. Exit 0 → invoke the
+   `/rawgentic:run-feedback` core path (the #337 embed contract — zero interactive
+   dependency). When enabled, invoke the run-feedback core path non-interactively
+   with explicit `--record /tmp/wf3-run-record.json --wf 3 --session-notes
+   <notes-path>`; an assessment failure never blocks workflow completion — log and
+   continue. Run it regardless of item 5's rc — the record FILE exists on rc 1 too,
+   and WF14 routes a schema-invalid record to degraded mode; on rc 2 WF14's own
+   `--record` fail-closed path yields a degraded/unscored assessment. The
+   assessment is report-only and PR-terminal-safe, so it runs unchanged in
+   headless mode.
+
 Log a marker in `claude_docs/session_notes.md`:
 `### WF3 Step 14: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)`
 
