@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 14:41 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 18:57 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -83,6 +83,29 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>2 Medium @0.7 — dropped by the severity band and refuted against code. Security scan:</p>
 <p>0 blocking / 0 advisory (iac n/a, sca nothing-to-scan). Lane: small-standard (3 impl</p>
 <p>files). Suite 2435+1skip → 2503+1skip (+68). No spine change → no diagram REV.</p>
+<p><strong>PR.</strong> #347 — merged 839f5a2, all 4 CI checks green (test, lint, code-review, security-review).</p>
+<h3>#330 — emit dispatches[] from the workflow completion steps · v3.27.0</h3>
+<p><strong>Issue.</strong> #330 (feature, epic #333 child 2/10, depends on #329): the schema existed but</p>
+<p>nothing wrote it — the audit line prescribed by the dispatch prescriptions carried no</p>
+<p>subagent_type/outcome/resolution and never reached the run-record.</p>
+<p><strong>What shipped.</strong> Canonical completion-time audit line `DISPATCH issue=&lt;n&gt; role=… type=…</p>
+<p>model=… effort=… outcome=… resolution=…` in the dispatch prescriptions (shared block →</p>
+<p>synced WF2 SKILL.md; bespoke review-only WF3 variant), with per-invocation / flush-left /</p>
+<p>retry / pre-suspend emission rules and a resolution decision table (<code>fallback</code> =</p>
+<p>carried-never-emitted). Assembly at WF2 Step 16 item 2d / WF3 Step 14 item 3b: grep</p>
+<p><code>^DISPATCH issue=&lt;n&gt;</code> from session notes, null→JSON null, never dedup, malformed lines</p>
+<p>counted (incl. indented rescues), zero→omit; under-count detection owned by WF14.</p>
+<p>Capture contract + worked example in <code>docs/run-records.md ### Capture (#330)</code>. 9 drift</p>
+<p>guards incl. regex byte-identity.</p>
+<p><strong>Reviews.</strong> Step 4 took the FULL loop-back budget (3/3): 2 design loop-backs (run-header</p>
+<p>scoping anchor matched nothing in the real notes corpus → issue-scoped lines; resolution</p>
+<p>ladder unmapped → decision table) + 1 spec-tighten (stale cross-references), final</p>
+<p>verifier CLEAN. Step 6 adversarial-on-plan: 2 Medium plan clarifications. 8a: 5 prose</p>
+<p>hardenings applied. Step 11 (re-dispatched after a session-limit kill — 3 dead agents +</p>
+<p>1 dead memorize recorded as outcome=dead DISPATCH lines): 1 Medium changelog inversion</p>
+<p>fixed + 3 Low hardenings + adversarial 1 applied / 2 refuted. Scan 0/0. DOGFOOD: this</p>
+<p>run&#x27;s own record carries 19 assembled dispatches[] entries (4 dead from the limit kill).</p>
+<p>Suite 2503+1skip → 2512+1skip. No spine change → no diagram REV.</p>
 <p><strong>PR.</strong> _PR # and CI filled by the next slot&#x27;s pass._</p>
 <p>---</p></section>
 <section class="mstone"><h3>Standalone — codex reliability (audit #328 fallout) <span class="chip c-conf">SHIPPED</span></h3><h3>#334 — codex thought-partner dispatches hang: routing rule + dead-job protocol + userns runbook · v3.24.26</h3>
@@ -636,9 +659,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#329 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>68 added · 2503/2504 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>2</td><td>2</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>2</td><td>2</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#330 (feature, standard)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>9 added · 2512/2513 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>17</td><td>17</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-09 14:41 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-09 18:57 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
