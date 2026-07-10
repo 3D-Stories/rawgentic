@@ -276,3 +276,136 @@ class TestBuildWf1Draft:
                         "## Affected Components", "## Risk"):
             assert section in draft
         assert SID_A in draft and "recurrence" in draft.lower()
+
+
+# ---------------------------------------------------------------- CLI tests
+
+SI_CLI = HOOKS_DIR / "session_index.py"
+
+
+def mk_corpus(root: Path, sid, texts):
+    d = root / "-proj-m"
+    d.mkdir(parents=True, exist_ok=True)
+    lines = [json.dumps({
+        "type": "user", "sessionId": sid,
+        "timestamp": "2026-07-01T10:00:00.000Z", "uuid": f"u-{sid}",
+        "message": {"role": "user", "content": t}}) for t in texts]
+    (d / f"{sid}.jsonl").write_text("\n".join(lines) + "\n")
+
+
+def run_mine(*args, cwd=None):
+    return subprocess.run([sys.executable, str(CLI), *args],
+                         capture_output=True, text=True, cwd=cwd)
+
+
+@pytest.fixture()
+def mining_env(tmp_path):
+    corpus = tmp_path / "projects"
+    for sid in (SID_A, SID_B, SID_C):
+        mk_corpus(corpus, sid, [f"hit a wall: permission denied again ({sid})",
+                                "unrelated chatter"])
+    db = tmp_path / "idx" / "sessions.db"
+    r = subprocess.run([sys.executable, str(SI_CLI), "index",
+                        "--projects-dir", str(corpus), "--db", str(db)],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    queue = tmp_path / "mining" / "candidates.jsonl"
+    ws = tmp_path / "ws"
+    (ws / "claude_docs").mkdir(parents=True)
+    return db, queue, ws
+
+
+class TestDetectCLI:
+    def test_detect_appends_events_with_verbatim_quotes(self, mining_env):
+        db, queue, ws = mining_env
+        r = run_mine("detect", "--queue", str(queue), "--db", str(db),
+                     "--workspace-root", str(ws))
+        assert r.returncode == 0, r.stderr
+        import session_mining_lib as sm2
+        state, _ = sm2.reduce_queue(queue)
+        pd = [e for e in state.values()
+              if e["canonical_pattern"] == "permission denied"]
+        assert len(pd) == 1
+        assert pd[0]["distinct_sessions"] == 3
+        # verbatim quote resolved from the DB, not the 12-token snippet
+        assert any("hit a wall" in ev_["quote"] for ev_ in pd[0]["evidence"])
+
+    def test_rerun_without_change_appends_nothing(self, mining_env):
+        db, queue, ws = mining_env
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+        n1 = len(queue.read_text().splitlines())
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+        assert len(queue.read_text().splitlines()) == n1
+
+
+class TestProposeDispositionCLI:
+    def _detect(self, db, queue, ws):
+        run_mine("detect", "--queue", str(queue), "--db", str(db),
+                 "--workspace-root", str(ws))
+
+    def test_propose_threshold_and_evidence(self, mining_env):
+        db, queue, ws = mining_env
+        self._detect(db, queue, ws)
+        r = run_mine("propose", "--queue", str(queue), "--json")
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        pd = [e for e in out["proposed"]
+              if e["canonical_pattern"] == "permission denied"]
+        assert len(pd) == 1
+        assert pd[0]["recurrence"] == 3
+        assert pd[0]["coverage"]["requested_limit"] == 500
+        assert pd[0]["evidence"][0]["session_id"]
+
+    def test_declined_never_reproposed(self, mining_env):
+        db, queue, ws = mining_env
+        self._detect(db, queue, ws)
+        r = run_mine("propose", "--queue", str(queue), "--json")
+        key = [e for e in json.loads(r.stdout)["proposed"]
+               if e["canonical_pattern"] == "permission denied"][0]["candidate_key"]
+        rd = run_mine("disposition", key, "declined", "--queue", str(queue))
+        assert rd.returncode == 0
+        r2 = run_mine("propose", "--queue", str(queue), "--json")
+        keys2 = [e["candidate_key"]
+                 for e in json.loads(r2.stdout)["proposed"]]
+        assert key not in keys2
+        # and a fresh detect must not resurrect it
+        run_mine("detect", "--queue", str(queue), "--db", str(db))
+        r3 = run_mine("propose", "--queue", str(queue), "--json")
+        assert key not in [e["candidate_key"]
+                           for e in json.loads(r3.stdout)["proposed"]]
+
+    def test_accepted_listed_pending_wf1(self, mining_env):
+        db, queue, ws = mining_env
+        self._detect(db, queue, ws)
+        r = run_mine("propose", "--queue", str(queue), "--json")
+        key = json.loads(r.stdout)["proposed"][0]["candidate_key"]
+        run_mine("disposition", key, "accepted", "--queue", str(queue))
+        r2 = run_mine("propose", "--queue", str(queue), "--json")
+        out = json.loads(r2.stdout)
+        assert key in [e["candidate_key"] for e in out["pending_wf1_action"]]
+        assert key not in [e["candidate_key"] for e in out["proposed"]]
+
+    def test_corrupt_queue_refuses_propose_and_disposition(self, mining_env, tmp_path):
+        db, queue, ws = mining_env
+        self._detect(db, queue, ws)
+        raw = queue.read_text()
+        queue.write_text("MIDFILE GARBAGE\n" + raw)
+        r = run_mine("propose", "--queue", str(queue))
+        assert r.returncode == 2 and "corruption" in r.stderr.lower()
+        r2 = run_mine("disposition", "deadbeef", "declined",
+                      "--queue", str(queue))
+        assert r2.returncode == 2
+
+    def test_unknown_key_exit_2(self, mining_env):
+        _, queue, _ws = mining_env
+        queue.parent.mkdir(parents=True, exist_ok=True)
+        queue.touch()
+        r = run_mine("disposition", "nope", "declined", "--queue", str(queue))
+        assert r.returncode == 2
+
+    def test_no_workspace_root_requires_queue_flag(self, tmp_path):
+        r = run_mine("propose", cwd=str(tmp_path))
+        assert r.returncode == 2
+        assert "--queue" in r.stderr

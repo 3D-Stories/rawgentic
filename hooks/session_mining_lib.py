@@ -461,9 +461,10 @@ def cmd_detect(args) -> int:
                           else r.get("snippet", ""))
         signals.extend(detect_error_proxies(phrase, rows))
         coverages[normalize_pattern(phrase)] = cov
-    root = resolve_workspace_root(Path.cwd())
+    root = (Path(args.workspace_root) if args.workspace_root
+            else resolve_workspace_root(Path.cwd()))
     if root:
-        signals.extend(detect_note_commands(_read_notes(root)))
+        signals.extend(detect_note_commands(_read_notes(Path(root))))
 
     rec = recurrence(signals)
     try:
@@ -612,6 +613,9 @@ def main(argv) -> int:
                           help="session-index DB (default: resolved by "
                                "session_index.py)")
     p_detect.add_argument("--run-id", default=None)
+    p_detect.add_argument("--workspace-root", default=None,
+                          help="override workspace root for notes reading "
+                               "(tests); default: resolve from cwd")
     p_detect.set_defaults(fn=cmd_detect)
 
     p_prop = sub.add_parser("propose")
