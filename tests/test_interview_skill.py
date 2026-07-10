@@ -62,7 +62,7 @@ def test_descriptions_account_for_interview_as_planning_skill():
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     for desc in (plugin["description"], mp["plugins"][0]["description"]):
         # interview is a separate planning skill, NOT counted among the SDLC workflows
-        assert "7 SDLC workflow skills" in desc
+        assert "8 SDLC workflow skills" in desc
         assert "planning skill" in desc
 
 

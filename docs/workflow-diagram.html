@@ -255,7 +255,7 @@ dialog.modal .sheet{margin-top:0;border:0;box-shadow:none;animation:none}
 <script>
 /* =================== DATA =================== */
 const DATA = {
-  order: ["wf1","wf2","wf3","wf5","wf14"],
+  order: ["wf1","wf2","wf3","wf5","wf14","wf17"],
   workflows: {
   wf2: {
     code:"WF2", name:"Implement Feature", skill:"skills/implement-feature",
@@ -551,6 +551,17 @@ const DATA = {
       {id:"3",num:"03",name:"Render Report",kind:"step",mand:true,sum:".md + .html via render_artifact.py under the rawgentic root; Artifact publish best-effort with required failure line; report-only.",pending:true},
       {id:"4",num:"04",name:"Route Feedback",kind:"step",mand:true,sum:"Defects dup-checked, filed ALWAYS on 3D-Stories/rawgentic (wf-feedback label, cap 3, not-filed-cap preserved); telemetry lane cross-linked #329/#330/#333; friction → one mempalace memory (tri-state surface); clean run stated.",pending:true},
       {id:"5",num:"05",name:"Close",kind:"step",mand:true,sum:"Session-note DONE marker + fixed summary block. Never auto-fixes what it found.",pending:true}
+    ]}}
+  },
+  wf17: {
+    code:"WF17", name:"Session Mining", skill:"skills/session-mining", skeletal:true,
+    revs:["3.34.0"], loopbacks:[], loopnote:null,
+    versions: {"3.34.0": {superseded:false, steps:[
+      {id:"1",num:"01",name:"Freshness + Detect",kind:"step",mand:true,sum:"session_index status/index refresh, then deterministic detectors (friction phrases, note commands, error proxies) append events to the candidates queue. No LLM in detect.",rev:{delta:"New in 3.34.0 (#376).",refs:["#376"]},pending:true},
+      {id:"2",num:"02",name:"Propose",kind:"gate",mand:true,sum:"Recurrence >= 3 distinct sessions; dedup vs existing skills (Jaccard strong/borderline) and terminal queue states; queue corruption fails closed.",pending:true},
+      {id:"3",num:"03",name:"Render Report",kind:"step",mand:true,sum:".md + .html via render_artifact.py --style report to docs/reviews/; coverage-honesty sentence mandatory; Artifact publish best-effort.",pending:true},
+      {id:"4",num:"04",name:"Human Gate",kind:"gate",mand:true,sum:"Per candidate: accept -> disposition accepted -> WF1 draft prompt -> filed; decline -> disposition declined (never re-proposed). Nothing auto-filed.",pending:true},
+      {id:"5",num:"05",name:"Close",kind:"step",mand:true,sum:"Session-note DONE marker with proposed/accepted/declined/pending counts. Report-only termination.",pending:true}
     ]}}
   }
   }

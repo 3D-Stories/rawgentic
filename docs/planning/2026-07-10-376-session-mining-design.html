@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design: WF17 Session Mining (#376)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 16:49 MDT</div>
+<h1>Design: WF17 Session Mining (#376)</h1>
+
+</header>
+<main>
+<h1>Design: WF17 <code>/rawgentic:session-mining</code> (issue #376)</h1>
+<p>Date: 2026-07-10 · WF2 run (epic #378 child 2/3) · Status: draft for Step 4 gate</p>
+<h2>Problem</h2>
+<p>On-demand, report-only mining of session history for skill/command candidates: detect (deterministic, no LLM) → durable queue → synthesize (evidence-quoted candidates) → human gate (route accepted to WF1 as a template-shaped draft). Mirrors WF14&#x27;s report-only pattern (<code>skills/run-feedback</code> — the write-surface enumeration, report pair naming, Artifact best-effort, 5-step skeleton).</p>
+<h2>Approaches — detector source fork</h2>
+<p>Sources: (1) FTS5 index #375 (TEXT blocks only — tool payloads deliberately excluded), (2) <code>claude_docs/session_notes*</code> (append-only audit trail), (3) raw JSONL corpus (tool_use commands / tool_result errors — invisible to the index).</p>
+<ul>
+<li><strong>A. Full raw-JSONL detector pass.</strong> Real tool-level signal, but a 2.35 GB</li>
+</ul>
+<p>  scan per run or a duplicate of #375&#x27;s incremental machinery. Rejected: scope   + duplication.</p>
+<ul>
+<li><strong>B. Bump #375 PARSER_VERSION to index tool payloads.</strong> Forces full rebuild</li>
+</ul>
+<p>  for every user; reverses #375&#x27;s deliberate size/exposure exclusion. Rejected.</p>
+<ul>
+<li><strong>C. Index+notes only (CHOSEN).</strong> Respects the issue text literally.</li>
+</ul>
+<p>  Tool-error and command detectors are <strong>proxy detectors</strong> (errors as restated   in assistant/user text; commands as quoted in session-notes evidence) and are   LABELED as such; the report carries the canonical coverage limitation: &quot;v1   does not inspect raw tool_use/tool_result payloads and cannot conclude that   command sequences or tool errors are absent.&quot; Tool-payload detection is   deferred to a separately approved design.</p>
+<ul>
+<li><strong>D. Hybrid (my initial draft — REFUTED by peer consult).</strong> A targeted</li>
+</ul>
+<p>  raw-JSONL pass over only already-flagged sessions looks cheap, but samples   tool evidence exactly where text signals exist — biased recurrence counts   and misleading negatives — and quietly adds a third substrate the issue   never declared. Peer-consult reversal recorded (run log D6); provenance:   the consult report in docs/reviews/.</p>
+<h2><code>hooks/session_mining_lib.py</code> (pure core + thin CLI)</h2>
+<p>Pure functions (unit-tested):</p>
+<ul>
+<li><code>detect_friction(rows) -&gt; list[Signal]</code> — over <code>session_index search --json</code></li>
+</ul>
+<p>  result rows for a fixed, versioned phrase list (<code>FRICTION_PHRASES</code>: e.g.   &quot;command not found&quot;, &quot;permission denied&quot;, &quot;try again&quot;, &quot;still failing&quot;,   &quot;same error&quot; — apostrophe-free by rule: unicode61 splits &quot;doesn&#x27;t&quot; and   breaks phrase matching). <strong>All phrase queries use <code>--literal</code></strong> (raw FTS5   would decompose a multiword phrase into AND-of-tokens — precision collapse   that would inflate the propose-triggering recurrence count). Signal =   (detector, canonical_pattern, session_id, ts, quote, source_ref).</p>
+<ul>
+<li><strong>Evidence quote resolution (from the #375 DB, read-only):</strong> the index row&#x27;s</li>
+</ul>
+<p>  <code>snippet</code> is a 12-token bm25 fragment with match markup — not AC2&#x27;s verbatim   quote. The verbatim text is ALREADY STORED in the #375 DB   (<code>messages.text</code>); the quote is resolved by a read-only DB query   (<code>mode=ro</code> URI, <code>SELECT m.text FROM messages m JOIN files f ... WHERE   f.path=? AND m.line_no=?</code>), extracting the matched phrase ± a bounded   window. No raw JSONL is ever opened (moots the option-C boundary question   entirely); <code>session_index.py</code> is consumed, not modified (per issue scope) —   the direct ro read is declared in platform_apis. Verified live 2026-07-10:   the JOIN returned the full verbatim message containing the phrase.</p>
+<ul>
+<li><code>detect_note_commands(notes_text) -&gt; list[Signal]</code> — fenced ```bash blocks</li>
+</ul>
+<p>  and backticked commands appearing in session_notes; canonical_pattern =   normalized command head. <strong>Session-id resolution for note signals   (defined):</strong> a UUID-shaped token (<code>[0-9a-f]{8}-…</code> regex) appearing in the   same markdown section (same <code>##</code>/<code>###</code> block) as the command mention   resolves as its session id; otherwise the signal is <strong>evidence-only — it   NEVER counts toward the ≥3 distinct-session threshold</strong> (recurrence is   distinct-session by definition; a note mention without provenance can   support a candidate, not gate it).</p>
+<ul>
+<li><code>detect_error_proxies(rows) -&gt; list[Signal]</code> — <strong>proxy</strong> detector over</li>
+</ul>
+<p>  indexed text for restated tool errors (versioned <code>ERROR_PHRASES</code> rules;   errors that were never restated in visible text are out of v1 coverage —   stated, never claimed absent).</p>
+<ul>
+<li><code>recurrence(signals) -&gt; dict[pattern_key, RecurrenceAssessment]</code> —</li>
+</ul>
+<p>  <strong>distinct-session</strong> counting (one vote per session, never row count). The   no-count-API contract from #375 is explicit: callers pass a high <code>--limit</code>   (default 500) and dedupe <code>session_id</code> client-side; each assessment records   <strong>coverage</strong> (<code>returned_rows</code>, <code>requested_limit</code>, <code>limit_hit</code>) — a limit hit   makes the count a LOWER BOUND: it may establish ≥3, but supports no   absence/ranking/trend claim. Under-count only delays a proposal, never   fabricates one. <strong>bm25-crowding caveat (in the coverage contract):</strong> results   are bm25-ordered, so one verbose session can occupy most of the top-N and   suppress distinct-session counts for common phrases — errs safe (misses,   never false-proposes); pagination/diversified queries are a noted deferral   if propose-rate proves low.</p>
+<ul>
+<li><code>candidate_key(detector, scope, canonical_pattern) -&gt; str</code> — sha256 over</li>
+</ul>
+<p>  <code>identity_version | detector family | normalized scope | canonical pattern</code>   (evidence, counts, timestamps excluded). <strong>Accepted v1 behavior:</strong> two   detectors surfacing the same underlying idea produce two keys — declining   one does not suppress the other (worst case: one extra human-gated question,   once per detector family; cross-detector identity merging is a noted   deferral). <strong>Normalizations defined:</strong>   <code>canonical_pattern</code> = lowercase, whitespace runs collapsed to single space,   leading/trailing punctuation stripped; for commands, the first two tokens   only (args stripped). <code>scope</code> = the constant <code>&quot;workspace&quot;</code> in v1 (mining is   workspace-global — a constant removes all per-run variance; the field exists   for future per-project mining). <strong>Pinned invariant (test-guarded):</strong> any   change to these normalization rules REQUIRES an <code>identity_version</code> bump —   resurrection of a declined candidate is only ever a deliberate, versioned   reset, never an accidental side effect of a rule tweak. Determinism test:   same inputs → same key across runs.</p>
+<ul>
+<li>`dedupe_candidates(candidates, reduced_queue, skill_descriptors) -&gt;</li>
+</ul>
+<p>  (fresh, suppressed, borderline)<code> — suppress when (a) the reduced queue holds   a TERMINAL state (</code>declined<code>/</code>accepted<code>/</code>filed<code>) for the key, or (b) a   STRONG deterministic match against an existing skill descriptor; a   borderline match is NOT auto-suppressed — surfaced with the matching skill +   score for the human gate. <strong>Match algorithm (defined):</strong> token-set Jaccard   over lowercased alphanumeric tokens of (skill name + frontmatter   description) vs (candidate title + canonical_pattern + keywords), stopwords   removed; <strong>strong ≥ 0.6 → suppress; borderline 0.3–0.6 → surface with   score; &lt; 0.3 → fresh.</strong> Thresholds are named constants, determinism tested. <strong>Descriptor source (defined — a naive cwd-relative   read would scan the bound project&#x27;s tree, which holds no rawgentic skills):</strong>   the running plugin&#x27;s own skills dir, resolved from the skill&#x27;s base directory   (</code>&lt;skill-base&gt;/../../skills/*/SKILL.md<code> — the plugin cache), PLUS workspace   skills at </code>&lt;workspace-root&gt;/.claude/skills/*/SKILL.md`; descriptor = skill   name + frontmatter description.</p>
+<ul>
+<li><code>redact_evidence(text) -&gt; text</code> — **core deterministic redaction applied in</li>
+</ul>
+<p>  the queue-append path<strong> (not just skill prose): masks a NAMED, versioned   rule list (v1: long hex/base64 runs ≥ 20 chars; <code>KEY=value</code> where KEY   contains token/secret/key/password/credential; <code>Bearer &lt;blob&gt;</code>) to   <code>[redacted:&lt;kind&gt;]</code>. </strong>Honesty bound: this is best-effort pattern masking,   not a guarantee over arbitrary secret shapes<strong> — the Security section says   exactly that, and the skill&#x27;s gate step ADDITIONALLY instructs human   secrets-by-NAME review before any quote lands in a report or issue.   </strong>Exposure-class rationale (why pre-gate durable quotes are acceptable):**   the queue lives in workspace <code>claude_docs/</code> beside <code>session_notes*</code> and the   #375 index DB, which already durably hold the SAME session content —   quoting an excerpt into the queue adds no new exposure class; the redaction   layer strictly reduces it. AC2&#x27;s &quot;verbatim&quot; reads: verbatim except values   masked by the named rule — tested.</p>
+<ul>
+<li><code>queue_append(path, event)</code> / <code>reduce_queue(path) -&gt; (state, malformed_tail)</code></li>
+</ul>
+<p>  — the repo&#x27;s plain JSONL idiom (makedirs + open-&quot;a&quot; + compact json +   newline; one O_APPEND single-line write). <strong>Torn-tail guard:</strong> before   writing, <code>queue_append</code> checks the file&#x27;s last byte — if it is not <code>\n</code>   (a prior crash tore the final line), it <strong>truncates the torn fragment</strong>   (seek to the last <code>\n</code>, truncate) before appending. The fragment is   already-lost data from a crashed write, so removal costs nothing — and,   unlike prepending a newline, truncation keeps the file all-parseable, so   the torn-tail case never converts into a fatal mid-file <code>QueueCorruption</code>   (incremental-verifier catch). <strong>Race note:</strong> truncate-then-append is not   atomic; a concurrent good append landing between the truncate and the write   could be dropped — bounded and accepted because (a) the window exists only   in the rare post-crash recovery path, (b) a dropped MACHINE event   regenerates on the next detect, and (c) a human <code>disposition</code> is never   written concurrently with a crash-recovery append in practice (dispositions   are interactive); the residual risk is named, not silent. <strong>No queue lock (deliberate):</strong>   the reducer&#x27;s human-over-machine rule makes a concurrent duplicate append   benign (worst case: one candidate proposed once more to a human gate,   self-healing next run) — plain append matches the issue&#x27;s stated   convention. <strong>Corruption policy asymmetric (AC4-load-bearing), expressed in   the function contract:</strong> <code>reduce_queue</code> RAISES <code>QueueCorruption</code> on any   unparseable line that is NOT the final line; it returns normally with   <code>malformed_tail=True</code> only for a torn final line (crash mid-append —   skipped + warned). <code>propose</code>/<code>disposition</code> catch <code>QueueCorruption</code> → exit 2   (a lost <code>declined</code> event would silently resurrect a declined candidate, and   the queue holds human dispositions that are NOT rebuildable). <code>detect</code> may   proceed on corruption (append-only, never proposes) — under corruption it   SKIPS the material-change optimization and appends <code>detected</code>   unconditionally (benign: the reducer reconciles machine events idempotently   once the queue is repaired). Evidence excerpts   bounded (≤ 500 chars). <strong>Redaction ordering:</strong> <code>redact_evidence</code> +   normalization are applied BEFORE both storage and the <code>evidence_updated</code>   material-change comparison — redacted-normalized is compared to   redacted-normalized, so a secret-bearing quote can never cause per-run   <code>evidence_updated</code> churn.</p>
+<p>Queue = <strong>event log</strong> (append-only). Reducer rule (test-pinned): <strong>machine events never override human events; human events override each other in order.</strong> Machine events = <code>detected</code>/<code>evidence_updated</code>/<code>proposed</code>; human events = <code>accepted</code>/<code>declined</code>/<code>filed</code>. Once ANY human event exists for a key, machine events can never change its state (&quot;latest wins&quot; alone would let a routine re-detect overwrite a human&#x27;s decline); a LATER human event always applies — so an accepted-but-never-filed candidate is not stranded: the user can later <code>disposition declined</code> (or <code>filed</code> when the WF1 issue lands). A key with a human state is never re-PROPOSED by the machine (AC4 covers declined; accepted/filed likewise). <strong>Accepted-unfiled visibility:</strong> the report ALWAYS lists accepted-but-not-yet-filed candidates in a &quot;pending WF1 action&quot; section — an accept interrupted before its WF1 handoff is surfaced on every subsequent run, never silently parked (adversarial p3 catch):</p>
+<pre><code>{&quot;schema_version&quot;: 1, &quot;ts&quot;: &quot;&lt;ISO&gt;&quot;, &quot;run_id&quot;: &quot;&lt;ISO-invocation-id&gt;&quot;,
+ &quot;event&quot;: &quot;detected|evidence_updated|proposed|accepted|declined|filed&quot;,
+ &quot;candidate_key&quot;: &quot;&lt;sha256&gt;&quot;, &quot;detector&quot;: &quot;friction|note_commands|error_proxy&quot;,
+ &quot;canonical_pattern&quot;: &quot;&lt;normalized&gt;&quot;, &quot;title&quot;: &quot;&lt;short&gt;&quot;,
+ &quot;evidence&quot;: [{&quot;session_id&quot;: &quot;...&quot;, &quot;quote&quot;: &quot;&lt;=500 chars&quot;, &quot;source&quot;: &quot;index|notes&quot;}],
+ &quot;distinct_sessions&quot;: N, &quot;coverage&quot;: {&quot;returned_rows&quot;: N, &quot;requested_limit&quot;: N, &quot;limit_hit&quot;: false},
+ &quot;note&quot;: &quot;&lt;optional&gt;&quot;}</code></pre>
+<p><code>evidence_updated</code> is appended only when the normalized evidence set or the distinct-session count materially changes; otherwise a re-run appends nothing.</p>
+<p>CLI subcommands (subprocess-tested): <code>detect</code> (runs the three index/notes detectors, appends <code>detected</code>/<code>evidence_updated</code> events, prints summary), <code>propose</code> (recurrence ≥ 3 distinct sessions AND not suppressed → prints candidates with evidence + coverage), <code>disposition &lt;candidate_key&gt; &lt;accepted|declined|filed&gt; [--note]</code> (appends the gate outcome; <code>accepted</code> at the human gate, <code>filed</code> once a WF1 issue number exists — both terminal, so an accepted-but-not-yet-filed candidate is never re-proposed either). No <code>.rawgentic.json</code> dependency; every subcommand accepts <code>--queue PATH</code> (default: workspace <code>claude_docs/.mining/candidates.jsonl</code>) so tests and the live verification run against a throwaway queue — a test disposition must never write a permanent state into the real one. <strong>NO <code>&lt;config-loading&gt;</code> block</strong> (the WF14 mirror covers the step skeleton and report lifecycle ONLY — the config-loading canary count, sync_shared_blocks MANIFEST, and the README &quot;8 config-driven skills&quot; string all stay unchanged); workspace root resolved as in <code>session_index.py</code>.</p>
+<h2>Skill: <code>skills/session-mining/SKILL.md</code> — WF17</h2>
+<p>Frontmatter: <code>name: rawgentic:session-mining</code>, description prefixed <code>WF17 —</code>, WHEN-triggers (&quot;mine sessions for skill candidates&quot;, &quot;what patterns keep recurring&quot;, after campaigns), argument-hint. H1 <code># WF17: Session Mining</code>. 5-step skeleton mirroring WF14: Step 1 Detect (freshness-check the #375 index first — run <code>session_index.py index</code> if stale — then <code>detect</code>), Step 2 Dedup + threshold (<code>propose</code>), Step 3 Render report (md+html to <code>docs/reviews/session-mining-&lt;date&gt;.md</code>, <code>render_artifact.py --style report</code>, Artifact best-effort with WF14&#x27;s exact failure line), Step 4 Gate (present candidates; per candidate: <strong>accept → run <code>disposition &lt;key&gt; accepted</code> (recorded BEFORE the WF1 handoff)</strong>, then emit a WF1 template-shaped draft prompt (Description/Acceptance Criteria/Scope/Affected Components/Risk, conventional title) — <strong>stated explicitly: WF1 has no pre-drafted-body entry path; the handoff is a prompt WF1 re-drafts from, and WF1&#x27;s own dedup + approval still run</strong>; once the WF1 issue exists, <code>disposition &lt;key&gt; filed --note &quot;#N&quot;</code>; decline → <code>disposition &lt;key&gt; declined</code>), Step 5 Close (session-note marker).</p>
+<p>Canonical drift-guarded sentences (AC1, AC7 — new <code>tests/test_session_mining_clarity.py</code>, cloning <code>test_run_feedback_clarity.py</code> mechanics: header-index slicing + whitespace normalize + one sentence per pin):</p>
+<ul>
+<li>Write surface: &quot;WF17 is STRICTLY report-only — the ONLY file writes are the</li>
+</ul>
+<p>  candidates queue (<code>claude_docs/.mining/candidates.jsonl</code>), the report   <code>.md</code>/<code>.html</code> pair under <code>docs/reviews/</code>, the session-note DONE marker   append, and — when Step 1 refreshes it — the #375 session-index store (a   derived cache owned end-to-end by <code>session_index.py</code>; WF17 never writes it   directly).&quot; (The index refresh was initially omitted from this enumeration —   adversarial catch; an exhaustive write-surface claim that misses a write is   worse than a longer honest one.)</p>
+<ul>
+<li>Threshold: &quot;A candidate is only PROPOSED for filing at recurrence ≥ 3</li>
+</ul>
+<p>  distinct sessions.&quot;</p>
+<ul>
+<li>Gate: &quot;Accepted candidates are routed to WF1 as a prepared draft; nothing is</li>
+</ul>
+<p>  ever auto-filed — propose-then-approve, always.&quot;</p>
+<ul>
+<li>Re-propose rule: &quot;A declined candidate is recorded in the queue and not</li>
+</ul>
+<p>  re-proposed.&quot;</p>
+<ul>
+<li>Coverage honesty: &quot;v1 does not inspect raw tool_use/tool_result payloads and</li>
+</ul>
+<p>  cannot conclude that command sequences or tool errors are absent.&quot;</p>
+<h2>Registration + diagram</h2>
+<p>add-skill surfaces: whitelist <code>./skills/session-mining</code> between <strong><code>scan</code> and <code>session-recall</code></strong> (alphabetical: &#x27;m&#x27; &lt; &#x27;r&#x27;); codex symlink; counts 17→18; category <strong>SDLC workflows</strong> 7→8 (a numbered WFn workflow, like run-feedback) — description breakdown <code>8 SDLC + 7 workspace + 1 planning + 2 security</code> in BOTH <code>.claude-plugin/plugin.json</code> and <code>.claude-plugin/marketplace.json</code> AND the codex <code>plugins/rawgentic/.codex-plugin/plugin.json</code> description (that third copy is NOT test-guarded — silent drift if missed); <strong>THREE</strong> hardcoded test literals asserting <code>&quot;7 SDLC workflow skills&quot;</code> bump to &quot;8&quot;: <code>test_adversarial_review_registration.py::test_descriptions_consistent_count</code>, <code>::test_readme_count_strings_updated</code>, and <code>tests/test_interview_skill.py::test_descriptions_account_for_interview_as_planning_skill</code> — the third is the EXACT surface both WF14 Step-2 agents missed (docs/reviews/run-feedback-wf2-337-2026-07-09.md:48); codex longDescription 17→18; README table row + evals fraction 9/18 + have-none list; version ×3 → <strong>3.34.0</strong>; Changelog entry (exact §2 shape). Category confirmation (deliberate, not inherited): SDLC because WF-numbered like run-feedback; sibling session-recall stays workspace-management (no WF number). <strong>Workflow diagram:</strong> WF17 skeletal registry entry required — <code>DATA.order</code> + <code>wf17</code> block (<code>code:&quot;WF17&quot;</code>, real phase names from the SKILL, <code>skeletal:true</code>) with non-empty <code>steps</code> on its version entry (<code>test_every_ordered_workflow_has_nonempty_default_steps</code> fails loud otherwise). This is the recorded diagram decision: skeletal entry, no REV (REV history is WF2-spine-only; WF14 precedent).</p>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li><code>session_index</code> DB missing → skill runs Step 1&#x27;s index first (explicit</li>
+</ul>
+<p>  invocation); search exit 2 → surface, stop (never fabricate).</p>
+<ul>
+<li>Malformed queue/JSONL lines → skip + count, surfaced in the report (AC3</li>
+</ul>
+<p>  spirit carried over).</p>
+<ul>
+<li>Report render failure → non-voiding (WF14 rule): keep the <code>.md</code>, record gap.</li>
+<li>Zero candidates → report says so honestly; no padding.</li>
+</ul>
+<h2>Security implications</h2>
+<ul>
+<li>Report + queue may quote session text → secrets-by-NAME discipline stated in</li>
+</ul>
+<p>  the skill (quotes are verbatim EVIDENCE — the skill instructs redacting any   credential VALUE to its name before the quote lands in queue/report).</p>
+<ul>
+<li>Queue is local, gitignored (<code>claude_docs/.mining/</code> added to the workspace</li>
+</ul>
+<p>  <code>.gitignore</code> beside <code>.session-index/</code> — same inert-for-git honesty note).</p>
+<ul>
+<li>No egress. Subprocess surface = exactly two sibling hooks, list-form argv,</li>
+</ul>
+<p>  no shell: <code>session_index.py</code> (search/index/status) and <code>render_artifact.py</code>   (report render). Plus one direct <strong>read-only</strong> SQLite open of the #375 DB   (<code>mode=ro</code> URI) for verbatim quote resolution — no raw session-file access.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: subprocess invocation of hooks/session_index.py (search --literal --limit N --json; index; status) and of render_artifact.py --style report (list-form argv, no shell)</li>
+</ul>
+<p>  feasibility: verified via spike — all invocations EXCEPT <code>--style report</code> exercised live this session (2026-07-10): search &quot;permission denied&quot; --literal --limit 500 --json returned 264 rows carrying exactly the detector-consumed fields (session_id, ts, project, role, snippet, path, line_no, score); <code>index</code> and <code>status</code> run end-to-end against the real corpus in the #375 Task-4 live verification; render_artifact executed twice (--style design, --style roadmap) through the shared template registry. <code>--style report</code> itself is corroborated (not live-run this session) by WF14&#x27;s shipped output docs/reviews/run-feedback-wf2-338-2026-07-10.html — it is exercised live at implementation (the skill&#x27;s own report render is the test)   failure: fail-loud</p>
+<ul>
+<li>api: read-only SQLite open of the #375 DB (sqlite3 mode=ro URI; SELECT messages.text JOIN files ON path+line_no) for verbatim quote resolution</li>
+</ul>
+<p>  feasibility: verified via spike — same 2026-07-10 live run: the JOIN returned the full verbatim message text (3,622 chars) containing the matched phrase   failure: fail-loud</p>
+<ul>
+<li>api: O_APPEND single-line JSONL writes under workspace claude_docs/.mining/ (no lock — see queue design)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — identical idiom in plan_lib.append_review_log and work_summary.persist_record; same-filesystem convention as session notes   failure: fail-loud</p>
+<p>(No new deps, no network, no daemon, no hook-event registration.)</p>
+<h2>Verification map (AC → test)</h2>
+<table>
+<thead><tr><th>AC</th><th>Test</th></tr></thead>
+<tbody>
+<tr><td>1 report-only writes</td><td>drift-guard pin on the write-surface sentence + CLI test asserting detect/propose/disposition touch only the queue</td></tr>
+<tr><td>2 verbatim evidence + recurrence</td><td>unit: Signal carries session_id+quote; propose output includes counts; no candidate without evidence rows</td></tr>
+<tr><td>3 dedupe vs skills + queue</td><td>unit: dedupe_candidates suppression both branches</td></tr>
+<tr><td>4 declined never re-proposed</td><td>CLI: disposition declined → subsequent propose omits pattern_key</td></tr>
+<tr><td>5 WF1 draft shape</td><td>unit: draft emitter output contains the 5 template sections + conventional title</td></tr>
+<tr><td>6 detectors unit+CLI tested; registration green</td><td>test modules + guard suite</td></tr>
+<tr><td>7 threshold + gate drift-guarded</td><td>test_session_mining_clarity.py canonical-sentence pins</td></tr>
+</tbody>
+</table>
+
+</main>
+<footer>Last updated: 2026-07-10 16:49 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
