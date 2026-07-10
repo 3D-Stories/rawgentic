@@ -328,3 +328,55 @@ class TestPerSlotFallbackChain:
         assert ("Named agent type does not resolve → per-slot fallback chain" in s9)
         assert ("Reviewer returns vacuous success → dead-return relaunch once, "
                 "then REVIEW_DISPATCH_FAILED + the workflow's ERROR protocol") in s9
+
+
+# --- #341: issue-keyed step markers (WF3) — contract + prescribed literals ---
+
+class TestIssueKeyedMarkersWF3:
+    """Drift guards for #341 in WF3: the <step-tracking> contract sentence plus
+    each prescribed keyed WF3 marker literal. Corpus `in` (the `#<issue>` token
+    makes each literal distinctive). Companion to
+    test_wf2_clarity.py::TestIssueKeyedMarkers."""
+
+    CONTRACT = (
+        "On every marker line the run key is read from the marker type's "
+        "canonical slot — concurrent runs share one notes file and un-keyed "
+        "markers are mechanically un-attributable (#341)."
+    )
+
+    KEYED_LITERALS = (
+        "### WF3 Step 1b — Goal guard (set|deferred|skipped): #<issue> — <first 80 chars of text | epic #N | decline reason>",
+        "### WF3 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>",
+        "### WF3 Step 10 — design artifact #<issue> (updated|skipped)",
+        "### WF3 Step 14: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)",
+    )
+
+    def test_contract_sentence_present(self):
+        # Whitespace-normalized: the sentence hard-wraps in <step-tracking>.
+        corpus = " ".join(_text().split())
+        assert self.CONTRACT in corpus, (
+            "WF3 <step-tracking> must carry the #341 canonical attribution sentence")
+
+    def test_step_tracking_marker_template_keyed(self):
+        block = _block(_text(), "step-tracking")
+        assert "### WF3 Step X: <Name> — DONE (#<issue>: <key detail>)" in block, (
+            "the <step-tracking> marker template must carry the #<issue> key")
+
+    def test_all_prescribed_literals_keyed(self):
+        corpus = _text()
+        for lit in self.KEYED_LITERALS:
+            assert lit in corpus, f"missing keyed WF3 marker literal: {lit!r}"
+
+    def test_markers_complete_is_run_scoped(self):
+        """#341 Task 3: WF3's own §Workflow Resumption prose must state the
+        same run-scoped counting rule as WF2's state-and-resume.md — WF3
+        cannot inherit WF2's reference file (cache blocks cross-skill reads),
+        so the rule is restated here verbatim."""
+        norm = " ".join(_text().split())
+        assert (
+            "MARKERS_COMPLETE counts only markers whose canonical-slot key names "
+            "the resuming issue; legacy un-keyed markers count only when the "
+            "containing run-section header names the issue."
+        ) in norm, (
+            "fix-bug/references/steps.md §Workflow Resumption must state the "
+            "run-scoped MARKERS_COMPLETE counting rule verbatim")

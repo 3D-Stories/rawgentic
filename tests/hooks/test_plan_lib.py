@@ -468,10 +468,46 @@ class TestFormatPromotionNote:
         assert "Step 8b" in note
         assert "Step 8 " not in note  # not the default
 
+    def test_no_issue_kwarg_byte_identical_to_today(self):
+        # Backward compat: captured from the pre-#341 output. Must not change
+        # for existing callers that don't pass issue=.
+        mod = _reload_plan_lib()
+        note = mod.format_promotion_note("3", "security surface", "touches auth")
+        assert note == (
+            "### WF2 Step 8 — Promoted 3: standard -> high "
+            "(criterion: security surface; rationale: touches auth)"
+        )
+
+    def test_issue_int_keys_the_detail(self):
+        mod = _reload_plan_lib()
+        note = mod.format_promotion_note(
+            "3", "security surface", "touches auth", issue=341
+        )
+        # Detail follows "Promoted {task_id}: " — the key must lead it as "#341: ".
+        assert "Promoted 3: #341: standard -> high" in note
+
+    def test_issue_string_behaves_identically(self):
+        mod = _reload_plan_lib()
+        note_str = mod.format_promotion_note(
+            "3", "security surface", "touches auth", issue="341"
+        )
+        note_int = mod.format_promotion_note(
+            "3", "security surface", "touches auth", issue=341
+        )
+        assert note_str == note_int
+        assert "Promoted 3: #341: standard -> high" in note_str
+
 
 # --- review log + deferrals + assertions ---
 
 class TestReviewLog:
+    def test_issue_hash_prefixed_string_normalized(self):
+        """#341 Step 11 hardening: issue="#341" must emit exactly one '#'
+        (a "##341" token would never match the canonical #<n> key shape)."""
+        import plan_lib
+        note = plan_lib.format_promotion_note("3", "c", "r", issue="#341")
+        assert "#341: " in note and "##341" not in note
+
     def test_append_creates_file(self, tmp_path):
         mod = _reload_plan_lib()
         log = tmp_path / "review_log.jsonl"

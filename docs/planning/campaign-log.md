@@ -90,6 +90,27 @@ REV 3.27.1, full-page snapshots re-verified 1440×2586 both themes. Suite
 #330 tables merged 30 minutes earlier; Step 11 caught the fabricated-audit-line
 semantics. Loop-backs 1/3.
 
+**PR.** #351 — merged 70e7d75, all 4 CI checks green.
+
+### #341 — issue-keyed step markers · v3.28.0
+
+**Issue.** #341 (feature, epic #333 child 4/10, WF14 dogfood finding): step markers
+carried no issue key — concurrent runs sharing one notes file were mechanically
+un-attributable (reproduced THREE times across this epic's own runs).
+
+**What shipped.** Per-marker-type canonical key-slot contract (5 classes + the
+hook-emitted promotion shape) with an AUTHORITATIVE slot table, emitter caution, and
+declared deferrals in both `<step-tracking>` blocks; 14 keyed prescribed literals
+(incl. the Step 4-discard and Step 6 adversarial siblings the 8a review caught);
+`format_promotion_note` gains a backward-compatible `issue` kwarg (TDD, `#`-input
+normalized); run-scoped consumer rules at all three read sites (WF2 MARKERS_COMPLETE,
+WF3 §Workflow Resumption, WF14 attribution with inlined slots — cache blocks
+cross-skill reads); legacy fallback tightened to pre-#341/stale-cache only;
+`docs/session-notes.md` updated. Lane-widened honestly noted (9 impl files > 7 after
+8a hardening). Suite 2518+1skip → 2534+1skip. Reviews caught real: unpinned slot
+table, stale canonical doc, wrong changelog file refs, fail-open fallback framing.
+Loop-backs 2/3. No spine change → no diagram REV.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---

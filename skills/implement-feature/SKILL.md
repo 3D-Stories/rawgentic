@@ -84,7 +84,7 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 
 Conditional steps (skip ONLY when their condition is not met):
 - Step 6 (Plan Drift): lightweight, fast — run it unless time-critical **or in the small-standard lane** (`<small-standard-lane>`)
-- **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<N findings>)` in session notes.
+- **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
 - Step 14 (Merge/Deploy): skip only if user does not request merge — **always skipped in headless mode** (`additionalContext` has "HEADLESS MODE active"): PR creation is the terminal deliverable, so a headless run never merges or deploys (`references/headless.md`).
@@ -271,9 +271,34 @@ entry must still be present at the end of the run (#50). Wherever anything in th
 
 As a step runs, APPEND cumulative `####` sub-headers (progress, evidence, decisions) under
 that step's section; then APPEND the step's marker **last**:
-`### WF2 Step X: <Name> — DONE (<key detail>)`
+`### WF2 Step X: <Name> — DONE (#<issue>: <key detail>)`
 The `— DONE` marker is load-bearing for the resumption protocol. This enables workflow
 resumption if context is lost.
+
+On every marker line the run key is read from the marker type's canonical slot —
+concurrent runs share one notes file and un-keyed markers are mechanically
+un-attributable (#341). The key is read ONLY from that marker type's slot (below); a
+`#N` in a free-text tail is never the key, and a marker whose slot holds no `#<n>` is
+legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error).
+The fallback exists for PRE-#341 notes and stale-cache (≤3.27) emitters ONLY: a run
+executing THIS contract that emits a prescribed marker without its slot key has
+violated the contract — fix the emission, do not lean on the fallback.
+
+| Marker type | Canonical key slot |
+| --- | --- |
+| DONE-parens (`— DONE (…)`) | first token inside the parens: `— DONE (#<issue>: <detail>)` |
+| enum-parens with trailing detail (Step 1b) | first token of the trailing detail: `(set\|deferred\|skipped): #<issue> — <detail>` |
+| bare-enum, no trailing detail (Step 12 design artifact) | post-label, pre-enum: `— design artifact #<issue> (updated\|skipped)` |
+| label-colon (Step 11 adversarial diff) | immediately after the colon: `Adversarial Diff Review: #<issue> findings_present …` |
+| parens-state (Step 4/6 adversarial incl. the discarded variant, Step 8 delegation) | key leads inside the parens: `(#<issue>, invoked\|skipped)` / `(#<issue>, discarded: <reason>)` / `whole-issue-delegation (#<issue>):` |
+| hook-emitted promotion note (`format_promotion_note`) | key leads the detail after the task colon: `— Promoted <id>: #<issue>: <detail>` |
+
+This slot table is AUTHORITATIVE: every prescribed marker literal in references/ must
+conform to its type's slot, and when a literal and this table diverge the table wins.
+Emitters: the key MUST land in the type's slot — a key anywhere else on the line is
+ignored by consumers. Deliberately un-keyed informational markers (path-estimate,
+path-estimate refresh, trivial-work suggestion, headless Step 14/15 skip) are declared
+deferrals, not misses — they are print-and-continue advisories no consumer attributes.
 </step-tracking>
 
 <references>

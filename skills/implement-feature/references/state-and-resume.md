@@ -65,6 +65,7 @@ set -euo pipefail
 #     issue-validated = issue validated in notes, no design yet       [-> Step 2]
 #     none            = neither                                       [-> Step 1]
 # MARKERS_COMPLETE = true|false  (true iff ALL step markers are present in notes)
+#   MARKERS_COMPLETE counts only markers whose canonical-slot key names the resuming issue; legacy un-keyed markers count only when the containing run-section header names the issue.
 # GATE_PRINTED     = true|false  (true iff the completion gate was already printed)
 # HEADLESS = true|false  (true iff additionalContext has "HEADLESS MODE active").
 #   In headless mode WF2 is PR-terminal: a ready-to-merge PR resumes at Step 16

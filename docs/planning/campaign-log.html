@@ -48,7 +48,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 20:12 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-09 21:51 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -126,6 +126,23 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>2512+1skip → 2518+1skip. Reviews caught real: pass-1 design collided with the</p>
 <p>#330 tables merged 30 minutes earlier; Step 11 caught the fabricated-audit-line</p>
 <p>semantics. Loop-backs 1/3.</p>
+<p><strong>PR.</strong> #351 — merged 70e7d75, all 4 CI checks green.</p>
+<h3>#341 — issue-keyed step markers · v3.28.0</h3>
+<p><strong>Issue.</strong> #341 (feature, epic #333 child 4/10, WF14 dogfood finding): step markers</p>
+<p>carried no issue key — concurrent runs sharing one notes file were mechanically</p>
+<p>un-attributable (reproduced THREE times across this epic&#x27;s own runs).</p>
+<p><strong>What shipped.</strong> Per-marker-type canonical key-slot contract (5 classes + the</p>
+<p>hook-emitted promotion shape) with an AUTHORITATIVE slot table, emitter caution, and</p>
+<p>declared deferrals in both <code>&lt;step-tracking&gt;</code> blocks; 14 keyed prescribed literals</p>
+<p>(incl. the Step 4-discard and Step 6 adversarial siblings the 8a review caught);</p>
+<p><code>format_promotion_note</code> gains a backward-compatible <code>issue</code> kwarg (TDD, <code>#</code>-input</p>
+<p>normalized); run-scoped consumer rules at all three read sites (WF2 MARKERS_COMPLETE,</p>
+<p>WF3 §Workflow Resumption, WF14 attribution with inlined slots — cache blocks</p>
+<p>cross-skill reads); legacy fallback tightened to pre-#341/stale-cache only;</p>
+<p><code>docs/session-notes.md</code> updated. Lane-widened honestly noted (9 impl files &gt; 7 after</p>
+<p>8a hardening). Suite 2518+1skip → 2534+1skip. Reviews caught real: unpinned slot</p>
+<p>table, stale canonical doc, wrong changelog file refs, fail-open fallback framing.</p>
+<p>Loop-backs 2/3. No spine change → no diagram REV.</p>
 <p><strong>PR.</strong> _PR # and CI filled by the next slot&#x27;s pass._</p>
 <p>---</p></section>
 <section class="mstone"><h3>Standalone — codex reliability (audit #328 fallout) <span class="chip c-conf">SHIPPED</span></h3><h3>#334 — codex thought-partner dispatches hang: routing rule + dead-job protocol + userns runbook · v3.24.26</h3>
@@ -679,9 +696,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established</p>
 <p>convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#331 (bug, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>6 added · 2518/2519 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>6</td><td>6</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#341 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>16 added · 2534/2535 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>14</td><td>14</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>9</td><td>9</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-09 20:12 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-09 21:51 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

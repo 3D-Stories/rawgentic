@@ -874,3 +874,101 @@ class TestDeadReturnDetection:
         assert "is a DEAD dispatch, not a clean pass" in step11, (
             "Step 11 item 2 must carry the same dead-return rule (adapted "
             "wording is fine, but the core phrase must survive)")
+
+
+# --- #341: issue-keyed step markers — contract + prescribed literals ---
+
+class TestIssueKeyedMarkers:
+    """Drift guards for #341: every WF2 step marker carries the run's issue key
+    in its marker-type canonical slot, so concurrent runs sharing one
+    session_notes.md stay mechanically attributable. Corpus `in` for the
+    contract sentence (it lives in SKILL.md's <step-tracking>); exact-literal
+    corpus pins for each prescribed keyed marker form (the `#<issue>` token makes
+    each literal distinctive, so a whole-corpus `in` cannot false-positive)."""
+
+    CONTRACT = (
+        "On every marker line the run key is read from the marker type's "
+        "canonical slot — concurrent runs share one notes file and un-keyed "
+        "markers are mechanically un-attributable (#341)."
+    )
+
+    KEYED_LITERALS = (
+        # Step 8a mandatory-steps row (SKILL.md:87) — payload preserved per site
+        "### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <N findings>)",
+        # references/steps.md sites
+        "### WF2 Step 1b — Goal guard (set|deferred|skipped): #<issue> — <first 80 chars of text | epic #N | decline reason>",
+        "### WF2 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>",
+        "### WF2 Step 8 whole-issue-delegation (#<issue>): <APPLIED receipt-valid | FALLBACK per-task (<reason>) | SKIPPED not-enabled>",
+        "### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <summary>)",
+        "### WF2 Step 11 — Adversarial Diff Review: #<issue> findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>",
+        "### WF2 Step 11.5: Security Scan — DONE (#<issue>: blocking: N resolved, advisory: N, skipped: <kinds>)",
+        "### WF2 Step 12 — design artifact #<issue> (updated|skipped)",
+        "### WF2 Step 16: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)",
+    )
+
+    def test_contract_sentence_present(self):
+        # Whitespace-normalized: the sentence hard-wraps in <step-tracking>.
+        corpus = " ".join(_text().split())
+        assert self.CONTRACT in corpus, (
+            "WF2 <step-tracking> must carry the #341 canonical attribution sentence")
+
+    def test_step_tracking_marker_template_keyed(self):
+        block = _block(_text(), "step-tracking")
+        assert "### WF2 Step X: <Name> — DONE (#<issue>: <key detail>)" in block, (
+            "the <step-tracking> marker template must carry the #<issue> key")
+
+    def test_all_prescribed_literals_keyed(self):
+        corpus = _text()
+        for lit in self.KEYED_LITERALS:
+            assert lit in corpus, f"missing keyed WF2 marker literal: {lit!r}"
+
+    def test_step11_prefix_and_states_preserved(self):
+        # Pin-safety: the #341 key insert must NOT break the Step 11 prefix pin
+        # (this file's :183) or the four state words (:184).
+        s11 = _step11()
+        assert "### WF2 Step 11 — Adversarial Diff Review:" in s11
+        for state in ("findings_present", "no_findings", "failed (", "skipped ("):
+            assert state in s11
+
+    def test_slot_table_rows_and_authority_pinned(self):
+        """8a hardening (#341): the slot table is the semantic core — pin one
+        distinctive cell per row plus the authority sentence so deleting the
+        table (or demoting it) fails a test."""
+        skill = (REPO_ROOT / "skills" / "implement-feature" / "SKILL.md").read_text()
+        norm = " ".join(skill.split())
+        for cell in (
+            "first token inside the parens: `— DONE (#<issue>: <detail>)`",
+            "first token of the trailing detail",
+            "post-label, pre-enum: `— design artifact #<issue>",
+            "immediately after the colon: `Adversarial Diff Review: #<issue>",
+            "key leads inside the parens",
+            "This slot table is AUTHORITATIVE",
+            "a key anywhere else on the line is ignored by consumers",
+        ):
+            assert cell in norm, f"slot-table pin missing from WF2 SKILL.md: {cell!r}"
+
+    def test_step4_discard_and_step6_adversarial_markers_keyed(self):
+        """8a hardening (#341): the Step 4 discard variant and the Step 6
+        adversarial sibling must carry the key like their Step 4 sibling."""
+        steps = (REPO_ROOT / "skills" / "implement-feature" / "references" / "steps.md").read_text()
+        assert "### WF2 Step 4 — Adversarial Review (#<issue>, discarded: superseded by volume loop-back)" in steps
+        assert "### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>" in steps
+
+    def test_markers_complete_is_run_scoped(self):
+        """#341 Task 3: MARKERS_COMPLETE must count only markers keyed to the
+        resuming issue (or, for legacy un-keyed markers, whose containing
+        run-section header names it) — not every marker in a shared
+        session-notes file. Pinned in state-and-resume.md's MARKERS_COMPLETE
+        description block."""
+        resume = (
+            REPO_ROOT / "skills" / "implement-feature" / "references"
+            / "state-and-resume.md"
+        ).read_text()
+        norm = " ".join(resume.split())
+        assert (
+            "MARKERS_COMPLETE counts only markers whose canonical-slot key names "
+            "the resuming issue; legacy un-keyed markers count only when the "
+            "containing run-section header names the issue."
+        ) in norm, (
+            "state-and-resume.md must state the run-scoped MARKERS_COMPLETE "
+            "counting rule verbatim")

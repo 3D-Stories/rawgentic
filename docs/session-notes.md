@@ -24,9 +24,14 @@ task and status.
 
 **Step markers.** Workflow skills append markers to track completed steps:
 ```
-### WF2 Step X: <Name> -- DONE (<key detail>)
+### WF2 Step X: <Name> -- DONE (#<issue>: <key detail>)
 ```
 All executed steps must have markers; the workflow completion gate verifies this.
+Since #341 (v3.28.0) every marker carries its run's issue key in the marker type's
+canonical slot (the AUTHORITATIVE slot table lives in each workflow's
+`<step-tracking>` block) — concurrent runs share one notes file, and un-keyed
+markers are mechanically un-attributable. Pre-#341 / stale-cache markers degrade to
+section-header attribution, never an error.
 
 **Compaction recovery.** Before context compacts, workflow skills document the
 current step, feature branch name, last commit SHA, loop-back budget state,

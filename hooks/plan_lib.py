@@ -899,17 +899,27 @@ def format_promotion_note(
     criterion: str,
     rationale: str,
     step: str = "8",
+    *,
+    issue: "int | str | None" = None,
 ) -> str:
     """Format a session-notes line documenting a mid-flight promotion.
 
     `step` defaults to "8" (the WF2 step where promotion fires today). If
     P15 ever sprouts a Step 8b promotion or a different workflow reuses
     the helper, callers can override.
+
+    `issue` (#341) attributes the marker to a GitHub issue number for
+    issue-keyed step markers: when set (int or str), the detail portion
+    (immediately after "Promoted {task_id}: ") is prefixed with
+    "#<issue>: ". Defaults to None for backward compat — omitting it
+    reproduces today's exact output byte-for-byte.
     """
-    return (
-        f"### WF2 Step {step} — Promoted {task_id}: standard -> high "
-        f"(criterion: {criterion}; rationale: {rationale})"
-    )
+    detail = f"standard -> high (criterion: {criterion}; rationale: {rationale})"
+    if issue is not None:
+        # accept both 341 and "#341" — emit exactly one '#' (a "##341" token
+        # would never match the canonical #<n> key shape, #341 review catch)
+        detail = f"#{str(issue).lstrip('#')}: {detail}"
+    return f"### WF2 Step {step} — Promoted {task_id}: {detail}"
 
 
 # --- Small-standard lane decision (#135) ---

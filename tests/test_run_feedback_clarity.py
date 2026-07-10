@@ -172,6 +172,20 @@ def test_marker_acceptance_boundaries():
         "Accepted markers must be quoted with source lines in the evidence ledger")
 
 
+# --- #341 Task 3: both-shapes marker attribution acceptance in Step 1 item 2 ---
+
+def test_marker_attribution_both_shapes_accepted():
+    s = _norm(_skill())
+    assert (
+        "Keyed markers attribute mechanically by their canonical-slot "
+        "issue-token; un-keyed markers inside the run's section are recorded "
+        "as attribution-ambiguous in the evidence ledger, and an in-tail "
+        "`#N` outside the slot never attributes."
+    ) in s, (
+        "run-feedback SKILL.md Step 1 item 2 must state the both-shapes "
+        "marker acceptance sentence verbatim")
+
+
 # --- Secrets redaction covers every egress surface (issues + memory too) ---
 
 def test_secrets_rule_covers_all_egress_surfaces():

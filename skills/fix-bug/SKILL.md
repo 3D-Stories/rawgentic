@@ -206,8 +206,29 @@ Step 14 closure summary still runs regardless.
 
 <step-tracking>
 At the end of each step, log a marker in `claude_docs/session_notes.md`:
-`### WF3 Step X: <Name> — DONE (<key detail>)`
+`### WF3 Step X: <Name> — DONE (#<issue>: <key detail>)`
 This enables workflow resumption if context is lost.
+
+On every marker line the run key is read from the marker type's canonical slot —
+concurrent runs share one notes file and un-keyed markers are mechanically
+un-attributable (#341). The key is read ONLY from that marker type's slot (below); a
+`#N` in a free-text tail is never the key, and a marker whose slot holds no `#<n>` is
+legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error). The fallback exists for PRE-#341 notes and
+stale-cache (≤3.27) emitters ONLY: a run executing THIS contract that emits a
+prescribed marker without its slot key has violated the contract.
+
+| Marker type | Canonical key slot |
+| --- | --- |
+| DONE-parens (`— DONE (…)`) | first token inside the parens: `— DONE (#<issue>: <detail>)` |
+| enum-parens with trailing detail (Step 1b) | first token of the trailing detail: `(set\|deferred\|skipped): #<issue> — <detail>` |
+| bare-enum, no trailing detail (Step 10 design artifact) | post-label, pre-enum: `— design artifact #<issue> (updated\|skipped)` |
+| parens-state (Step 4 adversarial) | key leads inside the parens: `(#<issue>, invoked\|skipped)` |
+
+This slot table is AUTHORITATIVE: every prescribed marker literal in references/ must
+conform to its type's slot, and when a literal and this table diverge the table wins.
+Emitters: the key MUST land in the type's slot — a key anywhere else on the line is
+ignored by consumers. Deliberately un-keyed informational markers (trivial-work
+suggestion, headless advisories) are declared deferrals, not misses.
 </step-tracking>
 
 <references>
