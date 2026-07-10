@@ -16,8 +16,9 @@ therefore renders as inert text, never as active markup.
 
 STDLIB ONLY: the CI env installs just pytest + jsonschema, so this pulls in no
 markdown library. The renderer handles the common blocks (headings, lists,
-fenced code, blockquotes, bold/inline-code, paragraphs) and leaves anything
-else as an escaped paragraph — a lossy-but-safe floor, never an injection.
+fenced code, blockquotes, tables, bold/inline-code, paragraphs) and leaves
+anything else as an escaped paragraph — a lossy-but-safe floor, never an
+injection.
 
 Datetime default is mountain time (owner preference for rawgentic reports,
 #174); pass `generated_at` for a deterministic stamp.
