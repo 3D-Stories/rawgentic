@@ -14,6 +14,41 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #378 — session-mining adoption: FTS5 index, WF17 mining, WF14 recurrence (Path B, auto-run)
+
+### #375 — FTS5 session index + `/rawgentic:session-recall` skill · v3.33.0
+
+**Issue.** #375 (feature, epic #378 child 1/3): full-text search over session history was
+the one capability the 2026-07-10 nine-tool comparison found genuinely missing —
+mempalace is curated semantic memory; nothing searched the raw 2.35 GB JSONL corpus.
+
+**What shipped.** `hooks/session_index.py` (pure core + thin CLI): incremental `index`
+over `~/.claude/projects/**/*.jsonl` (recursive — the corpus nests `subagents/` trees;
+per-file `(mtime_ns, size)` high-water marks, per-file transactions, stat-recheck for
+live-appending files), provenance-carrying `search` (FTS5 external-content table + sync
+triggers, bm25 deterministic ordering, `--literal` phrase quoting, inclusive date
+filters), `status` (versions, malformed/ignored/rejected split, staleness). Single-writer
+`fcntl.flock`; WAL concurrent readers; `--rebuild` builds a temp DB and atomically
+`os.replace()`s it in. Guards: missing-corpus-dir refusal, partial-vanish ratio refusal
+(>50%), startup schema/parser gate, reader staleness warning, lone-surrogate sanitize,
+dir 0700/files 0600, symlink refusal (DB + lock). New workspace-management skill
+`session-recall` wraps it; registration across all surfaces (17 skills, workspace 6→7).
+
+**Gate story.** Step 4 ran two passes (design loop-back + user-chosen spec-tighten cheap
+path, D1): 23 unique findings, all terminal. Step 11's adversarial diff review caught a
+Critical the spike had masked — `executescript()` autocommits, so the in-place
+"one-transaction" rebuild was never atomic; the peer consult's temp-DB swap (initially
+rejected as over-complex) was reinstated. Live Task-4 execution against the real corpus
+caught two more the synthetic fixtures missed: `*/*.jsonl` missed 3,308 nested files, and
+77% of message lines are legitimately textless (tool_use/tool_result/thinking) — the
+format-drift guard now measures true shape failures (rebuilt live: 5,139 files, 76,769
+messages, 0 rejected). Risk-tagging hit the `decompose` band because the bare `session`
+path pattern matches every file of a session-tooling feature (D2: manual tags kept,
+word-scope follow-up filed). Suite 2614+1skip→2670+1skip. No diagram REV (leaf skill +
+hook only). *(PR/CI/merge fields: filled by the next slot's pass.)*
+
+---
+
 ## Epic #333 — subagent-dispatch observability + review-gate hardening (auto-run)
 
 ### #329 — structured dispatches[] in the run-record schema + aggregate rollup · v3.26.0

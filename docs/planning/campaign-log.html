@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Epic campaign log — rawgentic</title>
+<title>Rawgentic modernization — campaign log</title>
 <style>
 :root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
 --line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
@@ -62,8 +62,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 08:21 MDT</div>
-<h1>Epic campaign log — rawgentic</h1>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 15:32 MDT</div>
+<h1>Rawgentic modernization — campaign log</h1>
 
 </header>
 <main>
@@ -71,6 +71,11 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
+<section class="mstone"><h3>Epic #378 — session-mining adoption: FTS5 index, WF17 mining, WF14 recurrence (Path B, auto-run) <span class="chip c-conf">SHIPPED</span></h3><h3>#375 — FTS5 session index + <code>/rawgentic:session-recall</code> skill · v3.33.0</h3>
+<p><strong>Issue.</strong> #375 (feature, epic #378 child 1/3): full-text search over session history was the one capability the 2026-07-10 nine-tool comparison found genuinely missing — mempalace is curated semantic memory; nothing searched the raw 2.35 GB JSONL corpus.</p>
+<p><strong>What shipped.</strong> <code>hooks/session_index.py</code> (pure core + thin CLI): incremental <code>index</code> over <code>~/.claude/projects/**/*.jsonl</code> (recursive — the corpus nests <code>subagents/</code> trees; per-file <code>(mtime_ns, size)</code> high-water marks, per-file transactions, stat-recheck for live-appending files), provenance-carrying <code>search</code> (FTS5 external-content table + sync triggers, bm25 deterministic ordering, <code>--literal</code> phrase quoting, inclusive date filters), <code>status</code> (versions, malformed/ignored/rejected split, staleness). Single-writer <code>fcntl.flock</code>; WAL concurrent readers; <code>--rebuild</code> builds a temp DB and atomically <code>os.replace()</code>s it in. Guards: missing-corpus-dir refusal, partial-vanish ratio refusal (&gt;50%), startup schema/parser gate, reader staleness warning, lone-surrogate sanitize, dir 0700/files 0600, symlink refusal (DB + lock). New workspace-management skill <code>session-recall</code> wraps it; registration across all surfaces (17 skills, workspace 6→7).</p>
+<p><strong>Gate story.</strong> Step 4 ran two passes (design loop-back + user-chosen spec-tighten cheap path, D1): 23 unique findings, all terminal. Step 11&#x27;s adversarial diff review caught a Critical the spike had masked — <code>executescript()</code> autocommits, so the in-place &quot;one-transaction&quot; rebuild was never atomic; the peer consult&#x27;s temp-DB swap (initially rejected as over-complex) was reinstated. Live Task-4 execution against the real corpus caught two more the synthetic fixtures missed: <code>*/*.jsonl</code> missed 3,308 nested files, and 77% of message lines are legitimately textless (tool_use/tool_result/thinking) — the format-drift guard now measures true shape failures (rebuilt live: 5,139 files, 76,769 messages, 0 rejected). Risk-tagging hit the <code>decompose</code> band because the bare <code>session</code> path pattern matches every file of a session-tooling feature (D2: manual tags kept, word-scope follow-up filed). Suite 2614+1skip→2670+1skip. No diagram REV (leaf skill + hook only). *(PR/CI/merge fields: filled by the next slot&#x27;s pass.)*</p>
+<p>---</p></section>
 <section class="mstone"><h3>Epic #333 — subagent-dispatch observability + review-gate hardening (auto-run) <span class="chip c-conf">SHIPPED</span></h3><h3>#329 — structured dispatches[] in the run-record schema + aggregate rollup · v3.26.0</h3>
 <p><strong>Issue.</strong> #329 (feature, epic #333 child 1/10): the #328 dispatch audit needed ~2.3 GB of transcript archaeology to answer &quot;did subagents run?&quot; — <code>run_records.jsonl</code> had no structured dispatch field.</p>
 <p><strong>What shipped.</strong> Optional, present-is-strict <code>dispatches[]</code> in the run-record schema (<code>hooks/work_summary.py</code> validate_record — the usage #155 / goal_guard #156 precedent): per-entry <code>role</code>/<code>subagent_type</code>/<code>model</code>/<code>effort</code> + orthogonal <code>outcome</code> (ok/error/retried/dead; dead = vacuous return) vs <code>resolution</code> (primary/fallback/generic). Aggregate rollup: counts by role/model (null model → <code>&quot;(none)&quot;</code>), dead rate, fallback rate, <code>runs_with_dispatches</code>; the section is omitted ENTIRELY when no record carries the field (single contract, per-partition under <code>--group-by</code>). Documented in <code>docs/run-records.md</code>. Emission wired by follow-up #330.</p>
@@ -341,9 +346,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
 <p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
-
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#375 (feature, standard)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>56 added · 2670/2671 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac, sca</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>23</td><td>23</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>8</td><td>8</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>8</td><td>8</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>11</td><td>11</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-10 08:21 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-10 15:32 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

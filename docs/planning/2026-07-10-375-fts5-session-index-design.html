@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design: FTS5 Session Index + session-recall (#375)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 15:26 MDT</div>
+<h1>Design: FTS5 Session Index + session-recall (#375)</h1>
+
+</header>
+<main>
+<h1>Design: FTS5 session index + <code>/rawgentic:session-recall</code> (issue #375)</h1>
+<p>Date: 2026-07-10 · Author: WF2 run (epic #378) · Status: draft for Step 4 gate</p>
+<h2>Problem</h2>
+<p>Full-text search over ~5,130 Claude Code session JSONL files (~2.35 GB, 16 project dirs under <code>~/.claude/projects/</code>). mempalace = curated semantic memory; this = raw full-text over everything. Derived, rebuildable, never committed. No daemon, no hook-event registration, no LLM — explicit invocation only (epic #378 hard constraints).</p>
+<h2>Approaches considered</h2>
+<p><strong>A. Regular content table + FTS5 external-content table (chosen).</strong> <code>messages</code> regular table holds provenance + text; <code>messages_fts</code> is <code>fts5(text, content=&#x27;messages&#x27;, content_rowid=&#x27;id&#x27;)</code>. Pros: <code>snippet()</code> works (AC2), per-file delete is cheap via a <code>file_id</code> index on the regular table, storage not duplicated (FTS index only), standard SQLite-docs pattern. Cons: two objects to keep in sync — handled by the AFTER INSERT/DELETE/UPDATE triggers below (adopted from peer consult; triggers are the sole sync mechanism, no manual FTS commands in application code, so no double-delete hazard).</p>
+<p><strong>B. Single plain FTS5 table with UNINDEXED provenance columns.</strong> Pros: one object. Cons: per-file re-index requires deleting rows located only by an UNINDEXED column — a full virtual-table scan per changed file; at millions of rows that makes the common incremental path the slow path. Rejected.</p>
+<p><strong>C. Contentless FTS5 (<code>content=&#x27;&#x27;</code>).</strong> Smallest disk. Cons: no <code>snippet()</code>, no text reconstruction — fails AC2. Rejected.</p>
+<h2>Schema (v1) — post peer-consult synthesis</h2>
+<pre><code>PRAGMA journal_mode=WAL;
+CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  -- schema_version=1, parser_version=1, last_run=&lt;ISO&gt;
+CREATE TABLE files(
+  id INTEGER PRIMARY KEY,
+  path TEXT UNIQUE NOT NULL,          -- absolute JSONL path
+  project TEXT NOT NULL,              -- parent dir basename
+  mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,   -- high-water mark
+  indexed_at TEXT NOT NULL,           -- ISO 8601 UTC
+  message_count INTEGER NOT NULL,
+  malformed_count INTEGER NOT NULL,   -- unparseable JSON lines (AC3)
+  ignored_count INTEGER NOT NULL,     -- parseable, non-message line types
+  rejected_count INTEGER NOT NULL     -- message-typed lines that failed extraction
+                                      -- (no text / missing or unparseable provenance)
+);
+CREATE TABLE messages(
+  id INTEGER PRIMARY KEY,
+  file_id INTEGER NOT NULL REFERENCES files(id),
+  line_no INTEGER NOT NULL,
+  session_id TEXT NOT NULL, ts TEXT NOT NULL,          -- ts verbatim ISO from line
+  ts_us INTEGER NOT NULL,                              -- normalized UTC microseconds (filters/ordering)
+  project TEXT NOT NULL, role TEXT NOT NULL,
+  uuid TEXT, text TEXT NOT NULL,
+  UNIQUE(file_id, line_no)
+);
+CREATE INDEX idx_messages_file ON messages(file_id);
+CREATE INDEX idx_messages_project_ts ON messages(project, ts_us);
+CREATE VIRTUAL TABLE messages_fts USING fts5(
+  text, content=&#x27;messages&#x27;, content_rowid=&#x27;id&#x27;, tokenize=&#x27;unicode61&#x27;
+);
+-- FTS sync triggers (the SOLE sync mechanism — application code never issues
+-- manual FTS commands, so no double-delete hazard):
+CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+  INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;
+CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text) VALUES(&#x27;delete&#x27;, old.id, old.text);
+END;
+CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+  INSERT INTO messages_fts(messages_fts, rowid, text) VALUES(&#x27;delete&#x27;, old.id, old.text);
+  INSERT INTO messages_fts(rowid, text) VALUES (new.id, new.text);
+END;</code></pre>
+<p><strong>Foreign keys: OFF by design</strong> (SQLite default; the <code>REFERENCES</code> clause is documentation). Rationale: cascade-delete would have to fire the FTS delete triggers via FK-action semantics — provable but subtler than needed. Instead the single-writer batch code pins the delete order explicitly: <code>DELETE FROM messages WHERE file_id=?</code> first (fires the FTS triggers), then the <code>files</code> row, in the same transaction. A test proves vanished-file content disappears from <code>messages_fts</code>.</p>
+<p>Peer-consult provenance: cross-model consult (<code>docs/reviews/peer-rawgentic-peer-problem-375-2026-07-10.md</code>) contributed: FTS-sync triggers, <code>line_no</code> + <code>UNIQUE(file_id,line_no)</code> identity, <code>mtime_ns</code>, normalized <code>ts_us</code>, malformed/ignored split, stat-recheck-mid-read, flock writer lock, <code>parser_version</code> meta, deterministic result ordering, <code>--literal</code> flag, thinking-block exclusion rationale. Rejected from peer: temp-DB atomic rebuild swap (WAL-sidecar complexity disproportionate for a rebuildable derived store — in-place drop/recreate under the writer lock instead).</p>
+<h2>Extraction contract (pure function)</h2>
+<p><code>extract_message(obj) -&gt; ExtractedMsg | None</code> over one parsed JSONL line:</p>
+<ul>
+<li><code>type in {&quot;user&quot;,&quot;assistant&quot;}</code> only; everything else (mode, attachment,</li>
+</ul>
+<p>  file-history-snapshot, system, queue-operation, …) → ignored (counted   <code>ignored</code>, distinct from malformed).</p>
+<ul>
+<li><code>message.content</code> is a <strong>str</strong> (user) → that string.</li>
+<li><code>message.content</code> is a <strong>list of blocks</strong> → join <code>text</code> block texts with</li>
+</ul>
+<p>  <code>&quot;\n\n&quot;</code>. <code>thinking</code>, <code>tool_use</code>, <code>tool_result</code> blocks are NOT indexed in v1   (index size + accidental exposure of internal/tool payloads — peer-consult   rationale; revisit = <code>parser_version</code> bump + <code>--rebuild</code>).</p>
+<ul>
+<li>Classification (calibrated against the REAL corpus during the live Task-4</li>
+</ul>
+<p>  run — 77% of message lines are legitimately textless): a <code>user</code>/<code>assistant</code>   line with well-formed content but no text-bearing blocks (tool_use-only,   tool_result, thinking-only, empty string) → <strong>ignored</strong> (expected shape). A   line with an unexpected <code>message</code>/<code>content</code> shape (non-dict message, non-   str/list content) or missing/unparseable provenance (<code>sessionId</code>,   <code>timestamp</code>) → <strong>rejected_message</strong> — the true format-drift signal,   persisted in <code>files.rejected_count</code> (see schema DDL).</p>
+<ul>
+<li><strong>Format-drift warning:</strong> after an <code>index</code> run, if run-wide</li>
+</ul>
+<p>  <code>rejected / (indexed + rejected) &gt; 0.5</code> (indexed = <code>message_count</code>; and   ≥ 100 message lines seen), print   a loud stderr warning naming sample file:line locations. Exit stays 0   (fail-soft per AC3) — the warning + <code>status</code> counters make the drift visible.</p>
+<ul>
+<li>Provenance per line: <code>session_id</code> (top-level <code>sessionId</code>), <code>ts</code> (<code>timestamp</code></li>
+</ul>
+<p>  verbatim) + <code>ts_us</code> (normalized UTC microseconds — parsed via   <code>datetime.fromisoformat(ts.replace(&quot;Z&quot;, &quot;+00:00&quot;))</code>, which handles the   corpus&#x27;s real <code>YYYY-MM-DDTHH:MM:SS.mmmZ</code> shape on all supported Pythons;   at least one test fixture line carries that exact shape so a systematic   parse failure goes red), <code>role</code> (= <code>type</code>), <code>uuid</code>, <code>line_no</code>, <code>project</code>   (= FIRST path component under the corpus root — the real corpus nests up to   <code>project/session-dir/subagents/*.jsonl</code>, so the scan is <code>rglob(&quot;*.jsonl&quot;)</code>   and a parent-dir-basename derivation would mislabel subagent files as   project &quot;subagents&quot;; live-run catch, Task 4).</p>
+<ul>
+<li>Unparseable JSON line → malformed, counted (AC3), never fatal.</li>
+</ul>
+<p>Upstream format is Claude Code-internal and may change without notice (issue risk note): the extractor is total — any unexpected shape inside a user/assistant line degrades to &quot;no text extracted&quot;, never an exception; format assumptions documented in the module docstring.</p>
+<h2>Incremental strategy (AC1)</h2>
+<p><strong>Startup validation (before any scan):</strong> <code>index</code> compares the stored <code>schema_version</code> and <code>parser_version</code> in <code>meta</code> against the code constants; mismatch → exit 2 with an explicit &quot;run <code>index --rebuild</code>&quot; instruction, no file mutated. Two explicit exemptions: (a) <strong>fresh DB</strong> — when the DB or <code>meta</code> does not yet exist, the first run creates the schema at the current versions and proceeds (no mismatch possible); (b) <strong><code>--rebuild</code> bypasses the check entirely</strong> — it is the remedy, so it must never be blocked by the condition it fixes. Tests cover both: first-run-on-empty succeeds; version-mismatch → incremental exits 2 → <code>--rebuild</code> succeeds. Without this gate, unchanged files parsed under an old contract would coexist with dirty files parsed under the new one, silently invalidating the convergence claim below.</p>
+<p>Unit = whole file. A file is dirty when <code>(mtime_ns, size)</code> differs from the stored high-water mark (or is absent). <strong>Known v1 limitation (documented, not defended):</strong> an in-place rewrite that preserves both size and mtime_ns (e.g. metadata restoration) is undetectable by this mark — accepted for v1 because the corpus writer (Claude Code) only appends; <code>--rebuild</code> is the recovery. Per dirty file, one transaction: <code>DELETE FROM messages WHERE file_id=?</code> (fires the FTS delete triggers), then delete+recreate the <code>files</code> row, re-parse and re-insert deterministically from file bytes. Stat the file before and after the read; if it changed mid-read (live session appending), roll back and retry that file up to 2×, else keep the prior indexed version (stale — visible in <code>status</code> freshness). Vanished files → per vanished path, one transaction: <code>DELETE FROM messages WHERE file_id=?</code> (FTS triggers fire) then the <code>files</code> row — else incremental would retain sessions a clean rebuild removes; a test proves vanished content leaves <code>messages_fts</code>. Because per-file state is always rebuilt from file bytes by the same pure extractor (pinned by <code>parser_version</code>), an incremental pass and a from-scratch rebuild converge to identical rows → identical search results (AC1 test compares result sets, using the deterministic ordering below).</p>
+<p><code>--rebuild</code> builds the new index in a <strong>temp DB</strong> (<code>sessions.db.rebuild-tmp</code>, fully checkpointed with TRUNCATE and closed) and atomically <code>os.replace()</code>s it over the old file, then unlinks the replaced file&#x27;s stale WAL/SHM sidecars — concurrent readers keep the complete OLD index until the single swap instant. <strong>Step 11 reversal note (honesty):</strong> the earlier &quot;one-transaction in-place DROP+CREATE&quot; approach was WRONG — Python&#x27;s <code>executescript()</code> implicitly commits, so the in-place rebuild was never atomic (adversarial diff review Critical + two same-model reviewers converged on it); the peer consult&#x27;s temp-DB swap, originally rejected as over-complex, was correct and is now the implementation. Disk headroom ≈ 2× final DB size still applies (old + new coexist until the swap), stated in the module docstring and README entry. Incremental runs are unaffected (per-file transactions + periodic passive checkpoints). A mostly-vanished corpus scan (&gt;50% of indexed files missing — unreadable dirs, wrong path, partial mount; <code>rglob</code> silently skips unreadable subtrees) is refused with exit 2 rather than pruned. Readers (<code>search</code>/ <code>status</code>) print a loud staleness warning when the stored schema/parser versions trail the code (only <code>index</code> hard-gates). The sibling lock path is symlink-refused like the DB path, and a pre-existing custom <code>--db</code> parent directory keeps its own permissions (0700 is set only on directories this tool creates).</p>
+<h2>Concurrency (AC4)</h2>
+<p>WAL mode. <code>index</code> is the single writer, enforced by a <strong>non-blocking <code>fcntl.flock</code></strong> on a sibling lock file (<code>sessions.db.lock</code>) acquired before any mutation — a second concurrent <code>index</code> fails immediately, exit 3, &quot;another index run appears to be in progress&quot; (cleaner than busy-timeout contention; <code>PRAGMA busy_timeout=5000</code> retained as backstop). One transaction per file keeps the writer lock granular and WAL growth bounded. Readers (<code>search</code>, <code>status</code>) open read-only connections (<code>sqlite3.connect(f&quot;file:{db}?mode=ro&quot;, uri=True)</code>), never touch the flock — WAL snapshot isolation gives consistent results during a concurrent write (AC4 test drives this). Search results are deterministically ordered: bm25 rank, then <code>ts_us</code>, <code>session_id</code>, <code>path</code>, <code>line_no</code> — required for the AC1 result-set comparison.</p>
+<p><strong>WAL growth policy:</strong> per-file transactions bound each write, but a long-lived reader snapshot can block checkpointing and grow the WAL for the run&#x27;s duration. The indexer runs <code>PRAGMA wal_checkpoint(PASSIVE)</code> every 50 files; <code>status</code> reports the WAL sidecar size so blockage is observable. No abort threshold in v1 — the store is derived and disk-bounded by the corpus; documented as an operational caveat.</p>
+<h2>CLI contract</h2>
+<p><code>python3 hooks/session_index.py &lt;sub&gt; [flags]</code> — argparse; pure core + thin <code>main(argv)</code> per repo hook quality bar (exemplar: <code>registry_prune.py</code>).</p>
+<ul>
+<li><code>index [--projects-dir DIR] [--db PATH] [--rebuild] [--workspace-root DIR]</code></li>
+</ul>
+<p>  → prints files scanned/indexed/unchanged, messages added, lines skipped. Exit   0 ok; 3 writer-locked; 2 usage/env error.</p>
+<ul>
+<li>`search QUERY [--project P] [--since YYYY-MM-DD] [--until YYYY-MM-DD]</li>
+</ul>
+<p>  [--limit N (default 20)] [--literal] [--json] [--db PATH]<code>   → provenance columns + </code>snippet(messages_fts, 0, &#x27;[&#x27;, &#x27;]&#x27;, &#x27;…&#x27;, 12)<code>,   deterministic ordering (bm25, ts_us, session_id, path, line_no). Raw FTS5   syntax by default; </code>--literal<code> converts the query to a safe FTS5 phrase:   wrap in double quotes AND double any embedded </code>&quot;<code> characters (boundary test   includes a query containing </code>&quot;<code>). The skill prefers </code>--literal<code> unless the   user asks for FTS operators. Date filters   compare against </code>ts_us<code> (inclusive </code>--since<code>, inclusive date </code>--until<code> =   end-of-day UTC). FTS5 query syntax error (</code>OperationalError`) → exit 2 with   the syntax hint, never a traceback. Missing DB → exit 2 &quot;no index yet — run   index first&quot;.</p>
+<ul>
+<li><code>status [--db PATH] [--projects-dir DIR]</code> → schema/parser versions,</li>
+</ul>
+<p>  file/message counts, malformed + ignored + rejected line totals, last run,   DB + WAL sizes, staleness (counts of new/changed/missing files vs the   high-water marks — live metadata scan, never mutates).</p>
+<p>DB default: <code>&lt;workspace-root&gt;/claude_docs/.session-index/sessions.db</code>, where workspace root = upward walk from cwd to the directory containing <code>.rawgentic_workspace.json</code> (pure <code>resolve_workspace_root(cwd)</code>); not found and no <code>--db</code> → exit 2 with an explicit message. Projects dir default: <code>~/.claude/projects</code> (injectable for tests).</p>
+<h2>Skill: <code>skills/session-recall/SKILL.md</code></h2>
+<p>Frontmatter <code>name: rawgentic:session-recall</code>, trigger-phrased description (&quot;Use when you need to find what a past session did/said/decided …&quot;), <code>argument-hint: &lt;query&gt; [--project P] [--since DATE]</code>. Body: resolve hook as <code>&lt;skill-base-dir&gt;/../../hooks/session_index.py</code>, run <code>index</code> first when status shows staleness (explicit invocation each time — never a hook), then <code>search</code>, present results with secrets-by-NAME discipline (never quote a credential value found in a session). No <code>&lt;config-loading&gt;</code> block (workspace-level tool, no project config) → config-loading canary count unchanged.</p>
+<p>Registration (add-skill surfaces): marketplace whitelist <code>./skills/session-recall</code> between <code>scan</code> and <code>setup</code>; codex mirror symlink; README count strings (17 skills; workspace-management 6→7 — including the hand-pinned test literal <code>&quot;6 workspace management&quot;</code> → <code>&quot;7 workspace management&quot;</code>); plugin.json ×2 description breakdown <code>7 SDLC + 7 workspace management + 1 planning + 2 security</code>; version ×3 → <strong>3.33.0</strong>; Changelog entry. Category call: <strong>workspace management</strong> (cross-project workspace tool, like housekeeping/switch). Evals file: not in v1 (optional surface; follow-up noted) — which still moves the <strong>computed README evals surfaces</strong>: the fraction denominator (&quot;9/16&quot; → &quot;9/17&quot;) AND <code>session-recall</code> inserted into the computed have-none membership list (README ~line 655), both asserted by <code>test_adversarial_review_registration.py::test_readme_count_strings_updated</code>.</p>
+<p><strong>Workflow-diagram REV decision:</strong> no workflow-spine change (new leaf skill + hook only; no WF step/gate/loop-back touched) → <strong>no diagram REV entry</strong>; recorded explicitly here and in the PR body per repo quality bar.</p>
+<h2>File changes</h2>
+<p>New: <code>hooks/session_index.py</code>, <code>tests/hooks/test_session_index.py</code>, <code>skills/session-recall/SKILL.md</code>, symlink <code>plugins/rawgentic/skills/session-recall</code>. Edits: <code>.claude-plugin/marketplace.json</code>, <code>.claude-plugin/plugin.json</code>, <code>plugins/rawgentic/.codex-plugin/plugin.json</code>, <code>tests/hooks/test_adversarial_review_registration.py</code> (version pin + workspace-mgmt literal), <code>README.md</code> (counts, skills table, Changelog), workspace root <code>.gitignore</code> (+<code>claude_docs/.session-index/</code>), this design doc + rendered HTML.</p>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>Malformed JSONL line → count + continue (AC3). Unreadable file (permission,</li>
+</ul>
+<p>  vanished mid-scan) → warn to stderr, skip file, continue; recorded as not   indexed (surfaces in status staleness).</p>
+<ul>
+<li>FTS5 unavailable in the Python build → loud exit 2 naming the missing module</li>
+</ul>
+<p>  capability (fail-loud, checked at DB create).</p>
+<ul>
+<li>DB corruption → sqlite errors are not caught broadly; <code>--rebuild</code> is the</li>
+</ul>
+<p>  documented recovery (derived store, rebuildable by design).</p>
+<ul>
+<li>Search before first index → exit 2 with instruction (no auto-index — explicit</li>
+</ul>
+<p>  invocation constraint).</p>
+<h2>Security implications</h2>
+<ul>
+<li>Index is local-only, under a non-repo workspace dir; no egress, no</li>
+</ul>
+<p>  credentials stored by the tool itself. Session content MAY contain secrets —   the skill instructs secrets-by-NAME discipline for anything quoted into   reports/issues; the DB never leaves the host.</p>
+<ul>
+<li><strong>At-rest protection:</strong> the index dir is created <code>0700</code> and DB/WAL/SHM/lock</li>
+</ul>
+<p>  files <code>0600</code> (<code>os.makedirs(mode=0o700)</code> + <code>os.chmod</code> after create); the CLI   refuses a <code>--db</code> destination that is a symlink (resolve + compare); a test   asserts the created modes.</p>
+<ul>
+<li>FTS5 <code>MATCH</code> uses parameterized queries (no SQL injection); file paths come</li>
+</ul>
+<p>  from a directory walk, not user input.</p>
+<ul>
+<li>AC7 honesty note: the workspace root is <strong>not a git repository</strong> (confirmed</li>
+</ul>
+<p>  live), so a workspace <code>.gitignore</code> entry is inert for git — the real   guarantee is structural (the DB dir lives outside every repo). We add the   entry anyway (documentation + defense-in-depth if the workspace ever becomes   a repo) and add a repo-side test asserting no <code>.session-index</code> path exists   inside the plugin repo. Pre-existing flaw named, not laundered.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: SQLite FTS5 external-content tables (fts5 content=/content_rowid=, AFTER INSERT/DELETE/UPDATE sync triggers incl. the &#x27;delete&#x27; command with old.text, bm25(), snippet(), parameterized MATCH) via Python stdlib sqlite3</li>
+</ul>
+<p>  feasibility: verified via spike — 2026-07-10 exact-schema spike on this host (sqlite 3.45.1): created the v1 schema incl. all three triggers, exercised insert/match/snippet/bm25, trigger delete cleaning FTS, trigger update, all assertions passed   failure: fail-loud</p>
+<ul>
+<li>api: SQLite WAL mode (PRAGMA journal_mode=WAL) with mode=ro URI readers concurrent with an open write transaction, and transactional DDL (DROP+CREATE+populate in one transaction) for --rebuild</li>
+</ul>
+<p>  feasibility: verified via spike — same 2026-07-10 spike: ro-reader saw pre-txn snapshot during an open BEGIN IMMEDIATE, and the transactional rebuild committed atomically   failure: fail-silent   surface: PRAGMA journal_mode=WAL is result-bearing (returns the actual mode, does not raise on refusal) — the code asserts the returned value == &quot;wal&quot; and exits 2 naming the actual mode otherwise; unit test covers the assertion</p>
+<ul>
+<li>api: fcntl.flock(LOCK_EX|LOCK_NB) on a sibling lock file for writer exclusion</li>
+</ul>
+<p>  feasibility: verified via spike — same 2026-07-10 spike acquired the lock on this host. POSIX-only (Linux target — this workspace); advisory (sufficient: only <code>index</code> writes, and only via this code path); NFS explicitly out of scope (DB lives on local ext4)   failure: fail-loud</p>
+<ul>
+<li>api: filesystem — read traversal of ~/.claude/projects/*/*.jsonl; create workspace claude_docs/.session-index/ (dir 0700, files 0600) incl. WAL/SHM sidecars</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — this session&#x27;s Step 2 probes read the corpus (5,130 files walked); hooks already write under workspace claude_docs (e.g. session_registry.jsonl, wal/); spike created a WAL DB + sidecars under the scratchpad   failure: fail-loud</p>
+<ul>
+<li>api: symlink creation for the codex mirror (plugins/rawgentic/skills/session-recall)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — every existing plugin skill has the same mirror symlink (e.g. plugins/rawgentic/skills/scan), asserted by the packaging test&#x27;s is_symlink() check   failure: fail-loud</p>
+<p>(No network, no subprocess, no non-stdlib deps. The sqlite3 CLI binary is absent on this host — tests use Python sqlite3 only. Environment scope: the spikes prove THIS host; CI (ubuntu-latest, Python 3.x) is proven by the test suite itself, which exercises FTS5 + WAL + flock end-to-end — a CI runner lacking FTS5 fails the suite loudly, never silently.)</p>
+<h2>Performance</h2>
+<p>First full index of 2.35 GB: minutes-scale, acceptable for an explicit batch command; incremental runs touch only dirty files (typically a handful). One transaction per file keeps the writer lock granular. bm25 ranking default; <code>--limit</code> caps result payload.</p>
+<h2>Verification map (AC → test)</h2>
+<table>
+<thead><tr><th>AC</th><th>Test</th></tr></thead>
+<tbody>
+<tr><td>1 incremental == rebuild</td><td>unit+CLI: index, modify one file, index again; compare full search results vs fresh <code>--rebuild</code> DB</td></tr>
+<tr><td>2 provenance</td><td>search result row asserts session id/ts/project/role/snippet</td></tr>
+<tr><td>3 malformed skipped+counted</td><td>corpus fixture with garbage lines; status shows count; exit 0</td></tr>
+<tr><td>4 WAL concurrent reader</td><td>reader connection opened mid-write transaction sees consistent pre-commit snapshot</td></tr>
+<tr><td>5 black-box CLI + pure unit</td><td>subprocess tests per docs/testing.md + direct-import unit tests</td></tr>
+<tr><td>6 registration</td><td>existing count-guard suite (test_v3_removals, test_adversarial_review_registration, packaging, headless canary)</td></tr>
+<tr><td>7 gitignore/no repo data</td><td>workspace .gitignore line present + repo-tree assertion no <code>.session-index</code></td></tr>
+</tbody>
+</table>
+
+</main>
+<footer>Last updated: 2026-07-10 15:26 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
