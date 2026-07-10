@@ -75,7 +75,8 @@ python3 hooks/adversarial_review_lib.py is-enabled \
 (the generic `key=` parser — no code change; exit 0 = enabled). A caller that supplies
 neither a resolvable record nor a session-notes path gets an `unscored` assessment
 with the gap stated — never a guessed one. WF2 Step 16 / WF3 Step 14 invocation wiring
-is deliberately NOT part of this skill (named follow-up issue).
+lives in those workflows' completion steps (#338) — opt-in via the `runFeedback` key,
+fail-open on assessment failure; this skill stays the invoked core, not the invoker.
 
 ## Step 1: Gather run facts
 

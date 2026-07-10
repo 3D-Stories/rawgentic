@@ -1693,6 +1693,29 @@ measurable signal — not just a sentence the user reads once.
      record the gap in session notes rather than ignoring it.
    - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
+5. **Embedded WF14 self-assessment (opt-in, #338).** After the exit-code handling
+   above, gate on the runFeedback key via the generic is-enabled parser:
+   ```bash
+   python3 hooks/adversarial_review_lib.py is-enabled \
+     --workspace .rawgentic_workspace.json --project <name> --skill implement-feature --key runFeedback
+   ```
+   Non-zero exit (key absent, disabled, or workflow not listed) → skip SILENTLY —
+   the peerConsult opt-in pattern, no marker noise. Exit 0 → invoke the
+   `/rawgentic:run-feedback` core path (the #337 embed contract — zero interactive
+   dependency). When enabled, invoke the run-feedback core path non-interactively
+   with explicit `--record /tmp/wf2-run-record.json --wf 2 --session-notes
+   <notes-path>`; an assessment failure never blocks workflow completion — log and
+   continue. Run it regardless of item 4's rc — the record FILE exists on rc 1 too,
+   and WF14 routes a schema-invalid record to degraded mode (an assessed degraded
+   run beats an unassessed one); on rc 2 WF14's own `--record` fail-closed path
+   yields a degraded/unscored assessment. The assessment is report-only for the
+   plugin SOURCE (it never edits skills/hooks/docs mid-assessment) and
+   PR-terminal-safe (it never touches the just-created PR), so it runs in headless
+   mode too — but its outward writes are WF14's own Step 4 actions and run
+   autonomously there: the report pair + session-note marker (the only FILE
+   writes), up to 3 filed issues against `3D-Stories/rawgentic`, and one mempalace
+   memory.
+
 Log a marker in `claude_docs/session_notes.md`:
 `### WF2 Step 16: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)`
 

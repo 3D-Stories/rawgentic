@@ -260,7 +260,8 @@ def is_enabled_for(
 ) -> bool:
     """True iff the <key> block is enabled AND skill_name is in its workflows.
 
-    key="adversarialReview" (default, backward compatible) or "peerConsult".
+    key="adversarialReview" (default, backward compatible), "peerConsult",
+    or "runFeedback" (#338) — any opt-in block sharing the enabled+workflows shape.
     """
     cfg = load_adversarial_review_config(workspace_path, project_name, key=key)
     return cfg.enabled and skill_name in cfg.workflows

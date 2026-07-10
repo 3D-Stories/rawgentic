@@ -143,6 +143,31 @@ not fixed here). Security scan 0/0 (iac n/a, sca nothing-to-scan). Lane: small-s
 (5 impl files ≤ 7). 6 new drift guards. Suite 2534+1skip → 2540+1skip. Loop-backs 1/3.
 No spine change → no diagram REV.
 
+**PR.** *(backfilled by #338's pass)* PR #353 squash-merged `5cd28b4`, all 4 CI checks
+green.
+
+---
+
+### #338 — runFeedback embedded invocation wired into WF2/WF3 completion · v3.30.0
+
+**Issue.** #338 (feature, epic #333 child 6/10, follow-up to #337): the WF14
+run-feedback skill shipped embed-ready but deliberately unwired — every assessment this
+epic ran was a manual invocation.
+
+**What shipped.** Opt-in embedded self-assessment item in WF2 Step 16 (item 5) and WF3
+Step 14 (item 6): gate on `adversarial_review_lib.py is-enabled --key runFeedback`
+(generic key parser, live-probed, no code change), silent skip on absent/disabled (the
+peerConsult pattern), enabled → invoke the `/rawgentic:run-feedback` core path with
+explicit `--record /tmp/wf{2,3}-run-record.json --wf <n> --session-notes <notes-path>`.
+Fail-open (AC3): assessment failure logs + continues; runs regardless of summarize rc
+(degraded mode covers schema-invalid records); report-only for the plugin source +
+PR-terminal-safe → runs in headless, where WF14's outward writes (report pair, ≤3
+filed issues, mempalace memory) proceed autonomously. Stale not-wired prose retired in run-feedback SKILL.md +
+config-reference.md.
+
+**Reviews.** (filled at Step 11) Lane: small-standard. 4 new drift guards. Suite
+2540+1skip → 2544+1skip.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---
