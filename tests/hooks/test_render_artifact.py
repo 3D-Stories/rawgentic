@@ -768,3 +768,12 @@ class TestTemplateVocabularySurfaces:
         ) in text, (
             "config-reference.md designArtifact.style entry must state the "
             "expanded #344 vocabulary and absent/invalid semantics (#344 Task 5)")
+
+
+class TestStep11Fixes:
+    # Step 11 review: CR normalization must cover the roadmap family too — a raw-CRLF
+    # library string must not leak \r into an mstone heading.
+    def test_roadmap_heading_crlf_normalized(self):
+        h = _render("## Slot 1 — DONE\r\n\r\nbody\r\n", style="roadmap")
+        assert "\r" not in h
+        assert "Slot 1 — DONE" in h

@@ -368,11 +368,17 @@ def _decorate_requirements(fragment: str) -> str:
 
 def _render_body(markdown: str, style: str = "plain") -> str:
     """Dispatch on style via the ``_TEMPLATES`` registry (defined below with the CSS
-    blocks). ``plain`` (default) is byte-for-byte the pre-#199 renderer. A decorator,
+    blocks). ``plain`` (default) adds no template CSS, decorator, or body class; its
+    block output matches pre-#199 for single-line paragraphs, with GFM tables added
+    in #343 and multi-line soft-wrap paragraph joining in #344. A decorator,
     if the template has one, is composed after ``_inline`` and applied wherever the
     body renderer runs its inline pass. Unknown styles fall back to plain WITH a
     stderr warning (the CLI argparse-rejects them; library callers get the loud
     fallback instead of a silent restyle — #344 8a review)."""
+    # Normalize CR endings at the dispatch point so BOTH renderer families (plain and
+    # roadmap/dashboard) see LF-only input — a raw-CRLF library string otherwise
+    # leaks \r into roadmap h3 headings (#344 Step 11 review).
+    markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
     if style not in _TEMPLATES:
         print(f"render_artifact: WARNING unknown style {style!r} — falling back to "
               f"plain (choose one of {tuple(_TEMPLATES)})", file=sys.stderr)
@@ -536,7 +542,8 @@ _DASHBOARD_STYLE = """
 
 # #344: template registry — name -> (body_renderer, [extra_css_blocks], decorator|None).
 # Insertion order is meaningful (drives argparse choices ordering). ``plain`` stays
-# renderer=_render_body_plain, no CSS, no decorator → byte-identical to pre-#344.
+# renderer=_render_body_plain with no template CSS, decorator, or body class (its
+# block semantics themselves changed in #343/#344 — see the module docstring).
 _TEMPLATES = {
     "plain":     (_render_body_plain, [], None),
     "roadmap":   (_render_roadmap,    [_COMPONENT_STYLE, _ROADMAP_STYLE], None),
@@ -569,7 +576,7 @@ def render_artifact(markdown: str, *, title: str, subtitle: str = "",
     sub_html = f'<p class="sub">{esub}</p>' if subtitle else ""
     css = _STYLE + "".join(css_blocks)
     # Body class marks non-plain templates for their accent selectors; plain stays a
-    # bare <body> so plain output is byte-identical to pre-#344.
+    # bare <body> (no template markup or CSS is ever added to plain).
     body_class = f' class="tpl-{style}"' if style in _TEMPLATES and style != "plain" else ""
     return f"""<!doctype html>
 <html lang="en">

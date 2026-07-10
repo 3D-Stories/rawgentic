@@ -243,3 +243,14 @@ def test_setup_asks_about_design_artifact_and_shared_doc():
     assert "sharedDoc" in c
     assert "per-issue" in c.lower() and "shared-doc" in c.lower()
     assert "render_artifact.py" in c
+
+
+def test_style_non_list_projects_never_raises(tmp_path, capsys):
+    # Step 11 adversarial diff review: {"projects": 1} must not raise (never-raises
+    # contract) — it is an unreadable-shape config: design + stderr warning.
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text('{"projects": 1}')
+    assert arl.design_artifact_style(str(ws), "p") == "design"
+    assert "non-list" in capsys.readouterr().err
+    assert arl.design_artifact_shared_doc(str(ws), "p") is None

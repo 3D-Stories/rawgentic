@@ -287,7 +287,10 @@ def design_artifact_shared_doc(workspace_path: str, project_name: str):
         return None
     if not isinstance(data, dict):
         return None
-    for proj in data.get("projects", []) or []:
+    projects = data.get("projects")
+    if not isinstance(projects, list):
+        return None
+    for proj in projects:
         if isinstance(proj, dict) and proj.get("name") == project_name:
             block = proj.get("designArtifact")
             if not isinstance(block, dict):
@@ -356,7 +359,14 @@ def design_artifact_style(workspace_path: str, project_name: str) -> str:
         print(f"adversarial_review_lib: workspace config {workspace_path!r} is not a "
               "JSON object; defaulting design_artifact_style to 'design'", file=sys.stderr)
         return "design"
-    for proj in data.get("projects", []) or []:
+    projects = data.get("projects")
+    if not isinstance(projects, list):
+        # e.g. {"projects": 1} — malformed shape must not raise (never-raises contract)
+        print(f"adversarial_review_lib: workspace config {workspace_path!r} has a "
+              "non-list 'projects'; defaulting design_artifact_style to 'design'",
+              file=sys.stderr)
+        return "design"
+    for proj in projects:
         if isinstance(proj, dict) and proj.get("name") == project_name:
             block = proj.get("designArtifact")
             if block is None:

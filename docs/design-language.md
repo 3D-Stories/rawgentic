@@ -84,7 +84,7 @@ already-escaped text).
 
 | Template    | Renderer family     | CSS layers                                | Decorator                | Surface + canonical invocation                                                                              |
 | ----------- | ------------------- | ----------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `plain`     | `_render_body_plain`| none                                      | none                     | legacy / default — byte-identical to the pre-#199 renderer; the fallback for any unknown style.             |
+| `plain`     | `_render_body_plain`| none                                      | none                     | legacy / default — no template CSS, decorator, or body class; block semantics gained GFM tables (#343) and soft-wrap paragraph joining (#344); the fallback for any unknown style.             |
 | `roadmap`   | `_render_roadmap`   | component + roadmap                       | none                     | back-compat alias family of `dashboard` (h2 bubble cards + completion chips).                               |
 | `report`    | `_render_body_plain`| component + report                        | `_decorate_scores`       | WF14 run-feedback reports — `--style report`.                                                               |
 | `design`    | `_render_body_plain`| component + design                        | none                     | WF2/WF3 design artifacts + the WORKSPACE `design-doc-publish` skill — `--style design`. See the gap note below. |
