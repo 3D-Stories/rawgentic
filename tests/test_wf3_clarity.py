@@ -257,3 +257,42 @@ class TestDispatchesAssembly:
         assert sentence in s14, (
             "Step 14 must contain the canonical #330 dispatches[] assembly "
             "sentence")
+
+
+# --- #331: per-slot fallback chain + dead-return detection at the Step 9 gate ---
+
+class TestPerSlotFallbackChain:
+    """Header-index-sliced guard (repo convention: TestDispatchesAssembly /
+    test_wf2_clarity.py's TestTieredLoopback, :444-454). Pins the two #331
+    canonical sentences the Step 9 review gate must carry: the per-slot
+    three-tier fallback chain (a fallback in one slot never collapses the gate
+    from two reviews to one) and the dead-return relaunch rule (a vacuous
+    reviewer return is a DEAD dispatch, not a clean pass). Location pin (reads
+    steps.md directly), whitespace-normalized so wrapped prose compares equal."""
+
+    def _step9(self) -> str:
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        return " ".join(_section(text, "## Step 9:", "## Step 10:").split())
+
+    def test_per_slot_fallback_chain_sentence_present(self):
+        s9 = self._step9()
+        sentence = (
+            "For EACH reviewer slot independently: dispatch the named "
+            "`pr-review-toolkit` agent; if THAT slot's agent type fails to "
+            "resolve, dispatch `rawgentic:rawgentic-reviewer` with that slot's "
+            "brief; if that also fails, use a generic inline-prompt dispatch "
+            "with that slot's brief — fallback in one slot never collapses the "
+            "gate from two reviews to one.")
+        assert sentence in s9, (
+            "Step 9 must carry the #331 canonical per-slot three-tier fallback "
+            "chain sentence")
+
+    def test_dead_return_detection_sentence_present(self):
+        s9 = self._step9()
+        sentence = (
+            "A reviewer return that is vacuous (no findings AND no substantive "
+            "content) is a DEAD dispatch, not a clean pass — relaunch that slot "
+            "once at the same tier; on a second death follow the existing "
+            "dispatch-failure path.")
+        assert sentence in s9, (
+            "Step 9 must carry the #331 canonical dead-return detection sentence")
