@@ -85,7 +85,9 @@ def _split_table_row(line: str) -> list[str]:
 def _render_body_plain(markdown: str) -> str:
     """Escape-first block renderer. Every line is escaped before classification;
     transforms only wrap escaped text in whitelisted tags."""
-    lines = markdown.split("\n")
+    # Normalize CR line endings so callers passing raw-CRLF strings get the same
+    # hard-break detection as the CLI's universal-newline file read (#344 8a review).
+    lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     out: list[str] = []
     i = 0
     in_list = False
