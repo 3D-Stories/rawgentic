@@ -45,7 +45,39 @@ format-drift guard now measures true shape failures (rebuilt live: 5,139 files, 
 messages, 0 rejected). Risk-tagging hit the `decompose` band because the bare `session`
 path pattern matches every file of a session-tooling feature (D2: manual tags kept,
 word-scope follow-up filed). Suite 2614+1skip→2670+1skip. No diagram REV (leaf skill +
-hook only). *(PR/CI/merge fields: filled by the next slot's pass.)*
+hook only). PR #386 squash-merged `5675cc1`, CI 4/4 green, issue auto-closed.
+
+### #376 — WF17 `/rawgentic:session-mining` — detect→queue→synthesize→gate · v3.34.0
+
+**Issue.** #376 (feature, epic #378 child 2/3): adopt claude-reflect's verified shape
+(detect → durable queue → synthesis → human gate) built native, report-only, no LLM in
+detect.
+
+**What shipped.** `hooks/session_mining_lib.py`: deterministic detectors over the #375
+index (`--literal` phrase queries; friction + restated-error proxies) and session notes
+(command mentions with same-section UUID session-id resolution; unresolvable =
+evidence-only). Append-only event-log queue with sha256 candidate identity,
+human-over-machine reducer (unknown/machine events can never override a decline),
+tail-parse torn-tail guard (repairs valid-but-unterminated hand-fixed lines; truncates
+only unparseable fragments; non-object tails truncate too), mid-file corruption fails
+propose/disposition closed, best-effort redaction preserving paths/UUIDs, verbatim
+quotes via read-only #375-DB JOIN (fail-loud; fallback marked `index-snippet`).
+Recurrence ≥ 3 DISTINCT sessions, bucketed per (detector, pattern) — the cross-detector
+leak was caught because the live run mined its own session's notes. WF17 skill mirrors
+WF14's report-only pattern; WF1 handoff is a re-draftable template prompt.
+
+**Gate story.** Step 4 took THREE passes + a verifier-guided micro-fix, consuming the
+entire loop-back budget (design ×2 + spec_tighten ×1, D7–D10 in the run log): the peer
+consult refuted my hybrid detector (sampling bias — option C with proxy labeling won,
+D6), the adversarial reviews forced the accepted-event lifecycle, absorbing-terminal
+semantics, and the torn-tail guard — whose first version the incremental verifier then
+proved converted the benign case into fatal corruption (fix reversed to
+truncate-then-append). Step 11's adversarial diff found the recurrence cross-detector
+leak + accepted-evidence loss; one High rejected with rationale (torn-tail-as-declined —
+write-time visibility). Live verification against the real corpus (temp queue): 1,031
+signals → 177 patterns → 10 proposals with verbatim evidence, AC4 decline-then-re-propose
+verified live. Suite 2670+1skip→2723+1skip. WF17 skeletal diagram entry, no WF2-spine
+REV. *(PR/CI/merge fields: filled by the next slot's pass.)*
 
 ---
 
