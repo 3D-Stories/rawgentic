@@ -953,6 +953,8 @@ Execute the implementation plan task by task.
 
 When the `implementation` role is `inherit` (default), Step 8 runs inline exactly as today — no delegation, no behavior change (and if the session model is Haiku, dispatch any implementation subagent with `model: sonnet`).
 
+When the resolved `implementation` model equals the session/orchestrator model, inline execution is an expected, acceptable outcome — delegation exists for isolation and parallelism, not obligation. The #328 subagent-dispatch audit (`docs/reviews/subagent-dispatch-audit-2026-07-09.md`, PR #328) measured 6/6 genuine runs implementing inline even with `implementation: opus` configured, and judged that scope-by-design rather than a bug. This documents current intended behavior only — it deliberately does NOT settle the delegation policy; the audit's unrun falsification experiment (route `implementation` to `sonnet` and re-measure) remains open.
+
 <!-- whole-issue-delegation: #133 -->
 **Optional WHOLE-ISSUE delegated build sub-mode (`wholeIssueDelegation`, default-off).** Per-task delegation above still runs the full per-task ceremony (dispatch, suite re-run, diff) in the orchestrator's own loop, so an orchestrator working a backlog bloats fast. When opted in, Step 8 instead hands ONE build-subagent the whole branch and validates a structured **receipt** — the *typing* is delegated, the *gating* is not. **Trust boundary:** the builder never self-certifies; every gate re-runs in the orchestrator against the real tree, and a receipt claim is a hypothesis until confirmed. Read `references/whole-issue-delegation.md` in full before using this mode — it holds the build-subagent brief template, the receipt schema, and the validation/fallback contract; the block below is only the spine.
 

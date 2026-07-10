@@ -1066,3 +1066,48 @@ class TestRunFeedbackWiring:
         assert ("--skill implement-feature --key runFeedback") in corpus, (
             "Step 16's runFeedback gate must probe the runFeedback key via "
             "the generic is-enabled parser (#338)")
+
+
+# --- #332: when Step 8 delegates vs runs inline ---
+
+class TestStep8InlineVsDelegated:
+    """#332: the #328 subagent-dispatch audit measured 6/6 genuine runs
+    implementing inline even with `implementation: opus` configured. Step 8
+    must document that inline execution when the resolved model equals the
+    session/orchestrator model is expected and acceptable, not a bug — while
+    stopping short of settling delegation policy (the audit's unrun
+    falsification experiment stays open). Location pin (lives in
+    references/steps.md's Step 8 section), whitespace-normalized (prose may
+    hard-wrap)."""
+
+    CANONICAL = (
+        "When the resolved `implementation` model equals the "
+        "session/orchestrator model, inline execution is an expected, "
+        "acceptable outcome — delegation exists for isolation and "
+        "parallelism, not obligation."
+    )
+
+    def _step8(self) -> str:
+        text = (
+            Path(__file__).resolve().parent.parent
+            / "skills" / "implement-feature" / "references" / "steps.md"
+        ).read_text()
+        m = re.search(r"## Step 8:.*?(?=\n## Step 9:)", text, re.DOTALL)
+        assert m, "Step 8 section not found in steps.md"
+        return m.group(0)
+
+    def test_canonical_inline_expected_sentence_present(self):
+        s8 = " ".join(self._step8().split())
+        assert self.CANONICAL in s8, (
+            "Step 8 must carry the #332 canonical inline-execution-is-"
+            "expected sentence verbatim (whitespace-normalized)")
+
+    def test_cites_audit_and_leaves_policy_open(self):
+        s8 = " ".join(self._step8().split())
+        assert "subagent-dispatch-audit-2026-07-09.md" in s8, (
+            "must cite the #328 audit doc")
+        assert "#328" in s8, "must cite the audit PR"
+        assert "6/6" in s8, "must cite the audit's 6/6-inline measurement"
+        assert "does NOT settle the delegation policy" in s8 or (
+            "does not settle the delegation policy" in s8.lower()
+        ), "must state the honesty bound: policy remains unsettled"
