@@ -380,3 +380,27 @@ class TestIssueKeyedMarkersWF3:
         ) in norm, (
             "fix-bug/references/steps.md §Workflow Resumption must state the "
             "run-scoped MARKERS_COMPLETE counting rule verbatim")
+
+
+# --- #340: multi-pass gate counting pointer at WF3 Step 14 ---
+
+class TestMultiPassGatePointerWF3:
+    """#340: WF3 duplicates the gates JSON inline (only dispatches[] is by
+    pointer), so its Step 14 gates block must carry a one-line pointer to the
+    canonical #340 counting rule in WF2's run-record.md. Header-index-sliced
+    (Step 14 section), location pin (reads steps.md directly), whitespace-
+    normalized per the repo convention."""
+
+    def _step14(self) -> str:
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        return " ".join(_section(text, "## Step 14:", "## Workflow Resumption").split())
+
+    def test_pointer_line_present(self):
+        s14 = self._step14()
+        pointer = (
+            "Multi-pass gates count per the #340 rule in "
+            "`skills/implement-feature/references/run-record.md` "
+            "(unique-across-passes / final-disposition-at-close).")
+        assert pointer in s14, (
+            "Step 14 must carry the #340 multi-pass counting pointer to "
+            "run-record.md")

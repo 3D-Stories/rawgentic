@@ -649,7 +649,9 @@ read once.
    a second step-9 gate. **Canonical names (#116):** use the exact `gates[].name`
    from `work_summary.CANONICAL_GATE_NAMES` (`canonical_gate_name("fix-bug", step)`) —
    WF3: `4`→"Lightweight Reflect", `9`→"Code Review" — so the Tier-2 `gates[].name`
-   column stays canonical across sessions.
+   column stays canonical across sessions. Multi-pass gates count per the #340 rule in
+   `skills/implement-feature/references/run-record.md` (unique-across-passes /
+   final-disposition-at-close).
 
 3b. **dispatches[] assembly (#330).** Assemble `dispatches[]` by grepping
    claude_docs/session_notes.md for lines matching `^DISPATCH issue=<n> ` where
