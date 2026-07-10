@@ -655,10 +655,16 @@ read once.
    never the string `"null"`. Entries preserve note order (the order the lines
    appear in the session-notes file) and are NEVER deduplicated — two identical
    lines are two distinct dispatches (e.g. two identically-configured review
-   agents). A line starting `DISPATCH ` that fails the canonical regex
-   (`shared/blocks/model-routing-resolve.md`) is skipped and adds an extra note
+   agents). Malformed detection operates on this issue's lines: any line whose
+   STRIPPED content starts `DISPATCH issue=<n> ` but that fails the canonical
+   regex (`shared/blocks/model-routing-resolve.md` — the broad 4-role form,
+   deliberately a superset of WF3's review-only emission regex) — including an
+   indented or list-bulleted line the flush-left `^DISPATCH` grep would
+   otherwise miss — is skipped and COUNTED in an extra note
    `{"label": "dispatch capture notes", "value": "skipped <n> malformed DISPATCH
-   line(s)"}` — a malformed capture line never fails the record. Zero
+   line(s)"}` — a malformed capture line never fails the record and is never
+   silently lost. (A `DISPATCH` line with NO parseable `issue=` field is
+   unattributable and stays outside this issue's assembly.) Zero
    well-formed lines for this issue → OMIT the `dispatches` key entirely (never
    an empty array). Assembly does NOT compare against the start-time
    observability line count — under-count detection is owned entirely by

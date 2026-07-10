@@ -199,7 +199,8 @@ value) lives alongside the grammar in `shared/blocks/model-routing-resolve.md`
   never per attempt.
 - Written flush-left at column 0, as its own physical line — never inside a
   list item, blockquote, or fenced code block. The assembler's `^DISPATCH` grep
-  is anchored to line start; an indented or bulleted line is silently lost.
+  is anchored to line start; an indented or bulleted line is rescued only
+  into the MALFORMED count, never into `dispatches[]`.
 - Retry of the SAME task/invocation is ONE line: `outcome=retried` (retried
   then succeeded) or `outcome=error` (retried and still failed). A dispatch
   PATH abandoned for a different one (e.g. delegation dropped for inline work)
@@ -216,10 +217,14 @@ value) lives alongside the grammar in `shared/blocks/model-routing-resolve.md`
   notes file union their lines. Accepted because a crash-resumed run is the
   common same-issue case and its union is correct; WF14's
   dispatch-completeness rubric audits anomalies.
-- A line starting `DISPATCH ` that fails the canonical regex is skipped, and
-  the record's `extra` gets one note
+- Malformed detection operates on this issue's lines: any line whose STRIPPED
+  content starts `DISPATCH issue=<n> ` but fails the canonical regex —
+  including an indented or list-bulleted line the flush-left grep would
+  otherwise miss — is skipped and COUNTED; the record's `extra` gets one note
   `{"label": "dispatch capture notes", "value": "skipped <n> malformed DISPATCH line(s)"}`
-  — a malformed line never fails the record.
+  — a malformed line never fails the record and is never silently lost. (A
+  `DISPATCH` line with NO parseable `issue=` field is unattributable and stays
+  outside this issue's assembly.)
 - Zero well-formed lines for this issue → omit the `dispatches` key entirely
   (no empty-array noise).
 - Under-count detection (a completion line never written at all) is owned

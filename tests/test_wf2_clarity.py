@@ -816,3 +816,30 @@ class TestDispatchCaptureDoc:
         assert canonical_line in section, (
             "the #330 worked example's null-model assembled JSON entry must be "
             "present verbatim in the dispatches section")
+
+
+class TestDispatchRegexIdentity:
+    """#330 Step 11 hardening: the canonical DISPATCH regex must stay
+    byte-identical between the shared block and docs/run-records.md, and WF3's
+    review-only variant may differ ONLY in the role group — regex-vs-validator
+    drift would otherwise stay green."""
+
+    _BROAD = (
+        r"^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) "
+        r"type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) "
+        r"effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) "
+        r"resolution=(primary|fallback|generic)$"
+    )
+
+    def test_shared_block_and_docs_regex_identical(self):
+        block = (REPO_ROOT / "shared" / "blocks" / "model-routing-resolve.md").read_text()
+        docs = (REPO_ROOT / "docs" / "run-records.md").read_text()
+        assert self._BROAD in block, "canonical regex missing from the shared block"
+        assert self._BROAD in docs, "docs/run-records.md regex drifted from the shared block"
+
+    def test_wf3_regex_differs_only_in_role_group(self):
+        wf3 = (REPO_ROOT / "skills" / "fix-bug" / "SKILL.md").read_text()
+        narrow = self._BROAD.replace("role=(review|implementation|analysis|other)", "role=(review)")
+        assert narrow in wf3, (
+            "fix-bug SKILL.md must carry the canonical regex narrowed ONLY in "
+            "the role group (role=(review))")

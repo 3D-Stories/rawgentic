@@ -23,7 +23,7 @@ Canonical regex (assembly's scoped grep + validator):
 ```
 Emission rules:
 - One line per SUBAGENT INVOCATION dispatched (not per attempt) — a multi-reviewer gate emits one line per reviewer (WF2 Step 8a's two reviewers = two lines; Step 11's three agents = three lines).
-- Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is silently lost).
+- Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is rescued only into the MALFORMED count, never into `dispatches[]`).
 - Retry semantics: a single retry of the SAME task/invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error` — regardless of any model escalation on the retry. Two lines are written only when the workflow abandons one dispatch PATH for a different one (e.g. delegation abandoned for inline work): the abandoned path's terminal line plus the new path's line.
 - A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds — the failed dispatch is exactly the entry the audit most needs.
 - `type`/`model`/`effort` values are stable slugs matching `[A-Za-z0-9_.:/-]+` (no spaces, no commas). Write the literal `null` when the role resolved `inherit` (model) or `none` (effort) — never an empty string or "unknown".
