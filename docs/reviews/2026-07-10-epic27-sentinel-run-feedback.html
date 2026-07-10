@@ -1,0 +1,198 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — epic sentinel#27</title>
+<style>
+:root{
+  --ground:#f2f3ef; --panel:#ffffff; --ink:#23262b; --muted:#6d7278;
+  --line:#d9dbd4; --accent:#37597a; --accent-ink:#ffffff;
+  --good:#3d7a4f; --good-bg:#e3efe6; --warn:#a8681f; --warn-bg:#f6ecdd;
+  --crit:#a83a32; --crit-bg:#f5e3e1; --neut:#6d7278; --neut-bg:#eceee9;
+  --chip:#e7eaf0; --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root{
+  --ground:#191c20; --panel:#20242a; --ink:#e6e4dd; --muted:#9aa0a8;
+  --line:#343941; --accent:#8fb2d4; --accent-ink:#14181d;
+  --good:#7fbf8e; --good-bg:#22352a; --warn:#d9a05b; --warn-bg:#3a2f1e;
+  --crit:#d98079; --crit-bg:#3b2523; --neut:#9aa0a8; --neut-bg:#2a2e34;
+  --chip:#2b3038;
+}}
+:root[data-theme="dark"]{
+  --ground:#191c20; --panel:#20242a; --ink:#e6e4dd; --muted:#9aa0a8;
+  --line:#343941; --accent:#8fb2d4; --accent-ink:#14181d;
+  --good:#7fbf8e; --good-bg:#22352a; --warn:#d9a05b; --warn-bg:#3a2f1e;
+  --crit:#d98079; --crit-bg:#3b2523; --neut:#9aa0a8; --neut-bg:#2a2e34;
+  --chip:#2b3038;
+}
+:root[data-theme="light"]{
+  --ground:#f2f3ef; --panel:#ffffff; --ink:#23262b; --muted:#6d7278;
+  --line:#d9dbd4; --accent:#37597a; --accent-ink:#ffffff;
+  --good:#3d7a4f; --good-bg:#e3efe6; --warn:#a8681f; --warn-bg:#f6ecdd;
+  --crit:#a83a32; --crit-bg:#f5e3e1; --neut:#6d7278; --neut-bg:#eceee9;
+  --chip:#e7eaf0;
+}
+body{background:var(--ground);color:var(--ink);font:15px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;padding:0 0 4rem}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header{border-bottom:2px solid var(--accent);padding:2.2rem 0 1.4rem;margin-bottom:1.8rem}
+h1{font-size:1.65rem;font-weight:700;letter-spacing:-.015em;margin:0 0 .35rem;text-wrap:balance}
+h1 .mono{font-family:var(--mono);font-weight:600}
+.sub{color:var(--muted);max-width:64ch;margin:0 0 .9rem}
+.chips{display:flex;flex-wrap:wrap;gap:.4rem}
+.chip{background:var(--chip);border-radius:3px;padding:.18rem .55rem;font-family:var(--mono);font-size:.74rem;color:var(--ink)}
+.chip b{color:var(--accent)}
+h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:600;margin:2.4rem 0 .8rem;display:flex;align-items:center;gap:.6rem}
+h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.tablewrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:4px}
+table{border-collapse:collapse;width:100%;font-size:.83rem}
+th{font-size:.68rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600;text-align:left;padding:.55rem .6rem;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:.5rem .6rem;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.mono,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.score{display:inline-block;min-width:1.7em;text-align:center;font-family:var(--mono);font-weight:700;font-size:.8rem;border-radius:3px;padding:.1rem .25rem}
+.s5{background:var(--good);color:var(--ground)}
+.s4{background:var(--good-bg);color:var(--good)}
+.s3{background:var(--neut-bg);color:var(--neut)}
+.s2{background:var(--warn-bg);color:var(--warn)}
+.s1{background:var(--crit-bg);color:var(--crit);outline:1.5px solid var(--crit)}
+.su{background:none;color:var(--muted);outline:1px dashed var(--line)}
+.scoretbl td:first-child{position:sticky;left:0;background:var(--panel);font-weight:600;white-space:nowrap}
+.scoretbl th:first-child{position:sticky;left:0;background:var(--panel)}
+.verdict{color:var(--muted);font-size:.79rem;min-width:26ch}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:.8rem}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--crit);border-radius:4px;padding:.75rem .9rem}
+.card .run{font-family:var(--mono);font-size:.72rem;color:var(--muted);margin-bottom:.3rem}
+.card p{margin:0;font-size:.86rem}
+.card code{font-family:var(--mono);font-size:.8em;background:var(--chip);padding:0 .25em;border-radius:2px}
+ol.synth{margin:0;padding:0;list-style:none;counter-reset:n;display:flex;flex-direction:column;gap:.65rem}
+ol.synth li{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:.7rem .9rem .7rem 3.1rem;position:relative;counter-increment:n}
+ol.synth li::before{content:counter(n);position:absolute;left:.85rem;top:.72rem;font-family:var(--mono);font-weight:700;font-size:.95rem;color:var(--accent)}
+ol.synth b{display:block;margin-bottom:.15rem}
+ol.synth p{margin:0;font-size:.85rem;color:var(--muted)}
+.issue{display:inline-block;background:var(--accent);color:var(--accent-ink);font-family:var(--mono);font-size:.72rem;font-weight:700;border-radius:3px;padding:.12rem .45rem;margin-left:.4rem;text-decoration:none}
+.tag{display:inline-block;font-family:var(--mono);font-size:.68rem;border-radius:3px;padding:.08rem .4rem;font-weight:600}
+.tag.env{background:var(--neut-bg);color:var(--neut)}
+.tag.ok{background:var(--good-bg);color:var(--good)}
+.ledger{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:.8rem 1rem;overflow-x:auto}
+.ledger pre{margin:0;font-family:var(--mono);font-size:.74rem;line-height:1.9;white-space:pre}
+.foot{margin-top:2.2rem;padding-top:1rem;border-top:1px solid var(--line);color:var(--muted);font-size:.78rem;max-width:75ch}
+.foot .mono{font-size:.95em}
+.legend{display:flex;gap:.9rem;flex-wrap:wrap;font-size:.72rem;color:var(--muted);margin:.5rem 0 0}
+.legend span{display:flex;align-items:center;gap:.3rem}
+td .neg{color:var(--crit);font-weight:600}
+td .pos{color:var(--good)}
+@media (prefers-reduced-motion: no-preference){ .card,.synth li{transition:border-color .15s} .card:hover{border-left-color:var(--accent)} }
+</style>
+
+<div class="wrap">
+<header>
+  <h1>WF14 run-feedback <span class="mono">·</span> epic <span class="mono">sentinel#27</span> — nine WF2 runs</h1>
+  <p class="sub">Machinery assessment of every implement-feature run in the wave-2 epic: what the workflow's gates, dispatches, and telemetry actually did — never the features they shipped. All nine children merged and closed (PRs #28–#36).</p>
+  <div class="chips">
+    <span class="chip">rubric <b>v1</b></span>
+    <span class="chip">assessed <b>2026-07-10</b></span>
+    <span class="chip">plugin under test <b>3.25.0 → 3.27.1</b></span>
+    <span class="chip">verified on main <b>v3.30.0</b></span>
+    <span class="chip">mode <b>full</b> · 9/9 run-records</span>
+    <span class="chip">filed <b>#361–#365</b></span>
+  </div>
+</header>
+
+<h2>Score matrix — fidelity · gates · clarity · dispatch · telemetry · cost</h2>
+<div class="tablewrap">
+<table class="scoretbl">
+<thead><tr><th>run</th><th>PR / merge</th><th>ver</th><th>lane</th><th>F</th><th>G</th><th>C</th><th>D</th><th>T</th><th>$</th><th>verdict</th></tr></thead>
+<tbody>
+<tr><td>#18 cron + stamp</td><td class="mono">#28 · 28f5f80</td><td class="mono">3.25.0</td><td>small-std</td><td><span class="score s3">3</span></td><td><span class="score s4">4</span></td><td><span class="score s4">4</span></td><td><span class="score s4">4</span></td><td><span class="score s4">4</span></td><td><span class="score s3">3</span></td><td class="verdict">ran clean; evidence trail unreliable at Steps 5–7 (concurrent-run interleave, proven by branch mismatch)</td></tr>
+<tr><td>#19 voice unification</td><td class="mono">#29 · eef078b</td><td class="mono">3.25.0</td><td>full</td><td><span class="score s3">3</span></td><td><span class="score s4">4</span></td><td><span class="score s4">4</span></td><td><span class="score su">–</span></td><td><span class="score s3">3</span></td><td><span class="score s3">3</span></td><td class="verdict">held; unlogged Step 7 marker + pre-mandate dispatch/usage gaps</td></tr>
+<tr><td>#20 PBS verification</td><td class="mono">#30 · 73b2bea</td><td class="mono">3.25.0</td><td>full</td><td><span class="score s3">3</span></td><td><span class="score s5">5</span></td><td><span class="score s3">3</span></td><td><span class="score su">–</span></td><td><span class="score s3">3</span></td><td><span class="score s3">3</span></td><td class="verdict">real catches (dead image tag, single-VM-loss gap); 6/6-vs-7/7 count drift never reconciled</td></tr>
+<tr><td>#21 status-by-text</td><td class="mono">#31 · d0107d9</td><td class="mono">3.25.0</td><td>small-std</td><td><span class="score s3">3</span></td><td><span class="score s3">3</span></td><td><span class="score s5">5</span></td><td><span class="score su">–</span></td><td><span class="score s3">3</span></td><td><span class="score s3">3</span></td><td class="verdict">live deploy + false-all-clear catches; telemetry gaps all pre-tracked (#340/#341, since shipped)</td></tr>
+<tr><td>#22 guarded cleanup</td><td class="mono">#32 · 28895ee</td><td class="mono">3.27.1</td><td>full</td><td><span class="score s3">3</span></td><td><span class="score s4">4</span></td><td><span class="score s5">5</span></td><td><span class="score s2">2</span></td><td><span class="score s2">2</span></td><td><span class="score s4">4</span></td><td class="verdict">machinery worked, the record of it didn't: DISPATCH 1-of-4, dispatches[] omitted against its own rule</td></tr>
+<tr><td>#23 hardening pack</td><td class="mono">#33 · 8c251b8</td><td class="mono">3.27.1</td><td>small-std</td><td><span class="score s3">3</span></td><td><span class="score s5">5</span></td><td><span class="score s3">3</span></td><td><span class="score s2">2</span></td><td><span class="score s2">2</span></td><td><span class="score s4">4</span></td><td class="verdict">gates 5/5 on a security path; Step-16 record contradicts its own notes twice</td></tr>
+<tr><td>#24 richer digest</td><td class="mono">#34 · 950f4f8</td><td class="mono">3.27.1</td><td>small-std</td><td><span class="score s2">2</span></td><td><span class="score s5">5</span></td><td><span class="score s3">3</span></td><td><span class="score s1">1</span></td><td><span class="score s2">2</span></td><td><span class="score s4">4</span></td><td class="verdict">two masked-failure bugs caught pre-merge; Steps 7/8/9 markers and all DISPATCH lines missing</td></tr>
+<tr><td>#25 shutdown/start</td><td class="mono">#35 · 8a4c311</td><td class="mono">3.27.1</td><td>full</td><td><span class="score s4">4</span></td><td><span class="score s5">5</span></td><td><span class="score s3">3</span></td><td><span class="score s5">5</span></td><td><span class="score s4">4</span></td><td><span class="score s4">4</span></td><td class="verdict">cross-session resume worked — via a judgment call papering over the BRANCH_STATES gap (#364)</td></tr>
+<tr><td>#26 log/error hybrid</td><td class="mono">#36 · 45061a4</td><td class="mono">3.27.1</td><td>full</td><td><span class="score s5">5</span></td><td><span class="score s5">5</span></td><td><span class="score s4">4</span></td><td><span class="score s5">5</span></td><td><span class="score s4">4</span></td><td><span class="score s4">4</span></td><td class="verdict">cleanest run of the epic: 12/12 markers, 5/5 dispatch lines, both deferrals on both surfaces</td></tr>
+</tbody>
+</table>
+</div>
+<div class="legend">
+  <span><span class="score s5">5</span> anchor met</span>
+  <span><span class="score s4">4</span> strong</span>
+  <span><span class="score s3">3</span> capped / mixed</span>
+  <span><span class="score s2">2</span> degraded</span>
+  <span><span class="score s1">1</span> failed anchor</span>
+  <span><span class="score su">–</span> unscored (pre-mandate version gap)</span>
+</div>
+
+<h2>What the gates actually bought — every run had a real catch</h2>
+<div class="cards">
+  <div class="card"><div class="run">#24 · Step 11</div><p>A failed Prometheus subquery rendered <code>reboot-required: none</code> — a false all-clear — and an unreachable Alertmanager coerced to “up (0 peers)”. Both fixed pre-merge.</p></div>
+  <div class="card"><div class="run">#26 · Step 8a, both reviewers</div><p>Unanchored <code>REBOOT-REQUIRED</code> grep became reachable through raw journal text: a log line merely containing the phrase could auto-reboot a guest at 3am. Reproduced, anchored.</p></div>
+  <div class="card"><div class="run">#26 · Codex diff review</div><p>The cleanup lane’s journal vacuum ran <em>before</em> the error-count collection — silently shrinking the sweep window it was about to report on.</p></div>
+  <div class="card"><div class="run">#23 · Step 11</div><p><code>$?</code>-clobber and double-text bugs in the reboot-return handler — found after a fully green suite.</p></div>
+  <div class="card"><div class="run">#20 · Step 11</div><p>Pinned exporter image tag didn’t exist on ghcr — the deploy would have been dead on arrival.</p></div>
+  <div class="card"><div class="run">#25 · Codex diff review</div><p>Detached power-op runner could exit silently after the “shutting down…” ack on lock-open failure. Same spot a same-model reviewer scored 0.85 and the band dropped — cross-model disagreement earned its keep.</p></div>
+</div>
+
+<h2>Recurring friction, ranked by frequency × cost → routing</h2>
+<ol class="synth">
+  <li><b>Step-16 record assembly is unvalidated manual work <a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/361">#361</a></b>
+  <p>4 of 9 runs shipped wrong fields — goal_guard set-vs-deferred ×2, dispatches[] omitted despite well-formed lines ×2, complexity ×1, commit-count ×1, a gates row with no marker ×1 — and every one passed validate_record, which checks shape only.</p></li>
+  <li><b>Marker emission tracks local reinforcement, not orchestrator quality <a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/362">#362</a></b>
+  <p>Step 7’s marker missing in 7/9 runs; §7 has no local marker instruction while templated §11.5 was emitted every run. Markers are load-bearing for resume and for this very assessment.</p></li>
+  <li><b>Usage telemetry effectively absent for epics <a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/363">#363</a></b>
+  <p>7/9 runs capture_status “unavailable” (long multi-child sessions); one of the two captures is a hand-subtracted delta persisted as “captured”. No per-run attribution primitive exists.</p></li>
+  <li><b>Mid-run mandate adoption has no reconcile step <span class="tag env">not filed</span></b>
+  <p>The 3.25.0→3.27.1 cache bump landed mid-epic; DISPATCH compliance went 1-of-4 → 3-of-6 → 0 → 7/7 → 5/5. Enforcement half rides #361; adoption nudge noted for post_update_reconcile — revisit if it recurs.</p></li>
+  <li><b>Resume vocabulary runs out at doc-only branches <a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/364">#364</a></b>
+  <p>A design-checkpoint branch literally classifies to “changes” → resume at Step 9 with nothing implemented. #25’s correct resume was an inline judgment call, not the written words.</p></li>
+  <li><b>Contaminated reviewer returns have no named handling <a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/365">#365</a></b>
+  <p>#23’s reviewer cited a nonexistent SHA around a real finding; only orchestrator re-verification saved it. Dead-return detection exists; fabricated-citation returns don’t.</p></li>
+  <li><b>Owner-gate / classifier pattern <span class="tag ok">working as designed</span></b>
+  <p>Every child hit auto-mode denials on host-privileged actions; all nine handled it correctly — no workaround, exact one-liners posted on the issue, honest deploy:manual.</p></li>
+</ol>
+
+<h2>Telemetry audit rollup — fields with ≥1 negative verdict</h2>
+<div class="tablewrap">
+<table>
+<thead><tr><th>field</th><th>match</th><th>mismatch</th><th>missing-in-record</th><th>missing-in-session</th><th>unverifiable</th><th>known-limitation</th></tr></thead>
+<tbody>
+<tr><td class="mono">goal_guard</td><td class="mono">7</td><td class="mono"><span class="neg">2</span> <span class="verdict">(#23, #24)</span></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td class="mono">dispatches[]</td><td class="mono">2</td><td class="mono"><span class="neg">2</span> <span class="verdict">(omitted with lines)</span></td><td>—</td><td class="mono"><span class="neg">1</span> <span class="verdict">(#24)</span></td><td>—</td><td class="mono">4 <span class="verdict">(version gap)</span></td></tr>
+<tr><td class="mono">usage</td><td>—</td><td>—</td><td>—</td><td>—</td><td class="mono">1</td><td class="mono">8 <span class="verdict">(7 null + 1 hand-delta)</span></td></tr>
+<tr><td class="mono">tests / changes</td><td class="mono">7</td><td class="mono"><span class="neg">2</span> <span class="verdict">(#20 counts, #21 commits)</span></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td class="mono">gates[] counts</td><td class="mono">8</td><td>—</td><td>—</td><td class="mono"><span class="neg">1</span> <span class="verdict">(#24 step-9 row)</span></td><td class="mono">1</td><td>—</td></tr>
+<tr><td class="mono">issue.complexity</td><td class="mono">8</td><td class="mono"><span class="neg">1</span> <span class="verdict">(#22)</span></td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td class="mono">reviewer_kind</td><td class="mono">6</td><td>—</td><td>—</td><td>—</td><td class="mono">3 <span class="verdict">(no solo-reviewer vocab)</span></td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Not filed, with reasons</h2>
+<div class="tablewrap">
+<table>
+<thead><tr><th>finding</th><th>class</th><th>reason</th></tr></thead>
+<tbody>
+<tr><td>AC-rescope path improvised (#23 Windows-VM premise)</td><td><span class="tag ok">partially as designed</span></td><td>Detection is sanctioned (Step-2 live probe fired); only resolution mechanics are unscripted, and escalation conventions covered it.</td></tr>
+<tr><td>Owner-pause vs goal-hook deadlock (#25)</td><td><span class="tag env">environment</span></td><td>Stop-hook goal guard is Claude Code harness machinery, not plugin code. Resolved via honest interim summaries + AskUserQuestion; noted for epic-run docs.</td></tr>
+<tr><td>Feasibility-gate failures leave no notes trail (#26)</td><td><span class="tag env">minor</span></td><td>Gate correctly fail-closed twice before passing; failures visible only in tool output. Rides #362’s marker-discipline theme.</td></tr>
+<tr><td>Friction memory</td><td><span class="tag env">skipped</span></td><td>mempalace unavailable this session (MCP disconnected) — visible skip; this report carries the friction inventory.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Per-run ledger — rubric v1 fixed blocks (abbreviated)</h2>
+<div class="ledger"><pre>
+WF2 @3.25.0  #18/PR28  small-std  F3 G4 C4 D4 T4 $3  best: post-deploy self-check mandate        friction: concurrent-run interleave @ Steps 5-7
+WF2 @3.25.0  #19/PR29  full       F3 G4 C4 D- T3 $3  best: null-labels mid-batch TypeError (H)   friction: Step 7 marker unlogged
+WF2 @3.25.0  #20/PR30  full       F3 G5 C3 D- T3 $3  best: nonexistent pinned image tag          friction: 6/6-vs-7/7 count drift
+WF2 @3.25.0  #21/PR31  small-std  F3 G3 C5 D- T3 $3  best: ALERTS:none on unreachable AM         friction: step-11 9/9 not itemizable
+WF2 @3.27.1  #22/PR32  full       F3 G4 C5 D2 T2 $4  best: runner-rc0-on-failure (H)             friction: DISPATCH 1-of-4 + dispatches[] omitted
+WF2 @3.27.1  #23/PR33  small-std  F3 G5 C3 D2 T2 $4  best: $?-clobber via contaminated return    friction: goal_guard mis-assembly
+WF2 @3.27.1  #24/PR34  small-std  F2 G5 C3 D1 T2 $4  best: failed-subquery false all-clear (Hx2) friction: steps 7/8/9 markers absent
+WF2 @3.27.1  #25/PR35  full       F4 G5 C3 D5 T4 $4  best: lock-open silent post-ack exit (H)    friction: BRANCH_STATES judgment call
+WF2 @3.27.1  #26/PR36  full       F5 G5 C4 D5 T4 $4  best: unanchored REBOOT-REQUIRED grep       friction: hand-delta usage
+</pre></div>
+
+<p class="foot">
+Assessed by WF14 batch (9 sonnet analysis subagents, ≤3 concurrent; every load-bearing claim re-verified by the main loop against files and <span class="mono">gh</span>). Evidence: session-note slices, per-run records from <span class="mono">projects/sentinel/docs/measurements/run_records.jsonl</span>, PR/issue threads, committed review reports. Defects verified present on main v3.30.0 before filing. Inferred (unconfirmed): #24’s usage-null cause (session position at a /clear boundary); the harness-side half of #25’s pause mechanics. Canonical source: <span class="mono">docs/reviews/2026-07-10-epic27-sentinel-run-feedback.md</span> in the rawgentic repo.
+</p>
+</div>
