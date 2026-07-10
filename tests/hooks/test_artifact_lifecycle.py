@@ -4,8 +4,11 @@ tests/hooks/test_model_routing_dispatch.py). Corpus-based (SKILL.md + references
 so the #158/#159 spine splits don't hide the prose.
 """
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from tests.corpus import skill_corpus
 
@@ -94,7 +97,9 @@ def test_shared_doc_fail_safe_on_malformed(tmp_path):
     assert arl.design_artifact_shared_doc(str(tmp_path / "nope.json"), "p") is None
 
 
-# --- designArtifact.style reader (#199 opt-in roadmap style) ---
+# --- designArtifact.style reader (#199 opt-in style; #344 full template vocabulary
+#     + absent-vs-invalid semantics: absent→design silently, unreadable→design+warn,
+#     valid→verbatim, invalid→plain+warn) ---
 
 def test_style_roadmap_when_set(tmp_path):
     import adversarial_review_lib as arl
@@ -104,23 +109,97 @@ def test_style_roadmap_when_set(tmp_path):
     assert arl.design_artifact_style(str(ws), "p") == "roadmap"
 
 
-def test_style_defaults_plain_when_unset(tmp_path):
+def test_style_absent_key_defaults_design_silently(tmp_path, capsys):
+    """#344: project exists, designArtifact block present but no style key
+    → 'design' (documented default for design artifacts), NO stderr warning."""
     import adversarial_review_lib as arl
     ws = tmp_path / "ws.json"
     ws.write_text(json.dumps({"projects": [
         {"name": "p", "designArtifact": {"enabled": True}}]}))
-    assert arl.design_artifact_style(str(ws), "p") == "plain"
+    assert arl.design_artifact_style(str(ws), "p") == "design"
+    assert capsys.readouterr().err == ""
 
 
-def test_style_fail_safe_on_bad_value_or_malformed(tmp_path):
+def test_style_no_designartifact_block_defaults_design_silently(tmp_path, capsys):
+    """#344: project exists with no designArtifact block at all → 'design', silent."""
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [{"name": "p"}]}))
+    assert arl.design_artifact_style(str(ws), "p") == "design"
+    assert capsys.readouterr().err == ""
+
+
+def test_style_missing_file_defaults_design_with_warning(tmp_path, capsys):
+    """#344: unreadable config → 'design' PLUS a stderr warning (operational failure visible)."""
+    import adversarial_review_lib as arl
+    assert arl.design_artifact_style(str(tmp_path / "nope.json"), "p") == "design"
+    assert capsys.readouterr().err.strip() != ""
+
+
+def test_style_malformed_json_defaults_design_with_warning(tmp_path, capsys):
+    """#344: JSON parse error → 'design' PLUS a stderr warning."""
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text("{not json")
+    assert arl.design_artifact_style(str(ws), "p") == "design"
+    assert capsys.readouterr().err.strip() != ""
+
+
+def test_style_project_not_found_defaults_design_with_warning(tmp_path, capsys):
+    """#344: read OK but the project entry is absent → 'design' PLUS a stderr warning."""
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [{"name": "other"}]}))
+    assert arl.design_artifact_style(str(ws), "p") == "design"
+    assert capsys.readouterr().err.strip() != ""
+
+
+@pytest.mark.parametrize(
+    "style", ["plain", "roadmap", "report", "design", "dashboard", "review", "spec"])
+def test_style_valid_values_round_trip(tmp_path, capsys, style):
+    """#344: every render_artifact template name is honored verbatim, no warning."""
     import adversarial_review_lib as arl
     ws = tmp_path / "ws.json"
     ws.write_text(json.dumps({"projects": [
-        {"name": "p", "designArtifact": {"style": "fancy"}}]}))
-    assert arl.design_artifact_style(str(ws), "p") == "plain"   # unknown -> plain
-    ws.write_text("{not json")
+        {"name": "p", "designArtifact": {"style": style}}]}))
+    assert arl.design_artifact_style(str(ws), "p") == style
+    assert capsys.readouterr().err == ""
+
+
+def test_style_invalid_value_falls_back_plain_with_warning(tmp_path, capsys):
+    """#344: a present-but-invalid style → 'plain' (conservative fail-safe) PLUS a
+    stderr warning naming the rejected value."""
+    import adversarial_review_lib as arl
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"style": "sparkle"}}]}))
     assert arl.design_artifact_style(str(ws), "p") == "plain"
-    assert arl.design_artifact_style(str(tmp_path / "nope.json"), "p") == "plain"
+    assert "sparkle" in capsys.readouterr().err
+
+
+def test_style_fallback_tuple_matches_render_artifact_templates():
+    """#344 drift guard: the literal fallback vocabulary used when render_artifact
+    can't be imported == the live render_artifact._TEMPLATES registry keys."""
+    import adversarial_review_lib as arl
+    import render_artifact
+    assert arl._FALLBACK_TEMPLATE_STYLES == tuple(render_artifact._TEMPLATES)
+
+
+def test_style_cross_module_import_works_via_subprocess(tmp_path):
+    """#344: the real `from render_artifact import _TEMPLATES` resolves in the hooks'
+    own execution context (python3 with 'hooks' on sys.path, cwd=repo root)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    ws = tmp_path / "ws.json"
+    ws.write_text(json.dumps({"projects": [
+        {"name": "p", "designArtifact": {"style": "report"}}]}))
+    code = (
+        "import sys; sys.path.insert(0, 'hooks'); "
+        "from adversarial_review_lib import design_artifact_style; "
+        f"print(design_artifact_style({str(ws)!r}, 'p'))"
+    )
+    out = subprocess.run([sys.executable, "-c", code], cwd=str(repo_root),
+                         capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "report", out.stderr
 
 
 def test_style_wired_into_wf2():
