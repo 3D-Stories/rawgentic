@@ -221,6 +221,12 @@ legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error)
 | enum-parens with trailing detail (Step 1b) | first token of the trailing detail: `(set\|deferred\|skipped): #<issue> — <detail>` |
 | bare-enum, no trailing detail (Step 10 design artifact) | post-label, pre-enum: `— design artifact #<issue> (updated\|skipped)` |
 | parens-state (Step 4 adversarial) | key leads inside the parens: `(#<issue>, invoked\|skipped)` |
+
+This slot table is AUTHORITATIVE: every prescribed marker literal in references/ must
+conform to its type's slot, and when a literal and this table diverge the table wins.
+Emitters: the key MUST land in the type's slot — a key anywhere else on the line is
+ignored by consumers. Deliberately un-keyed informational markers (trivial-work
+suggestion, headless advisories) are declared deferrals, not misses.
 </step-tracking>
 
 <references>

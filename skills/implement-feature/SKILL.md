@@ -288,6 +288,13 @@ legacy/un-keyed (section-header fallback, attribution-ambiguous, never an error)
 | bare-enum, no trailing detail (Step 12 design artifact) | post-label, pre-enum: `— design artifact #<issue> (updated\|skipped)` |
 | label-colon (Step 11 adversarial diff) | immediately after the colon: `Adversarial Diff Review: #<issue> findings_present …` |
 | parens-state (Step 4 adversarial, Step 8 delegation) | key leads inside the parens: `(#<issue>, invoked\|skipped)` / `whole-issue-delegation (#<issue>):` |
+
+This slot table is AUTHORITATIVE: every prescribed marker literal in references/ must
+conform to its type's slot, and when a literal and this table diverge the table wins.
+Emitters: the key MUST land in the type's slot — a key anywhere else on the line is
+ignored by consumers. Deliberately un-keyed informational markers (path-estimate,
+path-estimate refresh, trivial-work suggestion, headless Step 14/15 skip) are declared
+deferrals, not misses — they are print-and-continue advisories no consumer attributes.
 </step-tracking>
 
 <references>

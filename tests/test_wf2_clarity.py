@@ -929,3 +929,27 @@ class TestIssueKeyedMarkers:
         assert "### WF2 Step 11 — Adversarial Diff Review:" in s11
         for state in ("findings_present", "no_findings", "failed (", "skipped ("):
             assert state in s11
+
+    def test_slot_table_rows_and_authority_pinned(self):
+        """8a hardening (#341): the slot table is the semantic core — pin one
+        distinctive cell per row plus the authority sentence so deleting the
+        table (or demoting it) fails a test."""
+        skill = (REPO_ROOT / "skills" / "implement-feature" / "SKILL.md").read_text()
+        norm = " ".join(skill.split())
+        for cell in (
+            "first token inside the parens: `— DONE (#<issue>: <detail>)`",
+            "first token of the trailing detail",
+            "post-label, pre-enum: `— design artifact #<issue>",
+            "immediately after the colon: `Adversarial Diff Review: #<issue>",
+            "key leads inside the parens",
+            "This slot table is AUTHORITATIVE",
+            "a key anywhere else on the line is ignored by consumers",
+        ):
+            assert cell in norm, f"slot-table pin missing from WF2 SKILL.md: {cell!r}"
+
+    def test_step4_discard_and_step6_adversarial_markers_keyed(self):
+        """8a hardening (#341): the Step 4 discard variant and the Step 6
+        adversarial sibling must carry the key like their Step 4 sibling."""
+        steps = (REPO_ROOT / "skills" / "implement-feature" / "references" / "steps.md").read_text()
+        assert "### WF2 Step 4 — Adversarial Review (#<issue>, discarded: superseded by volume loop-back)" in steps
+        assert "### WF2 Step 6 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>" in steps
