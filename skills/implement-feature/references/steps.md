@@ -350,7 +350,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
    `goal_guard` field — `set` when emitted, `deferred` under an epic campaign,
    `skipped` when the user declines / an unlabeled headless run):
    ```
-   ### WF2 Step 1b — Goal guard (set|deferred|skipped): <first 80 chars of text | epic #N | decline reason>
+   ### WF2 Step 1b — Goal guard (set|deferred|skipped): #<issue> — <first 80 chars of text | epic #N | decline reason>
    ```
 
 7. `fired` (the Stop-hook actually blocked a quit) is recorded manually only — no
@@ -688,7 +688,7 @@ The self-review produces findings in the shape the gate consumes:
          STOP/ERROR protocol.
    - **Codex failure is non-blocking (the review is additive — the self-review gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the self-review result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the self-review-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
    - **Concurrency tradeoff (accepted):** because the review now overlaps the self-review instead of waiting for it, a design that the self-review sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
-   - Log a marker: `### WF2 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
+   - Log a marker: `### WF2 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
 
 **Breaker decision — run the ambiguity circuit breaker EXACTLY ONCE (items 4–7, summarized).**
 The run-count is the most error-prone control flow in this step (it spreads across items
@@ -976,7 +976,7 @@ When the `implementation` role is `inherit` (default), Step 8 runs inline exactl
    - **Step 8a** for every high-risk task (tagged in Step 5 **OR** in `norm["promoted_task_ids"]`) on that task's receipt sha; coverage asserted via `plan_lib.assert_review_coverage(<log>, tasks, receipt["task_shas"])`. **8a is NOT delegated** — the orchestrator owns it.
    - **Step 9** re-run the full suite from the orchestrator (the receipt baseline is a claim; the orchestrator's own run is the gate).
    - **Steps 11 / 11.5** unchanged (full diff review + scan).
-7. **Marker** (session notes): `### WF2 Step 8 whole-issue-delegation: <APPLIED receipt-valid | FALLBACK per-task (<reason>) | SKIPPED not-enabled>`.
+7. **Marker** (session notes): `### WF2 Step 8 whole-issue-delegation (#<issue>): <APPLIED receipt-valid | FALLBACK per-task (<reason>) | SKIPPED not-enabled>`.
 
 Interplay with `<small-standard-lane>`: whole-issue delegation is still allowed in the lane — the collapsed gates still run in the orchestrator; the receipt's Step-8a set is just usually empty.
 
@@ -1055,7 +1055,7 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
     "findings": {"crit": N, "high": N, "med": N, "low": N, "dropped": N}}
    ```
 9. **Update the review-state pointer** via `plan_lib.write_review_state(repo_root, branch, last_review_log_status)` (path resolved by `plan_lib.review_state_path(repo_root, branch)`). Valid statuses: `"applied"|"suspended"|"dispatch_failed"`. This pointer is **local, git-excluded bookkeeping** (#231 AC2) — `write_review_state` auto-appends `.rawgentic/` to the repo's `.git/info/exclude` so it can never land in the feature PR. **Do NOT stage or commit it** (staging `.rawgentic/` into an app PR is the exact #231 bug); commit only the actual fix files.
-10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (<summary>)`.
+10. **Log per-task marker in session notes:** `### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <summary>)`.
 11. **Headless suspend protection:** when Step 8a suspends (any QUESTION/ERROR path), convert the PR to draft if one exists (`gh pr ready --undo`). On fork PRs or no-perm sessions, post a blocking review comment instead.
 
 ### Output
@@ -1216,7 +1216,7 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
      - Success → map each finding's confidence enum through `ADV_CONFIDENCE_TO_FLOAT` (from `adversarial_review_lib`), tag each `source: adversarial`, and **merge** them into the finding list BEFORE item 3 so the severity-banded filter processes them identically. The single ambiguity breaker at item 6 runs **once** over the merged list; the design-flaw loop-back at item 7 stays the single `review` source. Marker `findings_present <N>` or `no_findings`; when the sidecar `secrets` list is non-empty, append `; secrets detected: <categories>` to the marker (and to the headless STATUS comment).
    - **Cleanup (finally-style):** delete the patch + sidecar on every handled exit path after the join. The startup stale sweep covers unhandled termination. **Staging backstop:** the temp files land under the *target* project's root (which is usually NOT this plugin repo), so the primary protection is the finally-cleanup + startup sweep, plus the explicit "stage ONLY this task's files, never `git add -A`" rule. As belt-and-suspenders, on first use append the two globs to the target repo's `.git/info/exclude` (local, untracked — does not dirty the target's committed `.gitignore`); the globs added to this plugin repo's own `.gitignore` only protect self-dogfooding runs.
    - **Marker (log exactly one per run):**
-     `### WF2 Step 11 — Adversarial Diff Review: findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
+     `### WF2 Step 11 — Adversarial Diff Review: #<issue> findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
 
 <!-- model-routing: role=review -->
 Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
@@ -1334,7 +1334,7 @@ its fixes and committed, and BEFORE pushing in Step 12.
    an escalation in headless mode — never auto-handle a live credential.]**
 
 Log a marker in `claude_docs/session_notes.md`:
-`### WF2 Step 11.5: Security Scan — DONE (blocking: N resolved, advisory: N, skipped: <kinds>)`
+`### WF2 Step 11.5: Security Scan — DONE (#<issue>: blocking: N resolved, advisory: N, skipped: <kinds>)`
 
 ### Output
 Security scan gate PASS with all blocking findings resolved; skips and advisories
@@ -1403,7 +1403,7 @@ recorded for the PR body and session notes.
    yields `plain`, so an unconfigured project is unchanged.
    Fields not knowable pre-PR (PR #, CI, merge SHA) follow the established
    convention: filled by the next slot's pass. Log
-   `### WF2 Step 12 — design artifact (updated|skipped)`.
+   `### WF2 Step 12 — design artifact #<issue> (updated|skipped)`.
 
 3. **Final push:**
    ```bash
@@ -1694,7 +1694,7 @@ measurable signal — not just a sentence the user reads once.
    - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
 Log a marker in `claude_docs/session_notes.md`:
-`### WF2 Step 16: Completion summary + run-record — DONE (persisted: yes/no)`
+`### WF2 Step 16: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)`
 
 Do NOT suggest auto-transitioning to WF1 or restarting WF2.
 

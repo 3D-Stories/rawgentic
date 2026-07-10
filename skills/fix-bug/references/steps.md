@@ -140,7 +140,7 @@ This is an optional guard, not a gate — it never blocks the workflow.
 6. **Record the marker** (read by the run-record `goal_guard` field — `set` when
    emitted, `deferred` under an epic campaign, `skipped` when declined):
    ```
-   ### WF3 Step 1b — Goal guard (set|deferred|skipped): <first 80 chars of text | epic #N | decline reason>
+   ### WF3 Step 1b — Goal guard (set|deferred|skipped): #<issue> — <first 80 chars of text | epic #N | decline reason>
    ```
 
 **[Headless: AUTO-RESOLVE — when `RAWGENTIC_EPIC_GOAL` is set (epic campaign),
@@ -255,7 +255,7 @@ python3 hooks/adversarial_review_lib.py is-enabled \
   --workspace .rawgentic_workspace.json --project <name> --skill fix-bug
 ```
 - The command exits `0` when enabled (`fix-bug` listed in the project's `adversarialReview.workflows`) and non-zero otherwise. If **disabled** (the default), **skip silently**. The fast path is preserved exactly; this adds zero overhead to a normal bug fix.
-- If **enabled** (the user knowingly accepts the latency tradeoff — an external review adds ~1-3 min on top of the 2-3 min reflect, the very cost this step was designed to avoid), write the RCA + fix approach to a temp file under the project and invoke `/rawgentic:adversarial-review <rca-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the **merged** list. If a Critical/High indicates the root cause itself is wrong, loop back to Step 3 **once** (max 1 per loop-back budget, same as the reflect loop-back — it does NOT add a second budget). **Codex failure is non-blocking** (additive review): on ANY non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the reflect result. Do NOT trigger the ERROR protocol and do NOT block WF3 (only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet prerequisite). Log: `### WF3 Step 4 — Adversarial Review (invoked|skipped): <report path or skip reason>`.
+- If **enabled** (the user knowingly accepts the latency tradeoff — an external review adds ~1-3 min on top of the 2-3 min reflect, the very cost this step was designed to avoid), write the RCA + fix approach to a temp file under the project and invoke `/rawgentic:adversarial-review <rca-path> plan`. It is report-only; merge its findings (tagged `source: adversarial`) with the reflect findings and apply the circuit breaker over the **merged** list. If a Critical/High indicates the root cause itself is wrong, loop back to Step 3 **once** (max 1 per loop-back budget, same as the reflect loop-back — it does NOT add a second budget). **Codex failure is non-blocking** (additive review): on ANY non-success — including headless unmet-prerequisite — skip the adversarial layer, log loudly (headless: STATUS comment), and continue with the reflect result. Do NOT trigger the ERROR protocol and do NOT block WF3 (only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet prerequisite). Log: `### WF3 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
 
 Note: the `is-enabled` check reads `.rawgentic_workspace.json`; if that file is missing or corrupt the engine returns disabled (fail-safe), so WF3 continues unchanged.
 
@@ -455,7 +455,7 @@ Review-clean code + optional project knowledge updates.
    git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
    ```
    Fields not knowable pre-PR (PR #, CI, merge SHA) fill on the next slot's pass.
-   Log `### WF3 Step 10 — design artifact (updated|skipped)`.
+   Log `### WF3 Step 10 — design artifact #<issue> (updated|skipped)`.
 
 2. Create final commit with conventional format:
    ```bash
@@ -701,7 +701,7 @@ read once.
    - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
 Log a marker in `claude_docs/session_notes.md`:
-`### WF3 Step 14: Completion summary + run-record — DONE (persisted: yes/no)`
+`### WF3 Step 14: Completion summary + run-record — DONE (#<issue>: persisted: yes/no)`
 
 ### Failure Modes
 
