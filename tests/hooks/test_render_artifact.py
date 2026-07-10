@@ -515,3 +515,122 @@ class TestParagraphsAndEmphasis:
     def test_single_line_paragraph_unchanged(self):
         h = _render("just one line")
         assert "<p>just one line</p>" in h
+
+
+# --- #344: template registry, component CSS, body classes, decorators ---
+
+# name -> its own accent MARKER selector, present in that template's CSS only.
+_TEMPLATE_MARKERS = {
+    "roadmap": ".mstone",
+    "report": ".tpl-report",
+    "design": ".tpl-design",
+    "dashboard": ".tpl-dashboard",
+    "review": ".tpl-review",
+    "spec": ".tpl-spec",
+}
+# every "new" CSS marker string that must NEVER appear in plain output.
+_ALL_NEW_MARKERS = [".mstone", "--chip-c", ".tpl-report", ".tpl-design",
+                    ".tpl-dashboard", ".tpl-review", ".tpl-spec"]
+
+
+class TestTemplates:
+    def test_six_nonplain_templates_body_class_and_marker(self):
+        for name, marker in _TEMPLATE_MARKERS.items():
+            h = _render("# Doc\n\n## Section\n\nbody text", style=name)
+            assert f'class="tpl-{name}"' in h, name
+            assert marker in h, (name, marker)
+
+    def test_plain_has_no_template_class_or_new_markers(self):
+        h = _render("# Doc\n\n## Section\n\n5/5 Severity: High MUST NOT", style="plain")
+        assert "tpl-" not in h
+        for marker in _ALL_NEW_MARKERS:
+            assert marker not in h, marker
+
+    def test_dashboard_has_roadmap_markup_and_own_marker(self):
+        h = _render("## Slot 1 — DONE\n\nbody", style="dashboard")
+        assert '<section class="mstone">' in h
+        assert 'class="chip' in h
+        assert ".tpl-dashboard" in h
+
+    def test_roadmap_does_not_carry_dashboard_style(self):
+        h = _render("## Slot 1 — DONE\n\nbody", style="roadmap")
+        assert '<section class="mstone">' in h
+        assert ".tpl-dashboard" not in h
+
+    def test_report_decorates_scores(self):
+        h = _render("Fidelity 3/5 overall", style="report")
+        assert '<span class="score">3/5</span>' in h
+
+    def test_scores_not_decorated_in_plain_or_design(self):
+        for style in ("plain", "design"):
+            h = _render("Fidelity 3/5 overall", style=style)
+            assert '<span class="score">' not in h, style
+            assert "3/5" in h, style
+
+    def test_review_decorates_severity_in_list_item(self):
+        h = _render("- Severity: High — needs a fix", style="review")
+        assert '<span class="sev sev-high">High</span>' in h
+
+    def test_review_severity_in_code_span_undecorated(self):
+        h = _render("check `Severity: High` literal", style="review")
+        assert '<span class="sev' not in h
+        assert "<code>Severity: High</code>" in h
+
+    def test_spec_decorates_requirements_single_span_no_nesting(self):
+        h = _render("The client MUST NOT retry. It SHOULD NOT block. It MAY log.",
+                    style="spec")
+        assert '<span class="req req-must-not">MUST NOT</span>' in h
+        assert '<span class="req req-should-not">SHOULD NOT</span>' in h
+        assert '<span class="req req-may">MAY</span>' in h
+        # MUST NOT must be ONE span, never a nested req-must inside it
+        assert '<span class="req req-must">MUST</span> NOT' not in h
+        assert h.count('class="req') == 3
+
+    def test_spec_requirement_in_code_span_undecorated(self):
+        h = _render("use `MUST` here", style="spec")
+        assert '<span class="req' not in h
+        assert "<code>MUST</code>" in h
+
+    def test_report_injection_stays_escaped_score_decorated(self):
+        h = _render("**<script>** 5/5", style="report")
+        assert "<script>" not in h
+        assert "&lt;script&gt;" in h
+        assert '<span class="score">5/5</span>' in h
+
+    def test_cli_report_style_end_to_end(self, tmp_path):
+        md = tmp_path / "in.md"; md.write_text("Fidelity 3/5")
+        out = tmp_path / "out.html"
+        rc = render_artifact.main(["--md", str(md), "--out", str(out),
+                                   "--title", "T", "--style", "report"])
+        assert rc == 0
+        html_out = out.read_text()
+        assert 'class="tpl-report"' in html_out
+        assert '<span class="score">3/5</span>' in html_out
+
+    def test_cli_junk_style_rejected(self, tmp_path):
+        md = tmp_path / "in.md"; md.write_text("x")
+        out = tmp_path / "out.html"
+        with pytest.raises(SystemExit):
+            render_artifact.main(["--md", str(md), "--out", str(out),
+                                  "--title", "T", "--style", "nonsense"])
+
+    def test_inline_closed_grammar_guard(self):
+        # Safety precondition for the decorators' code-span split: _inline output
+        # may contain ONLY attribute-free <code>/<strong> tags. If _inline ever
+        # grows link/attribute support, this fails and forces revisiting decorators.
+        import html as _html
+        allowed = {"<code>", "</code>", "<strong>", "</strong>"}
+        inputs = ["plain text", "`code`", "**bold**", "a `x` b **y** c",
+                  "<script>alert(1)</script>", "**`nested`**",
+                  "5/5 Severity: High MUST NOT", "a & b < c > d"]
+        for s in inputs:
+            out = render_artifact._inline(_html.escape(s))
+            for tag in re.findall(r"</?[a-zA-Z][^>]*>", out):
+                assert tag in allowed, (s, tag, out)
+
+    def test_existing_roadmap_chip_literals_untouched(self):
+        h = _render("## Slot 1 — DONE\n\n## Slot 2 — blocked\n\n## Slot 3 — planned",
+                    style="roadmap")
+        assert 'class="chip c-conf"' in h
+        assert 'class="chip c-defer"' in h
+        assert 'class="chip c-plan"' in h

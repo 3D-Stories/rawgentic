@@ -82,9 +82,12 @@ def _split_table_row(line: str) -> list[str]:
     return [c.strip() for c in line.strip().strip("|").split("|")]
 
 
-def _render_body_plain(markdown: str) -> str:
+def _render_body_plain(markdown: str, inline_fn=_inline) -> str:
     """Escape-first block renderer. Every line is escaped before classification;
-    transforms only wrap escaped text in whitelisted tags."""
+    transforms only wrap escaped text in whitelisted tags. ``inline_fn`` is the
+    inline pass applied to already-escaped text — defaults to bare ``_inline``;
+    template renderers pass a decorator-wrapped variant (#344). It is never applied
+    to fenced-code content (code stays verbatim, only html-escaped)."""
     # Normalize CR line endings so callers passing raw-CRLF strings get the same
     # hard-break detection as the CLI's universal-newline file read (#344 8a review).
     lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
@@ -111,7 +114,7 @@ def _render_body_plain(markdown: str) -> str:
         buf = para[:]
         para.clear()
         if len(buf) == 1:
-            out.append(f"<p>{_inline(html.escape(buf[0]))}</p>")
+            out.append(f"<p>{inline_fn(html.escape(buf[0]))}</p>")
             return
         src = [ln.replace("\x00", "") for ln in buf]  # (a) collision guard
         n = len(src)
@@ -123,7 +126,7 @@ def _render_body_plain(markdown: str) -> str:
             parts.append(html.escape(ln))          # (c) escape each line
             if idx < n - 1:                         # separator; last-line break dropped
                 parts.append("\x00" if hard else " ")
-        joined = _inline("".join(parts))            # (d) inline ONCE over the whole
+        joined = inline_fn("".join(parts))          # (d) inline ONCE over the whole
         joined = joined.replace("\x00", "<br>")     # (e) placeholder -> <br>
         out.append(f"<p>{joined}</p>")              # (f)
 
@@ -153,7 +156,7 @@ def _render_body_plain(markdown: str) -> str:
                 # captured lines as normal blocks and warn.
                 print("render_artifact: WARNING unclosed ``` fence — rendering the "
                       "remainder as normal text, not code", file=sys.stderr)
-                out.append(_render_body("\n".join(code)))
+                out.append(_render_body_plain("\n".join(code), inline_fn=inline_fn))
             continue
 
         stripped = raw.strip()
@@ -168,7 +171,7 @@ def _render_body_plain(markdown: str) -> str:
             flush_para()
             close_list()
             level = len(m.group(1))
-            out.append(f"<h{level}>{_inline(html.escape(m.group(2)))}</h{level}>")
+            out.append(f"<h{level}>{inline_fn(html.escape(m.group(2)))}</h{level}>")
             i += 1
             continue
 
@@ -178,7 +181,7 @@ def _render_body_plain(markdown: str) -> str:
                 out.append("<ul>")
                 in_list = True
             item = re.sub(r"^[-*]\s+", "", stripped)
-            out.append(f"<li>{_inline(html.escape(item))}</li>")
+            out.append(f"<li>{inline_fn(html.escape(item))}</li>")
             i += 1
             continue
 
@@ -186,7 +189,7 @@ def _render_body_plain(markdown: str) -> str:
             flush_para()
             close_list()
             quote = re.sub(r"^>\s?", "", stripped)
-            out.append(f"<blockquote>{_inline(html.escape(quote))}</blockquote>")
+            out.append(f"<blockquote>{inline_fn(html.escape(quote))}</blockquote>")
             i += 1
             continue
 
@@ -200,7 +203,7 @@ def _render_body_plain(markdown: str) -> str:
             header_cells = _split_table_row(lines[i])
             out.append("<table>")
             out.append("<thead><tr>" + "".join(
-                f"<th>{_inline(html.escape(c))}</th>" for c in header_cells) + "</tr></thead>")
+                f"<th>{inline_fn(html.escape(c))}</th>" for c in header_cells) + "</tr></thead>")
             i += 2  # skip header + separator
             body_rows = []
             while i < len(lines) and lines[i].strip().startswith("|"):
@@ -210,7 +213,7 @@ def _render_body_plain(markdown: str) -> str:
                 out.append("<tbody>")
                 for cells in body_rows:
                     out.append("<tr>" + "".join(
-                        f"<td>{_inline(html.escape(c))}</td>" for c in cells) + "</tr>")
+                        f"<td>{inline_fn(html.escape(c))}</td>" for c in cells) + "</tr>")
                 out.append("</tbody>")
             out.append("</table>")
             continue
@@ -252,11 +255,14 @@ def status_chip(text: str) -> tuple[str, str]:
     return ("c-plan", "—")
 
 
-def _render_roadmap(markdown: str) -> str:
+def _render_roadmap(markdown: str, inline_fn=_inline) -> str:
     """Render each ``## `` (h2) section as a dashboard-style ``.mstone`` bubble card
     titled with a completion chip. Preamble before the first h2 renders plain. All
     text stays escape-first: the heading is escaped exactly as the plain renderer
-    does, the body goes through the plain renderer, and the chip label is fixed vocab."""
+    does, the body goes through the plain renderer, and the chip label is fixed vocab.
+    ``inline_fn`` threads through to the plain body render and the heading inline pass
+    (#344) so dashboard-style templates decorate their card bodies; the chip label is
+    NEVER inline_fn'd — it is fixed vocab, html-escaped only."""
     lines = markdown.split("\n")
     h2 = re.compile(r"##(?!#)\s+(.*)")  # h2 only — ### and deeper stay in-card
 
@@ -275,7 +281,7 @@ def _render_roadmap(markdown: str) -> str:
     first = boundaries[0] if boundaries else len(lines)
     pre = lines[:first]
     if any(l.strip() for l in pre):
-        out.append(_render_body_plain("\n".join(pre)))
+        out.append(_render_body_plain("\n".join(pre), inline_fn=inline_fn))
 
     for bi, start in enumerate(boundaries):
         end = boundaries[bi + 1] if bi + 1 < len(boundaries) else len(lines)
@@ -292,21 +298,78 @@ def _render_roadmap(markdown: str) -> str:
         else:
             b_cls, b_label = status_chip("\n".join(sec))
             cls, label = (b_cls, b_label) if b_cls in ("c-conf", "c-defer") else (h_cls, h_label)
-        body_html = _render_body_plain("\n".join(sec))
+        body_html = _render_body_plain("\n".join(sec), inline_fn=inline_fn)
         out.append(
-            f'<section class="mstone"><h3>{_inline(html.escape(heading))} '
+            f'<section class="mstone"><h3>{inline_fn(html.escape(heading))} '
             f'<span class="chip {cls}">{html.escape(label)}</span></h3>'
             f'{body_html}</section>'
         )
     return "\n".join(out)
 
 
+# --- #344: inline decorators — badge/chip markup on ALREADY-escaped-and-inlined text ---
+#
+# A decorator receives the output of `_inline` (escape-first: may contain only
+# attribute-free <code>/<strong>, guarded by test_inline_closed_grammar_guard). It
+# adds badge <span>s to the text OUTSIDE <code>…</code> spans only — a code span is
+# a literal quote (e.g. `Severity: High`) and must render undecorated. Because the
+# input is already escaped, every inserted span wraps inert text; a spec's <script>
+# stays &lt;script&gt;. Each decorator runs ONE re.sub pass and never rescans its own
+# inserted markup.
+
+_CODE_SPAN_RE = re.compile(r"<code>.*?</code>", re.DOTALL)
+
+
+def _decorate_outside_code(fragment: str, seg_fn) -> str:
+    """Apply ``seg_fn`` to the parts of ``fragment`` OUTSIDE ``<code>…</code>`` spans,
+    passing code spans through verbatim. ``fragment`` is `_inline` output."""
+    out: list[str] = []
+    last = 0
+    for m in _CODE_SPAN_RE.finditer(fragment):
+        out.append(seg_fn(fragment[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(seg_fn(fragment[last:]))
+    return "".join(out)
+
+
+def _decorate_scores(fragment: str) -> str:
+    """Wrap ``N/5`` fidelity scores (N in 0–5, optional one decimal) in a ``.score`` chip."""
+    return _decorate_outside_code(
+        fragment,
+        lambda seg: re.sub(r"\b([0-5](?:\.\d)?)/5\b",
+                           r'<span class="score">\1/5</span>', seg))
+
+
+def _decorate_severity(fragment: str) -> str:
+    """Wrap a ``Severity: <Level>`` level in a ``.sev .sev-<level>`` badge (level lowercased)."""
+    return _decorate_outside_code(
+        fragment,
+        lambda seg: re.sub(
+            r"(Severity: )(Critical|High|Medium|Low)\b",
+            lambda m: f'{m.group(1)}<span class="sev sev-{m.group(2).lower()}">{m.group(2)}</span>',
+            seg))
+
+
+def _decorate_requirements(fragment: str) -> str:
+    """Wrap RFC-2119 keywords in a ``.req .req-<slug>`` badge. Longest-first alternation
+    so ``MUST NOT`` becomes ONE ``req-must-not`` span, never a nested ``MUST`` span."""
+    return _decorate_outside_code(
+        fragment,
+        lambda seg: re.sub(
+            r"\b(MUST NOT|SHOULD NOT|MUST|SHOULD|MAY)\b",
+            lambda m: f'<span class="req req-{m.group(1).lower().replace(" ", "-")}">{m.group(1)}</span>',
+            seg))
+
+
 def _render_body(markdown: str, style: str = "plain") -> str:
-    """Dispatch on style. ``plain`` (default) is byte-for-byte the pre-#199 renderer;
-    ``roadmap`` wraps h2 sections in bubble cards with completion chips."""
-    if style == "roadmap":
-        return _render_roadmap(markdown)
-    return _render_body_plain(markdown)
+    """Dispatch on style via the ``_TEMPLATES`` registry (defined below with the CSS
+    blocks). ``plain`` (default) is byte-for-byte the pre-#199 renderer. A decorator,
+    if the template has one, is composed after ``_inline`` and applied wherever the
+    body renderer runs its inline pass. Unknown styles fall back to plain."""
+    renderer, _css, dec = _TEMPLATES.get(style, _TEMPLATES["plain"])
+    inline_fn = (lambda esc: dec(_inline(esc))) if dec else _inline
+    return renderer(markdown, inline_fn=inline_fn)
 
 
 # --- telemetry (read-only consumer of the run-record shape) ---
@@ -420,23 +483,85 @@ _ROADMAP_STYLE = """
 .c-plan{color:var(--ink-2);background:var(--code)}
 """
 
+# #344: shared component styles for the decorator badges — injected by every
+# non-plain template (never plain, so plain stays byte-identical). Defines the
+# severity/requirement color tokens in all three theme blocks (:root light, @media
+# dark, [data-theme] overrides), consistent with the existing palette.
+_COMPONENT_STYLE = """
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+"""
+
+# #344: per-template accent blocks — small, tasteful, palette-only. Each carries its
+# OWN distinct marker selector (.tpl-<name>) so tests can pin presence/absence.
+_REPORT_STYLE = """
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+"""
+_DESIGN_STYLE = """
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+"""
+_REVIEW_STYLE = """
+.tpl-review tbody tr:nth-child(even){background:var(--code)}
+.tpl-review blockquote{border-left-color:var(--accent);color:var(--ink-2)}
+"""
+_SPEC_STYLE = """
+.tpl-spec table th{color:var(--accent)}
+.tpl-spec li{margin:.2em 0}
+"""
+_DASHBOARD_STYLE = """
+.tpl-dashboard tbody tr:nth-child(even){background:var(--code)}
+.tpl-dashboard .mstone{padding:10px 14px;margin:10px 0}
+"""
+
+# #344: template registry — name -> (body_renderer, [extra_css_blocks], decorator|None).
+# Insertion order is meaningful (drives argparse choices ordering). ``plain`` stays
+# renderer=_render_body_plain, no CSS, no decorator → byte-identical to pre-#344.
+_TEMPLATES = {
+    "plain":     (_render_body_plain, [], None),
+    "roadmap":   (_render_roadmap,    [_COMPONENT_STYLE, _ROADMAP_STYLE], None),
+    "report":    (_render_body_plain, [_COMPONENT_STYLE, _REPORT_STYLE], _decorate_scores),
+    "design":    (_render_body_plain, [_COMPONENT_STYLE, _DESIGN_STYLE], None),
+    "dashboard": (_render_roadmap,    [_COMPONENT_STYLE, _ROADMAP_STYLE, _DASHBOARD_STYLE], None),
+    "review":    (_render_body_plain, [_COMPONENT_STYLE, _REVIEW_STYLE], _decorate_severity),
+    "spec":      (_render_body_plain, [_COMPONENT_STYLE, _SPEC_STYLE], _decorate_requirements),
+}
+
 
 def render_artifact(markdown: str, *, title: str, subtitle: str = "",
                     telemetry: dict | None = None, generated_at: str | None = None,
                     style: str = "plain") -> str:
     """Render `markdown` to a self-contained CSP-safe HTML string. All text is
     HTML-escaped before rendering (see module docstring). `generated_at` defaults
-    to the current mountain-time stamp. `style` is `plain` (default, unchanged) or
-    `roadmap` (#199 — h2 sections become dashboard-style bubble cards with chips)."""
+    to the current mountain-time stamp. `style` selects a template from ``_TEMPLATES``
+    (plain default, unchanged; roadmap #199; report/design/dashboard/review/spec #344).
+    Non-plain templates stamp ``<body class="tpl-<style>">`` and inject their CSS
+    blocks; plain keeps a bare ``<body>`` (byte-stable). Unknown styles fall back to
+    plain rendering and get no body class."""
     stamp = generated_at or _mountain_now()
     etitle = html.escape(title)
     esub = html.escape(subtitle)
+    _renderer, css_blocks, _dec = _TEMPLATES.get(style, _TEMPLATES["plain"])
     body = _render_body(markdown, style=style)
     # `telemetry is not None` (not truthiness): an explicit empty {} means "record
     # present but empty" → the placeholder, distinct from None ("no telemetry").
     tel = _telemetry_html(telemetry) if telemetry is not None else ""
     sub_html = f'<p class="sub">{esub}</p>' if subtitle else ""
-    css = _STYLE + (_ROADMAP_STYLE if style == "roadmap" else "")
+    css = _STYLE + "".join(css_blocks)
+    # Body class marks non-plain templates for their accent selectors; plain stays a
+    # bare <body> so plain output is byte-identical to pre-#344.
+    body_class = f' class="tpl-{style}"' if style in _TEMPLATES and style != "plain" else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -445,7 +570,7 @@ def render_artifact(markdown: str, *, title: str, subtitle: str = "",
 <title>{etitle}</title>
 <style>{css}</style>
 </head>
-<body>
+<body{body_class}>
 <div class="wrap">
 <header>
 <div class="eyebrow">rawgentic design artifact · updated {html.escape(stamp)}</div>
@@ -471,8 +596,9 @@ def main(argv=None) -> int:
     ap.add_argument("--subtitle", default="")
     ap.add_argument("--telemetry", help="run-record JSON file to embed (optional)")
     ap.add_argument("--generated-at", dest="generated_at", help="datetime stamp (default: mountain time now)")
-    ap.add_argument("--style", choices=("plain", "roadmap"), default="plain",
-                    help="plain (default) or roadmap (h2 sections -> bubble cards + chips)")
+    ap.add_argument("--style", choices=tuple(_TEMPLATES), default="plain",
+                    help="template: plain (default), roadmap (h2 bubble cards + chips), "
+                         "or report/design/dashboard/review/spec (#344 component styles)")
     args = ap.parse_args(argv)
 
     try:
