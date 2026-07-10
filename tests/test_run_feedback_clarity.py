@@ -224,7 +224,7 @@ def test_secrets_rule_covers_all_egress_surfaces():
 
 def test_rubric_version_stamp():
     r = _norm(_rubric())
-    assert "Rubric version: v1" in r, "rubric.md must carry its version stamp"
+    assert "Rubric version: v2" in r, "rubric.md must carry its version stamp"
     assert ("every report quotes the rubric version it was assessed under") in _norm(
         _corpus()
     ), "Reports must quote the rubric version so assessments stay comparable"
@@ -292,3 +292,36 @@ def test_skill_step3_names_report_template():
     ) in step3, (
         "SKILL.md Step 3 must carry the canonical `report`-template sentence "
         "verbatim (#344 Task 5)")
+
+
+# --- #377: rubric v2 — recurrence evidence wiring ---
+
+def test_rubric_stamped_v2_with_comparability_note():
+    """AC1: rubric version v2 + comparability note (anchors unchanged)."""
+    c = _norm(_corpus())
+    assert "Rubric version: v2 (2026-07-10, #377" in c
+    assert ("v2 adds only the OPTIONAL recurrence tag and changes no anchors — "
+            "reports assessed under v1 remain comparable per-dimension") in c
+
+
+def test_recurrence_tag_optional_pinned():
+    """AC2: the recurrence tag is optional; index-less runs stay valid."""
+    assert ("The `recurrence` tag is OPTIONAL — an assessment run without a "
+            "session index remains fully valid; degraded-mode rules are "
+            "unchanged") in _norm(_corpus())
+
+
+def test_index_supplements_never_replaces_pinned():
+    """AC3: provenance boundary — marker-grep stays the sole run-fact source."""
+    assert ("The session index (#375) SUPPLEMENTS evidence; Step 1 "
+            "marker-grepping remains the SOLE provenance source for run "
+            "facts — the index is a derived cache that can lag mid-run"
+            ) in _norm(_corpus())
+
+
+def test_cap_sharing_rule_pinned():
+    """AC4: WF17 candidates at threshold share the 3-issue pool."""
+    assert ("WF17 (#376) skill candidates that reach recurrence ≥ 3 runs may "
+            "be filed via WF1 and then SHARE the MAX_FEEDBACK_ISSUES_PER_RUN "
+            "pool; below threshold they stay in the WF17 report/queue — a "
+            "candidate never crowds out a defect") in _norm(_corpus())
