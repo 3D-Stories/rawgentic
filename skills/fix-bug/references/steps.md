@@ -645,6 +645,34 @@ read once.
    WF3: `4`→"Lightweight Reflect", `9`→"Code Review" — so the Tier-2 `gates[].name`
    column stays canonical across sessions.
 
+3b. **dispatches[] assembly (#330).** Assemble `dispatches[]` by grepping
+   claude_docs/session_notes.md for lines matching `^DISPATCH issue=<n> ` where
+   `<n>` is this run's issue number. INPUT is `claude_docs/session_notes.md`; each
+   matching line becomes one `dispatches[]` entry carrying the 6 schema fields
+   (`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`) —
+   `issue=<n>` is the scoping key ONLY, it is NOT itself a record field. A
+   literal `null` in the `model`/`effort` capture position becomes JSON `null`,
+   never the string `"null"`. Entries preserve note order (the order the lines
+   appear in the session-notes file) and are NEVER deduplicated — two identical
+   lines are two distinct dispatches (e.g. two identically-configured review
+   agents). Malformed detection operates on this issue's lines: any line whose
+   STRIPPED content starts `DISPATCH issue=<n> ` but that fails the canonical
+   regex (`shared/blocks/model-routing-resolve.md` — the broad 4-role form,
+   deliberately a superset of WF3's review-only emission regex) — including an
+   indented or list-bulleted line the flush-left `^DISPATCH` grep would
+   otherwise miss — is skipped and COUNTED in an extra note
+   `{"label": "dispatch capture notes", "value": "skipped <n> malformed DISPATCH
+   line(s)"}` — a malformed capture line never fails the record and is never
+   silently lost. (A `DISPATCH` line with NO parseable `issue=` field is
+   unattributable and stays outside this issue's assembly.) Zero
+   well-formed lines for this issue → OMIT the `dispatches` key entirely (never
+   an empty array). Assembly does NOT compare against the start-time
+   observability line count — under-count detection is owned entirely by
+   WF14's dispatch-completeness rubric. OUTPUT is the `dispatches` key of
+   `/tmp/wf3-run-record.json`; the full schema shape lives in
+   `skills/implement-feature/references/run-record.md` (WF3 reuses the same
+   `dispatches[]` shape).
+
 4. **Render + persist** (carry `activeProject.path` in as a literal — shell vars
    do not persist across Bash tool calls):
    ```bash

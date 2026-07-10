@@ -728,3 +728,118 @@ class TestDelegatedReads:
         assert "stat -c %a" in c and "git check-ignore -q" in c, (
             "the fail-silent temp-file deps need their fail-loud "
             "post-creation asserts")
+
+
+# --- #330: canonical DISPATCH completion-time audit-line grammar ---
+
+class TestDispatchGrammar:
+    """Drift guard for the #330 canonical DISPATCH audit line. The completion-
+    time grammar sentence (all 6 schema fields + issue scope) must be present in
+    the implement-feature corpus so the emitter has one canonical form to copy.
+    Whitespace-normalized per the repo convention (prose may hard-wrap)."""
+
+    def test_wf2_canonical_grammar_sentence_present(self):
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        grammar = (
+            "DISPATCH issue=<n> role=<review|implementation|analysis|other> "
+            "type=<subagent_type> model=<model|null> effort=<effort|null> "
+            "outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>"
+        )
+        assert grammar in corpus, (
+            "the WF2 canonical DISPATCH grammar line must be present in the "
+            "implement-feature corpus")
+
+    def test_wf2_per_invocation_emission_rule_present(self):
+        """#330 8a hardening: the per-invocation rule is the load-bearing
+        emission sentence — without it a two-reviewer gate can emit one line."""
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        rule = ("One line per SUBAGENT INVOCATION dispatched (not per attempt) "
+                "— a multi-reviewer gate emits one line per reviewer")
+        assert rule in corpus, (
+            "the WF2 per-invocation DISPATCH emission rule must be present in "
+            "the implement-feature corpus")
+
+
+# --- #330: dispatches[] assembly instruction at WF2 Step 16 ---
+
+class TestDispatchesAssembly:
+    """Header-index-sliced guard (repo convention: this file's TestTieredLoopback
+    pattern, :444-454) pinning the Step 16 dispatches[] assembly instruction — the
+    canonical sentence telling the orchestrator how to turn #330's DISPATCH audit
+    lines into the run-record's dispatches[] key. Location pin (reads steps.md
+    directly, not the corpus) since this is a specific-file, specific-section
+    contract, not corpus-wide content."""
+
+    def _step16(self) -> str:
+        text = (REFERENCES / "steps.md").read_text()
+        assert "## Step 16:" in text, "Step 16 not found"
+        return text[text.index("## Step 16:"):]
+
+    def test_canonical_assembly_sentence_present(self):
+        s16 = " ".join(self._step16().split())
+        sentence = (
+            "Assemble `dispatches[]` by grepping claude_docs/session_notes.md "
+            "for lines matching `^DISPATCH issue=<n> ` where `<n>` is this "
+            "run's issue number.")
+        assert sentence in s16, (
+            "Step 16 must contain the canonical #330 dispatches[] assembly "
+            "sentence")
+
+
+# --- #330: dispatches[] capture contract + worked example, docs/run-records.md ---
+
+class TestDispatchCaptureDoc:
+    """Direct-file guard (docs/run-records.md is not part of the skill corpus, so
+    this reads the file directly rather than via skill_corpus) pinning the #330
+    `### Capture` subsection's worked example. Header-index-sliced to the
+    `## dispatches (#329)` section (repo convention: TestTieredLoopback, :444-454)
+    so a stray match elsewhere in the doc can't false-positive the pin."""
+
+    RUN_RECORDS = REPO_ROOT / "docs" / "run-records.md"
+
+    def _dispatches_section(self) -> str:
+        text = self.RUN_RECORDS.read_text()
+        start = text.index("## dispatches (#329)")
+        end = text.index("## Fail-closed for the store", start)
+        return text[start:end]
+
+    def test_capture_subsection_pins_null_model_assembled_entry(self):
+        section = self._dispatches_section()
+        assert "### Capture (#330)" in section, (
+            "docs/run-records.md's dispatches section must have a #330 Capture "
+            "subsection")
+        canonical_line = (
+            '{"role": "analysis", "subagent_type": "generic-analysis", '
+            '"model": null, "effort": null, "outcome": "ok", '
+            '"resolution": "generic"}'
+        )
+        assert canonical_line in section, (
+            "the #330 worked example's null-model assembled JSON entry must be "
+            "present verbatim in the dispatches section")
+
+
+class TestDispatchRegexIdentity:
+    """#330 Step 11 hardening: the canonical DISPATCH regex must stay
+    byte-identical between the shared block and docs/run-records.md, and WF3's
+    review-only variant may differ ONLY in the role group — regex-vs-validator
+    drift would otherwise stay green."""
+
+    _BROAD = (
+        r"^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) "
+        r"type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) "
+        r"effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) "
+        r"resolution=(primary|fallback|generic)$"
+    )
+
+    def test_shared_block_and_docs_regex_identical(self):
+        block = (REPO_ROOT / "shared" / "blocks" / "model-routing-resolve.md").read_text()
+        docs = (REPO_ROOT / "docs" / "run-records.md").read_text()
+        assert self._BROAD in block, "canonical regex missing from the shared block"
+        assert self._BROAD in docs, "docs/run-records.md regex drifted from the shared block"
+
+    def test_wf3_regex_differs_only_in_role_group(self):
+        wf3 = (REPO_ROOT / "skills" / "fix-bug" / "SKILL.md").read_text()
+        narrow = self._BROAD.replace("role=(review|implementation|analysis|other)", "role=(review)")
+        assert narrow in wf3, (
+            "fix-bug SKILL.md must carry the canonical regex narrowed ONLY in "
+            "the role group (role=(review))")

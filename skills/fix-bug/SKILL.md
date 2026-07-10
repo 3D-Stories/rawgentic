@@ -109,6 +109,31 @@ python3 hooks/model_routing_lib.py resolve \
 Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_lib.py` is missing (e.g. a stale plugin cache), the invocation may exit non-zero — treat that, and any non-zero/absent output, as `inherit`. Carry the resolved value as a literal into later steps (fresh-shell rule). When the value is `inherit`, dispatch review subagents with NO `model:` parameter (session model). Otherwise pass `model: <value>` on every Agent dispatch for review. A stderr warning is advisory — never treat it as failure.
 
 Also resolve the `review` role's effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch review: model <model>, effort <effort>`) so the resolved tier stays observable even where delivery is definition-level only (bundled agent-definition files are an M3 follow-up, out of scope here).
+
+**Canonical DISPATCH audit line (#330).** The lowercase start-time line above stays as-is (observability only, never parsed). At the point each `review` dispatch decision COMPLETES — or the orchestrator declares it dead/abandoned — ALSO append one uppercase canonical line carrying the issue number and all six schema fields, fixed key order, single-space-separated, one line. WF3 dispatches only the `review` role, so `role` is always `review`:
+```
+DISPATCH issue=<n> role=review type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>
+```
+Canonical regex (assembly's scoped grep + validator):
+```
+^DISPATCH issue=(\d+) role=(review) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
+```
+Emission rules:
+- One line per SUBAGENT INVOCATION dispatched (not per attempt) — WF3 Step 9's two review agents = two lines.
+- Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is silently lost).
+- Retry semantics: a single retry of the SAME invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error`. A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds.
+- `type`/`model`/`effort` values are stable slugs matching `[A-Za-z0-9_.:/-]+` (no spaces, no commas). Write the literal `null` when the role resolved `inherit` (model) or `none` (effort) — never an empty string or "unknown".
+- A generic inline-prompt review dispatch (no bundled agent type ran) uses the stable `subagent_type` token `generic-review` and carries `resolution=generic`.
+- `issue=<n>` is this run's issue number (scoping key — assembly greps the whole session-notes file for `^DISPATCH issue=<n> `). `DISPATCH` is uppercase so it can never collide with the lowercase start-time prose line.
+
+Resolution decision table (WF3 dispatches only `review`):
+
+| Dispatch path | resolution |
+|---|---|
+| `rawgentic:rawgentic-reviewer` ran worktree-isolated | `primary` |
+| `rawgentic:rawgentic-reviewer` ran WITHOUT isolation (`serial-only` degradation) | `primary` — the NAMED type still ran; `fallback` means a SUBSTITUTE type ran, which did not happen |
+| Reviewer type unavailable → generic inline-prompt dispatch | `generic` (`subagent_type` = `generic-review`) |
+| A bundled SUBSTITUTE agent type ran in place of the unavailable reviewer | `fallback` — no producer in WF3 today; schema-valid and carried but this workflow never emits it as written |
 </model-routing-resolve>
 
 <headless-mode>

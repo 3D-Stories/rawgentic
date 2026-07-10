@@ -41,6 +41,9 @@ non-negative integers and `resolved` may not exceed `findings`:
             "wall_clock_s": N|null,
             "model_mix": {"<model>": {"input_tokens": N|null, "output_tokens": N|null}, ...}|null,
             "capture_status": "captured|unrecoverable|unavailable"},
+  "dispatches": [{"role": "review|implementation|analysis|other", "subagent_type": "<type>",
+                  "model": "<model>"|null, "effort": "<effort>"|null,
+                  "outcome": "ok|error|retried|dead", "resolution": "primary|fallback|generic"}, ...],
   "goal_guard": "set|skipped|fired"
 }
 ```
@@ -125,6 +128,20 @@ line in place — use `python3 hooks/usage_capture.py backfill --records docs/me
 (recovers a row with a session-id correlator, else marks it `unrecoverable`); after that edit, the
 pristine drift-guard test validates the whole committed store in CI, so a malformed hand-edit is
 caught the same way a bad writer output would be.
+
+**`dispatches` (OPTIONAL, #330):** a **structured list** of per-subagent-invocation dispatch
+telemetry, one entry per canonical `DISPATCH` audit line (`shared/blocks/model-routing-resolve.md`)
+emitted this run. It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
+(NOT the unvalidated-passthrough pattern of `lane`): **absent** is fine — old records stay valid, no
+schema version bump — but **present is strict**: each entry must carry all six fields
+(`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`), and `role`/`outcome`/`resolution`
+are a controlled vocabulary quoted directly from `hooks/work_summary.py`'s `DISPATCH_ROLES`,
+`DISPATCH_OUTCOMES`, `DISPATCH_RESOLUTIONS` constants — `role` ∈ `{review, implementation, analysis,
+other}`, `outcome` ∈ `{ok, error, retried, dead}`, `resolution` ∈ `{primary, fallback, generic}`.
+`model`/`effort` are string-or-null. Assembled at Step 16 from the session-notes DISPATCH lines per
+the §16 assembly instruction above (grep `^DISPATCH issue=<n> `, map to entries, skip-and-note
+malformed lines, never dedup); zero well-formed lines for this issue means the key is **omitted
+entirely**, never an empty array.
 
 **`reviewer_kind` (OPTIONAL, #155):** a per-gate entry, a **controlled vocabulary** per #116's
 canonicalization contract: `inline` / `reflexion` / `builtin_code_review` / `codex` /

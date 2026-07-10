@@ -166,7 +166,108 @@ fine) just as easily as `{outcome: dead, resolution: primary}` (the requested
 agent ran and came back empty) — the two axes vary independently.
 
 Emission (actually populating `dispatches` from a live workflow run) is wired by
-follow-up #330; this schema entry only defines and validates the shape.
+#330 — the capture contract below.
+
+### Capture (#330)
+
+The schema above defines the shape; this is the CAPTURE side — how each of the
+six fields gets INTO the record from a live run.
+
+**Canonical audit line.** At the point each dispatch decision COMPLETES (or the
+orchestrator declares it dead/abandoned), the workflow appends one line to the
+session notes, fixed key order, single-space-separated (copied verbatim from
+`shared/blocks/model-routing-resolve.md`, the canonical source):
+
+```
+DISPATCH issue=<n> role=<review|implementation|analysis|other> type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>
+```
+
+Canonical regex (assembly's scoped grep + the shape the validator enforces):
+
+```
+^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
+```
+
+The resolution decision table (which dispatch path maps to which `resolution`
+value) lives alongside the grammar in `shared/blocks/model-routing-resolve.md`
+(the WF2 canonical source, synced into `skills/implement-feature/SKILL.md`);
+`skills/fix-bug/SKILL.md` carries its own review-role-only variant.
+
+**Correlation rules:**
+
+- One line per SUBAGENT INVOCATION, written at completion or abandonment —
+  never per attempt.
+- Written flush-left at column 0, as its own physical line — never inside a
+  list item, blockquote, or fenced code block. The assembler's `^DISPATCH` grep
+  is anchored to line start; an indented or bulleted line is rescued only
+  into the MALFORMED count, never into `dispatches[]`.
+- Retry of the SAME task/invocation is ONE line: `outcome=retried` (retried
+  then succeeded) or `outcome=error` (retried and still failed). A dispatch
+  PATH abandoned for a different one (e.g. delegation dropped for inline work)
+  gets TWO lines — the abandoned path's terminal line, then the new path's
+  line.
+- `dispatches[]` preserves the session note's line order; assembly performs no
+  reordering, grouping, or correlation beyond that.
+- Duplicates are NEVER deduped — two identically-configured dispatches (e.g.
+  Step 8a legitimately firing two reviewers) are two distinct entries.
+- `issue=<n>` is the scoping KEY assembly greps the whole session-notes file
+  on (`^DISPATCH issue=<n> `) — it is NOT itself a field carried into the
+  assembled `dispatches[]` entry.
+- Same-issue re-run limitation: two separate runs of the SAME issue in one
+  notes file union their lines. Accepted because a crash-resumed run is the
+  common same-issue case and its union is correct; WF14's
+  dispatch-completeness rubric audits anomalies.
+- Malformed detection operates on this issue's lines: any line whose STRIPPED
+  content starts `DISPATCH issue=<n> ` but fails the canonical regex —
+  including an indented or list-bulleted line the flush-left grep would
+  otherwise miss — is skipped and COUNTED; the record's `extra` gets one note
+  `{"label": "dispatch capture notes", "value": "skipped <n> malformed DISPATCH line(s)"}`
+  — a malformed line never fails the record and is never silently lost. (A
+  `DISPATCH` line with NO parseable `issue=` field is unattributable and stays
+  outside this issue's assembly.)
+- Zero well-formed lines for this issue → omit the `dispatches` key entirely
+  (no empty-array noise).
+- Under-count detection (a completion line never written at all) is owned
+  ENTIRELY by WF14's dispatch-completeness rubric — assembly never parses the
+  lowercase start-time observability line, so it performs no start-vs-
+  completion comparison itself.
+
+**Worked example.** A session-notes excerpt with two well-formed lines, a
+legitimate duplicate pair, and one malformed line:
+
+```
+DISPATCH issue=42 role=review type=rawgentic:rawgentic-reviewer model=opus effort=null outcome=ok resolution=primary
+DISPATCH issue=42 role=analysis type=generic-analysis model=null effort=null outcome=ok resolution=generic
+DISPATCH issue=42 role=review type=rawgentic:rawgentic-reviewer model=sonnet effort=high outcome=ok resolution=primary
+DISPATCH issue=42 role=review type=rawgentic:rawgentic-reviewer model=sonnet effort=high outcome=ok resolution=primary
+DISPATCH issue=42 role=review type=rawgentic:rawgentic-reviewer model=opus effort=high outcome=ok
+```
+
+Lines 3 and 4 are IDENTICAL and both real — Step 8a firing two
+identically-configured reviewers is exactly this shape; assembly keeps both,
+never deduped. Line 5 is malformed (missing `resolution=`) and is skipped.
+
+Assembled `dispatches[]` (4 entries, note order preserved):
+
+```json
+[
+  {"role": "review", "subagent_type": "rawgentic:rawgentic-reviewer", "model": "opus", "effort": null, "outcome": "ok", "resolution": "primary"},
+  {"role": "analysis", "subagent_type": "generic-analysis", "model": null, "effort": null, "outcome": "ok", "resolution": "generic"},
+  {"role": "review", "subagent_type": "rawgentic:rawgentic-reviewer", "model": "sonnet", "effort": "high", "outcome": "ok", "resolution": "primary"},
+  {"role": "review", "subagent_type": "rawgentic:rawgentic-reviewer", "model": "sonnet", "effort": "high", "outcome": "ok", "resolution": "primary"}
+]
+```
+
+Plus one `extra` entry for the skipped line:
+
+```json
+{"label": "dispatch capture notes", "value": "skipped 1 malformed DISPATCH line(s)"}
+```
+
+This example validates cleanly against `hooks/work_summary.py`'s
+`validate_record` (checked: a minimal record built with these exact 4
+`dispatches` entries plus this `extra` note returns `[]` from
+`validate_record(rec, strict=True)`).
 
 ## Fail-closed for the store, best-effort for the human
 

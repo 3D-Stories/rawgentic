@@ -38,6 +38,34 @@ task: 2 reviewers, clean. Step 11: 2 opus reviewers NO FINDINGS + codex adversar
 0 blocking / 0 advisory (iac n/a, sca nothing-to-scan). Lane: small-standard (3 impl
 files). Suite 2435+1skip → 2503+1skip (+68). No spine change → no diagram REV.
 
+**PR.** #347 — merged 839f5a2, all 4 CI checks green (test, lint, code-review, security-review).
+
+### #330 — emit dispatches[] from the workflow completion steps · v3.27.0
+
+**Issue.** #330 (feature, epic #333 child 2/10, depends on #329): the schema existed but
+nothing wrote it — the audit line prescribed by the dispatch prescriptions carried no
+subagent_type/outcome/resolution and never reached the run-record.
+
+**What shipped.** Canonical completion-time audit line `DISPATCH issue=<n> role=… type=…
+model=… effort=… outcome=… resolution=…` in the dispatch prescriptions (shared block →
+synced WF2 SKILL.md; bespoke review-only WF3 variant), with per-invocation / flush-left /
+retry / pre-suspend emission rules and a resolution decision table (`fallback` =
+carried-never-emitted). Assembly at WF2 Step 16 item 2d / WF3 Step 14 item 3b: grep
+`^DISPATCH issue=<n>` from session notes, null→JSON null, never dedup, malformed lines
+counted (incl. indented rescues), zero→omit; under-count detection owned by WF14.
+Capture contract + worked example in `docs/run-records.md ### Capture (#330)`. 9 drift
+guards incl. regex byte-identity.
+
+**Reviews.** Step 4 took the FULL loop-back budget (3/3): 2 design loop-backs (run-header
+scoping anchor matched nothing in the real notes corpus → issue-scoped lines; resolution
+ladder unmapped → decision table) + 1 spec-tighten (stale cross-references), final
+verifier CLEAN. Step 6 adversarial-on-plan: 2 Medium plan clarifications. 8a: 5 prose
+hardenings applied. Step 11 (re-dispatched after a session-limit kill — 3 dead agents +
+1 dead memorize recorded as outcome=dead DISPATCH lines): 1 Medium changelog inversion
+fixed + 3 Low hardenings + adversarial 1 applied / 2 refuted. Scan 0/0. DOGFOOD: this
+run's own record carries 19 assembled dispatches[] entries (4 dead from the limit kill).
+Suite 2503+1skip → 2512+1skip. No spine change → no diagram REV.
+
 **PR.** _PR # and CI filled by the next slot's pass._
 
 ---
