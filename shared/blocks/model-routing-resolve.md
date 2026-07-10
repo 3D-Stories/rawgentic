@@ -37,4 +37,4 @@ Resolution decision table (maps the dispatch ladder to #329's vocab):
 | Named agent type ran worktree-isolated | `primary` |
 | Named agent type ran WITHOUT isolation (`serial-only` degradation) | `primary` — the NAMED type still ran; `fallback` means a SUBSTITUTE type ran, which did not happen |
 | Named agent type unavailable → generic inline-prompt dispatch | `generic` (`subagent_type` = `generic-<role>`) |
-| A bundled SUBSTITUTE agent type ran in place of an unavailable named type | `fallback` — no producer in WF2/WF3 today; the vocab member is schema-valid and carried but these workflows never emit it as written |
+| A bundled SUBSTITUTE agent type ran in place of an unavailable named type | `fallback` — no WF2 producer today; WF3 Step 9's declared per-slot chain (#331) produces it at tier 2 |

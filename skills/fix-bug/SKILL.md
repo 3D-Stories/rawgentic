@@ -119,7 +119,8 @@ Canonical regex (assembly's scoped grep + validator):
 ^DISPATCH issue=(\d+) role=(review) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
 ```
 Emission rules:
-- One line per SUBAGENT INVOCATION dispatched (not per attempt) — WF3 Step 9's two review agents = two lines.
+- One line per SUBAGENT INVOCATION dispatched (not per attempt) — WF3 Step 9's two review agents = two lines at a single tier; a slot that falls back adds the abandoned tier's terminal line.
+- A slot that falls back emits TWO lines: the abandoned tier's terminal line (`outcome=error resolution=primary` for an abandoned tier 1 — the primary path was attempted and errored) plus the new tier's line. A double-unavailability (tiers 1 AND 2 unresolvable → tier 3) emits one abandoned-terminal line per abandoned tier.
 - Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is silently lost).
 - Retry semantics: a single retry of the SAME invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error`. A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds.
 - `type`/`model`/`effort` values are stable slugs matching `[A-Za-z0-9_.:/-]+` (no spaces, no commas). Write the literal `null` when the role resolved `inherit` (model) or `none` (effort) — never an empty string or "unknown".
@@ -130,10 +131,9 @@ Resolution decision table (WF3 dispatches only `review`):
 
 | Dispatch path | resolution |
 |---|---|
-| `rawgentic:rawgentic-reviewer` ran worktree-isolated | `primary` |
-| `rawgentic:rawgentic-reviewer` ran WITHOUT isolation (`serial-only` degradation) | `primary` — the NAMED type still ran; `fallback` means a SUBSTITUTE type ran, which did not happen |
-| Reviewer type unavailable → generic inline-prompt dispatch | `generic` (`subagent_type` = `generic-review`) |
-| A bundled SUBSTITUTE agent type ran in place of the unavailable reviewer | `fallback` — no producer in WF3 today; schema-valid and carried but this workflow never emits it as written |
+| Tier 1: the named `pr-review-toolkit:*` agent ran | `primary` |
+| Tier 2: `rawgentic:rawgentic-reviewer` ran as the SUBSTITUTE for an unresolvable named type | `fallback` — the first real producer (#331) |
+| Tier 3: generic inline-prompt dispatch (`subagent_type` = `generic-review`) | `generic` |
 </model-routing-resolve>
 
 <headless-mode>
