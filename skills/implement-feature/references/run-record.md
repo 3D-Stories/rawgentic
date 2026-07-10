@@ -78,6 +78,20 @@ pass 2 self-review re-raises C (no add) and finds D while adversarial re-litigat
 (no add) → unique findings {A, B, C, D}, `findings: 4`; at close A refuted-with-evidence, B applied,
 C applied, D dropped-by-band → `resolved: 4`.
 
+**Compute at gate close, persist, never re-derive (#340 8a).** The identity dedup needs the
+per-finding location+change data that lives only in the reviewer results — session-note markers
+persist COUNTS, not findings. So the deduped `findings`/`resolved` pair is computed AT GATE
+CLOSE (while the finding text is in context) and persisted in that gate's session-note evidence
+(the gate's `— DONE` marker detail or its evidence block); Step 16 / WF3 Step 14 assembly READS
+the persisted per-gate figures and never re-derives them. Gate close = the last circuit-breaker
+resolution before the workflow advances past the step; intermediate loop-back passes do not close
+the gate. If a legacy section carries only per-pass counts, their sum is an OVER-count — record it
+with an `extra` note naming the gap rather than presenting it as deduped. Disposition aliases
+(the phrases session evidence actually uses): "resolved-in-gate" = fixed-in-gate;
+"subsumed" = identity-merged into another finding (not a separate finding at all);
+"accepted-as-tightening" / "satisfied-by-verification" = applied-class terminal;
+any phrase outside this closed set is UNRESOLVED unless it cites evidence.
+
 **`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
 `"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`
 in `hooks/work_summary.py` only checks the keys it knows about and does not reject unrecognized
@@ -176,10 +190,11 @@ remains valid for legacy records but is no longer produced by WF2.)
 
 **Merged-gate precedence (#340).** For a merged gate, record the gate-DEFINING mechanism — the
 mechanism whose absence would void the gate; the additive opt-in adversarial layer is skippable by
-contract and never changes `reviewer_kind`. The crisp test: the gate-defining mechanism is the one
-whose absence would void the gate per the skill's own contract, so the adversarial layers at
-Steps 4/6/11 — skippable-on-failure by contract — are never gate-defining (Step 4 all lanes →
-`inline`, Step 6 → `inline`, Step 11 → `hand_rolled_multi`). The cross-model layer's per-gate
+contract and never changes `reviewer_kind`. The operative rule is the enumeration:
+Step 4 all lanes → `inline`, Step 6 → `inline`, Step 11 → `hand_rolled_multi` (the adversarial
+layers at Steps 4/6/11 are skippable-on-failure by contract, therefore never gate-defining). A
+fully-skipped gate (`status: "skipped"`) OMITS `reviewer_kind` entirely — the field is
+omit-not-null. The cross-model layer's per-gate
 visibility is the existing session-note markers — Step 11's 4-state diff-review marker and the
 Step 4/6 `(invoked|skipped|discarded)` parens markers — NOT a `dispatches[]` entry today;
 prescribing a DISPATCH line for adversarial-review invocations is a named follow-up.
