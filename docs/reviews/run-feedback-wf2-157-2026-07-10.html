@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #157</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 08:12 MDT</div>
+<h1>WF14 run-feedback — WF2 #157</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #157 (saystory, PR #180) · 2026-07-10 · rubric v1</h1>
+<p><strong>Run under assessment:</strong> WF2 invocation for saystory #157 (user-visible &quot;Parrot&quot; text rebrand) that took the <strong>trivial-work exit</strong> at Step 2. <strong>Plugin version loaded:</strong> 3.29.0 (cache); main: 3.32.1. <strong>Record:</strong> explicit (saystory store, issue-157 line, rc 0 on summarize). <strong>Session notes:</strong> saystory <code>claude_docs/session_notes.md</code> (Steps 1/1b/2 markers + trivial-suggestion advisory, first-party — assessor ran the run).</p>
+<h2>What the run did (confirmed)</h2>
+<p>Steps 1–2 in full. The Step-2 audit did the issue&#x27;s real work: classified every remaining &quot;Parrot&quot; occurrence — 7 brand-context template lines (replace), 2 README fork-lineage attributions (keep per AC2), and the whole docs/ tree (all historical records / identifiers / non-user-facing — keep per AC3, list shipped in the PR body). Net mechanical change 2 files / 7 lines → trivial exit (D5, owner-contract recommended fork). Exit hygiene: branch, one commit, PR #180 with the full audit list, merge on green, epic tick, run-record rc 0. One environment note: the PR&#x27;s CI ran FULL builds — <code>.github/ISSUE_TEMPLATE/*.yml</code> is evidently not in the path-classifier&#x27;s docs-skip allowlist, so a 7-line template change cost ~35 min of queued heavy builds (fail-safe direction by design: &quot;a wasted build is cheap&quot;).</p>
+<h2>Dimension scores</h2>
+<p>1. <strong>Fidelity 5/5</strong> (confirmed) — executed steps marked; sanctioned exit; decision    logged. 2. <strong>Gates unscored</strong> — none ran (sanctioned exit); the audit judgment (keep vs    replace) was the run&#x27;s substance and shipped transparently in the PR body. 3. <strong>Clarity 5/5</strong> (confirmed) — no improvisation. 4. <strong>Dispatch unscored</strong> — zero dispatches. 5. <strong>Telemetry 3/5</strong> (confirmed; valid first summarize; usage known-limitation;    all other fields match). 6. <strong>Cost 3/5</strong> (capped: usage session-level; the exit itself minimized    orchestration cost — the only real cost was the classifier-forced full CI,    which is saystory repo config, not plugin machinery).</p>
+<h2>Findings</h2>
+<p><strong>F1 — ENVIRONMENT (saystory repo config, noted for the owner, not a plugin issue): <code>.github/ISSUE_TEMPLATE/</code> absent from the path-aware classifier&#x27;s docs-skip set</strong> (<code>scripts/ci/classify-paths.sh</code> in saystory) — a pure template change ran ~43 min of platform builds. Fail-safe direction is correct policy; adding the template dir to the skip set is a one-line saystory follow-up, owner&#x27;s call. Routed: noted in the M1 wrap comment, not filed against the plugin.</p>
+<h2>Telemetry audit</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th></tr></thead>
+<tbody>
+<tr><td>workflow/version/issue</td><td>implement-feature / 3.29.0 / 157</td><td>cache + markers</td><td>match</td></tr>
+<tr><td>changes</td><td>2 files, +7/−7, 1 commit</td><td>PR #180 stat</td><td>match</td></tr>
+<tr><td>tests / gates / scan / loop_backs</td><td>0-added·nulls / [] / ran:false / 0-3</td><td>sanctioned exit, no suites (docs), none run</td><td>match</td></tr>
+<tr><td>outcome</td><td>PR 180, merged, ci passed</td><td>878c602 + all-lanes-pass</td><td>match</td></tr>
+<tr><td>usage</td><td>session-cumulative</td><td>capture semantics</td><td>known-limitation</td></tr>
+<tr><td>dispatches[]</td><td>absent</td><td>zero dispatch activity</td><td>correct omission</td></tr>
+<tr><td>goal_guard</td><td>deferred</td><td>run-level /goal</td><td>match</td></tr>
+</tbody>
+</table>
+<p>Verdicts: match 8 · known-limitation 1.</p>
+<h2>Routing</h2>
+<p>Clean run for the plugin: nothing filed, nothing memorized (F1 is assessed-project environment, routed via the epic wrap comment).</p>
+<p>Inferred (unconfirmed) claims: none.</p>
+
+</main>
+<footer>Last updated: 2026-07-10 08:12 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

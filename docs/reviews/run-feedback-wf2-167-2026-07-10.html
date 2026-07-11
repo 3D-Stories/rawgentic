@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #167</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 13:02 MDT</div>
+<h1>WF14 run-feedback — WF2 #167</h1>
+
+</header>
+<main>
+<h1>WF14 Run-Feedback — WF2 #167 (saystory) — 2026-07-10</h1>
+<p>Rubric: v1 (2026-07-09, #337). Mode: <strong>degraded (record: absent — run in-flight, Step 16 not reached; NOT store-lag)</strong>. Scores are <strong>provisional</strong> — the run is live at Step 4 pass 2; only reached obligations (Steps 1–4) are assessed. Plugin version loaded by the run: <strong>3.32.2</strong> (cache path quoted in transcript) = current main (3.32.2, commit <code>99ccb91</code>) — defect verification is current, not stale-cache noise.</p>
+<p>Assessment trigger: owner-reported display failure, RCA&#x27;d this session. Deep-reasoning pass: cross-model consult, Codex <strong>gpt-5.6-sol</strong> (owner directive), report <code>docs/reviews/peer-wf14-167-consult-problem-unknown-date.md</code> — its corrections (fidelity 3→2, F1/F4 reclassified, telemetry unscored) are adopted below.</p>
+<h2>At a glance</h2>
+<p><strong>A high-value design gate did its job (11 findings, 5 High, REV2 forced) — and then its circuit breaker asked the user to resolve findings the user could never see, because the presentation lived only in invisible extended thinking under output-compression plugins.</strong></p>
+<ul>
+<li>Fidelity <strong><span class="score">2/5</span> (provisional)</strong> — markers complete for Steps 1–4, but the breaker&#x27;s</li>
+</ul>
+<p>  mandatory &quot;Present ALL problematic findings to the user&quot; was materially skipped   (user answered blind).</p>
+<ul>
+<li>Gates <strong><span class="score">4/5</span></strong> — real catches: 11 design findings pre-implementation, design loop-back</li>
+</ul>
+<p>  consumed, REV2 produced; pass-2 disposition still open (in-flight).</p>
+<ul>
+<li>Clarity <strong><span class="score">3/5</span></strong> — executable, but SKILL.md:262 &quot;Present ALL problematic findings to</li>
+</ul>
+<p>  the user&quot; is under-operationalized: no channel, no ordering constraint, no precedence   over response-style layers.</p>
+<ul>
+<li>Dispatch <strong><span class="score">3/5</span></strong> — opus quality-bar reviewer non-vacuous first try; Codex adversarial</li>
+</ul>
+<p>  launch died on an invalid <code>--out</code> flag (orchestrator misuse), visibly relaunched.</p>
+<ul>
+<li>Telemetry <strong>unscored</strong> — no record obligation has matured (Step 16 unreached);</li>
+</ul>
+<p>  scoring would manufacture a failure for an inapplicable dimension.</p>
+<ul>
+<li>Cost <strong><span class="score">3/5</span> (cap: usage session-level only)</strong> — heaviest-least-value: the</li>
+</ul>
+<p>  dead-on-arrival Codex launch; 103.7k-token opus design review proportionate for a   5-High design but unproven at the margin.</p>
+<p><strong>Best catch:</strong> Step 4 pass 1 — 11 design findings (5 High) against the #167 design note before any implementation; loop-back consumed, REV2 written. <strong>Worst friction:</strong> <code>&lt;ambiguity-circuit-breaker&gt;</code> (SKILL.md v3.32.2:262) — &quot;Present ALL problematic findings to the user&quot; satisfied, in practice, by invisible thinking + terse AskUserQuestion option labels. <strong>Routed:</strong> 2 defect/hardening issues filed (see Routing); no plugin-friction finding survived consult (F4 reclassified orchestrator-error); 1 environment-hazard memory saved.</p>
+<h2>Evidence ledger</h2>
+<table>
+<thead><tr><th>#</th><th>Claim</th><th>Tag</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>E1</td><td>Run = WF2 #167 saystory, plugin 3.32.2</td><td>confirmed</td><td>transcript <code>e43f6341</code> skill base path <code>cache/rawgentic/rawgentic/3.32.2/skills/implement-feature</code>; session_notes.md L883 <code>## WF2 #167 run (2026-07-10, m1-m5 overnight driver, M2 child)</code></td></tr>
+<tr><td>E2</td><td>Step markers 1, 1b(deferred), 2, 3, 4×2 present</td><td>confirmed</td><td>session_notes.md L884 <code>### WF2 Step 1: Receive Issue — DONE (#167: …)</code>, L885 (1b deferred: run-level /goal active), L895 (Step 2), L901 (Step 3), L911 + L920 (Step 4 adversarial, pass 1 + pass 2)</td></tr>
+<tr><td>E3</td><td>Circuit breaker fired; 11 findings (5 High); user asked to apply resolutions</td><td>confirmed</td><td>transcript L463 AskUserQuestion input: &quot;Circuit breaker: 11 design findings on #167 (5 High). Apply all proposed resolutions above…&quot;</td></tr>
+<tr><td>E4</td><td>Findings NEVER emitted as visible text</td><td>confirmed</td><td>transcript L460→463: tool_result → thinking ×2 → AskUserQuestion, zero text blocks; turn output 3702 tokens (~3.3k thinking); all 33 session text blocks are one-liners (enumerated)</td></tr>
+<tr><td>E5</td><td>Session ran under caveman + ponytail compression mandates</td><td>confirmed</td><td>SessionStart hook outputs in transcript (&quot;CAVEMAN MODE ACTIVE&quot;, &quot;PONYTAIL MODE ACTIVE&quot;)</td></tr>
+<tr><td>E6</td><td>Run-record for #167 absent</td><td>confirmed + expected</td><td>saystory store latest = #166; run in-flight at Step 4 pass 2 (resumed-session tail: &quot;Resuming WF2 #167 at Step 4 pass-2&quot;)</td></tr>
+<tr><td>E7</td><td>Hook-timeout non-enforcement (cross-session)</td><td>confirmed</td><td>session <code>6d866952</code> entry 2683-2684: mempalace <code>user-prompt-submit</code> durationMs 11848 vs timeoutMs 5000; rawgentic <code>wal-context</code> durationMs 11849 vs timeoutMs 3000; both <code>timedOut: false</code>, cancelled only by user interrupt; Claude Code 2.1.206</td></tr>
+<tr><td>E8</td><td>Hook stall transient</td><td>confirmed (non-repro)</td><td>live re-test ×3 each: mempalace 34-35ms, wal-context 40-42ms, healthz 30ms</td></tr>
+<tr><td>E9</td><td>Stall cause = host load spike</td><td>inferred</td><td>would confirm: host metrics at 16:38; both hooks identical duration suggests shared cause; /reload-plugins ran 3 min prior</td></tr>
+<tr><td>E10</td><td>Codex review dead launch (<code>--out</code> on <code>review</code>)</td><td>confirmed</td><td>transcript L454 text + L456 tool_result usage error; relaunched successfully L459-460</td></tr>
+</tbody>
+</table>
+<h2>Findings and classification</h2>
+<p><strong>F1 — Circuit-breaker findings presented invisibly.</strong> Class: <strong>ORCHESTRATOR ERROR</strong> (consult-corrected: &quot;to the user&quot; already excludes invisible reasoning — the channel ambiguity does not excuse the conduct), <strong>with prose-invited component</strong> → plugin feedback per rubric: the inviting sentence is SKILL.md:262 &quot;Present ALL problematic findings to the user&quot; — no required visible artifact, no ordering constraint, no precedence over active response-style instructions. Filed as hardening (issue 1). Consult risk notes adopted: a prose-only fix may fail under future compression layers — the issue asks for a machine-checkable precondition where feasible; a linked report alone can still leave the user blind unless severity/counts are visibly summarized.</p>
+<p><strong>F2 — Whole-run narration compressed to one-liners.</strong> Class: <strong>ENVIRONMENT</strong> (third-party caveman/ponytail plugins). Not independently filed; folded into issue 1&#x27;s precedence clause. Runbook gap noted → memory (rubric: environment findings still get a runbook note when the plugin lacks one).</p>
+<p><strong>F3 — Hook timeout non-enforcement + wal-context lacking internal deadline.</strong> Split: harness non-enforcement (E7) = <strong>ENVIRONMENT</strong> (Claude Code, not fileable here); wal-context having no self-imposed deadline while the harness&#x27;s is proven unreliable = <strong>resilience enhancement</strong> (consult: &quot;defense-in-depth, not a demonstrated plugin defect&quot; — no rawgentic-side hang reproduced, E8). Filed as issue 2 with consult&#x27;s sharpened shape: internal monotonic deadline, subprocess-tree termination, safe degraded result, timeout telemetry.</p>
+<p><strong>F4 — Dead Codex launch (<code>--out</code> misuse).</strong> Class: <strong>ORCHESTRATOR ERROR</strong> (consult-corrected from friction: one mistaken invocation does not demonstrate the sibling CLIs are systematically misleading). Watch-flag: reclassify to friction if the misuse recurs across runs.</p>
+<h2>Telemetry audit (degraded)</h2>
+<p>Record absent and <strong>not yet due</strong> (Step 16 unreached; distinct from store-lag-known and from a genuinely missing record of a completed run). Per degraded-mode rules, no telemetry-accuracy claims are made. Claims intentionally NOT made: record correctness, cost accuracy, dispatch completeness, store-append behavior, gate-count honesty, reviewer_kind fidelity. All audited fields: <code>unverifiable</code> (not-yet-due). No telemetry-lane issues.</p>
+<h2>Routing</h2>
+<p>1. Issue 1 (hardening, <code>enhancement,framework,wf-feedback</code>): make ambiguity-gate    findings visibly inspectable before resolution — see filed issue for full shape. 2. Issue 2 (resilience, <code>enhancement,framework,wf-feedback</code>): bound wal-context    execution with an internal monotonic deadline independent of harness enforcement. 3. Memory (environment hazard runbook note): output-compression plugins + invisible    thinking can swallow gate presentations; harness hook timeouts unreliable on    2.1.206. 4. Not filed: F2 (environment, folded), F4 (orchestrator error, watch-flag). Cap not    reached (2/3).</p>
+<p>Cross-repo note (outside WF14 scope, owner-approved separately): the mempalace <code>user-prompt-submit</code> hook&#x27;s internal budget (healthz 2s + search max-time 8s = 10s worst case) exceeds its declared 5s hook timeout — routed to the rawgentic-memorypalace repo directly.</p>
+
+</main>
+<footer>Last updated: 2026-07-10 13:02 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
