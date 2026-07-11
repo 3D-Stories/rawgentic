@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 aggregate — saystory M1+M2 campaign</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-11 07:32 MDT</div>
+<h1>WF14 aggregate — saystory M1+M2 campaign</h1>
+
+</header>
+<main>
+<h1>WF14 aggregate — saystory M1+M2 overnight campaign (9 WF2 runs, 2026-07-10 → 07-11)</h1>
+<p>One roll-up of the nine per-issue WF14 assessments from the saystory M1–M5 overnight run&#x27;s first two milestones (epics #171 M1, #172 M2). Individual reports (committed alongside this aggregate) are authoritative for per-run evidence; this document is the cross-run view: score trends, systemic patterns, and what got routed where. Rubric v2 throughout (M1 reports predate the fixed summary block; scores extracted from their dimension sections). All adversarial/WF14 layers ran on gpt-5.6-sol per the owner directive of 2026-07-10.</p>
+<h2>Scoreboard</h2>
+<table>
+<thead><tr><th>Run</th><th>Lane</th><th>PRs</th><th>Fidelity</th><th>Gates</th><th>Clarity</th><th>Dispatch</th><th>Telemetry</th><th>Cost</th></tr></thead>
+<tbody>
+<tr><td>#164 runbook reconcile (M1)</td><td>trivial-D1</td><td>#177</td><td>5</td><td>unscored</td><td>5</td><td>unscored</td><td>3</td><td>3</td></tr>
+<tr><td>#165 dispatch extraction (M1)</td><td>full</td><td>#178</td><td>4</td><td>5</td><td>3</td><td>3</td><td>3</td><td>3</td></tr>
+<tr><td>#69 paste-spacing port (M1)</td><td>small-standard</td><td>#179</td><td>4</td><td>5</td><td>4</td><td>4</td><td>3</td><td>3</td></tr>
+<tr><td>#157 Parrot text (M1)</td><td>trivial-D1</td><td>#180</td><td>5</td><td>unscored</td><td>5</td><td>unscored</td><td>3</td><td>3</td></tr>
+<tr><td>#166 P2 mac skeleton (M2)</td><td>full</td><td>#181</td><td>5</td><td>5</td><td>4</td><td>5</td><td>3</td><td>3</td></tr>
+<tr><td>#167 P3 platform adapter (M2)</td><td>full ×2PR</td><td>#182+#183</td><td>4</td><td>4</td><td>3</td><td>3</td><td>3</td><td>2</td></tr>
+<tr><td>#168 P4 model pipeline (M2)</td><td>full ×2PR</td><td>#186+#189</td><td>3</td><td>5</td><td>4</td><td>4</td><td>2</td><td>3</td></tr>
+<tr><td>#156 input-monitoring recovery (M2)</td><td>small-standard</td><td>#188</td><td>4</td><td>5</td><td>4</td><td>5</td><td>2</td><td>4</td></tr>
+<tr><td>#162 cleanup-stage feedback (M2)</td><td>full</td><td>#190</td><td>4</td><td>5</td><td>5</td><td>5</td><td>3</td><td>4</td></tr>
+</tbody>
+</table>
+<p>Campaign outcome: 9/9 issues merged (11 PRs), v0.2.39 → v0.2.48, zero regressions against recorded baselines at every merge, both epics&#x27; code scope complete (owner-gated remainders: M2 UAT round, #154, #163).</p>
+<h2>The five cross-run patterns</h2>
+<p><strong>1. Gates score <span class="score">5/5</span> whenever scoreable — and the catches were real, not ceremony.</strong> Every scoreable run names at least one pre-merge catch with the finding text quoted. The campaign&#x27;s three best: (a) #168 design pass-2 H4 — the double-llama test-bundle link hazard, which produced the R6 symbol-localization mechanism; (b) #162 Step-11 adversarial — a Critical in the DESIGN&#x27;S OWN stage sequencing (&quot;running&quot; emitted before the load it labels), caught after two 8a lenses had verified the faithful implementation as clean: the strongest specimen yet that the adversarial layer catches the spec where compliance lenses structurally cannot; (c) #156 design F0 — the recovery notice would have rendered inside a hidden window; <code>notifyOs</code> surfacing became the fix&#x27;s actual user value.</p>
+<p><strong>2. The mac-preflight rule flipped CI economics mid-campaign.</strong> #167 took 4 mac-lane fix loops and #168 PR-A took 6 (each loop 15–40 min) — all authored-blind Swift/ld details a target-host run would have caught. After the owner&#x27;s challenge (~07:30Z 2026-07-11), the rule &quot;full build-macos-ffi.sh + swift test on the mac host before ANY mac-lane push&quot; went live: #168 PR-B, #156-adjacent runs, and #162 went <strong>3-for-3 mac-lane-green on the first CI attempt</strong>. Cost scores rise accordingly (#167 $2 → #162 $4). Promotion of this rule into WF2 prose is the campaign&#x27;s top process recommendation (routed: #391-class checklist thread; also named in the #168 report&#x27;s finding 3).</p>
+<p><strong>3. Telemetry is the chronically weakest dimension (2–3, never higher).</strong> Three independent causes, all routed: (a) usage capture unavailable — standing known-limitation, #329/#330; (b) orchestrator schema stumbles when assembling records by hand (#168: <code>type</code> vs <code>subagent_type</code>; #156: invented reviewer_kind enum) — the validator caught both loudly, the read-the-schema-first lesson landed by #162 (first-summarize valid); (c) gate-count semantics under the #340 rule need per-pass bookkeeping discipline (one in-store correction, #168). No new telemetry issues filed — every negative was either already tracked or assessor-caused.</p>
+<p><strong>4. The adversarial disposition ledger (#393) stays the top plugin friction — with new nuance.</strong> Re-litigation cost: #167 PR-A 3/4 findings, #168 PR-A 3/4 and PR-B 2/4 declined against settled evidence; but #162&#x27;s two engine passes produced ONLY fresh findings (including the campaign&#x27;s best catch). The fix must inject dispositions without dampening fresh-finding aggression — the #162 data point is the design constraint. Recurrence ≥4 runs; friction memory saved (<code>wf2-adversarial-needs-disposition-ledger-168</code>, mempalace).</p>
+<p><strong>5. Cross-project WF14 mechanics still need the #372 re-bind dance.</strong> Every report write into the rawgentic tree from the saystory-bound session required the documented registry re-bind workaround (3× this session). #372 remains open; the cost is small but per-report.</p>
+<h2>Environment ledger (not machinery, named for completeness)</h2>
+<p>Two same-day disk-full incidents (mac host at 276MiB free — owner freed 137G; WSL root 100% — spent worktree targets + a 13G incremental cache reclaimed), one usage-window stall recovered by the tick machinery (#69, M1), reviewer session-limit deaths with re-dispatch (#167), <code>gh pr edit</code> projectCards failure (PATCH workaround), stale mergeable races after fresh pushes. All carried in the workspace env-gotcha notes.</p>
+<h2>Routed (cumulative, deduplicated)</h2>
+<ul>
+<li>Filed during M1: rawgentic#371 (worktree spawn layout), rawgentic#372 (WF14</li>
+</ul>
+<p>  path-binding vs bind-guard). Linked during M2: rawgentic#393 (disposition   ledger — recurrence evidence added, not refiled).</p>
+<ul>
+<li>Friction memories: M1 reviewer-dead-threshold; M2 disposition-ledger</li>
+</ul>
+<p>  (<code>drawer_rawgentic_process-conventions_d151e29eadde94aa69115328</code>).</p>
+<ul>
+<li>Process recommendation for WF2 prose (not yet filed, #391-class thread): the</li>
+</ul>
+<p>  mac-preflight/target-host proxy rule (pattern 2) and the Step-9-folds-into-   Step-11 marker question (3 occurrences).</p>
+<ul>
+<li>Telemetry: nothing new filed — #329/#330/#333 cover the field.</li>
+</ul>
+<h2>Owner-gated remainders (unchanged by this aggregate)</h2>
+<p>M2 exit UAT round (install, re-grant, hotkey→dictation→paste through the rust core, #156 recovery UI, #162 stage pill), #154 (mic prompt, pre-milestone tccutil repro is the owner&#x27;s), #163 (Developer-ID cert, Apple-side).</p>
+
+</main>
+<footer>Last updated: 2026-07-11 07:32 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

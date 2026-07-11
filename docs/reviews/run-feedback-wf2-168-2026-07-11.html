@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #168</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-11 05:25 MDT</div>
+<h1>WF14 run-feedback — WF2 #168</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #168 (saystory, 2-PR split: PR #186 rust + PR #189 swift)</h1>
+<p>Assessed under rubric v2 (2026-07-10, #377). Plugin version loaded by the run: 3.35.0 (cache <code>~/.claude/plugins/cache/rawgentic/rawgentic/3.35.0/</code>); current main version not re-checked this pass (defects verified against 3.35.0 prose; the one filed-class finding was already filed upstream as #393, so no stale-cache filing risk). Record: explicit <code>--record</code> (claude_docs/.rawgentic-168-record.json), persisted to the saystory store (<code>docs/measurements/run_records.jsonl</code>, 23rd line) — schema-valid on SECOND summarize (see telemetry). Reviewer model directive honored: adversarial layers this run used gpt-5.6-sol (owner directive 2026-07-10 ~08:50).</p>
+<h2>At a glance</h2>
+<p><strong>A high-value, high-friction run: the gates earned their cost several times over (the single-llama localization mechanism, a hang-class bridge bug, and a merge-gate heading requirement were all caught pre-merge), but PR-A burned six mac-lane CI loops before the run adopted the preflight rule that then took PR-B through CI in one.</strong></p>
+<ul>
+<li><strong>Fidelity <span class="score">3/5</span></strong> — all mandatory markers present across both PR legs EXCEPT an</li>
+</ul>
+<p>  explicit Step-9 marker for the PR-B leg (drift verification demonstrably happened   inside Step 11 A1&#x27;s whole-diff task mapping, but the marker is absent → cap).</p>
+<ul>
+<li><strong>Gates <span class="score">5/5</span></strong> — multiple named real catches, quoted below.</li>
+<li><strong>Clarity <span class="score">4/5</span></strong> — executable throughout; one tool contract needed discovery</li>
+</ul>
+<p>  (engine sidecar path must live under project root — error text was clear, but no   skill prose states it).</p>
+<ul>
+<li><strong>Dispatch <span class="score">4/5</span></strong> — 25 dispatches, zero vacuous, all opus-as-routed; one implementer</li>
+</ul>
+<p>  idled holding for its own background gate and needed a SendMessage nudge.</p>
+<ul>
+<li><strong>Telemetry <span class="score">2/5</span></strong> — record REJECTED on first summarize (assessor used <code>type</code> for</li>
+</ul>
+<p>  the documented <code>subagent_type</code> — orchestrator error, validator correct); gate   counts initially recorded as per-pass sums (corrected in-store to the #340 unique   rule before any PR carries the line).</p>
+<ul>
+<li><strong>Cost <span class="score">3/5</span></strong> — proportional for a <code>complex</code> 2-PR feature overall; the heaviest</li>
+</ul>
+<p>  least-value spend was PR-A CI loop 3 (a full mac lane burned re-testing <code>lto=off</code>   on a conclusion drawn with the wrong instrument).</p>
+<p><strong>Best catch:</strong> Step 4 pass-2 H4 — &quot;the single SwiftPM TEST BUNDLE links ParrotCore (Swift llama xcframework) AND ParrotCoreFFI (rust llama .a) together from PR-A onward&quot; — this produced the R6 symbol-localization mechanism whose CI hardening then dominated (and justified) PR-A&#x27;s fix loops. Runner-up: adversarial diff on PR-B caught the unbounded <code>gate.wait()</code> hang class AFTER an 8a lens had passed the same code as &quot;documented R7 case&quot; — the redundant-lens design worked exactly as intended.</p>
+<p><strong>Worst friction:</strong> adversarial diff reviews still re-litigate settled dispositions (2 of 4 PR-B findings; 3 of 4 on PR-A) — already filed as rawgentic#393 (OPEN), recurrence now ≥3 runs (#166, #167, #168).</p>
+<p><strong>Routed:</strong> 0 new defects filed (1 recurrent friction linked to existing #393); 1 friction memory saved; telemetry improvements: none filed (both negatives were assessor-caused, validator behaved correctly).</p>
+<h2>Evidence ledger (selected, tagged)</h2>
+<ul>
+<li>Steps 1–5, 7, 8, 8a, 11, 11.5, 12, 14, 16 markers present for both PR legs —</li>
+</ul>
+<p>  <strong>confirmed</strong> (session_notes.md <code>### WF2 Step ...</code> markers; e.g. Step 4:   &quot;pass 2, 12 findings → 8 resolutions owner-approved, REV3 ... loop-backs design 2/3&quot;   @ line 1112; Step 12 PR-B: &quot;PR #189 OPEN &#x27;Closes #168&#x27; (7 commits, v0.2.46)&quot;).</p>
+<ul>
+<li>Step 9 (PR-B leg): explicit marker <strong>absent</strong>; drift check evidenced inside Step 11</li>
+</ul>
+<p>  A1 result (&quot;Whole-diff drift: every changed file maps to a task ... No unowned   file&quot;) — <strong>confirmed as performed, unverifiable as a step</strong>.</p>
+<ul>
+<li>PR-A six CI loops + root causes — <strong>confirmed</strong> (session notes postmortem marker:</li>
+</ul>
+<p>  &quot;L1 platform_version; L2 nm bitcode death masked by ||true; L3 wrong-instrument   inference (lto=off); L4 phantom over-strip ...; L5 swift-link httplib undefineds;   L6 GREEN: -u root-set&quot;).</p>
+<ul>
+<li>PR-B zero CI loops; mac lane green first run — <strong>confirmed</strong> (run 29150102046</li>
+</ul>
+<p>  jobs: macOS SUCCESS; preflight rounds 1–3 log reads: 82→84 tests/1 skip/0 fail).</p>
+<ul>
+<li>25 dispatches (2 implementer, 7 reviewer this leg + 16 <code>DISPATCH issue=168</code></li>
+</ul>
+<p>  markers from earlier legs), zero vacuous — <strong>confirmed</strong> (marker grep + agent   results in-session).</p>
+<ul>
+<li>Owner process rule adopted mid-run (&quot;no mac-lane push without full</li>
+</ul>
+<p>  build-macos-ffi.sh + swift test on the mac host&quot;) — <strong>confirmed</strong> (owner challenge   + session-notes rule marker); its effect (6 loops → 0) — <strong>confirmed</strong>.</p>
+<h2>Telemetry audit (record: present, explicit)</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th><th>impact</th><th>routing</th></tr></thead>
+<tbody>
+<tr><td>workflow/issue</td><td>implement-feature / 168</td><td>matches run</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>tests</td><td>33 added / 491 passing</td><td>ws 407/0 (runner output) + swift 84/1/0 (preflight log); &quot;added&quot; is an estimate across two count methods</td><td>mismatch-risk on <code>added</code> (estimate, stated here)</td><td>low — analytics only</td><td>not filed: assessor-assembled estimate, noted in-record context</td></tr>
+<tr><td>gates[] step 4</td><td>20/20 (corrected in-store from 24/24)</td><td>pass1 &quot;12 merged (4H/6M/2L)&quot;, pass2 &quot;deduped to 8 resolutions&quot;</td><td>match after correction; initial value was a per-pass-sum over-count</td><td>corrected pre-PR</td><td>orchestrator error, no filing</td></tr>
+<tr><td>gates[] 8a/11</td><td>8/8, 11/11</td><td>markers + reviewer results</td><td>match (counts assembled from markers)</td><td>—</td><td>—</td></tr>
+<tr><td>loop_backs</td><td>2/3</td><td>&quot;.wf2-state/168/loopback_counters.json&quot; markers (&quot;design 2/3, total 2/3&quot;)</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>security_scan</td><td>ran, 0 blocking, iac skipped</td><td>&quot;Security scan: PASS ... iac: not applicable&quot; output</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>outcome</td><td>PR 189 merged, ci passed</td><td>merge SHA 904fc65, run success</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>usage</td><td>capture_status unavailable</td><td>no session usage capture</td><td>known-limitation (standing)</td><td>—</td><td>#329/#330 open</td></tr>
+<tr><td>reviewer_kind</td><td>hand_rolled_multi on merged gates</td><td>multi-reviewer + adversarial layers</td><td>match under #340 precedence</td><td>—</td><td>—</td></tr>
+<tr><td>dispatches[]</td><td>25 entries</td><td>markers + this session&#x27;s agents</td><td>match; NOTE first summarize REJECTED the field (<code>type</code> vs documented <code>subagent_type</code>) — assessor error, validator correct and loud</td><td>schema held</td><td>none</td></tr>
+</tbody>
+</table>
+<p>Verdict counts: match 7 · mismatch 0 (2 corrected/stated) · missing-in-record 0 · missing-in-session 0 · unverifiable 0 · known-limitation 1.</p>
+<h2>Findings and classes</h2>
+<p>1. <strong>PLUGIN FRICTION (recurrent, ≥3 runs: #166/#167/#168)</strong> — adversarial diff    passes lack the settled-disposition ledger; PR-A: 3 of 4 findings re-litigated    settled decisions; PR-B: 2 of 4 declined against already-recorded evidence    (cleanup-routing = merged PR-A; detect-flag branch unreachable under the rust    invariant). <strong>Already filed: rawgentic#393 (OPEN)</strong> — linked, not refiled. This    run adds a data point: the cost is real but bounded (each decline took one    evidence lookup), and one adversarial finding on the same pass was the run&#x27;s    second-best catch — the lens must not be weakened, only fed dispositions. 2. <strong>ORCHESTRATOR ERROR</strong> — run-record first-summarize rejection (<code>type</code> instead of    the documented <code>subagent_type</code>, run-record.md:44) and the initial per-pass-sum    gate count. Both caught by machinery (validator; rubric #340 rule at assessment    time). Own goal; the docs were right; no prose invited the misread. 3. <strong>ORCHESTRATOR ERROR (earlier leg)</strong> — PR-A CI loop 3: <code>lto=off</code> re-tested on the    runner after loop 2, but the failing reader (Apple nm) was the wrong instrument;    the conclusion &quot;LTO inference WRONG&quot; was drawn from a stale-cache artifact. One    full mac lane spent. The corrective (instrument swap + on-runner forensics) came    from the owner&#x27;s challenge, not the workflow prose — WF2 has no &quot;verify the    instrument before re-testing the hypothesis&quot; guidance for CI fix loops; recorded    here as a data point for the existing authored-blind checklist thread    (peer-review defect #3 lineage, #391-class), not filed separately. 4. <strong>ENVIRONMENT ×2</strong> — mac host disk 100% full (killed preflight round 1; owner    freed 137G; agent-owned spike dirs deleted with approval) and WSL root 100% full    (per-worktree cargo <code>target/</code> dirs ~3–7G each + a 13G incremental cache; harness    task-output writes fail loudly on ENOSPC). No plugin runbook covers worktree    disk hygiene — worth one line in the implementer-dispatch prose eventually;    below filing threshold this run (cap discipline). 5. <strong>WORKING AS DESIGNED</strong> — the mid-run adoption of the mac-preflight rule    (full FFI script + swift test on the target host before any mac-lane push):    PR-B&#x27;s zero-loop CI empirically validates it. Candidate for promotion from    session rule to WF2 prose via the existing #391-class checklist issue.</p>
+<h2>Claims intentionally not made</h2>
+<ul>
+<li>No per-run cost claim (usage capture unavailable — session-level only).</li>
+<li>No claim that PR-A&#x27;s Step-16 record behavior matched convention (that leg&#x27;s</li>
+</ul>
+<p>  record was assembled and persisted in THIS leg, post-merge — a deviation from the   append-pre-merge convention, driven by the 2-PR structure; noted, not scored).</p>
+<h2>Summary block</h2>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.35.0 (issue #168, PRs #186+#189, lane full) · rubric v2
+Fidelity 3/5 · Gates 5/5 · Clarity 4/5 · Dispatch 4/5 · Telemetry 2/5 · Cost 3/5
+Mode: full · Record: claude_docs/.rawgentic-168-record.json (persisted, corrected)
+Best catch: Step-4 H4 double-llama test-bundle → R6 localization mechanism (pre-merge)
+Worst friction: adversarial diff re-litigates settled dispositions — rawgentic#393, recurrence ≥3 runs
+Telemetry verdicts: match 7 / mismatch 0 / missing-in-record 0 / missing-in-session 0 / unverifiable 0 / known-limitation 1
+Defects filed: none (recurrent friction → existing #393) | Telemetry filed: none | Not filed (cap): 0 | Friction memorized: wf2-adversarial-needs-disposition-ledger-168 | Clean run: no
+Report: projects/rawgentic/docs/reviews/run-feedback-wf2-168-2026-07-11.md
+Inferred (unconfirmed) claims: tests.added=33 (two count methods); current-main defect presence not re-verified (nothing filed that depends on it)</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-11 05:25 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

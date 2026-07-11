@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #156</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-11 06:03 MDT</div>
+<h1>WF14 run-feedback — WF2 #156</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #156 (saystory, small-standard lane, PR #188)</h1>
+<p>Assessed under rubric v2 (2026-07-10, #377). Plugin version loaded: 3.35.0 (cache). Record: explicit (<code>claude_docs/.rawgentic-156-record.json</code>), persisted to the saystory store (24th line) — schema-valid on SECOND summarize (reviewer_kind enum; see telemetry). Adversarial layers used gpt-5.6-sol per owner directive.</p>
+<h2>At a glance</h2>
+<p><strong>A clean, cheap, gate-productive small-lane run: the collapsed design note plus two adversarial passes and one reviewer produced four adopted improvements on a 69-line frontend fix, with zero CI loops on substance — the only churn was a predictable cross-PR design-log merge conflict and two enum/schema stumbles by the orchestrator.</strong></p>
+<ul>
+<li><strong>Fidelity <span class="score">4/5</span></strong> — small-standard collapsed-steps lane; all executed steps</li>
+</ul>
+<p>  marked (1, 2, 3-5 collapsed, 4-gate, 8-12, 14, 16); the collapse itself is the   lane&#x27;s documented shape.</p>
+<ul>
+<li><strong>Gates <span class="score">5/5</span></strong> — real catches, named below (notifyOs surfacing High; row-synthesis</li>
+</ul>
+<p>  edge; once-per-session notification guard).</p>
+<ul>
+<li><strong>Clarity <span class="score">4/5</span></strong> — one interpreted contract: the engine rejects sidecar paths</li>
+</ul>
+<p>  outside the project root (clear error, no prose warning; same as #168&#x27;s run).</p>
+<ul>
+<li><strong>Dispatch <span class="score">5/5</span></strong> — one reviewer dispatch, opus as routed, non-vacuous, first try.</li>
+<li><strong>Telemetry <span class="score">2/5</span></strong> — record rejected on first summarize (<code>codex_adversarial</code> not in</li>
+</ul>
+<p>  the reviewer_kind enum — the assessor invented a value instead of reading the   documented set); validator loud and correct.</p>
+<ul>
+<li><strong>Cost <span class="score">4/5</span></strong> — lane choice fit the change (no full 3-agent design gate, no</li>
+</ul>
+<p>  implementer dispatch — orchestrator-implemented inline); heaviest-least-value   step: the second full workspace suite run after the merge-conflict resolution   whose only rust delta was version numbers (defensible under the semantic-conflict   rule, but it re-proved an unchanged surface).</p>
+<p><strong>Best catch:</strong> design-pass F0 (High, gpt-5.6-sol): &quot;the only notification is rendered inside the Settings section... hotkey failure can remain visibly silent&quot; — adopted as the <code>notifyOs</code> surfacing, which is the issue&#x27;s actual user-facing value. Runner-up: diff-pass row-synthesis (the protocol compat-shim omits the Input Monitoring row while state is Unknown — the recovery row could vanish exactly when needed).</p>
+<p><strong>Worst friction:</strong> reviewer_kind enum invention (orchestrator error — the enum is documented in run-record.md; second occurrence of a schema stumble in one session after #168&#x27;s <code>subagent_type</code>). Pattern noted in the friction memory lineage, not refiled.</p>
+<p><strong>Routed:</strong> 0 defects filed; no new friction memory (the #168 memory of this session already carries the disposition-ledger lesson; the schema stumbles are orchestrator errors, not plugin faults — the validator worked both times); clean-run line below.</p>
+<h2>Evidence ledger (selected)</h2>
+<ul>
+<li>Steps 1-2 markers (previous leg) + Steps 3-5 collapsed note + 4-gate dispositions</li>
+</ul>
+<p>  + 8-12 markers + merge/audit — <strong>confirmed</strong> (session_notes.md markers, quoted in   the run&#x27;s section).</p>
+<ul>
+<li>Design adversarial r1: 4 findings, F0/F3 adopted, F1/F2 declined-with-evidence —</li>
+</ul>
+<p>  <strong>confirmed</strong> (dispositions in claude_docs/wf2-156-design-note.md + marker).</p>
+<ul>
+<li>Step 11: opus reviewer 0 C/H/M + 2 Lows (1 adopted, 1 declined-deliberate); engine</li>
+</ul>
+<p>  diff pass 3 findings (1 adopted, 2 declined with proofs) — <strong>confirmed</strong> (agent   result + findings JSON).</p>
+<ul>
+<li>Gates on merge: typecheck 0, ws 407/0 twice (pre-PR and post-conflict-resolution),</li>
+</ul>
+<p>  drift-guard 1/1, scan PASS — <strong>confirmed</strong> (runner outputs read).</p>
+<ul>
+<li>Merge held until #168 PR-B for version monotonicity; design-log append-append</li>
+</ul>
+<p>  conflict resolved keep-both; stale DIRTY mergeable race observed then cleared —   <strong>confirmed</strong>.</p>
+<h2>Telemetry audit</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th></tr></thead>
+<tbody>
+<tr><td>workflow/issue/lane</td><td>implement-feature / 156 / small-standard</td><td>matches</td><td>match</td></tr>
+<tr><td>tests</td><td>0 added / 407 passing</td><td>typecheck-only frontend change; ws 407/0 runner output</td><td>match (no JS harness exists — known repo shape)</td></tr>
+<tr><td>gates[]</td><td>4/4, 0/0, <span class="score">5/5</span></td><td>dispositions + markers</td><td>match</td></tr>
+<tr><td>loop_backs</td><td>0/3</td><td>no loop-back consumed</td><td>match</td></tr>
+<tr><td>outcome</td><td>PR 188 merged, ci passed</td><td>merge SHA 5d24fab</td><td>match</td></tr>
+<tr><td>security_scan</td><td>ran, iac skip</td><td>scan output</td><td>match</td></tr>
+<tr><td>usage</td><td>unavailable</td><td>session-level only</td><td>known-limitation</td></tr>
+<tr><td>dispatches[]</td><td>1 reviewer</td><td>agent result</td><td>match; first summarize rejected reviewer_kind enum (orchestrator-invented value)</td></tr>
+</tbody>
+</table>
+<p>Verdicts: match 7 · known-limitation 1 · mismatch 0.</p>
+<h2>Findings and classes</h2>
+<p>1. <strong>ORCHESTRATOR ERROR</strong> — invented <code>codex_adversarial</code> reviewer_kind (documented    enum: builtin_code_review/codex/hand_rolled_multi/inline/reflexion). Validator    caught it. Second schema stumble this session — the read-the-schema-first lesson    is the orchestrator&#x27;s, not the plugin&#x27;s. 2. <strong>ENVIRONMENT/GH</strong> — <code>gh pr edit</code> fails on the projectCards GraphQL deprecation    (body edits must go through <code>gh api PATCH</code>); and mergeable/mergeState reads race    fresh pushes (a stale DIRTY after the conflict-resolution push). Both are gh/API    behaviors; the workspace env-gotcha notes now carry them. 3. <strong>WORKING AS DESIGNED</strong> — merge-order hold for version monotonicity and the    keep-both design-log conflict resolution followed the documented conventions    exactly; the small-standard lane&#x27;s collapsed steps kept cost proportional.</p>
+<h2>Summary block</h2>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.35.0 (issue #156, PR #188, lane small-standard) · rubric v2
+Fidelity 4/5 · Gates 5/5 · Clarity 4/5 · Dispatch 5/5 · Telemetry 2/5 · Cost 4/5
+Mode: full · Record: claude_docs/.rawgentic-156-record.json (persisted)
+Best catch: design F0 — silent hotkey failure needs notifyOs surfacing (adopted)
+Worst friction: orchestrator-invented reviewer_kind enum value (own goal; validator correct)
+Telemetry verdicts: match 7 / mismatch 0 / missing-in-record 0 / missing-in-session 0 / unverifiable 0 / known-limitation 1
+Defects filed: none | Telemetry filed: none | Not filed (cap): 0 | Friction memorized: none (covered by this session&#x27;s #168 memory) | Clean run: yes (machinery)
+Report: projects/rawgentic/docs/reviews/run-feedback-wf2-156-2026-07-11.md
+Inferred (unconfirmed) claims: none</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-11 06:03 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

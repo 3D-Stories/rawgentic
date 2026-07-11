@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #69</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-10 08:05 MDT</div>
+<h1>WF14 run-feedback — WF2 #69</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #69 (saystory, PR #179) · 2026-07-10 · rubric v1</h1>
+<p><strong>Run under assessment:</strong> WF2 implement-feature, saystory #69 (caret-context paste-spacing fallback into parrot-core-service), <strong>small-standard lane</strong>, merged <code>fc15659</code>. <strong>Plugin version loaded:</strong> 3.29.0 (cache); main: 3.32.1. <strong>Record:</strong> explicit (saystory store, issue-69 line; <code>validate_record</code> → valid, <code>lane: &quot;small-standard&quot;</code> present). <strong>Session notes:</strong> saystory <code>claude_docs/session_notes.md</code> (all <code>#69</code>-keyed markers accepted; assessor ran the run — first-party evidence).</p>
+<h2>Dimension scores</h2>
+<p>1. <strong>Fidelity 4/5</strong> (confirmed). All lane-collapsed mandatory steps ran and are    marked (Step 3 brief note, Step 4 rubric, Step 5 checklist, Step 9    evidence-only + lane cross-check 4 ≤ 7); Step 6 skip quotes its lane condition.    Ding (same class as the #165 run): Step 2 item 10 probe-parallelism not    executed — generic dispatch chosen directly from the #165 discovery rather than    a fresh probe (rational, but the marker asserts rather than evidences; see    rawgentic#371 for the underlying probe defect). 2. <strong>Gates 5/5</strong> (confirmed, quoted catch). Step 8a caught a REAL design-claim    error pre-PR: the design asserted &quot;Cross-app bleed → same_target platform_id    gate … a previous window&#x27;s text cannot bleed into a new one&quot;, but on Linux    X11/non-Hyprland Wayland <code>platform_id</code> is session-constant (&quot;x11&quot;/&quot;wayland&quot;) —    the guard is vacuous exactly on the target platform (reviewer cited    linux/platform/paste.rs:42,118-121,443-445). Resolved as accept-and-document    with a pinning test + owner-reversible flag in the PR. The Step-11 adversarial    pass additionally contributed an ADOPTED privacy hardening (store only the    resolver tail — behavior-invisible); the lane reviewer caught a doc-count error    (347→349). Three distinct gates each earned their cost. 3. <strong>Clarity 4/5</strong> (confirmed). Lane prose executed cleanly; residual    interpretation (engine-vs-skill adversarial invocation) is the same fork already    quoted in the #165 report — counted once there, noted here. 4. <strong>Dispatch 4/5</strong> (confirmed). 5 dispatches, all resolved first-try, non-vacuous,    models as routed (impl opus, reviewers opus, memorize sonnet). Short of 5:    worktree isolation unavailable (rawgentic#371), so all impl dispatches ran    generic/unisolated. 5. <strong>Telemetry 3/5</strong> (confirmed; anchor: valid + ≥1 known-limitation). Valid on    first summarize; <code>dispatches[]</code> 5 entries == 5 session lines; gates[] counts    match at-close notes (Step 4 recorded <code>fast_path</code> 0/0 per the lane convention);    loop_backs 0/3 matches (no counters file → none consumed); usage    session-cumulative (known-limitation). 6. <strong>Cost 3/5</strong> (capped: usage session-level; would otherwise anchor high — the    lane election demonstrably fit: 1 impl file, design ceremony collapsed, review    + security kept, and the kept reviews were exactly where the value landed).</p>
+<h2>Findings</h2>
+<p><strong>F1 — PLUGIN FRICTION (memorized): the adversarial diff review re-litigates already-resolved per-task findings.</strong> The Step-11 1a diff review (gpt-5.6-sol) returned the coarse-platform_id finding as its top item — the SAME defect Step 8a had already caught, adjudicated (accept-and-document, pinned by test), and committed BEFORE the diff review dispatched. The dispatch carries the raw diff only; nothing in Step 11 1a&#x27;s brief-construction prose passes prior-gate dispositions (the 8a review log / deferrals ARE passed to the 3 same-model reviewers via the P15 pre-flight — but not to the adversarial engine artifact). Cost: one-third of the cross-model pass spent re-arguing a settled point; the orchestrator must re-derive the disposition at the join. Exact gap: Step 11 1a &quot;Dispatch … build the diff high-risk-first …&quot; (no disposition-context clause), vs Step 11 item 1&#x27;s P15 pre-flight which does this for same-model reviewers.</p>
+<p><strong>F2 — ENVIRONMENT (no plugin action, positive recovery data):</strong> a ~90-minute usage-window stall hit mid-CI-wait; the run resumed exactly as designed via the overnight recovery tick reading the handoff file. The plugin&#x27;s checkpoint/handoff/session-notes substrate carried the resume with zero loss. The CI poller background task was killed during the stall — state was re-read directly; no runbook gap worth filing (the contract&#x27;s own recovery design covered it).</p>
+<p><strong>F3 — ORCHESTRATOR ERROR (owned): premature dead-declaration pattern avoided here</strong> only because the #165 lesson was fresh (waited through 12–22 min reviewer runtimes). Covered by the memorized #165 friction; nothing new.</p>
+<h2>Telemetry audit</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th></tr></thead>
+<tbody>
+<tr><td>workflow/version/issue</td><td>implement-feature / 3.29.0 / 69</td><td>cache + markers</td><td>match</td></tr>
+<tr><td>changes</td><td>7 files, +369/−13, 4 commits</td><td>PR #179 merge stat + log</td><td>match</td></tr>
+<tr><td>tests</td><td>11 added, 350/350</td><td>runner final 350/0; 8 reproduce-first + 3 pins</td><td>match</td></tr>
+<tr><td>gates[]</td><td>4 rows (fast_path 0/0 · 3/3 · 0/0 · 5/5)</td><td>at-close dedup notes (#340 rule)</td><td>match</td></tr>
+<tr><td>security_scan</td><td>ran, skipped=[iac]</td><td>scan output</td><td>match</td></tr>
+<tr><td>loop_backs</td><td>0/3</td><td>no counters file for #69</td><td>match</td></tr>
+<tr><td>outcome</td><td>PR 179, merged, ci passed</td><td>fc15659 + all-lanes-pass checks</td><td>match</td></tr>
+<tr><td>usage</td><td>session-cumulative</td><td>capture semantics</td><td>known-limitation</td></tr>
+<tr><td>reviewer_kind</td><td>inline / hand_rolled_multi</td><td>#340 precedence</td><td>match</td></tr>
+<tr><td>dispatches[]</td><td>5 entries</td><td>5 <code>^DISPATCH issue=69</code> lines</td><td>match</td></tr>
+<tr><td>lane</td><td>small-standard</td><td>lane_decision tier=lane logged</td><td>match</td></tr>
+</tbody>
+</table>
+<p>Verdicts: match 10 · known-limitation 1.</p>
+<h2>Routing</h2>
+<ul>
+<li>Defects: none new filed (the worktree/probe defect and the WF14-write-guard</li>
+</ul>
+<p>  collision were filed from the #165 assessment: rawgentic#371, rawgentic#372 —   linked, not refiled).</p>
+<ul>
+<li>Friction: ONE mempalace memory (F1 — adversarial diff review lacks prior-gate</li>
+</ul>
+<p>  disposition context), project rawgentic.</p>
+<ul>
+<li>Telemetry lane: nothing filed (all match).</li>
+</ul>
+<p>Inferred (unconfirmed) claims: none — first-party evidence throughout.</p>
+
+</main>
+<footer>Last updated: 2026-07-10 08:05 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

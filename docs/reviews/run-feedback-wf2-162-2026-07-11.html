@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #162</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-11 07:29 MDT</div>
+<h1>WF14 run-feedback — WF2 #162</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #162 (saystory, standard lane, PR #190)</h1>
+<p>Assessed under rubric v2 (2026-07-10, #377). Plugin version loaded: 3.35.0 (cache). Record: explicit (<code>claude_docs/.rawgentic-162-record.json</code>), persisted to the saystory store (25th line) — <strong>schema-valid on FIRST summarize</strong> (the session&#x27;s two earlier schema stumbles didn&#x27;t recur). Adversarial layers used gpt-5.6-sol per owner directive.</p>
+<h2>At a glance</h2>
+<p><strong>The run where the layered-gate design proved itself: two independent 8a lenses verified a faithful implementation of a design whose stage sequencing was itself wrong, and the Step-11 adversarial diff caught that Critical (plus a real cache race) before any push — zero CI fix loops, mac lane green first try, and every gate artifact carried its evidence.</strong></p>
+<ul>
+<li><strong>Fidelity <span class="score">4/5</span></strong> — full-spine steps marked (1-5 incl. gated design, 8, 8a, 11,</li>
+</ul>
+<p>  11.5, 12, 14, 16); Step 9 again folded into the 8a whole-diff task-mapping rather   than marked separately (same pattern as #168 PR-B — see friction lineage).</p>
+<ul>
+<li><strong>Gates <span class="score">5/5</span></strong> — the assessment&#x27;s centerpiece, named below.</li>
+<li><strong>Clarity <span class="score">5/5</span></strong> — zero improvisation this run: every engine/tool invocation ran</li>
+</ul>
+<p>  as learned earlier in the session (sidecar path in-project, rc read unpiped,   schema enums from the doc).</p>
+<ul>
+<li><strong>Dispatch <span class="score">5/5</span></strong> — 3 dispatches (1 implementer worktree, 2 reviewers), all opus</li>
+</ul>
+<p>  as routed, non-vacuous, first try; implementer&#x27;s flagged doubt (is hotkey_worker   mac&#x27;s live path?) retired by the orchestrator with a code citation   (socket.rs:169) instead of being trusted or ignored.</p>
+<ul>
+<li><strong>Telemetry <span class="score">3/5</span></strong> — valid first summarize; usage still session-level</li>
+</ul>
+<p>  (known-limitation); tests.added assembled from two suites (stated).</p>
+<ul>
+<li><strong>Cost <span class="score">4/5</span></strong> — proportional: one implementer + 2 reviewers + 2 engine passes for</li>
+</ul>
+<p>  a 700-line cross-crate change; heaviest-least-value step: the second full   workspace suite run between 8a-fixes and adversarial-fixes (defensible, but the   intermediate run proved surfaces the final run re-proved 20 minutes later).</p>
+<p><strong>Best catch:</strong> Step-11 adversarial (gpt-5.6-sol), Critical — &quot;On a cold cache miss, <code>loading-model</code> is immediately followed by <code>running</code> before <code>cleanup()</code> begins. Because <code>cleanup()</code> itself performs the model load, the overlay switches to &#x27;Cleaning up…&#x27; for the entire slow load&quot; — a flaw in the DESIGN&#x27;S OWN sequencing (D-162-3 as written), faithfully implemented and passed by both 8a lenses. Fixed by warming explicitly between the stages (the trait surface already existed). This is the strongest same-session evidence yet that the adversarial layer catches what compliance-oriented lenses structurally cannot: the spec itself. Runner-up (High): <code>SingleSlotModelCache</code> two-key insert race (both platforms) — red-proven reentrancy test now pins the RAM invariant.</p>
+<p><strong>Worst friction:</strong> none new — the recurring items (Step-9 marker absorption; adversarial disposition ledger #393) both reappeared in known shapes; #393&#x27;s re-litigation cost this run was ZERO findings (both engine passes produced only fresh findings), a favorable data point for the pending fix&#x27;s priority calculus.</p>
+<p><strong>Routed:</strong> 0 defects filed; no new friction memory (both patterns already carried: #393 + this session&#x27;s #168 memory); orchestrator-error note below.</p>
+<h2>Evidence ledger (selected)</h2>
+<ul>
+<li>Design gate 1 pass, 5 findings dispositioned (4 adopted incl. the send-failure</li>
+</ul>
+<p>  safety net that Step 11 later CORRECTED in mechanism — the sidecar window-hide,   not a frontend re-render — an honest two-stage refinement, both recorded) —   <strong>confirmed</strong> (design-note dispositions + markers).</p>
+<ul>
+<li>T1 red-first: taps disabled → 3 sequencing tests red; cache race: retain</li>
+</ul>
+<p>  disabled → panic &quot;two models were resident&quot; — <strong>confirmed</strong> (runner outputs read   in-session).</p>
+<ul>
+<li>Gates: ws 416/0 (+9), linux 70/0 (+4), typecheck 0, drift-guard 1/1, scan PASS,</li>
+</ul>
+<p>  mac preflight 84/1/0 ×2 — <strong>confirmed</strong> (final runner outputs).</p>
+<ul>
+<li>PR #190 merged 50bf91b; mac lane green FIRST CI run (preflight rule now 3-for-3</li>
+</ul>
+<p>  since adoption); audit clean (#162 closed, #154/#172 untouched) — <strong>confirmed</strong>.</p>
+<ul>
+<li>ORCHESTRATOR ERROR (owned): during the red-proof, <code>git checkout --</code> restored the</li>
+</ul>
+<p>  committed file and silently wiped the UNCOMMITTED fix+test (reapplied from   context). Lesson: red-prove by sed-out/sed-back, never a checkout restore over   uncommitted work. No plugin prose invited it.</p>
+<h2>Telemetry audit</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th></tr></thead>
+<tbody>
+<tr><td>workflow/issue/lane</td><td>implement-feature / 162 / full</td><td>matches</td><td>match</td></tr>
+<tr><td>tests</td><td>13 added / 486 passing</td><td>ws 416 + linux 70 (two suites, stated)</td><td>match (assembly method stated)</td></tr>
+<tr><td>gates[]</td><td><span class="score">5/5</span>, 2/2, 2/2</td><td>dispositions + markers</td><td>match</td></tr>
+<tr><td>loop_backs</td><td>0/3</td><td>none consumed</td><td>match</td></tr>
+<tr><td>outcome</td><td>PR 190 merged, ci passed</td><td>merge SHA 50bf91b</td><td>match</td></tr>
+<tr><td>security_scan</td><td>ran, iac skip</td><td>scan output</td><td>match</td></tr>
+<tr><td>usage</td><td>unavailable</td><td>session-level</td><td>known-limitation</td></tr>
+<tr><td>dispatches[]</td><td>3</td><td>agent results</td><td>match (first-summarize valid)</td></tr>
+</tbody>
+</table>
+<p>Verdicts: match 7 · known-limitation 1 · mismatch 0.</p>
+<h2>Findings and classes</h2>
+<p>1. <strong>WORKING AS DESIGNED (highlight)</strong> — the redundant-lens architecture: 8a    verifies implementation-vs-spec, adversarial attacks the spec. #162 is the    clean specimen: both 8a lenses CLEAN on code that faithfully implemented a    wrong sequence; the adversarial pass alone caught it. Feed to #393&#x27;s issue as    supporting evidence that the disposition ledger must NOT dampen fresh-finding    aggression. 2. <strong>PLUGIN FRICTION (recurrent, low)</strong> — Step 9&#x27;s identity keeps dissolving into    Step 11&#x27;s whole-diff task-mapping on multi-task runs (3rd occurrence: #168    PR-B, #162). Either the prose should bless the fold (Step 11 subsumes 9 when    the same reviewer maps the whole diff) or demand the marker. Below filing    threshold individually; noted for the #391-class checklist thread. 3. <strong>ORCHESTRATOR ERROR</strong> — the checkout-over-uncommitted-work slip (owned,    recovered, lesson recorded).</p>
+<h2>Summary block</h2>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.35.0 (issue #162, PR #190, lane full) · rubric v2
+Fidelity 4/5 · Gates 5/5 · Clarity 5/5 · Dispatch 5/5 · Telemetry 3/5 · Cost 4/5
+Mode: full · Record: claude_docs/.rawgentic-162-record.json (persisted, first-summarize valid)
+Best catch: adversarial Critical — the design&#x27;s own stage sequencing billed the load to &quot;Cleaning up…&quot;
+Worst friction: none new (known lineages: Step-9 fold, #393 disposition ledger)
+Telemetry verdicts: match 7 / mismatch 0 / missing-in-record 0 / missing-in-session 0 / unverifiable 0 / known-limitation 1
+Defects filed: none | Telemetry filed: none | Not filed (cap): 0 | Friction memorized: none (covered) | Clean run: yes (machinery)
+Report: projects/rawgentic/docs/reviews/run-feedback-wf2-162-2026-07-11.md
+Inferred (unconfirmed) claims: none</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-11 07:29 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
