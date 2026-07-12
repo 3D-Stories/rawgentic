@@ -16,6 +16,7 @@
       "strict": true,
       "skills": [
         "./skills/add-exception",
+        "./skills/admit-to-org-runners",
         "./skills/adversarial-review",
         "./skills/create-issue",
         "./skills/fix-bug",

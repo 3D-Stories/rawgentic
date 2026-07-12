@@ -1,6 +1,6 @@
 # rawgentic
 
-**8 SDLC workflow skills + 7 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**8 SDLC workflow skills + 8 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,7 +11,7 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 18 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 19 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
 - **Workspace management** (7 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, and full-text session-history recall
 - **SDLC workflows** (8 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14) and human-gated session-history mining (WF17)
@@ -436,7 +436,7 @@ Tracks all registered projects. Created automatically by `/rawgentic:new-project
 
 ### Config-Loading Protocol
 
-All 8 config-driven skills (the active workflows plus `/rawgentic:scan`) share an identical config-loading block that runs before any workflow step:
+All 9 config-driven skills (the active workflows plus `/rawgentic:scan` and `/rawgentic:admit-to-org-runners`) share an identical config-loading block that runs before any workflow step:
 
 1. Read `.rawgentic_workspace.json` → find active project (if multiple are active, stop and prompt user to `/rawgentic:switch`)
 2. Load + derive: `python3 hooks/capabilities_lib.py derive --config <project-path>/.rawgentic.json` validates the config and emits `{config, capabilities}`
@@ -655,7 +655,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (9/18 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (9/19 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `admit-to-org-runners`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -706,6 +706,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.36.0 (2026-07-12)
+- **`/rawgentic:admit-to-org-runners` — admit the bound repo to an org self-hosted runner fleet + migrate its CI off GitHub-hosted runners (#397).** New operational skill: resolves the bound repo via the shared `<config-loading>` block, discovers the org's runner groups and their ONLINE runners with a SEPARATE runner-admin credential (`--admin-token-file` / `$RAWGENTIC_RUNNER_ADMIN_TOKEN`, used ONLY on `orgs/<org>/actions/runner-*` — never the default gh token, never a hosted fallback), and migrates each workflow's hosted `runs-on` to a `{group, labels}` fleet block. Fail-closed by construction: it verifies an online runner carries the target labels BEFORE editing (never strands CI on a label no runner has), refuses the whole file if any hosted lane is unmappable or a `${{ }}`/matrix shape it will not mangle, and never leaves a hosted fallback; idempotent (already-admitted + already-on-fleet = clean no-op); dry-run by default, `--apply` ships the migration as a PR. Risky logic lives in the new tested helper `hooks/org_runners_lib.py` (workflow `runs-on` parse/classify, OS→label map, online-runner label match, hosted-remnant detection); 27 red-before-green tests. Registered across all surfaces (whitelist between `add-exception`/`adversarial-review`, codex mirror symlink, config-loading canary 8→9, counts 18→19 / workspace management 7→8). No workflow-spine change → no diagram REV. Suite 2727+1skip→2759+1skip.
 ### v3.35.0 (2026-07-10)
 - **WF14 rubric v2 — cross-session recurrence evidence wiring (#377, epic #378).** Prose-only change closing the epic's third child: WF14 friction findings gain an OPTIONAL `recurrence: <n> runs (index query, quoted)` tag backed by a #375 session-index query (distinct sessions), upgrading one-off observations to confirmed patterns at higher anchor confidence — the tag is optional, an index-less assessment stays fully valid, degraded-mode rules unchanged. Provenance boundary pinned: the index SUPPLEMENTS evidence; Step 1 marker-grepping remains the SOLE provenance source for run facts (a derived cache can lag mid-run). Step 4 routing: recurrence cross-links on filed findings; WF17 (#376) candidates at recurrence ≥ 3 runs may be filed via WF1 and then SHARE the `MAX_FEEDBACK_ISSUES_PER_RUN` pool — below threshold they stay in the WF17 report/queue, so a candidate never crowds out a defect. Rubric stamped v2 with a comparability note (no anchors changed; v1 reports comparable per-dimension). Tests: 4 new canonical-sentence drift guards red-before-green + the v1 stamp pin updated. No workflow-spine change → no diagram REV (wf14 sheet is skeletal; prose-only). Suite 2723+1skip→2727+1skip.
 ### v3.34.0 (2026-07-10)
