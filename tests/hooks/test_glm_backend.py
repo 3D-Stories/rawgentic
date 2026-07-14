@@ -683,3 +683,84 @@ class TestUrlEdgeCases:
         w = arl.egress_warning(backend="invalid")
         assert "OpenAI" not in w
         assert "unknown" in w.lower() or "invalid" in w.lower()
+
+
+# ---------------------------------------------------------------------------
+# Task 4 — backend-aware report paths + Reviewer line (gpt golden byte-compat)
+# ---------------------------------------------------------------------------
+
+# Captured from the PRE-#403 renderer for this exact input (golden — gpt
+# single-backend output must stay byte-identical; snapshot 2026-07-14).
+_LEGACY_GPT_REPORT = (
+    "# Adversarial Review — a.md\n\n- Date: 2026-07-14\n- Artifact type: design\n"
+    "- Reviewer: Codex (model config-default, reasoning effort high)\n"
+    "- Findings: 1 (Critical 0, High 1, Medium 0, Low 0)\n\n## Summary\n\nsum\n\n"
+    "## Findings\n\n### 1. [High] security · high confidence — L1\n\n> quoted\n\n"
+    "desc\n\n**Recommendation:** rec\n\n---\n"
+    "_Report-only: this review does not edit the artifact. Findings are advisory; "
+    "incorporate them at your discretion._"
+)
+
+
+class TestBackendReportPaths:
+    def test_review_path_gpt_unchanged(self, tmp_path):
+        legacy = arl.review_report_path(str(tmp_path), "doc.md", "2026-07-14")
+        explicit = arl.review_report_path(str(tmp_path), "doc.md", "2026-07-14",
+                                          backend="gpt")
+        assert legacy == explicit
+        assert legacy.endswith("doc-md-2026-07-14.md")
+
+    def test_review_path_glm_suffix_after_date(self, tmp_path):
+        p = arl.review_report_path(str(tmp_path), "doc.md", "2026-07-14", backend="glm")
+        assert p.endswith("doc-md-2026-07-14-glm.md")
+
+    def test_glm_suffix_collision_free(self, tmp_path):
+        """gpt review of foo-glm.md vs glm review of foo.md — disjoint by construction."""
+        gpt_of_glm_named = arl.review_report_path(str(tmp_path), "foo-glm.md",
+                                                  "2026-07-14", backend="gpt")
+        glm_of_foo = arl.review_report_path(str(tmp_path), "foo.md",
+                                            "2026-07-14", backend="glm")
+        assert gpt_of_glm_named != glm_of_foo
+
+    def test_consult_path_glm_suffix_after_date(self, tmp_path):
+        gpt = arl.consult_report_path(str(tmp_path), "prob.md", "2026-07-14")
+        glm = arl.consult_report_path(str(tmp_path), "prob.md", "2026-07-14",
+                                      backend="glm")
+        assert gpt.endswith("peer-prob-2026-07-14.md")
+        assert glm.endswith("peer-prob-2026-07-14-glm.md")
+
+
+class TestBackendReviewerLine:
+    FINDING = {"evidence": "quoted", "severity": "High", "category": "security",
+               "confidence": "high", "description": "desc", "recommendation": "rec",
+               "ambiguity_flag": None, "ambiguity_reason": None, "location": "L1"}
+    META = {"artifact": "a.md", "date": "2026-07-14", "artifact_type": "design",
+            "summary": "sum", "model": "", "effort": "high"}
+
+    def test_gpt_report_byte_identical_golden(self):
+        """No backend key in meta (single-backend gpt) -> EXACT legacy bytes."""
+        assert arl.render_report_md([self.FINDING], dict(self.META)) == _LEGACY_GPT_REPORT
+
+    def test_gpt_explicit_backend_also_legacy(self):
+        meta = dict(self.META); meta["backend"] = "gpt"
+        assert arl.render_report_md([self.FINDING], meta) == _LEGACY_GPT_REPORT
+
+    def test_glm_reviewer_line(self):
+        meta = dict(self.META); meta.update(backend="glm", model="glm-5.2")
+        md = arl.render_report_md([self.FINDING], meta)
+        assert "- Reviewer: GLM (model glm-5.2, reasoning effort high)" in md
+        assert "Codex" not in md
+
+    def test_consult_gpt_legacy_line(self):
+        md = arl.render_consult_md({"approach": "a", "key_decisions": [],
+                                    "risks": [], "sketch": "s"},
+                                   {"artifact": "p.md", "date": "2026-07-14"})
+        assert "- Reviewer: Codex (peer designer)" in md
+
+    def test_consult_glm_line(self):
+        md = arl.render_consult_md({"approach": "a", "key_decisions": [],
+                                    "risks": [], "sketch": "s"},
+                                   {"artifact": "p.md", "date": "2026-07-14",
+                                    "backend": "glm", "model": "glm-5.2"})
+        assert "GLM" in md
+        assert "Codex" not in md

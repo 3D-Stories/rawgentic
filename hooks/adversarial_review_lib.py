@@ -1532,15 +1532,21 @@ def _safe_date(date_str: str) -> str:
     return cleaned[:32] or "undated"
 
 
-def review_report_path(project_root: str, artifact_name: str, date_str: str) -> str:
-    """Return <project_root>/docs/reviews/<slug>-<date>.md.
+def review_report_path(
+    project_root: str, artifact_name: str, date_str: str, backend: str = "gpt"
+) -> str:
+    """Return <project_root>/docs/reviews/<slug>-<date>[-glm].md.
 
     BOTH the artifact name and the date are sanitized — neither may introduce
-    path separators or traversal (#77 Step 8a F1).
+    path separators or traversal (#77 Step 8a F1). The glm backend suffixes
+    AFTER the date (#403): a suffix before the date would collide when an
+    artifact's own slug ends `-glm` (gpt review of foo-glm.md vs glm review of
+    foo.md, same date); after the date the two are disjoint by construction.
     """
+    suffix = "-glm" if backend == "glm" else ""
     return os.path.join(
         project_root, "docs", "reviews",
-        f"{slugify(artifact_name)}-{_safe_date(date_str)}.md",
+        f"{slugify(artifact_name)}-{_safe_date(date_str)}{suffix}.md",
     )
 
 
@@ -1594,13 +1600,21 @@ def render_report_md(findings: list[dict], meta: dict) -> str:
     for f in findings:
         if f.get("severity") in counts:
             counts[f["severity"]] += 1
+    # Reviewer identity comes from meta (#403). No/gpt backend renders the
+    # EXACT legacy Codex wording — gpt single-backend reports stay
+    # byte-identical (golden-tested); only glm output carries the new wording.
+    if meta.get("backend") == "glm":
+        reviewer = (f"GLM (model {meta.get('model') or GLM_MODEL}, "
+                    f"reasoning effort {meta.get('effort') or 'config-default'})")
+    else:
+        reviewer = (f"Codex (model {meta.get('model') or 'config-default'}, "
+                    f"reasoning effort {meta.get('effort') or 'config-default'})")
     lines = [
         f"# Adversarial Review — {meta.get('artifact', 'artifact')}",
         "",
         f"- Date: {meta.get('date', '')}",
         f"- Artifact type: {meta.get('artifact_type', 'generic')}",
-        f"- Reviewer: Codex (model {meta.get('model') or 'config-default'}, "
-        f"reasoning effort {meta.get('effort') or 'config-default'})",
+        f"- Reviewer: {reviewer}",
         f"- Findings: {len(findings)} "
         f"(Critical {counts['Critical']}, High {counts['High']}, "
         f"Medium {counts['Medium']}, Low {counts['Low']})",
@@ -1706,16 +1720,21 @@ def build_consult_prompt(problem_text: str, nonce: str | None = None) -> str:
     )
 
 
-def consult_report_path(project_root: str, artifact_name: str, date_str: str) -> str:
-    """Return <project_root>/docs/reviews/peer-<slug>-<date>.md.
+def consult_report_path(
+    project_root: str, artifact_name: str, date_str: str, backend: str = "gpt"
+) -> str:
+    """Return <project_root>/docs/reviews/peer-<slug>-<date>[-glm].md.
 
     BOTH the artifact name and the date are sanitized (no path separators /
-    traversal), mirroring review_report_path. The artifact extension is dropped
-    before slugifying so 'my-problem.md' -> 'my-problem' (not 'my-problem-md').
+    traversal), mirroring review_report_path (incl. the after-date glm suffix,
+    #403). The artifact extension is dropped before slugifying so
+    'my-problem.md' -> 'my-problem' (not 'my-problem-md').
     """
     slug = slugify(os.path.splitext(os.path.basename(artifact_name))[0])
+    suffix = "-glm" if backend == "glm" else ""
     return os.path.join(
-        project_root, "docs", "reviews", f"peer-{slug}-{_safe_date(date_str)}.md"
+        project_root, "docs", "reviews",
+        f"peer-{slug}-{_safe_date(date_str)}{suffix}.md",
     )
 
 
@@ -1723,9 +1742,13 @@ def render_consult_md(proposal: dict, meta: dict) -> str:
     """Render a markdown peer-consult proposal (report-only)."""
     kd = "\n".join(f"- {d}" for d in proposal.get("key_decisions", []))
     rk = "\n".join(f"- {r}" for r in proposal.get("risks", []))
+    if meta.get("backend") == "glm":
+        reviewer = f"GLM (model {meta.get('model') or GLM_MODEL}, peer designer)"
+    else:
+        reviewer = "Codex (peer designer)"  # legacy wording, byte-identical
     return (
         f"# Peer Consult — {meta.get('artifact', '')}\n\n"
-        f"- Date: {meta.get('date', '')}\n- Reviewer: Codex (peer designer)\n\n"
+        f"- Date: {meta.get('date', '')}\n- Reviewer: {reviewer}\n\n"
         f"## Approach\n\n{proposal.get('approach', '')}\n\n"
         f"## Key decisions\n\n{kd}\n\n## Risks\n\n{rk}\n\n"
         f"## Sketch\n\n{proposal.get('sketch', '')}\n\n"
