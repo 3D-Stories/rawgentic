@@ -269,9 +269,9 @@ to any project repo — and are set by `/rawgentic:setup`.
 | Field | Type | Description |
 |-------|------|-------------|
 | `critiqueMethod` | `string` | **Deprecated / ignored (#205).** Formerly selected the critique tool; the external reflexion dependency was removed and quality gates now use the in-repo quality-bar rubric. A leftover value in a workspace file is inert. |
-| `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }`. Default disabled. Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
+| `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"], "backend"?: "gpt" \| "glm" \| "both" }`. Default disabled; `backend` absent → `gpt`. A present-but-INVALID `backend` value refuses at run time (exit 2, no egress) rather than silently defaulting (#403). Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`, or a `{model, effort}` object; string shorthand ≡ `{model, effort: null}`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown model or effort values warn and resolve to `inherit`/`null`, never block. See [`modelRouting`](#modelrouting). |
-| `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
+| `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"], "backend"?: "gpt" \| "glm" \| "both" }` — mirrors `adversarialReview` incl. the #403 backend field. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `runFeedback` | `object` \| `bool` | Opt-in embedded post-run self-assessment (WF14, `/rawgentic:run-feedback`) at workflow completion. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }` — same loader and fail-closed semantics as `peerConsult` (`load_adversarial_review_config(..., key="runFeedback")`). Default disabled. Wired at WF2 Step 16 / WF3 Step 14 (rawgentic #338); the standalone skill always works regardless. |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
 | `designArtifact` | `object` \| `bool` | Opt-in HTML design-artifact lifecycle (#174): WF1 renders + publishes the issue spec artifact; WF2/WF3 create-or-update the `docs/planning/<issue>.{md,html}` artifact (with run telemetry embedded) inside the feature PR before `gh pr create`. Shape: `{ "enabled": bool, "workflows": ["create-issue", "implement-feature", "fix-bug"], "sharedDoc"?: "docs/planning/<name>.md", "style"?: "plain" \| "roadmap" \| "report" \| "design" \| "dashboard" \| "review" \| "spec" }` — mirrors `adversarialReview` plus an optional `sharedDoc` and `style`. Default disabled (byte-identical behavior for opted-out projects). **Two distinct fail behaviors:** a missing/malformed `designArtifact` block fails **closed → disabled** (feature off); but an invalid `sharedDoc` *value* (absolute, `..`, or not a `docs/*.md` path) fails **safe → per-issue** (feature stays enabled, just doesn't use the bad shared path). **`sharedDoc` (optional, project-relative path):** when set, WF1/WF2/WF3 update that ONE rolling design doc across every issue — the multi-issue / campaign model, one program doc refreshed per slot (like this repo's modernization dashboard) — instead of a per-issue `<issue>-<slug>.{md,html}` file; unset = per-issue (default). Absolute paths or `..` traversal in `sharedDoc` fail safe to per-issue. **`style` (optional, #199, vocabulary expanded #344)** — accepts the seven design-language template names (plain, roadmap, report, design, dashboard, review, spec); absent → `design` (the documented default); an invalid value → `plain` plus a stderr warning. Every non-plain template shares the one visual system (see `docs/design-language.md`); `dashboard`/`roadmap` render each `##` section as a bubble card with a completion chip (green (done/shipped) / amber (abandoned/blocked) / neutral (planned)), for a campaign/roadmap log that matches the modernization dashboard. Rendering uses `hooks/render_artifact.py` (self-contained, CSP-safe, escape-first, mountain-time datetime stamp; `--style` flag). |
@@ -310,8 +310,17 @@ to run setup after a plugin update rather than silently enabling it (it sends
 artifact text to OpenAI, so it is never force-enabled). Shape:
 
 ```json
-"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"] }
+"adversarialReview": { "enabled": true, "workflows": ["implement-feature", "fix-bug"], "backend": "both" }
 ```
+
+**`backend` (optional, #403):** selects the cross-model reviewer — `gpt` (Codex CLI,
+the default), `glm` (Zhipu GLM via the zhipuai SDK against the z.ai endpoint — a
+Coding Plan subscription key works), or `both` (two independent reviews, two
+reports; one backend failing degrades to a PARTIAL result, exit 5, never aborting
+the other). Absent → `gpt`. A present-but-invalid value (e.g. a typo `"glm5"`)
+REFUSES at run time with exit 2 before any egress — it is never silently laundered
+into `gpt`, because that would reroute the artifact to a different provider than
+the operator chose. An explicit `--backend` on an invocation overrides the config.
 
 `workflows` uses bare skill names (`implement-feature`, `fix-bug`, `create-issue`;
 a removed name like `refactor` is accepted but inert — see `docs/upgrade-3.0.md`).
@@ -446,8 +455,13 @@ there is no default-on recommendation; the standalone `/rawgentic:peer-consult` 
 always works regardless of this field. Shape:
 
 ```json
-"peerConsult": { "enabled": true, "workflows": ["implement-feature"] }
+"peerConsult": { "enabled": true, "workflows": ["implement-feature"], "backend": "both" }
 ```
+
+**`backend` (optional, #403):** same vocabulary and semantics as
+`adversarialReview.backend` (read with `--key peerConsult`). Under `both`, WF2's
+Step 3 consult produces TWO independent peer proposals (the structured out-file
+plus a `-glm` sibling), selected via the consult's per-backend stdout status lines.
 
 `peerConsult` **governs the WF2 integration only** — it does not gate the standalone
 skill. When enabled and `implement-feature` is listed: at the WF2 design step
@@ -502,9 +516,12 @@ proceeds. The engine also scans the artifact for obvious secrets (API keys, pass
 tokens, private keys) and names any detected categories in the notice. Set
 `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` to make detection blocking instead of advisory.
 Findings reports are written locally to `<project>/docs/reviews/` and are never uploaded.
-The Codex CLI must be installed (`curl -fsSL https://codex.openai.com/install.sh | bash`)
+The gpt backend requires the Codex CLI installed (`curl -fsSL https://codex.openai.com/install.sh | bash`)
 and authenticated (`codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
-for headless/CI).
+for headless/CI). The glm backend (#403) requires `pip install "zhipuai>=2.1.5"` and a key in
+`ZHIPUAI_API_KEY` — its egress goes to z.ai/Zhipu (a distinct provider and jurisdiction),
+named in the consent notice. Under `both`, prerequisites degrade-and-warn: the run proceeds
+when at least one backend is ready.
 
 The reviewer is invoked via `codex exec` (never `codex review`, which is git-diff-only)
 with tools forbidden, structured-JSON output, and these env-tunable knobs:
@@ -516,7 +533,10 @@ with tools forbidden, structured-JSON output, and these env-tunable knobs:
 | `RAWGENTIC_ADV_REVIEW_TIMEOUT` | `600` | Codex invocation timeout (seconds). 600 (was 300) gives high-effort reviews of large artifacts headroom so they don't silently fail-closed. |
 | `RAWGENTIC_ADV_REVIEW_MAX_BYTES` | `200000` | Artifact size cap; over-cap truncates and warns. |
 | `RAWGENTIC_ADV_REVIEW_MAX_RETRIES` | `1` | Retries on transient Codex failure. |
-| `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS` | _off_ | When set, block egress if secrets are detected (otherwise warn-only). |
+| `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS` | _off_ | When set, block egress if secrets are detected (otherwise warn-only). Applies to BOTH backends. |
+| `RAWGENTIC_ADV_REVIEW_GLM_MODEL` | `glm-5.2` | GLM model slug (#403). Exact slug verified against the z.ai Coding Plan endpoint. |
+| `ZHIPUAI_API_KEY` / `ZHIPU_API_KEY` / `GLM_API_KEY` | _unset_ | GLM credential, read at call time in that precedence order. A z.ai Coding Plan subscription key works with the default endpoint. |
+| `ZHIPUAI_BASE_URL` / `GLM_JUDGE_BASE_URL` | `https://api.z.ai/api/coding/paas/v4` | GLM endpoint override (precedence order). Must be https with no userinfo/query/fragment — a violating value is a config error (exit 2, no egress). The egress notice names the effective endpoint (sanitized scheme+host). |
 
 The review also runs `--ephemeral` (the prompt, which inlines the artifact, is not
 persisted to Codex session history) and `-c project_doc_max_bytes=0` (suppresses the
