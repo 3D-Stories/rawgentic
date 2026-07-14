@@ -142,6 +142,10 @@ REASONING_EFFORT: Final[str] = _coerce_effort_env(
 )
 REVIEW_MODEL: Final[str | None] = _model_env("RAWGENTIC_ADV_REVIEW_MODEL")
 
+# Selectable reviewer backends (#403): gpt = Codex CLI (the historical default),
+# glm = Zhipu GLM via the zhipuai SDK, both = run each independently.
+BACKENDS: Final[tuple[str, ...]] = ("gpt", "glm", "both")
+
 SEVERITIES: Final[tuple[str, ...]] = ("Critical", "High", "Medium", "Low")
 _SEVERITY_RANK = {s: i for i, s in enumerate(SEVERITIES)}
 CATEGORIES: Final[tuple[str, ...]] = (
@@ -201,16 +205,48 @@ ADV_CONFIDENCE_TO_FLOAT: Final[dict[str, float]] = {
 class AdversarialReviewConfig:
     enabled: bool
     workflows: tuple[str, ...]
+    # Selected reviewer backend (#403). "gpt" (default), "glm", "both" — or the
+    # sentinel "invalid" when a PRESENT value failed coercion, with the rejected
+    # raw value preserved in backend_error_value so diagnostics can name it.
+    # Every config-RESOLVING entry point must refuse on the sentinel BEFORE any
+    # provider call: a typo'd "glm5" must never silently reroute egress to OpenAI.
+    backend: str = "gpt"
+    backend_error_value: object = None
 
 
 _DISABLED = AdversarialReviewConfig(enabled=False, workflows=())
 
 
+def _coerce_backend(raw: object) -> tuple[str, object]:
+    """Coerce a raw `backend` value. Returns (backend, error_value).
+
+    Absent (None) -> ("gpt", None) silently — backward compatible.
+    Valid member of BACKENDS -> (value, None).
+    Anything else (wrong type, unknown string, stray whitespace/case) ->
+    ("invalid", <raw>) with a stderr warning — FAIL-CLOSED at the entry points,
+    never a silent fallback to a different egress destination (#403 F-E).
+    """
+    if raw is None:
+        return "gpt", None
+    # NB: bool is an int subclass — an explicit `backend: true` is invalid, not 1.
+    if isinstance(raw, str) and not isinstance(raw, bool) and raw in BACKENDS:
+        return raw, None
+    print(
+        f"adversarial_review_lib: invalid backend {raw!r} (expected one of "
+        f"{list(BACKENDS)}); refusing to resolve a backend from it — fix the "
+        "config's `backend` field",
+        file=sys.stderr,
+    )
+    return "invalid", raw
+
+
 def _coerce_config(raw: object) -> AdversarialReviewConfig:
     """Coerce a raw adversarialReview value into config. FAIL-CLOSED.
 
-    Accepts: bool shorthand (True/False), or {enabled: bool, workflows: [str]}.
-    Anything else -> disabled. `enabled` must be a real bool to count as enabled.
+    Accepts: bool shorthand (True/False), or {enabled: bool, workflows: [str],
+    backend: "gpt"|"glm"|"both"}. Anything else -> disabled. `enabled` must be a
+    real bool to count as enabled. A present-but-invalid `backend` coerces to the
+    "invalid" sentinel (see _coerce_backend) rather than silently becoming "gpt".
     """
     if isinstance(raw, bool):
         return AdversarialReviewConfig(enabled=raw, workflows=())
@@ -223,7 +259,11 @@ def _coerce_config(raw: object) -> AdversarialReviewConfig:
             workflows = tuple(w for w in wf_raw if isinstance(w, str))
         else:
             workflows = ()
-        return AdversarialReviewConfig(enabled=enabled, workflows=workflows)
+        backend, err = _coerce_backend(raw.get("backend"))
+        return AdversarialReviewConfig(
+            enabled=enabled, workflows=workflows,
+            backend=backend, backend_error_value=err,
+        )
     return _DISABLED
 
 
@@ -1376,6 +1416,16 @@ def main(argv: list[str] | None = None) -> int:
     p_enabled.add_argument("--skill", required=True)
     p_enabled.add_argument("--key", default="adversarialReview")
 
+    # #403: print the config-resolved backend. Exit contract: 0 + backend on
+    # stdout for a VALID, ABSENT, or disabled config (absent/missing -> "gpt");
+    # 2 + the rejected value on stderr for a PRESENT-BUT-INVALID backend — this
+    # subcommand must never launder an invalid value into "gpt" (that would
+    # route around the invalid-config refusal and egress to the wrong provider).
+    p_backend = sub.add_parser("backend", help="print the config-resolved backend")
+    p_backend.add_argument("--workspace", required=True)
+    p_backend.add_argument("--project", required=True)
+    p_backend.add_argument("--key", default="adversarialReview")
+
     p_review = sub.add_parser("review", help="run an adversarial review")
     p_review.add_argument("--artifact", required=True)
     p_review.add_argument("--type", default="generic")
@@ -1404,6 +1454,21 @@ def main(argv: list[str] | None = None) -> int:
         enabled = is_enabled_for(args.workspace, args.project, args.skill, key=args.key)
         print("enabled" if enabled else "disabled")
         return 0 if enabled else 1
+
+    if args.cmd == "backend":
+        cfg = load_adversarial_review_config(args.workspace, args.project, key=args.key)
+        if cfg.backend == "invalid":
+            # _coerce_backend already printed the naming warning at load time;
+            # repeat the rejected value here so THIS invocation's stderr carries it.
+            print(
+                f"invalid `backend` value {cfg.backend_error_value!r} in the "
+                f"{args.key} config for project {args.project!r}; expected one of "
+                f"{list(BACKENDS)} — refusing (no egress)",
+                file=sys.stderr,
+            )
+            return 2
+        print(cfg.backend)
+        return 0
 
     if args.cmd == "review":
         artifact_type = args.type if args.type in ARTIFACT_TYPES else "generic"
