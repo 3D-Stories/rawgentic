@@ -1097,12 +1097,15 @@ def run_codex_review(
     *,
     timeout: int | None = None,
     headless: bool = False,
+    artifact_text: tuple[str, bool] | None = None,
 ) -> CodexResult:
     """Run an adversarial review via Codex. FAIL-CLOSED on every error path.
 
     Reads + size-caps the artifact, scans for secrets (optionally blocking),
     builds a type-aware prompt, and invokes `codex exec --output-schema` with
     shell=False and the prompt on stdin. Validates the structured output.
+    `artifact_text` (#403 F-G): preloaded (text, truncated) skips the FILE READ
+    only — the secret scan below still runs on it unconditionally (A3).
     """
     # Prereq (gate before any work / egress).
     if not codex_installed():
@@ -1111,10 +1114,13 @@ def run_codex_review(
         msg = _HEADLESS_AUTH_MSG if headless else _AUTH_MSG
         return CodexResult(status="unauthenticated", findings=(), raw_error=msg)
 
-    try:
-        artifact_text, truncated = read_artifact(artifact_path, project_root)
-    except ArtifactError as exc:
-        return CodexResult(status="error", findings=(), raw_error=str(exc))
+    if artifact_text is not None:
+        artifact_text, truncated = artifact_text
+    else:
+        try:
+            artifact_text, truncated = read_artifact(artifact_path, project_root)
+        except ArtifactError as exc:
+            return CodexResult(status="error", findings=(), raw_error=str(exc))
 
     # NB: named secret_hits (not `secrets`) so it does not shadow the stdlib
     # `secrets` module used just below to mint the prompt-fence nonce.
@@ -1505,9 +1511,14 @@ def run_glm_consult(
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(proposal, f)
     except OSError as exc:
-        return CodexResult(status="error", findings=(),
-                           raw_error=f"proposal write failed: {exc}",
-                           truncated=truncated, secrets=secret_hits, backend="glm")
+        # 8a T3: route through the marker helper — a truncated/partial out_path
+        # must be replaced by the explicit empty marker (sibling parity with
+        # run_codex_consult; the tiny marker write can succeed where the large
+        # proposal write failed).
+        return _fail_marked(CodexResult(
+            status="error", findings=(),
+            raw_error=f"proposal write failed: {exc}",
+            truncated=truncated, secrets=secret_hits, backend="glm"))
     return CodexResult(status="success", findings=(), truncated=truncated,
                        secrets=secret_hits, model=GLM_MODEL,
                        effort=REASONING_EFFORT, backend="glm")
@@ -1799,6 +1810,8 @@ def run_codex_consult(
     out_path: str,
     headless: bool = False,
     timeout: int | None = None,
+    *,
+    artifact_text: tuple[str, bool] | None = None,
 ) -> CodexResult:
     """Run codex as an independent peer designer, writing a PROPOSAL to out_path.
 
@@ -1821,10 +1834,14 @@ def run_codex_consult(
     if not codex_authenticated():
         return _fail("unauthenticated", _HEADLESS_AUTH_MSG if headless else _AUTH_MSG)
 
-    try:
-        artifact_text, truncated = read_artifact(artifact, project_root)
-    except ArtifactError as exc:
-        return _fail("error", str(exc))
+    if artifact_text is not None:
+        # #403 F-G: preloaded text skips the FILE READ only; the scan below runs.
+        artifact_text, truncated = artifact_text
+    else:
+        try:
+            artifact_text, truncated = read_artifact(artifact, project_root)
+        except ArtifactError as exc:
+            return _fail("error", str(exc))
 
     secret_hits = tuple(scan_for_secrets(artifact_text))
     if secret_hits and BLOCK_SECRETS:
@@ -1932,6 +1949,46 @@ def run_codex_consult(
 # CLI (for test ergonomics; SKILL.md may also import directly)
 # ============================================================================
 
+# Non-success status -> exit code (shared by both backends; 5 = both-mode
+# PARTIAL is computed in the dispatch, not here).
+_STATUS_EXIT: Final[dict[str, int]] = {
+    "not_installed": 2, "unauthenticated": 2,
+    "timeout": 3, "error": 3, "parse_error": 4,
+}
+
+
+def _sidecar_sibling(path: str) -> str:
+    """The glm sibling of a caller-requested output path: x.json -> x-glm.json."""
+    root, ext = os.path.splitext(path)
+    return f"{root}-glm{ext}"
+
+
+def _resolve_cli_backend(args) -> tuple[str | None, int]:
+    """Resolve the effective backend for a review/consult invocation (#403).
+
+    Precedence (pass-4 contract): an EXPLICIT --backend (argparse-validated) is
+    the source and skips config resolution entirely; with no arg and
+    --workspace/--project given, resolve from config and REFUSE on the invalid
+    sentinel (exit 2, no egress — never launder a typo into gpt); with neither,
+    default gpt (legacy argv, byte-compatible).
+
+    Returns (backend, 0) or (None, exit_code) on refusal.
+    """
+    if getattr(args, "backend", None) is not None:
+        return args.backend, 0
+    if getattr(args, "workspace", None) and getattr(args, "project", None):
+        cfg = load_adversarial_review_config(args.workspace, args.project, key=args.key)
+        if cfg.backend == "invalid":
+            print(
+                f"invalid `backend` value {cfg.backend_error_value} in the "
+                f"{args.key} config for project {args.project!r}; expected one of "
+                f"{list(BACKENDS)} — refusing (no egress)",
+                file=sys.stderr,
+            )
+            return None, 2
+        return cfg.backend, 0
+    return "gpt", 0
+
 def main(argv: list[str] | None = None) -> int:
     """CLI: prereq | is-enabled | review | consult.
 
@@ -1972,6 +2029,13 @@ def main(argv: list[str] | None = None) -> int:
     # Optional machine-readable sidecar for embedded consumers (WF2 Step 11).
     # Fail-closed: written ONLY on success, AFTER the report write succeeds.
     p_review.add_argument("--findings-json", default=None)
+    # #403: backend selection. Default None (NOT "gpt") so explicit-arg vs
+    # absent is detectable — absence resolves from config when --workspace/
+    # --project are given, else legacy gpt.
+    p_review.add_argument("--backend", choices=list(BACKENDS), default=None)
+    p_review.add_argument("--workspace", default=None)
+    p_review.add_argument("--project", default=None)
+    p_review.add_argument("--key", default="adversarialReview")
 
     p_consult = sub.add_parser("consult", help="run a peer-designer consult")
     p_consult.add_argument("--artifact", required=True)
@@ -1979,6 +2043,10 @@ def main(argv: list[str] | None = None) -> int:
     p_consult.add_argument("--out", required=True)
     p_consult.add_argument("--date", default="")
     p_consult.add_argument("--headless", action="store_true")
+    p_consult.add_argument("--backend", choices=list(BACKENDS), default=None)
+    p_consult.add_argument("--workspace", default=None)
+    p_consult.add_argument("--project", default=None)
+    p_consult.add_argument("--key", default="peerConsult")
 
     args = parser.parse_args(argv)
 
@@ -2008,141 +2076,219 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "review":
+        backend, rc = _resolve_cli_backend(args)
+        if backend is None:
+            return rc
         artifact_type = args.type if args.type in ARTIFACT_TYPES else "generic"
-        # Sidecar path validation + stale-removal happen BEFORE any codex/egress:
-        # a bad path fails-closed (exit 2, codex never invoked), and clearing the
-        # stale file up front means a failed run leaves NO sidecar behind (exit 0
-        # is the only path that writes a fresh one).
-        sidecar_path = None
+        date_str = args.date or "unknown-date"
+        run_backends = ["gpt", "glm"] if backend == "both" else [backend]
+
+        # Sidecar path validation + stale-removal happen BEFORE any provider
+        # egress: a bad path fails-closed (exit 2, nothing invoked), and clearing
+        # the stale file(s) up front means a failed run leaves NO sidecar behind —
+        # under `both`, a prior run's `-glm` sibling must never survive into this
+        # run's results either.
+        sidecar_by_backend: dict[str, str] = {}
         if args.findings_json is not None:
             try:
                 sidecar_path = resolve_sidecar_path(args.findings_json, args.project_root)
             except ArtifactError as exc:
                 print(str(exc), file=sys.stderr)
                 return 2
-            # Collision guards, BEFORE the stale-removal os.remove() below: the
+            if backend == "both":
+                sidecar_by_backend = {"gpt": sidecar_path,
+                                      "glm": _sidecar_sibling(sidecar_path)}
+            else:
+                sidecar_by_backend = {backend: sidecar_path}
+            # Collision guards, BEFORE the stale-removal os.remove() below: a
             # sidecar must never BE the artifact (os.remove would destroy the
-            # input before codex even runs) or the computed report path (the
-            # later sidecar write would clobber the human-readable report) (#131).
-            sidecar_real = os.path.realpath(sidecar_path)
+            # input before the review even runs) or that backend's computed
+            # report path (the later sidecar write would clobber the report) (#131).
             try:
                 artifact_real = resolve_artifact_path(args.artifact, args.project_root)
             except ArtifactError:
                 artifact_real = None
-            if artifact_real is not None and sidecar_real == artifact_real:
-                print(
-                    f"--findings-json collision: sidecar path is the same file as "
-                    f"--artifact ({sidecar_path!r}); refusing (would destroy the "
-                    "artifact before review)", file=sys.stderr,
-                )
-                return 2
-            date_str = args.date or "unknown-date"
-            report_path = os.path.normpath(
-                review_report_path(args.project_root, args.artifact, date_str)
+            for bk, sc in sidecar_by_backend.items():
+                if artifact_real is not None and os.path.realpath(sc) == artifact_real:
+                    print(
+                        f"--findings-json collision: sidecar path is the same file as "
+                        f"--artifact ({sc!r}); refusing (would destroy the "
+                        "artifact before review)", file=sys.stderr,
+                    )
+                    return 2
+                report_norm = os.path.normpath(review_report_path(
+                    args.project_root, args.artifact, date_str, backend=bk))
+                if os.path.normpath(sc) == report_norm:
+                    print(
+                        f"--findings-json collision: sidecar path is the same as the "
+                        f"computed report path ({sc!r}); refusing (would "
+                        "clobber the report)", file=sys.stderr,
+                    )
+                    return 2
+            for sc in sidecar_by_backend.values():
+                try:
+                    os.remove(sc)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    print(f"failed to clear stale findings sidecar: {exc}",
+                          file=sys.stderr)
+                    return 2
+
+        def _review_one(bk: str, artifact_text=None) -> tuple[CodexResult, str | None]:
+            """Run ONE backend end-to-end (review -> report -> sidecar).
+
+            Returns (result, report_path). Any post-success write failure
+            converts the result to a fail-closed error (#77 Step 8a F3).
+            """
+            run_fn = run_codex_review if bk == "gpt" else run_glm_review
+            res = run_fn(args.artifact, artifact_type, args.project_root,
+                         headless=args.headless, artifact_text=artifact_text)
+            if res.status != "success":
+                return res, None
+            report = render_report_md(
+                list(res.findings),
+                {"artifact": os.path.basename(args.artifact), "date": date_str,
+                 "artifact_type": artifact_type, "summary": res.summary,
+                 "truncated": res.truncated, "secrets": list(res.secrets),
+                 "model": res.model, "effort": res.effort, "backend": bk},
             )
-            if os.path.normpath(sidecar_path) == report_path:
-                print(
-                    f"--findings-json collision: sidecar path is the same as the "
-                    f"computed report path ({sidecar_path!r}); refusing (would "
-                    "clobber the report)", file=sys.stderr,
-                )
-                return 2
+            path = review_report_path(args.project_root, args.artifact, date_str,
+                                      backend=bk)
             try:
-                os.remove(sidecar_path)
-            except FileNotFoundError:
-                pass
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(report)
             except OSError as exc:
-                print(f"failed to clear stale findings sidecar: {exc}", file=sys.stderr)
-                return 2
-        result = run_codex_review(
-            args.artifact, artifact_type, args.project_root, headless=args.headless
-        )
-        if result.status in ("not_installed", "unauthenticated"):
-            print(result.raw_error, file=sys.stderr)
-            return 2
-        if result.status in ("timeout", "error"):
-            print(result.raw_error, file=sys.stderr)
-            return 3
-        if result.status == "parse_error":
-            print(result.raw_error, file=sys.stderr)
-            return 4
-        # success
-        date_str = args.date or "unknown-date"
-        report = render_report_md(
-            list(result.findings),
-            {"artifact": os.path.basename(args.artifact), "date": date_str,
-             "artifact_type": artifact_type, "summary": result.summary,
-             "truncated": result.truncated, "secrets": list(result.secrets),
-             "model": result.model, "effort": result.effort},
-        )
-        path = review_report_path(args.project_root, args.artifact, date_str)
+                return CodexResult(status="error", findings=(),
+                                   raw_error=f"failed to write report: {exc}",
+                                   backend=bk), None
+            # Machine-readable sidecar — written ONLY on success, AFTER the
+            # report write. Atomic (#264). gpt findings stay untagged (legacy
+            # byte-shape); glm findings carry a per-finding backend key (#403).
+            sc = sidecar_by_backend.get(bk)
+            if sc is not None:
+                findings = list(res.findings)
+                if bk == "glm":
+                    findings = [dict(f, backend="glm") for f in findings]
+                try:
+                    atomic_write_text(sc, json.dumps({
+                        "status": "success",
+                        "summary": res.summary,
+                        "truncated": res.truncated,
+                        "secrets": list(res.secrets),
+                        "findings": findings,
+                    }))
+                except OSError as exc:
+                    return CodexResult(status="error", findings=(),
+                                       raw_error=f"failed to write findings sidecar: {exc}",
+                                       backend=bk), None
+            return res, path
+
+        if backend != "both":
+            result, path = _review_one(backend)
+            if result.status != "success" or path is None:
+                print(result.raw_error, file=sys.stderr)
+                return _STATUS_EXIT.get(result.status, 3)
+            print(path)
+            return 0
+
+        # both: read + size-cap ONCE; each run function still scans the shared
+        # immutable text itself (A3). One backend failing never aborts the other.
         try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(report)
-        except OSError as exc:
-            # Fail-closed: a write failure must surface as a non-zero exit, not a
-            # traceback that a caller could misread as success (#77 Step 8a F3).
-            print(f"failed to write report: {exc}", file=sys.stderr)
+            shared_text = read_artifact(args.artifact, args.project_root)
+        except ArtifactError as exc:
+            print(str(exc), file=sys.stderr)
             return 3
-        # Machine-readable sidecar for embedded consumers — written ONLY here,
-        # after the report write succeeded. A write OSError fails-closed (exit 3,
-        # mirroring the report-write contract) so a consumer never read-gates on a
-        # missing/partial sidecar and misreads it as success (#131).
-        if sidecar_path is not None:
-            # Atomic write via the shared helper (#264): crash/interrupt mid-write
-            # never leaves a partial sidecar (reader sees the old file or the
-            # complete new one); the helper's exclusive temp creation covers the
-            # planted-symlink defense the old bespoke variant carried.
-            try:
-                atomic_write_text(sidecar_path, json.dumps({
-                    "status": "success",
-                    "summary": result.summary,
-                    "truncated": result.truncated,
-                    "secrets": list(result.secrets),
-                    "findings": list(result.findings),
-                }))
-            except OSError as exc:
-                print(f"failed to write findings sidecar: {exc}", file=sys.stderr)
-                return 3
-        print(path)
-        return 0
+        outcomes = []
+        for bk in run_backends:
+            res, path = _review_one(bk, artifact_text=shared_text)
+            outcomes.append((bk, res, path))
+            # Per-backend stdout status lines: THE authoritative both-mode
+            # manifest — consumers parse these, never exit code + existence.
+            if res.status == "success" and path is not None:
+                print(f"{bk}: {path}")
+            else:
+                print(f"{bk}: FAILED ({res.status}): {res.raw_error}", file=sys.stderr)
+        succeeded = [o for o in outcomes if o[1].status == "success" and o[2]]
+        if len(succeeded) == len(run_backends):
+            return 0
+        if succeeded:
+            return 5  # PARTIAL — machine-distinguishable degradation
+        gpt_res = outcomes[0][1]
+        return _STATUS_EXIT.get(gpt_res.status, 3)
 
     if args.cmd == "consult":
-        result = run_codex_consult(
-            args.artifact, args.project_root, args.out, headless=args.headless
-        )
-        if result.status in ("not_installed", "unauthenticated"):
-            print(result.raw_error, file=sys.stderr)
-            return 2
-        if result.status in ("timeout", "error"):
-            print(result.raw_error, file=sys.stderr)
-            return 3
-        if result.status == "parse_error":
-            print(result.raw_error, file=sys.stderr)
-            return 4
-        # success: run_codex_consult wrote the clean proposal JSON to args.out.
+        backend, rc = _resolve_cli_backend(args)
+        if backend is None:
+            return rc
         date_str = args.date or "unknown-date"
+        out_by_backend = ({"gpt": args.out, "glm": _sidecar_sibling(args.out)}
+                          if backend == "both" else {backend: args.out})
+
+        def _consult_one(bk: str, out_path: str,
+                         artifact_text=None) -> tuple[CodexResult, str | None]:
+            run_fn = run_codex_consult if bk == "gpt" else run_glm_consult
+            res = run_fn(args.artifact, args.project_root, out_path,
+                         headless=args.headless, artifact_text=artifact_text)
+            if res.status != "success":
+                return res, None
+            # success: the run function wrote the clean proposal JSON to out_path.
+            try:
+                with open(out_path, "r", encoding="utf-8") as f:
+                    proposal = json.load(f)
+            except (OSError, ValueError) as exc:
+                return CodexResult(status="error", findings=(),
+                                   raw_error=f"failed to read proposal: {exc}",
+                                   backend=bk), None
+            report = render_consult_md(
+                proposal,
+                {"artifact": os.path.basename(args.artifact), "date": date_str,
+                 "backend": bk, "model": res.model},
+            )
+            path = consult_report_path(args.project_root, args.artifact, date_str,
+                                       backend=bk)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(report)
+            except OSError as exc:
+                # Fail-closed: a write failure must surface as a non-zero exit.
+                return CodexResult(status="error", findings=(),
+                                   raw_error=f"failed to write report: {exc}",
+                                   backend=bk), None
+            return res, path
+
+        if backend != "both":
+            result, path = _consult_one(backend, args.out)
+            if result.status != "success" or path is None:
+                print(result.raw_error, file=sys.stderr)
+                return _STATUS_EXIT.get(result.status, 3)
+            print(path)
+            return 0
+
+        # both: read once, two independent consults, two --out files (gpt =
+        # exact requested path, glm = -glm sibling; the empty-proposal-marker
+        # guarantee means each sibling always holds valid JSON afterward).
         try:
-            with open(args.out, "r", encoding="utf-8") as f:
-                proposal = json.load(f)
-        except (OSError, ValueError) as exc:
-            print(f"failed to read proposal: {exc}", file=sys.stderr)
+            shared_text = read_artifact(args.artifact, args.project_root)
+        except ArtifactError as exc:
+            print(str(exc), file=sys.stderr)
             return 3
-        report = render_consult_md(
-            proposal, {"artifact": os.path.basename(args.artifact), "date": date_str}
-        )
-        path = consult_report_path(args.project_root, args.artifact, date_str)
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(report)
-        except OSError as exc:
-            # Fail-closed: a write failure must surface as a non-zero exit.
-            print(f"failed to write report: {exc}", file=sys.stderr)
-            return 3
-        print(path)
-        return 0
+        outcomes = []
+        for bk in ("gpt", "glm"):
+            res, path = _consult_one(bk, out_by_backend[bk], artifact_text=shared_text)
+            outcomes.append((bk, res, path))
+            if res.status == "success" and path is not None:
+                print(f"{bk}: {path}")
+            else:
+                print(f"{bk}: FAILED ({res.status}): {res.raw_error}", file=sys.stderr)
+        succeeded = [o for o in outcomes if o[1].status == "success" and o[2]]
+        if len(succeeded) == 2:
+            return 0
+        if succeeded:
+            return 5
+        return _STATUS_EXIT.get(outcomes[0][1].status, 3)
 
     return 2
 

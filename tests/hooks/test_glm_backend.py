@@ -764,3 +764,245 @@ class TestBackendReviewerLine:
                                     "backend": "glm", "model": "glm-5.2"})
         assert "GLM" in md
         assert "Codex" not in md
+
+
+# ---------------------------------------------------------------------------
+# Task 5 — CLI dispatch: --backend on review/consult + both-mode orchestration
+# (in-process main() with monkeypatched run functions — dispatch layer only)
+# ---------------------------------------------------------------------------
+
+def _ok_result(backend, n=1, summary="s"):
+    return arl.CodexResult(status="success",
+                           findings=tuple(_valid_finding(f"{backend}-d{i}") for i in range(n)),
+                           summary=summary, model="m", effort="high", backend=backend)
+
+
+def _fail_result(backend, status="error", raw="boom"):
+    return arl.CodexResult(status=status, findings=(), raw_error=raw, backend=backend)
+
+
+@pytest.fixture
+def cli_env(tmp_path, monkeypatch):
+    """Artifact + project root + spies on both run functions."""
+    root = tmp_path
+    art = root / "doc.md"
+    art.write_text("# doc\n")
+    calls = {"gpt": 0, "glm": 0}
+
+    def fake_gpt(*a, **kw):
+        calls["gpt"] += 1
+        return _ok_result("gpt")
+
+    def fake_glm(*a, **kw):
+        calls["glm"] += 1
+        return _ok_result("glm")
+
+    monkeypatch.setattr(arl, "run_codex_review", fake_gpt)
+    monkeypatch.setattr(arl, "run_glm_review", fake_glm)
+    return SimpleNamespace(root=str(root), art=str(art), calls=calls,
+                           monkeypatch=monkeypatch)
+
+
+def _review_argv(env, *extra):
+    return ["review", "--artifact", env.art, "--project-root", env.root,
+            "--date", "2026-07-14", *extra]
+
+
+class TestCliBackendDispatch:
+    def test_legacy_argv_runs_gpt_only(self, cli_env, capsys):
+        rc = arl.main(_review_argv(cli_env))
+        assert rc == 0
+        assert cli_env.calls == {"gpt": 1, "glm": 0}
+        out = capsys.readouterr().out
+        assert "doc-md-2026-07-14.md" in out
+        assert "-glm" not in out
+
+    def test_backend_glm_runs_glm_only(self, cli_env, capsys):
+        rc = arl.main(_review_argv(cli_env, "--backend", "glm"))
+        assert rc == 0
+        assert cli_env.calls == {"gpt": 0, "glm": 1}
+        assert "doc-md-2026-07-14-glm.md" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("status,code", [
+        ("not_installed", 2), ("unauthenticated", 2), ("timeout", 3),
+        ("error", 3), ("parse_error", 4)])
+    def test_glm_failure_exit_codes(self, cli_env, status, code):
+        cli_env.monkeypatch.setattr(
+            arl, "run_glm_review", lambda *a, **kw: _fail_result("glm", status))
+        rc = arl.main(_review_argv(cli_env, "--backend", "glm"))
+        assert rc == code
+
+    def test_invalid_backend_arg_rejected_by_argparse(self, cli_env):
+        with pytest.raises(SystemExit) as exc:
+            arl.main(_review_argv(cli_env, "--backend", "glm5"))
+        assert exc.value.code == 2
+
+    def test_backend_absent_resolves_from_config(self, cli_env, tmp_path):
+        ws = _write_ws(tmp_path / "w", []) if False else None
+        wsdir = tmp_path / "wsdir"; wsdir.mkdir()
+        ws = wsdir / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"version": 1, "projects": [
+            {"name": "p", "path": "./p",
+             "adversarialReview": {"enabled": True, "workflows": ["x"],
+                                   "backend": "glm"}}]}))
+        rc = arl.main(_review_argv(cli_env, "--workspace", str(ws), "--project", "p"))
+        assert rc == 0
+        assert cli_env.calls == {"gpt": 0, "glm": 1}
+
+    def test_backend_absent_invalid_config_refuses_no_run(self, cli_env, tmp_path, capsys):
+        wsdir = tmp_path / "wsdir"; wsdir.mkdir()
+        ws = wsdir / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"version": 1, "projects": [
+            {"name": "p", "path": "./p",
+             "adversarialReview": {"enabled": True, "workflows": ["x"],
+                                   "backend": "glm5"}}]}))
+        rc = arl.main(_review_argv(cli_env, "--workspace", str(ws), "--project", "p"))
+        assert rc == 2
+        assert cli_env.calls == {"gpt": 0, "glm": 0}   # refused BEFORE any provider call
+        assert "glm5" in capsys.readouterr().err
+
+    def test_explicit_arg_skips_invalid_config(self, cli_env, tmp_path):
+        """Explicit valid --backend is the source — corrupt config backend ignored."""
+        wsdir = tmp_path / "wsdir"; wsdir.mkdir()
+        ws = wsdir / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"version": 1, "projects": [
+            {"name": "p", "path": "./p",
+             "adversarialReview": {"enabled": True, "workflows": ["x"],
+                                   "backend": "glm5"}}]}))
+        rc = arl.main(_review_argv(cli_env, "--backend", "gpt",
+                                   "--workspace", str(ws), "--project", "p"))
+        assert rc == 0
+        assert cli_env.calls == {"gpt": 1, "glm": 0}
+
+
+class TestCliBothMode:
+    def test_both_success_exit0_two_reports_manifest(self, cli_env, capsys):
+        rc = arl.main(_review_argv(cli_env, "--backend", "both"))
+        assert rc == 0
+        assert cli_env.calls == {"gpt": 1, "glm": 1}
+        out = capsys.readouterr().out
+        assert "gpt: " in out and "glm: " in out       # per-backend manifest lines
+        gpt_report = Path(cli_env.root) / "docs/reviews/doc-md-2026-07-14.md"
+        glm_report = Path(cli_env.root) / "docs/reviews/doc-md-2026-07-14-glm.md"
+        assert gpt_report.exists() and glm_report.exists()
+
+    def test_both_reads_artifact_once(self, cli_env):
+        reads = []
+        real = arl.read_artifact
+        cli_env.monkeypatch.setattr(
+            arl, "read_artifact",
+            lambda *a, **kw: (reads.append(1), real(*a, **kw))[1])
+        arl.main(_review_argv(cli_env, "--backend", "both"))
+        assert len(reads) == 1
+
+    def test_both_glm_fails_exit5_gpt_report_kept(self, cli_env, capsys):
+        cli_env.monkeypatch.setattr(
+            arl, "run_glm_review", lambda *a, **kw: _fail_result("glm", "timeout"))
+        rc = arl.main(_review_argv(cli_env, "--backend", "both"))
+        assert rc == 5
+        cap = capsys.readouterr()
+        assert "gpt: " in cap.out
+        assert "FAILED" in cap.err and "glm" in cap.err
+        assert (Path(cli_env.root) / "docs/reviews/doc-md-2026-07-14.md").exists()
+        assert not (Path(cli_env.root) / "docs/reviews/doc-md-2026-07-14-glm.md").exists()
+
+    def test_both_gpt_fails_exit5(self, cli_env):
+        cli_env.monkeypatch.setattr(
+            arl, "run_codex_review", lambda *a, **kw: _fail_result("gpt", "error"))
+        rc = arl.main(_review_argv(cli_env, "--backend", "both"))
+        assert rc == 5
+
+    def test_both_all_fail_gpt_failure_class(self, cli_env):
+        cli_env.monkeypatch.setattr(
+            arl, "run_codex_review", lambda *a, **kw: _fail_result("gpt", "parse_error"))
+        cli_env.monkeypatch.setattr(
+            arl, "run_glm_review", lambda *a, **kw: _fail_result("glm", "timeout"))
+        rc = arl.main(_review_argv(cli_env, "--backend", "both"))
+        assert rc == 4                                  # gpt's class wins
+
+    def test_both_sidecars_gpt_exact_glm_sibling(self, cli_env, tmp_path):
+        sc = Path(cli_env.root) / "sc.json"
+        rc = arl.main(_review_argv(cli_env, "--backend", "both",
+                                   "--findings-json", str(sc)))
+        assert rc == 0
+        gpt_side = json.loads(sc.read_text())
+        glm_side = json.loads((Path(cli_env.root) / "sc-glm.json").read_text())
+        # gpt sidecar byte-shape: NO backend key anywhere (legacy consumers)
+        assert "backend" not in json.dumps(gpt_side)
+        # glm sibling: per-finding backend tag
+        assert all(f.get("backend") == "glm" for f in glm_side["findings"])
+
+    def test_both_stale_sibling_cleared_on_glm_failure(self, cli_env):
+        sc = Path(cli_env.root) / "sc.json"
+        stale = Path(cli_env.root) / "sc-glm.json"
+        stale.write_text('{"stale": true}')
+        cli_env.monkeypatch.setattr(
+            arl, "run_glm_review", lambda *a, **kw: _fail_result("glm", "error"))
+        rc = arl.main(_review_argv(cli_env, "--backend", "both",
+                                   "--findings-json", str(sc)))
+        assert rc == 5
+        assert not stale.exists()                       # prior run's sibling never survives
+
+    def test_glm_only_sidecar_exact_path_with_tag(self, cli_env):
+        sc = Path(cli_env.root) / "sc.json"
+        rc = arl.main(_review_argv(cli_env, "--backend", "glm",
+                                   "--findings-json", str(sc)))
+        assert rc == 0
+        side = json.loads(sc.read_text())
+        assert all(f.get("backend") == "glm" for f in side["findings"])
+
+
+class TestCliConsultBackend:
+    @pytest.fixture
+    def consult_env(self, tmp_path, monkeypatch):
+        root = tmp_path
+        art = root / "prob.md"
+        art.write_text("problem\n")
+        out = root / "out.json"
+        calls = {"gpt": 0, "glm": 0}
+
+        def fake_gpt(artifact, project_root, out_path, **kw):
+            calls["gpt"] += 1
+            Path(out_path).write_text(_proposal_json())
+            return _ok_result("gpt")
+
+        def fake_glm(artifact, project_root, out_path, **kw):
+            calls["glm"] += 1
+            Path(out_path).write_text(_proposal_json())
+            return _ok_result("glm")
+
+        monkeypatch.setattr(arl, "run_codex_consult", fake_gpt)
+        monkeypatch.setattr(arl, "run_glm_consult", fake_glm)
+        return SimpleNamespace(root=str(root), art=str(art), out=str(out),
+                               calls=calls, monkeypatch=monkeypatch)
+
+    def _argv(self, env, *extra):
+        return ["consult", "--artifact", env.art, "--project-root", env.root,
+                "--out", env.out, "--date", "2026-07-14", *extra]
+
+    def test_legacy_consult_gpt_only(self, consult_env):
+        rc = arl.main(self._argv(consult_env))
+        assert rc == 0
+        assert consult_env.calls == {"gpt": 1, "glm": 0}
+
+    def test_consult_backend_glm(self, consult_env, capsys):
+        rc = arl.main(self._argv(consult_env, "--backend", "glm"))
+        assert rc == 0
+        assert consult_env.calls == {"gpt": 0, "glm": 1}
+        assert "peer-prob-2026-07-14-glm.md" in capsys.readouterr().out
+
+    def test_consult_both_dual_out_and_reports(self, consult_env, capsys):
+        rc = arl.main(self._argv(consult_env, "--backend", "both"))
+        assert rc == 0
+        assert consult_env.calls == {"gpt": 1, "glm": 1}
+        assert Path(consult_env.out).exists()
+        assert (Path(consult_env.root) / "out-glm.json").exists()
+        out = capsys.readouterr().out
+        assert "gpt: " in out and "glm: " in out
+
+    def test_consult_both_glm_fails_exit5(self, consult_env):
+        consult_env.monkeypatch.setattr(
+            arl, "run_glm_consult",
+            lambda *a, **kw: _fail_result("glm", "timeout"))
+        rc = arl.main(self._argv(consult_env, "--backend", "both"))
+        assert rc == 5
