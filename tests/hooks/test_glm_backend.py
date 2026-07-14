@@ -1006,3 +1006,28 @@ class TestCliConsultBackend:
             lambda *a, **kw: _fail_result("glm", "timeout"))
         rc = arl.main(self._argv(consult_env, "--backend", "both"))
         assert rc == 5
+
+
+class TestResolveEdgeCases:
+    """8a T5 findings: half-given resolution info + cross-backend collisions."""
+
+    def test_workspace_without_project_refuses(self, cli_env, capsys):
+        rc = arl.main(_review_argv(cli_env, "--workspace", "/some/ws.json"))
+        assert rc == 2
+        assert cli_env.calls == {"gpt": 0, "glm": 0}
+
+    def test_empty_project_refuses_not_gpt(self, cli_env):
+        """--project "$NAME" with $NAME unset must fail closed, never egress gpt."""
+        rc = arl.main(_review_argv(cli_env, "--workspace", "/some/ws.json",
+                                   "--project", ""))
+        assert rc == 2
+        assert cli_env.calls == {"gpt": 0, "glm": 0}
+
+    def test_both_sidecar_at_other_backends_report_path_refused(self, cli_env):
+        glm_report = arl.review_report_path(cli_env.root, cli_env.art,
+                                            "2026-07-14", backend="glm")
+        Path(glm_report).parent.mkdir(parents=True, exist_ok=True)
+        rc = arl.main(_review_argv(cli_env, "--backend", "both",
+                                   "--findings-json", glm_report))
+        assert rc == 2
+        assert cli_env.calls == {"gpt": 0, "glm": 0}

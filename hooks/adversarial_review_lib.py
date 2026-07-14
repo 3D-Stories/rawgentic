@@ -1976,7 +1976,9 @@ def _resolve_cli_backend(args) -> tuple[str | None, int]:
     """
     if getattr(args, "backend", None) is not None:
         return args.backend, 0
-    if getattr(args, "workspace", None) and getattr(args, "project", None):
+    ws = getattr(args, "workspace", None)
+    proj = getattr(args, "project", None)
+    if ws and proj:
         cfg = load_adversarial_review_config(args.workspace, args.project, key=args.key)
         if cfg.backend == "invalid":
             print(
@@ -1986,7 +1988,21 @@ def _resolve_cli_backend(args) -> tuple[str | None, int]:
                 file=sys.stderr,
             )
             return None, 2
+        # NB: a missing project/block resolves _DISABLED whose backend is "gpt" —
+        # that matches the documented "ABSENT config info defaults gpt" contract
+        # (only a PRESENT-but-invalid value refuses); enablement gating is the
+        # caller's is-enabled concern, not this resolver's.
         return cfg.backend, 0
+    if ws or proj:
+        # Half-given resolution info (e.g. --project "$NAME" with $NAME unset) is
+        # a malformed invocation, not "no config": refusing beats silently
+        # skipping the config a caller clearly meant to consult (8a T5).
+        print(
+            "backend resolution needs BOTH --workspace and --project (got only "
+            "one, or an empty value) — refusing to default the backend (no egress)",
+            file=sys.stderr,
+        )
+        return None, 2
     return "gpt", 0
 
 def main(argv: list[str] | None = None) -> int:
@@ -2108,6 +2124,13 @@ def main(argv: list[str] | None = None) -> int:
                 artifact_real = resolve_artifact_path(args.artifact, args.project_root)
             except ArtifactError:
                 artifact_real = None
+            # Each sidecar is checked against EVERY selected backend's report
+            # path (not just its own): under `both` the gpt sidecar pointed at
+            # the glm report path would be clobbered by the later glm report
+            # write (8a T5) — cross-checking closes that ordering hazard.
+            report_norms = [os.path.normpath(review_report_path(
+                args.project_root, args.artifact, date_str, backend=bk))
+                for bk in run_backends]
             for bk, sc in sidecar_by_backend.items():
                 if artifact_real is not None and os.path.realpath(sc) == artifact_real:
                     print(
@@ -2116,11 +2139,9 @@ def main(argv: list[str] | None = None) -> int:
                         "artifact before review)", file=sys.stderr,
                     )
                     return 2
-                report_norm = os.path.normpath(review_report_path(
-                    args.project_root, args.artifact, date_str, backend=bk))
-                if os.path.normpath(sc) == report_norm:
+                if os.path.normpath(sc) in report_norms:
                     print(
-                        f"--findings-json collision: sidecar path is the same as the "
+                        f"--findings-json collision: sidecar path is the same as a "
                         f"computed report path ({sc!r}); refusing (would "
                         "clobber the report)", file=sys.stderr,
                     )
