@@ -1,33 +1,58 @@
 ---
 name: rawgentic:adversarial-review
-description: WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer via the Codex CLI. Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. Also reviews code DIFFS via the `diff` artifact type (refutation lens, report-only) — this complements same-model self-review (the in-repo quality-bar rubric) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path. Requires the Codex CLI to be installed and authenticated.
-argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type hint (design|spec|plan|prd|adr|rfc|readme|diff)
+description: WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer. Selectable backend (#403) — `gpt` (Codex CLI, the default), `glm` (Zhipu GLM via the zhipuai SDK), or `both` (two independent reviews, two reports). Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. Also reviews code DIFFS via the `diff` artifact type (refutation lens, report-only) — this complements same-model self-review (the in-repo quality-bar rubric) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path. The gpt backend requires the Codex CLI installed and authenticated; the glm backend requires `pip install "zhipuai>=2.1.5"` and ZHIPUAI_API_KEY.
+argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type hint (design|spec|plan|prd|adr|rfc|readme|diff) and optional --backend (gpt|glm|both)
 ---
 
 # WF5: Adversarial Review Workflow
 
 <role>
-You are the WF5 orchestrator. You run an independent, cross-model adversarial review of a single TEXT artifact using the Codex CLI (a different model than yourself), then write a severity-ranked findings report. You are STRICTLY report-only: you never edit the reviewed artifact and you never auto-apply findings — the user (or the calling workflow) decides what to do with them. All real logic lives in `hooks/adversarial_review_lib.py`; you are a thin orchestrator over it.
+You are the WF5 orchestrator. You run an independent, cross-model adversarial review of a single TEXT artifact using the selected backend — the Codex CLI (gpt, default), Zhipu GLM via the zhipuai SDK (glm), or both — always a different model than yourself, then write a severity-ranked findings report (one per backend under `both`). You are STRICTLY report-only: you never edit the reviewed artifact and you never auto-apply findings — the user (or the calling workflow) decides what to do with them. All real logic lives in `hooks/adversarial_review_lib.py`; you are a thin orchestrator over it.
 </role>
 
 <constants>
 SUPPORTED_ARTIFACT_TYPES: design, spec, plan, prd, adr, rfc, readme, generic, diff
 FINDING_SEVERITIES: Critical, High, Medium, Low
-REVIEWER: Codex CLI (independent different-model reviewer; egress to OpenAI)
+BACKENDS (#403): gpt (Codex CLI; egress to OpenAI — the default), glm (Zhipu GLM
+  via the zhipuai SDK, sync-streaming; egress to z.ai/Zhipu — a distinct provider
+  and jurisdiction), both (run each independently; two reports)
+BACKEND RESOLUTION: an explicit `--backend` in the invocation argument wins;
+  otherwise the project's `adversarialReview.backend` config field (read via the
+  engine's `backend` subcommand); absent → gpt. A present-but-INVALID config value
+  refuses (exit 2) — it is never silently laundered into gpt.
 OUTPUT: <activeProject.path>/docs/reviews/<slug>-<YYYY-MM-DD>.md  (report-only)
+  glm report: <slug>-<YYYY-MM-DD>-glm.md (suffix AFTER the date; both mode writes both files)
 ENGINE: hooks/adversarial_review_lib.py
-CLI: `review --findings-json <path>` (optional; embedded-consumer sidecar — written only on success, after the report; path must resolve under the project root)
-ENV (all optional, frozen at lib import):
+CLI: `review --backend {gpt,glm,both} --findings-json <path>` (both optional; the
+  sidecar is written only on success, after the report; path must resolve under the
+  project root. Under `both`, gpt writes the exact sidecar path — byte-compatible —
+  and glm writes a `-glm` sibling with per-finding `backend` tags.)
+EXIT CODES: 0 success (ALL selected backends) · 2 prereq/config · 3 error/timeout ·
+  4 parse · 5 PARTIAL (both mode only: ≥1 backend succeeded, ≥1 failed — present
+  the successful report(s), name the failed backend, do NOT stop)
+ENV (all optional, frozen at lib import unless noted):
   RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap truncates + warns
-  RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — Codex invocation timeout (seconds); 600 gives high-effort reviews of large artifacts headroom
-  RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient Codex failure
-  RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected
-  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — Codex reasoning effort (low|medium|high); pinned explicitly so a fresh ~/.codex/config.toml that defaults to medium does not silently degrade the review
-  RAWGENTIC_ADV_REVIEW_MODEL       (default unset)  — override the reviewer model (`codex exec -m`); unset = inherit Codex/config default (do NOT hardcode a model id — OpenAI retires them)
+  RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — per-attempt invocation timeout (seconds), both backends
+  RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient failure, both backends
+  RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected (both backends)
+  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — reasoning effort (low|medium|high), both backends
+  RAWGENTIC_ADV_REVIEW_MODEL      (default unset)  — gpt reviewer model override (`codex exec -m`); unset = Codex/config default
+  RAWGENTIC_ADV_REVIEW_GLM_MODEL   (default glm-5.2) — glm model slug
+  ZHIPUAI_API_KEY / ZHIPU_API_KEY / GLM_API_KEY (read at call time) — glm credential; a Coding Plan subscription key works
+  ZHIPUAI_BASE_URL / GLM_JUDGE_BASE_URL (default https://api.z.ai/api/coding/paas/v4) — glm endpoint; must be https with no userinfo/query/fragment
 </constants>
 
 <reviewer-invocation>
-The engine invokes Codex as a one-shot, tools-OFF, structured-JSON reviewer (NOT
+GLM backend (#403): the engine calls the zhipuai SDK's sync chat completion —
+`chat.completions.create(model=glm-5.2, response_format=json_object,
+thinking=enabled, extra_body.reasoning_effort, stream=True)` — STREAMED (a
+non-streamed thinking call stalls and dies; measured live) with a two-layer
+timeout (SDK read timeout + per-chunk wall-clock deadline). GLM json_object has
+no strict-schema enforcement, so the findings schema rides in the prompt and the
+engine's tolerant validators are the gate; the same nonce-fenced prompt-injection
+defense applies. No shell, no subprocess — the SDK talks https directly.
+
+The gpt backend invokes Codex as a one-shot, tools-OFF, structured-JSON reviewer (NOT
 `codex review`, which is git-diff-only with no `--output-schema`). The argv is:
 `codex exec [-m <model>] --output-schema <schema> -o <out> -c model_reasoning_effort=<effort> --ephemeral --color never -c project_doc_max_bytes=0 -s read-only -C <root> --skip-git-repo-check -`
 - **effort pinned** (high): gpt-5.5 defaults to medium; deep critique benefits from high.
@@ -73,7 +98,7 @@ Per the shared invariant: STOP and ask the user when findings are ambiguous, con
 </ambiguity-circuit-breaker>
 
 <data-handling>
-This skill transmits the artifact's TEXT to OpenAI (Codex) for an independent model review — the artifact leaves the machine. This is **warn-only**: the skill prints a one-time egress notice before invoking Codex and proceeds. The engine additionally scans the artifact for obvious secrets (API keys, passwords, tokens, private keys) and, if any are found, names the detected categories in the notice. To make secret detection blocking instead of advisory, set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1`. Findings reports are written locally to `<project>/docs/reviews/` and never uploaded anywhere. A `diff` artifact is raw source code — the highest secret density of any supported type, so the egress warning above and the `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` hard-block matter most here. An agent-harness egress classifier may also block the Codex invocation entirely, independent of this skill's own warn-only policy — embedded callers (e.g. WF2 Step 11) must treat that as a failed review and continue non-blocking, while standalone runs surface the block to the user.
+This skill transmits the artifact's TEXT to the selected backend's provider for an independent model review — the artifact leaves the machine. Destination by backend (#403): gpt → OpenAI (Codex); glm → z.ai / Zhipu at the EFFECTIVE resolved endpoint (named, sanitized scheme+host, in the notice) — a distinct provider and jurisdiction; both → both destinations. This is **warn-only**: the skill prints a one-time egress notice before invoking the backend(s) and proceeds. The engine additionally scans the artifact for obvious secrets (API keys, passwords, tokens, private keys) and, if any are found, names the detected categories in the notice. To make secret detection blocking instead of advisory, set `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1`. Findings reports are written locally to `<project>/docs/reviews/` and never uploaded anywhere. A `diff` artifact is raw source code — the highest secret density of any supported type, so the egress warning above and the `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` hard-block matter most here. An agent-harness egress classifier may also block the Codex invocation entirely, independent of this skill's own warn-only policy — embedded callers (e.g. WF2 Step 11) must treat that as a failed review and continue non-blocking, while standalone runs surface the block to the user.
 </data-handling>
 
 <step-tracking>
@@ -89,9 +114,15 @@ This enables workflow resumption if context is lost.
 ### Instructions
 
 1. **Execute `<config-loading>`** to resolve the active project and its absolute path (`PROJECT_ROOT = <activeProject.path>`). Log the resolved project and repo in session notes.
-2. Parse the user argument into an artifact path and an optional type hint:
+2. Parse the user argument into an artifact path, an optional type hint, and an optional `--backend`:
    - If the argument is a path to an existing file, use it.
    - If a type hint (one of SUPPORTED_ARTIFACT_TYPES) is given, record it; otherwise auto-detect from the filename (e.g. `*spec*` → spec, `*plan*` → plan, `*adr*` → adr, `README*` → readme, `*.patch`/`*.diff` → diff) and fall back to `generic`.
+2b. **Resolve the backend (#403).** An explicit `--backend gpt|glm|both` in the argument wins. Otherwise read the project's config default:
+   ```bash
+   python3 hooks/adversarial_review_lib.py backend \
+     --workspace .rawgentic_workspace.json --project <name> --key adversarialReview
+   ```
+   Exit 0 → stdout is the backend (absent/disabled config → `gpt`). **Exit 2 → the config carries a present-but-INVALID backend value: STOP and relay the stderr message — NEVER fall back to gpt** (a typo'd backend must not silently reroute the artifact to a different provider). Never default an empty stdout capture to gpt — branch on the exit code. Carry the resolved backend as a literal into Steps 2–4.
 3. Validate the artifact:
    - The path must resolve to a file **under** `PROJECT_ROOT` (the engine enforces this — traversal/absolute escape is rejected). If it is outside the project, STOP and tell the user the artifact must live inside the active project.
    - If the file does not exist, STOP: "Artifact not found: `<path>`."
@@ -116,30 +147,26 @@ Size:     <bytes> (cap <MAX_BYTES>)
 
 ---
 
-## Step 2: Prerequisite Gate (Codex CLI)
+## Step 2: Prerequisite Gate (selected backend)
 
 ### Instructions
 
-1. Check the Codex prerequisite via the engine:
+1. Check the SELECTED backend's prerequisite via the engine:
    ```bash
-   python3 -c "import sys; sys.path.insert(0,'hooks'); from adversarial_review_lib import prereq_status; ok,msg=prereq_status(headless=__import__('os').environ.get('RAWGENTIC_HEADLESS')=='1'); print(msg); sys.exit(0 if ok else 2)"
+   python3 hooks/adversarial_review_lib.py prereq --backend <resolved backend> [--headless]
    ```
-   (Equivalently: `python3 hooks/adversarial_review_lib.py prereq [--headless]`.)
 2. If the prerequisite check fails (exit 2), **STOP** and print the message verbatim. It tells the user how to install and authenticate:
-   - Install (standalone binary): `curl -fsSL https://codex.openai.com/install.sh | bash`
-   - Authenticate (interactive): `codex login`
-   - Headless/CI (API key): `printenv OPENAI_API_KEY | codex login --with-api-key`
-3. **Headless note:** ChatGPT OAuth login is interactive-only. If the session is headless (`RAWGENTIC_HEADLESS=1`) and Codex is unauthenticated, this is a terminal ERROR — do not wait for an interactive login. Post an error and exit.
+   - gpt — install (standalone binary): `curl -fsSL https://codex.openai.com/install.sh | bash`; authenticate: `codex login` (headless/CI: `printenv OPENAI_API_KEY | codex login --with-api-key`)
+   - glm — install: `pip install "zhipuai>=2.1.5"`; credential: export `ZHIPUAI_API_KEY` (a z.ai Coding Plan subscription key works with the default endpoint)
+3. **`both` is DEGRADE-AND-WARN (#403):** the check passes when AT LEAST ONE backend is ready; the message names BOTH backends' results, and an unready backend is a loud warning (the run will degrade to the ready backend, exit 5). Only zero-ready fails. Surface the warning to the user, then proceed.
+4. **Headless note:** ChatGPT OAuth login is interactive-only. If the session is headless (`RAWGENTIC_HEADLESS=1`) and the gpt prereq fails on authentication, this is a terminal ERROR — do not wait for an interactive login. The glm credential is an env var (no interactive step), so its headless message is the same export instruction.
 
 ### Output
-```
-Codex CLI: installed and authenticated [OK]
-```
-or the verbatim install/login instructions on failure.
+The prereq message (per-backend detail under `both`), or the verbatim install/credential instructions on failure.
 
 ### Failure Modes
-- Codex not installed → STOP with install instructions.
-- Codex not authenticated → STOP with login instructions (headless: ERROR).
+- Selected backend not ready (gpt/glm single mode) → STOP with instructions (headless: ERROR).
+- `both` with zero backends ready → STOP with both messages.
 
 ---
 
@@ -147,55 +174,58 @@ or the verbatim install/login instructions on failure.
 
 ### Instructions
 
-1. Print the egress notice (warn-only): the artifact text will be sent to OpenAI (Codex). The engine scans for obvious secrets; if any are detected, the notice names the categories.
+1. Print the egress notice (warn-only): the artifact text will be sent to the selected backend's provider — gpt → OpenAI (Codex); glm → z.ai/Zhipu at the effective endpoint; both → both. The engine scans for obvious secrets; if any are detected, the notice names the categories.
    ```bash
-   python3 -c "import sys; sys.path.insert(0,'hooks'); from adversarial_review_lib import read_artifact, scan_for_secrets, egress_warning; t,_=read_artifact('<artifact>','<PROJECT_ROOT>'); print(egress_warning(scan_for_secrets(t)))"
+   python3 -c "import sys; sys.path.insert(0,'hooks'); from adversarial_review_lib import read_artifact, scan_for_secrets, egress_warning; t,_=read_artifact('<artifact>','<PROJECT_ROOT>'); print(egress_warning(scan_for_secrets(t), backend='<resolved backend>'))"
    ```
-2. This is **warn-only** — proceed after printing. If `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` is set, the engine will refuse egress in Step 4 when secrets are present (status `error`); surface that to the user.
+2. This is **warn-only** — proceed after printing. If `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` is set, the engine will refuse egress in Step 4 when secrets are present (status `error`, on every backend); surface that to the user.
 
 ### Output
-The egress warning text (and any detected secret categories).
+The egress warning text (destination(s) named, and any detected secret categories).
 
 ---
 
-## Step 4: Invoke Codex Adversarial Review
+## Step 4: Invoke Adversarial Review (selected backend)
 
 ### Instructions
 
-1. Run the review via the engine CLI (fail-closed; no live Codex needed in tests):
+1. Run the review via the engine CLI (fail-closed; no live provider needed in tests):
    ```bash
    python3 hooks/adversarial_review_lib.py review \
      --artifact "<artifact>" \
      --type "<resolved type>" \
      --project-root "<PROJECT_ROOT>" \
      --date "$(date -u +%Y-%m-%d)" \
+     --backend <resolved backend> \
      [--headless] \
      [--findings-json <path>]
    ```
-   Embedded callers (e.g. WF2 Step 11) may append `--findings-json <path>` to also receive a machine-readable sidecar of the findings; it is written only on success, after the report.
-2. Interpret the exit code (the contract is fail-closed):
-   - `0` → success; the path of the written report is printed on stdout.
-   - `2` → prerequisite failure (not installed / unauthenticated). STOP (should have been caught in Step 2).
-   - `3` → Codex error or timeout. STOP and report; **do not** fabricate findings.
-   - `4` → Codex output could not be parsed/validated. STOP and report.
-3. On any non-zero exit, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review.
+   Embedded callers (e.g. WF2 Step 11) may append `--findings-json <path>` to also receive a machine-readable sidecar of the findings; it is written only on success, after the report. Under `both`, gpt writes the exact sidecar path (byte-compatible) and glm writes a `-glm` sibling.
+2. Interpret the exit code (the contract is fail-closed, with ONE both-mode carve-out):
+   - `0` → success (ALL selected backends); single mode prints the report path on stdout; `both` prints per-backend status lines (`gpt: <path>` / `glm: <path>`) — the authoritative manifest.
+   - `2` → prerequisite/config failure. STOP (should have been caught in Steps 1b/2).
+   - `3` → backend error or timeout. STOP and report; **do not** fabricate findings.
+   - `4` → backend output could not be parsed/validated. STOP and report.
+   - **`5` → PARTIAL (both mode only): ≥1 backend succeeded, ≥1 failed. Do NOT stop — present the successful report(s) from the stdout manifest, name the failed backend from the stderr `FAILED` line, and continue.** Exit 5 never occurs in single-backend mode.
+3. On exit 2/3/4, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review. (Exit 5 is not that case: the successful backend's review DID complete and is presented as such, with the degradation named.)
 
 ### Output
-The path to the generated report (on success) or the failure reason.
+The path(s) to the generated report(s) (from the stdout manifest under `both`) or the failure reason.
 
 ### Failure Modes
-- Exit 3 (timeout/error) → report and stop; suggest retrying or checking Codex status.
-- Exit 4 (parse error) → report; the artifact may be too large or Codex returned unexpected output.
+- Exit 3 (timeout/error) → report and stop; suggest retrying or checking the backend's status.
+- Exit 4 (parse error) → report; the artifact may be too large or the backend returned unexpected output.
+- Exit 5 (partial, both mode) → present the successful report, name the failure — not a stop.
 
 ---
 
-## Step 5: Present Report
+## Step 5: Present Report(s)
 
 ### Instructions
 
-1. Read the generated report at `<PROJECT_ROOT>/docs/reviews/<slug>-<date>.md`.
-2. Present a concise summary to the user: total findings, per-severity counts, and the top Critical/High findings.
-3. Print the absolute report path and (if known) the Codex invocation latency.
+1. Read the generated report(s) — single mode: `<PROJECT_ROOT>/docs/reviews/<slug>-<date>.md` (glm: `<slug>-<date>-glm.md`); `both`: BOTH files from the Step 4 stdout manifest. Under both mode the two reviews are INDEPENDENT — present them side by side (per-backend finding counts), never merged (attribution is the point of a cross-model pass).
+2. Present a concise summary to the user: total findings per backend, per-severity counts, and the top Critical/High findings (with their backend named under both).
+3. Print the absolute report path(s) and (if known) the invocation latency.
 4. State clearly that this is **report-only**: findings are advisory and the artifact was not modified. Do NOT prompt to apply findings — that is the user's (or the calling workflow's) decision.
 5. Log the report path and finding counts in session notes.
 
@@ -232,10 +262,10 @@ Before declaring WF5 complete, verify ALL of the following. Print the checklist 
 
 1. [ ] Step markers logged for ALL executed steps in session notes
 2. [ ] Artifact validated (exists, under project root, type resolved)
-3. [ ] Codex prerequisite satisfied (installed + authenticated)
+3. [ ] Selected backend's prerequisite satisfied (gpt: codex installed+authenticated; glm: zhipuai>=2.1.5 + key; both: >=1 ready, degradation warned)
 4. [ ] Egress notice printed (warn-only)
-5. [ ] Codex review invoked; exit code interpreted (fail-closed on non-zero)
-6. [ ] On success: report written to <project>/docs/reviews/ and presented
+5. [ ] Review invoked with the resolved --backend; exit code interpreted (fail-closed on 2/3/4; exit 5 = both-mode partial, presented with the failure named)
+6. [ ] On success: report(s) written to <project>/docs/reviews/ and presented (both files under `both`)
 7. [ ] Artifact NOT modified (report-only invariant)
 
 If ANY item fails, complete it before declaring "WF5 complete."
