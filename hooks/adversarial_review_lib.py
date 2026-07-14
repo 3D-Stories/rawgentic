@@ -141,6 +141,9 @@ REASONING_EFFORT: Final[str] = _coerce_effort_env(
     "RAWGENTIC_ADV_REVIEW_EFFORT", _EFFORT_DEFAULT
 )
 REVIEW_MODEL: Final[str | None] = _model_env("RAWGENTIC_ADV_REVIEW_MODEL")
+# GLM model slug (#403). Unlike REVIEW_MODEL (unset = codex default), this has a
+# concrete default: glm-5.2 is the live-verified slug on the subscription endpoint.
+GLM_MODEL: Final[str] = _model_env("RAWGENTIC_ADV_REVIEW_GLM_MODEL") or "glm-5.2"
 
 # Selectable reviewer backends (#403): gpt = Codex CLI (the historical default),
 # glm = Zhipu GLM via the zhipuai SDK, both = run each independently.
@@ -651,8 +654,13 @@ def validate_glm_base_url(url: str) -> tuple[bool, str]:
     from urllib.parse import urlsplit  # noqa: PLC0415 (stdlib, cheap)
     try:
         parts = urlsplit(url)
+        # urlsplit is LAZY: .port parses on ACCESS and raises ValueError on an
+        # out-of-range/non-numeric port — touch it inside the try (8a T2 F1) so
+        # https://host:99999 is rejected here, not crashed on downstream.
+        _ = parts.port
+        hostname = parts.hostname
     except ValueError as exc:
-        return False, f"unparseable base URL: {exc}"
+        return False, f"unparseable base URL (check host/port): {exc}"
     if parts.scheme != "https":
         return False, "base URL must be https (key + artifact travel to this host)"
     if "@" in parts.netloc:
@@ -661,21 +669,29 @@ def validate_glm_base_url(url: str) -> tuple[bool, str]:
         return False, "base URL must not carry a query string"
     if parts.fragment:
         return False, "base URL must not carry a fragment"
-    if not parts.hostname:
+    if not hostname:
         return False, "base URL has no host"
     return True, ""
 
 
 def redact_endpoint(url: str) -> str:
-    """Scheme + host only — safe to log (strips userinfo, path, query, fragment)."""
+    """Scheme + host only — safe to log (strips userinfo, path, query, fragment).
+
+    NEVER raises: urlsplit parses .hostname/.port lazily ON ACCESS, so those
+    reads live inside the try (8a T2 F1 — an out-of-range port would otherwise
+    crash the consent-notice path). IPv6 literals are re-bracketed.
+    """
     from urllib.parse import urlsplit  # noqa: PLC0415
     try:
         parts = urlsplit(url)
+        host = parts.hostname or "<no-host>"
+        port = f":{parts.port}" if parts.port else ""
+        scheme = parts.scheme
     except ValueError:
         return "<unparseable endpoint>"
-    host = parts.hostname or "<no-host>"
-    port = f":{parts.port}" if parts.port else ""
-    return f"{parts.scheme}://{host}{port}"
+    if ":" in host:  # IPv6 literal — urlsplit strips the brackets; restore them
+        host = f"[{host}]"
+    return f"{scheme}://{host}{port}"
 
 
 def _glm_prereq() -> tuple[bool, str]:
@@ -944,6 +960,7 @@ def normalize_findings(raw: object) -> list[dict]:
 
 @dataclass(frozen=True)
 class CodexResult:
+    """Shared result type for BOTH backends (#403) — the name predates GLM."""
     status: str  # not_installed|unauthenticated|timeout|error|parse_error|success
     findings: tuple
     raw_error: str = ""
@@ -952,6 +969,7 @@ class CodexResult:
     secrets: tuple = ()
     model: str = ""   # model actually requested ("" = inherited Codex/config default)
     effort: str = ""  # reasoning effort pinned for this review
+    backend: str = "gpt"  # which backend produced this result (#403)
 
 
 def build_prompt(
@@ -1210,6 +1228,292 @@ def run_codex_review(
 
 
 # ============================================================================
+# GLM (Zhipu) invocation — the second backend (#403). Mirrors the Codex plumbing
+# above, sharing artifact IO, secret scan, nonce prompts, schemas, validators.
+# The SDK import is DEFERRED (codex-only users never need zhipuai); tests inject
+# a fake `client`, so CI never imports the SDK or touches the network.
+# ============================================================================
+
+def _strip_json_fences(text: str) -> str:
+    """Strip a single wrapping triple-backtick fence (``` or ```json).
+
+    GLM's json_object mode normally emits bare JSON, but a fence is a cheap,
+    known failure shape — tolerate exactly one wrapping fence; anything else
+    passes through untouched and fails at the JSON parser (fail-closed).
+    """
+    s = text.strip()
+    if s.startswith("```") and s.endswith("```"):
+        body = s[3:-3]
+        # drop an optional language tag on the opening fence line
+        first_nl = body.find("\n")
+        if first_nl != -1 and body[:first_nl].strip().isalpha():
+            body = body[first_nl + 1:]
+        return body.strip()
+    return s
+
+
+def _schema_instruction(schema: dict) -> str:
+    """Schema-in-prompt suffix for GLM (#403).
+
+    GLM json_object is freeform — there is no strict-schema enforcement like
+    codex --output-schema — so the schema rides in the prompt and the tolerant
+    validators stay the real gate. Appended OUTSIDE the nonce fence.
+    """
+    return (
+        "\n\nRespond with a SINGLE JSON object (no prose, no markdown fences) "
+        "conforming to this JSON Schema:\n" + json.dumps(schema)
+    )
+
+
+def _load_glm_client(timeout: float):
+    """Construct a ZhipuAI client (deferred import). Raises on any failure.
+
+    The constructor CARRIES the per-attempt timeout — this is timeout layer 1:
+    the SDK/httpx read timeout is the only mechanism that can interrupt a
+    blocked next(stream) on a stalled socket.
+    """
+    from zhipuai import ZhipuAI  # noqa: PLC0415 (deferred: optional dependency)
+    url = glm_base_url()
+    print(f"adversarial_review_lib: GLM endpoint {redact_endpoint(url)}",
+          file=sys.stderr)
+    return ZhipuAI(api_key=glm_api_key(), base_url=url, timeout=timeout)
+
+
+class _GlmDeadline(Exception):
+    """Internal: the per-attempt wall-clock deadline elapsed mid-stream."""
+
+
+def _collect_glm_stream(stream, deadline: float) -> str:
+    """Accumulate a streamed chat completion's content deltas.
+
+    Timeout layer 2: the wall-clock deadline is checked per chunk — exceeding it
+    raises _GlmDeadline (the attempt is then discarded whole; chunks are never
+    combined across attempts). Layer 1 (the SDK read timeout set at client
+    construction) covers a blocked next() that never yields a chunk at all.
+    """
+    import time as _time  # noqa: PLC0415 (stdlib; keep module imports minimal)
+    parts: list[str] = []
+    for chunk in stream:
+        if _time.monotonic() > deadline:
+            raise _GlmDeadline()
+        choices = getattr(chunk, "choices", None) or []
+        if choices:
+            delta = getattr(choices[0], "delta", None)
+            text = getattr(delta, "content", None) if delta is not None else None
+            if text:
+                parts.append(text)
+    return "".join(parts)
+
+
+def _glm_attempts(
+    client, prompt: str, eff_timeout: float, *, model: str, effort: str,
+) -> tuple[str | None, str]:
+    """Run up to MAX_RETRIES+1 streamed GLM attempts. (payload, last_error).
+
+    payload is the accumulated content of the FIRST attempt that completes its
+    stream (which may still fail JSON parsing — that is the caller's fail-closed
+    gate, deliberately NOT retried: a well-formed-but-invalid answer is a model
+    problem, not a transport blip). A deadline or SDK/network exception discards
+    that attempt entirely and retries. payload None = all attempts failed
+    transport-level; last_error says how.
+    """
+    import time as _time  # noqa: PLC0415
+    last_error = ""
+    for _attempt in range(MAX_RETRIES + 1):
+        deadline = _time.monotonic() + eff_timeout
+        try:
+            stream = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                max_tokens=16384,
+                temperature=0.2,
+                thinking={"type": "enabled"},
+                # zhipuai has no named reasoning_effort arg — send via extra_body
+                # (pinned; GLM-5.2's implicit default is MAX: slow + token-heavy).
+                extra_body={"reasoning_effort": effort},
+                stream=True,
+            )
+            return _collect_glm_stream(stream, deadline), ""
+        except _GlmDeadline:
+            last_error = f"glm attempt timed out after {eff_timeout}s"
+            continue
+        except Exception as exc:  # SDK/transport errors — types unknowable w/o import
+            last_error = f"{type(exc).__name__}: {exc}"[:2000]
+            continue
+    return None, last_error
+
+
+def _glm_prepare(
+    artifact_path: str,
+    project_root: str,
+    artifact_text: tuple[str, bool] | None,
+    client,
+    timeout: float | None,
+) -> tuple:
+    """Shared GLM preamble: prereq → text → UNCONDITIONAL secret scan → client.
+
+    Returns (client, text, truncated, secret_hits, eff_timeout, fail) where
+    fail is a ready-to-return CodexResult on any refusal, else None.
+    """
+    def _fail(status: str, raw_error: str, **kw) -> CodexResult:
+        return CodexResult(status=status, findings=(), raw_error=raw_error,
+                           backend="glm", **kw)
+
+    eff_timeout = TIMEOUT_SECONDS if timeout is None else timeout
+
+    if client is None:
+        sdk_ok, sdk_detail = glm_sdk_status()
+        if not sdk_ok:
+            return None, "", False, (), eff_timeout, _fail("not_installed", sdk_detail)
+        if glm_api_key() is None:
+            return None, "", False, (), eff_timeout, _fail(
+                "unauthenticated",
+                "No GLM credential set. Export ZHIPUAI_API_KEY (or ZHIPU_API_KEY / "
+                "GLM_API_KEY).",
+            )
+        url = glm_base_url()
+        url_ok, reason = validate_glm_base_url(url)
+        if not url_ok:
+            return None, "", False, (), eff_timeout, _fail(
+                "error", f"GLM base URL rejected ({redact_endpoint(url)}): {reason}")
+
+    if artifact_text is not None:
+        text, truncated = artifact_text
+    else:
+        try:
+            text, truncated = read_artifact(artifact_path, project_root)
+        except ArtifactError as exc:
+            return None, "", False, (), eff_timeout, _fail("error", str(exc))
+
+    # A3 invariant: the scan runs INSIDE every run function on whatever text is
+    # about to be sent — supplied artifact_text can skip the read, never the scan.
+    secret_hits = tuple(scan_for_secrets(text))
+    if secret_hits and BLOCK_SECRETS:
+        return None, text, truncated, secret_hits, eff_timeout, _fail(
+            "error",
+            "Refusing to send artifact to GLM: possible secrets detected "
+            f"({', '.join(secret_hits)}). Unset RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS "
+            "to override.",
+            secrets=secret_hits, truncated=truncated,
+        )
+
+    if client is None:
+        try:
+            client = _load_glm_client(eff_timeout)
+        except Exception as exc:  # constructor failure incl. incompatible SDK
+            return None, text, truncated, secret_hits, eff_timeout, _fail(
+                "error",
+                f"zhipuai client construction failed ({type(exc).__name__}: {exc}) — "
+                f'check the installed SDK version (need >={_GLM_SDK_FLOOR_STR}).',
+            )
+
+    return client, text, truncated, secret_hits, eff_timeout, None
+
+
+def run_glm_review(
+    artifact_path: str,
+    artifact_type: str,
+    project_root: str,
+    *,
+    timeout: float | None = None,
+    headless: bool = False,  # noqa: ARG001 — signature parity with run_codex_review
+    artifact_text: tuple[str, bool] | None = None,
+    client=None,
+) -> CodexResult:
+    """Adversarial review via GLM (Zhipu). FAIL-CLOSED on every error path.
+
+    Mirrors run_codex_review: same nonce-fenced prompt, same validators, same
+    status vocabulary (sdk missing -> not_installed, key missing ->
+    unauthenticated — the CLI exit-code mapping is unchanged). `client` is
+    injectable for tests; None constructs the real SDK client (deferred import).
+    """
+    client, text, truncated, secret_hits, eff_timeout, fail = _glm_prepare(
+        artifact_path, project_root, artifact_text, client, timeout)
+    if fail is not None:
+        return fail
+
+    nonce = secrets.token_hex(16)
+    prompt = build_prompt(text, artifact_type, nonce) + _schema_instruction(FINDINGS_SCHEMA)
+
+    payload, last_error = _glm_attempts(
+        client, prompt, eff_timeout, model=GLM_MODEL, effort=REASONING_EFFORT)
+    if payload is None:
+        status = "timeout" if "timed out" in last_error else "error"
+        return CodexResult(status=status, findings=(), raw_error=last_error,
+                           truncated=truncated, secrets=secret_hits, backend="glm")
+
+    parsed = _parse_codex_output(_strip_json_fences(payload))
+    if parsed is None:
+        return CodexResult(status="parse_error", findings=(),
+                           raw_error="could not parse GLM output as findings JSON",
+                           truncated=truncated, secrets=secret_hits, backend="glm")
+    raw_findings, summary = parsed
+    ok, errs = validate_findings(raw_findings)
+    if not ok:
+        return CodexResult(status="parse_error", findings=(),
+                           raw_error="; ".join(errs[:10]),
+                           truncated=truncated, secrets=secret_hits, backend="glm")
+    findings = normalize_findings(raw_findings)
+    return CodexResult(status="success", findings=tuple(findings), summary=summary,
+                       truncated=truncated, secrets=secret_hits,
+                       model=GLM_MODEL, effort=REASONING_EFFORT, backend="glm")
+
+
+def run_glm_consult(
+    artifact: str,
+    project_root: str,
+    out_path: str,
+    headless: bool = False,  # noqa: ARG001 — signature parity with run_codex_consult
+    timeout: float | None = None,
+    *,
+    artifact_text: tuple[str, bool] | None = None,
+    client=None,
+) -> CodexResult:
+    """Peer-designer consult via GLM. FAIL-CLOSED; mirrors run_codex_consult.
+
+    GUARANTEE (same as the codex variant): out_path always ends holding valid
+    proposal JSON — an explicit empty-proposal marker on every non-success path.
+    """
+    def _fail_marked(result: CodexResult) -> CodexResult:
+        _write_empty_proposal(out_path)
+        return result
+
+    client, text, truncated, secret_hits, eff_timeout, fail = _glm_prepare(
+        artifact, project_root, artifact_text, client, timeout)
+    if fail is not None:
+        return _fail_marked(fail)
+
+    nonce = secrets.token_hex(16)
+    prompt = build_consult_prompt(text, nonce) + _schema_instruction(PROPOSAL_SCHEMA)
+
+    payload, last_error = _glm_attempts(
+        client, prompt, eff_timeout, model=GLM_MODEL, effort=REASONING_EFFORT)
+    if payload is None:
+        status = "timeout" if "timed out" in last_error else "error"
+        return _fail_marked(CodexResult(
+            status=status, findings=(), raw_error=last_error,
+            truncated=truncated, secrets=secret_hits, backend="glm"))
+
+    proposal = _parse_codex_proposal(_strip_json_fences(payload))
+    if proposal is None:
+        return _fail_marked(CodexResult(
+            status="parse_error", findings=(),
+            raw_error="could not parse GLM output as proposal JSON",
+            truncated=truncated, secrets=secret_hits, backend="glm"))
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(proposal, f)
+    except OSError as exc:
+        return CodexResult(status="error", findings=(),
+                           raw_error=f"proposal write failed: {exc}",
+                           truncated=truncated, secrets=secret_hits, backend="glm")
+    return CodexResult(status="success", findings=(), truncated=truncated,
+                       secrets=secret_hits, model=GLM_MODEL,
+                       effort=REASONING_EFFORT, backend="glm")
+
+
+# ============================================================================
 # Report rendering
 # ============================================================================
 
@@ -1262,12 +1566,19 @@ def egress_warning(
         "note the distinct provider and jurisdiction. The artifact is "
         "transmitted off-box."
     )
-    if backend == "glm":
+    if backend == "gpt":
+        base = gpt_line
+    elif backend == "glm":
         base = glm_line
     elif backend == "both":
         base = gpt_line + "\n" + glm_line
     else:
-        base = gpt_line
+        # Consent surface must not claim a destination for an unknown/invalid
+        # backend (8a T2 — mirror prereq_status's explicit refusal, fail-loud).
+        base = (
+            f"[WARNING] unknown backend {backend!r} — no egress destination can be "
+            "named; the invocation will be refused."
+        )
     if secrets:
         base += (
             "\n[WARNING] Possible secrets detected in the artifact "

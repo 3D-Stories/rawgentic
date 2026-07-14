@@ -378,3 +378,308 @@ class TestEgressWarningBackend:
         w = arl.egress_warning(["API key"], backend="glm")
         assert "API key" in w
         assert "RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS" in w
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — GLM invocation core (fake clients; no network, no zhipuai SDK)
+# ---------------------------------------------------------------------------
+
+import time
+from types import SimpleNamespace
+
+
+def _chunk(content):
+    return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=content))])
+
+
+class _FakeCompletions:
+    """Scripted chat.completions: each create() pops the next behavior.
+
+    A behavior is either an Exception (raised), a list of chunk-contents
+    (returned as a streaming iterator), or a callable returning an iterator.
+    """
+
+    def __init__(self, behaviors):
+        self.behaviors = list(behaviors)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.behaviors:
+            raise AssertionError("fake client exhausted")
+        b = self.behaviors.pop(0)
+        if isinstance(b, Exception):
+            raise b
+        if callable(b):
+            return b()
+        return iter([_chunk(c) for c in b])
+
+
+class _FakeClient:
+    def __init__(self, behaviors):
+        self.completions = _FakeCompletions(behaviors)
+        self.chat = SimpleNamespace(completions=self.completions)
+
+    @property
+    def calls(self):
+        return self.completions.calls
+
+
+def _valid_finding(desc="a real problem"):
+    return {
+        "evidence": "quoted artifact text", "severity": "High",
+        "category": "security", "confidence": "high",
+        "description": desc, "recommendation": "fix it",
+        "ambiguity_flag": None, "ambiguity_reason": None, "location": "L1",
+    }
+
+
+def _findings_json(n=1):
+    return json.dumps({"summary": "risk read",
+                       "findings": [_valid_finding(f"d{i}") for i in range(n)]})
+
+
+def _proposal_json():
+    return json.dumps({"approach": "do X", "key_decisions": ["a"],
+                       "risks": ["r"], "sketch": "s"})
+
+
+@pytest.fixture
+def artifact(tmp_path):
+    p = tmp_path / "doc.md"
+    p.write_text("# design\nsome text\n")
+    return str(p), str(tmp_path)
+
+
+class TestGlmReview:
+    def test_success_streamed(self, artifact):
+        path, root = artifact
+        payload = _findings_json(2)
+        client = _FakeClient([[payload[:10], payload[10:]]])  # split across chunks
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "success"
+        assert len(res.findings) == 2
+        assert res.backend == "glm"
+        assert res.model == "glm-5.2"
+
+    def test_create_kwargs_verified_shape(self, artifact):
+        path, root = artifact
+        client = _FakeClient([[_findings_json()]])
+        arl.run_glm_review(path, "design", root, client=client)
+        kw = client.calls[0]
+        assert kw["model"] == "glm-5.2"
+        assert kw["response_format"] == {"type": "json_object"}
+        assert kw["thinking"] == {"type": "enabled"}
+        assert kw["extra_body"] == {"reasoning_effort": arl.REASONING_EFFORT}
+        assert kw["stream"] is True
+        assert kw["max_tokens"] == 16384
+        assert kw["temperature"] == 0.2
+
+    def test_prompt_nonce_fenced_plus_schema(self, artifact):
+        path, root = artifact
+        client = _FakeClient([[_findings_json()]])
+        arl.run_glm_review(path, "design", root, client=client)
+        prompt = client.calls[0]["messages"][0]["content"]
+        assert "BEGIN UNTRUSTED ARTIFACT [k=" in prompt          # nonce fence intact
+        assert "TOOLS — STRICTLY FORBIDDEN" in prompt
+        assert "JSON Schema" in prompt                            # schema-in-prompt suffix
+        assert '"findings"' in prompt                             # schema body inlined
+
+    def test_malformed_json_parse_error(self, artifact):
+        path, root = artifact
+        client = _FakeClient([["this is not json"]])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "parse_error"
+        assert res.findings == ()
+
+    def test_empty_stream_parse_error(self, artifact):
+        path, root = artifact
+        client = _FakeClient([[]])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "parse_error"
+
+    def test_invalid_findings_fail_closed(self, artifact):
+        path, root = artifact
+        bad = json.dumps({"summary": "s", "findings": [{"severity": "Nope"}]})
+        client = _FakeClient([[bad]])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "parse_error"
+
+    def test_fenced_output_stripped(self, artifact):
+        path, root = artifact
+        fenced = "```json\n" + _findings_json() + "\n```"
+        client = _FakeClient([[fenced]])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "success"
+
+    def test_trickling_deadline_timeout(self, artifact, monkeypatch):
+        path, root = artifact
+
+        def trickle():
+            def gen():
+                while True:
+                    time.sleep(0.02)
+                    yield _chunk("x")
+            return gen()
+
+        monkeypatch.setattr(arl, "MAX_RETRIES", 0)
+        client = _FakeClient([trickle])
+        res = arl.run_glm_review(path, "design", root, client=client, timeout=0.05)
+        assert res.status == "timeout"
+
+    def test_sdk_exception_retries_then_error(self, artifact):
+        path, root = artifact
+        client = _FakeClient([RuntimeError("boom"), RuntimeError("boom2")])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "error"
+        assert "boom" in res.raw_error
+
+    def test_retry_discards_partial_chunks(self, artifact):
+        """Attempt 1 streams a valid-JSON PREFIX then dies; attempt 2 streams a
+        complete document. If chunks were combined across attempts the parse
+        would fail — success proves the discard."""
+        path, root = artifact
+        prefix = _findings_json()[:15]
+
+        def dying():
+            def gen():
+                yield _chunk(prefix)
+                raise RuntimeError("mid-stream death")
+            return gen()
+
+        client = _FakeClient([dying, [_findings_json()]])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "success"
+
+    def test_sdk_missing_not_installed(self, artifact, monkeypatch):
+        path, root = artifact
+        monkeypatch.setattr(arl, "_zhipuai_version", lambda: None)
+        res = arl.run_glm_review(path, "design", root)   # no injected client
+        assert res.status == "not_installed"
+        assert "zhipuai" in res.raw_error
+
+    def test_key_missing_unauthenticated(self, artifact, monkeypatch):
+        path, root = artifact
+        monkeypatch.setattr(arl, "_zhipuai_version", lambda: "2.1.5")
+        for v in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+            monkeypatch.delenv(v, raising=False)
+        res = arl.run_glm_review(path, "design", root)
+        assert res.status == "unauthenticated"
+        assert "ZHIPUAI_API_KEY" in res.raw_error
+
+    def test_bad_base_url_error_no_call(self, artifact, monkeypatch):
+        path, root = artifact
+        monkeypatch.setattr(arl, "_zhipuai_version", lambda: "2.1.5")
+        monkeypatch.setenv("ZHIPUAI_API_KEY", "k")
+        monkeypatch.setenv("ZHIPUAI_BASE_URL", "http://plain.example/v4")
+        res = arl.run_glm_review(path, "design", root)
+        assert res.status == "error"
+
+    def test_block_secrets_no_egress(self, artifact, monkeypatch):
+        path, root = artifact
+        Path(path).write_text("password: hunter2\n")
+        monkeypatch.setattr(arl, "BLOCK_SECRETS", True)
+        client = _FakeClient([[_findings_json()]])
+        res = arl.run_glm_review(path, "design", root, client=client)
+        assert res.status == "error"
+        assert client.calls == []                # blocked BEFORE any provider call
+
+    def test_block_secrets_applies_to_supplied_artifact_text(self, artifact, monkeypatch):
+        """A3: the scan runs INSIDE the run function even on preloaded text."""
+        path, root = artifact
+        monkeypatch.setattr(arl, "BLOCK_SECRETS", True)
+        client = _FakeClient([[_findings_json()]])
+        res = arl.run_glm_review(path, "design", root, client=client,
+                                 artifact_text=("api_key = SECRET\n", False))
+        assert res.status == "error"
+        assert client.calls == []
+
+    def test_artifact_text_skips_file_read(self, artifact):
+        path, root = artifact
+        client = _FakeClient([[_findings_json()]])
+        res = arl.run_glm_review(str(Path(root) / "does-not-exist.md"), "design",
+                                 root, client=client, artifact_text=("hello", False))
+        assert res.status == "success"
+
+
+class TestGlmConsult:
+    def test_success_writes_out(self, artifact, tmp_path):
+        path, root = artifact
+        out = tmp_path / "out.json"
+        client = _FakeClient([[_proposal_json()]])
+        res = arl.run_glm_consult(path, root, str(out), client=client)
+        assert res.status == "success"
+        assert res.backend == "glm"
+        data = json.loads(out.read_text())
+        assert data["approach"] == "do X"
+
+    def test_failure_writes_empty_marker(self, artifact, tmp_path):
+        path, root = artifact
+        out = tmp_path / "out.json"
+        client = _FakeClient([["not json"]])
+        res = arl.run_glm_consult(path, root, str(out), client=client)
+        assert res.status == "parse_error"
+        data = json.loads(out.read_text())
+        assert data == {"approach": "", "key_decisions": [], "risks": [], "sketch": ""}
+
+    def test_consult_prompt_is_peer_framing(self, artifact, tmp_path):
+        path, root = artifact
+        client = _FakeClient([[_proposal_json()]])
+        arl.run_glm_consult(path, root, str(tmp_path / "o.json"), client=client)
+        prompt = client.calls[0]["messages"][0]["content"]
+        assert "peer" in prompt.lower()
+        assert "JSON Schema" in prompt
+
+    def test_consult_artifact_text_supported(self, artifact, tmp_path):
+        path, root = artifact
+        client = _FakeClient([[_proposal_json()]])
+        res = arl.run_glm_consult(str(Path(root) / "nope.md"), root,
+                                  str(tmp_path / "o.json"), client=client,
+                                  artifact_text=("problem text", False))
+        assert res.status == "success"
+
+
+class TestStripJsonFences:
+    def test_plain_passthrough(self):
+        assert arl._strip_json_fences('{"a": 1}') == '{"a": 1}'
+
+    def test_json_fence(self):
+        assert arl._strip_json_fences('```json\n{"a": 1}\n```') == '{"a": 1}'
+
+    def test_bare_fence(self):
+        assert arl._strip_json_fences('```\n{"a": 1}\n```') == '{"a": 1}'
+
+    def test_whitespace_around(self):
+        assert arl._strip_json_fences('  ```json\n{"a": 1}\n```  ') == '{"a": 1}'
+
+
+class TestCodexResultBackend:
+    def test_default_backend_gpt(self):
+        r = arl.CodexResult(status="success", findings=())
+        assert r.backend == "gpt"
+
+
+class TestUrlEdgeCases:
+    """8a T2 findings: lazy urlsplit port parsing + IPv6 + unknown-backend egress."""
+
+    def test_out_of_range_port_rejected_not_crash(self):
+        ok, reason = arl.validate_glm_base_url("https://api.z.ai:99999/v4")
+        assert ok is False
+        assert "port" in reason.lower()
+
+    def test_redact_endpoint_bad_port_degrades(self):
+        assert arl.redact_endpoint("https://api.z.ai:99999/v4") == "<unparseable endpoint>"
+
+    def test_redact_endpoint_ipv6_rebracketed(self):
+        assert arl.redact_endpoint("https://[::1]:8443/v4") == "https://[::1]:8443"
+
+    def test_egress_warning_bad_port_does_not_raise(self, monkeypatch):
+        monkeypatch.setenv("ZHIPUAI_BASE_URL", "https://api.z.ai:99999/v4")
+        w = arl.egress_warning(backend="glm")   # must not raise
+        assert "unparseable" in w or "endpoint" in w.lower()
+
+    def test_egress_warning_unknown_backend_no_destination(self):
+        """Consent surface must not claim OpenAI for an unknown/invalid backend."""
+        w = arl.egress_warning(backend="invalid")
+        assert "OpenAI" not in w
+        assert "unknown" in w.lower() or "invalid" in w.lower()
