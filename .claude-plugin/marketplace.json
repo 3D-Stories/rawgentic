@@ -11,7 +11,7 @@
   "plugins": [
     {
       "name": "rawgentic",
-      "description": "8 SDLC workflow skills + 7 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, incident response, peer consultation, post-run workflow self-assessment, session-history mining with human-gated skill candidates, whole-tree security scanning, security pattern syncing, opt-in operating-charter installation, session-registry housekeeping, full-text session-history recall, and dangerous pattern blocking with per-project exceptions.",
+      "description": "8 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, epic auto-run, incident response, peer consultation, post-run workflow self-assessment, session-history mining with human-gated skill candidates, whole-tree security scanning, security pattern syncing, opt-in operating-charter installation, session-registry housekeeping, org self-hosted runner admission, full-text session-history recall, and dangerous pattern blocking with per-project exceptions.",
       "source": "./",
       "strict": true,
       "skills": [
@@ -19,6 +19,7 @@
         "./skills/admit-to-org-runners",
         "./skills/adversarial-review",
         "./skills/create-issue",
+        "./skills/epic-run",
         "./skills/fix-bug",
         "./skills/housekeeping",
         "./skills/implement-feature",

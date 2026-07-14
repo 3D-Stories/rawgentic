@@ -39,7 +39,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.36.0"
+    assert plugin["version"] == "3.37.0"
 
 
 def test_descriptions_consistent_count():
@@ -105,7 +105,7 @@ def test_readme_count_strings_updated():
         f"{sorted(set(skills) - have - {'peer-consult'})} (peer-consult is "
         f"called out separately as a stub)"
     )
-    assert "8 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
+    assert "9 workspace management" in readme  # #113 — README count must match plugin/marketplace descriptions
 
 
 def test_readme_changelog_has_no_spliced_headings():

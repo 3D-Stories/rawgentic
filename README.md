@@ -1,6 +1,6 @@
 # rawgentic
 
-**8 SDLC workflow skills + 8 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**8 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,7 +11,7 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 19 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 20 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
 - **Workspace management** (7 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, and full-text session-history recall
 - **SDLC workflows** (8 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14) and human-gated session-history mining (WF17)
@@ -655,7 +655,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (9/19 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `admit-to-org-runners`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (9/20 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `admit-to-org-runners`, `epic-run`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -706,6 +706,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.37.0 (2026-07-14)
+- **`/rawgentic:epic-run` — bundle the epic-run workspace skill into the plugin (#401).** Promotes the interactive front-end for the multi-issue driver (`docs/multi-issue-driver.md` + `hooks/driver_lib.py`) from a loose workspace skill to `rawgentic:epic-run` so it ships with the plugin: derives the queue from an epic's task-list checkboxes, gets the per-run merge-policy decision (scoped auto-merge vs PR-only), drafts the `/goal` Stop-hook condition with the WF2 per-child contract, and drives child-by-child with the ERROR-comment-and-continue blocker protocol. Registered across all surfaces (whitelist between `create-issue`/`fix-bug`, codex mirror symlink, codex longDescription, counts 19→20 / workspace management 8→9); no `<config-loading>` block (not config-driven — canary unchanged at 9). Bonus: reconciled the `marketplace.json` description, stale at "7 workspace management" since #398 (it missed admit-to-org-runners' documented 7→8 bump) — now correct at 9 with both `admit-to-org-runners` and `epic-run` in its prose list. No workflow-spine change → no diagram REV. Suite 2759+1skip→2759+1skip.
 ### v3.36.0 (2026-07-12)
 - **`/rawgentic:admit-to-org-runners` — admit the bound repo to an org self-hosted runner fleet + migrate its CI off GitHub-hosted runners (#397).** New operational skill: resolves the bound repo via the shared `<config-loading>` block, discovers the org's runner groups and their ONLINE runners with a SEPARATE runner-admin credential (`--admin-token-file` / `$RAWGENTIC_RUNNER_ADMIN_TOKEN`, used ONLY on `orgs/<org>/actions/runner-*` — never the default gh token, never a hosted fallback), and migrates each workflow's hosted `runs-on` to a `{group, labels}` fleet block. Fail-closed by construction: it verifies an online runner carries the target labels BEFORE editing (never strands CI on a label no runner has), refuses the whole file if any hosted lane is unmappable or a `${{ }}`/matrix shape it will not mangle, and never leaves a hosted fallback; idempotent (already-admitted + already-on-fleet = clean no-op); dry-run by default, `--apply` ships the migration as a PR. Risky logic lives in the new tested helper `hooks/org_runners_lib.py` (workflow `runs-on` parse/classify, OS→label map, online-runner label match, hosted-remnant detection); 27 red-before-green tests. Registered across all surfaces (whitelist between `add-exception`/`adversarial-review`, codex mirror symlink, config-loading canary 8→9, counts 18→19 / workspace management 7→8). No workflow-spine change → no diagram REV. Suite 2727+1skip→2759+1skip.
 ### v3.35.0 (2026-07-10)
