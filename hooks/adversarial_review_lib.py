@@ -211,25 +211,28 @@ class AdversarialReviewConfig:
     # Every config-RESOLVING entry point must refuse on the sentinel BEFORE any
     # provider call: a typo'd "glm5" must never silently reroute egress to OpenAI.
     backend: str = "gpt"
-    backend_error_value: object = None
+    # repr() of the rejected raw value (str keeps the frozen dataclass hashable —
+    # a live dict/list here would make hash() raise on the invalid path only).
+    backend_error_value: str | None = None
 
 
 _DISABLED = AdversarialReviewConfig(enabled=False, workflows=())
 
 
-def _coerce_backend(raw: object) -> tuple[str, object]:
-    """Coerce a raw `backend` value. Returns (backend, error_value).
+def _coerce_backend(raw: object) -> tuple[str, str | None]:
+    """Coerce a raw `backend` value. Returns (backend, error_value_repr).
 
     Absent (None) -> ("gpt", None) silently — backward compatible.
     Valid member of BACKENDS -> (value, None).
-    Anything else (wrong type, unknown string, stray whitespace/case) ->
-    ("invalid", <raw>) with a stderr warning — FAIL-CLOSED at the entry points,
-    never a silent fallback to a different egress destination (#403 F-E).
+    Anything else (wrong type — incl. bool, which is never a str — unknown
+    string, stray whitespace/case) -> ("invalid", repr(raw)) with a stderr
+    warning — FAIL-CLOSED at the entry points, never a silent fallback to a
+    different egress destination (#403 F-E). repr (not the live object) keeps
+    the frozen dataclass hashable when the rejected value is a dict/list.
     """
     if raw is None:
         return "gpt", None
-    # NB: bool is an int subclass — an explicit `backend: true` is invalid, not 1.
-    if isinstance(raw, str) and not isinstance(raw, bool) and raw in BACKENDS:
+    if isinstance(raw, str) and raw in BACKENDS:
         return raw, None
     print(
         f"adversarial_review_lib: invalid backend {raw!r} (expected one of "
@@ -237,7 +240,7 @@ def _coerce_backend(raw: object) -> tuple[str, object]:
         "config's `backend` field",
         file=sys.stderr,
     )
-    return "invalid", raw
+    return "invalid", repr(raw)
 
 
 def _coerce_config(raw: object) -> AdversarialReviewConfig:
@@ -552,6 +555,147 @@ def codex_authenticated() -> bool:
     return result.returncode == 0
 
 
+# ============================================================================
+# GLM (Zhipu) prerequisite detection (#403)
+# ============================================================================
+
+# Minimum zhipuai SDK version whose call shape (thinking=, extra_body=,
+# stream usage semantics) was verified live (rawgentic-next #74).
+_GLM_SDK_FLOOR: Final[tuple[int, int, int]] = (2, 1, 5)
+_GLM_SDK_FLOOR_STR: Final[str] = ".".join(str(p) for p in _GLM_SDK_FLOOR)
+_GLM_DEFAULT_BASE_URL: Final[str] = "https://api.z.ai/api/coding/paas/v4"
+
+
+def _zhipuai_version() -> str | None:
+    """Installed zhipuai version string, or None when not installed.
+
+    Isolated as a module-level function so tests can monkeypatch it — the SDK
+    is deliberately NOT a hard dependency (deferred everywhere; codex-only
+    users never need it).
+    """
+    try:
+        from importlib import metadata  # noqa: PLC0415 (deferred, stdlib)
+        return metadata.version("zhipuai")
+    except Exception:  # PackageNotFoundError or any metadata failure
+        return None
+
+
+def glm_sdk_status() -> tuple[bool, str]:
+    """(ok, detail) for the zhipuai SDK prerequisite. FAIL-CLOSED.
+
+    ok requires the package installed AND its version at/above the verified
+    call-shape floor (2.1.5) — an older install would pass an importability
+    check and then fail at client construction/create() on a real invocation.
+    An unparseable version fails closed with the raw string named.
+    """
+    ver = _zhipuai_version()
+    if ver is None:
+        return False, (
+            "zhipuai SDK not installed. Install with:\n"
+            f'  pip install "zhipuai>={_GLM_SDK_FLOOR_STR}"'
+        )
+    try:
+        parts = tuple(int(p) for p in ver.split(".")[:3])
+    except ValueError:
+        return False, (
+            f"zhipuai version {ver!r} is unparseable; need >={_GLM_SDK_FLOOR_STR}. "
+            f'Reinstall with:  pip install "zhipuai>={_GLM_SDK_FLOOR_STR}"'
+        )
+    if parts < _GLM_SDK_FLOOR:
+        return False, (
+            f"zhipuai {ver} is below the verified call-shape floor "
+            f"{_GLM_SDK_FLOOR_STR}. Upgrade with:\n"
+            f'  pip install "zhipuai>={_GLM_SDK_FLOOR_STR}"'
+        )
+    return True, f"zhipuai {ver}"
+
+
+def glm_sdk_available() -> bool:
+    """True iff the zhipuai SDK is installed at/above the verified floor."""
+    return glm_sdk_status()[0]
+
+
+def glm_api_key() -> str | None:
+    """GLM credential from env, read at CALL time (never frozen at import).
+
+    Exact precedence: ZHIPUAI_API_KEY > ZHIPU_API_KEY > GLM_API_KEY.
+    Empty/whitespace values are skipped. None when no key is set.
+    """
+    for name in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+        raw = os.environ.get(name)
+        if raw and raw.strip():
+            return raw.strip()
+    return None
+
+
+def glm_base_url() -> str:
+    """Effective GLM endpoint, read at CALL time.
+
+    Exact precedence: ZHIPUAI_BASE_URL > GLM_JUDGE_BASE_URL > the Coding Plan
+    subscription default. Returned raw — callers gate on validate_glm_base_url.
+    """
+    for name in ("ZHIPUAI_BASE_URL", "GLM_JUDGE_BASE_URL"):
+        raw = os.environ.get(name)
+        if raw and raw.strip():
+            return raw.strip()
+    return _GLM_DEFAULT_BASE_URL
+
+
+def validate_glm_base_url(url: str) -> tuple[bool, str]:
+    """Validate an endpoint override. (ok, reason). FAIL-CLOSED.
+
+    Requires https (the artifact AND the API key travel to this host) and
+    rejects userinfo/query/fragment components — the shapes that smuggle a
+    credential into a URL and then into logs.
+    """
+    from urllib.parse import urlsplit  # noqa: PLC0415 (stdlib, cheap)
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        return False, f"unparseable base URL: {exc}"
+    if parts.scheme != "https":
+        return False, "base URL must be https (key + artifact travel to this host)"
+    if "@" in parts.netloc:
+        return False, "base URL must not carry userinfo (user:token@host)"
+    if parts.query:
+        return False, "base URL must not carry a query string"
+    if parts.fragment:
+        return False, "base URL must not carry a fragment"
+    if not parts.hostname:
+        return False, "base URL has no host"
+    return True, ""
+
+
+def redact_endpoint(url: str) -> str:
+    """Scheme + host only — safe to log (strips userinfo, path, query, fragment)."""
+    from urllib.parse import urlsplit  # noqa: PLC0415
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<unparseable endpoint>"
+    host = parts.hostname or "<no-host>"
+    port = f":{parts.port}" if parts.port else ""
+    return f"{parts.scheme}://{host}{port}"
+
+
+def _glm_prereq() -> tuple[bool, str]:
+    """(ok, message) for the glm backend: SDK floor + key + valid endpoint."""
+    sdk_ok, sdk_detail = glm_sdk_status()
+    if not sdk_ok:
+        return False, sdk_detail
+    if glm_api_key() is None:
+        return False, (
+            "No GLM credential set. Export ZHIPUAI_API_KEY (or ZHIPU_API_KEY / "
+            "GLM_API_KEY) with your z.ai key — a Coding Plan subscription key "
+            "works with the default endpoint."
+        )
+    url = glm_base_url()
+    url_ok, reason = validate_glm_base_url(url)
+    if not url_ok:
+        return False, f"GLM base URL rejected ({redact_endpoint(url)}): {reason}"
+    return True, f"GLM ready ({sdk_detail}, endpoint {redact_endpoint(url)})."
+
+
 _INSTALL_MSG = (
     "Codex CLI is not installed. Install it (standalone binary) with:\n"
     "  curl -fsSL https://codex.openai.com/install.sh | bash\n"
@@ -570,17 +714,54 @@ _HEADLESS_AUTH_MSG = (
 )
 
 
-def prereq_status(headless: bool = False) -> tuple[bool, str]:
-    """Return (ok, message). ok == True only when installed AND authenticated.
+def prereq_status(headless: bool = False, backend: str = "gpt") -> tuple[bool, str]:
+    """Return (ok, message) for the SELECTED backend's prerequisites (#403).
 
-    In headless mode an unauthenticated state yields a headless-specific message
-    so the caller can ERROR (not suspend for interactive login).
+    backend="gpt" (the default — pre-#403 callers are byte-identical): ok only
+    when the Codex CLI is installed AND authenticated; in headless mode an
+    unauthenticated state yields the headless-specific message so the caller can
+    ERROR (not suspend for interactive login).
+
+    backend="glm": ok when the zhipuai SDK meets the version floor, a key is
+    set, and the endpoint validates. The key-missing message names
+    ZHIPUAI_API_KEY (same text headless — an env var, not an interactive login).
+
+    backend="both": DEGRADE-AND-WARN — ok iff AT LEAST ONE backend is ready;
+    the message always reports BOTH named results (never collapsed), so an
+    unready backend is a loud warning rather than a review-blocking failure
+    (matching both-mode's "one failing never aborts the other" run semantics).
+
+    Any other value (incl. the "invalid" config sentinel): not ok — refuse.
     """
-    if not codex_installed():
-        return False, _INSTALL_MSG
-    if not codex_authenticated():
-        return False, _HEADLESS_AUTH_MSG if headless else _AUTH_MSG
-    return True, "Codex CLI installed and authenticated."
+    def _gpt() -> tuple[bool, str]:
+        if not codex_installed():
+            return False, _INSTALL_MSG
+        if not codex_authenticated():
+            return False, _HEADLESS_AUTH_MSG if headless else _AUTH_MSG
+        return True, "Codex CLI installed and authenticated."
+
+    if backend == "gpt":
+        return _gpt()
+    if backend == "glm":
+        return _glm_prereq()
+    if backend == "both":
+        gpt_ok, gpt_msg = _gpt()
+        glm_ok, glm_msg = _glm_prereq()
+        combined = (
+            f"gpt: {'ready' if gpt_ok else 'NOT ready'} — {gpt_msg}\n"
+            f"glm: {'ready' if glm_ok else 'NOT ready'} — {glm_msg}"
+        )
+        if gpt_ok and glm_ok:
+            return True, combined
+        if gpt_ok or glm_ok:
+            return True, (
+                combined + "\n[WARNING] one backend is unready — a both-mode run "
+                "will degrade to the ready backend (partial, exit 5)."
+            )
+        return False, combined
+    return False, (
+        f"unknown backend {backend!r} (expected one of {list(BACKENDS)}); refusing."
+    )
 
 
 # ============================================================================
@@ -1059,12 +1240,34 @@ def review_report_path(project_root: str, artifact_name: str, date_str: str) -> 
     )
 
 
-def egress_warning(secrets: list[str] | tuple[str, ...] | None = None) -> str:
-    """Return the warn-only egress notice; names detected secret categories."""
-    base = (
+def egress_warning(
+    secrets: list[str] | tuple[str, ...] | None = None, backend: str = "gpt"
+) -> str:
+    """Return the warn-only egress notice; names detected secret categories.
+
+    #403: the notice names the SELECTED backend's real destination — gpt keeps
+    the pre-#403 OpenAI text byte-identical; glm names z.ai/Zhipu (a different
+    provider and jurisdiction) PLUS the EFFECTIVE endpoint's sanitized
+    scheme+host resolved at warning time (an env-overridden base URL must show
+    the real destination in the consent notice, not a hardcoded one); both
+    names both destinations.
+    """
+    gpt_line = (
         "[WARNING] Adversarial review sends the artifact text to OpenAI (Codex) for "
         "an independent model review. The artifact is transmitted off-box."
     )
+    glm_line = (
+        "[WARNING] Adversarial review sends the artifact text to z.ai / Zhipu (GLM) "
+        f"at {redact_endpoint(glm_base_url())} for an independent model review — "
+        "note the distinct provider and jurisdiction. The artifact is "
+        "transmitted off-box."
+    )
+    if backend == "glm":
+        base = glm_line
+    elif backend == "both":
+        base = gpt_line + "\n" + glm_line
+    else:
+        base = gpt_line
     if secrets:
         base += (
             "\n[WARNING] Possible secrets detected in the artifact "
