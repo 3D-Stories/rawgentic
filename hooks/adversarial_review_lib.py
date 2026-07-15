@@ -225,7 +225,8 @@ _DISABLED = AdversarialReviewConfig(enabled=False, workflows=())
 def _coerce_backend(raw: object) -> tuple[str, str | None]:
     """Coerce a raw `backend` value. Returns (backend, error_value_repr).
 
-    Absent (None) -> ("gpt", None) silently — backward compatible.
+    Absent (the _BACKEND_ABSENT sentinel) -> ("gpt", None) silently — backward
+    compatible. An explicit JSON null is PRESENT and therefore invalid.
     Valid member of BACKENDS -> (value, None).
     Anything else (wrong type — incl. bool, which is never a str — unknown
     string, stray whitespace/case) -> ("invalid", repr(raw)) with a stderr
@@ -233,7 +234,7 @@ def _coerce_backend(raw: object) -> tuple[str, str | None]:
     different egress destination (#403 F-E). repr (not the live object) keeps
     the frozen dataclass hashable when the rejected value is a dict/list.
     """
-    if raw is None:
+    if raw is _BACKEND_ABSENT:
         return "gpt", None
     if isinstance(raw, str) and raw in BACKENDS:
         return raw, None
@@ -244,6 +245,9 @@ def _coerce_backend(raw: object) -> tuple[str, str | None]:
         file=sys.stderr,
     )
     return "invalid", repr(raw)
+
+
+_BACKEND_ABSENT: Final[object] = object()  # sentinel: field truly absent (#403)
 
 
 def _coerce_config(raw: object) -> AdversarialReviewConfig:
@@ -265,7 +269,10 @@ def _coerce_config(raw: object) -> AdversarialReviewConfig:
             workflows = tuple(w for w in wf_raw if isinstance(w, str))
         else:
             workflows = ()
-        backend, err = _coerce_backend(raw.get("backend"))
+        # raw.get(...) with a sentinel default so an EXPLICIT `"backend": null`
+        # (present, outside the vocabulary) refuses instead of aliasing to
+        # absent (Step 11 diff review, #403).
+        backend, err = _coerce_backend(raw.get("backend", _BACKEND_ABSENT))
         return AdversarialReviewConfig(
             enabled=enabled, workflows=workflows,
             backend=backend, backend_error_value=err,
@@ -1993,32 +2000,41 @@ def _resolve_cli_backend(args) -> tuple[str | None, int]:
         # (only a PRESENT-but-invalid value refuses); enablement gating is the
         # caller's is-enabled concern, not this resolver's.
         return cfg.backend, 0
-    if ws or proj:
-        # Half-given resolution info (e.g. --project "$NAME" with $NAME unset) is
-        # a malformed invocation, not "no config": refusing beats silently
-        # skipping the config a caller clearly meant to consult (8a T5).
+    if ws is not None or proj is not None:
+        # Resolution info was PROVIDED but is unusable — half-given, or empty
+        # strings from unset shell vars (--workspace "" --project ""). Refusing
+        # beats silently skipping the config a caller clearly meant to consult
+        # (8a T5 + Step 11 diff review). Only flags never provided at all fall
+        # through to the legacy gpt default.
         print(
-            "backend resolution needs BOTH --workspace and --project (got only "
-            "one, or an empty value) — refusing to default the backend (no egress)",
+            "backend resolution needs BOTH --workspace and --project non-empty "
+            "(got a missing or empty value) — refusing to default the backend "
+            "(no egress)",
             file=sys.stderr,
         )
         return None, 2
     return "gpt", 0
 
+
 def main(argv: list[str] | None = None) -> int:
-    """CLI: prereq | is-enabled | review | consult.
+    """CLI: prereq | is-enabled | backend | review | consult.
 
     Exit codes:
-      prereq:     0 ok, 2 prerequisite failure
+      prereq:     0 ok, 2 prerequisite failure (per --backend; both = degrade-and-warn)
       is-enabled: 0 enabled, 1 disabled
-      review:     0 ok, 2 prereq-fail, 3 codex-error/timeout, 4 parse-error
-      consult:    0 ok, 2 prereq-fail, 3 codex-error/timeout, 4 parse-error
+      backend:    0 + resolved backend on stdout, 2 present-but-invalid config value
+      review:     0 ok, 2 prereq/config-fail, 3 error/timeout, 4 parse-error,
+                  5 both-mode PARTIAL (>=1 backend succeeded, >=1 failed)
+      consult:    0 ok, 2 prereq/config-fail, 3 error/timeout, 4 parse-error,
+                  5 both-mode PARTIAL
     """
     parser = argparse.ArgumentParser(prog="adversarial_review_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_prereq = sub.add_parser("prereq", help="check Codex prerequisites")
+    p_prereq = sub.add_parser("prereq", help="check the selected backend's prerequisites")
     p_prereq.add_argument("--headless", action="store_true")
+    # #403: bare `prereq` stays the legacy gpt check byte-for-byte.
+    p_prereq.add_argument("--backend", choices=list(BACKENDS), default="gpt")
 
     p_enabled = sub.add_parser("is-enabled", help="check per-project enablement")
     p_enabled.add_argument("--workspace", required=True)
@@ -2067,7 +2083,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "prereq":
-        ok, msg = prereq_status(headless=args.headless)
+        ok, msg = prereq_status(headless=args.headless, backend=args.backend)
         print(msg)
         return 0 if ok else 2
 
@@ -2246,6 +2262,23 @@ def main(argv: list[str] | None = None) -> int:
         date_str = args.date or "unknown-date"
         out_by_backend = ({"gpt": args.out, "glm": _sidecar_sibling(args.out)}
                           if backend == "both" else {backend: args.out})
+        # Collision guard (Step 11 diff review, #403): no out path — including the
+        # DERIVED -glm sibling the user never typed — may be the artifact itself;
+        # run_*_consult unconditionally writes out_path (proposal or empty marker),
+        # which would destroy the input. Checked BEFORE any run function executes.
+        try:
+            artifact_real = resolve_artifact_path(args.artifact, args.project_root)
+        except ArtifactError:
+            artifact_real = None
+        if artifact_real is not None:
+            for bk, op in out_by_backend.items():
+                if os.path.realpath(op) == artifact_real:
+                    print(
+                        f"--out collision: the {bk} out path is the same file as "
+                        f"--artifact ({op!r}); refusing (would destroy the artifact)",
+                        file=sys.stderr,
+                    )
+                    return 2
 
         def _consult_one(bk: str, out_path: str,
                          artifact_text=None) -> tuple[CodexResult, str | None]:

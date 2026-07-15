@@ -26,12 +26,12 @@ EXIT CODES: 0 success (ALL selected backends) · 2 prereq/config · 3 error/time
   4 parse · 5 PARTIAL (both mode only: present the successful proposal, name the
   failed backend, do NOT stop)
 ENGINE: hooks/adversarial_review_lib.py
-ENV (all optional, frozen at lib import — shared with WF5/adversarial-review):
+ENV (all optional, frozen at lib import unless noted — shared with WF5/adversarial-review):
   RAWGENTIC_ADV_REVIEW_MAX_BYTES   (default 200000) — artifact size cap; over-cap truncates + warns
-  RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — Codex invocation timeout (seconds)
-  RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient Codex failure
+  RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — per-attempt invocation timeout (seconds), both backends
+  RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient failure, both backends
   RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected
-  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — Codex reasoning effort (low|medium|high)
+  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — reasoning effort (low|medium|high), both backends
   RAWGENTIC_ADV_REVIEW_MODEL       (default unset)  — override the gpt peer model (`codex exec -m`); unset = inherit Codex/config default (do NOT hardcode a model id)
   RAWGENTIC_ADV_REVIEW_GLM_MODEL   (default glm-5.2) — glm model slug
   ZHIPUAI_API_KEY / ZHIPU_API_KEY / GLM_API_KEY (read at call time) — glm credential; a Coding Plan subscription key works

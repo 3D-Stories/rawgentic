@@ -1031,3 +1031,90 @@ class TestResolveEdgeCases:
                                    "--findings-json", glm_report))
         assert rc == 2
         assert cli_env.calls == {"gpt": 0, "glm": 0}
+
+
+class TestPrereqCliBackend:
+    """Step 11 High: the SKILL.md-documented `prereq --backend <b>` must work."""
+
+    def test_prereq_backend_glm_cli(self, monkeypatch):
+        monkeypatch.setattr(arl, "_zhipuai_version", lambda: None)
+        for v in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+            monkeypatch.delenv(v, raising=False)
+        rc = arl.main(["prereq", "--backend", "glm"])
+        assert rc == 2                       # a real prereq verdict, not an argparse error
+
+    def test_prereq_backend_gpt_cli(self, monkeypatch):
+        monkeypatch.setattr(arl, "codex_installed", lambda: True)
+        monkeypatch.setattr(arl, "codex_authenticated", lambda: True)
+        assert arl.main(["prereq", "--backend", "gpt"]) == 0
+
+    def test_prereq_backend_both_degrades(self, monkeypatch, capsys):
+        monkeypatch.setattr(arl, "codex_installed", lambda: True)
+        monkeypatch.setattr(arl, "codex_authenticated", lambda: True)
+        monkeypatch.setattr(arl, "_zhipuai_version", lambda: None)
+        for v in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+            monkeypatch.delenv(v, raising=False)
+        rc = arl.main(["prereq", "--backend", "both"])
+        assert rc == 0                       # degrade-and-warn: >=1 ready
+        out = capsys.readouterr().out
+        assert "gpt" in out.lower() and "glm" in out.lower()
+
+    def test_prereq_bare_legacy_unchanged(self, monkeypatch):
+        monkeypatch.setattr(arl, "codex_installed", lambda: True)
+        monkeypatch.setattr(arl, "codex_authenticated", lambda: True)
+        assert arl.main(["prereq"]) == 0
+
+
+class TestStep11DiffReviewFindings:
+    """Step 11 adversarial diff-review findings (#403): null backend, empty-empty
+    resolution, consult --out collision with the artifact."""
+
+    def test_explicit_null_backend_is_invalid(self, tmp_path):
+        """JSON `"backend": null` is a PRESENT value outside the vocabulary —
+        it must refuse like any other invalid value, not alias to absent."""
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"], "backend": None})])
+        cfg = arl.load_adversarial_review_config(str(ws), "p")
+        assert cfg.backend == "invalid"
+
+    def test_absent_backend_still_gpt(self, tmp_path):
+        ws = _write_ws(tmp_path, [_proj(adversarialReview={
+            "enabled": True, "workflows": ["x"]})])
+        assert arl.load_adversarial_review_config(str(ws), "p").backend == "gpt"
+
+    def test_both_empty_ws_and_project_refuse(self, cli_env):
+        """Two unset shell vars interpolated as empty strings must fail closed."""
+        rc = arl.main(_review_argv(cli_env, "--workspace", "", "--project", ""))
+        assert rc == 2
+        assert cli_env.calls == {"gpt": 0, "glm": 0}
+
+    def test_neither_given_still_legacy_gpt(self, cli_env):
+        rc = arl.main(_review_argv(cli_env))
+        assert rc == 0
+        assert cli_env.calls == {"gpt": 1, "glm": 0}
+
+    def test_consult_both_out_sibling_colliding_with_artifact_refused(self, tmp_path, monkeypatch):
+        """artifact foo-glm.md + --out foo.md: the derived glm sibling IS the
+        artifact — the engine must refuse before any run function executes."""
+        root = tmp_path
+        art = root / "foo-glm.md"
+        art.write_text("problem\n")
+        calls = []
+        monkeypatch.setattr(arl, "run_codex_consult",
+                            lambda *a, **kw: calls.append("gpt") or _ok_result("gpt"))
+        monkeypatch.setattr(arl, "run_glm_consult",
+                            lambda *a, **kw: calls.append("glm") or _ok_result("glm"))
+        rc = arl.main(["consult", "--artifact", str(art), "--project-root", str(root),
+                       "--out", str(root / "foo.md"), "--date", "2026-07-14",
+                       "--backend", "both"])
+        assert rc == 2
+        assert calls == []
+
+    def test_consult_single_out_equal_artifact_refused(self, tmp_path, monkeypatch):
+        root = tmp_path
+        art = root / "prob.md"
+        art.write_text("problem\n")
+        monkeypatch.setattr(arl, "run_codex_consult", lambda *a, **kw: _ok_result("gpt"))
+        rc = arl.main(["consult", "--artifact", str(art), "--project-root", str(root),
+                       "--out", str(art), "--date", "2026-07-14"])
+        assert rc == 2
