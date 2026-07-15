@@ -480,6 +480,14 @@ class TestTieredLoopback:
         assert "absent/null/off-vocab contributes `untagged`" in s4
         assert "fully backward compatible" in s4
 
+    def test_step4_dispatch_produces_findings_sidecar(self):
+        # Step-11 F1: loopback_class is sidecar-only (render_report_md never
+        # emits it) — the Step-4 dispatch must produce/read the sidecar or the
+        # #407 fold is silently inert at its target step.
+        s4 = " ".join(self._step4().split())
+        assert "--findings-json" in s4
+        assert "sidecar-only" in s4
+
     def test_verifier_brief_sourced_from_sidecar(self):
         # Pass-3 rider: originating findings come from the review sidecar,
         # never a re-derivation.
