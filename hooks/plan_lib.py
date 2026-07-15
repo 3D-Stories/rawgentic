@@ -1421,9 +1421,21 @@ def read_dispositions(ledger_path: str) -> tuple[list[dict], int]:
         return [], 0
     entries: list[dict] = []
     skipped = 0
-    with open(ledger_path, "r", encoding="utf-8") as f:
-        for lineno, raw in enumerate(f, start=1):
-            raw = raw.strip()
+    # Binary read + per-line decode: text-mode iteration decodes lazily, so a
+    # single non-UTF-8 byte would raise OUTSIDE the tolerant path and drop the
+    # whole ledger (8a R2). One bad line must cost one line.
+    with open(ledger_path, "rb") as f:
+        for lineno, raw_bytes in enumerate(f, start=1):
+            try:
+                raw = raw_bytes.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                skipped += 1
+                print(
+                    f"plan_lib: skipping corrupt dispositions line {lineno} "
+                    f"in {ledger_path}: not UTF-8",
+                    file=sys.stderr,
+                )
+                continue
             if not raw:
                 continue
             try:

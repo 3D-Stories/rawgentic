@@ -151,6 +151,22 @@ class TestReadDispositions:
         assert len(entries) == 1 and skipped == 1
         assert "dispositions" in capsys.readouterr().err
 
+    def test_non_utf8_line_skipped_not_fatal(self, tmp_path, capsys):
+        # 8a R2 High: decoding must happen per line INSIDE the tolerant path —
+        # a single non-UTF-8 byte must cost one line, never the whole ledger.
+        mod = _reload_plan_lib()
+        path = tmp_path / "d.jsonl"
+        mod.append_disposition(str(path), _valid_entry(mod))
+        with open(path, "ab") as f:
+            f.write(b'{"bad": "\xff\xfe"}\n')
+        good = _valid_entry(mod, id="d-11-3-1-cafe",
+                            finding={"description": "post-corruption entry"})
+        good["finding_key"] = mod.compute_finding_key(good["finding"])
+        mod.append_disposition(str(path), good)
+        entries, skipped = mod.read_dispositions(str(path))
+        assert len(entries) == 2 and skipped == 1
+        assert "dispositions" in capsys.readouterr().err
+
     def test_wrong_schema_version_skipped(self, tmp_path):
         mod = _reload_plan_lib()
         path = tmp_path / "d.jsonl"
@@ -244,6 +260,14 @@ class TestStripReopens:
             "REOPENS d-4-2-1-ab3f: new evidence — the cap is bypassed on retry")
         assert rid == "d-4-2-1-ab3f"
         assert text == "new evidence — the cap is bypassed on retry"
+
+    def test_all_gate_forms_parse(self):
+        # 8a R1 Low adopt: pin the non-trivial gate ids (8a, 11) and
+        # multi-digit pass/seq so a regex tweak cannot regress them silently.
+        mod = _reload_plan_lib()
+        for rid in ("d-8a-2-1-ab3f", "d-11-12-34-Zz09"):
+            got, text = mod.strip_reopens(f"REOPENS {rid}: delta text")
+            assert got == rid and text == "delta text"
 
     def test_no_prefix_passthrough(self):
         mod = _reload_plan_lib()
