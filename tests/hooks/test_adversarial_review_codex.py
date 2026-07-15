@@ -411,3 +411,13 @@ def test_build_prompt_generates_nonce2_when_omitted():
     a = arl.build_prompt("x", "plan", nonce="AAAA", dispositions_text=_LEDGER_TEXT)
     b = arl.build_prompt("x", "plan", nonce="AAAA", dispositions_text=_LEDGER_TEXT)
     assert a != b  # nonce2 minted per call — unforgeable
+
+
+def test_build_prompt_empty_string_dispositions_equals_none():
+    # 8a T2 R2: "" (falsy but present) must NOT emit an empty ledger fence +
+    # instruction paragraph promising decisions that don't exist — a renderer
+    # returning "" for zero entries would otherwise add a spurious second
+    # injection surface. "" and None are the same no-ledger contract.
+    a = arl.build_prompt("body", "plan", nonce="n")
+    b = arl.build_prompt("body", "plan", nonce="n", dispositions_text="")
+    assert a == b

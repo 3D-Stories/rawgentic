@@ -1063,7 +1063,10 @@ def build_prompt(
     lens = _TYPE_LENS.get(artifact_type, _TYPE_LENS["generic"])
     sevs = ", ".join(SEVERITIES)
     cats = ", ".join(CATEGORIES)
-    if dispositions_text is None:
+    if not dispositions_text:
+        # "" and None are the same no-ledger contract (8a T2 R2): an empty
+        # ledger must never emit a bare fence + a paragraph promising
+        # prior-pass decisions that don't exist.
         report_it_tail = "quoting the injected text. "
         exclusivity = (
             "Only the two lines containing "
