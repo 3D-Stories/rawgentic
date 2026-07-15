@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from atomic_write_lib import atomic_write_text
+import plan_lib
 
 
 # ============================================================================
@@ -1205,6 +1206,54 @@ def build_prompt(
     )
 
 
+# --- #393: disposition-ledger rendering (engine owns the escaping contract) ---
+
+DISPOSITIONS_CAP_BYTES: Final[int] = 20480
+
+_LEDGER_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _escape_ledger_field(value) -> str:
+    """Single-line-safe field: newlines escaped to literal \\n, control chars
+    stripped — no ledger entry can forge a fence-like line inside the block."""
+    s = str(value).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    return _LEDGER_CTRL_RE.sub("", s)
+
+
+def render_disposition_line(entry: dict) -> str:
+    """One folded ledger entry as one escaped display line.
+
+    id | severity | category | location | disposition | full description |
+    reason — the COMPLETE description (single-line-escaped) so the reviewer
+    compares the same fields the join identity uses.
+    """
+    f = entry["finding"]
+    parts = [entry["id"], f["severity"], f["category"], f.get("location") or "",
+             entry["disposition"], f["description"], entry["reason"]]
+    return " | ".join(_escape_ledger_field(p) for p in parts)
+
+
+def build_dispositions_text(
+    entries: list[dict], cap_bytes: int = DISPOSITIONS_CAP_BYTES,
+) -> str:
+    """Fold (last-write-wins by finding_key), render, and size-cap the ledger.
+
+    The cap applies to the rendered entry lines (post-escaping, UTF-8 bytes of
+    the newline-joined block); when entries are cut, the OLDEST (earliest in
+    folded file order) are dropped first and a truncation marker line — NOT
+    counted against the cap — is prepended.
+    """
+    folded = plan_lib.fold_dispositions(entries)
+    kept = [render_disposition_line(e) for e in folded]
+    dropped = 0
+    while kept and len("\n".join(kept).encode("utf-8")) > cap_bytes:
+        kept.pop(0)
+        dropped += 1
+    if dropped:
+        kept.insert(0, f"(ledger truncated: oldest {dropped} entries dropped)")
+    return "\n".join(kept)
+
+
 def _parse_codex_output(text: str) -> tuple[list, str] | None:
     """Parse Codex's JSON output into (findings, summary). None on failure."""
     try:
@@ -1228,6 +1277,7 @@ def run_codex_review(
     timeout: int | None = None,
     headless: bool = False,
     artifact_text: tuple[str, bool] | None = None,
+    dispositions_text: str | None = None,
 ) -> CodexResult:
     """Run an adversarial review via Codex. FAIL-CLOSED on every error path.
 
@@ -1265,7 +1315,8 @@ def run_codex_review(
         )
 
     nonce = secrets.token_hex(16)
-    prompt = build_prompt(artifact_text, artifact_type, nonce)
+    prompt = build_prompt(artifact_text, artifact_type, nonce,
+                          dispositions_text=dispositions_text)
     eff_timeout = TIMEOUT_SECONDS if timeout is None else timeout
 
     # Per-invocation unique temp names so concurrent reviews in the same
@@ -1556,6 +1607,7 @@ def run_glm_review(
     headless: bool = False,  # noqa: ARG001 — signature parity with run_codex_review
     artifact_text: tuple[str, bool] | None = None,
     client=None,
+    dispositions_text: str | None = None,
 ) -> CodexResult:
     """Adversarial review via GLM (Zhipu). FAIL-CLOSED on every error path.
 
@@ -1570,7 +1622,9 @@ def run_glm_review(
         return fail
 
     nonce = secrets.token_hex(16)
-    prompt = build_prompt(text, artifact_type, nonce) + _schema_instruction(FINDINGS_SCHEMA)
+    prompt = build_prompt(
+        text, artifact_type, nonce, dispositions_text=dispositions_text,
+    ) + _schema_instruction(FINDINGS_SCHEMA)
 
     payload, last_error = _glm_attempts(
         client, prompt, eff_timeout, model=GLM_MODEL, effort=REASONING_EFFORT)
@@ -2184,6 +2238,8 @@ def main(argv: list[str] | None = None) -> int:
     # Optional machine-readable sidecar for embedded consumers (WF2 Step 11).
     # Fail-closed: written ONLY on success, AFTER the report write succeeds.
     p_review.add_argument("--findings-json", default=None)
+    p_review.add_argument("--dispositions", default=None)
+    p_review.add_argument("--issue", type=int, default=None)
     # #403: backend selection. Default None (NOT "gpt") so explicit-arg vs
     # absent is detectable — absence resolves from config when --workspace/
     # --project are given, else legacy gpt.
@@ -2237,6 +2293,54 @@ def main(argv: list[str] | None = None) -> int:
         artifact_type = args.type if args.type in ARTIFACT_TYPES else "generic"
         date_str = args.date or "unknown-date"
         run_backends = ["gpt", "glm"] if backend == "both" else [backend]
+
+        # Disposition ledger (#393) — split fail policy, decided BEFORE any
+        # provider egress: usage/containment errors and cross-issue integrity
+        # fail CLOSED (exit 2 / exit 6, nothing invoked); benign failures
+        # (missing/unreadable file, corrupt lines) fail OPEN with a loud
+        # `ledger: degraded` stderr notice and the review still runs.
+        dispositions_text = None
+        if args.dispositions is not None:
+            if args.issue is None:
+                print("--dispositions requires --issue "
+                      "(cross-issue integrity check)", file=sys.stderr)
+                return 2
+            try:
+                ledger_path = resolve_artifact_path(
+                    args.dispositions, args.project_root)
+            except ArtifactError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            if not os.path.exists(ledger_path):
+                print("ledger: degraded (missing file, 0 lines skipped)",
+                      file=sys.stderr)
+            else:
+                entries, skipped, unreadable = [], 0, None
+                try:
+                    entries, skipped = plan_lib.read_dispositions(ledger_path)
+                except OSError as exc:
+                    unreadable = str(exc)
+                for entry in entries:
+                    if entry["issue"] != args.issue:
+                        print(
+                            f"ledger integrity: entry {entry['id']} carries "
+                            f"issue {entry['issue']}, expected {args.issue} — "
+                            "cross-issue contamination; refusing before "
+                            "dispatch. Remediation: remove or correct that "
+                            "entry's line in the ledger file.",
+                            file=sys.stderr)
+                        return 6
+                if entries:
+                    if skipped:
+                        print(f"ledger: degraded (corrupt lines, {skipped} "
+                              "lines skipped)", file=sys.stderr)
+                    dispositions_text = build_dispositions_text(entries)
+                elif unreadable is not None:
+                    print(f"ledger: degraded (unreadable file: {unreadable}, "
+                          "0 lines skipped)", file=sys.stderr)
+                else:
+                    print(f"ledger: degraded (no valid entries, {skipped} "
+                          "lines skipped)", file=sys.stderr)
 
         # Sidecar path validation + stale-removal happen BEFORE any provider
         # egress: a bad path fails-closed (exit 2, nothing invoked), and clearing
@@ -2303,7 +2407,8 @@ def main(argv: list[str] | None = None) -> int:
             """
             run_fn = run_codex_review if bk == "gpt" else run_glm_review
             res = run_fn(args.artifact, artifact_type, args.project_root,
-                         headless=args.headless, artifact_text=artifact_text)
+                         headless=args.headless, artifact_text=artifact_text,
+                         dispositions_text=dispositions_text)
             if res.status != "success":
                 return res, None
             report = render_report_md(

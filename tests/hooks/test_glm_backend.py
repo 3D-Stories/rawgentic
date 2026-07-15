@@ -1119,3 +1119,16 @@ class TestStep11DiffReviewFindings:
         rc = arl.main(["consult", "--artifact", str(art), "--project-root", str(root),
                        "--out", str(art), "--date", "2026-07-14"])
         assert rc == 2
+
+
+class TestGlmDispositionsThreading:
+    def test_dispositions_text_threaded_into_prompt(self, artifact):
+        # #393: both backends receive the same ledger fence; schema suffix
+        # stays after the ledger block.
+        path, root = artifact
+        client = _FakeClient([[_findings_json()]])
+        arl.run_glm_review(path, "design", root, client=client,
+                           dispositions_text="d-4-2-1-ab3f | High | security | x | dissolved | d | r")
+        prompt = client.calls[0]["messages"][0]["content"]
+        assert "=== BEGIN SETTLED DISPOSITIONS [k=" in prompt
+        assert prompt.index("=== END SETTLED DISPOSITIONS") < prompt.index("JSON Schema")
