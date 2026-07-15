@@ -14,6 +14,59 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
+
+**Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped
+auto-merge grant 2026-07-15): each adversarial engine invocation saw only the
+artifact, so multi-pass gates re-derived and RE-LITIGATED settled decisions —
+observed on saystory #167, #69, and three times in the #407 run (the same
+category-poisoning disposition dissolved at pass 2, pass 3, and the Step-11 diff
+review).
+
+**What shipped.** Orchestrator-persisted terminal-disposition memory:
+`plan_lib.append_disposition` (fail-closed writer) / `read_dispositions` (tolerant
+per-line binary reader — one bad byte costs one line) / `fold_dispositions`
+(last-write-wins, last-occurrence order) / `compute_finding_key` (engine
+dedupe-tuple sha256, category deliberately excluded — relabel-proof) /
+`strip_reopens`. Pass-N dispatches fold `claude_docs/.wf2-state/<issue>/dispositions.jsonl`
+to a 0600 temp copy and add `--dispositions <temp> --issue <n>`; the engine
+re-validates, renders escaped single lines (C0/C1 + U+2028/U+2029 stripped), caps
+at 20KB (most-recent kept, loud truncation), and injects a SECOND independent
+nonce fence with a disposition-aware instruction (declined/dissolved: no re-raise
+without `REOPENS <id>:` + new evidence; adopted: DO re-raise if still broken).
+Split fail policy: benign → fail-OPEN `ledger: degraded`/`ledger: empty`,
+`--issue` mismatch → fail-CLOSED exit 6 → `failed (ledger integrity)`. Steps
+4/6/11 wire gate-close persistence, the dispatch sequence, and the join backstop
+(DECLINED/DISSOLVED match auto-dissolves; ADOPTED match → `possible failed
+remediation`). No flag → byte-identical prompt, pinned vs a committed pre-change
+golden. Diagram REV 3.40.0 (stations 4+11 delta).
+
+**Decisions (this slot).** Plan-gate: 4 adversarial Highs dissolved-with-evidence
+(2 reviewer-scope — the design §1/§5 held the "missing" contracts; 1 intentional
+key asymmetry; 1 already-defended realpath containment), 4 Mediums adopted. D-11
+task reorder (T1→T4): a cross-surface corpus guard sat red between new public
+helpers and their steps.md wiring — both plan reviewers missed the sequencing.
+Golden-fixture base64-encoding DECLINED (fence contract held live; auditability
+wins). Import layering confirmed coherent (plan_lib owns `.wf2-state`
+persistence, engine owns the fence/escaping contract).
+
+**Reviews.** Step-4 gate closed in the prior session (3 passes, 13+7+6 findings,
+budget 3/3 exhausted — Steps 8/11 required clean-or-blocker). 8a ×2 on all 3
+high-risk tasks: 1 High fixed red-first (text-mode UnicodeDecodeError dropped the
+whole ledger on one bad byte) + 5 cheap adopts (honest empty-vs-degraded signal,
+loud truncation, Unicode line-separator strip, pre-change golden, empty-string
+seam). Step 11 (3 agents + cross-model diff pass): 3H+2M adopted red-first —
+including the diff pass LIVE-DOGFOODING `--dispositions` on its own diff (ledger
+seeded from the plan-gate's dissolved Highs; codex re-litigated neither) and
+catching that the no-re-raise instruction wrongly covered ADOPTED entries.
+Security scan clean (iac/sca visible skips). Suite 2920+1skip→2983+1skip, zero
+regressions, red-before-green per task.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry for this slot embedded below.
+
+---
+
 ## Epic #408 slot 1 — #407: adversarial findings carry a loopback-class · v3.39.0
 
 **Issue.** #407 (feature, standard, full spine; epic #408 auto-run, scoped auto-merge
@@ -56,8 +109,9 @@ adversarial diff (5 unique: station-13 stray marker, the sidecar-wiring gap;
 2 re-litigations dissolved). Security scan clean (iac/sca visible skips). Suite
 2889+1skip→2920+1skip, zero regressions, red-before-green per task.
 
-**Status.** PR + CI + merge SHA filled by the next slot's pass (established
-convention). Telemetry for this slot embedded below.
+**Status.** *(backfilled by slot 2's pass)* PR #409, CI hard lanes green,
+squash-merged `7bea79f` 2026-07-15, issue #407 auto-closed, v3.39.0 on main.
+Telemetry for this slot embedded below.
 
 ---
 
