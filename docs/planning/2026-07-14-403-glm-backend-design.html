@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#403 GLM backend design (rev 5, gate-passed)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-14 23:52 MDT</div>
+<h1>#403 GLM backend design (rev 5, gate-passed)</h1>
+
+</header>
+<main>
+<h1>Design — #403: selectable GLM review/consult backend (gpt | glm | both)</h1>
+<p>Date: 2026-07-14 · Issue: #403 · Complexity: standard_feature (full spine — new dependency) Status: rev 5 — GATE PASSED (4 review passes, 3 loop-backs, 38 findings adjudicated; owner-confirmed pass 2026-07-14; see &quot;Step 4 gate resolutions&quot;)</p>
+<h2>Approach</h2>
+<p><strong>Selected: parallel backend functions sharing all pure plumbing (mirror-function design).</strong> Add a GLM invocation layer to <code>hooks/adversarial_review_lib.py</code> as sibling functions (<code>run_glm_review</code>, <code>run_glm_consult</code>) mirroring the Codex ones, sharing every pure component that is backend-agnostic (artifact IO, secret scan, nonce prompts, schemas, validators, renderers, path builders). A thin dispatch layer in <code>main()</code> maps <code>--backend {gpt,glm,both}</code> onto the run functions. No existing function signature changes in a breaking way; every new parameter is keyword-with-default so the existing test suite passes untouched.</p>
+<p>Alternative considered — <strong>backend-object abstraction</strong> (a <code>Backend</code> protocol with <code>gpt</code>/<code>glm</code> implementations, dispatch table): cleaner for a hypothetical third backend, but reshapes <code>run_codex_review</code>&#x27;s tested surface now for a speculative future need (YAGNI); the mirror-function design keeps the diff additive and the codex tests byte-identical. Revisit if a third backend ever lands.</p>
+<h2>File changes</h2>
+<p>1. <strong><code>hooks/adversarial_review_lib.py</code></strong> (the whole feature, ~+350 lines):</p>
+<ul>
+<li><code>BACKENDS: Final = (&quot;gpt&quot;, &quot;glm&quot;, &quot;both&quot;)</code>.</li>
+<li><code>AdversarialReviewConfig</code> gains <code>backend: str = &quot;gpt&quot;</code>. <code>_coerce_config</code> reads</li>
+</ul>
+<p>     <code>raw.get(&quot;backend&quot;)</code>: value in BACKENDS → kept; <strong>absent → &quot;gpt&quot; silently</strong>      (back-compat); <strong>present-but-invalid → CONFIG ERROR, no egress</strong> (gate      resolution F-E, amending AC1): the config coerces to a sentinel      <code>backend=&quot;invalid&quot;</code> carried on the dataclass, and <strong>every entry point that      RESOLVES the backend from config</strong> refuses with exit 2 and a message naming the      rejected value BEFORE any provider call — a typo&#x27;d <code>&quot;glm5&quot;</code> must never silently      reroute the artifact to OpenAI. Precedence mechanics (pass-4): the engine&#x27;s      <code>review</code>/<code>consult</code> <code>--backend</code> defaults to <strong>None</strong> (absence detectable, never a      literal <code>gpt</code>); on absence the engine resolves from <code>config.backend</code> and applies      the sentinel refusal; an EXPLICIT valid <code>--backend</code> is the source and skips the      config sentinel check entirely. The refusal is thus anchored at the      config-resolving sites (<code>backend</code> subcommand + the review/consult      config-fallback path), never blocking an explicit valid arg. The rejected raw      value is PRESERVED on the dataclass as <code>backend_error_value</code> (pass-2 A5) so      every diagnostic can name it — the <code>&quot;invalid&quot;</code> sentinel alone would lose it.      Bool shorthand unchanged (backend &quot;gpt&quot;).</p>
+<ul>
+<li>New env-frozen constant <code>GLM_MODEL</code> from <code>RAWGENTIC_ADV_REVIEW_GLM_MODEL</code></li>
+</ul>
+<p>     (default <code>&quot;glm-5.2&quot;</code>). Shared constants reused: MAX_BYTES, TIMEOUT_SECONDS,      MAX_RETRIES, BLOCK_SECRETS, REASONING_EFFORT (GLM accepts the same      low/medium/high vocabulary via <code>extra_body={&quot;reasoning_effort&quot;: ...}</code> —      verified shape in rawgentic-next).</p>
+<ul>
+<li>GLM prereq helpers: <code>glm_sdk_available()</code> (deferred — never imports at module</li>
+</ul>
+<p>     load; pass-4: checks <code>importlib.metadata.version(&quot;zhipuai&quot;) &gt;= 2.1.5</code>, not mere      <code>find_spec</code> discoverability — an older install reports NOT ready with upgrade      guidance naming the detected version),      <code>glm_api_key()</code> (<code>ZHIPUAI_API_KEY</code> → <code>ZHIPU_API_KEY</code> → <code>GLM_API_KEY</code>; read at      CALL time, not frozen at import — a key exported mid-session must work),      <code>glm_base_url()</code> (<code>ZHIPUAI_BASE_URL</code> → <code>GLM_JUDGE_BASE_URL</code> → default      <code>https://api.z.ai/api/coding/paas/v4</code>, the Coding Plan subscription endpoint,      AC9; pass-4 validation: MUST be https, MUST NOT carry userinfo/query/fragment —      a violating override is a config error, exit 2, no egress; a non-z.ai https host      is allowed but is named in the egress consent notice via the A4 rule).</p>
+<ul>
+<li><code>_load_glm_client(timeout)</code> — deferred <code>from zhipuai import ZhipuAI</code>;</li>
+</ul>
+<p>     <code>ZhipuAI(api_key=key, base_url=base_url, timeout=timeout)</code> (pass-2 A1: the      constructor CARRIES the per-attempt timeout — this is timeout layer 1; omitting      it would leave <code>next(stream)</code> able to block forever).</p>
+<ul>
+<li><code>_glm_chat(client, prompt, timeout, model, effort)</code> — ONE streamed completion:</li>
+</ul>
+<p>     <code>client.chat.completions.create(model=model, messages=[{&quot;role&quot;:&quot;user&quot;,&quot;content&quot;:prompt}],      response_format={&quot;type&quot;:&quot;json_object&quot;}, max_tokens=16384, temperature=0.2,      thinking={&quot;type&quot;:&quot;enabled&quot;}, extra_body={&quot;reasoning_effort&quot;: effort}, stream=True)</code>,      accumulated by <code>_collect_glm_stream(stream, deadline)</code> (concat <code>choices[0].delta.content</code>).      <strong>Timeout is TWO-LAYER (gate resolution F-A, both reviewers):</strong> (1) the client is      constructed with an SDK/httpx-level timeout (<code>ZhipuAI(..., timeout=&lt;per-attempt      TIMEOUT_SECONDS&gt;)</code>) so a stalled socket read RAISES instead of blocking the      iterator forever — a per-chunk check alone cannot interrupt a blocked      <code>next(stream)</code>; (2) the per-chunk wall-clock deadline additionally caps total      attempt time when chunks keep trickling. Both layers feed the existing      retry→<code>timeout</code> path. <strong>Test-layer honesty (pass-2 A12):</strong> an injected fake      client has no httpx, so layer 1 is NOT fake-testable — CI exercises layer 2      only, via a TRICKLING iterator (sleeps between chunks past the deadline; a      literally-blocked fake <code>next()</code> would hang the suite). Layer 1 is verified by      the pre-merge live smoke. Timeout semantics: <strong>per attempt</strong> (mirrors the codex      subprocess contract). On retry, a partially received stream is DISCARDED      entirely — chunks never combine across attempts.      Streaming is REQUIRED (non-streamed thinking calls die &quot;Connection error.&quot;,      measured live, rawgentic-next #74). Temperature 0.2 (deterministic review;      rawgentic-next&#x27;s 0.8 was for score-distribution sampling, not wanted here).</p>
+<ul>
+<li>Schema-in-prompt: GLM <code>json_object</code> is freeform (no strict-schema enforcement),</li>
+</ul>
+<p>     so a <code>_schema_instruction(schema)</code> suffix is appended to the SAME nonce-fenced      prompt from <code>build_prompt</code>/<code>build_consult_prompt</code>: &quot;Respond with a single JSON      object conforming to this JSON Schema: &lt;json.dumps(schema)&gt;&quot;. Parsing goes      through a tolerant <code>_strip_json_fences(text)</code> (defense: model wraps output in      triple-backtick json fences) then the EXISTING <code>_parse_codex_output</code> → <code>validate_findings</code> →      <code>normalize_findings</code> (review) / <code>_parse_codex_proposal</code> (consult). Fail-closed:      any parse/validate failure → <code>parse_error</code> status (AC4).</p>
+<ul>
+<li>`run_glm_review(artifact_path, artifact_type, project_root, *, timeout=None,</li>
+</ul>
+<p>     headless=False, artifact_text=None)<code> → </code>CodexResult<code> (dataclass reused as the      generic result type; gains a </code>backend: str = &quot;gpt&quot;<code> field; </code>model=GLM_MODEL<code>):      prereq (sdk → </code>not_installed<code>, key → </code>unauthenticated<code> — the existing status      vocabulary maps 1:1, so CLI exit codes are unchanged) → </code>read_artifact<code>      → secret scan + BLOCK_SECRETS → nonce prompt + schema suffix → retry loop      (MAX_RETRIES; SDK/network exceptions and deadline → retry, then </code>timeout<code>/</code>error<code>)      → parse/validate → </code>success<code>. <strong></code>artifact_text<code> (gate resolution F-G, tightened      pass-2 A3):</strong> when a caller passes preloaded </code>(text, truncated)<code>, only the FILE      READ is skipped — <strong>the secret scan + BLOCK_SECRETS check ALWAYS run inside      every run function on whatever text it is about to send</strong> (the scan is cheap      regex; making it caller-skippable would let any direct caller bypass the      hard-block). </code>both<code> mode still reads once; it just cannot skip the scan. Same      keyword added to </code>run_codex_review<code>, </code>run_codex_consult<code>, AND </code>run_glm_consult`      (pass-2 A8) — keyword-with-default, existing tests unaffected.</p>
+<ul>
+<li>`run_glm_consult(artifact, project_root, out_path, headless=False, timeout=None,</li>
+</ul>
+<p>     *, artifact_text=None)<code> — mirrors </code>run_codex_consult<code> incl. the      <strong>empty-proposal-marker guarantee</strong> on every non-success path      (</code>_write_empty_proposal<code>). <strong>Both-mode consult </code>--out<code> (pass-2 A13):</strong> under      </code>--backend both<code>, gpt writes the exact requested </code>--out<code>; glm writes a </code>-glm`      sibling before the extension (same rule as the findings sidecar) — two      independent peer proposals, no clobbering. Consumers (WF13 present step; WF2      Step 3 embedded synthesis) derive the EXPECTED proposal set from the exit code:      exit 0 → both files must exist and parse (the empty-proposal-marker guarantee +      per-backend write-failure rule make a missing expected file impossible without      that backend counting failed); exit 5 → the successful backend&#x27;s file. A missing      expected proposal = that backend FAILED — logged loudly, never a silent      single-output run (pass-3 clarification).</p>
+<ul>
+<li><code>prereq_status(headless=False, backend=&quot;gpt&quot;)</code> — keyword param, default preserves</li>
+</ul>
+<p>     the existing signature/messages byte-for-byte. <code>glm</code> messages: install      <code>pip install &quot;zhipuai&gt;=2.1.5&quot;</code> (pinned floor — the verified call-shape version,      gate resolution F-C); set <code>ZHIPUAI_API_KEY</code> (headless variant included).      <strong><code>both</code> = DEGRADE-AND-WARN (gate resolution F-B/F-D, amending AC3):</strong> ok iff      <strong>≥1</strong> backend ready; the message always reports BOTH backends&#x27; named results      (never collapsed); an unready backend is a loud warning, not a blocker. Only      zero-ready fails. This matches the run&#x27;s &quot;one failing never aborts the other&quot;.</p>
+<ul>
+<li><code>egress_warning(secrets=None, backend=&quot;gpt&quot;)</code> — destination named per backend:</li>
+</ul>
+<p>     gpt → OpenAI (Codex) [existing text unchanged]; glm → z.ai / Zhipu (<strong>different      provider and jurisdiction</strong>) <strong>plus the EFFECTIVE endpoint&#x27;s sanitized      scheme+host resolved from <code>glm_base_url()</code> at warning time (pass-2 A4)</strong> — with      an env-overridden base URL the consent notice must name the real destination,      not a hardcoded one; both → both destinations (AC6).</p>
+<ul>
+<li><code>render_report_md</code> / <code>render_consult_md</code>: meta gains <code>backend</code>; Reviewer line</li>
+</ul>
+<p>     renders <code>Codex (model …, reasoning effort …)</code> or <code>GLM (model glm-5.2, reasoning      effort …)</code> (AC7). Absent meta key → existing Codex wording (back-compat).      <strong>Pass-4 byte-compat rule (mirrors the sidecar matrix):</strong> a gpt single-backend      report renders BYTE-identical to today — the backend-aware wording appears only      in glm/both-mode reports; a golden test pins the legacy gpt report text.</p>
+<ul>
+<li><code>review_report_path(..., backend=&quot;gpt&quot;)</code> / <code>consult_report_path(..., backend=&quot;gpt&quot;)</code>:</li>
+</ul>
+<p>     glm → <strong><code>&lt;slug&gt;-&lt;date&gt;-glm.md</code></strong> / <strong><code>peer-&lt;slug&gt;-&lt;date&gt;-glm.md</code></strong> (suffix AFTER      the date — gate resolution F-K: a <code>-glm</code> infix before the date collides when an      artifact&#x27;s own slug ends <code>-glm</code>; after the date, a gpt review of <code>foo-glm.md</code>      yields <code>foo-glm-&lt;date&gt;.md</code> while a glm review of <code>foo.md</code> yields      <code>foo-&lt;date&gt;-glm.md</code> — disjoint by construction); gpt paths unchanged (AC5).      Residual sidecar case (user passes an <code>x-glm.json</code> base on a both-run: glm      sibling becomes <code>x-glm-glm.json</code>) is distinct within any single run and      accepted as Low with this rationale.</p>
+<ul>
+<li>CLI: <code>review</code> and <code>consult</code> gain <code>--backend {gpt,glm,both}</code> (default <code>gpt</code>).</li>
+</ul>
+<p>     New subcommand <code>backend --workspace --project --key {adversarialReview,peerConsult}</code>      prints the config-resolved backend. <strong>Exit contract (pass-2 A9 — supersedes the      draft&#x27;s &quot;exit 0 always&quot;):</strong> exit 0 + printed backend for a VALID, ABSENT, or      disabled config (absent/disabled → <code>gpt</code>); exit 2 + the rejected value on stderr      for a PRESENT-BUT-INVALID <code>backend</code> — the subcommand must never launder <code>&quot;glm5&quot;</code>      into <code>gpt</code> (that would route around the F-E refusal and egress to OpenAI).      <strong>Embedded callers on subcommand exit 2: abort the review layer LOUDLY (log +      skip, non-blocking for the host workflow) — never fall back to gpt.</strong></p>
+<ul>
+<li><strong><code>both</code> semantics (AC5):</strong> run gpt first, then glm — independently; one failing</li>
+</ul>
+<p>     never aborts the other. The artifact is <strong>read ONCE in dispatch</strong>; the secret      scan + BLOCK_SECRETS check then runs <strong>inside each run function</strong> on the shared      immutable text passed via <code>artifact_text</code> (idempotent — the second cheap scan is      intentional, per A3&#x27;s unbypassable-scan rule; only the file READ is deduplicated,      because two reads could observe a mutated file differently — peer finding). Per-backend report paths printed on      stdout prefixed <code>gpt: &lt;path&gt;</code> / <code>glm: &lt;path&gt;</code>; a failed backend prints      <code>gpt: FAILED (&lt;status&gt;)</code> to stderr. <strong>Exit codes (gate resolution F-B, amending      the draft&#x27;s 0-on-partial):</strong> <code>0</code> = ALL selected backends succeeded; <strong><code>5</code> =      PARTIAL</strong> (≥1 succeeded, ≥1 failed — machine-distinguishable; skills and      embedded callers treat 5 as success-with-loud-warning, presenting the      successful report(s) and naming the failed backend); all failed → the primary      (gpt) failure&#x27;s exit class (2/3/4). A backend skipped by degrade-and-warn      prereq counts as failed for the exit code (so a one-backend both-run exits 5,      never a silent 0). <strong><code>--findings-json</code> sidecar under <code>both</code> (peer design, adopted):</strong> gpt      writes the EXACT requested path (sidecar FORMAT byte-compatible with today&#x27;s      consumer); glm writes a <code>-glm</code> sibling before the extension (<code>x.json</code> →      <code>x-glm.json</code>, same collision + traversal guards via <code>resolve_sidecar_path</code>).      glm-only mode writes the exact requested path. A sidecar is written only for a      SUCCESSFUL validated result — never from a failed backend; <strong>and a per-backend      sidecar/report WRITE FAILURE fails that backend</strong> (mirrors the engine&#x27;s existing      fail-closed write contract — exit 3 on report/sidecar write failure — applied      per backend), so &quot;successful backend with missing output&quot; cannot occur (pass-3      clarification). <strong>Consumer contract under <code>both</code> (pass-2 A10 — the format is      unchanged, the exit/multi-file handling is not):</strong> the consumer derives the      EXPECTED sidecar set from the per-backend statuses — on exit 5 it reads the      successful backend&#x27;s sidecar (which the write-failure rule guarantees exists)      and continues with a loud warning naming the failed backend; on exit 0 it reads      BOTH the exact path and the <code>-glm</code> sibling and merges (dropping the sibling      would silently lose every glm finding at the highest-value gate). <strong>Merge      semantics (pass-4, deterministic):</strong> provenance attached from FILE identity;      normalize both lists; dedupe on <code>(evidence, location, category)</code> keeping the      highest severity on collision; stable sort by severity rank, then backend, then      original order. An expected sidecar that is missing/unreadable is treated as      that backend having FAILED, never silently skipped. <strong>Which backend succeeded is      learned from the CLI&#x27;s per-backend stdout status lines (<code>gpt: &lt;path&gt;</code> /      <code>glm: FAILED (&lt;status&gt;)</code>) — the authoritative both-mode manifest; consumers      never infer it from the exit code or file existence alone (pass-4; applies      identically to the consult proposal set).</strong> <strong>Sidecar field matrix (pass-3):</strong> gpt-only AND      both-mode gpt exact-path files = byte-identical to today (no <code>backend</code> key);      glm-only AND both-mode <code>-glm</code> sibling = carry <code>&quot;backend&quot;: &quot;glm&quot;</code> per finding;      gpt provenance during a both-mode merge is assigned by the consumer from FILE      identity, never written into the legacy-format file.</p>
+<p>2. <strong><code>skills/adversarial-review/SKILL.md</code></strong> — constants (backend modes, GLM env vars,    both-mode report paths), backend-resolution step (config default via <code>backend</code>    subcommand; an explicit VALID user <code>--backend</code> arg <strong>skips config resolution    entirely</strong> — the arg is the source, so a corrupt config <code>backend</code> is fatal only    when config IS the source; with no arg, subcommand exit 2 → STOP, never gpt),    prereq step (<code>prereq --backend &lt;b&gt;</code>), egress step (per-backend destination),    invoke step (<code>--backend</code>), present step (two reports under both), argument-hint.    <strong>Exit-code table amended (pass-2 A11):</strong> <code>0</code> success · <code>2</code> prereq/config ·    <code>3</code> error/timeout · <code>4</code> parse · <strong><code>5</code> PARTIAL (both-mode only): present the    successful report(s), name the failed backend, do NOT stop</strong> — the current    &quot;on any non-zero exit the review did NOT succeed&quot; sentence gains the exit-5    carve-out. 3. <strong><code>skills/peer-consult/SKILL.md</code></strong> — same shape of edits (incl. exit-5 carve-out    and dual <code>--out</code> presentation under both). 4. <strong><code>docs/config-reference.md</code></strong> — <code>backend</code> field on both blocks. 5. <strong>README</strong> — feature text + Changelog entry (exact repo shape, incl. diagram    decision + Suite old→new). 6. <strong>Version ×3 surfaces</strong> — minor bump (3.37.0 → 3.38.0):    <code>.claude-plugin/plugin.json</code>, <code>plugins/rawgentic/.codex-plugin/plugin.json</code>,    <code>test_plugin_version_bumped</code>. 7. <strong>Tests</strong> (<code>tests/hooks/…</code>) — new module <code>test_glm_backend.py</code> (or folded into the    existing adversarial-review test file per its conventions — Step 5 decides from the    inventory): config <code>backend</code> coercion incl. invalid shapes AND    present-but-invalid-refuses-with-no-egress + <code>backend_error_value</code> preserved (F-E,    A5); prereq per backend (fake <code>find_spec</code>, env keys) incl. both-mode    degrade-and-warn (F-B/F-D); <code>run_glm_review</code>/<code>run_glm_consult</code> with injected fake    client (success, malformed JSON, empty stream, <strong>trickling-iterator deadline    timeout</strong> (F-A/A12 — layer 2 only; layer 1 is live-smoke-verified), missing    SDK/key, secrets block incl. secrets-block-with-supplied-artifact_text (A3));    fence-strip; report paths (<code>-glm</code> after date) + Reviewer line; egress wording    (z.ai/Zhipu + effective sanitized endpoint named, A4); base-URL redaction    (scheme+host only, F-I); CLI <code>--backend</code> + <code>backend</code> subcommand exit contract    (0 valid/absent, 2 present-invalid, A9) + both-mode exit-code matrix (0/5/failure    classes) + sidecar sibling + consult dual <code>--out</code> (A13) +    gpt-sidecar-byte-identical (F-H). Red-before-green for AC4. 8. <strong><code>skills/implement-feature/references/steps.md</code></strong> (gate resolution F-F —    embedded wiring): each embedded engine invocation (Step 3 peer consult argv,    Step 11 diff-review argv) resolves the project&#x27;s configured backend via the    <code>backend</code> subcommand and passes <code>--backend &lt;resolved&gt;</code>; on subcommand exit 2,    abort the review layer loudly (log + skip, non-blocking) — never default to gpt    (A9); skill-dispatch call sites (Steps 4/6/8) need no argv change (the WF5 skill    resolves config itself). Step 11 join rewritten per the consumer contract above    (exit 5 + dual-sidecar merge, A10); Step 3 synthesis reads both proposals when a    <code>-glm</code> <code>--out</code> sibling exists (A13).</p>
+<p>Pass-2 A14 (scope correction): the draft&#x27;s file 9 (<code>skills/fix-bug/references/steps.md</code>) is REMOVED — WF3&#x27;s only adversarial touchpoint is the Step 4 skill dispatch <code>/rawgentic:adversarial-review &lt;rca-path&gt; plan</code>, which resolves config itself; WF3 has no raw-argv <code>review</code>/<code>consult</code> site to wire. Verified against skills/fix-bug/references/steps.md:258 by the pass-2 reviewer.</p>
+<h2>Configuration changes</h2>
+<ul>
+<li>Workspace per-project blocks gain optional <code>backend</code>:</li>
+</ul>
+<p>  <code>&quot;adversarialReview&quot;: {&quot;enabled&quot;: true, &quot;workflows&quot;: [...], &quot;backend&quot;: &quot;both&quot;}</code> —   same for <code>peerConsult</code>. Absent → <code>gpt</code>.</p>
+<ul>
+<li>New env: <code>RAWGENTIC_ADV_REVIEW_GLM_MODEL</code> (default <code>glm-5.2</code>); consumed (not new):</li>
+</ul>
+<p>  <code>ZHIPUAI_API_KEY</code>/<code>ZHIPU_API_KEY</code>/<code>GLM_API_KEY</code>, <code>ZHIPUAI_BASE_URL</code>/<code>GLM_JUDGE_BASE_URL</code>.</p>
+<h2>Error handling and failure modes</h2>
+<ul>
+<li>SDK missing → <code>not_installed</code> (exit 2, message: <code>pip install &quot;zhipuai&gt;=2.1.5&quot;</code>).</li>
+<li>Key missing → <code>unauthenticated</code> (exit 2, message names <code>ZHIPUAI_API_KEY</code>; headless variant).</li>
+<li>Present-but-invalid config <code>backend</code> → config error, exit 2, NO egress (F-E).</li>
+<li>Stream stall → SDK read-timeout raises (client-level) OR per-chunk deadline →</li>
+</ul>
+<p>  retry with full discard, then <code>timeout</code> (exit 3) (F-A).</p>
+<ul>
+<li>SDK/network/construction exception (incl. incompatible installed SDK version) →</li>
+</ul>
+<p>  retry where transient, then <code>error</code> (exit 3) with version guidance.</p>
+<ul>
+<li>Malformed / non-JSON / schema-invalid output → <code>parse_error</code> (exit 4) — never</li>
+</ul>
+<p>  fabricated findings (AC4).</p>
+<ul>
+<li>Secrets + BLOCK_SECRETS → <code>error</code> before any egress (AC6).</li>
+<li><code>both</code>: independent execution; exit 0 all-succeeded, exit 5 partial (loud), all</li>
+</ul>
+<p>  failed → primary failure class (F-B).</p>
+<ul>
+<li>Injected-fake tests cover every path; no network in CI.</li>
+</ul>
+<h2>Security implications</h2>
+<ul>
+<li><strong>New egress destination:</strong> artifact text goes to z.ai/Zhipu when backend includes</li>
+</ul>
+<p>  glm — named explicitly in the egress notice (jurisdiction differs from OpenAI).   Warn-only (matches existing policy); BLOCK_SECRETS hard-block applies identically.</p>
+<ul>
+<li>Nonce-fenced prompt-injection defense preserved verbatim (same <code>build_prompt</code> /</li>
+</ul>
+<p>  <code>build_consult_prompt</code>; the schema suffix is appended OUTSIDE the fence).</p>
+<ul>
+<li>API key read from env only; never logged, never in argv (SDK sends it in headers —</li>
+</ul>
+<p>  no subprocess, <code>shell=False</code> irrelevant: no shell at all on the GLM path).</p>
+<ul>
+<li><strong>Endpoint stderr log is REDACTED (F-I):</strong> only scheme + host of the resolved base</li>
+</ul>
+<p>  URL is printed (userinfo and query stripped) — a user-supplied   <code>https://user:token@host/?key=…</code> override must not leak into session notes or   headless STATUS comments. Redaction test included.</p>
+<ul>
+<li>Report-only invariant unchanged.</li>
+</ul>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: zhipuai.ZhipuAI().chat.completions.create(stream=True, thinking, response_format=json_object, extra_body.reasoning_effort) against the z.ai Coding Plan endpoint (glm-5.2)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — projects/rawgentic-next/hooks/glm_batch_judge.py <code>judge_cells_sync</code> + <code>_load_sync_client</code>, live-smoke-tested against <code>https://api.z.ai/api/coding/paas/v4</code> (module docstring VERIFICATION STATUS, 2026-07-13): slug valid, streaming completes where non-streamed dies, json worksheets parse under thinking mode   failure: fail-loud   surface: SDK raises / deadline aborts; engine converts every path to a non-success CodexResult status → CLI exit matrix consumed by skills and embedded callers as — 2/3/4 STOP (failed review, fail-closed); 5 PARTIAL (both-mode only — present successful backend outputs, name the failure, continue); 0 full success (pass-2 A2)</p>
+<p>Note: <code>zhipuai</code> is NOT installed on this host/CI. CI stays network-free (injected-fake-client tests over the exact call/stream shapes). <strong>Install lifecycle (pass-2 A6):</strong> this is a user-host plugin, not a deployed service — there is no project dependency manifest to cite; the prereq gate IS the installation lifecycle, exactly as the codex CLI install is for the gpt backend (GLM mode is unsupported where the user cannot <code>pip install</code>, and the prereq message says so). <strong>Gate resolution F-C (owner decision): a PRE-MERGE LIVE SMOKE replaces the deferred-to-target plan</strong> — at Step 9 verification, <code>pip install &quot;zhipuai&gt;=2.1.5&quot;</code> locally, obtain the subscription key from the owner, and run one real <code>--backend glm</code> review against the Coding Plan endpoint; only then may the PR claim live-verified. Install guidance pins <code>zhipuai&gt;=2.1.5</code> (the verified call-shape floor). Fallback if the key is genuinely unreachable mid-run (pass-2 A7 wording): the PR ships <strong>explicitly NOT-live-verified</strong> — deferred-to-target with the #138 recording discipline (plan task line, PR <code>## Deferred verification</code> section, run-record), naming the likeliest-wrong claim (exact kwarg acceptance of <code>thinking=</code>/<code>extra_body=</code> by the installed zhipuai version). A fallback PR must never describe itself as live-verified.</p>
+<h2>Backward compatibility</h2>
+<ul>
+<li>Default backend <code>gpt</code> everywhere (config absent, CLI arg absent) — codex-only users</li>
+</ul>
+<p>  byte-for-byte unaffected; zero behavior change without opt-in.</p>
+<ul>
+<li>No existing function&#x27;s positional signature changes; new params keyword-with-default.</li>
+<li>Existing report paths, exit codes, and status vocabulary unchanged for gpt.</li>
+</ul>
+<p>  <strong>Sidecar in gpt single-backend mode is BYTE-identical</strong> — the per-finding   <code>backend</code> key is emitted only in glm/both outputs (F-H), so strict-schema or   snapshot consumers of today&#x27;s sidecar are untouched. Exit 5 is emitted ONLY under   <code>--backend both</code> (a mode no existing caller can be in).</p>
+<ul>
+<li><code>CodexResult</code> dataclass name retained as the shared result type (renaming would</li>
+</ul>
+<p>  churn the tested surface for zero behavior).</p>
+<h2>Refinements adopted from the cross-model peer consult (provenance)</h2>
+<p>Peer proposal: <code>docs/reviews/peer-rawgentic-peer-problem-403-2026-07-14.md</code> (Codex, blind both ways). Independently convergent on the mirror-function architecture, deferred import, injected-client tests, status-vocabulary reuse, <code>-glm</code> path suffix, and per-backend egress. Adopted from the peer where it was better:</p>
+<p>1. <strong>Sidecar-sibling design</strong> (replaces my union-sidecar): under <code>both</code>, gpt writes    the exact requested <code>--findings-json</code> path (consumer byte-compat), glm a <code>-glm</code>    sibling — no schema change for existing consumers. 2. <strong>Read-once shared input:</strong> the artifact READ happens once; both jobs get    identical immutable text. (The secret scan runs inside each run function on that    text — A3 made it unbypassable, superseding the peer&#x27;s scan-once placement.) 3. <strong>Retry hygiene:</strong> a partially received stream is discarded entirely on retry —    chunks are never combined across attempts. 4. <strong>Timeout semantics defined:</strong> TIMEOUT_SECONDS is <strong>per attempt</strong> (matches the    codex subprocess semantics, where each retry gets the full timeout); the stream    deadline enforces it chunk-by-chunk. 5. <strong><code>both</code> prereq does not collapse detail:</strong> both named results reported, not a    merged boolean message. 6. <strong>Endpoint visibility:</strong> the selected GLM base URL is printed to stderr at call    time (never the key) — catches a token routed to the wrong endpoint. (Tightened    by gate resolution F-I: scheme+host only.) 7. <strong>Runtime SDK incompatibility caught:</strong> importability passing does not guarantee    call-shape compatibility — client construction and create() calls are wrapped;    failures → <code>error</code> status with version guidance.</p>
+<p>Rejected from the peer, with reason: the normalized result-envelope + adapter layer (two backends do not earn a third abstraction; <code>CodexResult</code> gains a <code>backend</code> field instead — revisit with a third backend, same trigger as the backend-object alternative above). <code>_parse_codex_proposal</code> keeps its name (it is already provider-neutral; renaming churns the tested surface).</p>
+<h2>Step 4 gate resolutions (four passes — gate PASSED at pass 4)</h2>
+<p><strong>Pass 4 (rev 4 → rev 5, VERDICT: PASSED, owner-confirmed).</strong> Self-review: 0 C/H (second consecutive convergence), 1 Medium (<code>--backend</code> None-default mechanics). Adversarial: 2H/6M — H1 dissolves (the per-backend stdout status lines ARE the both-mode manifest; sentence added), H2 discarded with reason (httpx read-timeout applies per socket-read op incl. streaming-body iteration — documented httpx semantics; zhipuai is httpx-based; synthetic stall-server test disproportionate), M-5 = fifth F-C re-litigation (stands). Six rev-5 amendments: stdout-manifest sentence; <code>--backend</code> None default + refusal anchored at config-resolving sites; deterministic merge algorithm; <code>importlib.metadata</code> version-floor prereq; gpt single-backend report byte-compat golden rule; <code>glm_base_url</code> https/no-userinfo validation. Loop-back budget fully spent (design 2/2, spec_tighten 1/2, global 3/3); owner elected PASS over out-of-workflow escalation.</p>
+<p><strong>Pass 1 (rev 1 → rev 2).</strong> Self-review (opus reviewer, 5 findings) + adversarial (Codex, 7), deduped to 10; <code>design</code> loop-back #1 consumed. User-resolved forks (2026-07-14): F-B/F-D degrade-and-warn + exit 5; F-E invalid-backend refuses with no egress (amends AC1); F-F embedded WF2 wiring in scope; F-C pre-merge live smoke. Clear fixes: F-A two-layer timeout; F-G <code>artifact_text</code> read-once; F-H gpt-sidecar byte-identical; F-I redacted endpoint log; F-K <code>-glm</code> suffix after date.</p>
+<p><strong>Pass 3 (rev 3 → rev 4).</strong> Self-review CONVERGED (0 C/H, 1 Medium wording; verified all pass-2 tension points cohere). Adversarial: 3H/3M — the Highs dissolve under engine-contract verification (per-backend write-failure fail-closed precludes the missing-output scenarios) or re-litigate the decided F-C (third time; stands). Owner elected one more full gate pass; the final global loop-back consumed via <code>spec_tighten</code> (the findings&#x27; true class; counters: spec_tighten 1/2, global 3/3). Rev-4 wordings: scan-once → scan-in-each-run-function reconciliation ×2; per-backend write-failure sentence (review sidecar + consult proposal); sidecar field matrix; explicit-arg-skips-config-resolution precedence clause.</p>
+<p><strong>Pass 2 (rev 2 → rev 3).</strong> Self-review (opus, 6 findings, all spec-tightening) + adversarial (Codex, 9), deduped to 13; adversarial findings enter untagged so the fold forced <code>design</code> loop-back #2 (counters: design 2/2, global 2/3). No new user forks — resolutions follow pass-1 decisions: A1 constructor timeout; A2 surface exit matrix; A3 unbypassable secret scan on supplied text; A4 effective-endpoint egress notice; A5 <code>backend_error_value</code>; A8/A13 consult <code>artifact_text</code> + dual <code>--out</code>; A9 subcommand exit contract + no-gpt-fallback on invalid; A10 Step 11 exit-5 + dual-sidecar consumer; A11 SKILL.md exit-5 carve-out; A12 trickling-iterator test honesty; A14 fix-bug steps.md removed from scope (no raw-argv site). Discarded with reason: adversarial &quot;cite a dependency manifest&quot; (user-host plugin — prereq gate is the lifecycle, mirroring the codex CLI prereq) and &quot;make the live smoke non-waivable&quot; (re-litigates the user&#x27;s F-C decision, which stands; fallback wording made honest instead).</p>
+<h2>Multi-PR assessment</h2>
+<p>Single PR. ~400 engine lines + skills/docs/tests — cohesive single-module feature; splitting would strand a half-wired backend. (Embedded steps.md wiring rides the same PR — it is what makes the config field non-inert.)</p>
+
+</main>
+<footer>Last updated: 2026-07-14 23:52 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

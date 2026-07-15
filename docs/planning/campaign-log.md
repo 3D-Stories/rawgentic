@@ -14,7 +14,43 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
-## Epic #378 — session-mining adoption: FTS5 index, WF17 mining, WF14 recurrence (Path B, auto-run)
+## Standalone — #403: selectable GLM review/consult backend (gpt | glm | both) · v3.38.0
+
+**Issue.** #403 (feature, standard, full spine — new optional dependency): WF5
+adversarial-review and WF13 peer-consult were hardwired to the Codex CLI; the owner's
+GLM Coding Plan subscription (proven live in rawgentic-next's bench-judge lane) makes
+a second, independent cross-model backend available.
+
+**What shipped.** A `backend` field (`gpt`|`glm`|`both`, absent → gpt) on the
+`adversarialReview`/`peerConsult` config blocks + `--backend` on the `review`/`consult`/
+`prereq` CLI and both skills. New GLM engine path in `hooks/adversarial_review_lib.py`:
+zhipuai SDK (deferred import, version floor 2.1.5), sync-STREAMING with a two-layer
+timeout (SDK read timeout at client construction + per-chunk deadline), schema-in-prompt
++ the existing tolerant validators, the same nonce-fenced injection defense, unbypassable
+in-run-function secret scan (supplied `artifact_text` is scanned too). `both` runs each
+backend independently — gpt keeps every path byte-identical, glm writes `-glm` siblings
+(report suffix AFTER the date; sidecar/out siblings), exit 5 = machine-distinguishable
+PARTIAL. Fail-closed egress control: a present-but-invalid backend value (incl. explicit
+JSON null, half/empty resolution args) REFUSES with exit 2 before any provider call —
+never silently laundered into gpt. Embedded WF2 Step 3/11 call sites resolve the config
+backend via the new `backend` subcommand and consume exit 5 + dual sidecars with a
+deterministic merge.
+
+**Verification.** TDD throughout (130 new tests, injected fake clients — CI network-free);
+**LIVE pre-merge smoke on the z.ai Coding Plan subscription endpoint**: glm-only review
+(exit 0, GLM reviewer line, findings parsed) and both-mode with dual sidecars (exit 0,
+stdout manifest, gpt sidecar untagged/byte-compat, glm sibling tagged). Suite
+2759+1skip→2889+1skip.
+
+**Gates.** Step 4 ran FOUR passes (owner elected a 4th over escalation; 36 deduped
+findings adjudicated, budget 3/3 spent — the cross-model reviewer re-litigated the
+owner's decided live-smoke fork repeatedly; discard-with-reason each time). 8a dual
+reviews on all 4 high-risk tasks (16 findings; fixes incl. a lazy-urlsplit port crash
+on the consent path). Step 11: all four review sources converged on one High (prereq
+CLI missing `--backend`) — fixed red-before-green with three more diff-review catches
+(JSON-null backend, empty resolution args, consult out-sibling/artifact collision).
+
+
 
 ### #375 — FTS5 session index + `/rawgentic:session-recall` skill · v3.33.0
 
