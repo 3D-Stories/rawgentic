@@ -910,7 +910,10 @@ def loopback_class_entries(findings: list) -> list[str]:
     for f in findings:
         if not isinstance(f, dict) or f.get("severity") not in ("Critical", "High"):
             continue
-        if f.get("category") == "security":
+        # Case-INSENSITIVE on purpose (unlike the vocab match below): widening
+        # the security net is fail-closed, so the defense holds even on a raw,
+        # un-normalized finding (8a review: self-contained, not contract-bound).
+        if str(f.get("category", "")).lower() == "security":
             entries.append("untagged")
             continue
         val = f.get("loopback_class")

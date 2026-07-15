@@ -359,6 +359,14 @@ def test_entries_security_category_unconditionally_untagged():
     assert arl.loopback_class_entries(fs) == ["untagged"]
 
 
+def test_entries_security_override_case_insensitive_self_contained():
+    # The override must hold on RAW (un-normalized) findings too — widening the
+    # security net is fail-closed, unlike vocab case-repair which would open
+    # the cheap path.
+    fs = [_lc_finding(category="Security", loopback_class="spec-tightening")]
+    assert arl.loopback_class_entries(fs) == ["untagged"]
+
+
 def test_entries_medium_low_excluded_and_empty_input():
     fs = [_lc_finding(severity="Medium", loopback_class="spec-tightening"),
           _lc_finding(severity="Low", loopback_class="design-flaw")]
