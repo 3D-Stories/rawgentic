@@ -113,3 +113,19 @@ def test_codex_long_description_skill_count_matches_disk():
         f"longDescription claims {claimed_count} skills but "
         f"skills/*/SKILL.md has {actual_count}"
     )
+
+
+def test_codex_description_matches_main_plugin():
+    """#406: the codex-mirror `description` must be byte-identical to the main
+    plugin's — they enumerate the same skill set. This closes the #401 guard
+    gap: `test_codex_long_description_skill_count_matches_disk` only guards the
+    longDescription TOTAL, so the description-field breakdown ("N workspace
+    management") + skill enumeration drifted on the mirror unnoticed (8 vs 9,
+    missing epic-run). Equality catches ANY future divergence, forcing both
+    surfaces updated together on the next skill addition."""
+    main_desc = _load(CLAUDE_PLUGIN)["description"]
+    codex_desc = _load(CODEX_PLUGIN)["description"]
+    assert codex_desc == main_desc, (
+        "codex-mirror plugin.json description drifted from the main plugin's; "
+        "mirror them verbatim (both enumerate the same skills)"
+    )
