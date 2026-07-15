@@ -124,6 +124,7 @@ def test_build_prompt_loopback_class_rubric_present():
     # the unsure default, the boundary clarifier, and null-for-Medium/Low.
     p = arl.build_prompt("# My Design", "design", nonce="abc123")
     assert '"spec-tightening"' in p and '"design-flaw"' in p
+    assert "for Critical and High findings only" in p
     assert "INTENT is right but its text is wrong" in p
     assert "verbatim in the recommendation" in p
     # Peer-adopted boundary clarifier: doc-shaped edits that change behavior
