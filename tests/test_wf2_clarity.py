@@ -1146,3 +1146,79 @@ class TestStep8InlineVsDelegated:
         assert "does NOT settle the delegation policy" in s8 or (
             "does not settle the delegation policy" in s8.lower()
         ), "must state the honesty bound: policy remains unsettled"
+
+
+# --- #393: disposition ledger — gate-close persistence + pass-N dispatch ---
+
+class TestDispositionLedger:
+    """Drift guards for the #393 disposition ledger. Pin the canonical
+    gate-close persistence sentence (Step 4), the pass-N dispatch sequence
+    vocabulary (--dispositions/--issue, the exit-6 loud-abort marker, the
+    degraded marker), the join-backstop contract (adopted-exemption +
+    REOPENS strip-before-key), multi-site presence of append_disposition at
+    the three gates, and the .rawgentic-dispositions-* glob in the Step 11
+    stale sweep."""
+
+    def _section(self, start: str, end: str) -> str:
+        text = _text()
+        return text[text.index(start):text.index(end)]
+
+    def _step4(self) -> str:
+        return self._section("## Step 4: Quality Gate", "## Step 5:")
+
+    def _step6(self) -> str:
+        return self._section("## Step 6: Quality Gate", "## Step 7:")
+
+    def _step11(self) -> str:
+        return self._section("## Step 11: Pre-PR Code Review", "## Step 11.5:")
+
+    def test_canonical_gate_close_persistence_sentence(self):
+        # ONE canonical sentence, Step 4: terminal dispositions are persisted
+        # at gate close via the plan_lib writer.
+        s4 = " ".join(self._step4().split())
+        assert ("append each Critical/High finding's TERMINAL disposition "
+                "(adopted | declined | dissolved) to the issue's "
+                "`dispositions.jsonl` via `plan_lib.append_disposition`") in s4
+
+    def test_append_disposition_present_at_all_three_gates(self):
+        # Multi-site presence (>=): each gate's close names the writer.
+        for section in (self._step4(), self._step6(), self._step11()):
+            assert "append_disposition" in section
+
+    def test_canonical_dispatch_sequence_sentence(self):
+        # Pass-N dispatch: both flags, orchestrator folds + temp-copies first.
+        s4 = " ".join(self._step4().split())
+        assert "--dispositions <temp path> --issue <n>" in s4
+        assert "fold_dispositions" in s4
+
+    def test_exit6_loud_abort_marker(self):
+        s4 = " ".join(self._step4().split())
+        assert "failed (ledger integrity)" in s4, (
+            "exit 6 must map to the loud-abort marker, never absorbed as a "
+            "benign backend failure")
+
+    def test_degraded_marker_vocabulary(self):
+        s4 = " ".join(self._step4().split())
+        assert "ledger: degraded" in s4, (
+            "benign ledger failure is fail-OPEN but must stay visible in the "
+            "gate marker")
+
+    def test_join_backstop_adopted_exemption(self):
+        s4 = " ".join(self._step4().split())
+        assert "possible failed remediation" in s4, (
+            "a finding matching an ADOPTED entry must resurface, never "
+            "auto-dissolve")
+        assert "auto-dissolved as re-litigation" in s4
+
+    def test_join_backstop_reopens_strip_before_key(self):
+        s4 = " ".join(self._step4().split())
+        assert "stripping" in s4 and "REOPENS" in s4, (
+            "the comparison key is computed AFTER stripping a valid "
+            "REOPENS prefix (plan_lib.strip_reopens)")
+        assert "strip_reopens" in s4
+
+    def test_dispositions_glob_in_stale_sweep(self):
+        s11 = self._step11()
+        assert ".rawgentic-dispositions-" in s11, (
+            "the dispositions temp-copy glob must be in the Step 11 1a stale "
+            "sweep list")
