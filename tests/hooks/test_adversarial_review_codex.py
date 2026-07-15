@@ -119,6 +119,27 @@ def test_prereq_ok(tmp_path, monkeypatch):
 
 # --- build_prompt ---
 
+def test_build_prompt_loopback_class_rubric_present():
+    # #407: the prompt must define both classes with WF2's own rubric wording,
+    # the unsure default, the boundary clarifier, and null-for-Medium/Low.
+    p = arl.build_prompt("# My Design", "design", nonce="abc123")
+    assert '"spec-tightening"' in p and '"design-flaw"' in p
+    assert "INTENT is right but its text is wrong" in p
+    assert "verbatim in the recommendation" in p
+    # Peer-adopted boundary clarifier: doc-shaped edits that change behavior
+    # are still design flaws.
+    assert ("contracts, executable behavior, data shape, ordering, or "
+            "verification strategy") in p
+    assert 'unsure, use "design-flaw"' in p
+    assert "null for Medium/Low findings" in p
+
+
+def test_build_prompt_injection_guard_covers_loopback_classifications():
+    # #407: steering the loop-back classification is a named attack.
+    p = arl.build_prompt("body", "design", nonce="n")
+    assert "severity or loop-back classifications" in p
+
+
 def test_build_prompt_includes_artifact_and_lens():
     p = arl.build_prompt("# My Design", "design", nonce="abc123")
     assert "My Design" in p
