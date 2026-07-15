@@ -14,6 +14,7 @@ Provides testable helpers for:
 Used by skills/implement-feature/SKILL.md via `python3 -c` invocations.
 """
 import fcntl
+import hashlib
 import json as _json
 import os
 import re
@@ -1329,6 +1330,178 @@ def resolve_deferral(
         target["user_ack"] = bool(user_ack)
     _write_deferrals(deferrals_path, deferrals)
     return target
+
+
+# --- disposition ledger (jsonl, #393) ---
+#
+# `claude_docs/.wf2-state/<issue>/dispositions.jsonl` — TERMINAL gate decisions
+# (adopted | declined | dissolved) fed forward as reviewer context on pass-N
+# adversarial dispatches. Normative record schema: design doc
+# docs/planning/2026-07-15-393-disposition-ledger.md §1.
+
+_DISPOSITION_VALUES: Final[tuple[str, ...]] = ("adopted", "declined", "dissolved")
+_REOPENS_RE = re.compile(r"^REOPENS (d-[^\s:-]+-\d+-\d+-[A-Za-z0-9]{4}): (.+)$", re.DOTALL)
+
+
+def compute_finding_key(finding: dict) -> str:
+    """sha256 identity over EXACTLY the engine dedupe tuple.
+
+    "sha256:" + hex sha256 of the UTF-8 bytes of
+    json.dumps([severity, location or "", description],
+    separators=(",",":"), ensure_ascii=True). `category` is deliberately
+    EXCLUDED: the mechanical key must be relabel-proof (the same finding
+    re-raised under a different category still matches the join backstop);
+    the prompt's 4-field "substantive match" wording is model-facing
+    guidance only.
+    """
+    payload = _json.dumps(
+        [finding["severity"], finding.get("location") or "", finding["description"]],
+        separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def append_disposition(ledger_path: str, entry: dict) -> None:
+    """Append a TERMINAL disposition entry to the issue's ledger (plain line append).
+
+    Auto-adds `ts` (ISO 8601 UTC) alongside the caller's `date`. Plain
+    open(..., "a") — append-only JSONL needs no atomic rewrite, and the serial
+    per-issue orchestrator is the one writer. Boundary vs deferrals.json: a
+    DEFERRAL is an unresolved High in a resolution pipeline (re-presented at
+    Step 11); the ledger holds only TERMINAL decisions
+    (adopted | declined | dissolved) — a deferral that later resolves gets a
+    ledger entry at THAT gate close.
+    """
+    enriched = dict(entry)
+    enriched.setdefault("ts", _now_iso())
+    # Fail CLOSED at the write (Step 11 A4, the append_deferral precedent): a
+    # malformed record would otherwise look persisted at gate close and then
+    # be skipped by the next pass's tolerant reader — the settled decision
+    # silently drops out of ledger memory.
+    reason = _disposition_entry_error(enriched)
+    if reason is not None:
+        raise ValueError(f"append_disposition: invalid entry ({reason})")
+    line = _json.dumps(enriched, separators=(",", ":")) + "\n"
+    os.makedirs(os.path.dirname(ledger_path) or ".", exist_ok=True)
+    with open(ledger_path, "a", encoding="utf-8") as f:
+        f.write(line)
+
+
+def _disposition_entry_error(entry: dict) -> str | None:
+    """Return a reason string if the entry is invalid, else None."""
+    if entry.get("schema_version") != 1:
+        return f"schema_version {entry.get('schema_version')!r} != 1"
+    required_str = ("id", "finding_key", "disposition", "reason", "decided_by", "date")
+    for field in required_str:
+        if not isinstance(entry.get(field), str) or not entry[field]:
+            return f"missing/mistyped field {field!r}"
+    for field in ("issue", "pass"):
+        if not isinstance(entry.get(field), int) or isinstance(entry.get(field), bool):
+            return f"missing/mistyped field {field!r}"
+    if not isinstance(entry.get("gate"), str):
+        return "missing/mistyped field 'gate'"
+    if entry["disposition"] not in _DISPOSITION_VALUES:
+        return f"disposition {entry['disposition']!r} not terminal (adopted|declined|dissolved)"
+    finding = entry.get("finding")
+    if not isinstance(finding, dict):
+        return "missing/mistyped field 'finding'"
+    for field in ("severity", "category", "description"):
+        if not isinstance(finding.get(field), str) or not finding[field]:
+            return f"missing/mistyped finding field {field!r}"
+    if entry["finding_key"] != compute_finding_key(finding):
+        return "finding_key does not recompute from stored finding fields"
+    return None
+
+
+def read_dispositions(ledger_path: str) -> tuple[list[dict], int]:
+    """Tolerant ledger reader. Returns (valid_entries, skipped_count).
+
+    Missing file -> ([], 0). A line is CORRUPT — skipped with a stderr warning
+    and counted — when it fails JSON parse OR entry validation
+    (schema_version == 1, required fields with the stated types, finding_key
+    recomputes from the stored finding fields). Bounded, visible loss: the
+    caller's degraded marker carries the skipped count. Boundary vs
+    deferrals.json: this ledger holds TERMINAL decisions only — `deferred` is
+    NOT a disposition here (deferrals have their own file and gate).
+    """
+    if not os.path.exists(ledger_path):
+        return [], 0
+    entries: list[dict] = []
+    skipped = 0
+    # Binary read + per-line decode: text-mode iteration decodes lazily, so a
+    # single non-UTF-8 byte would raise OUTSIDE the tolerant path and drop the
+    # whole ledger (8a R2). One bad line must cost one line.
+    with open(ledger_path, "rb") as f:
+        for lineno, raw_bytes in enumerate(f, start=1):
+            try:
+                raw = raw_bytes.decode("utf-8").strip()
+            except UnicodeDecodeError:
+                skipped += 1
+                print(
+                    f"plan_lib: skipping corrupt dispositions line {lineno} "
+                    f"in {ledger_path}: not UTF-8",
+                    file=sys.stderr,
+                )
+                continue
+            if not raw:
+                continue
+            try:
+                entry = _json.loads(raw)
+            except _json.JSONDecodeError:
+                skipped += 1
+                print(
+                    f"plan_lib: skipping corrupt dispositions line {lineno} "
+                    f"in {ledger_path}: not JSON: {raw[:80]!r}",
+                    file=sys.stderr,
+                )
+                continue
+            reason = _disposition_entry_error(entry) if isinstance(entry, dict) \
+                else "entry is not an object"
+            if reason is not None:
+                skipped += 1
+                print(
+                    f"plan_lib: skipping corrupt dispositions line {lineno} "
+                    f"in {ledger_path}: {reason}",
+                    file=sys.stderr,
+                )
+                continue
+            entries.append(entry)
+    return entries, skipped
+
+
+def fold_dispositions(entries: list[dict]) -> list[dict]:
+    """Last-write-wins fold by finding_key in file order.
+
+    Later entries for the same identity supersede earlier ones (append-only
+    history; the read_review_log precedent). Survivors are returned in
+    LAST-occurrence order — a superseded key moves to the end — so a
+    downstream size cap dropping from the front discards the oldest-DECIDED
+    entries first (Step 11 A3/R3: first-seen order would evict the most
+    recently re-decided identity just because it was first raised early).
+    """
+    folded: dict[str, dict] = {}
+    for entry in entries:
+        folded.pop(entry["finding_key"], None)
+        folded[entry["finding_key"]] = entry
+    return list(folded.values())
+
+
+def strip_reopens(description: str) -> tuple[str | None, str]:
+    """Parse an optional leading 'REOPENS <id>:' prefix from a finding description.
+
+    Returns (disposition_id, stripped_text) when the prefix is well-formed —
+    id matches the d-<gate>-<pass>-<seq>-<tok> shape AND non-empty delta text
+    follows the colon — else (None, original_text). The join backstop computes
+    the comparison key over the STRIPPED text (hashing the prefixed text would
+    make the matched-entry validation unreachable).
+    """
+    m = _REOPENS_RE.match(description)
+    if m is None:
+        return None, description
+    delta = m.group(2).strip()
+    if not delta:
+        return None, description
+    return m.group(1), delta
 
 
 # --- loop-back budget persistence ---

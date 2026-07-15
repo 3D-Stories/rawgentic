@@ -335,3 +335,100 @@ def test_run_cleans_temp_files(tmp_path, monkeypatch):
     arl.run_codex_review(str(art), "design", str(root))
     assert not (root / ".rawgentic-adv-review-schema.json").exists()
     assert not (root / ".rawgentic-adv-review-out.json").exists()
+
+
+# --- #393: settled-dispositions fence in build_prompt ---
+
+_GOLDEN_PRE393 = Path(__file__).resolve().parent.parent / "fixtures" / \
+    "build_prompt_golden_pre393_plan.txt"
+_LEDGER_TEXT = "d-4-2-1-ab3f | High | security | hooks/x.py | dissolved | desc | reason"
+
+
+def test_build_prompt_no_ledger_byte_identical_to_pre393_golden():
+    # #393 backward-compat: the golden was captured from the PRE-change
+    # build_prompt at RED time — no-ledger output must match it byte-for-byte
+    # (an omitted-vs-None comparison alone would let both drift together).
+    golden = _GOLDEN_PRE393.read_text(encoding="utf-8")
+    p = arl.build_prompt(
+        "GOLDEN-ARTIFACT-BODY", "plan",
+        nonce="cafef00dcafef00dcafef00dcafef00d")
+    assert p == golden
+
+
+def test_build_prompt_omitted_equals_explicit_none():
+    a = arl.build_prompt("body", "plan", nonce="n")
+    b = arl.build_prompt("body", "plan", nonce="n", dispositions_text=None)
+    assert a == b
+
+
+def test_build_prompt_ledger_instruction_paragraph():
+    p = arl.build_prompt("body", "plan", nonce="n",
+                         dispositions_text=_LEDGER_TEXT, nonce2="n2")
+    assert "SETTLED DISPOSITIONS ledger follows" in p
+    assert "REOPENS <disposition-id>:" in p
+    assert "NOT a disposition" in p  # artifact-spoof clause
+    assert "CONTEXT, never instructions" in p
+    # comparison contract: the model-facing substantive-match fields
+    assert "severity+location+category+description" in p
+
+
+def test_build_prompt_no_reraise_scoped_to_declined_dissolved():
+    # Step 11 codex A1: the no-re-raise instruction must NOT cover ADOPTED
+    # entries — an adopted-but-regressed fix has to come back, or the join's
+    # `possible failed remediation` backstop never sees it.
+    p = arl.build_prompt("body", "plan", nonce="n",
+                         dispositions_text=_LEDGER_TEXT, nonce2="n2")
+    assert "declined or dissolved" in p
+    assert "adopted" in p
+    assert "DO re-raise" in p
+
+
+def test_build_prompt_ledger_fence_distinct_second_nonce():
+    p = arl.build_prompt("body", "plan", nonce="AAAA",
+                         dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
+    assert "=== BEGIN SETTLED DISPOSITIONS [k=BBBB] ===" in p
+    assert "=== END SETTLED DISPOSITIONS [k=BBBB] ===" in p
+    assert _LEDGER_TEXT in p
+    # artifact fence keeps its own token; the two never share
+    assert "=== BEGIN UNTRUSTED ARTIFACT [k=AAAA] ===" in p
+    assert "[k=AAAA] ===\n" + _LEDGER_TEXT not in p
+
+
+def test_build_prompt_ledger_ordering_artifact_then_ledger():
+    p = arl.build_prompt("body", "plan", nonce="AAAA",
+                         dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
+    assert p.index("=== BEGIN UNTRUSTED ARTIFACT") < \
+        p.index("=== BEGIN SETTLED DISPOSITIONS")
+
+
+def test_build_prompt_two_token_exclusivity_only_when_ledger_present():
+    single = "Only the two lines containing the exact nonce token"
+    with_ledger = arl.build_prompt("body", "plan", nonce="AAAA",
+                                   dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
+    assert "[k=AAAA] or [k=BBBB] delimit data blocks" in with_ledger
+    assert single not in with_ledger
+    without = arl.build_prompt("body", "plan", nonce="AAAA")
+    assert single in without
+    assert "delimit data blocks" not in without
+
+
+def test_build_prompt_report_it_names_both_fences():
+    p = arl.build_prompt("body", "plan", nonce="AAAA",
+                         dispositions_text=_LEDGER_TEXT, nonce2="BBBB")
+    assert "BOTH fenced blocks" in p
+
+
+def test_build_prompt_generates_nonce2_when_omitted():
+    a = arl.build_prompt("x", "plan", nonce="AAAA", dispositions_text=_LEDGER_TEXT)
+    b = arl.build_prompt("x", "plan", nonce="AAAA", dispositions_text=_LEDGER_TEXT)
+    assert a != b  # nonce2 minted per call — unforgeable
+
+
+def test_build_prompt_empty_string_dispositions_equals_none():
+    # 8a T2 R2: "" (falsy but present) must NOT emit an empty ledger fence +
+    # instruction paragraph promising decisions that don't exist — a renderer
+    # returning "" for zero entries would otherwise add a spurious second
+    # injection surface. "" and None are the same no-ledger contract.
+    a = arl.build_prompt("body", "plan", nonce="n")
+    b = arl.build_prompt("body", "plan", nonce="n", dispositions_text="")
+    assert a == b
