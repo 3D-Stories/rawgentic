@@ -14,6 +14,53 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #408 slot 1 — #407: adversarial findings carry a loopback-class · v3.39.0
+
+**Issue.** #407 (feature, standard, full spine; epic #408 auto-run, scoped auto-merge
+grant 2026-07-15): WF2 Step 4's fold treated every WF5 adversarial Critical/High as
+`untagged` → full design loop-back by construction. The #403 run burned its entire
+3/3 global budget on prose tightening; the spec_tighten cheap path was unreachable
+from adversarial findings.
+
+**What shipped.** `FINDINGS_SCHEMA` gains a required-but-nullable `loopback_class`
+(plain `["string","null"]`, NO enum — a null-member enum has no strict-mode precedent;
+the prompt constrains vocab). The review prompt carries the WF2 rubric (spec-tightening
+= intent right/text wrong, stateable verbatim; design-flaw incl. the boundary clarifier;
+unsure→design-flaw; null for Medium/Low) + an injection-guard extension naming
+loop-back-classification steering. `validate_finding` is FULLY permissive on the field
+(whole-report gate :1220/:1465 — a bad advisory tag must never parse_error a review);
+the new pure `loopback_class_entries` owns the fail-close: security-category
+Critical/High → `untagged` UNCONDITIONALLY (case-insensitive, self-contained),
+exact-case vocab after strip, else `untagged` (backward compatible). WF2 item-7
+consumes the tag (security override stated first), the cheap-path verifier brief is
+sidecar-sourced with per-originating-finding confirmation, and the Step-4 dispatch now
+explicitly wires `--findings-json` (Step-11 catch: the field is sidecar-only —
+without it the feature is silently inert at its target step). Diagram REV 3.39.0
+(station 4 delta).
+
+**Decisions (this slot).** Enum dropped at gate pass 1 (unproven strict-mode shape,
+zero correctness cost — helper constrains). Vocab-rejecting/type-checking validator
+DECLINED twice (peer + pass-2): normalize drops invalid findings + whole-report gate.
+Category-distrust DECLINED ×3 (would nullify the cheap path; residual risk documented;
+the recurring re-litigation across passes is live evidence for #393's disposition
+ledger). Case asymmetry: security override case-INSENSITIVE (widening fail-closed net),
+vocab match case-SENSITIVE (repair conceals drift).
+
+**Reviews.** 3 design-gate passes (17 unique findings, all terminal): 2 design
+loop-backs + the run's FIRST spec_tighten cheap pass — both reviewers repeatedly
+demonstrated the pre-#407 cost live (every adversarial Critical/High entered untagged;
+2/3 budget burned on the run shipping the fix). Plan gate: 5 findings (task-order fix:
+version-bump-before-diagram-REV — linkage test is one-directional). 8a ×2 on the
+high-risk tasks (1 Low applied: self-contained override). Step 11: 3 agents +
+adversarial diff (5 unique: station-13 stray marker, the sidecar-wiring gap;
+2 re-litigations dissolved). Security scan clean (iac/sca visible skips). Suite
+2889+1skip→2920+1skip, zero regressions, red-before-green per task.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established
+convention). Telemetry for this slot embedded below.
+
+---
+
 ## Standalone — #403: selectable GLM review/consult backend (gpt | glm | both) · v3.38.0
 
 **Issue.** #403 (feature, standard, full spine — new optional dependency): WF5
