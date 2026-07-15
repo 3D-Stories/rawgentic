@@ -324,3 +324,47 @@ def test_wf2_step8_delegation_is_opt_in_default_off():
     # default-off: a non-zero is-enabled exit skips silently
     assert "default-off" in skill
     assert "skip silently" in skill
+
+
+# --- setup collects the backend field (#405) ---
+
+def test_setup_2d_asks_backend():
+    """#405 AC1: the Step 2d detail asks which backend and stages it; the
+    default-gpt-may-omit contract is stated (LOCATION pin: the offer detail
+    lives in references/integrations.md, same as test_setup_offers_surviving_workflows)."""
+    detail = (SKILLS_DIR / "setup" / "references" / "integrations.md").read_text()
+    assert "Which review backend? (gpt / glm / both) [default: gpt]" in detail
+    assert "absent → gpt is the documented contract" in detail
+    assert 'pip install "zhipuai>=2.1.5"' in detail
+    assert "ZHIPUAI_API_KEY" in detail
+
+
+def test_setup_2d_prereq_nudge_never_blocks():
+    """#405 AC4: glm/both picks with an unready prereq print the engine guidance
+    and STILL stage — config is intent, the runtime gate enforces."""
+    detail = (SKILLS_DIR / "setup" / "references" / "integrations.md").read_text()
+    assert "prereq --backend" in detail
+    assert "STILL stage" in detail
+
+
+def test_setup_2g_mirrors_backend_question():
+    """#405 AC2: peerConsult asks the same-vocabulary backend question
+    independently of the review answer."""
+    detail = (SKILLS_DIR / "setup" / "references" / "integrations.md").read_text()
+    twog = detail[detail.index("## Step 2g:"):detail.index("## Step 2h:")]
+    assert "backend" in twog
+    assert "independent" in twog
+
+
+def test_setup_2d_reconfig_preserves_backend():
+    """#405 AC3: re-running setup offers the current backend as the default,
+    never silently resetting it."""
+    detail = (SKILLS_DIR / "setup" / "references" / "integrations.md").read_text()
+    assert "current backend" in detail
+
+
+def test_config_reference_scope_out_dropped():
+    """#405 AC6: setup now collects backend — the hand-edit scope-out note is gone."""
+    doc = (REPO_ROOT / "docs" / "config-reference.md").read_text()
+    assert "deliberate #403 scope-out" not in doc
+    assert "does not yet collect" not in doc

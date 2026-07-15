@@ -121,7 +121,9 @@ access, so it stays opt-in.
 Runs on **every** setup invocation (including Sub-flow A re-runs). Asks whether an
 OpenAI account is available for the Codex CLI and, on yes, turns WF5 cross-model
 review **on by default** for the applicable workflows — implement-feature (WF2)
-and fix-bug (WF3), with create-issue (WF1) offered as an opt-in add. Stores the
+and fix-bug (WF3), with create-issue (WF1) offered as an opt-in add. Also asks
+which review backend (`gpt` | `glm` | `both`, #405) and stages it into the
+block's `backend` field (default `gpt` may omit the field). Stores the
 `adversarialReview` field in the project's `.rawgentic_workspace.json` entry
 (workspace-scoped, not committed to the repo). The standalone
 `/rawgentic:adversarial-review` skill works regardless of this setting.
@@ -220,7 +222,8 @@ block = inherit everywhere).
 
 Runs on **every** setup invocation (including Sub-flow A re-runs). Mirrors Step 2d:
 asks whether to enable the cross-model peer designer at the WF2 design step and
-stages the `peerConsult` field in the project's `.rawgentic_workspace.json` entry.
+stages the `peerConsult` field in the project's `.rawgentic_workspace.json` entry —
+including its own independent `backend` answer (#405; same vocabulary as Step 2d).
 The standalone `/rawgentic:peer-consult` works regardless.
 
 **Read `references/integrations.md` before executing Step 2g.**

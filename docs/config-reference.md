@@ -320,9 +320,9 @@ reports; one backend failing degrades to a PARTIAL result, exit 5, never abortin
 the other). Absent → `gpt`. A present-but-invalid value (e.g. a typo `"glm5"`)
 REFUSES at run time with exit 2 before any egress — it is never silently laundered
 into `gpt`, because that would reroute the artifact to a different provider than
-the operator chose. An explicit `--backend` on an invocation overrides the config. Note: `/rawgentic:setup`
-does not yet collect `backend` — set it by hand-editing the config block (or use the
-per-invocation `--backend` argument); a deliberate #403 scope-out.
+the operator chose. An explicit `--backend` on an invocation overrides the config. `/rawgentic:setup`
+collects `backend` at Step 2d (and Step 2g for `peerConsult`) since #405 — the
+sanctioned config path; the per-invocation `--backend` argument remains available.
 
 `workflows` uses bare skill names (`implement-feature`, `fix-bug`, `create-issue`;
 a removed name like `refactor` is accepted but inert — see `docs/upgrade-3.0.md`).
