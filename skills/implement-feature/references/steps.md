@@ -662,17 +662,31 @@ The self-review produces findings in the shape the gate consumes:
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
      The command exits `0` when the review is enabled for this skill and `1` (or any non-zero) otherwise. If it exits non-zero, or `fast_path_eligible == true`, **skip silently** — behavior is byte-for-byte unchanged.
-   When both gates pass, dispatch `/rawgentic:adversarial-review <design-doc-path>` **in parallel with the self-review** (write the design doc to a temp file under the project first if it only exists in session notes). The adversarial review is **report-only**; bring its findings back into THIS gate at the **join barrier** described next:
+   When both gates pass, dispatch the adversarial review **in parallel with the self-review** (write the design doc to a temp file under the project first if it only exists in session notes) — and dispatch it **with a findings sidecar**: run the engine with `--findings-json <sidecar under the project root>` (the `/rawgentic:adversarial-review` skill form must be given the same), because `loopback_class` is **sidecar-only** — `render_report_md` deliberately does not emit it, so a report-only dispatch would feed the #407 fold absent fields and silently degrade every adversarial finding to `untagged`. The review is **report-only** in its effects; bring its findings back into THIS gate at the **join barrier** described next, reading them from that sidecar:
    - **Join barrier (single breaker):** once both the self-review and the review have returned, merge adversarial findings with the self-review findings into ONE list, tagging each with `source: self-review | adversarial`. Apply the ambiguity circuit breaker **exactly once** over the merged list — this IS the breaker deferred from item 6; never run a second, self-review-only breaker.
    - If the merged list contains one or more Critical/High findings, fold their
      `Loopback-class` tags via `plan_lib.classify_loopback_source(<classes>)` (#223) and
      consume **exactly one** loop-back from the source it returns, regardless of how many
      such findings there are. **Every Critical/High finding contributes exactly one
      Loopback-class entry to the fold; a finding without the field contributes 'untagged',
-     which folds to the full design path.** Adversarial-review findings carry no
-     Loopback-class (that skill's finding shape doesn't know the field) → they enter as
-     `untagged`, so any adversarial Critical/High forces the full path — the cheap path
-     serves self-review-sourced findings by construction.
+     which folds to the full design path.** Adversarial-review findings MAY carry a
+     `loopback_class` field (engine ≥ 3.39.0, #407); each Critical/High adversarial
+     finding contributes via `adversarial_review_lib.loopback_class_entries`: a
+     `category: security` finding contributes `untagged` UNCONDITIONALLY (never the
+     cheap path, regardless of its tag — model metadata alone must not route a security
+     finding cheap); otherwise a vocab value contributes itself; absent/null/off-vocab
+     contributes `untagged` (old engines, other sources — folds to the full design path,
+     fully backward compatible). Self-review findings keep their existing Loopback-class
+     contribution unchanged. The composition
+     (`classify_loopback_source(loopback_class_entries(adversarial) + self_review_classes)`)
+     is invoked by the orchestrator via `python3 -c`, the established gate-helper pattern.
+     **Verifier-brief hardening (#407):** when a spec_tighten cheap pass was reached via
+     ANY adversarial-sourced tag, the incremental verifier's brief must include the
+     originating Critical/High findings — read from the review's `--findings-json` sidecar
+     (the canonical normalized report), never a re-derivation — and the verifier must
+     confirm EACH is resolved by the applied amendment; any unresolved, omitted, or
+     recategorized originating finding escalates to the full `design` path exactly like a
+     new Critical/High finding.
      - Fold = `design` → consume `plan_lib.consume_loopback(<counters>, "design")` and
        return to Step 3 once with the unified constraint set (the pre-#223 behavior,
        unchanged). Do not consume per-finding and do not double-count against the
