@@ -829,6 +829,7 @@ FINDINGS_SCHEMA: Final[dict] = {
                     "evidence", "severity", "category", "confidence",
                     "description", "recommendation",
                     "ambiguity_flag", "ambiguity_reason", "location",
+                    "loopback_class",
                 ],
                 "properties": {
                     "evidence": {
@@ -868,11 +869,56 @@ FINDINGS_SCHEMA: Final[dict] = {
                     "ambiguity_flag": {"type": ["boolean", "null"]},
                     "ambiguity_reason": {"type": ["string", "null"]},
                     "location": {"type": ["string", "null"]},
+                    # #407: loop-back routing tag. Plain nullable string — NO enum
+                    # (a null-member enum has no strict-mode precedent here; the
+                    # prompt constrains vocab, loopback_class_entries fail-closes
+                    # off-vocab to "untagged").
+                    "loopback_class": {
+                        "type": ["string", "null"],
+                        "description": "Critical/High only: 'spec-tightening' = "
+                                       "the artifact's INTENT is right but its "
+                                       "text is wrong — a wording fix stateable "
+                                       "verbatim in the recommendation; "
+                                       "'design-flaw' = intent/structure wrong. "
+                                       "When unsure: 'design-flaw'. null for "
+                                       "Medium/Low.",
+                    },
                 },
             },
         },
     },
 }
+
+
+_LOOPBACK_CLASS_VOCAB: Final[tuple[str, str]] = ("spec-tightening", "design-flaw")
+
+
+def loopback_class_entries(findings: list) -> list[str]:
+    """Map findings to WF2 Loopback-class fold entries (#407).
+
+    One entry per Critical/High finding (Medium/Low contribute nothing):
+    1. category == "security" -> "untagged" UNCONDITIONALLY: model metadata
+       alone must never route a security finding onto the spec_tighten cheap
+       path (poisoned-tag defense).
+    2. else the finding's loopback_class when, after strip(), it is EXACTLY one
+       of the vocab values — case-sensitive, no case repair (silent repair
+       would conceal backend drift; enum-less strict output is expected exact).
+    3. else the literal "untagged" (absent, null, off-vocab, non-string) —
+       folds to the full design path via plan_lib.classify_loopback_source.
+    """
+    entries: list[str] = []
+    for f in findings:
+        if not isinstance(f, dict) or f.get("severity") not in ("Critical", "High"):
+            continue
+        if f.get("category") == "security":
+            entries.append("untagged")
+            continue
+        val = f.get("loopback_class")
+        if isinstance(val, str) and val.strip() in _LOOPBACK_CLASS_VOCAB:
+            entries.append(val.strip())
+        else:
+            entries.append("untagged")
+    return entries
 
 
 def write_schema(path: str) -> None:
@@ -915,6 +961,13 @@ def validate_finding(d: object) -> tuple[bool, list[str]]:
     loc = d.get("location")
     if loc is not None and not isinstance(loc, str):
         errors.append("location must be string or null")
+    # loopback_class (#407) is deliberately NOT validated — fully permissive.
+    # It is advisory routing metadata: validate_findings is a whole-report gate
+    # (run_codex_review/run_glm_review parse_error the ENTIRE review on one
+    # invalid finding) and normalize_findings drops invalid findings, so any
+    # check here would let a bad tag from a non-strict backend silently kill a
+    # real Critical. loopback_class_entries owns the vocab fail-close; an
+    # off-vocab value stays visible in the sidecar (drift observability).
     return (not errors), errors
 
 

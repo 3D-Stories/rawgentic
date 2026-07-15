@@ -431,6 +431,7 @@ def _valid_finding(desc="a real problem"):
         "category": "security", "confidence": "high",
         "description": desc, "recommendation": "fix it",
         "ambiguity_flag": None, "ambiguity_reason": None, "location": "L1",
+        "loopback_class": None,
     }
 
 

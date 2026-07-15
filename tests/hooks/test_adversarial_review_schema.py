@@ -21,7 +21,8 @@ def _finding(**over):
     base = {"evidence": "a quoted span", "severity": "High", "category": "security",
             "confidence": "high",
             "description": "d", "recommendation": "r", "location": "S1",
-            "ambiguity_flag": False, "ambiguity_reason": None}
+            "ambiguity_flag": False, "ambiguity_reason": None,
+            "loopback_class": None}
     base.update(over)
     return base
 
@@ -198,7 +199,7 @@ def test_findings_schema_is_openai_strict_compliant():
 
 def test_optional_finding_fields_are_nullable_in_schema():
     item_props = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]["properties"]
-    for field in ("ambiguity_flag", "ambiguity_reason", "location"):
+    for field in ("ambiguity_flag", "ambiguity_reason", "location", "loopback_class"):
         t = item_props[field]["type"]
         assert "null" in t, f"{field} must allow null (strict mode requires it in `required`)"
 
@@ -280,6 +281,110 @@ def test_strict_schema_validates_full_findings_with_jsonschema():
     doc = {"summary": "s", "findings": [
         {"evidence": "q", "severity": "High", "category": "security",
          "confidence": "high", "description": "d", "recommendation": "r",
-         "ambiguity_flag": None, "ambiguity_reason": None, "location": None},
+         "ambiguity_flag": None, "ambiguity_reason": None, "location": None,
+         "loopback_class": None},
     ]}
     jsonschema.validate(doc, arl.FINDINGS_SCHEMA)  # must not raise
+
+
+# --- loopback_class (#407) ---
+
+def test_loopback_class_in_schema_required_nullable_string_no_enum():
+    item = arl.FINDINGS_SCHEMA["properties"]["findings"]["items"]
+    assert "loopback_class" in item["required"]
+    prop = item["properties"]["loopback_class"]
+    # Plain nullable string — the proven #80 strict-mode shape (ambiguity_reason).
+    assert prop["type"] == ["string", "null"]
+    # NO enum: a null-member enum has no strict-mode precedent in this repo; the
+    # prompt constrains vocab and loopback_class_entries fail-closes off-vocab.
+    assert "enum" not in prop
+
+
+@pytest.mark.parametrize("value", [
+    "spec-tightening", "design-flaw", None, "prose-fix", 123, [], {"x": 1}, True,
+])
+def test_validate_finding_fully_permissive_on_loopback_class(value):
+    # Advisory routing metadata must NEVER invalidate a finding: validate_findings
+    # is a whole-report gate (one bad tag would parse_error the entire review),
+    # and normalize_findings drops invalid findings. Any value is valid here;
+    # loopback_class_entries owns the fail-close.
+    ok, errs = arl.validate_finding(_finding(loopback_class=value))
+    assert ok, errs
+
+
+def test_validate_finding_accepts_absent_loopback_class():
+    f = _finding()
+    del f["loopback_class"]
+    ok, errs = arl.validate_finding(f)
+    assert ok, errs
+
+
+def _lc_finding(severity="High", category="completeness", **over):
+    return _finding(severity=severity, category=category, **over)
+
+
+def test_entries_vocab_values_pass_through():
+    fs = [_lc_finding(loopback_class="spec-tightening"),
+          _lc_finding(severity="Critical", loopback_class="design-flaw")]
+    assert arl.loopback_class_entries(fs) == ["spec-tightening", "design-flaw"]
+
+
+def test_entries_strips_surrounding_whitespace_only():
+    fs = [_lc_finding(loopback_class=" spec-tightening ")]
+    assert arl.loopback_class_entries(fs) == ["spec-tightening"]
+
+
+def test_entries_case_variant_is_untagged_no_case_repair():
+    # Exact case-sensitive match: silent case repair would conceal backend drift.
+    fs = [_lc_finding(loopback_class="Spec-Tightening")]
+    assert arl.loopback_class_entries(fs) == ["untagged"]
+
+
+@pytest.mark.parametrize("value", [None, "prose-fix", 123, [], ""])
+def test_entries_absent_null_offvocab_nonstring_untagged(value):
+    fs = [_lc_finding(loopback_class=value)]
+    assert arl.loopback_class_entries(fs) == ["untagged"]
+
+
+def test_entries_absent_key_untagged():
+    f = _lc_finding()
+    del f["loopback_class"]
+    assert arl.loopback_class_entries([f]) == ["untagged"]
+
+
+def test_entries_security_category_unconditionally_untagged():
+    # Poisoned-tag defense: model metadata alone must never route a security
+    # finding onto the cheap path — category: security folds design regardless.
+    fs = [_lc_finding(category="security", loopback_class="spec-tightening")]
+    assert arl.loopback_class_entries(fs) == ["untagged"]
+
+
+def test_entries_medium_low_excluded_and_empty_input():
+    fs = [_lc_finding(severity="Medium", loopback_class="spec-tightening"),
+          _lc_finding(severity="Low", loopback_class="design-flaw")]
+    assert arl.loopback_class_entries(fs) == []
+    assert arl.loopback_class_entries([]) == []
+
+
+def test_offvocab_loopback_class_visible_in_normalized_sidecar_content():
+    # Visibility contract: the sidecar (--findings-json) carries normalize_findings
+    # output verbatim — an off-vocab value survives and stays observable, while the
+    # fold helper fail-closes it. (render_report_md deliberately does NOT emit the
+    # field — routing metadata, not report content.)
+    f = _lc_finding(loopback_class="prose-fix")
+    ok, errs = arl.validate_findings([f])
+    assert ok, errs
+    out = arl.normalize_findings([f])
+    assert len(out) == 1 and out[0]["loopback_class"] == "prose-fix"
+    assert arl.loopback_class_entries(out) == ["untagged"]
+
+
+def test_entries_fold_integration_with_classify_loopback_source():
+    import plan_lib
+    tight = [_lc_finding(loopback_class="spec-tightening"),
+             _lc_finding(severity="Critical", loopback_class="spec-tightening")]
+    assert plan_lib.classify_loopback_source(arl.loopback_class_entries(tight)) == "spec_tighten"
+    mixed = tight + [_lc_finding(loopback_class="design-flaw")]
+    assert plan_lib.classify_loopback_source(arl.loopback_class_entries(mixed)) == "design"
+    untagged = tight + [_lc_finding(loopback_class=None)]
+    assert plan_lib.classify_loopback_source(arl.loopback_class_entries(untagged)) == "design"
