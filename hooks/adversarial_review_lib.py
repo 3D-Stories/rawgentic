@@ -1210,12 +1210,14 @@ def build_prompt(
 
 DISPOSITIONS_CAP_BYTES: Final[int] = 20480
 
-_LEDGER_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
+_LEDGER_CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 def _escape_ledger_field(value) -> str:
-    """Single-line-safe field: newlines escaped to literal \\n, control chars
-    stripped — no ledger entry can forge a fence-like line inside the block."""
+    """Single-line-safe field: newlines escaped to literal \\n; C0+C1 control
+    chars and the Unicode line/paragraph separators (U+2028/U+2029 — some
+    renderers break lines on them) stripped — no ledger entry can forge even a
+    visually fence-like line inside the block (8a T3 defense-in-depth)."""
     s = str(value).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
     return _LEDGER_CTRL_RE.sub("", s)
 
@@ -1250,6 +1252,10 @@ def build_dispositions_text(
         kept.pop(0)
         dropped += 1
     if dropped:
+        # Bounded data loss must be loud on the OPERATOR channel too — the
+        # in-prompt marker is visible only to the reviewer model (8a T3).
+        print(f"ledger: degraded (truncated, {dropped} oldest entries "
+              "dropped)", file=sys.stderr)
         kept.insert(0, f"(ledger truncated: oldest {dropped} entries dropped)")
     return "\n".join(kept)
 
@@ -2338,9 +2344,14 @@ def main(argv: list[str] | None = None) -> int:
                 elif unreadable is not None:
                     print(f"ledger: degraded (unreadable file: {unreadable}, "
                           "0 lines skipped)", file=sys.stderr)
-                else:
+                elif skipped:
                     print(f"ledger: degraded (no valid entries, {skipped} "
                           "lines skipped)", file=sys.stderr)
+                else:
+                    # Empty ledger = normal early-pass state, not degradation
+                    # — a false alarm trains operators to ignore the channel.
+                    print("ledger: empty (no prior dispositions)",
+                          file=sys.stderr)
 
         # Sidecar path validation + stale-removal happen BEFORE any provider
         # egress: a bad path fails-closed (exit 2, nothing invoked), and clearing

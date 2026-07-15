@@ -505,3 +505,49 @@ def test_build_dispositions_text_cap_boundary():
 
 def test_dispositions_cap_constant():
     assert arl.DISPOSITIONS_CAP_BYTES == 20480
+
+
+# --- 8a T3 adopts: honest signals + hardened strip ---
+
+def test_empty_ledger_not_reported_degraded(tmp_path):
+    # Empty file = normal early-pass state, not degradation — a false alarm
+    # trains operators to ignore the degraded channel.
+    marker, _ = _codex_stub_capture(tmp_path / "bin", exec_body=_valid_output())
+    root, art = _proj(tmp_path)
+    ledger = root / "l.jsonl"
+    ledger.write_text("")
+    r = _run(_review_args(root, art, ledger), extra_path=tmp_path / "bin")
+    assert r.returncode == 0
+    assert "ledger: degraded" not in r.stderr
+    assert "ledger: empty" in r.stderr
+
+
+def test_truncation_emits_stderr_degraded(tmp_path):
+    # Cap-dropped entries are bounded data loss — must be loud on the
+    # operator channel, not only in the in-prompt marker.
+    marker, _ = _codex_stub_capture(tmp_path / "bin", exec_body=_valid_output())
+    root, art = _proj(tmp_path)
+    ledger = root / "l.jsonl"
+    entries = []
+    for i in range(30):
+        e = _ledger_entry(id=f"d-4-2-{i}-ab3f",
+                          finding={"description": f"f{i} " + "x" * 1000})
+        e["finding_key"] = plan_lib.compute_finding_key(e["finding"])
+        entries.append(e)
+    _write_ledger(ledger, entries)
+    r = _run(_review_args(root, art, ledger), extra_path=tmp_path / "bin")
+    assert r.returncode == 0
+    assert "ledger: degraded (truncated," in r.stderr
+
+
+def test_escape_strips_unicode_line_separators():
+    # U+2028/U+2029/NEL + C1 range: some renderers treat these as line
+    # breaks — strip them so no crafted description can even VISUALLY start
+    # a fence-like line (defense-in-depth; the nonce already prevents real
+    # breakout).
+    e = _ledger_entry(finding={"description": "a\u2028b\u2029c\u0085d\x80e"})
+    e["finding_key"] = plan_lib.compute_finding_key(e["finding"])
+    line = arl.render_disposition_line(e)
+    for ch in ("\u2028", "\u2029", "\u0085", "\x80"):
+        assert ch not in line
+    assert "abcde" in line
