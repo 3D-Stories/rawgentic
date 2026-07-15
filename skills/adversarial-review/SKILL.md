@@ -209,6 +209,7 @@ The egress warning text (destination(s) named, and any detected secret categorie
    - `3` → backend error or timeout. STOP and report; **do not** fabricate findings.
    - `4` → backend output could not be parsed/validated. STOP and report.
    - **`5` → PARTIAL (both mode only): ≥1 backend succeeded, ≥1 failed. Do NOT stop — present the successful report(s) from the stdout manifest, name the failed backend from the stderr `FAILED` line, and continue.** Exit 5 never occurs in single-backend mode.
+   - `6` → ledger integrity failure (`--issue` mismatch — fail-closed, embedded pass-N callers only; never fires without `--dispositions`). The embedded caller records the loud-abort marker `failed (ledger integrity)`.
 3. On exit 2/3/4, the review did NOT succeed — report the failure to the user. Never present partial or invented findings as a completed review. (Exit 5 is not that case: the successful backend's review DID complete and is presented as such, with the degradation named.)
 
 ### Output

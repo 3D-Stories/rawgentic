@@ -372,6 +372,17 @@ def test_build_prompt_ledger_instruction_paragraph():
     assert "severity+location+category+description" in p
 
 
+def test_build_prompt_no_reraise_scoped_to_declined_dissolved():
+    # Step 11 codex A1: the no-re-raise instruction must NOT cover ADOPTED
+    # entries — an adopted-but-regressed fix has to come back, or the join's
+    # `possible failed remediation` backstop never sees it.
+    p = arl.build_prompt("body", "plan", nonce="n",
+                         dispositions_text=_LEDGER_TEXT, nonce2="n2")
+    assert "declined or dissolved" in p
+    assert "adopted" in p
+    assert "DO re-raise" in p
+
+
 def test_build_prompt_ledger_fence_distinct_second_nonce():
     p = arl.build_prompt("body", "plan", nonce="AAAA",
                          dispositions_text=_LEDGER_TEXT, nonce2="BBBB")

@@ -1374,6 +1374,13 @@ def append_disposition(ledger_path: str, entry: dict) -> None:
     """
     enriched = dict(entry)
     enriched.setdefault("ts", _now_iso())
+    # Fail CLOSED at the write (Step 11 A4, the append_deferral precedent): a
+    # malformed record would otherwise look persisted at gate close and then
+    # be skipped by the next pass's tolerant reader — the settled decision
+    # silently drops out of ledger memory.
+    reason = _disposition_entry_error(enriched)
+    if reason is not None:
+        raise ValueError(f"append_disposition: invalid entry ({reason})")
     line = _json.dumps(enriched, separators=(",", ":")) + "\n"
     os.makedirs(os.path.dirname(ledger_path) or ".", exist_ok=True)
     with open(ledger_path, "a", encoding="utf-8") as f:
@@ -1466,11 +1473,15 @@ def fold_dispositions(entries: list[dict]) -> list[dict]:
     """Last-write-wins fold by finding_key in file order.
 
     Later entries for the same identity supersede earlier ones (append-only
-    history; the read_review_log precedent). Returns the surviving entries in
-    first-seen key order.
+    history; the read_review_log precedent). Survivors are returned in
+    LAST-occurrence order — a superseded key moves to the end — so a
+    downstream size cap dropping from the front discards the oldest-DECIDED
+    entries first (Step 11 A3/R3: first-seen order would evict the most
+    recently re-decided identity just because it was first raised early).
     """
     folded: dict[str, dict] = {}
     for entry in entries:
+        folded.pop(entry["finding_key"], None)
         folded[entry["finding_key"]] = entry
     return list(folded.values())
 

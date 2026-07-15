@@ -67,6 +67,14 @@ def _valid_entry(mod, **over):
     return entry
 
 
+
+def _append_raw(path, entry):
+    """Write a (possibly invalid) entry as a raw JSONL line, bypassing the
+    fail-closed writer — reader-tolerance tests need malformed lines on disk."""
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+
+
 # --- compute_finding_key: the exact engine-dedupe-tuple identity ---
 
 class TestComputeFindingKey:
@@ -170,7 +178,7 @@ class TestReadDispositions:
     def test_wrong_schema_version_skipped(self, tmp_path):
         mod = _reload_plan_lib()
         path = tmp_path / "d.jsonl"
-        mod.append_disposition(str(path), _valid_entry(mod, schema_version=2))
+        _append_raw(path, _valid_entry(mod, schema_version=2))
         entries, skipped = mod.read_dispositions(str(path))
         assert entries == [] and skipped == 1
 
@@ -179,14 +187,14 @@ class TestReadDispositions:
         path = tmp_path / "d.jsonl"
         bad = _valid_entry(mod)
         del bad["disposition"]
-        mod.append_disposition(str(path), bad)
+        _append_raw(path, bad)
         entries, skipped = mod.read_dispositions(str(path))
         assert entries == [] and skipped == 1
 
     def test_mistyped_field_skipped(self, tmp_path):
         mod = _reload_plan_lib()
         path = tmp_path / "d.jsonl"
-        mod.append_disposition(str(path), _valid_entry(mod, issue="393"))
+        _append_raw(path, _valid_entry(mod, issue="393"))
         entries, skipped = mod.read_dispositions(str(path))
         assert entries == [] and skipped == 1
 
@@ -195,15 +203,14 @@ class TestReadDispositions:
         # deferrals.json (resolution pipeline); the ledger is terminal-only.
         mod = _reload_plan_lib()
         path = tmp_path / "d.jsonl"
-        mod.append_disposition(str(path), _valid_entry(mod, disposition="deferred"))
+        _append_raw(path, _valid_entry(mod, disposition="deferred"))
         entries, skipped = mod.read_dispositions(str(path))
         assert entries == [] and skipped == 1
 
     def test_finding_key_mismatch_skipped(self, tmp_path):
         mod = _reload_plan_lib()
         path = tmp_path / "d.jsonl"
-        mod.append_disposition(
-            str(path), _valid_entry(mod, finding_key="sha256:" + "0" * 64))
+        _append_raw(path, _valid_entry(mod, finding_key="sha256:" + "0" * 64))
         entries, skipped = mod.read_dispositions(str(path))
         assert entries == [] and skipped == 1
 
@@ -211,7 +218,7 @@ class TestReadDispositions:
         mod = _reload_plan_lib()
         path = tmp_path / "d.jsonl"
         mod.append_disposition(str(path), _valid_entry(mod))
-        mod.append_disposition(str(path), _valid_entry(mod, schema_version=99))
+        _append_raw(path, _valid_entry(mod, schema_version=99))
         good = _valid_entry(mod, id="d-11-3-1-cafe",
                             finding={"description": "other finding"})
         good["finding_key"] = mod.compute_finding_key(good["finding"])
@@ -290,3 +297,31 @@ class TestStripReopens:
         mod = _reload_plan_lib()
         rid, text = mod.strip_reopens("REOPENS d-4-2-1-ab3f:")
         assert rid is None
+
+
+# --- Step 11 adopts (#393 pre-PR review) ---
+
+class TestStep11Adopts:
+    def test_fold_moves_superseded_key_to_end(self):
+        # A3/R3 convergence: a key re-decided LATER must sort by its LAST
+        # occurrence, so the cap drops oldest-DECIDED first, honouring the
+        # most-recent-kept contract.
+        mod = _reload_plan_lib()
+        a1 = _valid_entry(mod, disposition="declined")           # key A, pass 1
+        b = _valid_entry(mod, id="d-6-1-1-beef",
+                         finding={"description": "other finding"})
+        b["finding_key"] = mod.compute_finding_key(b["finding"])  # key B, pass 2
+        a2 = _valid_entry(mod, id="d-11-3-1-cafe", disposition="adopted")  # key A again, pass 3
+        folded = mod.fold_dispositions([a1, b, a2])
+        assert [e["id"] for e in folded] == ["d-6-1-1-beef", "d-11-3-1-cafe"]
+
+    def test_append_disposition_rejects_invalid_fails_closed(self, tmp_path):
+        # A4: a malformed record must fail LOUDLY at gate close (the write),
+        # not silently vanish at the next pass's tolerant read.
+        import pytest as _pytest
+        mod = _reload_plan_lib()
+        path = tmp_path / "d.jsonl"
+        bad = _valid_entry(mod, disposition="deferred")
+        with _pytest.raises(ValueError):
+            mod.append_disposition(str(path), bad)
+        assert not path.exists()  # nothing persisted
