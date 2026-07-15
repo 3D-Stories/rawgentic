@@ -356,6 +356,18 @@ When enabled and the running skill is listed:
 > `--findings-json` sidecar are temp files written under the project root
 > (`.rawgentic-diff-review-*.patch` / `.rawgentic-diff-findings-*.json`) and are
 > gitignored.
+>
+> Pass-N gate dispatches (#393) may also carry `--dispositions <path> --issue <n>`:
+> a folded settled-dispositions JSONL temp copy
+> (`.rawgentic-dispositions-<issue>-<token>.jsonl`, 0600, same
+> project-root/stale-sweep/git-exclude discipline) rendered into a second nonce
+> fence so pass-N reviewers don't re-litigate settled findings. `--dispositions`
+> requires `--issue`; an entry/issue mismatch fails closed (exit 6,
+> `failed (ledger integrity)` in the gate marker) while benign ledger failures
+> degrade openly (`ledger: degraded (<reason>, N lines skipped)` on stderr, review
+> still runs). The canonical ledger lives at
+> `claude_docs/.wf2-state/<issue>/dispositions.jsonl`, written by the orchestrator
+> at each gate close.
 
 In every embedded workflow the review is **non-blocking / fail-closed**: any Codex
 failure (including a missing/unauthenticated CLI, even in headless mode) is logged and

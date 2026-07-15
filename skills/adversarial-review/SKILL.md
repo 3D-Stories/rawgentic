@@ -198,9 +198,11 @@ The egress warning text (destination(s) named, and any detected secret categorie
      --date "$(date -u +%Y-%m-%d)" \
      --backend <resolved backend> \
      [--headless] \
-     [--findings-json <path>]
+     [--findings-json <path>] \
+     [--dispositions <path> --issue <n>]
    ```
    Embedded callers (e.g. WF2 Step 11) may append `--findings-json <path>` to also receive a machine-readable sidecar of the findings; it is written only on success, after the report. Under `both`, gpt writes the exact sidecar path (byte-compatible) and glm writes a `-glm` sibling.
+   Embedded pass-N callers (#393) may additionally append `--dispositions <path> --issue <n>` — a folded settled-dispositions JSONL (written by the WF2 orchestrator under the project root) rendered into a second nonce fence so the reviewer does not re-litigate settled findings. `--dispositions` REQUIRES `--issue` (exit `2` without it); every valid entry's `issue` field is cross-checked and a mismatch fails CLOSED with exit `6` BEFORE any backend dispatch (cross-issue contamination). Benign ledger failures (missing/unreadable file, corrupt lines) fail OPEN: the review still runs and stderr carries `ledger: degraded (<reason>, N lines skipped)` — embedded callers record that phrase in the gate marker; exit `6` maps to the loud-abort marker `failed (ledger integrity)`.
 2. Interpret the exit code (the contract is fail-closed, with ONE both-mode carve-out):
    - `0` → success (ALL selected backends); single mode prints the report path on stdout; `both` prints per-backend status lines (`gpt: <path>` / `glm: <path>`) — the authoritative manifest.
    - `2` → prerequisite/config failure. STOP (should have been caught in Steps 1b/2).

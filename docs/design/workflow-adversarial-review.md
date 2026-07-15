@@ -101,6 +101,48 @@ then category).
   explicitly listed. Preserves WF3's intentional lightweight-reflect path and
   documents the latency tradeoff. Loop-back shares the existing reflect budget.
 
+## Disposition ledger (#393)
+
+On multi-pass gates the reviewer used to re-derive and re-litigate settled
+decisions. The WF2 orchestrator now persists each Critical/High finding's
+TERMINAL disposition (`adopted | declined | dissolved` — deferrals stay in
+`deferrals.json`) to `claude_docs/.wf2-state/<issue>/dispositions.jsonl` at
+gate close (schema: design doc `docs/planning/2026-07-15-393-disposition-ledger.md`
+§1; helpers: `plan_lib.append_disposition` / `read_dispositions` /
+`fold_dispositions` / `compute_finding_key` / `strip_reopens`). Identity is the
+engine dedupe tuple — sha256 over `[severity, location or "", description]`;
+`category` is deliberately excluded (relabel-proof).
+
+On a pass-N dispatch the orchestrator folds the ledger, writes the folded
+canonical JSONL to `.rawgentic-dispositions-<issue>-<token>.jsonl` (0600, under
+the project root, stale-swept, git-excluded) and adds
+`--dispositions <temp> --issue <n>` to the `review` invocation. The engine
+re-validates (tolerant reader: corrupt lines skipped and counted), cross-checks
+every entry's `issue`, folds, renders one escaped line per entry (newlines →
+literal `\n`, control chars stripped — no entry can forge a fence-like line),
+caps at `DISPOSITIONS_CAP_BYTES` (20480, most-recent kept, truncation marker
+excluded from the cap), and injects the block into the prompt inside a SECOND
+independent nonce fence with a no-re-litigation instruction paragraph (the
+`REOPENS <disposition-id>:` convention keeps legitimate re-raising open). Both
+backends receive the same prompt.
+
+**Split fail policy:** benign failures (missing/unreadable file, corrupt
+lines) fail OPEN — the review runs and stderr carries
+`ledger: degraded (<reason>, N lines skipped)`, recorded in the gate marker;
+an `--issue` mismatch on any valid entry is an INTEGRITY failure — fail
+CLOSED, exit `6` before any backend dispatch, surfaced by WF2 as the loud-abort
+marker `failed (ledger integrity)`. Omitting the flag is byte-identical pass-1
+behavior. At the join, WF2 applies a backstop over returned findings: a
+finding_key match (computed after `strip_reopens`) against DECLINED/DISSOLVED
+auto-dissolves as re-litigation; against ADOPTED it surfaces as
+`possible failed remediation`.
+
+Injection analysis: the ledger travels the orchestrator channel; entries are
+fenced, declared context-never-instructions, and artifact text claiming
+something "was settled" is named as a spoof by the prompt (only the fenced
+ledger is a disposition). A false entry suppressing a real finding is mitigated
+by the reopen rule + the ledger being human-auditable JSONL.
+
 ## Invariants
 
 - **Report-only** — never edits the reviewed artifact.
