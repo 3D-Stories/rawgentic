@@ -460,6 +460,33 @@ class TestTieredLoopback:
     def test_fold_helper_named(self):
         assert "classify_loopback_source" in self._step4()
 
+    def test_adversarial_findings_contribute_via_entries_helper(self):
+        # #407: adversarial findings now MAY carry loopback_class; the fold
+        # consumes it via the engine helper instead of hardcoding untagged.
+        s4 = " ".join(self._step4().split())
+        assert "loopback_class_entries" in s4
+        assert "contributes `untagged` UNCONDITIONALLY" in s4, \
+            "security-category override must be stated (and stated FIRST)"
+
+    def test_adversarial_security_override_stated_before_vocab_rule(self):
+        # Prose ordering is load-bearing (pass-2 A5): an implementer of the
+        # sentence must hit the security override before the vocab rule.
+        s4 = " ".join(self._step4().split())
+        assert s4.index("contributes `untagged` UNCONDITIONALLY") \
+            < s4.index("a vocab value contributes itself")
+
+    def test_adversarial_absent_field_backward_compat_sentence(self):
+        s4 = " ".join(self._step4().split())
+        assert "absent/null/off-vocab contributes `untagged`" in s4
+        assert "fully backward compatible" in s4
+
+    def test_verifier_brief_sourced_from_sidecar(self):
+        # Pass-3 rider: originating findings come from the review sidecar,
+        # never a re-derivation.
+        s4 = " ".join(self._step4().split())
+        assert "`--findings-json` sidecar" in s4
+        assert "never a re-derivation" in s4
+
     def test_loopback_class_field_in_wf2_finding_shape(self):
         # steps.md §4 is WF2's gate-owned finding shape (quality-bar.md is the
         # 3-gate shared DEFAULT — fix-bug/setup don't tier, so the field lives

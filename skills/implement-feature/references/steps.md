@@ -669,10 +669,24 @@ The self-review produces findings in the shape the gate consumes:
      consume **exactly one** loop-back from the source it returns, regardless of how many
      such findings there are. **Every Critical/High finding contributes exactly one
      Loopback-class entry to the fold; a finding without the field contributes 'untagged',
-     which folds to the full design path.** Adversarial-review findings carry no
-     Loopback-class (that skill's finding shape doesn't know the field) → they enter as
-     `untagged`, so any adversarial Critical/High forces the full path — the cheap path
-     serves self-review-sourced findings by construction.
+     which folds to the full design path.** Adversarial-review findings MAY carry a
+     `loopback_class` field (engine ≥ 3.39.0, #407); each Critical/High adversarial
+     finding contributes via `adversarial_review_lib.loopback_class_entries`: a
+     `category: security` finding contributes `untagged` UNCONDITIONALLY (never the
+     cheap path, regardless of its tag — model metadata alone must not route a security
+     finding cheap); otherwise a vocab value contributes itself; absent/null/off-vocab
+     contributes `untagged` (old engines, other sources — folds to the full design path,
+     fully backward compatible). Self-review findings keep their existing Loopback-class
+     contribution unchanged. The composition
+     (`classify_loopback_source(loopback_class_entries(adversarial) + self_review_classes)`)
+     is invoked by the orchestrator via `python3 -c`, the established gate-helper pattern.
+     **Verifier-brief hardening (#407):** when a spec_tighten cheap pass was reached via
+     ANY adversarial-sourced tag, the incremental verifier's brief must include the
+     originating Critical/High findings — read from the review's `--findings-json` sidecar
+     (the canonical normalized report), never a re-derivation — and the verifier must
+     confirm EACH is resolved by the applied amendment; any unresolved, omitted, or
+     recategorized originating finding escalates to the full `design` path exactly like a
+     new Critical/High finding.
      - Fold = `design` → consume `plan_lib.consume_loopback(<counters>, "design")` and
        return to Step 3 once with the unified constraint set (the pre-#223 behavior,
        unchanged). Do not consume per-finding and do not double-count against the
