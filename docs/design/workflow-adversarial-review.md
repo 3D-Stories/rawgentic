@@ -66,10 +66,15 @@ Default disabled. `workflows` uses bare skill names. Written by
 
 Each finding: `severity` (Critical|High|Medium|Low), `category` (correctness,
 completeness, feasibility, consistency, internal-consistency, security, scope,
-ambiguity), `description`, `recommendation`, optional `ambiguity_flag` +
-`ambiguity_reason`, optional `location`. Codex output is constrained by a JSON
-Schema (draft-07) via `codex exec --output-schema`, then validated and
-normalized (deduped on the full description; ranked by severity then category).
+ambiguity), `confidence` (high|medium|low — required since #80; this line
+previously omitted it, a doc-rot fix), `description`, `recommendation`,
+optional `ambiguity_flag` + `ambiguity_reason`, optional `location`, optional
+`loopback_class` (#407: `spec-tightening` | `design-flaw` | null — WF2 Step 4
+folds it via `loopback_class_entries`; security-category findings and
+absent/off-vocab values always route to the full design path). Codex output is
+constrained by a JSON Schema (draft-07) via `codex exec --output-schema`, then
+validated and normalized (deduped on the full description; ranked by severity
+then category).
 
 ## Standalone steps (WF5)
 

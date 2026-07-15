@@ -59,7 +59,7 @@ The gpt backend invokes Codex as a one-shot, tools-OFF, structured-JSON reviewer
 - **--ephemeral**: the prompt inlines the full (possibly proprietary) artifact; this keeps it out of CODEX_HOME session history.
 - **project_doc_max_bytes=0**: suppresses the reviewed project's AGENTS.md so the cross-model reviewer stays independent of the project's own conventions.
 - **--color never**: keeps the parsed output byte-clean.
-- The prompt itself FORBIDS the model from running any shell/tool/file/network op (review purely from inlined text) — required where the Codex bubblewrap sandbox is unavailable, and a defense against artifact-embedded prompt injection. Each finding must carry a verbatim `evidence` quote (grounding) and a `confidence`; severity is governed by an explicit rubric to curb inflation.
+- The prompt itself FORBIDS the model from running any shell/tool/file/network op (review purely from inlined text) — required where the Codex bubblewrap sandbox is unavailable, and a defense against artifact-embedded prompt injection. Each finding must carry a verbatim `evidence` quote (grounding) and a `confidence`; severity is governed by an explicit rubric to curb inflation. Critical/High findings additionally carry a `loopback_class` tag (`spec-tightening` | `design-flaw`, unsure→design-flaw — #407) that WF2's Step-4 fold consumes; absent/off-vocab values fail closed to the full design path.
 </reviewer-invocation>
 
 <config-loading>
