@@ -1,361 +1,339 @@
-# Per-phase model routing for WF2/WF3 — from bench #14 (two-judge, 6 models × 6 phases)
+# Purposeful per-phase model routing + deterministic execution engine — rev 3
 
-**Date:** 2026-07-16 · **Status:** awaiting owner approval · **Source data:** bench #14
-GLM-5.2 rejudge (`rawgentic-next` `docs/measurements/model-bench/2026-07-14-glm-rejudge/`
-— report md/html + `scores.json` + `tradeoff.json`, 216 frozen cells)
-· **Peers consulted:** gpt-5.6-sol (Codex) + glm-5.2 (Zhipu), independent proposals in
-`docs/reviews/peer-rawgentic-routing-problem-2026-07-16{,-glm}.md`
+**Date:** 2026-07-16 (rev 3 — owner design review applied) · **Status:** awaiting owner
+approval of the reworked epic · **Source data:** bench #14 GLM-5.2 rejudge
+(`rawgentic-next` `docs/measurements/model-bench/2026-07-14-glm-rejudge/`, 216 frozen
+cells, 6 models × 6 phases × 2 briefs × 3 reps) · **Thought partners this rev:** the
+owner (live), gpt-5.6-sol, glm-5.2 (independent proposals:
+`docs/reviews/peer-rawgentic-routing-problem-v2-2026-07-16{,-glm}.md`).
 
-Every load-bearing claim below is **[C]onfirmed** (with its evidence) or **[I]nferred**
-(with what would confirm it). All numbers were recomputed from `tradeoff.json` /
-`scores.json` in this run — never taken from report prose.
+Rev 1 routed Claude-only and was corrected. Rev 2 ran the six-model comparison and a
+decision register; the owner's review of rev 2 redirected the architecture itself:
+**no fallback seat** (every phase gets a purposeful subject), **no prose routing**
+(deterministic code + config), and **a Python execution engine** replacing
+prose-subagent dispatch. Rev 3 is that design.
 
----
+Every load-bearing claim is **[C]onfirmed** (evidence) or **[I]nferred** (what would
+confirm). Numbers recomputed from `tradeoff.json`/`scores.json` — never prose.
 
-## 1. The verdict up front
+## 0. The owner's directives that shaped this rev (verbatim intent)
 
-| Seat | Model | Why (one line) |
-|---|---|---|
-| **Interactive driver** | **claude-opus-4-8** | Tightest reliability floor on the phases the driver does inline (design/plan worst-cells 81/82 vs sonnet's 46/28; 6/6 gates vs 5/6) [C: scores.json perCell] |
-| **Review subagents** (WF2 Steps 4/8a/11, WF3 review) | **claude-fable-5**, fallback opus-4-8 | The ONLY statistically real Claude quality edge in the bench: review +4 vs opus, +3 vs sonnet at pooled sd ~2 [C: recomputed] — and review gates everything downstream |
-| **Analysis subagents** | **claude-sonnet-5** (unchanged) | No real Claude gap on analysis-adjacent phases; cheapest; intro pricing ~⅓ off through 2026-08-31 [C: live pricing fetch] |
-| **Implementation subagents** | ceiling **claude-opus-4-8** (unchanged); `select_impl_model` down-routes standard tasks to sonnet | Build gap opus−sonnet = +1 at pooled sd 7.6 — inside noise — at 1.74× the cost. The complexity fork the owner asked for **already exists in code** [C: model_routing_lib.py:121-152] |
-| **Per-phase config schema** | **Deferred** | Data supports 3 real distinctions, not 6; both peers independently converged on deferral [C: both peer reports] |
+1. No fallback position — "every stage should have a very purposeful subject." The
+   interactive driver is a pure orchestrator, never a model of last resort. (The
+   orchestrator role itself was never benchmarked — a driver-bench child closes that.)
+2. Review fallback follows the DATA: fable 88 > sol 85.5 > sonnet 85 > opus 84 —
+   "why is review not fable with a sol fallback? Opus is number four."
+3. Design: sol competes — both authors draft, **a judge decides which draft wins each
+   round, and the winner is used in the run.**
+4. Default implementer = sonnet ("it only being one point"); super-complicated tasks are
+   flagged and become **multi-model implementation bake-offs**; and "I don't want to
+   allow the prose to determine whether it's complicated enough" — the gate is code.
+5. "Instead of using subagents with prose, build a python app that takes model and
+   prompt input, calls the run and outputs the run outputs in json" — reusable by
+   kukakuka.
+6. "Can we build hooks to ensure it is routing properly?" — yes: routing verified, not
+   trusted (§3.4).
+7. Cross-model review invariant (D9, approved): adversarial reviewer never shares the
+   author's engine.
+8. Every premium seat carries a fallback chain covering full unavailability (quota,
+   model leaving the subscription/API, entitlement) — config-declared.
 
-Net config change: **one value** — `modelRouting.review: opus → fable` — plus a fallback
-chain, a provenance stamp, and skill-prose wiring. Everything else is confirmation that
-existing machinery already implements the desired behavior.
+## 1. The seat table (the plan, one screen)
 
----
-
-## 2. What the bench actually says (recomputed)
-
-### 2.1 Quality (GLM-5.2 judge, median-of-medians 0–100) × cost (USD per phase, 6 cells)
-
-| Phase | sonnet-5 | opus-4-8 | fable-5 | best gpt-5.6 |
-|---|---|---|---|---|
-| intake | 85 / $2.52 | **88.5** / $3.95 | 88 / $7.06 | terra 85 / $0.99 |
-| design | 84 / $4.28 | **87** / $5.46 | 86 / $9.46 | sol 87.5 / $1.92 |
-| plan | **85** / $6.69 | 83 / $7.71 | 84 / $13.47 | terra 85 / $2.67 |
-| build | 76 / $6.85 | **77** / $11.92 | 77 / $16.62 | sol 62 / $7.12 |
-| review | 85 / $5.71 | 84 / $7.19 | **88** / $11.63 | sol 85.5 / $5.93 |
-| ship | **88** / $2.83 | 85 / $4.41 | 84 / $6.14 | sol 82 / $2.59 |
-
-[C: recomputed from `tradeoff.json` this run.] Claude costs are billed-token figures at
-$3/$15 sonnet, $5/$25 opus, $10/$50 fable per M; gpt rows are `est@12/M` **estimates** —
-cross-engine cost comparison is soft and is NOT used to drive any routing choice here.
-
-### 2.2 Which gaps are real (gap vs pooled per-cell sd, n=6 cells/model/phase)
-
-Only three Claude-family gaps clear the noise floor [C: recomputed from `scores.json`
-perCell; n=6 cells per model×phase except fable plan n=5 (one null cell, §2.3)]:
-
-| Gap | Size | Pooled sd | Verdict |
+| Seat | Primary | Chain (floor-constrained, config-declared) | Deciding data |
 |---|---|---|---|
-| fable − opus, review | +4.0 | 2.0 | **real** |
-| fable − sonnet, review | +3.0 | 1.9 | **real** |
-| sonnet − opus, ship | +3.0 | 2.9 | **real (borderline)** |
-| fable − sonnet, intake | +3.0 | 2.6 | real (opus ≈ fable there, +0.5 at sd 2.7 — parity) |
-| opus − sonnet, build | +1.0 | 7.6 | noise |
-| opus − sonnet, intake | +3.5 | 3.8 | noise |
-| opus − sonnet, design | +3.0 | 8.7 | noise |
-| sonnet − opus, plan | +2.0 | 11.7 | noise |
+| **orchestrator** (the Claude Code session) | opus-4-8 *(interim)* | n/a — session model | Unbenchmarked role; strong-model-on-top evidence (OptAgent: weak-top collapses 53.9%→0%) [C: AC1 verdict, PR #153 record]; **driver-bench child measures it** |
+| **intake** | opus-4-8 | opus → fable → sonnet | Median leader 88.5 [81]; owner picked opus over the peers' fable-primary to keep fable quota concentrated on review where its edge is REAL, not parity |
+| **design** | **COMPETITIVE: sol vs opus**, judge glm-5.2, winner used in the run | author lanes fall back in-family only (sol→terra; opus→fable); judge fail → §3.3 hybrid | sol 87.5 [85] best floor+sd in bench vs opus 87 [81]; gap noise; cross-judge caveat (Gemini bench: fable ≥ sol) — competition + telemetry settles it with evidence |
+| **plan** | opus-4-8 | opus → fable → terra | Best floor 82 (terra 78, sonnet 28); medians all noise; planning defects propagate into every build task |
+| **build** | sonnet-5 (default) | sonnet → opus → terra; **gate-flagged → BAKE-OFF {sonnet, opus, terra}**, judge glm on deterministic test evidence | opus−sonnet +1 @ sd 7.6 = noise at 1.74× cost (owner's one-point rule); gpt disqualified as *default* (62 [18]) but terra rides bake-offs as free-quota signal |
+| **review** | fable-5 | **fable → sol → sonnet** (interim, pre-gpt-lane: fable → sonnet). **opus dropped — #4 by data** (owner correction) | fable +2.5 over sol REAL; chain = measured ranking |
+| **ship** | sonnet-5 | sonnet → opus → fable | sonnet 88 REAL edge (+3 opus, +6 sol) AND cheapest |
 
-**Where quality is inside noise, cost decides** — the owner's stated rule. That rule,
-applied honestly, sends far more work to sonnet than the raw medians suggest.
+Cross-cutting rules: never Haiku (config + hook enforced); chains skip entries that
+would violate the cross-model invariant for the artifact under review (chain-aware
+skip, not blind next-entry — glm's catch); a chain exhausting its eligible entries is a
+**handled hard failure**, never a silent downgrade; ≤3 concurrent Claude subagents with
+**one slot reserved for the driver → working ceiling 2** (glm's catch).
 
-### 2.3 Reliability floors — the fact that picks the driver
+## 2. Six-model evidence (unchanged from rev 2; the basis)
 
-Worst cell of 6 (harder brief a) [C: scores.json perCell]:
+Median [worst cell] of 6 cells, GLM-5.2 judge; cost USD/phase (gpt = est@12/M, soft):
 
-| | design floor | plan floor | build floor | design gates | plan gates |
-|---|---|---|---|---|---|
-| opus-4-8 | **81** | **82** | 62 | **6/6 all five** | **6/6 all five** |
-| sonnet-5 | 46 | 28 | 62 | 5/6 each | 5/6 each |
-| fable-5 | 84 | 80 (n=5¹) | 38 | 6/6 all five | 4/5 on P-G1, 5/5 on P-G2..G5 |
+| Phase | luna | terra | sol | sonnet-5 | opus-4-8 | fable-5 |
+|---|---|---|---|---|---|---|
+| intake | 82 [76] $1.36 | 85 [78] $0.99 | 83 [80] $1.10 | 85 [80] $2.52 | **88.5** [81] $3.95 | 88 [86] $7.06 |
+| design | 86.5 [84] $2.93 | 86 [84] $2.65 | **87.5** [85] $1.92 | 84 [46] $4.28 | 87 [81] $5.46 | 86 [84] $9.46 |
+| plan | 82 [79] $2.97 | **85** [78] $2.67 | 81 [80] $2.63 | **85** [28] $6.69 | 83 [82] $7.71 | 84 [80] $13.47 |
+| build | 47 [16] $7.89 | 57 [50] $9.95 | 62 [18] $7.12 | 76 [62] $6.85 | **77** [62] $11.92 | **77** [38] $16.62 |
+| review | 82 [78] $7.57 | 84 [80] $6.59 | 85.5 [83] $5.93 | 85 [84] $5.71 | 84 [82] $7.19 | **88** [86] $11.63 |
+| ship | 81 [78] $2.83 | 80 [76] $2.63 | 82 [80] $2.59 | **88** [82] $2.83 | 85 [82] $4.41 | 84 [82] $6.14 |
 
-¹ fable plan has one null cell (brief a rep 2) — median over 5. Named, not hidden.
+REAL gaps (> pooled per-cell sd, valid-n ≥5): fable review (+2.5 over sol); sonnet ship
+(+6 over sol, +3 over opus); gpt build disqualification (−15..−30, floors 16–18).
+Everything else noise — floors, cost, and mechanics decide. Cross-judge caveat: the
+Gemini-judged fixture-v2 had fable ≥ sol on all phases — sol's design lead is
+judge-dependent, which is exactly what the competitive rounds resolve with evidence.
+Subscription economics: Claude Max + Codex are **independent quota pools**; gpt seats
+load-shed the Claude 5-hour window; dollar figures are burn proxies (real out-of-pocket
+$0 both engines). Noise method: effect-size heuristic (gap vs pooled per-cell sd), not a
+significance test; fable plan n=5 (one named null); brief a is harder for all models.
 
-Brief a is simply the harder brief for every model (mean slot deviation −1.0..−2.3 vs
-+0.4 for brief b) [C: recomputed] — the collapses are genuine model failures under
-difficulty, not a fixture artifact.
+## 3. The execution engine (replaces prose-subagent dispatch for routed seats)
 
-### 2.4 Pricing (verified live this run)
+Owner directive #5; both peers converged independently on the same shape. **Generalize
+`model_bench_lib.py fixture-v2-campaign-run-cell`** — its per-engine command templates
+(`claude --print --model X --output-format json`, codex CLI, zhipuai SDK) and
+capture-dir discipline are proven by 400+ bench cells [C: bench #14 lineage]. Do not
+clean-room.
 
-[C: fetched `platform.claude.com/docs/en/about-claude/pricing` 2026-07-16]
-opus-4-8 $5/$25 · sonnet-5 **intro $2/$10 through 2026-08-31**, then $3/$15 · fable-5
-$10/$50 (per M in/out; cache read 0.1×). The bench's sonnet costs are anchored at
-post-intro $3/$15, so sonnet's *current* API-equivalent is ~⅓ lower than table values
-through August. Fast-mode opus-4-8 exists at $10/$50 — not used in the bench, not part
-of this plan.
+### 3.1 Package (`phase_executor/`, in this repo now; extracted when kukakuka consumes it)
 
-### 2.5 Known limitations (stated, not buried)
+- **The normative artifact is a language-neutral versioned JSON Schema**
+  (`observation.schema.json` + `routing-table.schema.json`, committed) — `contract.py`
+  is ONE producer implementation; a Rust producer (kukakuka) emits the same documents
+  (kukakuka conformance review, §3.5). Observation fields: `{schema_version, run_id,
+  attempt_id, correlation_id?, seat, engine, transport, requested_model, actual_model,
+  prompt_hash, context_hashes, usage {input, output, cached, cost_proxy?}, timing_ms,
+  queued_ms, process {exit_code, timed_out}, parse_status, parsed_payload,
+  raw_capture_path, fallback_reason, judge_degraded?, routing_config_digest}`.
+  **`actual_model` is mandatory evidence — the provider-reported id from the INNERMOST
+  envelope (a CCR/proxy hop is auditable as `transport` + upstream id); absent identity
+  is a failure, not an unknown success** (sol's rule). `usage` counts are real provider
+  numbers (required); `cost_proxy` is optional. `correlation_id` is an opaque
+  caller-supplied string (rawgentic: WF2 step/task id; kukakuka: room turn nonce).
+- `adapters/` — `claude_cli.py`, `codex_cli.py` (parses header for actual model),
+  `zhipuai_sdk.py` (invocation pattern from `adversarial_review_lib`). Each:
+  `run(request) -> Observation`. Adapter owns the model flag — no user-supplied
+  override reaches the command line.
+- `engine.py` — `run_seat(seat, prompt, context) -> Observation` and
+  `run_competitive(seat, candidates, judge, rubric) -> (winner, losers, judge_obs,
+  record)`. Enforces: chain membership, never-Haiku, cross-model invariant
+  (chain-aware skip), Claude working-ceiling 2, capture + audit append. Synchronous
+  (WF2 blocks on results); competitive candidates run concurrently across quota pools.
+  Detached mode deliberately NOT built (both peers: cut it).
+- `routing/` — declarative seat table (the §1 table as data): `seat → {primary,
+  chain[], floor}` where each chain entry references a **lane object** `{provider,
+  transport, auth_mode, credential_ref, participation_mode?}` — rawgentic entries
+  default `transport: native, auth_mode: subscription_oauth`; kukakuka declares its
+  CCR/Ollama shapes in the same schema (no fork). Per-pool **concurrency limits are
+  config keyed by lane** (rawgentic: `claude: 2` under the CC ceiling; kukakuka sets
+  its own — one CCR instance measured taking 4 concurrent). **Invariants are data:**
+  the hooks consume a project-supplied `forbidden_combinations` table
+  (engine×transport×auth patterns + reason) — rawgentic ships never-Haiku and the
+  cross-model author invariant as its rows; kukakuka declares `{GLM, CCR} ⇒ FORBIDDEN
+  (account-ban trigger)`; the enforcement engine is generic. Projects own their
+  tables; the engine is policy-free.
 
-- Single benchmark; 2 briefs × 3 reps; n=6 cells per model×phase. Medians are
-  directional; floors are safety evidence. [C: fixture design]
-- GLM-5.2 judges stricter than Gemini (every per-model mean Δ negative, widest on
-  build); cross-JUDGE absolutes aren't comparable — all comparisons here are within the
-  judge-uniform GLM matrix. [C: report correlation section, ρ=0.621]
-- build B-G2/B-G3 gates: 0/6 for opus AND fable, 2/6 sonnet — those two gates fail
-  nearly universally and say more about the gate than the models. [C: gateFrac]
-- Driver economics are subscription usage-window burn, not API dollars; API-equivalent
-  figures are the proxy for burn rate. [I: no per-window burn telemetry exists — the
-  run-record `usage` capture would confirm; see child issue 6]
+### 3.2 Deterministic complexity gate (owner directive #4 — code, not prose)
 
----
+Lives beside `plan_lib` (where `riskLevel` fail-closed and `issue.complexity` already
+exist [C: plan_lib.py:170,202-205; work_summary.py:208-211]):
 
-## 3. Driver recommendation: opus-4-8 (not sonnet-5)
-
-**Recommendation: drive interactive and unattended orchestration sessions on
-claude-opus-4-8.** Both independent peers reached the same conclusion unprompted.
-
-The driver personally executes what the bench calls intake, design, plan and the
-orchestration glue — the phases where a bad output silently corrupts everything
-downstream. The decisive facts:
-
-1. **Tail risk, not medians.** Sonnet's design/plan medians are competitive (84/85),
-   but one cell in six collapsed to 46 (design) and 28 (plan) on the harder brief, and
-   its gate pass-rate there is 5/6. Opus's worst cells are 81/82 with 6/6 gates. A
-   driver that writes one catastrophic design in six hard tasks is expensive in exactly
-   the way that doesn't show up in a median. [C: §2.3]
-2. **Sonnet's real edges are dispatchable.** Its ship edge (+3, real) and cheapness are
-   captured by routing ship-shaped *tasks* to sonnet subagents (§5) — the driver seat
-   doesn't need to be sonnet to harvest them.
-3. **Cost containment comes from farming, not from a cheaper driver.** With analysis,
-   standard implementation, and ship tasks on sonnet and review on fable, the opus
-   driver's own token share shrinks; that is where the burn goes down without giving up
-   the floor. [I: exact driver-share depends on issue mix — run-record usage telemetry
-   (child 6) would quantify it]
-
-**The alternative and why it loses:** sonnet-5 as driver saves roughly ⅓–½ of driver
-burn [C: pricing ratio] and matches opus on medians everywhere but intake/design
-[C: §2.1, gaps inside noise]. It loses on the one thing a driver can't delegate:
-the reliability floor on inline design/plan work. If a future bench shows sonnet's
-collapse cells were brief-specific noise, revisit (§6 refresh rule).
-
----
-
-## 4. Per-phase routing table (the plan)
-
-"Seat" = who actually executes that phase's work in WF2/WF3 today
-[C: WF2 SKILL.md steps; dispatch points at SKILL.md:145-156, steps.md:961-965].
-
-| Phase | Seat today | Routed model | Quality/cost basis | Fork |
-|---|---|---|---|---|
-| intake (WF1/Step 1-2) | driver inline | **opus-4-8** (driver) | opus 88.5 tops; ≈fable at half fable's cost; real edge over sonnet | none — driver covers it |
-| design (Step 3-4) | driver inline + review judge | **opus-4-8** (driver); critique judge → **fable-5** | driver floor argument (§3); judge is a review-role dispatch | none |
-| plan (Step 5) | driver inline | **opus-4-8** (driver) | plan gaps all inside noise; opus floor 82 vs sonnet 28 | none |
-| build (Step 7-8) | implementation subagents | ceiling **opus-4-8**; standard/trivial tasks **down-route to sonnet-5** | opus−sonnet +1 @ sd 7.6 = noise; sonnet 57% of opus cost — the owner's 88-vs-87 example, verbatim | **existing** `select_impl_model(ceiling, riskLevel, complexity)`: high-risk or complex → opus; else sonnet [C: model_routing_lib.py:121-152] |
-| review (Steps 4/8a/11; WF3 review) | review subagents | **fable-5**, fallback **opus-4-8** on quota exhaustion | the one real quality edge (+4/+3); review volume is bounded: 1 + high-risk-count + 1 per run [C: plan_lib.py estimate_agents] | quota circuit-breaker, run-scoped (§5.2) |
-| ship (Steps 12-16) | driver inline today | ship-shaped tasks → **sonnet-5** via standard-task down-route; final merge/verify stays driver | sonnet 88 real edge AND cheapest — double win | reuse implementation fork; no new machinery |
-
-gpt-5.6 is deliberately **not** routed into Claude seats: its costs are estimates
-(`est@12/M`), its build quality craters (47–62), and gpt/glm already serve the
-orthogonal cross-model gates (WF5 adversarial review, WF13 peer consult). [C: §2.1;
-both peers flagged the same]
-
----
-
-## 5. What actually changes in WF2/WF3
-
-The audit finding of this run: **most of the desired behavior already exists.** The
-changes are one config value, one fallback mechanism, prose wiring, and provenance.
-
-### 5.1 Config (workspace `.rawgentic_workspace.json`, rawgentic entry)
-
-```json
-"modelRouting": {
-  "review": "fable",
-  "analysis": "sonnet",
-  "implementation": "opus",
-  "provenance": { "bench": "#14 glm-rejudge 2026-07-14", "decided": "2026-07-16" }
-}
+```python
+def needs_bakeoff(task, issue, plan_est, cfg) -> GateDecision:
+    return (task.riskLevel == "high"
+        or issue.complexity == "complex"
+        or hits_security_surface(plan_est.files)   # repo-owned globs: auth/secrets/
+                                                   # payments/migrations/CI/crypto
+        or plan_est.lines > cfg.BAKEOFF_DIFF_LINES
+        or plan_est.file_count > cfg.BAKEOFF_FILE_COUNT)
 ```
 
-- `review: opus → fable` is the only value change. `resolve()` already accepts it;
-  fable is not in `_BELOW_OPUS`, so no soft-floor warning fires
-  [C: model_routing_lib.py:24-26,113-116]. Local resolver acceptance is NOT proof a
-  real fable dispatch works under this workspace's account/entitlements — child 2's
-  AC requires one real dispatch before the flip merges (adversarial-review fix).
-- **Sequencing (must-fix from both reviewers):** this flip merges only AFTER the
-  fallback chain (child 1) is deployed — see §7 dependency order.
-- `provenance` is a new, ignored-by-resolve() annotation field — needs a
-  schema-tolerance check only. [I: verify resolve() ignores unknown keys — child 1
-  includes the test]
+Thresholds are config. Missing/invalid mandatory metadata → bake-off (fail-closed,
+sol's rule). Returns decision + reason codes + input snapshot + policy digest; the
+executor recomputes the digest at admission (gate can't be edited between plan and
+run). Known limit, named: plan-time size estimates can undershoot — the security-glob
+override is the backstop, and the glob list completeness is a maintained artifact.
 
-### 5.2 Review fallback chain (the one real mechanism to build)
+### 3.3 Competitive rounds (design always; build when gated)
 
-When fable quota is exhausted mid-run (historically real), review dispatch falls back
-to opus — never lower (review soft floor stays). Both peers specified the same shape:
+- Authors run concurrently on independent quota pools against byte-identical
+  prompt/context snapshots, isolated captures.
+- Judge = **glm-5.2** (shares no author engine), bench-#14 rubric reused verbatim
+  (both peers: no new rubric). Judge returns winner + criterion scores + confidence on
+  **anonymized, randomly-ordered drafts**; build bake-offs judge on deterministic
+  test/static-analysis evidence + anonymized patches, not vibes.
+- **Judge failure (after one retry) — policy is caller-supplied, not baked in** (§3.6
+  item 5): `run_competitive` takes a failure-strategy parameter. Rawgentic passes the
+  owner-picked hybrid — interactive session → stop and ask; headless → winner =
+  incumbent lane (opus), `judge_degraded` flag, excluded from telemetry, surfaced in
+  the morning report. kukakuka's Council passes its own strategy.
+- Winner's exact bytes (hashed) become the phase artifact; losers + scores persist via
+  an **injectable results sink** (rawgentic's sink: `bakeoff_results.jsonl`).
+  Retirement of a chronic loser needs a preregistered sample size and
+  downstream-outcome evidence, not raw win counts (sol's rule) — reviewed quarterly,
+  no auto-retirement.
+- **D9 wiring:** the winner's engine determines the adversarial-review backend —
+  gpt-authored winner → Claude/glm reviewer, never gpt.
 
-Transition contract (adversarial-review fix — the trigger must be enumerable, not vibes):
+### 3.3b Parallelization contract (owner directive, added live)
 
-- **Breaker triggers** — a fable dispatch result counts as quota/capacity exhaustion
-  ONLY when it matches an enumerated signal class: (a) an explicit rate/usage-limit
-  error from the harness/provider (HTTP 429 or an error string matching the harness's
-  usage-limit / quota-exhausted family), or (b) the known vacuous-death signature of a
-  limit-killed subagent (`confirmedCount: 0` + empty body — established in the repo
-  manual §4.9). Child 2 owns the exact classifier list, seeded from real captured
-  errors (see child 2 AC).
-- **Everything else is NOT a trigger**: timeout, 5xx, parse failure, or an unfavorable
-  review result goes down the existing retry/error path on fable — model substitution
-  is only for exhaustion. [C: gpt peer, decision 4]
-- **Trip semantics**: the first triggering dispatch atomically sets run-scoped
-  `fable_exhausted`, then that same review is **replayed once on opus immediately**;
-  all subsequent review dispatches in the run go straight to opus. Concurrent in-flight
-  fable dispatches at trip time are left to finish; each one that returns a trigger is
-  replayed once on opus (no storms — one replay per review, ever).
-- **Concurrency clamp (honest status)**: the ≤3 concurrent Claude subagent ceiling is
-  today a workspace-manual rule enforced by dispatch discipline only — **no
-  programmatic clamp exists** [C: grep of hooks/ this run]. Step 8a fan-out must
-  respect it in prose now; child 2's AC adds at minimum a logged concurrent-dispatch
-  count so violations are visible, with a code-level clamp as a stretch goal.
+Dispatch is parallel wherever the work is independent — serial execution is the
+exception that must justify itself:
 
-### 5.3 Skill prose (WF2 `implement-feature`, WF3 `fix-bug`)
+- **Bake-offs are always fully parallel:** all candidates launch simultaneously —
+  build's {sonnet, opus, terra} = 2 Claude slots (exactly the working ceiling) + terra
+  on the codex pool concurrently, **each in an isolated git worktree** so builders
+  cannot collide on the shared tree [C: worktree isolation is the established
+  parallel-build mechanism — Agent tool `isolation: worktree`; the executor's capture
+  dirs adopt the same discipline]. Wall-clock = slowest candidate, not the sum.
+- **Design rounds:** both authors (sol on codex pool, opus on Claude pool) launch
+  together; the judge (glm, third pool) fires the moment both observations land.
+  Three quota pools, zero contention.
+- **Independent seats/tasks pipeline:** where the WF2 DAG allows (e.g. multiple
+  standard build tasks with no dependency edges), the executor runs them concurrently
+  under the Claude working ceiling (2), queuing overflow rather than serializing
+  everything — queue wait is logged in the Observation (`queued_ms`) so stalls are
+  diagnosable.
+- **The ceiling accounting:** cross-engine candidates (terra/sol/glm) never consume
+  Claude slots — parallelizing across pools is free capacity, which is exactly the
+  subscription-economics argument for keeping gpt lanes in the bake-off set.
+- E1/E5 acceptance criteria include a live demonstration: a 3-candidate bake-off whose
+  total wall-clock is within 1.3× the slowest single candidate.
 
-- `<model-routing-resolve>` block: document the fallback chain + circuit breaker for
-  the review role (mechanism in 5.2). [C: block exists at SKILL.md:145-156]
-- Step 12-16 (ship): the down-route only fires for **delegated** tasks
-  [C: steps.md:961 — select_impl_model runs at the implementation-delegation boundary],
-  and ship work is driver-inline today, so classification alone routes nothing
-  (adversarial-review catch). The change is therefore a **delegation boundary**: WF2
-  ship steps that are self-contained artifact edits — README/changelog entry, version
-  bump ×3, docs updates — become delegable tasks (riskLevel standard) dispatched
-  through the existing implementation path, landing on sonnet via the down-route.
-  **Driver-only, never delegated:** merge decision/execution, CI-lane triage, deploy
-  and its verification, run-record telemetry (Step 16). Child 4 tests BOTH paths by
-  asserting the actual executing model (delegation on → sonnet; delegation off →
-  driver inline, unchanged).
-- WF3: same review fallback; diagnosis stays analysis=sonnet; fix tasks already flow
-  through the implementation fork. [C: fix-bug SKILL.md:106-109 resolves review role]
-- Driver guidance: a short "driver seat" note in both skills naming opus-4-8 as the
-  recommended session model with the §3 rationale — guidance, not enforcement (the
-  harness owns session model). 
+### 3.4 Routing enforcement hooks (owner directive #6 — verified, not trusted)
 
-### 5.4 What is explicitly NOT changing
+- **PreToolUse:** requested model ∈ the seat's declared chain; no
+  `forbidden_combinations` row matches (never-Haiku is rawgentic's row, not engine
+  code); the CALL's declared routing-config digest matches the config that will serve
+  it — **a config reload is a defined, audited epoch event** (new digest line in the
+  audit log), not a mismatch failure (§3.5 item 8; rawgentic's plan→run immutability
+  is its own epoch policy layered on top); gate digest present when build claims
+  `default`.
+- **PostToolUse:** `requested_model == actual_model` (normalized), sourced from the
+  provider's own output (claude JSON / codex header) — mismatch fails the call,
+  non-retryable; Observation appended to per-run `routing_audit.jsonl`.
+- **Run-end audit:** reconciles expected seat calls vs audit records; refuses ship on
+  missing/duplicate/unverified calls; WF2 accepts only executor result envelopes so
+  uninstrumented dispatch can't sneak past the hooks (sol's orphan-work rule).
+- Honest limit (glm): if a CLI ever silently substitutes a model without reflecting it
+  in its own output, the hook can't see it — pin CLI versions, fixture-test the
+  parsers.
 
-- `select_impl_model` logic — already correct; the bench validates it. 
-- The 3-role schema — no per-phase keys (deferred, §6).
-- analysis role value — stays sonnet.
-- WF5/WF13 backends (gpt/glm) — orthogonal cross-model gates, untouched.
-- No auto-tuner. No Haiku anywhere (enforced in code) [C: model_routing_lib.py:88-91].
+### 3.5 Cross-project generality contract (kukakuka conformance, verified PRE-E1)
 
----
+The kukakuka session ran a 9-item conformance review against this design (kukakuka:
+Rust product, a2a crate, runtime per-participant routing in live rooms — not dev-time
+WF2 phases). Verdicts, all applied above:
 
-## 6. How bench data drives routing going forward (provenance + refresh)
+1. **Reuse boundary**: normative artifact = language-neutral versioned JSON Schemas
+   (`observation.schema.json`, `routing-table.schema.json`); `contract.py` is one
+   producer; Rust emits the same documents. *(widened, §3.1)*
+2. **Seat width**: chain entries are lane objects `{provider, transport, auth_mode,
+   credential_ref, participation_mode?}` — covers kukakuka's Native/Ccr transports and
+   auth shapes without a fork. *(widened, §3.1)*
+3. **Invariants as data**: project-supplied `forbidden_combinations` table
+   (engine×transport×auth + reason); kukakuka declares `{GLM, CCR} ⇒ FORBIDDEN
+   (account-ban trigger)`; rawgentic's never-Haiku + author invariant are its rows.
+   *(widened, §3.1/§3.4)*
+4. **actual_model across transports**: `transport` field added; rule = provider-
+   reported id from the INNERMOST envelope (kukakuka confirmed live that a CCR
+   envelope reports the true upstream id), absent = failure. *(widened, §3.1)*
+5. **run_competitive = Council's primitive**: shared; judge-failure policy and results
+   sink are caller-supplied, rubric already a parameter. *(widened, §3.3)*
+6. **Ceiling is config**: per-pool concurrency limits keyed by lane (rawgentic
+   `claude: 2`; kukakuka measured one CCR taking 4 concurrent). *(widened, §3.1)*
+7. **Real usage**: `usage` counts are provider-reported and required (bench captured
+   them from all three engines); `cost_proxy` optional. *(confirmed + tightened)*
+8. **Config lifecycle**: per-call digest matching; reload = audited epoch event, not a
+   failure; rawgentic's plan→run immutability is its own layered policy. *(widened, §3.4)*
+9. **Correlation id**: optional caller-supplied `correlation_id` (kukakuka: room turn
+   nonce; rawgentic: WF2 step/task id). *(widened, §3.1)*
 
-The mechanism both peers converged on — human-in-the-loop, no auto-tuner:
+E1's acceptance criteria include schema-validation of a hand-written "kukakuka-shaped"
+Observation (CCR transport, proxied actual_model, correlation_id) against the
+committed JSON Schema — proving the extraction is a move, not a rewrite.
 
-1. **Provenance stamp** in config (§5.1) ties current values to bench #14.
-2. **Refresh rule** (documented in `docs/model-routing.md`, new — child 5 carries the
-   full executable decision table; the contract, made precise per adversarial review):
-   - **Role→phase map:** review → review phase; analysis → intake+design (mean of the
-     two gaps); implementation ceiling → build; driver seat → design+plan (each must
-     independently pass).
-   - **Gap test:** candidate's median − incumbent's median > pooled sd, where pooled
-     sd = mean of the two models' population sd over their VALID cells (null cells
-     dropped and named; minimum n=5 valid cells per side or the comparison is void).
-     This is an **effect-size heuristic, not a significance test** — stated as such.
-   - **Floor test:** candidate's worst valid cell ≥ 70 for subagent seats, ≥ 80 for
-     the driver seat; driver seat additionally requires every design+plan gate ≥ 5/6.
-     (Thresholds chosen from bench #14's spread: opus floors 81/82, the collapse cells
-     46/28/38 are what the rule must exclude. Owner may retune in child 5.)
-   - A value moves only when BOTH tests pass; ties/void comparisons hold the incumbent.
-     Re-stamp provenance on every decision, including "no change".
-3. **Per-phase schema gate:** open a per-phase design spike only when a future bench
-   shows ≥2 real distinctions the 3-role model cannot express. [C: both peers,
-   independently identical rule]
-4. Run-record telemetry (`usage` capture, already in WF2 Step 16) provides the
-   production-side signal — retry rates, gate failures, per-role burn — to sanity-check
-   bench conclusions between reports. [C: hooks/usage_capture.py exists; extension in
-   child 6]
+### 3.5b Multi-account Claude lanes (owner directive, folded in)
 
----
+Confirmed live this session: `CLAUDE_CONFIG_DIR=<dir> claude` scaffolds a fully
+isolated config tree — credentials, sessions, projects, plugins — per directory
+[C: probe output, "Not logged in · Please run /login" in a fresh dir]. Three accounts
+= three config dirs; the 5-hour usage windows are per-account, so accounts are
+**independent Claude quota pools**, exactly like the codex/zhipu pools.
 
-## 7. Epic + child issues (ready to file on approval)
+- **Mechanism in the schema (already there via item 2):** a claude-cli lane's
+  `credential_ref` names the config dir (`~/.claude`, `~/.claude-acct2`, …); the
+  adapter sets `CLAUDE_CONFIG_DIR` from it. Per-pool concurrency then applies per
+  ACCOUNT (each gets its own working ceiling), and the parallelization lanes multiply.
+- **Per-dir costs, named:** each account dir needs its own `/login` (one-time), plugin
+  install (rawgentic per dir), and settings; artifact credentials and session history
+  are per-dir. The cron launcher and executor pin the env var per invocation.
+- **ToS note (owner-acknowledged):** usage limits are per-account by design — rotating
+  accounts to evade limits can violate Anthropic's consumer terms; legitimately-owned
+  separate seats are a different matter. The design makes the mechanism available;
+  which accounts exist is the owner's call. The sanctioned no-window alternative
+  (`ANTHROPIC_API_KEY`, API billing, real dollars) remains on the table.
+- Lands as child **E8**.
 
-**Epic: "Route WF2/WF3 model seats from bench #14 evidence (driver=opus, review=fable, ship→sonnet)"**
-Body carries the §1 verdict table + link to this doc. Children, in **dependency
-order** (adversarial-review fix: the fallback mechanism MUST exist before the config
-flip goes live — both reviewers independently flagged the original ordering as a
-production window with fable live and no fallback):
+### 3.6 Driver-bench (closing the gap the owner named)
 
-0. **Prerequisite (owner-gated): repair `~/.codex/config.toml` CCR hijack + WF5/WF13
-   smoke test** — remove the two CCR-managed blocks (owner approval required; global
-   config), then one live WF5 review + one WF13 consult on the gpt backend as the
-   epic's acceptance signal that the cross-model gates this plan leans on actually
-   run. If the owner declines, the epic proceeds but the plan's WF5/WF13 references
-   are re-stamped "glm-backend only". (chore, S, blocks nothing else structurally)
-1. **Review fallback chain: run-scoped fable→opus circuit breaker** — the §5.2
-   transition contract: enumerated trigger classifier (seeded from real captured
-   errors), atomic trip + single immediate opus replay, in-flight handling, logged
-   concurrent-dispatch count (clamp visibility), tests for trip/no-trip/replay-once/
-   never-below-opus. (feat, M — **blocks child 2**)
-2. **Retune rawgentic `modelRouting` (review→fable) + provenance field** — the config
-   flip, `resolve()` unknown-key tolerance test, never-Haiku regression test. AC
-   (adversarial-review fix): one REAL WF2/WF3 review dispatch under the exact
-   workspace config recording the resolved model and a successful fable response, plus
-   one real captured quota/capacity error validated against child 1's classifier.
-   **Depends on child 1 — do not merge review=fable before the circuit breaker is
-   deployed.** (feat, S)
-3. **WF2/WF3 skill prose: fallback wiring + Step 8a concurrency note + driver-seat
-   guidance** — `<model-routing-resolve>` block edit (shared-block sync), drift-guard
-   anchor. (docs/feat, S)
-4. **Ship-task delegation boundary** — make self-contained ship artifacts
-   (README/changelog, version bump, docs) delegable standard-risk tasks through the
-   existing implementation path; driver-only list (merge, CI triage, deploy+verify,
-   Step 16) stays inline. Tests assert the actual executing model on BOTH paths
-   (delegation on → sonnet; off → driver unchanged). (feat, M)
-5. **`docs/model-routing.md`: provenance + refresh-rule doc** — the §6 executable
-   decision table (role→phase map, pooled-sd formula, min-n, null handling, floor and
-   gate thresholds, tie behavior, effect-size-not-significance statement) with the
-   gap>sd AND floor rule as the canonical drift-guardable sentence. (docs, S)
-6. **Routing telemetry in run records** — per-dispatch: role, preferred/actual model,
-   selector inputs, fallback reason, queue/concurrency count; extends the run-record
-   schema (append-only store rules apply). (feat, M)
-7. **(Deferred — record only)** per-phase schema spike, gated on the §6.3 evidence rule.
-   Filed as a `deferred` issue so the gate is written down, not remembered.
+The orchestrator role was never measured. Design (sol's stubbed-matrix shape, adopted):
+fixtures = synthetic issues + **stubbed executor responses** + injected failures
+(quota, model-retired, judge timeout) + expected state-transition graph. Score: correct
+seat/fallback selection, gate computation, cross-model enforcement, winner propagation,
+audit completeness, recovery, token burn. Matrix: 12 fixtures × 3 reps × 2 driver
+models (opus, sonnet) = 72 stubbed runs (cheap — stubs), then 3 live end-to-end runs.
+Orchestrator seat stays opus until this reports.
 
-Multi-PR conventions: children 0–6 are each single-PR; only the last references
-`Closes` on the epic; child 2's body carries `depends on #<child-1>`. [C: repo manual
-§2; driver_lib parse_depends_on reads child-body deps]
+## 4. Epic restructure (supersedes the rev-1 child set — owner approval needed)
 
----
+The executor changes the mechanism, so the filed children need rework. Proposed:
 
-## 8. Owner attention required
+| Child | Status | Content |
+|---|---|---|
+| #414 CCR repair | **stands** | unchanged; still owner-gated; still blocks any gpt lane work |
+| E1 (new) | **file** | `phase_executor/` package: contract + adapters + engine + routing config + tests (generalize bench cell-runner). The foundation — blocks E2–E6. (feat, L) |
+| E2 (new) | **file** | Routing enforcement hooks (Pre/Post/run-end audit) + `routing_audit.jsonl` (feat, M) |
+| E3 (reworks #415+#416) | **rewrite** | Seat table config incl. fallback chains (full unavailability class, config-declared) + the review flip to fable→sol→sonnet + provenance stamp. Depends on E1+E2. |
+| E4 (reworks #418) | **rewrite** | Ship + intake + plan seats through the executor (delegation boundaries; driver-only list stands: merge, CI triage, deploy+verify, Step 16) |
+| E5 (new) | **file** | Competitive design rounds + build bake-off {sonnet, opus, terra} + glm judge + hybrid judge-failure policy + `bakeoff_results.jsonl` (feat, L) |
+| E6 (new) | **file** | Deterministic complexity gate in plan_lib + security-surface globs + thresholds config (feat, M) |
+| #417 skill prose | **shrinks** | WF2/WF3 prose now just calls the executor per seat; D9 backend-selection rule; driver-seat note |
+| #419 refresh-rule doc | **stands** | + seat-table refresh discipline (glm's config-rot catch: floor-based picks must be re-derived every bench, not persist silently) |
+| #420 telemetry | **stands** | now largely emitted by the executor (routing_audit + bakeoff_results feed run records) |
+| #421 per-phase schema | **closes** | the routing config IS the per-phase schema — evidence gate met by owner directive |
+| E7 (new) | **file** | Driver-bench (stubbed matrix + 3 live) (feat, M) |
+| E8 (new) | **file** | Multi-account Claude lanes: `credential_ref`→`CLAUDE_CONFIG_DIR` in the claude adapter, per-account concurrency pools, account setup runbook (login + plugin install per dir), launcher env pinning. Depends on E1. ToS note in §3.5b rides the issue body. (feat, S/M) |
 
-> **⚠ These five items are YOUR decisions — none was executed unattended.** Everything
-> above is analysis and drafts; nothing routes differently until you approve, and the
-> two environment problems (items 2 and 5) were worked around, not fixed.
+Sequencing: #414 (independent) · E1 → E2 → E3 → {E4, E5, E6, E8} → E7. WF2 keeps
+working throughout — the executor lands behind the existing prose path and seats cut
+over one at a time (review first: highest value, bounded volume).
 
-1. **APPROVE/REJECT the plan** — specifically driver=opus (§3), review=fable (§4), and
-   filing children 1–7.
-2. **`~/.codex/config.toml` is broken for every Codex-backed flow** (WF5 gpt backend,
-   WF13, codex-rescue): a leftover CCR "managed profile" points Codex at
-   `http://127.0.0.1:3456` (dead — you said not to restart CCR) with
-   `model=openai/gpt-4o-mini`. This run worked around it with a scratchpad
-   `CODEX_HOME` (auth copied, native provider, gpt-5.6-sol) — **not durable**. Fix =
-   delete the two CCR-managed blocks from `~/.codex/config.toml` (backup exists in
-   scratchpad). One-line decision; I did not edit your global config unattended.
-3. **Fable quota exposure**: review=fable puts fable on every WF2/WF3 run (bounded
-   volume, with opus fallback) — if fable quota is already tight for other work, say so
-   and review stays opus (child 1 flips one value back).
-4. **Sonnet intro pricing expires 2026-08-31** — the ship/analysis cost case weakens
-   ~⅓ then; the routing still stands on the no-real-gap argument, but re-check at the
-   next bench.
-5. **zhipuai SDK gap in system python3**: the GLM backend of WF5/WF13 currently needs
-   the `.venv-bench` interpreter (PEP 668 blocks `pip3 --user` on this host). Decide:
-   venv-wrapper in the skill docs, or a `pipx`/system exception. This run used the venv
-   python directly.
+## 5. Owner attention
 
----
+> **⚠ Your calls.** Decisions already made this rev (live, with you): sonnet default
+> implementer · competitive design pilot with judge-selected winner used in-run ·
+> intake=opus (fable quota concentrated on review) · hybrid judge-failure policy ·
+> bake-off = {sonnet, opus, terra} · executor lives in-repo now · review chain drops
+> opus (#4 by data) · D9 stands.
+
+1. **Approve the epic restructure** (§4): file E1–E8, rewrite #415/#416/#418, shrink
+   #417, close #421. Rev-1 children #415/#416/#418 get superseded-by comments, not
+   silent edits.
+2. **#414 (CCR repair) is now on the critical path** for the sol lanes (design
+   competition + review fallback) — the scratch CODEX_HOME workaround serves interim
+   but isn't durable.
+3. **Orchestrator stays opus until driver-bench (E7) reports** — confirm you're OK
+   holding that seat decision on its evidence.
+4. **zhipuai venv gap** (unchanged from rev 2): glm judge calls run via `.venv-bench`
+   python — durable home decision pending (venv wrapper in skill docs vs pipx).
+5. **kukakuka linkage — DONE pre-E1**: the kukakuka session's 9-item conformance
+   review ran against this design and all widenings are applied (§3.5); E1's AC
+   includes validating a kukakuka-shaped Observation against the committed JSON
+   Schema.
+6. **Multi-account accounts (E8)**: which Claude accounts exist and get lanes is your
+   call — the mechanism is folded in (§3.5b) with the ToS note; account setup (login +
+   plugin install per config dir) is a per-account one-time runbook step.
 
 ## Appendix: method
 
-Recomputation scripts run inline this session against `tradeoff.json` (quality, cost,
-q/$, time per phase×model) and `scores.json` (per-cell medians, spreads, gate
-fractions, slot-deviation audit). Peer consults ran via WF13 `--backend both`
-(gpt-5.6-sol via clean CODEX_HOME; glm-5.2 via z.ai Coding Plan endpoint). Pricing
-fetched live from platform.claude.com docs. Complexity-fork machinery confirmed by
-reading `hooks/model_routing_lib.py`, `hooks/plan_lib.py`, `hooks/work_summary.py`,
-and the WF2/WF3 skill sources at the cited lines.
+Rev 3 synthesized from: owner's live design review (per-decision feedback + four
+resolved forks), independent peer proposals from gpt-5.6-sol and glm-5.2 on the v2
+problem artifact (both consulted blind; glm's first attempt returned vacuous and was
+retried successfully — named, not hidden), bench #14 recomputation, and code-confirmed
+machinery (`model_bench_lib` cell-runner, `model_routing_lib`, `plan_lib`,
+`adversarial_review_lib`, hooks registry). Peer convergences adopted without debate;
+divergences (judge-failure policy, intake seat, bake-off breadth, package home) were
+resolved by the owner. Prior revs' peer/adversarial reports remain in `docs/reviews/`.
