@@ -1,307 +1,254 @@
-# Per-phase model routing for WF2/WF3 — six-model verdict from bench #14
+# Purposeful per-phase model routing + deterministic execution engine — rev 3
 
-**Date:** 2026-07-16 (rev 2 — six-model scope per owner correction) · **Status:** awaiting
-owner approval · **Source data:** bench #14 GLM-5.2 rejudge (`rawgentic-next`
-`docs/measurements/model-bench/2026-07-14-glm-rejudge/` — report md/html + `scores.json` +
-`tradeoff.json`, 216 frozen cells: **6 models** × 6 phases × 2 briefs × 3 reps)
-· **Peers consulted:** gpt-5.6-sol (Codex) + glm-5.2 (Zhipu), independent proposals in
-`docs/reviews/peer-rawgentic-routing-problem-2026-07-16{,-glm}.md` · adversarial review
-both backends, 11 findings applied.
+**Date:** 2026-07-16 (rev 3 — owner design review applied) · **Status:** awaiting owner
+approval of the reworked epic · **Source data:** bench #14 GLM-5.2 rejudge
+(`rawgentic-next` `docs/measurements/model-bench/2026-07-14-glm-rejudge/`, 216 frozen
+cells, 6 models × 6 phases × 2 briefs × 3 reps) · **Thought partners this rev:** the
+owner (live), gpt-5.6-sol, glm-5.2 (independent proposals:
+`docs/reviews/peer-rawgentic-routing-problem-v2-2026-07-16{,-glm}.md`).
 
-The six candidates: **claude-fable-5, claude-opus-4-8, claude-sonnet-5, gpt-5.6-sol,
-gpt-5.6-terra, gpt-5.6-luna.** Rev 1 of this doc silently narrowed the routing seats to
-Claude models; rev 2 runs the full six-model comparison first and then applies the seat
-constraints openly.
+Rev 1 routed Claude-only and was corrected. Rev 2 ran the six-model comparison and a
+decision register; the owner's review of rev 2 redirected the architecture itself:
+**no fallback seat** (every phase gets a purposeful subject), **no prose routing**
+(deterministic code + config), and **a Python execution engine** replacing
+prose-subagent dispatch. Rev 3 is that design.
 
-Every load-bearing claim is **[C]onfirmed** (with evidence) or **[I]nferred** (with what
-would confirm it). All numbers recomputed from `tradeoff.json`/`scores.json` this run —
-never report prose.
+Every load-bearing claim is **[C]onfirmed** (evidence) or **[I]nferred** (what would
+confirm). Numbers recomputed from `tradeoff.json`/`scores.json` — never prose.
 
+## 0. The owner's directives that shaped this rev (verbatim intent)
 
-## 1. Six-model verdict, phase by phase
+1. No fallback position — "every stage should have a very purposeful subject." The
+   interactive driver is a pure orchestrator, never a model of last resort. (The
+   orchestrator role itself was never benchmarked — a driver-bench child closes that.)
+2. Review fallback follows the DATA: fable 88 > sol 85.5 > sonnet 85 > opus 84 —
+   "why is review not fable with a sol fallback? Opus is number four."
+3. Design: sol competes — both authors draft, **a judge decides which draft wins each
+   round, and the winner is used in the run.**
+4. Default implementer = sonnet ("it only being one point"); super-complicated tasks are
+   flagged and become **multi-model implementation bake-offs**; and "I don't want to
+   allow the prose to determine whether it's complicated enough" — the gate is code.
+5. "Instead of using subagents with prose, build a python app that takes model and
+   prompt input, calls the run and outputs the run outputs in json" — reusable by
+   kukakuka.
+6. "Can we build hooks to ensure it is routing properly?" — yes: routing verified, not
+   trusted (§3.4).
+7. Cross-model review invariant (D9, approved): adversarial reviewer never shares the
+   author's engine.
+8. Every premium seat carries a fallback chain covering full unavailability (quota,
+   model leaving the subscription/API, entitlement) — config-declared.
 
-Median of 6 cells [worst cell] (per-cell sd), GLM-5.2 judge. **Bold = best in bench.**
-Cost = USD/phase; gpt costs are `est@12/M` estimates (soft), Claude costs are billed
-tokens at list rates. [C: recomputed]
+## 1. The seat table (the plan, one screen)
 
-| Phase | luna | terra | sol | sonnet-5 | opus-4-8 | fable-5 | Best-in-6, and is the gap real? |
-|---|---|---|---|---|---|---|---|
-| intake | 82 [76] | 85 [78] | 83 [80] | 85 [80] | **88.5** [81] | 88 [86] | opus — but vs terra +3.5 @ sd 3.9 = **noise** |
-| design | 86.5 [84] | 86 [84] | **87.5** [85] | 84 [46] | 87 [81] | 86 [84] | sol — vs opus +0.5 @ sd 2.1 = **noise**, but sol has the best floor (85) and sd (1.2) |
-| plan | 82 [79] | **85** [78] | 81 [80] | **85** [28] | 83 [82] | 84 [80] | terra/sonnet tie — all gaps noise (pooled sd up to 12.3); opus has the best floor (82) |
-| build | 47 [16] | 57 [50] | 62 [18] | 76 [62] | **77** [62] | **77** [38] | opus/fable — gpt is **disqualified for real**: 15–30 pts behind, floors 16–18 |
-| review | 82 [78] | 84 [80] | 85.5 [83] | 85 [84] | 84 [82] | **88** [86] | fable — vs runner-up sol +2.5 @ sd 1.6 = **REAL** |
-| ship | 81 [78] | 80 [76] | 82 [80] | **88** [82] | 85 [82] | 84 [82] | sonnet — vs best gpt (sol) +6 @ sd 2.4 = **REAL** |
+| Seat | Primary | Chain (floor-constrained, config-declared) | Deciding data |
+|---|---|---|---|
+| **orchestrator** (the Claude Code session) | opus-4-8 *(interim)* | n/a — session model | Unbenchmarked role; strong-model-on-top evidence (OptAgent: weak-top collapses 53.9%→0%) [C: AC1 verdict, PR #153 record]; **driver-bench child measures it** |
+| **intake** | opus-4-8 | opus → fable → sonnet | Median leader 88.5 [81]; owner picked opus over the peers' fable-primary to keep fable quota concentrated on review where its edge is REAL, not parity |
+| **design** | **COMPETITIVE: sol vs opus**, judge glm-5.2, winner used in the run | author lanes fall back in-family only (sol→terra; opus→fable); judge fail → §3.3 hybrid | sol 87.5 [85] best floor+sd in bench vs opus 87 [81]; gap noise; cross-judge caveat (Gemini bench: fable ≥ sol) — competition + telemetry settles it with evidence |
+| **plan** | opus-4-8 | opus → fable → terra | Best floor 82 (terra 78, sonnet 28); medians all noise; planning defects propagate into every build task |
+| **build** | sonnet-5 (default) | sonnet → opus → terra; **gate-flagged → BAKE-OFF {sonnet, opus, terra}**, judge glm on deterministic test evidence | opus−sonnet +1 @ sd 7.6 = noise at 1.74× cost (owner's one-point rule); gpt disqualified as *default* (62 [18]) but terra rides bake-offs as free-quota signal |
+| **review** | fable-5 | **fable → sol → sonnet** (interim, pre-gpt-lane: fable → sonnet). **opus dropped — #4 by data** (owner correction) | fable +2.5 over sol REAL; chain = measured ranking |
+| **ship** | sonnet-5 | sonnet → opus → fable | sonnet 88 REAL edge (+3 opus, +6 sol) AND cheapest |
 
-Cost row (USD/phase, for the same cells):
-intake $1.36/$0.99/$1.10/$2.52/$3.95/$7.06 · design $2.93/$2.65/$1.92/$4.28/$5.46/$9.46 ·
-plan $2.97/$2.67/$2.63/$6.69/$7.71/$13.47 · build $7.89/$9.95/$7.12/$6.85/$11.92/$16.62 ·
-review $7.57/$6.59/$5.93/$5.71/$7.19/$11.63 · ship $2.83/$2.63/$2.59/$2.83/$4.41/$6.14
-(order: luna/terra/sol/sonnet/opus/fable). [C: tradeoff.json]
+Cross-cutting rules: never Haiku (config + hook enforced); chains skip entries that
+would violate the cross-model invariant for the artifact under review (chain-aware
+skip, not blind next-entry — glm's catch); a chain exhausting its eligible entries is a
+**handled hard failure**, never a silent downgrade; ≤3 concurrent Claude subagents with
+**one slot reserved for the driver → working ceiling 2** (glm's catch).
 
-**What survives the noise floor across all six models** [C: gap > pooled per-cell sd,
-valid-n ≥5]:
-1. **fable-5 is the best reviewer in the bench** (+2.5 over sol, +3 over sonnet, +4 over opus).
-2. **sonnet-5 is the best shipper in the bench** (+3 over opus, +6 over sol).
-3. **gpt-5.6 (all three) cannot build** in this harness — the one disqualifying gap.
-4. Everything else — including every intake/design/plan ranking — is inside noise, so
-   **floors, gates, cost, and dispatch mechanics decide**, not medians.
+## 2. Six-model evidence (unchanged from rev 2; the basis)
 
-### Cross-judge caveat on sol
+Median [worst cell] of 6 cells, GLM-5.2 judge; cost USD/phase (gpt = est@12/M, soft):
 
-The earlier fixture-v2 capture (2 candidates, **Gemini** judge, 2026-07-12) had
-**fable ≥ sol on all six phases**, sol never clearly winning one. Under GLM, sol tops
-design and runs second at review. Two judges, two orderings for sol's text phases —
-sol's design case is **judge-dependent** and gets a pilot, not a seat (decision D3).
-[C: fixture-v2 verdict, docs/measurements lineage; GLM matrix above]
+| Phase | luna | terra | sol | sonnet-5 | opus-4-8 | fable-5 |
+|---|---|---|---|---|---|---|
+| intake | 82 [76] $1.36 | 85 [78] $0.99 | 83 [80] $1.10 | 85 [80] $2.52 | **88.5** [81] $3.95 | 88 [86] $7.06 |
+| design | 86.5 [84] $2.93 | 86 [84] $2.65 | **87.5** [85] $1.92 | 84 [46] $4.28 | 87 [81] $5.46 | 86 [84] $9.46 |
+| plan | 82 [79] $2.97 | **85** [78] $2.67 | 81 [80] $2.63 | **85** [28] $6.69 | 83 [82] $7.71 | 84 [80] $13.47 |
+| build | 47 [16] $7.89 | 57 [50] $9.95 | 62 [18] $7.12 | 76 [62] $6.85 | **77** [62] $11.92 | **77** [38] $16.62 |
+| review | 82 [78] $7.57 | 84 [80] $6.59 | 85.5 [83] $5.93 | 85 [84] $5.71 | 84 [82] $7.19 | **88** [86] $11.63 |
+| ship | 81 [78] $2.83 | 80 [76] $2.63 | 82 [80] $2.59 | **88** [82] $2.83 | 85 [82] $4.41 | 84 [82] $6.14 |
 
-### Engine mechanics (a seat constraint, stated openly this time)
+REAL gaps (> pooled per-cell sd, valid-n ≥5): fable review (+2.5 over sol); sonnet ship
+(+6 over sol, +3 over opus); gpt build disqualification (−15..−30, floors 16–18).
+Everything else noise — floors, cost, and mechanics decide. Cross-judge caveat: the
+Gemini-judged fixture-v2 had fable ≥ sol on all phases — sol's design lead is
+judge-dependent, which is exactly what the competitive rounds resolve with evidence.
+Subscription economics: Claude Max + Codex are **independent quota pools**; gpt seats
+load-shed the Claude 5-hour window; dollar figures are burn proxies (real out-of-pocket
+$0 both engines). Noise method: effect-size heuristic (gap vs pooled per-cell sd), not a
+significance test; fable plan n=5 (one named null); brief a is harder for all models.
 
-Two facts, one hard, one soft:
-- **Hard:** the interactive driver IS a Claude Code session — no gpt model can hold that
-  seat regardless of subscription or quality.
-- **Soft:** WF2/WF3 role routing dispatches **Claude** subagents via the Agent `model:`
-  parameter [C: SKILL.md:145-156]. gpt-5.6 models execute through the Codex CLI — a lane
-  that already exists and serves WF5/WF13/codex-rescue (and ran the bench's gpt cells)
-  [C: adversarial_review_lib.py codex exec path], but is not wired into role routing.
-  A gpt subagent seat costs the **one-time** D8 lane build, not per-run dollars.
+## 3. The execution engine (replaces prose-subagent dispatch for routed seats)
 
-### Subscription economics (owner correction, rev 2)
+Owner directive #5; both peers converged independently on the same shape. **Generalize
+`model_bench_lib.py fixture-v2-campaign-run-cell`** — its per-engine command templates
+(`claude --print --model X --output-format json`, codex CLI, zhipuai SDK) and
+capture-dir discipline are proven by 400+ bench cells [C: bench #14 lineage]. Do not
+clean-room.
 
-The owner holds BOTH a Claude Max and a Codex subscription. Every candidate's work is
-therefore **$0 out-of-pocket** — the `est@12/M` gpt figures and the Claude billed-token
-figures are API-equivalents, useful for burn-rate proxies only. The real scarce resources
-are the two subscription quotas, and they are **independent pools**: work routed to a gpt
-model through the codex lane load-sheds the Claude 5-hour usage window — the binding
-constraint on long runs in this workspace [C: overnight-run history; workspace manual
-"concurrent Codex job is fine — different provider, different quota"]. This reframes
-D3/D6/D8: a gpt seat on a text phase is not "extra cost for noise-level quality" but
-"free capacity from the second pool at noise-level quality difference" — provided the
-lane exists and the cross-judge caveat clears.
+### 3.1 Package (`phase_executor/`, in this repo now; extracted when kukakuka consumes it)
 
+- `contract.py` — versioned Observation schema: `{schema_version, run_id, attempt_id,
+  seat, engine, requested_model, actual_model, prompt_hash, context_hashes, usage
+  {input, output, cached, cost_proxy}, timing_ms, process {exit_code, timed_out},
+  parse_status, parsed_payload, raw_capture_path, fallback_reason, judge_degraded?,
+  routing_config_digest}`. **`actual_model` is mandatory evidence — absent identity is
+  a failure, not an unknown success** (sol's rule).
+- `adapters/` — `claude_cli.py`, `codex_cli.py` (parses header for actual model),
+  `zhipuai_sdk.py` (invocation pattern from `adversarial_review_lib`). Each:
+  `run(request) -> Observation`. Adapter owns the model flag — no user-supplied
+  override reaches the command line.
+- `engine.py` — `run_seat(seat, prompt, context) -> Observation` and
+  `run_competitive(seat, candidates, judge, rubric) -> (winner, losers, judge_obs,
+  record)`. Enforces: chain membership, never-Haiku, cross-model invariant
+  (chain-aware skip), Claude working-ceiling 2, capture + audit append. Synchronous
+  (WF2 blocks on results); competitive candidates run concurrently across quota pools.
+  Detached mode deliberately NOT built (both peers: cut it).
+- `routing/` — declarative seat table (the §1 table as data): `seat → {primary,
+  chain[], floor, forbidden_engines_when_author_is[]}`. Projects own their table; the
+  engine is policy-free (kukakuka supplies its own).
 
-## 2. Decision register — every decision, its alternatives, and the deciding facts
+### 3.2 Deterministic complexity gate (owner directive #4 — code, not prose)
 
-**D1 — Interactive driver: claude-opus-4-8.** *(confidence: high)*
-- Alternatives weighed: sonnet-5 (cheaper, ship edge); terra (plan median tie, 4× cheaper
-  than opus at intake); "sol drives design" (see D3).
-- Deciding facts: the driver executes intake/design/plan inline, where a single collapse
-  poisons the run. Worst-cells: opus 81/82 with 6/6 gates; sonnet 46/28 with 5/6; terra
-  plan floor 78. Sonnet's real edges (ship) are harvested by subagents instead (D5).
-  gpt models can't hold the seat at all — the driver IS a Claude session.
-- What would flip it: a future bench where sonnet's design/plan floors clear 80 on the
-  hard brief.
+Lives beside `plan_lib` (where `riskLevel` fail-closed and `issue.complexity` already
+exist [C: plan_lib.py:170,202-205; work_summary.py:208-211]):
 
-**D2 — Review seat: claude-fable-5, with a mandatory fallback to opus.** *(confidence: high)*
-- Alternatives: opus (current), sonnet, sol (runner-up, 85.5, cheapest reviewer).
-- Deciding facts: fable's +2.5..+4 review edge is the strongest REAL gap in the bench,
-  against all five others; review gates everything downstream (Steps 4/8a/11). Volume is
-  bounded (1 + high-risk-count + 1 per run). sol as reviewer would also need the new gpt
-  dispatch lane AND loses the cross-judge caveat.
-- **Fallback is a standing requirement, not just a quota patch (owner directive):** any
-  routed seat on a premium model must survive that model becoming unavailable — quota
-  exhaustion, the model id disappearing from the API/subscription tier (fable could
-  leave the plan), or entitlement/auth errors. #415's trigger classifier covers the full
-  unavailability class, and the chain (fable → opus, never lower, never Haiku) is
-  config-declared so a permanent departure is a one-line config edit, not an incident.
-- Sequencing owned: fallback chain lands BEFORE the flip (#415 blocks #416).
-- What would flip it: fable quota pressure the owner rejects (§4 item 3), the edge
-  vanishing at the next bench, or fable leaving the subscription (then the chain IS the
-  routing until re-benched).
+```python
+def needs_bakeoff(task, issue, plan_est, cfg) -> GateDecision:
+    return (task.riskLevel == "high"
+        or issue.complexity == "complex"
+        or hits_security_surface(plan_est.files)   # repo-owned globs: auth/secrets/
+                                                   # payments/migrations/CI/crypto
+        or plan_est.lines > cfg.BAKEOFF_DIFF_LINES
+        or plan_est.file_count > cfg.BAKEOFF_FILE_COUNT)
+```
 
-**D3 — Design stays driver-inline (opus) NOW; sol gets an evidence pilot.** *(confidence: medium — this is the genuine six-model finding)*
-- Alternatives: (a) keep inline opus; (b) dispatch design drafting to a sol subagent via
-  a new codex lane, driver reviews and owns.
-- Facts for sol: best design floor in the bench (85 vs opus 81), tightest sd (1.2),
-  gate-clean, ~35% of opus cost (soft basis). Facts against switching now: median gap is
-  noise (+0.5); the Gemini-judged bench ranked fable>sol on design; a codex dispatch lane
-  doesn't exist for role routing; design handoff cost (driver still must own the design)
-  was never measured.
-- Subscription reframe (owner correction): sol drafts spend CODEX quota, not the Claude
-  window — on the two-pool economics the pilot's marginal cost is ~zero, which is why it
-  is worth running despite the noise-level median gap.
-- Decision: keep opus inline; file a **pilot child** — dispatch design DRAFTS to sol in
-  N real WF2 runs behind the driver's ownership, judge the drafts, then decide with
-  two-judge evidence. No seat change on one judge's noise-level ranking.
-- What would flip it: pilot shows sol drafts survive driver review with less rework at
-  lower Claude-window burn.
+Thresholds are config. Missing/invalid mandatory metadata → bake-off (fail-closed,
+sol's rule). Returns decision + reason codes + input snapshot + policy digest; the
+executor recomputes the digest at admission (gate can't be edited between plan and
+run). Known limit, named: plan-time size estimates can undershoot — the security-glob
+override is the backstop, and the glob list completeness is a maintained artifact.
 
-**D4 — Implementation ceiling: opus-4-8; standard tasks down-route to sonnet-5.** *(confidence: high)*
-- Alternatives: fable ceiling; sonnet-only; any gpt — disqualified (build 47–62,
-  floors 16–18, REAL gap).
-- Deciding facts: opus−sonnet build gap +1 @ sd 7.6 = noise, at 1.74× cost — the owner's
-  stated fork case, and the fork **already exists**: `select_impl_model(ceiling,
-  riskLevel, complexity)` routes high-risk/complex → ceiling, else sonnet
-  [C: model_routing_lib.py:121-152]. Fable adds cost (1.4× opus), no build edge, and a
-  38 floor.
-- What would flip it: nothing pending — this is confirmation of existing machinery.
+### 3.3 Competitive rounds (design always; build when gated)
 
-**D5 — Ship tasks: sonnet-5, via a NEW delegation boundary.** *(confidence: high)*
-- Alternatives: keep driver-inline (opus); sol ($2.59, cheapest — but −6 REAL vs sonnet).
-- Deciding facts: sonnet is the bench's best shipper (REAL edge over everyone) AND
-  cheapest-or-tied among Claude. The catch both adversarial reviewers surfaced: the
-  down-route only fires for DELEGATED tasks [C: steps.md:961], and ship work is inline
-  today — so the change is the delegation boundary itself (#418). Driver keeps merge,
-  CI triage, deploy+verify, Step 16.
-- What would flip it: delegation overhead exceeding the quality/cost win in practice
-  (telemetry, #420).
+- Authors run concurrently on independent quota pools against byte-identical
+  prompt/context snapshots, isolated captures.
+- Judge = **glm-5.2** (shares no author engine), bench-#14 rubric reused verbatim
+  (both peers: no new rubric). Judge returns winner + criterion scores + confidence on
+  **anonymized, randomly-ordered drafts**; build bake-offs judge on deterministic
+  test/static-analysis evidence + anonymized patches, not vibes.
+- **Judge failure (after one retry) — owner-picked hybrid:** interactive session →
+  stop and ask the owner; headless → winner = incumbent lane (opus), round flagged
+  `judge_degraded`, excluded from telemetry, surfaced in the morning report.
+- Winner's exact bytes (hashed) become the phase artifact; losers + scores persist to
+  `bakeoff_results.jsonl`. Retirement of a chronic loser needs a preregistered sample
+  size and downstream-outcome evidence, not raw win counts (sol's rule) — reviewed
+  quarterly, no auto-retirement.
+- **D9 wiring:** the winner's engine determines the adversarial-review backend —
+  gpt-authored winner → Claude/glm reviewer, never gpt.
 
-**D6 — Intake/plan: stay with the driver (opus).** *(confidence: medium-high)*
-- Alternatives: terra subagent for intake ($0.99, median −3.5 in noise) and plan (median
-  +2 in noise).
-- Deciding facts: both phases are the driver's own thinking surface; all gaps are noise
-  and terra's plan floor (78) is below opus (82). The subscription reframe cuts both
-  ways here: dispatching would load-shed the Claude window (free capacity), but intake
-  and plan feed the driver's OWN next step — the handoff cost is highest exactly where
-  the driver must re-ingest the output.
-- What would flip it: a bench showing a REAL terra edge, or the gpt lane existing anyway
-  (built for D3's pilot) making a low-risk trial cheap — revisit then, with the
-  load-shedding argument on the table.
+### 3.3b Parallelization contract (owner directive, added live)
 
-**D7 — No per-phase config schema yet.** *(confidence: high)*
-- The data supports exactly 3 real distinctions (review, ship, gpt-can't-build); all are
-  expressible in the existing 3-role model + delegation boundary. Both peer models
-  converged on deferral unprompted. Evidence gate recorded as #421.
+Dispatch is parallel wherever the work is independent — serial execution is the
+exception that must justify itself:
 
-**D8 — gpt dispatch lane: file as a child, build only if D3's pilot needs it.** *(confidence: medium)*
-- The lane (codex-exec dispatch for role-routed work, mirroring WF5's invocation shape)
-  is the prerequisite for ANY gpt seat. Don't build speculatively; the pilot child
-  carries it.
+- **Bake-offs are always fully parallel:** all candidates launch simultaneously —
+  build's {sonnet, opus, terra} = 2 Claude slots (exactly the working ceiling) + terra
+  on the codex pool concurrently, **each in an isolated git worktree** so builders
+  cannot collide on the shared tree [C: worktree isolation is the established
+  parallel-build mechanism — Agent tool `isolation: worktree`; the executor's capture
+  dirs adopt the same discipline]. Wall-clock = slowest candidate, not the sum.
+- **Design rounds:** both authors (sol on codex pool, opus on Claude pool) launch
+  together; the judge (glm, third pool) fires the moment both observations land.
+  Three quota pools, zero contention.
+- **Independent seats/tasks pipeline:** where the WF2 DAG allows (e.g. multiple
+  standard build tasks with no dependency edges), the executor runs them concurrently
+  under the Claude working ceiling (2), queuing overflow rather than serializing
+  everything — queue wait is logged in the Observation (`queued_ms`) so stalls are
+  diagnosable.
+- **The ceiling accounting:** cross-engine candidates (terra/sol/glm) never consume
+  Claude slots — parallelizing across pools is free capacity, which is exactly the
+  subscription-economics argument for keeping gpt lanes in the bake-off set.
+- E1/E5 acceptance criteria include a live demonstration: a 3-candidate bake-off whose
+  total wall-clock is within 1.3× the slowest single candidate.
 
-**D9 — Cross-model review invariant: the adversarial reviewer must not share the
-author's engine.** *(confidence: high — owner directive)*
-- Today's shape already satisfies it: Claude authors everything, and WF5/WF13 review
-  through gpt (Codex) and/or glm — cross-model by construction.
-- The D3 pilot would break it silently: if **sol (gpt) authors the design**, running the
-  WF5 gpt backend reviews gpt with gpt. Rule: **the WF5/peer backend is chosen against
-  the artifact's author engine** — gpt-authored artifact → Claude reviewer (the
-  established independent-Opus substitution [C: workspace manual, accepted substitution
-  when Codex fails]) or glm; Claude-authored → gpt/glm as today; glm-authored → gpt or
-  Claude.
-- Note the boundary: WF2's in-family review seats (fable reviewing opus-authored code)
-  are the INTRA-family quality gate and stay as designed — this invariant governs the
-  CROSS-model gates (WF5 adversarial review, WF13 peer consult), which exist precisely
-  to escape the author's family.
-- Lands as: an author-engine parameter on the D3 pilot spec + a backend-selection rule
-  in the WF5/WF13 skill prose (child #417 scope grows one bullet).
-- What would flip it: nothing foreseeable — same-engine adversarial review defeats the
-  gate's purpose.
+### 3.4 Routing enforcement hooks (owner directive #6 — verified, not trusted)
 
+- **PreToolUse:** requested model ∈ the seat's declared chain; not Haiku-family;
+  routing-config digest matches; gate digest present when build claims `default`.
+- **PostToolUse:** `requested_model == actual_model` (normalized), sourced from the
+  provider's own output (claude JSON / codex header) — mismatch fails the call,
+  non-retryable; Observation appended to per-run `routing_audit.jsonl`.
+- **Run-end audit:** reconciles expected seat calls vs audit records; refuses ship on
+  missing/duplicate/unverified calls; WF2 accepts only executor result envelopes so
+  uninstrumented dispatch can't sneak past the hooks (sol's orphan-work rule).
+- Honest limit (glm): if a CLI ever silently substitutes a model without reflecting it
+  in its own output, the hook can't see it — pin CLI versions, fixture-test the
+  parsers.
 
-## 3. What the bench actually says (recomputed) — supporting detail
+### 3.5 Driver-bench (closing the gap the owner named)
 
-### 3.1 Noise methodology
+The orchestrator role was never measured. Design (sol's stubbed-matrix shape, adopted):
+fixtures = synthetic issues + **stubbed executor responses** + injected failures
+(quota, model-retired, judge timeout) + expected state-transition graph. Score: correct
+seat/fallback selection, gate computation, cross-model enforcement, winner propagation,
+audit completeness, recovery, token burn. Matrix: 12 fixtures × 3 reps × 2 driver
+models (opus, sonnet) = 72 stubbed runs (cheap — stubs), then 3 live end-to-end runs.
+Orchestrator seat stays opus until this reports.
 
-Gap test: |median A − median B| > pooled per-cell sd (mean of the two models' population
-sd over valid cells; n=6 per model×phase except fable plan n=5, one null cell at brief a
-rep 2 — named, not hidden). This is an **effect-size heuristic, not a significance
-test**. Brief a is simply harder for every model (mean slot deviation −1.0..−2.3 vs +0.4
-for brief b) [C: recomputed] — the collapse cells are genuine failures under difficulty,
-not fixture artifacts.
+## 4. Epic restructure (supersedes the rev-1 child set — owner approval needed)
 
-### 3.2 Reliability floors — the driver-seat decider
+The executor changes the mechanism, so the filed children need rework. Proposed:
 
-Worst cell of 6, phases the driver does inline [C: scores.json perCell]:
+| Child | Status | Content |
+|---|---|---|
+| #414 CCR repair | **stands** | unchanged; still owner-gated; still blocks any gpt lane work |
+| E1 (new) | **file** | `phase_executor/` package: contract + adapters + engine + routing config + tests (generalize bench cell-runner). The foundation — blocks E2–E6. (feat, L) |
+| E2 (new) | **file** | Routing enforcement hooks (Pre/Post/run-end audit) + `routing_audit.jsonl` (feat, M) |
+| E3 (reworks #415+#416) | **rewrite** | Seat table config incl. fallback chains (full unavailability class, config-declared) + the review flip to fable→sol→sonnet + provenance stamp. Depends on E1+E2. |
+| E4 (reworks #418) | **rewrite** | Ship + intake + plan seats through the executor (delegation boundaries; driver-only list stands: merge, CI triage, deploy+verify, Step 16) |
+| E5 (new) | **file** | Competitive design rounds + build bake-off {sonnet, opus, terra} + glm judge + hybrid judge-failure policy + `bakeoff_results.jsonl` (feat, L) |
+| E6 (new) | **file** | Deterministic complexity gate in plan_lib + security-surface globs + thresholds config (feat, M) |
+| #417 skill prose | **shrinks** | WF2/WF3 prose now just calls the executor per seat; D9 backend-selection rule; driver-seat note |
+| #419 refresh-rule doc | **stands** | + seat-table refresh discipline (glm's config-rot catch: floor-based picks must be re-derived every bench, not persist silently) |
+| #420 telemetry | **stands** | now largely emitted by the executor (routing_audit + bakeoff_results feed run records) |
+| #421 per-phase schema | **closes** | the routing config IS the per-phase schema — evidence gate met by owner directive |
+| E7 (new) | **file** | Driver-bench (stubbed matrix + 3 live) (feat, M) |
 
-| | design floor | plan floor | design gates | plan gates |
-|---|---|---|---|---|
-| opus-4-8 | **81** | **82** | 6/6 all five | 6/6 all five |
-| sonnet-5 | 46 | 28 | 5/6 each | 5/6 each |
-| fable-5 | 84 | 80 (n=5) | 6/6 all five | 4/5 on P-G1, 5/5 rest |
-| sol | **85** | 80 | 6/6 all five | 6/6 all five |
-| terra | 84 | 78 | 6/6 all five | 6/6 all five |
-| luna | 84 | 79 | 6/6 all five | 6/6 all five |
+Sequencing: #414 (independent) · E1 → E2 → E3 → {E4, E5, E6} → E7. WF2 keeps working
+throughout — the executor lands behind the existing prose path and seats cut over one
+at a time (review first: highest value, bounded volume).
 
-Note what this table shows honestly: **on text phases the gpt models are floor-solid and
-gate-clean** — the gpt weakness is exclusively build. That is exactly why D3 is a pilot
-rather than a dismissal.
+## 5. Owner attention
 
-Build gates B-G2/B-G3 fail 0/6 for opus AND fable, 2/6 sonnet — those two gates say more
-about the gate than the models [C: gateFrac].
+> **⚠ Your calls.** Decisions already made this rev (live, with you): sonnet default
+> implementer · competitive design pilot with judge-selected winner used in-run ·
+> intake=opus (fable quota concentrated on review) · hybrid judge-failure policy ·
+> bake-off = {sonnet, opus, terra} · executor lives in-repo now · review chain drops
+> opus (#4 by data) · D9 stands.
 
-### 3.3 Pricing (verified live this run)
-
-[C: fetched platform.claude.com/docs pricing 2026-07-16] opus-4-8 $5/$25 · sonnet-5
-**intro $2/$10 through 2026-08-31** then $3/$15 · fable-5 $10/$50 (per M; cache read
-0.1×). Bench sonnet costs are anchored at post-intro $3/$15 — sonnet's current
-API-equivalent is ~⅓ lower through August. gpt rows are `est@12/M` estimates: informative
-for order-of-magnitude, never load-bearing alone.
-
-### 3.4 Known limitations
-
-Single benchmark; 2 briefs × 3 reps; n=6 (one n=5) cells per model×phase. GLM judges
-stricter than Gemini (pooled ρ=0.621; every per-model mean Δ negative) — absolute scores
-don't transfer across judges, so all comparisons here are within the judge-uniform GLM
-matrix, with the sol cross-judge caveat named in §1. Driver economics are subscription
-usage-window burn; API-equivalent is the proxy [I: run-record usage telemetry (#420)
-would quantify real burn share].
-
-
-## 4. Owner attention required
-
-> **⚠ These are YOUR decisions — none was executed unattended.** Nothing routes
-> differently until you approve; the environment problems (items 2 and 5) were worked
-> around, not fixed.
-
-1. **APPROVE/REJECT the decision register** (D1–D8) — specifically driver=opus (D1),
-   review=fable (D2), the sol design pilot instead of a seat change (D3), and ship
-   delegation (D5).
-2. **`~/.codex/config.toml` is CCR-hijacked** — every Codex-backed flow (WF5 gpt, WF13,
-   codex-rescue) fails until the two CCR-managed blocks are removed. Worked around this
-   run via a scratch `CODEX_HOME` — not durable. Fix = #414, needs your OK (global config).
-3. **Fable quota exposure**: review=fable puts fable on every WF2/WF3 run (bounded, with
-   the #415 fallback). If fable quota is already committed elsewhere, say so — review
-   stays opus and D2 flips.
-4. **Sonnet intro pricing expires 2026-08-31** — D4/D5 cost margins shrink ~⅓; the
-   decisions still stand on the no-real-gap / real-edge arguments.
-5. **zhipuai SDK absent from system python3** (PEP 668) — the GLM backend of WF5/WF13
-   ran via `.venv-bench` python. Decide the durable home (venv wrapper in skill docs, or
-   pipx).
-6. **NEW (rev 2): approve filing the two additional children** — sol design pilot (D3)
-   and the gpt dispatch lane it depends on (D8) — or fold them into #421's deferred
-   record.
-
-
-## 5. WF2/WF3 changes (unchanged from rev 1 except D3/D8 additions)
-
-Config: `modelRouting.review: opus → fable` + provenance stamp (child #416, gated on
-#415's fallback chain). Fallback transition contract: enumerated trigger classes
-covering the full **unavailability** family (429/usage-limit; model-not-found /
-model-retired API errors — fable leaving the subscription tier; entitlement/auth
-rejections; vacuous-death signature `confirmedCount: 0` + empty body), atomic trip + one
-immediate opus replay, in-flight dispatches replay once each, never below opus, never
-Haiku. Chain is config-declared per role so a permanent model departure is a one-line
-config edit. No programmatic ≤3-subagent clamp exists today [C: grep this
-run] — #415 adds logged concurrency counts, code clamp stretch. Ship delegation boundary
-(#418) with driver-only list (merge, CI triage, deploy+verify, Step 16) and both-path
-executing-model tests. Skill prose + drift guards (#417). Refresh-rule doc (#419):
-role→phase map, pooled-sd formula, min-n 5, floors ≥70 subagent / ≥80 driver +
-gates ≥5/6, move only on gap>sd AND floor pass, re-stamp provenance every decision.
-Telemetry (#420). Deferred per-phase schema (#421).
-
-## 6. Epic + children
-
-Filed (epic **#422**): #414 CCR repair (owner-gated) · #415 fallback chain (**blocks
-#416**) · #416 review→fable flip · #417 skill prose · #418 ship delegation · #419
-refresh-rule doc · #420 telemetry · #421 deferred schema spike.
-
-**Proposed rev-2 additions (await §4 item 6):**
-- **sol design pilot (D3):** dispatch design DRAFTS to gpt-5.6-sol behind driver
-  ownership for N real WF2 runs; score drafts with both judges; seat decision follows
-  the #419 refresh rule. **Carries the D9 invariant:** sol-authored drafts get their
-  adversarial review from a Claude reviewer or glm — never the gpt backend.
-- **gpt dispatch lane (D8):** codex-exec dispatch for role-routed work (WF5-shaped
-  invocation, output contract, timeout/dead-job protocol per docs/codex-reliability.md).
-  Prerequisite of the pilot; built only with it.
-
+1. **Approve the epic restructure** (§4): file E1–E7, rewrite #415/#416/#418, shrink
+   #417, close #421. Rev-1 children #415/#416/#418 get superseded-by comments, not
+   silent edits.
+2. **#414 (CCR repair) is now on the critical path** for the sol lanes (design
+   competition + review fallback) — the scratch CODEX_HOME workaround serves interim
+   but isn't durable.
+3. **Orchestrator stays opus until driver-bench (E7) reports** — confirm you're OK
+   holding that seat decision on its evidence.
+4. **zhipuai venv gap** (unchanged from rev 2): glm judge calls run via `.venv-bench`
+   python — durable home decision pending (venv wrapper in skill docs vs pipx).
+5. **kukakuka linkage**: E1's contract review is the moment to sanity-check kukakuka's
+   input needs (its model+prompt→JSON shape) so the extraction later is a move, not a
+   rewrite.
 
 ## Appendix: method
 
-All numbers recomputed inline this session from `tradeoff.json` (quality, cost, time) and
-`scores.json` (per-cell medians, spreads, floors, gate fractions, slot-deviation audit)
-across **all six models**. Peer consults: WF13 `--backend both` (gpt-5.6-sol via clean
-CODEX_HOME; glm-5.2 via z.ai). Adversarial review: WF5 `--backend both`, 11 findings, all
-applied (reports in docs/reviews/). Pricing fetched live. Machinery confirmed by reading
-model_routing_lib.py, plan_lib.py, work_summary.py, and the WF2/WF3 skill sources at the
-cited lines. Rev 2 adds the six-model comparison, the decision register, the sol
-cross-judge caveat, and D3/D6/D8 — correcting rev 1's silent Claude-only narrowing.
+Rev 3 synthesized from: owner's live design review (per-decision feedback + four
+resolved forks), independent peer proposals from gpt-5.6-sol and glm-5.2 on the v2
+problem artifact (both consulted blind; glm's first attempt returned vacuous and was
+retried successfully — named, not hidden), bench #14 recomputation, and code-confirmed
+machinery (`model_bench_lib` cell-runner, `model_routing_lib`, `plan_lib`,
+`adversarial_review_lib`, hooks registry). Peer convergences adopted without debate;
+divergences (judge-failure policy, intake seat, bake-off breadth, package home) were
+resolved by the owner. Prior revs' peer/adversarial reports remain in `docs/reviews/`.
