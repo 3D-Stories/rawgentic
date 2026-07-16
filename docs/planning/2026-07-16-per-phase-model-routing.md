@@ -92,15 +92,22 @@ lane exists and the cross-judge caveat clears.
 - What would flip it: a future bench where sonnet's design/plan floors clear 80 on the
   hard brief.
 
-**D2 — Review seat: claude-fable-5, run-scoped fallback to opus.** *(confidence: high)*
+**D2 — Review seat: claude-fable-5, with a mandatory fallback to opus.** *(confidence: high)*
 - Alternatives: opus (current), sonnet, sol (runner-up, 85.5, cheapest reviewer).
 - Deciding facts: fable's +2.5..+4 review edge is the strongest REAL gap in the bench,
   against all five others; review gates everything downstream (Steps 4/8a/11). Volume is
   bounded (1 + high-risk-count + 1 per run). sol as reviewer would also need the new gpt
   dispatch lane AND loses the cross-judge caveat.
-- Quota risk owned: fallback chain lands BEFORE the flip (#415 blocks #416).
-- What would flip it: fable quota pressure the owner rejects (§4 item 3), or the edge
-  vanishing at the next bench.
+- **Fallback is a standing requirement, not just a quota patch (owner directive):** any
+  routed seat on a premium model must survive that model becoming unavailable — quota
+  exhaustion, the model id disappearing from the API/subscription tier (fable could
+  leave the plan), or entitlement/auth errors. #415's trigger classifier covers the full
+  unavailability class, and the chain (fable → opus, never lower, never Haiku) is
+  config-declared so a permanent departure is a one-line config edit, not an incident.
+- Sequencing owned: fallback chain lands BEFORE the flip (#415 blocks #416).
+- What would flip it: fable quota pressure the owner rejects (§4 item 3), the edge
+  vanishing at the next bench, or fable leaving the subscription (then the chain IS the
+  routing until re-benched).
 
 **D3 — Design stays driver-inline (opus) NOW; sol gets an evidence pilot.** *(confidence: medium — this is the genuine six-model finding)*
 - Alternatives: (a) keep inline opus; (b) dispatch design drafting to a sol subagent via
@@ -160,6 +167,25 @@ lane exists and the cross-judge caveat clears.
 - The lane (codex-exec dispatch for role-routed work, mirroring WF5's invocation shape)
   is the prerequisite for ANY gpt seat. Don't build speculatively; the pilot child
   carries it.
+
+**D9 — Cross-model review invariant: the adversarial reviewer must not share the
+author's engine.** *(confidence: high — owner directive)*
+- Today's shape already satisfies it: Claude authors everything, and WF5/WF13 review
+  through gpt (Codex) and/or glm — cross-model by construction.
+- The D3 pilot would break it silently: if **sol (gpt) authors the design**, running the
+  WF5 gpt backend reviews gpt with gpt. Rule: **the WF5/peer backend is chosen against
+  the artifact's author engine** — gpt-authored artifact → Claude reviewer (the
+  established independent-Opus substitution [C: workspace manual, accepted substitution
+  when Codex fails]) or glm; Claude-authored → gpt/glm as today; glm-authored → gpt or
+  Claude.
+- Note the boundary: WF2's in-family review seats (fable reviewing opus-authored code)
+  are the INTRA-family quality gate and stay as designed — this invariant governs the
+  CROSS-model gates (WF5 adversarial review, WF13 peer consult), which exist precisely
+  to escape the author's family.
+- Lands as: an author-engine parameter on the D3 pilot spec + a backend-selection rule
+  in the WF5/WF13 skill prose (child #417 scope grows one bullet).
+- What would flip it: nothing foreseeable — same-engine adversarial review defeats the
+  gate's purpose.
 
 
 ## 3. What the bench actually says (recomputed) — supporting detail
@@ -240,9 +266,12 @@ would quantify real burn share].
 
 Config: `modelRouting.review: opus → fable` + provenance stamp (child #416, gated on
 #415's fallback chain). Fallback transition contract: enumerated trigger classes
-(429/usage-limit family, vacuous-death signature `confirmedCount: 0` + empty body),
-atomic trip + one immediate opus replay, in-flight dispatches replay once each, never
-below opus, never Haiku. No programmatic ≤3-subagent clamp exists today [C: grep this
+covering the full **unavailability** family (429/usage-limit; model-not-found /
+model-retired API errors — fable leaving the subscription tier; entitlement/auth
+rejections; vacuous-death signature `confirmedCount: 0` + empty body), atomic trip + one
+immediate opus replay, in-flight dispatches replay once each, never below opus, never
+Haiku. Chain is config-declared per role so a permanent model departure is a one-line
+config edit. No programmatic ≤3-subagent clamp exists today [C: grep this
 run] — #415 adds logged concurrency counts, code clamp stretch. Ship delegation boundary
 (#418) with driver-only list (merge, CI triage, deploy+verify, Step 16) and both-path
 executing-model tests. Skill prose + drift guards (#417). Refresh-rule doc (#419):
@@ -259,7 +288,8 @@ refresh-rule doc · #420 telemetry · #421 deferred schema spike.
 **Proposed rev-2 additions (await §4 item 6):**
 - **sol design pilot (D3):** dispatch design DRAFTS to gpt-5.6-sol behind driver
   ownership for N real WF2 runs; score drafts with both judges; seat decision follows
-  the #419 refresh rule.
+  the #419 refresh rule. **Carries the D9 invariant:** sol-authored drafts get their
+  adversarial review from a Claude reviewer or glm — never the gpt backend.
 - **gpt dispatch lane (D8):** codex-exec dispatch for role-routed work (WF5-shaped
   invocation, output contract, timeout/dead-job protocol per docs/codex-reliability.md).
   Prerequisite of the pilot; built only with it.
