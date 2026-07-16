@@ -89,12 +89,19 @@ clean-room.
 
 ### 3.1 Package (`phase_executor/`, in this repo now; extracted when kukakuka consumes it)
 
-- `contract.py` — versioned Observation schema: `{schema_version, run_id, attempt_id,
-  seat, engine, requested_model, actual_model, prompt_hash, context_hashes, usage
-  {input, output, cached, cost_proxy}, timing_ms, process {exit_code, timed_out},
-  parse_status, parsed_payload, raw_capture_path, fallback_reason, judge_degraded?,
-  routing_config_digest}`. **`actual_model` is mandatory evidence — absent identity is
-  a failure, not an unknown success** (sol's rule).
+- **The normative artifact is a language-neutral versioned JSON Schema**
+  (`observation.schema.json` + `routing-table.schema.json`, committed) — `contract.py`
+  is ONE producer implementation; a Rust producer (kukakuka) emits the same documents
+  (kukakuka conformance review, §3.5). Observation fields: `{schema_version, run_id,
+  attempt_id, correlation_id?, seat, engine, transport, requested_model, actual_model,
+  prompt_hash, context_hashes, usage {input, output, cached, cost_proxy?}, timing_ms,
+  queued_ms, process {exit_code, timed_out}, parse_status, parsed_payload,
+  raw_capture_path, fallback_reason, judge_degraded?, routing_config_digest}`.
+  **`actual_model` is mandatory evidence — the provider-reported id from the INNERMOST
+  envelope (a CCR/proxy hop is auditable as `transport` + upstream id); absent identity
+  is a failure, not an unknown success** (sol's rule). `usage` counts are real provider
+  numbers (required); `cost_proxy` is optional. `correlation_id` is an opaque
+  caller-supplied string (rawgentic: WF2 step/task id; kukakuka: room turn nonce).
 - `adapters/` — `claude_cli.py`, `codex_cli.py` (parses header for actual model),
   `zhipuai_sdk.py` (invocation pattern from `adversarial_review_lib`). Each:
   `run(request) -> Observation`. Adapter owns the model flag — no user-supplied
@@ -106,8 +113,17 @@ clean-room.
   (WF2 blocks on results); competitive candidates run concurrently across quota pools.
   Detached mode deliberately NOT built (both peers: cut it).
 - `routing/` — declarative seat table (the §1 table as data): `seat → {primary,
-  chain[], floor, forbidden_engines_when_author_is[]}`. Projects own their table; the
-  engine is policy-free (kukakuka supplies its own).
+  chain[], floor}` where each chain entry references a **lane object** `{provider,
+  transport, auth_mode, credential_ref, participation_mode?}` — rawgentic entries
+  default `transport: native, auth_mode: subscription_oauth`; kukakuka declares its
+  CCR/Ollama shapes in the same schema (no fork). Per-pool **concurrency limits are
+  config keyed by lane** (rawgentic: `claude: 2` under the CC ceiling; kukakuka sets
+  its own — one CCR instance measured taking 4 concurrent). **Invariants are data:**
+  the hooks consume a project-supplied `forbidden_combinations` table
+  (engine×transport×auth patterns + reason) — rawgentic ships never-Haiku and the
+  cross-model author invariant as its rows; kukakuka declares `{GLM, CCR} ⇒ FORBIDDEN
+  (account-ban trigger)`; the enforcement engine is generic. Projects own their
+  tables; the engine is policy-free.
 
 ### 3.2 Deterministic complexity gate (owner directive #4 — code, not prose)
 
@@ -138,13 +154,16 @@ override is the backstop, and the glob list completeness is a maintained artifac
   (both peers: no new rubric). Judge returns winner + criterion scores + confidence on
   **anonymized, randomly-ordered drafts**; build bake-offs judge on deterministic
   test/static-analysis evidence + anonymized patches, not vibes.
-- **Judge failure (after one retry) — owner-picked hybrid:** interactive session →
-  stop and ask the owner; headless → winner = incumbent lane (opus), round flagged
-  `judge_degraded`, excluded from telemetry, surfaced in the morning report.
-- Winner's exact bytes (hashed) become the phase artifact; losers + scores persist to
-  `bakeoff_results.jsonl`. Retirement of a chronic loser needs a preregistered sample
-  size and downstream-outcome evidence, not raw win counts (sol's rule) — reviewed
-  quarterly, no auto-retirement.
+- **Judge failure (after one retry) — policy is caller-supplied, not baked in** (§3.6
+  item 5): `run_competitive` takes a failure-strategy parameter. Rawgentic passes the
+  owner-picked hybrid — interactive session → stop and ask; headless → winner =
+  incumbent lane (opus), `judge_degraded` flag, excluded from telemetry, surfaced in
+  the morning report. kukakuka's Council passes its own strategy.
+- Winner's exact bytes (hashed) become the phase artifact; losers + scores persist via
+  an **injectable results sink** (rawgentic's sink: `bakeoff_results.jsonl`).
+  Retirement of a chronic loser needs a preregistered sample size and
+  downstream-outcome evidence, not raw win counts (sol's rule) — reviewed quarterly,
+  no auto-retirement.
 - **D9 wiring:** the winner's engine determines the adversarial-review backend —
   gpt-authored winner → Claude/glm reviewer, never gpt.
 
@@ -175,8 +194,13 @@ exception that must justify itself:
 
 ### 3.4 Routing enforcement hooks (owner directive #6 — verified, not trusted)
 
-- **PreToolUse:** requested model ∈ the seat's declared chain; not Haiku-family;
-  routing-config digest matches; gate digest present when build claims `default`.
+- **PreToolUse:** requested model ∈ the seat's declared chain; no
+  `forbidden_combinations` row matches (never-Haiku is rawgentic's row, not engine
+  code); the CALL's declared routing-config digest matches the config that will serve
+  it — **a config reload is a defined, audited epoch event** (new digest line in the
+  audit log), not a mismatch failure (§3.5 item 8; rawgentic's plan→run immutability
+  is its own epoch policy layered on top); gate digest present when build claims
+  `default`.
 - **PostToolUse:** `requested_model == actual_model` (normalized), sourced from the
   provider's own output (claude JSON / codex header) — mismatch fails the call,
   non-retryable; Observation appended to per-run `routing_audit.jsonl`.
@@ -187,7 +211,63 @@ exception that must justify itself:
   in its own output, the hook can't see it — pin CLI versions, fixture-test the
   parsers.
 
-### 3.5 Driver-bench (closing the gap the owner named)
+### 3.5 Cross-project generality contract (kukakuka conformance, verified PRE-E1)
+
+The kukakuka session ran a 9-item conformance review against this design (kukakuka:
+Rust product, a2a crate, runtime per-participant routing in live rooms — not dev-time
+WF2 phases). Verdicts, all applied above:
+
+1. **Reuse boundary**: normative artifact = language-neutral versioned JSON Schemas
+   (`observation.schema.json`, `routing-table.schema.json`); `contract.py` is one
+   producer; Rust emits the same documents. *(widened, §3.1)*
+2. **Seat width**: chain entries are lane objects `{provider, transport, auth_mode,
+   credential_ref, participation_mode?}` — covers kukakuka's Native/Ccr transports and
+   auth shapes without a fork. *(widened, §3.1)*
+3. **Invariants as data**: project-supplied `forbidden_combinations` table
+   (engine×transport×auth + reason); kukakuka declares `{GLM, CCR} ⇒ FORBIDDEN
+   (account-ban trigger)`; rawgentic's never-Haiku + author invariant are its rows.
+   *(widened, §3.1/§3.4)*
+4. **actual_model across transports**: `transport` field added; rule = provider-
+   reported id from the INNERMOST envelope (kukakuka confirmed live that a CCR
+   envelope reports the true upstream id), absent = failure. *(widened, §3.1)*
+5. **run_competitive = Council's primitive**: shared; judge-failure policy and results
+   sink are caller-supplied, rubric already a parameter. *(widened, §3.3)*
+6. **Ceiling is config**: per-pool concurrency limits keyed by lane (rawgentic
+   `claude: 2`; kukakuka measured one CCR taking 4 concurrent). *(widened, §3.1)*
+7. **Real usage**: `usage` counts are provider-reported and required (bench captured
+   them from all three engines); `cost_proxy` optional. *(confirmed + tightened)*
+8. **Config lifecycle**: per-call digest matching; reload = audited epoch event, not a
+   failure; rawgentic's plan→run immutability is its own layered policy. *(widened, §3.4)*
+9. **Correlation id**: optional caller-supplied `correlation_id` (kukakuka: room turn
+   nonce; rawgentic: WF2 step/task id). *(widened, §3.1)*
+
+E1's acceptance criteria include schema-validation of a hand-written "kukakuka-shaped"
+Observation (CCR transport, proxied actual_model, correlation_id) against the
+committed JSON Schema — proving the extraction is a move, not a rewrite.
+
+### 3.5b Multi-account Claude lanes (owner directive, folded in)
+
+Confirmed live this session: `CLAUDE_CONFIG_DIR=<dir> claude` scaffolds a fully
+isolated config tree — credentials, sessions, projects, plugins — per directory
+[C: probe output, "Not logged in · Please run /login" in a fresh dir]. Three accounts
+= three config dirs; the 5-hour usage windows are per-account, so accounts are
+**independent Claude quota pools**, exactly like the codex/zhipu pools.
+
+- **Mechanism in the schema (already there via item 2):** a claude-cli lane's
+  `credential_ref` names the config dir (`~/.claude`, `~/.claude-acct2`, …); the
+  adapter sets `CLAUDE_CONFIG_DIR` from it. Per-pool concurrency then applies per
+  ACCOUNT (each gets its own working ceiling), and the parallelization lanes multiply.
+- **Per-dir costs, named:** each account dir needs its own `/login` (one-time), plugin
+  install (rawgentic per dir), and settings; artifact credentials and session history
+  are per-dir. The cron launcher and executor pin the env var per invocation.
+- **ToS note (owner-acknowledged):** usage limits are per-account by design — rotating
+  accounts to evade limits can violate Anthropic's consumer terms; legitimately-owned
+  separate seats are a different matter. The design makes the mechanism available;
+  which accounts exist is the owner's call. The sanctioned no-window alternative
+  (`ANTHROPIC_API_KEY`, API billing, real dollars) remains on the table.
+- Lands as child **E8**.
+
+### 3.6 Driver-bench (closing the gap the owner named)
 
 The orchestrator role was never measured. Design (sol's stubbed-matrix shape, adopted):
 fixtures = synthetic issues + **stubbed executor responses** + injected failures
@@ -215,10 +295,11 @@ The executor changes the mechanism, so the filed children need rework. Proposed:
 | #420 telemetry | **stands** | now largely emitted by the executor (routing_audit + bakeoff_results feed run records) |
 | #421 per-phase schema | **closes** | the routing config IS the per-phase schema — evidence gate met by owner directive |
 | E7 (new) | **file** | Driver-bench (stubbed matrix + 3 live) (feat, M) |
+| E8 (new) | **file** | Multi-account Claude lanes: `credential_ref`→`CLAUDE_CONFIG_DIR` in the claude adapter, per-account concurrency pools, account setup runbook (login + plugin install per dir), launcher env pinning. Depends on E1. ToS note in §3.5b rides the issue body. (feat, S/M) |
 
-Sequencing: #414 (independent) · E1 → E2 → E3 → {E4, E5, E6} → E7. WF2 keeps working
-throughout — the executor lands behind the existing prose path and seats cut over one
-at a time (review first: highest value, bounded volume).
+Sequencing: #414 (independent) · E1 → E2 → E3 → {E4, E5, E6, E8} → E7. WF2 keeps
+working throughout — the executor lands behind the existing prose path and seats cut
+over one at a time (review first: highest value, bounded volume).
 
 ## 5. Owner attention
 
@@ -228,7 +309,7 @@ at a time (review first: highest value, bounded volume).
 > bake-off = {sonnet, opus, terra} · executor lives in-repo now · review chain drops
 > opus (#4 by data) · D9 stands.
 
-1. **Approve the epic restructure** (§4): file E1–E7, rewrite #415/#416/#418, shrink
+1. **Approve the epic restructure** (§4): file E1–E8, rewrite #415/#416/#418, shrink
    #417, close #421. Rev-1 children #415/#416/#418 get superseded-by comments, not
    silent edits.
 2. **#414 (CCR repair) is now on the critical path** for the sol lanes (design
@@ -238,9 +319,13 @@ at a time (review first: highest value, bounded volume).
    holding that seat decision on its evidence.
 4. **zhipuai venv gap** (unchanged from rev 2): glm judge calls run via `.venv-bench`
    python — durable home decision pending (venv wrapper in skill docs vs pipx).
-5. **kukakuka linkage**: E1's contract review is the moment to sanity-check kukakuka's
-   input needs (its model+prompt→JSON shape) so the extraction later is a move, not a
-   rewrite.
+5. **kukakuka linkage — DONE pre-E1**: the kukakuka session's 9-item conformance
+   review ran against this design and all widenings are applied (§3.5); E1's AC
+   includes validating a kukakuka-shaped Observation against the committed JSON
+   Schema.
+6. **Multi-account accounts (E8)**: which Claude accounts exist and get lanes is your
+   call — the mechanism is folded in (§3.5b) with the ToS note; account setup (login +
+   plugin install per config dir) is a per-account one-time runbook step.
 
 ## Appendix: method
 
