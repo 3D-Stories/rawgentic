@@ -243,3 +243,36 @@ def test_all_forbidden_chain_exhausted(tmp_path):
     with pytest.raises(routing.ChainExhausted):
         run_competitive(haikus, judge=_judge_first, snapshot=_snapshot(), quota=qc,
                         capture_root=tmp_path, dispatch=_stub())
+
+
+# --- #425 B: engine stamps dispatched_lane from the ACTUAL dispatched target ---
+
+def test_run_seat_stamps_dispatched_lane_primary(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
+    obs = run_seat("review", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path, dispatch=_stub())
+    assert obs.requested_model == "claude-fable-5"
+    assert obs.dispatched_lane == _lane("claude")  # primary lane, stamped
+
+
+def test_run_seat_dispatched_lane_reflects_fallback_target(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
+    # claude fails availability -> falls back to sol (codex/openai); lane must be the FALLBACK's
+    obs = run_seat("review", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
+                   dispatch=_stub({"claude": contract.LAUNCH_ERROR}))
+    assert obs.requested_model == "gpt-5.6-sol"
+    assert obs.dispatched_lane == _lane("codex", provider="openai")
+
+
+def test_run_competitive_stamps_dispatched_lane(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
+    cands = [
+        Candidate(seat="build", model="claude-sonnet-5", prompt="p", provider="anthropic", pool="claude"),
+        Candidate(seat="build", model="gpt-5.6-terra", prompt="p", provider="openai", pool="codex"),
+    ]
+    winner, losers, _jo, rec = run_competitive(
+        cands, judge=lambda results, rubric: {"winner_index": 0},
+        snapshot=_snapshot(), quota=qc, capture_root=tmp_path, dispatch=_stub())
+    lanes = {c["requested_model"]: c.get("dispatched_lane") for c in rec["candidates"]}
+    assert lanes["claude-sonnet-5"] == {"provider": "anthropic", "transport": "native",
+                                        "auth_mode": "subscription_oauth", "pool": "claude", "credential_ref": None}
+    assert lanes["gpt-5.6-terra"]["provider"] == "openai" and lanes["gpt-5.6-terra"]["pool"] == "codex"
