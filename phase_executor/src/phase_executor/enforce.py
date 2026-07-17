@@ -36,13 +36,16 @@ def target_identity(target: dict) -> tuple:
 
     Model canonicalization is ONE field (aliases/prefixes/date collapse); the lane fields are
     compared verbatim, so an allowed model smuggled through an undeclared
-    provider/transport/auth_mode/pool/credential is caught. Returns a 6-tuple
-    ``(canon_model, provider, transport, auth_mode, pool, credential_ref)``.
+    provider/transport/auth_mode/pool/credential/participation_mode is caught. Returns a 7-tuple
+    ``(canon_model, provider, transport, auth_mode, pool, credential_ref, participation_mode)``.
+    ``participation_mode`` is included (Step-11) so two targets differing ONLY in that schema-optional
+    lane field do not collapse to the same identity — relevant to kukakuka's participation modes.
     """
     lane = target["lane"]
     return (
         contract.canonicalize_model_id(target["model"]),
-        lane["provider"], lane["transport"], lane["auth_mode"], lane["pool"], lane.get("credential_ref"),
+        lane["provider"], lane["transport"], lane["auth_mode"], lane["pool"],
+        lane.get("credential_ref"), lane.get("participation_mode"),
     )
 
 
@@ -163,6 +166,10 @@ def verify_post(obs) -> PostCheck:
       (``ok=False``) — retrying re-bills the same wrong route. (This VERIFIES a ``usage_unavailable``
       call whose identity matches — identity is attested, only token counts are missing — instead of
       wrongly refusing it.)
+
+    (A ``harness_error`` — a candidate that never dispatched — carries no identity, so it reads as
+    ``identity_missing``; such an obs never reaches ``reconcile_run`` anyway, since it has no
+    ``dispatched_lane`` and ``append_observation`` rejects it.)
 
     Accepts an ``Observation`` or its dict form."""
     d = obs.to_dict() if isinstance(obs, contract.Observation) else obs

@@ -56,7 +56,7 @@ def test_target_identity_tuple():
     t = _target("claude-opus-4-8[1m]", _lane("claude", cred="ACCT_A"))
     tid = target_identity(t)
     # canonicalized model + full lane identity
-    assert tid == ("claude-opus-4-8", "anthropic", "native", "subscription_oauth", "claude", "ACCT_A")
+    assert tid == ("claude-opus-4-8", "anthropic", "native", "subscription_oauth", "claude", "ACCT_A", None)
 
 
 # ---- check_pre ----
@@ -182,7 +182,7 @@ def test_verify_post_kukakuka_fixture_verified():
 
 def _receipt(nonce="n1", verdict="pass", **over):
     base = dict(nonce=nonce, seat="review", correlation_id="c1", attempt_id="0",
-                target_identity=("claude-opus-4-8", "anthropic", "native", "subscription_oauth", "claude", None),
+                target_identity=("claude-opus-4-8", "anthropic", "native", "subscription_oauth", "claude", None, None),
                 config_digest="sha256:d", gate_digest=None, author_provider="openai",
                 verdict=verdict, violations=())
     base.update(over)
@@ -318,14 +318,14 @@ def test_candidate_as_target_single_sources_lane():
                   pool="claude", credential_ref="ACCT_X")
     assert c.as_target()["lane"] == c.lane()
     assert target_identity(c.as_target()) == \
-        ("claude-sonnet-5", "anthropic", "native", "subscription_oauth", "claude", "ACCT_X")
+        ("claude-sonnet-5", "anthropic", "native", "subscription_oauth", "claude", "ACCT_X", None)
 
 
 # ---- reconcile_run ----
 
 _DEF_LANE = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
              "pool": "claude", "credential_ref": None}
-_DEF_TID = ("claude-fable-5", "anthropic", "native", "subscription_oauth", "claude", None)
+_DEF_TID = ("claude-fable-5", "anthropic", "native", "subscription_oauth", "claude", None, None)
 
 
 def _receipt_rec(nonce, seat="review", cid="c1", verdict="pass", tid=_DEF_TID, digest="sha256:d"):
@@ -552,3 +552,12 @@ def test_reconcile_missing_obs_not_forgiven_by_verified_sibling():
             _receipt_rec("n1"), _obs_rec("n1")]  # verified sibling
     res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
     assert not res.ok and ("review", "c1") in res.missing_obs
+
+
+def test_target_identity_includes_participation_mode():
+    """Step-11: two targets differing ONLY in the schema-optional participation_mode lane field are
+    DISTINCT identities (they must not collapse and let an undeclared mode pass off_chain)."""
+    base = _lane("claude")
+    a = target_identity(_target("claude-fable-5", dict(base)))
+    b = target_identity(_target("claude-fable-5", dict(base, participation_mode="council")))
+    assert a != b and len(a) == 7
