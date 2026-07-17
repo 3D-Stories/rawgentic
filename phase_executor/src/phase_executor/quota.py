@@ -94,8 +94,13 @@ class QuotaCoordinator:
                 pid = int(pid_str)
             except (OSError, ValueError, IndexError):
                 pid = -1
-            stale = (not _pid_alive(pid))
-            if not stale:
+            if pid > 0:
+                # Known holder: reap ONLY if the process is dead. Never age-reap a live holder —
+                # a legitimately long-running call (> stale_after) must keep its permit, else another
+                # process could acquire the slot and exceed the ceiling.
+                stale = not _pid_alive(pid)
+            else:
+                # Unknown/unparseable holder (e.g. a crash mid-write): fall back to age.
                 try:
                     stale = (now - token.stat().st_mtime) > self.stale_after
                 except OSError:

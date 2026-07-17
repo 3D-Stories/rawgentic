@@ -76,7 +76,7 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)
-    parsed = parse_claude(proc.stdout, requested_model=req.requested_model) if proc.stdout.strip() else ParsedResult(parse_error="empty stdout")
+    parsed = parse_claude(proc.stdout, requested_model=req.requested_model) if proc.stdout.strip() else ParsedResult(empty_transport=True)
     cap.write_output(parsed.text)
     obs = build_observation(
         req=req, engine=ENGINE, run_id=run_id, attempt_id=attempt_id, parsed=parsed, proc=proc,

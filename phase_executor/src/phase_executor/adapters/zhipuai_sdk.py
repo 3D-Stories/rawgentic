@@ -59,20 +59,26 @@ def _uv_command(locked: bool) -> list:
     return ["uv", "run", "--with", "zhipuai>=2.1.5", "--with", "sniffio", "python", str(_WORKER)]
 
 
+def _attempt(locked: bool, payload: str, timeout: float) -> ProcOutcome:
+    try:
+        r = subprocess.run(_uv_command(locked), input=payload, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return ProcOutcome(returncode=None, stdout="", stderr=str(exc),
+                           timed_out=isinstance(exc, subprocess.TimeoutExpired), launch_error=str(exc))
+    return ProcOutcome(returncode=r.returncode, stdout=r.stdout, stderr=r.stderr, timed_out=False)
+
+
 def _invoke_worker(payload: str, timeout: float) -> ProcOutcome:
-    """Try the locked env first (reproducible); fall back to the unbounded --with form."""
-    last: Optional[ProcOutcome] = None
-    for locked in (True, False):
-        try:
-            r = subprocess.run(_uv_command(locked), input=payload, capture_output=True, text=True, timeout=timeout)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            last = ProcOutcome(returncode=None, stdout="", stderr=str(exc), timed_out=isinstance(exc, subprocess.TimeoutExpired), launch_error=str(exc))
-            continue
-        outcome = ProcOutcome(returncode=r.returncode, stdout=r.stdout, stderr=r.stderr, timed_out=False)
-        if r.returncode == 0 and r.stdout.strip():
-            return outcome
-        last = outcome
-    return last  # both attempts failed; return the last outcome for the Observation
+    """Run the worker from the LOCKED env (reproducible). Fall back to the unbounded --with form
+    ONLY when the locked attempt failed to RUN the worker (empty stdout = uv/lock setup failure) —
+    never when the worker actually ran, so a provider/auth/quota error is not retried into a second
+    (billable) provider call (finding f4-diff)."""
+    locked = _attempt(True, payload, timeout)
+    if locked.stdout.strip():
+        return locked  # the worker ran (success or an error JSON) -> do not re-issue the request
+    if locked.timed_out:
+        return locked  # a timeout may mean the request reached the provider -> do not double-issue
+    return _attempt(False, payload, timeout)  # locked setup failed before the worker ran -> retry unlocked
 
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
@@ -84,7 +90,7 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)
-    parsed = parse_zhipuai(proc.stdout, requested_model=req.requested_model) if proc.stdout.strip() else ParsedResult(parse_error="empty worker stdout")
+    parsed = parse_zhipuai(proc.stdout, requested_model=req.requested_model) if proc.stdout.strip() else ParsedResult(empty_transport=True)
     cap.write_output(parsed.text)
     obs = build_observation(
         req=req, engine=ENGINE, run_id=run_id, attempt_id=attempt_id, parsed=parsed, proc=proc,

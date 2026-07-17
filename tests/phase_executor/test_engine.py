@@ -95,6 +95,17 @@ def test_run_seat_falls_back_on_availability_failure(tmp_path):
     assert calls[1][2] and "fallback from claude-fable-5" in calls[1][2]
 
 
+def test_run_seat_falls_back_on_no_response(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
+    calls = []
+    # claude primary returns no_response (empty transport/output) -> availability -> fall back
+    obs = run_seat("review", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
+                   dispatch=_stub({"claude": contract.NO_RESPONSE}, record=calls))
+    assert obs.requested_model == "gpt-5.6-sol"
+    assert obs.parse_status == "ok"
+    assert calls[0][0] == "claude" and calls[1][0] == "codex"
+
+
 def test_run_seat_does_not_fall_back_on_identity_failure(tmp_path):
     qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
     calls = []

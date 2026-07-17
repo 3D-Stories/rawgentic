@@ -66,8 +66,8 @@ def test_parse_codex_proxied_transport_no_identity():
 
 
 def test_parse_codex_empty():
-    assert parse_codex("", requested_model="x").parse_error
-    assert parse_codex("garbage\nlines", requested_model="x").parse_error
+    assert parse_codex("", requested_model="x").empty_transport          # no bytes -> availability
+    assert parse_codex("garbage\nlines", requested_model="x").empty_transport  # no parseable events
 
 
 # ---- zhipuai ----------------------------------------------------------------
@@ -118,6 +118,27 @@ def test_codex_native_builds_valid_ok_observation():
     d = obs.to_dict()
     assert d["parse_status"] == "ok"
     contract.validate_observation(d)
+
+
+def test_resolve_status_empty_transport_is_no_response():
+    from phase_executor.adapters.base import ParsedResult, resolve_parse_status
+    st = resolve_parse_status(ParsedResult(empty_transport=True), "m", timed_out=False, exit_code=0, launch_error=None)
+    assert st == "no_response"  # availability failure -> engine falls back
+
+
+def test_resolve_status_empty_output_is_no_response():
+    from phase_executor.adapters.base import ParsedResult, resolve_parse_status
+    # valid identity + usage but empty output -> not a usable success (diff-review finding #1)
+    p = ParsedResult(text="", payload=None, actual_model="claude-opus-4-8", usage={"input": 1, "output": 2})
+    st = resolve_parse_status(p, "claude-opus-4-8", timed_out=False, exit_code=0, launch_error=None)
+    assert st == "no_response"
+
+
+def test_resolve_status_ok_requires_output():
+    from phase_executor.adapters.base import ParsedResult, resolve_parse_status
+    p = ParsedResult(text="answer", actual_model="claude-opus-4-8", usage={"input": 1, "output": 2})
+    st = resolve_parse_status(p, "claude-opus-4-8", timed_out=False, exit_code=0, launch_error=None)
+    assert st == "ok"
 
 
 def test_identity_failure_when_actual_missing():

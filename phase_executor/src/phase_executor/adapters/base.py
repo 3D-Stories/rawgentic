@@ -39,7 +39,14 @@ class ParsedResult:
     actual_model: Optional[str] = None
     usage: Optional[dict] = None            # {input, output, cached, cost_proxy?}
     payload: Any = None                     # structured parsed payload if any
-    parse_error: Optional[str] = None       # set when the envelope could not be parsed at all
+    parse_error: Optional[str] = None       # set when a NON-EMPTY envelope could not be parsed
+    empty_transport: bool = False           # transport produced nothing (no bytes / no events) -> availability failure
+
+
+def _has_output(parsed: "ParsedResult") -> bool:
+    if parsed.text:
+        return True
+    return parsed.payload not in (None, "")
 
 
 @dataclass
@@ -88,12 +95,16 @@ def resolve_parse_status(parsed: ParsedResult, requested_model: str, *, timed_ou
         return contract.TIMEOUT
     if exit_code not in (0, None):
         return contract.NONZERO_EXIT
+    if parsed.empty_transport:
+        return contract.NO_RESPONSE  # transport gave nothing -> availability failure (falls back)
     if parsed.parse_error:
         return contract.PARSE_ERROR
     if not parsed.actual_model or not contract.models_match(requested_model, parsed.actual_model):
         return contract.IDENTITY_FAILURE
     if not parsed.usage or "input" not in parsed.usage or "output" not in parsed.usage:
         return contract.USAGE_UNAVAILABLE
+    if not _has_output(parsed):
+        return contract.NO_RESPONSE  # valid identity+usage but empty output -> not a usable success
     return contract.OK
 
 

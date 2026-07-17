@@ -27,11 +27,24 @@ from .quota import QuotaCoordinator
 
 # provider (lane) -> adapter engine family
 PROVIDER_ENGINE = {"anthropic": "claude", "openai": "codex", "zhipuai": "zhipuai"}
-AVAILABILITY_FAILURES = frozenset({contract.LAUNCH_ERROR, contract.NONZERO_EXIT, contract.TIMEOUT})
+# Statuses that warrant a chain fallback: the transport failed to deliver a usable response.
+# NO_RESPONSE (empty transport / empty output) is included; a genuine parse_error (got bytes,
+# couldn't parse) and identity/usage failures are NOT — the model responded.
+AVAILABILITY_FAILURES = frozenset(
+    {contract.LAUNCH_ERROR, contract.NONZERO_EXIT, contract.TIMEOUT, contract.NO_RESPONSE}
+)
 
 
 class InfeasibleBakeoff(RuntimeError):
     """A candidate set cannot run within pool limits with the required parallelism."""
+
+
+# D9 / cross_model_author contract: the rule is relational (reviewer must not share the author's
+# engine) and is correctly INERT when author_provider is None — a seat call with no author is not a
+# review, so there is nothing to conflict with. A REVIEW-seat caller MUST pass author_provider so
+# the rule fires (same-engine targets are skipped chain-aware); that "reviews always supply the
+# author" policy is enforced at the review-wiring layer (E3) and by its tests, not here — requiring
+# it for every seat would wrongly break intake/design/build/ship, which have no author.
 
 
 def _new_run_id() -> str:
@@ -67,7 +80,11 @@ def run_seat(
     timeout: float = 300.0,
     dispatch: Callable[..., contract.Observation] = _dispatch_real,
 ) -> contract.Observation:
-    """Run a seat to an Observation, with chain-aware fallback on availability failures."""
+    """Run a seat to an Observation, with chain-aware fallback on availability failures.
+
+    For a REVIEW seat, pass ``author_provider`` (the authored artifact's engine) so the D9
+    cross_model_author rule skips same-engine targets; omitting it leaves the rule inert (correct
+    for non-review seats). See the module-level D9 note."""
     run_id = run_id or _new_run_id()
     targets = routing.eligible_targets(seat, snapshot, author_provider=author_provider)
     if not targets:

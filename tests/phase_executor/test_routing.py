@@ -118,6 +118,19 @@ def test_chain_exhausted_raises():
         select_target("solo", snap, author_provider="anthropic")
 
 
+def test_snapshot_immune_to_source_mutation():
+    """A caller mutating the original table after snapshotting must not change routing under the
+    already-computed digest (diff-review finding #11)."""
+    t = _table()
+    snap = RoutingSnapshot.from_table(t)
+    d0 = snap.config_digest
+    t["pools"]["claude"]["concurrency"] = 99
+    t["seats"]["review"]["primary"]["model"] = "hacked"
+    assert snap.config_digest == d0
+    assert snap.pool_concurrency()["claude"] == 2
+    assert snap.seat("review")["primary"]["model"] == "claude-fable-5"
+
+
 def test_shipped_table_digest_stable_and_pools():
     snap = RoutingSnapshot.from_table(load_routing_table(SHIPPED))
     assert snap.config_digest.startswith("sha256:")

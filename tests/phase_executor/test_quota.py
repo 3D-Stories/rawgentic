@@ -56,14 +56,26 @@ def test_stale_dead_pid_token_reaped(tmp_path):
         assert qc.live_permits("claude") == 1
 
 
-def test_stale_by_age_reaped(tmp_path):
+def test_stale_by_age_reaped_when_pid_unknown(tmp_path):
     qc = QuotaCoordinator(tmp_path, {"claude": 1}, stale_after=0.0)
     pool_dir = tmp_path / "claude" / "default"
     pool_dir.mkdir(parents=True)
-    tok = pool_dir / f"permit-{os.getpid()}-old"  # our own pid (alive) but age>stale_after=0
+    tok = pool_dir / "permit-bad-old"  # unparseable pid -> age applies
+    tok.write_text("not-a-pid\n0\n", encoding="utf-8")
+    time.sleep(0.01)
+    assert qc.live_permits("claude") == 0  # reaped by age (holder unknown)
+
+
+def test_live_pid_not_age_reaped(tmp_path):
+    """A legitimately long-running call (age > stale_after) with a LIVE holder keeps its permit —
+    else another process could grab the slot and exceed the ceiling (diff-review finding #12)."""
+    qc = QuotaCoordinator(tmp_path, {"claude": 1}, stale_after=0.0)  # aggressive age threshold
+    pool_dir = tmp_path / "claude" / "default"
+    pool_dir.mkdir(parents=True)
+    tok = pool_dir / f"permit-{os.getpid()}-old"  # our own (alive) pid, ancient mtime
     tok.write_text(f"{os.getpid()}\n0\n", encoding="utf-8")
     time.sleep(0.01)
-    assert qc.live_permits("claude") == 0
+    assert qc.live_permits("claude") == 1  # NOT reaped despite age>stale_after (holder alive)
 
 
 def _max_overlap(intervals):

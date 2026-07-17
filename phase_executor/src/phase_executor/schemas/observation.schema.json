@@ -90,6 +90,7 @@
         "timeout",
         "launch_error",
         "parse_error",
+        "no_response",
         "identity_failure",
         "usage_unavailable",
         "harness_error"
@@ -129,6 +130,12 @@
           "usage": {
             "type": "object",
             "required": ["input", "output"]
+          },
+          "process": {
+            "properties": {
+              "exit_code": {"const": 0},
+              "timed_out": {"const": false}
+            }
           }
         }
       }

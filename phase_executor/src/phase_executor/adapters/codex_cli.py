@@ -68,7 +68,7 @@ def parse_codex(stdout_jsonl: str, *, requested_model: str, transport: str = "na
                 if isinstance(ev.get(key), str):
                     model_from_events = ev[key]
     if not saw_event:
-        return ParsedResult(parse_error="no parseable codex events")
+        return ParsedResult(empty_transport=True)  # no events -> transport gave nothing (availability)
     if model_from_events:
         actual = model_from_events
     elif transport == "native":

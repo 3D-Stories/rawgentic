@@ -29,11 +29,12 @@ NONZERO_EXIT = "nonzero_exit"
 TIMEOUT = "timeout"
 LAUNCH_ERROR = "launch_error"
 PARSE_ERROR = "parse_error"
+NO_RESPONSE = "no_response"          # transport produced nothing / parsed envelope carried no output
 IDENTITY_FAILURE = "identity_failure"
 USAGE_UNAVAILABLE = "usage_unavailable"
 HARNESS_ERROR = "harness_error"
 PARSE_STATUSES = frozenset(
-    {OK, NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, PARSE_ERROR, IDENTITY_FAILURE, USAGE_UNAVAILABLE, HARNESS_ERROR}
+    {OK, NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, PARSE_ERROR, NO_RESPONSE, IDENTITY_FAILURE, USAGE_UNAVAILABLE, HARNESS_ERROR}
 )
 
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"

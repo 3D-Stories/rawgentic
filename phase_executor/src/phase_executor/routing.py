@@ -64,7 +64,11 @@ class RoutingSnapshot:
 
     @staticmethod
     def from_table(table: dict) -> "RoutingSnapshot":
-        return RoutingSnapshot(table=table, config_digest=digest(table))
+        # Deep-copy on ingest so a caller mutating the original dict cannot change routing behavior
+        # under an already-computed (audited) digest, and an in-flight snapshot stays fixed.
+        import copy  # noqa: PLC0415
+        frozen = copy.deepcopy(table)
+        return RoutingSnapshot(table=frozen, config_digest=digest(frozen))
 
     def pool_concurrency(self) -> Dict[str, int]:
         return {name: spec["concurrency"] for name, spec in self.table["pools"].items()}
