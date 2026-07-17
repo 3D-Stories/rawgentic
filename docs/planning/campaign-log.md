@@ -81,6 +81,14 @@ model, fallback_reason, queued_ms, concurrency, selector inputs) — validated-o
 pre-#420 entries stay rc=0), populated once #417 wires the executor. Small-standard lane; suite
 3252+7 → 3262+7 (+10); no spine change → no diagram REV. (child 7/10)
 
+### #419 — model-routing.md provenance + refresh rule · v3.48.1
+
+New `docs/model-routing.md`: the executable refresh-rule decision table (role→phase map, gap test =
+median-gap>pooled-sd effect-size heuristic, floor test ≥70 subagent/≥80 driver + driver 5/6 gates,
+move-only-when-both-pass, provenance re-stamped every decision incl. "no change") + a drift-guard
+pinning the canonical move sentence. Docs child (PATCH bump). Small-standard lane; suite 3265+7 →
+3269+7 (+4); no spine change → no diagram REV. (child 8/10)
+
 ## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
 
 **Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped
