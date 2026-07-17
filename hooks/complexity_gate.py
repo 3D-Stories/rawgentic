@@ -95,8 +95,19 @@ def _field(obj, *names, default=_GATE_MISSING):
     return default
 
 
+def _json_safe(value):
+    """A JSON-serializable scalar: pass None/str/int/float/bool through, stringify anything else
+    (Enum/bytes/set/custom object). Keeps the snapshot — and the digest computed from it — total, so
+    a non-primitive raw metadata value fail-CLOSES via the value-validity check instead of crashing
+    _policy_digest's json.dumps (Step-11 F1)."""
+    return value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+
+
 def _policy_digest(snapshot: dict) -> str:
-    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    # default=str is belt-and-suspenders: _json_safe already scrubs the stored values, but a total
+    # serializer guarantees the digest can never raise regardless of what the snapshot holds.
+    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=True, default=str).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
@@ -108,25 +119,36 @@ def _int_or_none(value):
 def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:
     """Deterministic bake-off gate (plan §3.2). See the module docstring. Pure; fail-closed."""
     cfg = cfg or {}
-    diff_lines_thr = _int_or_none(_field(cfg, "BAKEOFF_DIFF_LINES", "bakeoff_diff_lines"))
-    diff_lines_thr = DEFAULT_BAKEOFF_DIFF_LINES if diff_lines_thr is None else diff_lines_thr
-    file_count_thr = _int_or_none(_field(cfg, "BAKEOFF_FILE_COUNT", "bakeoff_file_count"))
-    file_count_thr = DEFAULT_BAKEOFF_FILE_COUNT if file_count_thr is None else file_count_thr
-
     reasons: list[str] = []
     snap: dict = {}
 
+    def _threshold(key, alias, default):
+        # Absent -> default (a legitimate "not configured"). PRESENT-but-unparseable -> fail CLOSED
+        # (reason code + default for the comparison): a bad threshold must not silently LOOSEN the
+        # gate to the default when the operator meant something stricter (Step-11 F2).
+        raw = _field(cfg, key, alias)
+        if raw is _GATE_MISSING:
+            return default
+        val = _int_or_none(raw)
+        if val is None:
+            reasons.append(f"fail_closed:{key}_invalid")
+            return default
+        return val
+
+    diff_lines_thr = _threshold("BAKEOFF_DIFF_LINES", "bakeoff_diff_lines", DEFAULT_BAKEOFF_DIFF_LINES)
+    file_count_thr = _threshold("BAKEOFF_FILE_COUNT", "bakeoff_file_count", DEFAULT_BAKEOFF_FILE_COUNT)
+
     rl = _field(task, "risk_level", "riskLevel")
-    snap["risk_level"] = None if rl is _GATE_MISSING else rl
+    snap["risk_level"] = None if rl is _GATE_MISSING else _json_safe(rl)
     if rl is _GATE_MISSING or rl not in _VALID_RISK_LEVELS:
-        reasons.append(f"fail_closed:risk_level={'missing' if rl is _GATE_MISSING else rl}")
+        reasons.append(f"fail_closed:risk_level={'missing' if rl is _GATE_MISSING else _json_safe(rl)}")
     elif rl == "high":
         reasons.append("risk_high")
 
     cx = _field(issue, "complexity")
-    snap["complexity"] = None if cx is _GATE_MISSING else cx
+    snap["complexity"] = None if cx is _GATE_MISSING else _json_safe(cx)
     if cx is _GATE_MISSING or cx not in _VALID_ISSUE_COMPLEXITIES:
-        reasons.append(f"fail_closed:complexity={'missing' if cx is _GATE_MISSING else cx}")
+        reasons.append(f"fail_closed:complexity={'missing' if cx is _GATE_MISSING else _json_safe(cx)}")
     elif cx == "complex":
         reasons.append("complexity_complex")
 

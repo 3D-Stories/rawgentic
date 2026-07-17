@@ -147,3 +147,45 @@ def test_accepts_objects_not_only_dicts():
     plan_est = types.SimpleNamespace(files=["x.py"], lines=1, file_count=1)
     d = pl.needs_bakeoff(task, issue, plan_est)
     assert d.decision is True and "risk_high" in d.reason_codes
+
+
+# --- Step-11 F1: non-serializable metadata fail-CLOSES, never crashes _policy_digest -----------
+import enum  # noqa: E402
+
+
+class _Cx(enum.Enum):
+    COMPLEX = "complex"
+
+
+@pytest.mark.parametrize("bad_rl", [_Cx.COMPLEX, b"high", {"high"}, object()])
+def test_non_serializable_risk_level_fails_closed_not_crash(bad_rl):
+    d = pl.needs_bakeoff({"risk_level": bad_rl}, {"complexity": "standard"},
+                         {"files": [], "lines": 1, "file_count": 1})
+    assert d.decision is True
+    assert any(r.startswith("fail_closed:risk_level=") for r in d.reason_codes)
+    assert d.policy_digest.startswith("sha256:")  # digest computed, did not raise
+
+
+def test_non_serializable_complexity_fails_closed_not_crash():
+    d = pl.needs_bakeoff({"risk_level": "standard"}, {"complexity": b"complex"},
+                         {"files": [], "lines": 1, "file_count": 1})
+    assert d.decision is True
+    assert any(r.startswith("fail_closed:complexity=") for r in d.reason_codes)
+
+
+# --- Step-11 F2: unparseable cfg threshold fail-CLOSES (does not silently loosen to default) ----
+def test_bad_threshold_fails_closed_not_silent_loosen():
+    # operator meant a strict 200 but wrote it as a string; must NOT quietly run at the looser 400
+    d = pl.needs_bakeoff({"risk_level": "standard"}, {"complexity": "standard"},
+                         {"files": [], "lines": 300, "file_count": 1},
+                         cfg={"BAKEOFF_DIFF_LINES": "200"})
+    assert d.decision is True
+    assert "fail_closed:BAKEOFF_DIFF_LINES_invalid" in d.reason_codes
+
+
+def test_absent_threshold_uses_default_silently():
+    # a genuinely-absent threshold is fine (default), no fail_closed reason
+    d = pl.needs_bakeoff({"risk_level": "standard"}, {"complexity": "standard"},
+                         {"files": [], "lines": 10, "file_count": 1}, cfg={})
+    assert d.decision is False
+    assert not any("threshold" in r or "BAKEOFF" in r for r in d.reason_codes)
