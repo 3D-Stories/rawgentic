@@ -112,6 +112,7 @@ class Observation:
     context_hashes: list = field(default_factory=list)
     correlation_id: Optional[str] = None
     judge_degraded: Optional[bool] = None
+    dispatched_lane: Optional[dict] = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -140,6 +141,11 @@ class Observation:
         # judge_degraded is a bool-only optional (no null in schema): emit only when set.
         if self.judge_degraded is not None:
             out["judge_degraded"] = self.judge_degraded
+        # dispatched_lane (#425 B): the lane the executor actually dispatched on, stamped by the
+        # engine at dispatch — enables independent receipt<->observation binding at run-end audit.
+        # Optional/additive (kukakuka v1 parity): emitted only when set.
+        if self.dispatched_lane is not None:
+            out["dispatched_lane"] = dict(self.dispatched_lane)
         return out
 
 

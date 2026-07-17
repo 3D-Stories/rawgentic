@@ -123,3 +123,13 @@ def test_routing_table_lane_missing_pool_rejected():
 def test_routing_table_requires_pools_and_seats():
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"schema_version": "1", "seats": {}}, RT_SCHEMA)
+
+
+def test_observation_dispatched_lane_optional_and_valid():
+    """#425 B: dispatched_lane is optional (absent validates — kukakuka v1 parity) and,
+    when present, validates as a lane object."""
+    jsonschema.validate(_obs_ok(), OBS_SCHEMA)  # absent
+    o = _obs_ok()
+    o["dispatched_lane"] = {"provider": "anthropic", "transport": "native",
+                            "auth_mode": "subscription_oauth", "pool": "claude", "credential_ref": None}
+    jsonschema.validate(o, OBS_SCHEMA)  # present
