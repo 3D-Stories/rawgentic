@@ -1,0 +1,28 @@
+{
+  "id": "f04-intake-recovery",
+  "dimensions": [
+    "recovery"
+  ],
+  "primary_seat": "intake",
+  "responses": {
+    "intake": [
+      {
+        "parse_status": "timeout"
+      },
+      {
+        "parse_status": "ok",
+        "actual_model": "claude-fable-5",
+        "payload": "x",
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cached": 0
+        }
+      }
+    ]
+  },
+  "expected": {
+    "seat_model": "claude-fable-5",
+    "recovered": true
+  }
+}

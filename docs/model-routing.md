@@ -83,3 +83,13 @@ failure semantics):
   then stop and ask. Winner bytes + losers persist to `bakeoff_results.jsonl` (no auto-retirement).
 - **D9** — the winner's engine picks the adversarial-review backend: a gpt-authored winner forces a
   glm reviewer, never gpt (`reviewer_backend_for_winner`).
+
+## Driver-bench (#430)
+
+The orchestrator/driver role itself is measured by `hooks/driver_bench_lib.py`: 12 synthetic fixtures
+driven through the REAL orchestration code (`run_seat`/`run_competitive`, `needs_bakeoff`,
+`verify_post`, `dispatch_seat`, `bakeoff_policy`) via a fixture stub dispatch, scored across 7
+dimensions (seat/fallback selection, gate, enforcement, winner propagation, audit completeness,
+recovery, token burn). The stubbed matrix is a reproducibility/regression baseline (the deterministic
+path is model-independent); the opus-vs-sonnet comparison is the 3 live cells (`RUN_LIVE`). The
+orchestrator seat stays opus until the live campaign reports (owner-confirmed).

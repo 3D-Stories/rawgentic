@@ -1,0 +1,16 @@
+{
+  "id": "f08-enforcement-breach",
+  "dimensions": [
+    "enforcement"
+  ],
+  "primary_seat": "build",
+  "enforcement": {
+    "observation": {
+      "requested_model": "claude-opus-4-8",
+      "actual_model": "claude-sonnet-5",
+      "parse_status": "ok",
+      "payload": "x"
+    },
+    "expected_ok": false
+  }
+}

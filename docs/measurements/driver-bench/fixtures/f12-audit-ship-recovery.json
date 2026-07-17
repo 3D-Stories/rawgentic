@@ -1,0 +1,29 @@
+{
+  "id": "f12-audit-ship-recovery",
+  "dimensions": [
+    "audit_completeness",
+    "token_burn"
+  ],
+  "primary_seat": "ship",
+  "responses": {
+    "ship": [
+      {
+        "parse_status": "nonzero_exit"
+      },
+      {
+        "parse_status": "ok",
+        "actual_model": "claude-opus-4-8",
+        "payload": "x",
+        "usage": {
+          "input": 200,
+          "output": 100,
+          "cached": 0
+        }
+      }
+    ]
+  },
+  "expected": {
+    "audit_complete": true,
+    "token_burn_max": 1000
+  }
+}

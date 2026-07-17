@@ -1,0 +1,29 @@
+{
+  "id": "f03-ship-recovery",
+  "dimensions": [
+    "recovery",
+    "seat_selection"
+  ],
+  "primary_seat": "ship",
+  "responses": {
+    "ship": [
+      {
+        "parse_status": "nonzero_exit"
+      },
+      {
+        "parse_status": "ok",
+        "actual_model": "claude-opus-4-8",
+        "payload": "x",
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cached": 0
+        }
+      }
+    ]
+  },
+  "expected": {
+    "seat_model": "claude-opus-4-8",
+    "recovered": true
+  }
+}

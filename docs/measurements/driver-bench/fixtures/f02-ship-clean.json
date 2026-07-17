@@ -1,0 +1,24 @@
+{
+  "id": "f02-ship-clean",
+  "dimensions": [
+    "seat_selection"
+  ],
+  "primary_seat": "ship",
+  "responses": {
+    "ship": [
+      {
+        "parse_status": "ok",
+        "actual_model": "claude-sonnet-5",
+        "payload": "x",
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cached": 0
+        }
+      }
+    ]
+  },
+  "expected": {
+    "seat_model": "claude-sonnet-5"
+  }
+}
