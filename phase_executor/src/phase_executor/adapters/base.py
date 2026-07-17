@@ -58,15 +58,21 @@ class ProcOutcome:
     launch_error: Optional[str] = None
 
 
-def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float) -> ProcOutcome:
+def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optional[dict] = None) -> ProcOutcome:
     """Run ``cmd`` with ``stdin`` on stdin in its OWN process group; on timeout kill the whole
     group (no orphaned children), wait, and report ``timed_out``. Launch errors are captured,
-    never raised, so the caller can still record an Observation."""
+    never raised, so the caller can still record an Observation.
+
+    ``env`` (#431) is a dict of env-var ADDITIONS, MERGED onto the current ``os.environ`` (the child
+    keeps PATH/HOME/etc. and gains the additions) — e.g. the claude adapter's ``CLAUDE_CONFIG_DIR``
+    for a multi-account lane. ``env=None`` (default) inherits the parent environment unchanged
+    (byte-identical to the pre-#431 behavior)."""
+    proc_env = {**os.environ, **env} if env else None
     try:
         proc = subprocess.Popen(
             list(cmd),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True,
+            text=True, start_new_session=True, env=proc_env,
         )
     except OSError as exc:
         return ProcOutcome(returncode=None, stdout="", stderr=str(exc), timed_out=False, launch_error=str(exc))

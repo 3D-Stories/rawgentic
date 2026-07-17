@@ -67,6 +67,24 @@ assert obs.parse_status == "ok" and obs.actual_model  # provider-reported eviden
 uv-native: `uv sync` (add `--extra glm` for the zhipuai adapter's locked env). The zhipuai worker
 runs isolated via uv, so importing this package never imports `zhipuai`.
 
+## Multi-account Claude lanes (E8, #431)
+
+A claude-cli lane's `credential_ref` names an isolated Claude config dir; the adapter sets
+`CLAUDE_CONFIG_DIR=<credential_ref>` for that invocation (`adapters/claude_cli._claude_env`
+→ `run_subprocess(env=…)`, a MERGE onto `os.environ`). Because Claude's 5-hour usage window is
+per-config-dir, each account is an **independent quota pool** — `QuotaCoordinator` already keys
+permits by `account = lane.credential_ref` (the engine passes it), so per-account concurrency
+ceilings and parallel lanes fall out for free. A lane with no `credential_ref` inherits the parent
+environment unchanged (the single-account default). Codex uses `CODEX_HOME`, zhipu its own key —
+only the claude adapter sets `CLAUDE_CONFIG_DIR`.
+
+**Per-account setup runbook (one-time):** `CLAUDE_CONFIG_DIR=<dir> claude` → `/login`, then install
+the rawgentic plugin and settings in that dir; the cron launcher / executor pins `CLAUDE_CONFIG_DIR`
+per invocation. **ToS note (owner-acknowledged):** per-account usage limits are by design — rotating
+accounts to *evade* limits can violate Anthropic's consumer terms; legitimately-owned separate seats
+are a different matter and the owner's call. The sanctioned no-window alternative is
+`ANTHROPIC_API_KEY` (API billing, real dollars).
+
 ## Tests
 
 Run from the rawgentic repo root: `pytest tests/phase_executor/`. The pure parsers are
