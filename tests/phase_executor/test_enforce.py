@@ -183,3 +183,146 @@ def test_verify_post_kukakuka_fixture_verified():
     d = json.loads((FIXTURES / "kukakuka-observation.json").read_text())
     pc = enforce.verify_post(d)  # glm-5.2 == glm-5.2 (ccr transport, provider-attested)
     assert pc.ok and pc.verified
+
+
+# ---- RoutingAuditLog + audited_digests ----
+
+def _receipt(nonce="n1", verdict="pass", **over):
+    base = dict(nonce=nonce, seat="review", correlation_id="c1", attempt_id="0",
+                target_identity=("claude-opus-4-8", "anthropic", "native", "subscription_oauth", "claude", None),
+                config_digest="sha256:d", gate_digest=None, author_provider="openai",
+                verdict=verdict, violations=())
+    base.update(over)
+    return PreReceipt(**base)
+
+
+def _obs_with_lane(**over):
+    d = _obs_dict(**over)
+    d["dispatched_lane"] = {"provider": "anthropic", "transport": "native",
+                            "auth_mode": "subscription_oauth", "pool": "claude", "credential_ref": None}
+    return d
+
+
+def test_audit_log_constructor_containment(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")  # ok
+    assert tmp_path.resolve() in log.path.resolve().parents
+    # an all-dot / empty run_id is rejected outright by sanitize_component
+    with pytest.raises(ValueError):
+        enforce.RoutingAuditLog(tmp_path, "..")
+    # a name carrying traversal chars is NEUTRALIZED to a safe single component, never an escape
+    log2 = enforce.RoutingAuditLog(tmp_path, "../escape")
+    assert tmp_path.resolve() in log2.path.resolve().parents
+
+
+def test_audit_log_append_and_records_roundtrip(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    r = _receipt()
+    log.append_receipt(r)
+    log.append_observation(_obs_with_lane(), receipt=r)
+    log.append_epoch("sha256:d", "sha256:e")
+    recs = log.records()
+    kinds = [x["kind"] for x in recs]
+    assert kinds == ["receipt", "observation", "epoch"]
+    assert recs[1]["receipt_nonce"] == "n1"
+    assert recs[1]["observation"]["dispatched_lane"]["pool"] == "claude"
+    assert recs[2]["seq"] == 1
+
+
+def test_append_observation_fail_closed_missing_dispatched_lane(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    with pytest.raises(ValueError):
+        log.append_observation(_obs_dict(), receipt=_receipt())  # no dispatched_lane -> refuse
+
+
+def test_append_observation_rejects_schema_invalid(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    import jsonschema
+    bad = _obs_with_lane(parse_status="ok", actual_model=None)  # ok requires actual_model
+    with pytest.raises(jsonschema.ValidationError):
+        log.append_observation(bad, receipt=_receipt())
+
+
+def test_records_fail_closed_unknown_kind(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text('{"kind":"bogus","x":1}\n')
+    with pytest.raises(ValueError):
+        log.records()
+
+
+def test_records_fail_closed_bad_verdict(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text('{"kind":"receipt","nonce":"n","seat":"review","correlation_id":"c","attempt_id":"0","target_identity":[],"config_digest":"d","verdict":"maybe"}\n')
+    with pytest.raises(ValueError):
+        log.records()
+
+
+def test_records_fail_closed_malformed_json(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text('{not json}\n')
+    with pytest.raises(ValueError):
+        log.records()
+
+
+def test_audited_digests_valid_chain(tmp_path):
+    recs = [{"kind": "epoch", "seq": 1, "from": "sha256:a", "to": "sha256:b"},
+            {"kind": "epoch", "seq": 2, "from": "sha256:b", "to": "sha256:c"}]
+    assert enforce.audited_digests(recs, "sha256:a") == frozenset({"sha256:a", "sha256:b", "sha256:c"})
+
+
+def test_audited_digests_rejects_gap_repeat_reorder_fork():
+    # gap: seq jumps 1 -> 3
+    with pytest.raises(ValueError):
+        enforce.audited_digests([{"kind": "epoch", "seq": 1, "from": "a", "to": "b"},
+                                 {"kind": "epoch", "seq": 3, "from": "b", "to": "c"}], "a")
+    # broken chain (fork/reorder): second from != prev to
+    with pytest.raises(ValueError):
+        enforce.audited_digests([{"kind": "epoch", "seq": 1, "from": "a", "to": "b"},
+                                 {"kind": "epoch", "seq": 2, "from": "X", "to": "c"}], "a")
+    # first from != initial
+    with pytest.raises(ValueError):
+        enforce.audited_digests([{"kind": "epoch", "seq": 1, "from": "b", "to": "c"}], "a")
+
+
+def test_audit_log_concurrent_append_integration(tmp_path):
+    import threading
+    log = enforce.RoutingAuditLog(tmp_path, "run-cc")
+    def worker(i):
+        log.append_receipt(_receipt(nonce=f"n{i}"))
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    recs = log.records()
+    assert len([x for x in recs if x["kind"] == "receipt"]) == 20  # no interleaved/lost lines
+
+
+def test_reload_on_epoch_exception_propagates(tmp_path):
+    """Contract (Med#7 negative-path): RoutingConfig.reload must NOT swallow an on_epoch failure,
+    so a lost audit epoch surfaces rather than silently dropping."""
+    import json as _json
+    table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
+             "seats": {"review": {"primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}},
+             "forbidden_combinations": []}
+    p = tmp_path / "rt.json"
+    p.write_text(_json.dumps(table))
+
+    def boom(old, new):
+        raise OSError("append_epoch failed")
+
+    cfg = routing.RoutingConfig(p, on_epoch=boom)
+    table["pools"]["claude"]["concurrency"] = 3  # change digest
+    p.write_text(_json.dumps(table))
+    with pytest.raises(OSError):
+        cfg.reload()
+
+
+def test_candidate_as_target_single_sources_lane():
+    """#425 Step-8a fix: Candidate.as_target()'s lane == the stamped lane(), so target_identity
+    works on a competitive candidate and matches its stamped dispatched_lane (no 3-vs-6 asymmetry)."""
+    from phase_executor.engine import Candidate
+    c = Candidate(seat="build", model="claude-sonnet-5", prompt="p", provider="anthropic",
+                  pool="claude", credential_ref="ACCT_X")
+    assert c.as_target()["lane"] == c.lane()
+    assert target_identity(c.as_target()) == \
+        ("claude-sonnet-5", "anthropic", "native", "subscription_oauth", "claude", "ACCT_X")
