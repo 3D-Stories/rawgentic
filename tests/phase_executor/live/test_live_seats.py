@@ -92,3 +92,26 @@ def test_ac4_parallel_bakeoff(tmp_path):
     assert ok_count >= 2, [o.to_dict() for o in all_obs]  # at least the two premium lanes answered
     assert wall_ms <= 1.3 * slowest_ms, f"not parallel: wall={wall_ms}ms slowest={slowest_ms}ms"
     print(f"\nAC4 bake-off: wall={wall_ms}ms slowest_candidate={slowest_ms}ms ratio={wall_ms/slowest_ms:.2f} ok={ok_count}/3")
+
+
+# --- #426: one REAL review-seat dispatch under the shipped config (fable primary) ---
+import json as _json
+import pathlib as _pl
+from phase_executor.contract import models_match
+from phase_executor.engine import run_seat
+from phase_executor.routing import RoutingSnapshot
+
+_SHIPPED = _pl.Path(__file__).resolve().parents[3] / "phase_executor" / "src" / "phase_executor" / "routing" / "rawgentic.routing-table.json"
+
+
+@pytest.mark.skipif(not _HAVE_CLAUDE, reason="needs the claude CLI")
+def test_live_review_seat_dispatch_on_fable_426(tmp_path):
+    """#426 AC: a REAL review-seat dispatch under the exact shipped config records the resolved
+    model and a successful fable response; requested == actual."""
+    snap = RoutingSnapshot.from_table(_json.loads(_SHIPPED.read_text()))
+    qc = QuotaCoordinator(tmp_path / "q", snap.pool_concurrency())
+    obs = run_seat("review", PROMPT, snapshot=snap, quota=qc, capture_root=tmp_path,
+                   author_provider="openai", timeout=120.0)
+    assert obs.requested_model == "claude-fable-5", "review primary is fable"
+    assert obs.parse_status == "ok", f"expected ok, got {obs.parse_status}"
+    assert models_match(obs.requested_model, obs.actual_model), f"requested {obs.requested_model} != actual {obs.actual_model}"
