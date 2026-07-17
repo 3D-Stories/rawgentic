@@ -1,26 +1,45 @@
 {
   "schema_version": "1",
+  "provenance": {
+    "source": "bench #14",
+    "plan": "docs/planning/2026-07-16-per-phase-model-routing.md §1",
+    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design=COMPETITIVE is wired in E5/#428, not a static seat here."
+  },
   "pools": {
     "claude": {"concurrency": 2},
     "codex": {"concurrency": 4},
     "zhipu": {"concurrency": 2}
   },
   "seats": {
-    "review": {
-      "floor": 80,
-      "role": "review",
+    "intake": {
       "primary": {
-        "model": "claude-fable-5",
+        "model": "claude-opus-4-8",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
       },
       "chain": [
         {
-          "model": "gpt-5.6-sol",
-          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+          "model": "claude-fable-5",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
         },
         {
           "model": "claude-sonnet-5",
           "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        }
+      ]
+    },
+    "plan": {
+      "primary": {
+        "model": "claude-opus-4-8",
+        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+      },
+      "chain": [
+        {
+          "model": "claude-fable-5",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
         }
       ]
     },
@@ -39,6 +58,40 @@
         {
           "model": "gpt-5.6-terra",
           "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+        }
+      ]
+    },
+    "review": {
+      "floor": 80,
+      "role": "review",
+      "primary": {
+        "model": "claude-fable-5",
+        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+      },
+      "chain": [
+        {
+          "model": "gpt-5.6-sol",
+          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+        },
+        {
+          "model": "claude-sonnet-5",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        }
+      ]
+    },
+    "ship": {
+      "primary": {
+        "model": "claude-sonnet-5",
+        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+      },
+      "chain": [
+        {
+          "model": "claude-opus-4-8",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        },
+        {
+          "model": "claude-fable-5",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
         }
       ]
     }

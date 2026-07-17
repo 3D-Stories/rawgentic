@@ -135,3 +135,51 @@ def test_shipped_table_digest_stable_and_pools():
     snap = RoutingSnapshot.from_table(load_routing_table(SHIPPED))
     assert snap.config_digest.startswith("sha256:")
     assert snap.pool_concurrency()["claude"] == 2
+
+
+# --- #426: full seat table (intake/plan/build/review/ship) + fallback chains + provenance ---
+
+_EXPECTED_SEATS_426 = {
+    "intake": ("claude-opus-4-8", ["claude-fable-5", "claude-sonnet-5"]),
+    "plan": ("claude-opus-4-8", ["claude-fable-5", "gpt-5.6-terra"]),
+    "build": ("claude-sonnet-5", ["claude-opus-4-8", "gpt-5.6-terra"]),
+    "review": ("claude-fable-5", ["gpt-5.6-sol", "claude-sonnet-5"]),
+    "ship": ("claude-sonnet-5", ["claude-opus-4-8", "claude-fable-5"]),
+}
+
+
+def test_shipped_table_full_seat_set_426():
+    table = load_routing_table(SHIPPED)
+    assert set(table["seats"]) == set(_EXPECTED_SEATS_426)
+    for seat, (primary, chain) in _EXPECTED_SEATS_426.items():
+        s = table["seats"][seat]
+        assert s["primary"]["model"] == primary, seat
+        assert [c["model"] for c in s["chain"]] == chain, seat
+
+
+def test_shipped_table_every_seat_has_fallback_chain_426():
+    table = load_routing_table(SHIPPED)
+    for seat, s in table["seats"].items():
+        assert len(s["chain"]) >= 1, f"seat {seat} has no fallback chain"
+
+
+def test_shipped_table_enforcement_roles_426():
+    table = load_routing_table(SHIPPED)
+    assert table["seats"]["review"].get("role") == "review"
+    assert table["seats"]["build"].get("role") == "build"
+    for seat in ("intake", "plan", "ship"):
+        assert "role" not in table["seats"][seat]  # non-review/build seats carry no enforcement role
+
+
+def test_shipped_table_never_haiku_426():
+    table = load_routing_table(SHIPPED)
+    models = [table["seats"][s]["primary"]["model"] for s in table["seats"]]
+    models += [c["model"] for s in table["seats"].values() for c in s.get("chain", [])]
+    assert not any("haiku" in m.lower() for m in models), "never routes a seat to Haiku"
+    assert any(r.get("model_pattern") == "haiku" for r in table["forbidden_combinations"])
+
+
+def test_shipped_table_provenance_bench14_426():
+    table = load_routing_table(SHIPPED)
+    assert "provenance" in table, "seat table must carry a provenance stamp"
+    assert "14" in json.dumps(table["provenance"]), "provenance names bench #14"
