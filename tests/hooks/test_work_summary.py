@@ -2126,3 +2126,60 @@ class TestFleetCLI:
         r = self._run(tmp_path, "--workspace", str(ws))
         assert r.returncode == 0, r.stderr
         assert json.loads(r.stdout)["aggregate"]["n"] == 2
+
+
+# --- #420 routing telemetry: OPTIONAL per-dispatch fields on dispatches[] ---
+class TestDispatchRoutingTelemetry:
+    def _rec(self, extra):
+        rec = _valid_record()
+        d = {"role": "review", "subagent_type": "rawgentic:rawgentic-reviewer",
+             "model": "opus", "effort": None, "outcome": "ok", "resolution": "primary"}
+        d.update(extra)
+        rec["dispatches"] = [d]
+        return rec
+
+    def test_full_routing_fields_valid(self):
+        from work_summary import validate_record
+        rec = self._rec({
+            "preferred_model": "claude-opus-4-8", "actual_model": "claude-opus-4-8",
+            "fallback_reason": None, "queued_ms": 12, "concurrency": 2,
+            "selector": {"risk_level": "high", "complexity": "complex", "ceiling": "opus"}})
+        assert validate_record(rec) == []
+
+    def test_routing_fields_nullable(self):
+        from work_summary import validate_record
+        rec = self._rec({"preferred_model": None, "actual_model": None, "fallback_reason": None,
+                         "queued_ms": None, "concurrency": None, "selector": None})
+        assert validate_record(rec) == []
+
+    def test_pre_420_entry_without_routing_fields_still_valid(self):
+        from work_summary import validate_record
+        assert validate_record(self._rec({})) == []
+
+    def test_old_record_no_dispatches_still_valid(self):
+        from work_summary import validate_record
+        assert validate_record(_valid_record()) == []
+
+    def test_bad_preferred_model_errors(self):
+        from work_summary import validate_record
+        assert any("preferred_model" in e for e in validate_record(self._rec({"preferred_model": 123})))
+
+    def test_bad_fallback_reason_errors(self):
+        from work_summary import validate_record
+        assert any("fallback_reason" in e for e in validate_record(self._rec({"fallback_reason": 5})))
+
+    def test_queued_ms_bool_rejected(self):
+        from work_summary import validate_record
+        assert any("queued_ms" in e for e in validate_record(self._rec({"queued_ms": True})))
+
+    def test_concurrency_non_int_errors(self):
+        from work_summary import validate_record
+        assert any("concurrency" in e for e in validate_record(self._rec({"concurrency": "2"})))
+
+    def test_selector_non_dict_errors(self):
+        from work_summary import validate_record
+        assert any("selector" in e for e in validate_record(self._rec({"selector": "high"})))
+
+    def test_selector_bad_subfield_errors(self):
+        from work_summary import validate_record
+        assert any("selector.risk_level" in e for e in validate_record(self._rec({"selector": {"risk_level": 5}})))

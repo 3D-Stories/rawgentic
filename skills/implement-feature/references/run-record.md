@@ -174,6 +174,17 @@ the §16 assembly instruction above (grep `^DISPATCH issue=<n> `, map to entries
 malformed lines, never dedup); zero well-formed lines for this issue means the key is **omitted
 entirely**, never an empty array.
 
+**Routing telemetry on `dispatches[]` entries (OPTIONAL, #420):** each dispatch entry MAY carry
+additional per-dispatch routing-telemetry fields, populated once #417 wires the executor into the WF
+prose (the executor's Observation supplies them): `preferred_model` (str|null — the routed/requested
+model), `actual_model` (str|null — the provider-reported id), `fallback_reason` (str|null),
+`queued_ms` (int|null — quota queue wait), `concurrency` (int|null — observed concurrent-permit
+count, for ≤3-ceiling visibility), and `selector` (object|null — `{risk_level, complexity, ceiling}`,
+each str|null — the routing selector inputs). Same **validated-optional** rule as the rest of the
+schema: absent is fine (a pre-#420 6-key entry stays valid), but a PRESENT value is type-checked
+(`validate_record`, fail-closed). Prompt contents are excluded. Bools are rejected where an int is
+expected (`queued_ms`/`concurrency`), consistent with the rest of the schema.
+
 **`reviewer_kind` (OPTIONAL, #155):** a per-gate entry, a **controlled vocabulary** per #116's
 canonicalization contract: `inline` / `reflexion` / `builtin_code_review` / `codex` /
 `hand_rolled_multi`. When present it must be a member of that set — free text is rejected
