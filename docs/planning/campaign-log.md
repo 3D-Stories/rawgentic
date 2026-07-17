@@ -46,6 +46,24 @@ build seat stays fail-closed until #429. Supersedes #418.
   security scan PASS (iac n/a). A **live** ship-seat `claude --print` spike (RUN_LIVE) verified the
   real `actual_model==sonnet` end-to-end. No workflow-spine change → no diagram REV.
 
+### #428 — competitive design rounds + build bake-off + glm judge (E5) · DEFERRED
+
+`ZHIPUAI_API_KEY` absent in the autonomous-run environment → the live glm-5.2 competitive judging
+(its acceptance) cannot be verified. Deferred with a blocker comment (no code written); the auto-run
+continued at #429. Revisit in a session with the key (`pip install "zhipuai>=2.1.5"` + the key).
+
+### #429 — deterministic complexity gate (E6) · v3.46.0
+
+`hooks/complexity_gate.py` — a pure, fail-closed `needs_bakeoff(task, issue, plan_est, cfg) ->
+GateDecision` ("code routes, prose never does"). Bakes off on risk_level==high / complexity==complex
+/ security-surface glob hit (auth/secrets/payments/migrations/CI/crypto) / diff-lines-over /
+file-count-over; fail-closed on missing/invalid metadata (incl. non-serializable values + unparseable
+thresholds — both hardened in the Step-11 review). Returns decision + reason codes + input snapshot +
+sha256 policy digest (executor recomputes at admission). Shipped in its OWN module (not plan_lib) —
+executor-consumed (#428/#430), not a WF2-prose helper, so out of plan_lib's skill-wired surface (the
+`test_skill_helpers` reverse drift-guard caught the initial plan_lib placement). Small-standard lane;
+suite 3208+7 → 3246+7 (+38); no spine change → no diagram REV. (child 5/10)
+
 ## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
 
 **Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped

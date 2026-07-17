@@ -1,0 +1,183 @@
+"""Deterministic complexity gate (#429, E6, epic #422; plan doc §3.2).
+
+"Code routes, prose never does" (owner directive). A pure, fail-closed decision helper the executor
+consults (wired in #428 competitive rounds / #430 driver-bench) to decide whether a phase runs a
+competitive bake-off. Lives BESIDE `plan_lib` in its own module (single responsibility, like
+`model_routing_lib` / `executor_routing_lib`); it is executor-consumed, not a WF2-prose helper, so it
+is deliberately NOT part of plan_lib's skill-wired public surface.
+
+`needs_bakeoff(task, issue, plan_est, cfg) -> GateDecision` — pure, no I/O; accepts dicts or objects.
+Bakes off if ANY: task risk_level == high; issue complexity == complex; the plan's files hit a
+security surface; estimated diff lines > threshold; estimated file_count > threshold. **Fail-closed:**
+missing/invalid mandatory metadata forces a bake-off (a gate that cannot evaluate its inputs bakes off
+rather than silently passing). Returns the decision + reason codes + the exact input snapshot + a
+policy digest so the executor can recompute it at admission and refuse a gate edited between plan and
+run.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from typing import Final
+
+# --- security-surface globs ---------------------------------------------------------------------
+# A NARROWER, repo-owned override list: a change touching any of these ALWAYS bakes off, because
+# plan-time size estimates can undershoot on a small-but-sensitive diff (plan §3.2 named limit —
+# this glob list is the backstop and is a maintained artifact). Distinct from (and narrower than)
+# plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS, which is the broader Step-5 risk-promotion allowlist.
+SECURITY_SURFACE_PATTERNS: Final[tuple[str, ...]] = (
+    r"auth", r"secret", r"payment", r"migration", r"crypto", r"\.github", r"ci",
+)
+
+# Anchor each pattern to path-segment boundaries (same idiom as plan_lib._anchor — kept local to
+# avoid a cross-module private import): match `src/auth/x.py` / `AUTH/h.py` / `ci.yml`, NOT
+# `author.py` / `special.py`. Boundary chars: start/end, slash, underscore, dot, hyphen; a trailing
+# `s` is allowed for natural plurals. A pattern already starting with `\.` isn't left-double-anchored.
+_BOUNDARY = r"(?:^|[/_.\-])"
+_BOUNDARY_END = r"s?(?:$|[/_.\-])"
+
+
+def _anchor(pattern: str) -> str:
+    if pattern.startswith(r"\."):
+        return pattern + _BOUNDARY_END
+    return _BOUNDARY + pattern + _BOUNDARY_END
+
+
+_SECURITY_SURFACE_RE = re.compile(
+    "(" + "|".join(_anchor(p) for p in SECURITY_SURFACE_PATTERNS) + ")",
+    re.IGNORECASE,
+)
+
+# --- config-default thresholds (a project's `cfg` may override) ---------------------------------
+DEFAULT_BAKEOFF_DIFF_LINES: Final[int] = 400
+DEFAULT_BAKEOFF_FILE_COUNT: Final[int] = 10
+
+# issue.complexity vocab matches the run-record store (work_summary): trivial|standard|complex.
+_VALID_ISSUE_COMPLEXITIES: Final[frozenset[str]] = frozenset({"trivial", "standard", "complex"})
+_VALID_RISK_LEVELS: Final[frozenset[str]] = frozenset({"high", "standard"})
+
+_GATE_MISSING: Final = object()  # sentinel distinguishing an ABSENT field from a present null
+
+
+def hits_security_surface(files) -> bool:
+    """True if any path in ``files`` touches a security surface. A non-list input is False here —
+    the CALLER (`needs_bakeoff`) fail-closes on a missing/invalid ``files`` field; this helper only
+    answers the match question."""
+    if not isinstance(files, (list, tuple)):
+        return False
+    return any(isinstance(p, str) and _SECURITY_SURFACE_RE.search(p) for p in files)
+
+
+@dataclass(frozen=True)
+class GateDecision:
+    """A deterministic complexity-gate verdict. ``decision`` True ⇒ bake off. ``reason_codes`` names
+    every trigger that fired (incl. ``fail_closed:<field>`` for missing/invalid metadata).
+    ``input_snapshot`` is the exact inputs the decision was computed from; ``policy_digest`` is a
+    sha256 over that snapshot so the executor can recompute it at admission and refuse a gate edited
+    between plan and run."""
+
+    decision: bool
+    reason_codes: tuple
+    input_snapshot: dict
+    policy_digest: str
+
+
+def _field(obj, *names, default=_GATE_MISSING):
+    """Read a field from a dict OR an object (tolerates snake/camel aliases)."""
+    for name in names:
+        if isinstance(obj, dict):
+            if name in obj:
+                return obj[name]
+        elif hasattr(obj, name):
+            return getattr(obj, name)
+    return default
+
+
+def _json_safe(value):
+    """A JSON-serializable scalar: pass None/str/int/float/bool through, stringify anything else
+    (Enum/bytes/set/custom object). Keeps the snapshot — and the digest computed from it — total, so
+    a non-primitive raw metadata value fail-CLOSES via the value-validity check instead of crashing
+    _policy_digest's json.dumps (Step-11 F1)."""
+    return value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+
+
+def _policy_digest(snapshot: dict) -> str:
+    # default=str is belt-and-suspenders: _json_safe already scrubs the stored values, but a total
+    # serializer guarantees the digest can never raise regardless of what the snapshot holds.
+    payload = json.dumps(snapshot, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=True, default=str).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _int_or_none(value):
+    """An int that is NOT a bool (bool is an int subclass — a True 'line count' is invalid metadata)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:
+    """Deterministic bake-off gate (plan §3.2). See the module docstring. Pure; fail-closed."""
+    cfg = cfg or {}
+    reasons: list[str] = []
+    snap: dict = {}
+
+    def _threshold(key, alias, default):
+        # Absent -> default (a legitimate "not configured"). PRESENT-but-unparseable -> fail CLOSED
+        # (reason code + default for the comparison): a bad threshold must not silently LOOSEN the
+        # gate to the default when the operator meant something stricter (Step-11 F2).
+        raw = _field(cfg, key, alias)
+        if raw is _GATE_MISSING:
+            return default
+        val = _int_or_none(raw)
+        if val is None:
+            reasons.append(f"fail_closed:{key}_invalid")
+            return default
+        return val
+
+    diff_lines_thr = _threshold("BAKEOFF_DIFF_LINES", "bakeoff_diff_lines", DEFAULT_BAKEOFF_DIFF_LINES)
+    file_count_thr = _threshold("BAKEOFF_FILE_COUNT", "bakeoff_file_count", DEFAULT_BAKEOFF_FILE_COUNT)
+
+    rl = _field(task, "risk_level", "riskLevel")
+    snap["risk_level"] = None if rl is _GATE_MISSING else _json_safe(rl)
+    if rl is _GATE_MISSING or rl not in _VALID_RISK_LEVELS:
+        reasons.append(f"fail_closed:risk_level={'missing' if rl is _GATE_MISSING else _json_safe(rl)}")
+    elif rl == "high":
+        reasons.append("risk_high")
+
+    cx = _field(issue, "complexity")
+    snap["complexity"] = None if cx is _GATE_MISSING else _json_safe(cx)
+    if cx is _GATE_MISSING or cx not in _VALID_ISSUE_COMPLEXITIES:
+        reasons.append(f"fail_closed:complexity={'missing' if cx is _GATE_MISSING else _json_safe(cx)}")
+    elif cx == "complex":
+        reasons.append("complexity_complex")
+
+    files = _field(plan_est, "files")
+    if not isinstance(files, (list, tuple)):
+        reasons.append("fail_closed:files=missing")
+        snap["security_surface_hit"] = None
+    else:
+        hit = hits_security_surface(files)
+        snap["security_surface_hit"] = hit
+        if hit:
+            reasons.append("security_surface")
+
+    lines = _int_or_none(_field(plan_est, "lines"))
+    snap["lines"] = lines
+    if lines is None:
+        reasons.append("fail_closed:lines=invalid")
+    elif lines > diff_lines_thr:
+        reasons.append("diff_lines_over")
+
+    fc = _int_or_none(_field(plan_est, "file_count", "fileCount"))
+    snap["file_count"] = fc
+    if fc is None:
+        reasons.append("fail_closed:file_count=invalid")
+    elif fc > file_count_thr:
+        reasons.append("file_count_over")
+
+    snap["thresholds"] = {"BAKEOFF_DIFF_LINES": diff_lines_thr, "BAKEOFF_FILE_COUNT": file_count_thr}
+    return GateDecision(
+        decision=bool(reasons), reason_codes=tuple(reasons),
+        input_snapshot=snap, policy_digest=_policy_digest(snap),
+    )
