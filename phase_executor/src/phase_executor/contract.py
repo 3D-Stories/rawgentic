@@ -37,6 +37,13 @@ PARSE_STATUSES = frozenset(
     {OK, NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, PARSE_ERROR, NO_RESPONSE, IDENTITY_FAILURE, USAGE_UNAVAILABLE, HARNESS_ERROR}
 )
 
+# Statuses where the transport failed to deliver a usable envelope: a chain fallback is warranted
+# and the run-end audit treats them as legitimate (non-breach) attempts. Every OTHER non-ok status
+# (identity_failure, parse_error, usage_unavailable, harness_error) means an envelope WAS produced
+# but is not a clean success — routing enforcement treats an absent/mismatched identity there as a
+# breach (verified, not trusted). Single-sourced here so engine and enforce agree.
+AVAILABILITY_FAILURES = frozenset({NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, NO_RESPONSE})
+
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 
 _PROVIDER_PREFIXES = (
@@ -112,6 +119,7 @@ class Observation:
     context_hashes: list = field(default_factory=list)
     correlation_id: Optional[str] = None
     judge_degraded: Optional[bool] = None
+    dispatched_lane: Optional[dict] = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -140,6 +148,11 @@ class Observation:
         # judge_degraded is a bool-only optional (no null in schema): emit only when set.
         if self.judge_degraded is not None:
             out["judge_degraded"] = self.judge_degraded
+        # dispatched_lane (#425 B): the lane the executor actually dispatched on, stamped by the
+        # engine at dispatch — enables independent receipt<->observation binding at run-end audit.
+        # Optional/additive (kukakuka v1 parity): emitted only when set.
+        if self.dispatched_lane is not None:
+            out["dispatched_lane"] = dict(self.dispatched_lane)
         return out
 
 

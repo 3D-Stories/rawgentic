@@ -78,7 +78,8 @@
           "items": {"$ref": "#/$defs/target"},
           "description": "Fallback targets in order. Engine skips chain-ineligible entries (chain-aware skip), never blind next-entry."
         },
-        "floor": {"type": ["number", "null"], "description": "Optional quality floor for this seat."}
+        "floor": {"type": ["number", "null"], "description": "Optional quality floor for this seat."},
+        "role": {"type": "string", "description": "Optional enforcement role, e.g. review | build. Routing enforcement (enforce.check_pre) keys its per-role requirements (review => author_provider required; build => gate required) on THIS field, not the seat's name — so a renamed seat still enforces and the vocabulary is portable. A seat with no role carries no review/build requirement."}
       }
     }
   }

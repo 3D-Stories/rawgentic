@@ -123,3 +123,33 @@ def test_routing_table_lane_missing_pool_rejected():
 def test_routing_table_requires_pools_and_seats():
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"schema_version": "1", "seats": {}}, RT_SCHEMA)
+
+
+def test_observation_dispatched_lane_optional_and_valid():
+    """#425 B: dispatched_lane is optional (absent validates — kukakuka v1 parity) and,
+    when present, validates as a lane object."""
+    jsonschema.validate(_obs_ok(), OBS_SCHEMA)  # absent
+    o = _obs_ok()
+    o["dispatched_lane"] = {"provider": "anthropic", "transport": "native",
+                            "auth_mode": "subscription_oauth", "pool": "claude", "credential_ref": None}
+    jsonschema.validate(o, OBS_SCHEMA)  # present
+
+
+def test_observation_dispatched_lane_negative_and_participation_mode():
+    """#425 B (8a review): dispatched_lane must reject a malformed lane (missing required field,
+    extra property) AND accept participation_mode — true parity with routing-table $defs/lane, so a
+    lane carrying participation_mode can be stamped verbatim without projection."""
+    base = _obs_ok()
+    # missing required 'pool' -> rejected
+    bad = dict(base); bad["dispatched_lane"] = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(bad, OBS_SCHEMA)
+    # unknown extra property -> rejected (additionalProperties:false)
+    bad2 = dict(base); bad2["dispatched_lane"] = {"provider": "anthropic", "transport": "native",
+        "auth_mode": "subscription_oauth", "pool": "claude", "credential_ref": None, "bogus": "x"}
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(bad2, OBS_SCHEMA)
+    # participation_mode accepted (parity with a routing lane that sets it -> verbatim stamp works)
+    ok = dict(base); ok["dispatched_lane"] = {"provider": "openai", "transport": "ccr",
+        "auth_mode": "api_key", "pool": "codex", "credential_ref": None, "participation_mode": "council"}
+    jsonschema.validate(ok, OBS_SCHEMA)

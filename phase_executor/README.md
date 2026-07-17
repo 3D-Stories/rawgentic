@@ -27,6 +27,31 @@ bake-offs E5, complexity gate E6, driver-bench E7, multi-account lanes E8) consu
   `forbidden_combinations` rows — the engine is policy-free.
 - **Quota** (`quota.py`): an inter-process, pool-keyed permit coordinator (the Claude ceiling holds
   across separate OS processes, not just threads).
+- **Enforcement** (`enforce.py`, E2/#425): routing *verified, not trusted*. Executor-internal
+  functions (NOT Claude Code harness hooks — the package imports no `hooks/`):
+  - `check_pre(seat, target, snapshot, …) -> PreReceipt` — pre-dispatch: full-target chain
+    membership (canon model + full lane, so an allowed model through an undeclared
+    provider/pool/credential is `off_chain`), `forbidden_combinations` (never-Haiku,
+    cross_model_author), review-seat `author_provider` fail-closed, and a build-gate requirement
+    DERIVED from the seat (fail-closed `gate_validation_unavailable` until #429 supplies the
+    authenticated validator). Mints a nonce-bearing receipt.
+  - `verify_post(obs) -> PostCheck` — post-call: `requested_model` must canonicalize-match the
+    provider-reported `actual_model`; a mismatch/identity-missing is a NON-retryable breach.
+  - `RoutingAuditLog(capture_root, run_id)` — per-run append-only JSONL (receipt / observation /
+    epoch lines), thread-safe append+fsync, contained path, fail-closed `records()`.
+  - `reconcile_run(expected, records, *, initial_digest) -> Reconcile` — run-end audit: binds every
+    expected seat call to a PASSED receipt + a VERIFIED observation, comparing the receipt identity
+    against the observation's OWN `dispatched_lane` (stamped by the engine at dispatch, so the bind
+    is independent of the receipt). Refuses ship on any anomaly (missing / failed-precheck /
+    binding-mismatch / duplicate / unverified / unaudited-digest / orphan).
+
+  **Honest limits (named):** (1) if a CLI silently substitutes a model WITHOUT reflecting it in its
+  own output, `verify_post` cannot see it — pin CLI versions, fixture-test the parsers. (2)
+  `dispatched_lane` is executor-recorded, not provider-attested (providers don't report the
+  credential/pool used), so the bind proves executor-record consistency (pre-checked target ==
+  dispatched target), not physical provider attestation; `actual_model` is the only provider-attested
+  identity. (3) The wiring layer (E3/E4) must make the executor a mandatory choke point — work run
+  entirely outside it leaves no receipt/observation and is invisible to reconcile alone.
 
 ## Install / use
 

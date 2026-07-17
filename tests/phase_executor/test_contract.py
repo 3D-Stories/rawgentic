@@ -84,3 +84,19 @@ def test_routing_table_validator_accepts_shipped_default():
     import pathlib
     p = pathlib.Path(contract.__file__).resolve().parent / "routing" / "rawgentic.routing-table.json"
     contract.validate_routing_table(json.loads(p.read_text()))
+
+
+def test_dispatched_lane_omitted_when_absent():
+    """#425 B: backward-compat — absent when unset (kukakuka v1 parity, judge_degraded pattern)."""
+    d = _obs_ok().to_dict()
+    assert "dispatched_lane" not in d
+    contract.validate_observation(d)
+
+
+def test_dispatched_lane_emitted_and_validates_when_set():
+    """#425 B: the executor stamps the actual dispatched lane; emitted + schema-valid."""
+    lane = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
+            "pool": "claude", "credential_ref": None}
+    d = _obs_ok(dispatched_lane=lane).to_dict()
+    assert d["dispatched_lane"] == lane
+    contract.validate_observation(d)

@@ -9,6 +9,8 @@ Public API:
 - Quota:     ``QuotaCoordinator``, ``QuotaTimeout``
 - Engine:    ``run_seat``, ``run_competitive``, ``Candidate``, ``InfeasibleBakeoff``
 - Adapters:  ``AdapterRequest``, ``parse_claude``, ``parse_codex``, ``parse_zhipuai``, ``ADAPTERS``
+- Enforcement: ``check_pre``, ``verify_post``, ``RoutingAuditLog``, ``reconcile_run``, ``PreReceipt``,
+             ``PostCheck``, ``ExpectedCall``, ``Reconcile``, ``target_identity``, ``audited_digests``
 
 The normative artifacts are the committed JSON Schemas (``schemas/observation.schema.json``,
 ``schemas/routing-table.schema.json``); this package is one producer of those documents.
@@ -34,6 +36,18 @@ from .routing import (
     select_target,
     snapshot_from_file,
 )
+from .enforce import (
+    ExpectedCall,
+    PostCheck,
+    PreReceipt,
+    Reconcile,
+    RoutingAuditLog,
+    audited_digests,
+    check_pre,
+    reconcile_run,
+    target_identity,
+    verify_post,
+)
 
 __version__ = "0.1.0"
 
@@ -45,5 +59,7 @@ __all__ = [
     "QuotaCoordinator", "QuotaTimeout",
     "run_seat", "run_competitive", "Candidate", "InfeasibleBakeoff",
     "AdapterRequest", "parse_claude", "parse_codex", "parse_zhipuai", "ADAPTERS",
+    "check_pre", "verify_post", "RoutingAuditLog", "reconcile_run", "PreReceipt", "PostCheck",
+    "ExpectedCall", "Reconcile", "target_identity", "audited_digests",
     "__version__",
 ]

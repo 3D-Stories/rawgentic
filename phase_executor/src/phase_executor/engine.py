@@ -17,7 +17,7 @@ from __future__ import annotations
 import concurrent.futures as _cf
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import contract, routing
@@ -28,11 +28,8 @@ from .quota import QuotaCoordinator
 # provider (lane) -> adapter engine family
 PROVIDER_ENGINE = {"anthropic": "claude", "openai": "codex", "zhipuai": "zhipuai"}
 # Statuses that warrant a chain fallback: the transport failed to deliver a usable response.
-# NO_RESPONSE (empty transport / empty output) is included; a genuine parse_error (got bytes,
-# couldn't parse) and identity/usage failures are NOT — the model responded.
-AVAILABILITY_FAILURES = frozenset(
-    {contract.LAUNCH_ERROR, contract.NONZERO_EXIT, contract.TIMEOUT, contract.NO_RESPONSE}
-)
+# Single-sourced in contract so engine (fallback) and enforce (breach classification) agree.
+AVAILABILITY_FAILURES = contract.AVAILABILITY_FAILURES
 
 
 class InfeasibleBakeoff(RuntimeError):
@@ -108,6 +105,9 @@ def run_seat(
             queued_ms = int((time.monotonic() - t0) * 1000)
             obs = dispatch(engine, req, run_id=run_id, attempt_id=attempt_id, capture_root=capture_root,
                            digest=snapshot.config_digest, queued_ms=queued_ms, fallback_reason=fallback_reason)
+        # #425 B: stamp the lane we ACTUALLY dispatched on (this target, not the request) so the
+        # run-end audit can bind receipt<->observation independently of the receipt object.
+        obs = replace(obs, dispatched_lane=dict(lane))
         if obs.parse_status not in AVAILABILITY_FAILURES:
             return obs  # success or a non-availability failure (model responded) -> do not fall back
         last = obs
@@ -127,6 +127,7 @@ class Candidate:
     provider: str
     pool: str
     transport: str = "native"
+    auth_mode: str = "subscription_oauth"
     credential_ref: Optional[str] = None
     context: Sequence[str] = ()
 
@@ -134,12 +135,18 @@ class Candidate:
     def engine(self) -> str:
         return PROVIDER_ENGINE.get(self.provider, self.provider)
 
+    def lane(self) -> dict:
+        """The full lane this candidate dispatches on (#425 B: stamped as dispatched_lane)."""
+        return {"provider": self.provider, "transport": self.transport, "auth_mode": self.auth_mode,
+                "pool": self.pool, "credential_ref": self.credential_ref}
+
     def as_target(self) -> dict:
-        """A routing target view for forbidden_combinations evaluation."""
-        return {
-            "model": self.model,
-            "lane": {"provider": self.provider, "transport": self.transport, "pool": self.pool},
-        }
+        """A routing target view for forbidden_combinations evaluation AND enforcement identity.
+        Single-sources the lane via ``lane()`` (#425 Step-8a: the forbidden-eval view, the
+        receipt/target_identity source, and the stamped dispatched_lane must be the SAME lane —
+        otherwise a competitive candidate's stamped 6-field lane cannot be reconciled against a
+        3-field as_target identity)."""
+        return {"model": self.model, "lane": self.lane()}
 
 
 def _harness_observation(c: "Candidate", *, run_id: str, digest: str, reason: str) -> contract.Observation:
@@ -180,8 +187,10 @@ def _run_candidate(c: Candidate, *, snapshot, quota, capture_root, run_id, dispa
     t0 = time.monotonic()
     with quota.acquire(c.pool, account=acct, timeout=300.0):
         queued_ms = int((time.monotonic() - t0) * 1000)
-        return dispatch(c.engine, req, run_id=run_id, attempt_id=attempt_id, capture_root=capture_root,
-                        digest=snapshot.config_digest, queued_ms=queued_ms, fallback_reason=None)
+        obs = dispatch(c.engine, req, run_id=run_id, attempt_id=attempt_id, capture_root=capture_root,
+                       digest=snapshot.config_digest, queued_ms=queued_ms, fallback_reason=None)
+    # #425 B: stamp the candidate's actual dispatch lane (parity with run_seat).
+    return replace(obs, dispatched_lane=c.lane())
 
 
 def run_competitive(
