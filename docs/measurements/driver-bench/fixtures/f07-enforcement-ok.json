@@ -1,0 +1,16 @@
+{
+  "id": "f07-enforcement-ok",
+  "dimensions": [
+    "enforcement"
+  ],
+  "primary_seat": "build",
+  "enforcement": {
+    "observation": {
+      "requested_model": "claude-opus-4-8",
+      "actual_model": "claude-opus-4-8",
+      "parse_status": "ok",
+      "payload": "x"
+    },
+    "expected_ok": true
+  }
+}

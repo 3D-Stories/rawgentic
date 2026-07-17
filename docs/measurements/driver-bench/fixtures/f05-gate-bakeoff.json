@@ -1,0 +1,25 @@
+{
+  "id": "f05-gate-bakeoff",
+  "dimensions": [
+    "gate"
+  ],
+  "primary_seat": "build",
+  "gate_inputs": {
+    "task": {
+      "risk_level": "high"
+    },
+    "issue": {
+      "complexity": "standard"
+    },
+    "plan_est": {
+      "files": [
+        "a.py"
+      ],
+      "lines": 1,
+      "file_count": 1
+    }
+  },
+  "expected": {
+    "gate": true
+  }
+}

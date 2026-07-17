@@ -1,0 +1,26 @@
+{
+  "id": "f01-intake-clean",
+  "dimensions": [
+    "seat_selection",
+    "token_burn"
+  ],
+  "primary_seat": "intake",
+  "responses": {
+    "intake": [
+      {
+        "parse_status": "ok",
+        "actual_model": "claude-opus-4-8",
+        "payload": "x",
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cached": 0
+        }
+      }
+    ]
+  },
+  "expected": {
+    "seat_model": "claude-opus-4-8",
+    "token_burn_max": 1000
+  }
+}

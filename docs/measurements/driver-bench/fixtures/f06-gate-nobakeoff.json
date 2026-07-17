@@ -1,0 +1,25 @@
+{
+  "id": "f06-gate-nobakeoff",
+  "dimensions": [
+    "gate"
+  ],
+  "primary_seat": "build",
+  "gate_inputs": {
+    "task": {
+      "risk_level": "standard"
+    },
+    "issue": {
+      "complexity": "standard"
+    },
+    "plan_est": {
+      "files": [
+        "src/app.py"
+      ],
+      "lines": 1,
+      "file_count": 1
+    }
+  },
+  "expected": {
+    "gate": false
+  }
+}

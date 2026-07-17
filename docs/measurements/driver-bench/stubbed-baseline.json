@@ -1,0 +1,615 @@
+{
+  "cells": [
+    {
+      "fixture": "f01-intake-clean",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "seat_selection": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f02-ship-clean",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f03-ship-recovery",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "recovery": 1.0,
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f04-intake-recovery",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "recovery": 1.0
+      }
+    },
+    {
+      "fixture": "f05-gate-bakeoff",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f06-gate-nobakeoff",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f07-enforcement-ok",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f08-enforcement-breach",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f09-winner-draft1",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f10-winner-draft2",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f11-audit-intake",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "audit_completeness": 1.0
+      }
+    },
+    {
+      "fixture": "f12-audit-ship-recovery",
+      "model": "opus",
+      "rep": 0,
+      "scores": {
+        "audit_completeness": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f01-intake-clean",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "seat_selection": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f02-ship-clean",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f03-ship-recovery",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "recovery": 1.0,
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f04-intake-recovery",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "recovery": 1.0
+      }
+    },
+    {
+      "fixture": "f05-gate-bakeoff",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f06-gate-nobakeoff",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f07-enforcement-ok",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f08-enforcement-breach",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f09-winner-draft1",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f10-winner-draft2",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f11-audit-intake",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "audit_completeness": 1.0
+      }
+    },
+    {
+      "fixture": "f12-audit-ship-recovery",
+      "model": "opus",
+      "rep": 1,
+      "scores": {
+        "audit_completeness": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f01-intake-clean",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "seat_selection": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f02-ship-clean",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f03-ship-recovery",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "recovery": 1.0,
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f04-intake-recovery",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "recovery": 1.0
+      }
+    },
+    {
+      "fixture": "f05-gate-bakeoff",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f06-gate-nobakeoff",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f07-enforcement-ok",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f08-enforcement-breach",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f09-winner-draft1",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f10-winner-draft2",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f11-audit-intake",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "audit_completeness": 1.0
+      }
+    },
+    {
+      "fixture": "f12-audit-ship-recovery",
+      "model": "opus",
+      "rep": 2,
+      "scores": {
+        "audit_completeness": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f01-intake-clean",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "seat_selection": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f02-ship-clean",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f03-ship-recovery",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "recovery": 1.0,
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f04-intake-recovery",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "recovery": 1.0
+      }
+    },
+    {
+      "fixture": "f05-gate-bakeoff",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f06-gate-nobakeoff",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f07-enforcement-ok",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f08-enforcement-breach",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f09-winner-draft1",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f10-winner-draft2",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f11-audit-intake",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "audit_completeness": 1.0
+      }
+    },
+    {
+      "fixture": "f12-audit-ship-recovery",
+      "model": "sonnet",
+      "rep": 0,
+      "scores": {
+        "audit_completeness": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f01-intake-clean",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "seat_selection": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f02-ship-clean",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f03-ship-recovery",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "recovery": 1.0,
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f04-intake-recovery",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "recovery": 1.0
+      }
+    },
+    {
+      "fixture": "f05-gate-bakeoff",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f06-gate-nobakeoff",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f07-enforcement-ok",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f08-enforcement-breach",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f09-winner-draft1",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f10-winner-draft2",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f11-audit-intake",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "audit_completeness": 1.0
+      }
+    },
+    {
+      "fixture": "f12-audit-ship-recovery",
+      "model": "sonnet",
+      "rep": 1,
+      "scores": {
+        "audit_completeness": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f01-intake-clean",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "seat_selection": 1.0,
+        "token_burn": 1.0
+      }
+    },
+    {
+      "fixture": "f02-ship-clean",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f03-ship-recovery",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "recovery": 1.0,
+        "seat_selection": 1.0
+      }
+    },
+    {
+      "fixture": "f04-intake-recovery",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "recovery": 1.0
+      }
+    },
+    {
+      "fixture": "f05-gate-bakeoff",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f06-gate-nobakeoff",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "gate": 1.0
+      }
+    },
+    {
+      "fixture": "f07-enforcement-ok",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f08-enforcement-breach",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "enforcement": 1.0
+      }
+    },
+    {
+      "fixture": "f09-winner-draft1",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f10-winner-draft2",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "winner_propagation": 1.0
+      }
+    },
+    {
+      "fixture": "f11-audit-intake",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "audit_completeness": 1.0
+      }
+    },
+    {
+      "fixture": "f12-audit-ship-recovery",
+      "model": "sonnet",
+      "rep": 2,
+      "scores": {
+        "audit_completeness": 1.0,
+        "token_burn": 1.0
+      }
+    }
+  ],
+  "dimension_means": {
+    "audit_completeness": 1.0,
+    "enforcement": 1.0,
+    "gate": 1.0,
+    "recovery": 1.0,
+    "seat_selection": 1.0,
+    "token_burn": 1.0,
+    "winner_propagation": 1.0
+  },
+  "models": [
+    "opus",
+    "sonnet"
+  ],
+  "n_cells": 72,
+  "n_fixtures": 12,
+  "note": "STUBBED BASELINE \u2014 model-independent deterministic code path; the model x rep axes replicate the per-fixture result to prove determinism and establish the matrix shape. The opus-vs-sonnet signal comes from the 3 live cells (RUN_LIVE), not this matrix.",
+  "reps": 3
+}

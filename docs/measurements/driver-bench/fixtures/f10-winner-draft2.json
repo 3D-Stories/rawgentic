@@ -1,0 +1,37 @@
+{
+  "id": "f10-winner-draft2",
+  "dimensions": [
+    "winner_propagation"
+  ],
+  "primary_seat": "build",
+  "bakeoff": {
+    "candidates": [
+      {
+        "model": "gpt-5.6-sol",
+        "parse_status": "ok",
+        "actual_model": "gpt-5.6-sol",
+        "payload": "draft sol",
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cached": 0
+        }
+      },
+      {
+        "model": "claude-opus-4-8",
+        "parse_status": "ok",
+        "actual_model": "claude-opus-4-8",
+        "payload": "draft opus",
+        "usage": {
+          "input": 100,
+          "output": 50,
+          "cached": 0
+        }
+      }
+    ],
+    "winner_draft": 2
+  },
+  "expected": {
+    "winner_propagates": true
+  }
+}
