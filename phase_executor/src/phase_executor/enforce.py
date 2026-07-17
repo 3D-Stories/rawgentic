@@ -267,3 +267,128 @@ def audited_digests(records, initial_digest: str) -> frozenset:
         digests.add(e["to"])
         prev = e["to"]
     return frozenset(digests)
+
+
+@dataclass(frozen=True)
+class ExpectedCall:
+    """The stable identity of an expected seat call (WF2 step/task id; kukakuka turn nonce)."""
+
+    seat: str
+    correlation_id: str
+
+
+@dataclass(frozen=True)
+class Reconcile:
+    """Run-end reconciliation verdict. ``ok`` iff every anomaly list is empty — reconcile refuses
+    ship on ANY. Fail-closed."""
+
+    ok: bool
+    missing_receipt: tuple = ()
+    failed_precheck: tuple = ()
+    missing_obs: tuple = ()
+    binding_mismatch: tuple = ()
+    duplicate_nonce: tuple = ()
+    duplicate: tuple = ()
+    unverified: tuple = ()
+    unaudited_digest: tuple = ()
+    orphan: tuple = ()
+
+
+def reconcile_run(expected, records, *, initial_digest):
+    """Run-end audit: bind every expected seat call to a PASSED receipt + a VERIFIED observation,
+    with the observation's OWN ``dispatched_lane``/digest matching the receipt (independent binding).
+    Refuses ship (``ok=False``) on any anomaly. ``known_digests`` is derived INTERNALLY via
+    ``audited_digests`` (not a caller input) from a trusted ``initial_digest``. The ``expected``
+    sequence must have unique ``(seat, correlation_id)`` tuples (else ValueError)."""
+    exp_keys = [(e.seat, e.correlation_id) for e in expected]
+    if len(exp_keys) != len(set(exp_keys)):
+        raise ValueError("reconcile_run: expected has duplicate (seat, correlation_id) tuples")
+    exp_set = set(exp_keys)
+    known = audited_digests(records, initial_digest)  # raises on a broken epoch chain
+
+    receipts = [r for r in records if r.get("kind") == "receipt"]
+    observations = [r for r in records if r.get("kind") == "observation"]
+
+    missing_receipt, failed_precheck, missing_obs, binding_mismatch = [], [], [], []
+    duplicate_nonce, duplicate, unverified, unaudited_digest, orphan = [], [], [], [], []
+
+    by_nonce = {}
+    for r in receipts:
+        n = r["nonce"]
+        if n in by_nonce:
+            duplicate_nonce.append(n)
+        else:
+            by_nonce[n] = r
+        if r["config_digest"] not in known:
+            unaudited_digest.append(n)
+        if (r["seat"], r["correlation_id"]) not in exp_set:
+            orphan.append(f"receipt:{n}")
+
+    obs_by_nonce = {}
+    for o in observations:
+        n = o["receipt_nonce"]
+        inner = o["observation"]
+        try:
+            contract.validate_observation(inner)
+        except Exception:  # noqa: BLE001 — a non-conforming inner obs is an orphan/invalid envelope (fail closed)
+            orphan.append(f"observation:{n}:invalid")
+            continue
+        rec = by_nonce.get(n)
+        if rec is None:
+            binding_mismatch.append(f"{n}:no-receipt")
+            continue
+        lane = inner.get("dispatched_lane")
+        if not lane:
+            binding_mismatch.append(f"{n}:no-dispatched_lane")
+            continue
+        obs_tid = target_identity({"model": inner["requested_model"], "lane": lane})
+        if list(obs_tid) != list(rec["target_identity"]) or rec["config_digest"] != inner.get("routing_config_digest"):
+            binding_mismatch.append(f"{n}:identity-or-digest")
+            continue
+        if (rec["seat"], rec["correlation_id"]) not in exp_set:
+            orphan.append(f"observation:{n}:unexpected")
+            continue
+        if n in obs_by_nonce:
+            duplicate.append(n)
+        else:
+            obs_by_nonce[n] = o
+
+    for key in exp_keys:
+        seat, cid = key
+        rs = [r for r in receipts if r["seat"] == seat and r["correlation_id"] == cid]
+        for r in rs:
+            if r["verdict"] == "fail" and r["nonce"] in obs_by_nonce:
+                failed_precheck.append(r["nonce"])
+        passed = [r for r in rs if r["verdict"] == "pass"]
+        if not passed:
+            missing_receipt.append(key)
+            continue
+        saw_verified = saw_breach = saw_missing_obs = False
+        for r in passed:
+            o = obs_by_nonce.get(r["nonce"])
+            if o is None:
+                saw_missing_obs = True
+                continue
+            pc = verify_post(o["observation"])
+            if pc.verified:
+                saw_verified = True
+            elif not pc.ok:
+                saw_breach = True
+            # pc.ok and not verified => availability failure => a legitimate fallback attempt
+        if saw_verified:
+            continue
+        if saw_breach:
+            unverified.append(key)
+        elif saw_missing_obs:
+            missing_obs.append(key)
+        else:
+            missing_receipt.append(key)  # passed receipts all availability-failed: the call was never served
+
+    ok = not any([missing_receipt, failed_precheck, missing_obs, binding_mismatch,
+                  duplicate_nonce, duplicate, unverified, unaudited_digest, orphan])
+    return Reconcile(
+        ok=ok, missing_receipt=tuple(missing_receipt), failed_precheck=tuple(failed_precheck),
+        missing_obs=tuple(missing_obs), binding_mismatch=tuple(binding_mismatch),
+        duplicate_nonce=tuple(duplicate_nonce), duplicate=tuple(duplicate),
+        unverified=tuple(unverified), unaudited_digest=tuple(unaudited_digest), orphan=tuple(orphan),
+    )

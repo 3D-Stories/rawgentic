@@ -326,3 +326,119 @@ def test_candidate_as_target_single_sources_lane():
     assert c.as_target()["lane"] == c.lane()
     assert target_identity(c.as_target()) == \
         ("claude-sonnet-5", "anthropic", "native", "subscription_oauth", "claude", "ACCT_X")
+
+
+# ---- reconcile_run ----
+
+_DEF_LANE = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
+             "pool": "claude", "credential_ref": None}
+_DEF_TID = ("claude-fable-5", "anthropic", "native", "subscription_oauth", "claude", None)
+
+
+def _receipt_rec(nonce, seat="review", cid="c1", verdict="pass", tid=_DEF_TID, digest="sha256:d"):
+    return {"kind": "receipt", "nonce": nonce, "seat": seat, "correlation_id": cid, "attempt_id": "0",
+            "target_identity": list(tid), "config_digest": digest, "gate_digest": None,
+            "author_provider": "openai", "verdict": verdict, "violations": []}
+
+
+def _obs_rec(nonce, requested="claude-fable-5", actual="claude-fable-5", lane=None, status="ok", digest="sha256:d"):
+    inner = _obs_dict(seat="review", requested_model=requested, actual_model=actual,
+                      parse_status=status, routing_config_digest=digest)
+    if status != "ok":
+        inner["actual_model"] = None
+        inner["usage"] = None
+        inner["process"] = {"exit_code": None, "timed_out": status == "timeout"}
+    inner["dispatched_lane"] = lane or _DEF_LANE
+    return {"kind": "observation", "receipt_nonce": nonce, "observation": inner}
+
+
+def _EC(seat="review", cid="c1"):
+    return enforce.ExpectedCall(seat, cid)
+
+
+def test_reconcile_happy_e2e_ok():
+    recs = [_receipt_rec("n1"), _obs_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_missing_receipt():
+    res = enforce.reconcile_run([_EC()], [], initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.missing_receipt
+
+
+def test_reconcile_failed_precheck():
+    recs = [_receipt_rec("n1", verdict="fail"), _obs_rec("n1")]  # launched despite fail
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and "n1" in res.failed_precheck
+
+
+def test_reconcile_missing_obs():
+    recs = [_receipt_rec("n1")]  # passed receipt, no observation
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.missing_obs
+
+
+def test_reconcile_binding_mismatch_dispatched_other_target():
+    # pre-checked fable-5/claude (receipt tid), but dispatched sonnet via codex (obs lane) -> mismatch
+    other = {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth",
+             "pool": "codex", "credential_ref": None}
+    recs = [_receipt_rec("n1"), _obs_rec("n1", requested="gpt-5.6-sol", actual="gpt-5.6-sol", lane=other)]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and res.binding_mismatch
+
+
+def test_reconcile_duplicate_nonce():
+    recs = [_receipt_rec("n1"), _receipt_rec("n1"), _obs_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and "n1" in res.duplicate_nonce
+
+
+def test_reconcile_duplicate_observation():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _obs_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and "n1" in res.duplicate
+
+
+def test_reconcile_unverified_mismatch():
+    # obs bound + present but requested!=actual -> unverified (a real breach, not availability)
+    recs = [_receipt_rec("n1"), _obs_rec("n1", requested="claude-fable-5", actual="claude-sonnet-5")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.unverified
+
+
+def test_reconcile_unaudited_digest():
+    recs = [_receipt_rec("n1", digest="sha256:ROGUE"), _obs_rec("n1", digest="sha256:ROGUE")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and "n1" in res.unaudited_digest
+
+
+def test_reconcile_orphan_unexpected_key():
+    recs = [_receipt_rec("n1", cid="ghost"), _obs_rec("n1")]
+    res = enforce.reconcile_run([_EC(cid="c1")], recs, initial_digest="sha256:d")
+    assert not res.ok and res.orphan
+
+
+def test_reconcile_expected_duplicate_raises():
+    with pytest.raises(ValueError):
+        enforce.reconcile_run([_EC(), _EC()], [], initial_digest="sha256:d")
+
+
+def test_reconcile_multi_attempt_fallback_ok():
+    # attempt 0 availability-failed (launch_error), attempt 1 verified fallback -> call OK
+    recs = [
+        _receipt_rec("n0"), _obs_rec("n0", status="launch_error"),
+        _receipt_rec("n1"), _obs_rec("n1", status="ok"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_golden_fixture_ok():
+    """AC1: a hand-authored golden routing-audit.jsonl (receipt + bound observation + epoch)
+    reconciles ok when read from disk and passed through reconcile_run."""
+    recs = [json.loads(line) for line in
+            (FIXTURES / "routing-audit.jsonl").read_text().splitlines() if line.strip()]
+    res = enforce.reconcile_run([enforce.ExpectedCall("review", "wf2-step11")], recs,
+                                initial_digest="sha256:epoch-a")
+    assert res.ok, res
