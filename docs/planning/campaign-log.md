@@ -64,6 +64,16 @@ executor-consumed (#428/#430), not a WF2-prose helper, so out of plan_lib's skil
 `test_skill_helpers` reverse drift-guard caught the initial plan_lib placement). Small-standard lane;
 suite 3208+7 → 3246+7 (+38); no spine change → no diagram REV. (child 5/10)
 
+### #431 — multi-account Claude lanes via CLAUDE_CONFIG_DIR (E8) · v3.47.0
+
+The `phase_executor` claude adapter sets `CLAUDE_CONFIG_DIR=<credential_ref>` per invocation
+(`run_subprocess` gains an env-MERGE param; `_claude_env` builds it), so a lane's `credential_ref`
+selects an isolated Claude config tree = an independent quota pool (per-config-dir 5-hour window).
+Quota-per-account was already wired (engine keys permits by account=credential_ref); per-account
+ceilings + parallel lanes fall out for free. No `credential_ref` → environment inherited unchanged;
+codex/zhipu untouched. + per-account setup runbook + ToS note in the phase_executor README.
+Small-standard lane; suite 3246+7 → 3252+7 (+6); no spine change → no diagram REV. (child 6/10)
+
 ## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
 
 **Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped

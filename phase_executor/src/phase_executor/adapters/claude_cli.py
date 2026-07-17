@@ -66,13 +66,23 @@ def parse_claude(raw: Union[str, dict], *, requested_model: str) -> ParsedResult
     )
 
 
+def _claude_env(credential_ref: Optional[str]) -> Optional[dict]:
+    """#431: a lane's ``credential_ref`` names an isolated Claude config dir → set
+    ``CLAUDE_CONFIG_DIR`` so this invocation uses that account's independent quota pool. A missing /
+    empty ``credential_ref`` returns None (env inherited unchanged — the single-account default).
+    Claude-only: codex has its own ``CODEX_HOME``, zhipu its own key."""
+    if isinstance(credential_ref, str) and credential_ref:
+        return {"CLAUDE_CONFIG_DIR": credential_ref}
+    return None
+
+
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
     """Live seat call. Writes a capture dir and returns an Observation."""
     cmd = build_command(req.requested_model, effort=req.effort)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = time.monotonic()
-    proc = run_subprocess(cmd, req.prompt, req.timeout)
+    proc = run_subprocess(cmd, req.prompt, req.timeout, env=_claude_env(req.credential_ref))
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)
