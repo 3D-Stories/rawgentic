@@ -84,8 +84,7 @@ def test_check_pre_off_chain_allowed_model_wrong_provider():
 def test_check_pre_forbidden_never_haiku():
     snap = _snapshot()
     t = _target("claude-haiku-4-5", _lane("claude"))
-    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0",
-                  gate_digest="g", gate_validator=lambda d: True)
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0")
     # off_chain AND forbidden both accumulate (haiku isn't in build's chain either)
     assert r.verdict == "fail"
     assert any(v.startswith("forbidden") for v in r.violations)
@@ -107,21 +106,13 @@ def test_check_pre_build_gate_validation_unavailable():
     assert "gate_validation_unavailable" in r.violations  # no validator -> fail closed
 
 
-def test_check_pre_build_gate_invalid():
+def test_check_pre_build_always_fails_closed_until_429():
+    # Step-11: E2 removed the caller-supplied gate_validator (a lambda:True bypass). A build seat
+    # fails closed unconditionally until #429 supplies an authenticated validator.
     snap = _snapshot()
     t = _target("claude-sonnet-5", _lane("claude"))
-    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0",
-                  gate_digest="bad", gate_validator=lambda d: False)
-    assert r.verdict == "fail"
-    assert "gate_invalid" in r.violations
-
-
-def test_check_pre_build_pass_with_validator():
-    snap = _snapshot()
-    t = _target("claude-sonnet-5", _lane("claude"))
-    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0",
-                  gate_digest="good", gate_validator=lambda d: d == "good")
-    assert r.verdict == "pass" and not r.violations
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", gate_digest="anything")
+    assert r.verdict == "fail" and "gate_validation_unavailable" in r.violations
 
 
 def test_check_pre_unknown_seat_raises():
@@ -344,7 +335,7 @@ def _receipt_rec(nonce, seat="review", cid="c1", verdict="pass", tid=_DEF_TID, d
 
 
 def _obs_rec(nonce, requested="claude-fable-5", actual="claude-fable-5", lane=None, status="ok", digest="sha256:d"):
-    inner = _obs_dict(seat="review", requested_model=requested, actual_model=actual,
+    inner = _obs_dict(seat="review", correlation_id="c1", requested_model=requested, actual_model=actual,
                       parse_status=status, routing_config_digest=digest)
     if status != "ok":
         inner["actual_model"] = None
@@ -529,8 +520,35 @@ def test_check_pre_no_role_no_requirement():
     assert r.verdict == "pass" and not r.violations
 
 
-def test_reconcile_require_nonempty_refuses_empty():
-    """Step-8a Finding 3: require_nonempty makes an empty expected-set refuse ship, not pass vacuously."""
-    assert enforce.reconcile_run([], [], initial_digest="sha256:d").ok  # default: empty is ok
-    res = enforce.reconcile_run([], [], initial_digest="sha256:d", require_nonempty=True)
-    assert not res.ok and res.orphan
+def test_reconcile_require_nonempty_default_refuses_empty():
+    """Step-11: require_nonempty DEFAULTS True — an empty expected-set refuses ship. Pass
+    require_nonempty=False only for a legitimately zero-routed-call run."""
+    assert not enforce.reconcile_run([], [], initial_digest="sha256:d").ok  # default fail-closed
+    assert enforce.reconcile_run([], [], initial_digest="sha256:d", require_nonempty=False).ok
+
+
+def test_reconcile_correlation_drift_binding_mismatch():
+    """Step-11 Crit: an observation whose inner correlation_id differs from its bound receipt's is a
+    binding_mismatch — an obs from another call cannot attach to a receipt by nonce alone."""
+    obs = _obs_rec("n1")
+    obs["observation"]["correlation_id"] = "other-call"
+    recs = [_receipt_rec("n1"), obs]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("correlation-drift" in x for x in res.binding_mismatch)
+
+
+def test_audited_digests_rejects_physical_reorder():
+    """Step-11 High: a physically-reordered (tampered) epoch log — seq 2 line before seq 1 — RAISES
+    (no sorting to normalize it away)."""
+    with pytest.raises(ValueError):
+        enforce.audited_digests([{"kind": "epoch", "seq": 2, "from": "b", "to": "c"},
+                                 {"kind": "epoch", "seq": 1, "from": "a", "to": "b"}], "a")
+
+
+def test_reconcile_missing_obs_not_forgiven_by_verified_sibling():
+    """Step-11 bug/logic: a passed receipt with NO observation (a lost/uninstrumented approved
+    dispatch) refuses ship even when a sibling attempt verified."""
+    recs = [_receipt_rec("n0"),  # passed receipt, no observation for it
+            _receipt_rec("n1"), _obs_rec("n1")]  # verified sibling
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.missing_obs
