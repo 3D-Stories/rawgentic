@@ -1609,6 +1609,38 @@ def _glm_prepare(
     return client, text, truncated, secret_hits, eff_timeout, None
 
 
+def glm_complete(
+    prompt: str,
+    *,
+    model: str = GLM_MODEL,
+    effort: str = REASONING_EFFORT,
+    timeout: float | None = None,
+    client=None,
+) -> tuple[str | None, str]:
+    """Public raw GLM text completion, single-sourced through the shared preamble.
+
+    Returns ``(payload_text | None, error_detail)``. Reuses ``_glm_prepare`` so the SAME
+    fail-closed gates every GLM caller gets apply here too: SDK-floor check, credential
+    presence, ``validate_glm_base_url`` (endpoint exfil guard), and — critically — the A3
+    UNCONDITIONAL secret scan on the outgoing ``prompt`` (passed as ``artifact_text`` so no
+    file is read but the scan still runs). Any refusal (no key, bad endpoint, secret in the
+    prompt, client-construction failure) returns ``(None, reason)`` and NEVER raises — callers
+    that want a hard failure (e.g. the bake-off judge) raise on the ``None`` themselves.
+
+    This is the reusable primitive for arbitrary judge/consult prompts; the findings-shaped
+    ``run_glm_review``/``run_glm_consult`` are not usable for free-form text. It exists so the
+    #428 bake-off judge does not reach into the private ``_load_glm_client``/``_glm_attempts``
+    (which would bypass the secret scan — a real egress leak, since build bake-offs ship
+    candidate patches to GLM)."""
+    client, text, _truncated, _secret_hits, eff_timeout, fail = _glm_prepare(
+        artifact_path="", project_root="", artifact_text=(prompt, False),
+        client=client, timeout=timeout,
+    )
+    if fail is not None:
+        return None, fail.raw_error
+    return _glm_attempts(client, text, eff_timeout, model=model, effort=effort)
+
+
 def run_glm_review(
     artifact_path: str,
     artifact_type: str,

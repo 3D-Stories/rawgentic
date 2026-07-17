@@ -63,3 +63,23 @@ deciding human. (This is the target the stamp captures; the current `rawgentic.r
 policy this doc sets.) A "no change" decision is stamped too, so a seat's value is never silently
 carried forward without a fresh evidence check each bench cycle (the config-rot guard, plan §4:
 floor-based picks must be **re-derived** every bench, not persist by inertia).
+
+## Competitive rounds & build bake-off (#428)
+
+Where routing above picks ONE model per seat from prior bench evidence, competitive rounds settle a
+noisy seat *in-run* with fresh evidence. The mechanism is `hooks/bakeoff_policy.py` (rawgentic
+policy) plugging into the extraction-clean `phase_executor.run_competitive` engine (execution +
+failure semantics):
+
+- **Design round** — sol vs opus every round; **build bake-off** — gate-flagged (the #429
+  `needs_bakeoff` verdict) `{sonnet, opus, terra}`. Authors run concurrently across quota pools
+  (sol/terra on codex, sonnet/opus on the claude pool at its ceiling 2); wall-clock ≈ the slowest
+  candidate, not the sum.
+- **Judge** — glm-5.2 (`make_glm_judge`), the vendored **bench-#14 rubric**
+  (`hooks/data/bakeoff_rubrics/`), scoring **anonymized, seed-shuffled** drafts (only ok candidates;
+  a failed candidate can never win). Build bake-offs judge on deterministic test evidence, not vibes.
+- **Judge failure** (after one retry) — headless: winner = incumbent (opus) + `judge_degraded`,
+  excluded from telemetry, surfaced in the morning report; interactive: persist a degraded trace,
+  then stop and ask. Winner bytes + losers persist to `bakeoff_results.jsonl` (no auto-retirement).
+- **D9** — the winner's engine picks the adversarial-review backend: a gpt-authored winner forces a
+  glm reviewer, never gpt (`reviewer_backend_for_winner`).

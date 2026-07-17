@@ -189,3 +189,21 @@ def test_absent_threshold_uses_default_silently():
                          {"files": [], "lines": 10, "file_count": 1}, cfg={})
     assert d.decision is False
     assert not any("threshold" in r or "BAKEOFF" in r for r in d.reason_codes)
+
+
+def test_decision_from_snapshot_matches_needs_bakeoff():
+    # #428 M7 single-source contract: the decision re-derived from a snapshot ALONE must equal the
+    # decision needs_bakeoff computed, across representative inputs — incl. a threshold-invalid case
+    # (now recorded in the snapshot so it is re-derivable) and a clean no-bake-off case.
+    cases = [
+        ({"risk_level": "high"}, {"complexity": "standard"}, {"files": ["a.py"], "lines": 1, "file_count": 1}, {}),
+        ({"risk_level": "standard"}, {"complexity": "complex"}, {"files": ["a.py"], "lines": 1, "file_count": 1}, {}),
+        ({"risk_level": "standard"}, {"complexity": "standard"}, {"files": [".github/ci.yml"], "lines": 1, "file_count": 1}, {}),
+        ({"risk_level": "standard"}, {"complexity": "standard"}, {"files": ["a.py"], "lines": 1, "file_count": 1}, {}),
+        ({"risk_level": "standard"}, {"complexity": "standard"}, {"files": ["a.py"], "lines": 1, "file_count": 1},
+         {"BAKEOFF_DIFF_LINES": "not-an-int"}),  # threshold-invalid -> fail-closed, recorded in snapshot
+    ]
+    for task, issue, plan_est, cfg in cases:
+        gd = pl.needs_bakeoff(task, issue, plan_est, cfg=cfg)
+        assert pl.decision_from_snapshot(gd.input_snapshot) == gd.decision
+        assert pl.reasons_from_snapshot(gd.input_snapshot) == gd.reason_codes

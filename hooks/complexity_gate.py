@@ -116,68 +116,103 @@ def _int_or_none(value):
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:
-    """Deterministic bake-off gate (plan §3.2). See the module docstring. Pure; fail-closed."""
-    cfg = cfg or {}
+def reasons_from_snapshot(snap: dict) -> tuple:
+    """Re-derive the reason codes (hence ``decision = bool(reasons)``) from a gate ``input_snapshot``
+    ALONE — the single source of the trigger logic, shared by ``needs_bakeoff`` (which builds the
+    snapshot) and the executor's admission check (#428, which recomputes the decision from the
+    integrity-verified snapshot so a gate whose *decision* was edited between plan and run is caught:
+    the ``policy_digest`` binds the snapshot, and the decision is a pure function of it). Reason order
+    matches ``needs_bakeoff``'s original emission order so ``reason_codes`` is byte-identical."""
     reasons: list[str] = []
+    for key in snap.get("threshold_invalid") or ():   # threshold fail-closes emit first (as before)
+        reasons.append(f"fail_closed:{key}_invalid")
+    thr = snap.get("thresholds") or {}
+    diff_thr = thr.get("BAKEOFF_DIFF_LINES", DEFAULT_BAKEOFF_DIFF_LINES)
+    file_thr = thr.get("BAKEOFF_FILE_COUNT", DEFAULT_BAKEOFF_FILE_COUNT)
+
+    rl = snap.get("risk_level")
+    if rl is None or rl not in _VALID_RISK_LEVELS:
+        reasons.append(f"fail_closed:risk_level={'missing' if rl is None else rl}")
+    elif rl == "high":
+        reasons.append("risk_high")
+
+    cx = snap.get("complexity")
+    if cx is None or cx not in _VALID_ISSUE_COMPLEXITIES:
+        reasons.append(f"fail_closed:complexity={'missing' if cx is None else cx}")
+    elif cx == "complex":
+        reasons.append("complexity_complex")
+
+    hit = snap.get("security_surface_hit")
+    if hit is None:
+        reasons.append("fail_closed:files=missing")
+    elif hit:
+        reasons.append("security_surface")
+
+    lines = snap.get("lines")
+    if lines is None:
+        reasons.append("fail_closed:lines=invalid")
+    elif lines > diff_thr:
+        reasons.append("diff_lines_over")
+
+    fc = snap.get("file_count")
+    if fc is None:
+        reasons.append("fail_closed:file_count=invalid")
+    elif fc > file_thr:
+        reasons.append("file_count_over")
+    return tuple(reasons)
+
+
+def decision_from_snapshot(snap: dict) -> bool:
+    """The bake-off decision re-derived from a snapshot alone (``bool`` of the reasons). The executor
+    calls this at admission on the digest-verified snapshot — the authoritative decision, so a
+    tampered ``GateDecision.decision`` cannot force or suppress a bake-off (#428 M7)."""
+    return bool(reasons_from_snapshot(snap))
+
+
+def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:
+    """Deterministic bake-off gate (plan §3.2). See the module docstring. Pure; fail-closed.
+
+    Builds the ``input_snapshot`` from the raw inputs, then derives ``reason_codes``/``decision`` from
+    the snapshot via ``reasons_from_snapshot`` (single source, so the admission-time recompute cannot
+    drift from the plan-time verdict)."""
+    cfg = cfg or {}
     snap: dict = {}
+    invalid_thresholds: list[str] = []
 
     def _threshold(key, alias, default):
-        # Absent -> default (a legitimate "not configured"). PRESENT-but-unparseable -> fail CLOSED
-        # (reason code + default for the comparison): a bad threshold must not silently LOOSEN the
-        # gate to the default when the operator meant something stricter (Step-11 F2).
+        # Absent -> default (a legitimate "not configured"). PRESENT-but-unparseable -> fail CLOSED:
+        # a bad threshold must not silently LOOSEN the gate to the default when the operator meant
+        # something stricter (Step-11 F2). The invalid key is recorded in the snapshot (so the digest
+        # binds it and the decision is re-derivable), then surfaced as fail_closed:{key}_invalid.
         raw = _field(cfg, key, alias)
         if raw is _GATE_MISSING:
             return default
         val = _int_or_none(raw)
         if val is None:
-            reasons.append(f"fail_closed:{key}_invalid")
+            invalid_thresholds.append(key)
             return default
         return val
 
     diff_lines_thr = _threshold("BAKEOFF_DIFF_LINES", "bakeoff_diff_lines", DEFAULT_BAKEOFF_DIFF_LINES)
     file_count_thr = _threshold("BAKEOFF_FILE_COUNT", "bakeoff_file_count", DEFAULT_BAKEOFF_FILE_COUNT)
+    if invalid_thresholds:
+        snap["threshold_invalid"] = invalid_thresholds
 
     rl = _field(task, "risk_level", "riskLevel")
     snap["risk_level"] = None if rl is _GATE_MISSING else _json_safe(rl)
-    if rl is _GATE_MISSING or rl not in _VALID_RISK_LEVELS:
-        reasons.append(f"fail_closed:risk_level={'missing' if rl is _GATE_MISSING else _json_safe(rl)}")
-    elif rl == "high":
-        reasons.append("risk_high")
 
     cx = _field(issue, "complexity")
     snap["complexity"] = None if cx is _GATE_MISSING else _json_safe(cx)
-    if cx is _GATE_MISSING or cx not in _VALID_ISSUE_COMPLEXITIES:
-        reasons.append(f"fail_closed:complexity={'missing' if cx is _GATE_MISSING else _json_safe(cx)}")
-    elif cx == "complex":
-        reasons.append("complexity_complex")
 
     files = _field(plan_est, "files")
-    if not isinstance(files, (list, tuple)):
-        reasons.append("fail_closed:files=missing")
-        snap["security_surface_hit"] = None
-    else:
-        hit = hits_security_surface(files)
-        snap["security_surface_hit"] = hit
-        if hit:
-            reasons.append("security_surface")
+    snap["security_surface_hit"] = None if not isinstance(files, (list, tuple)) else hits_security_surface(files)
 
-    lines = _int_or_none(_field(plan_est, "lines"))
-    snap["lines"] = lines
-    if lines is None:
-        reasons.append("fail_closed:lines=invalid")
-    elif lines > diff_lines_thr:
-        reasons.append("diff_lines_over")
-
-    fc = _int_or_none(_field(plan_est, "file_count", "fileCount"))
-    snap["file_count"] = fc
-    if fc is None:
-        reasons.append("fail_closed:file_count=invalid")
-    elif fc > file_count_thr:
-        reasons.append("file_count_over")
-
+    snap["lines"] = _int_or_none(_field(plan_est, "lines"))
+    snap["file_count"] = _int_or_none(_field(plan_est, "file_count", "fileCount"))
     snap["thresholds"] = {"BAKEOFF_DIFF_LINES": diff_lines_thr, "BAKEOFF_FILE_COUNT": file_count_thr}
+
+    reasons = reasons_from_snapshot(snap)
     return GateDecision(
-        decision=bool(reasons), reason_codes=tuple(reasons),
+        decision=bool(reasons), reason_codes=reasons,
         input_snapshot=snap, policy_digest=_policy_digest(snap),
     )
