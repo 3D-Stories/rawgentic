@@ -89,6 +89,15 @@ move-only-when-both-pass, provenance re-stamped every decision incl. "no change"
 pinning the canonical move sentence. Docs child (PATCH bump). Small-standard lane; suite 3265+7 →
 3269+7 (+4); no spine change → no diagram REV. (child 8/10)
 
+### #417 — WF2/WF3 skill prose: fallback + concurrency + driver-seat · v3.49.0
+
+Documents three dispatch contracts in the single-sourced `<model-routing-resolve>` block: seat
+fallback chains + circuit breaker (chain exhaustion = handled hard failure, never silent downgrade),
+≤3-Claude concurrency ceiling (effective 2 driver-active), driver-seat guidance (opus recommended,
+not enforced). Shared source edited + synced into implement-feature; fix-bug's bespoke WF3 block
+updated directly (no forced unification). Drift-guard pins the canonical fallback sentence. Lane;
+suite 3269+7 → 3273+7 (+4); no spine change → no diagram REV. (child 10/10 — LAST queued)
+
 ## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
 
 **Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped
