@@ -497,8 +497,10 @@ def validate_record(record, *, strict=False) -> list:
                 for field in ("queued_ms", "concurrency"):
                     if field in item and item[field] is not None:
                         v = item[field]
-                        if not isinstance(v, int) or isinstance(v, bool):
-                            errs.append(f"dispatches[{i}].{field} must be an int or null")
+                        # non-negative: a queue-wait / permit-count is never < 0 (matches every
+                        # other count/duration field in this validator; Step-11 finding).
+                        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                            errs.append(f"dispatches[{i}].{field} must be a non-negative int or null")
                 if "selector" in item and item["selector"] is not None:
                     sel = item["selector"]
                     if not isinstance(sel, dict):

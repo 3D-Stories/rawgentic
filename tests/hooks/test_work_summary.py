@@ -2183,3 +2183,25 @@ class TestDispatchRoutingTelemetry:
     def test_selector_bad_subfield_errors(self):
         from work_summary import validate_record
         assert any("selector.risk_level" in e for e in validate_record(self._rec({"selector": {"risk_level": 5}})))
+
+
+class TestDispatchRoutingTelemetryNegatives:
+    def _rec(self, extra):
+        rec = _valid_record()
+        d = {"role": "review", "subagent_type": "rawgentic:rawgentic-reviewer",
+             "model": "opus", "effort": None, "outcome": "ok", "resolution": "primary"}
+        d.update(extra)
+        rec["dispatches"] = [d]
+        return rec
+
+    def test_negative_queued_ms_rejected(self):
+        from work_summary import validate_record
+        assert any("queued_ms" in e for e in validate_record(self._rec({"queued_ms": -1})))
+
+    def test_negative_concurrency_rejected(self):
+        from work_summary import validate_record
+        assert any("concurrency" in e for e in validate_record(self._rec({"concurrency": -5})))
+
+    def test_zero_queued_ms_ok(self):
+        from work_summary import validate_record
+        assert validate_record(self._rec({"queued_ms": 0, "concurrency": 0})) == []
