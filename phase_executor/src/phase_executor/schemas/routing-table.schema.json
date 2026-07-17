@@ -42,6 +42,10 @@
           "rule": {"type": "string", "enum": ["cross_model_author"]}
         }
       }
+    },
+    "provenance": {
+      "description": "Optional evidence/authorship stamp for the seat table (e.g. the benchmark that decided the seats). Free-form object or string; the engine does not interpret it.",
+      "type": ["object", "string"]
     }
   },
   "$defs": {
