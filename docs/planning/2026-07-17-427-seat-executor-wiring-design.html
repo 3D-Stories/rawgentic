@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#427 Seat-executor wiring (E4)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 01:48 MDT</div>
+<h1>#427 Seat-executor wiring (E4)</h1>
+
+</header>
+<main>
+<h1>#427 — Ship/intake/plan seats through the executor (E4) — design (rev 3)</h1>
+<p><strong>Epic</strong> #422 child 3/10 · supersedes #418 · depends on #426 (✓). Plan authority: <code>docs/planning/2026-07-16-per-phase-model-routing.md</code> §1, §3.3b, §3.4, §4 (E4 row). Peer proposal (Codex) synthesized; <strong>rev 2</strong> applies the Step-4 design-critique findings (opus self-review + Codex adversarial) — see &quot;Review findings applied&quot; at the end.</p>
+<h2>Problem</h2>
+<p><code>phase_executor/</code> (E1 #424 + enforce E2 #425 + seat-table E3 #426) exists but is consumed by <strong>nothing</strong> — <code>run_seat</code> is imported nowhere in <code>hooks/</code>/<code>skills/</code> (grep-confirmed). This child ships the <strong>first consumer CLI</strong> for the <strong>ship, intake, plan</strong> seats: the glue + CLI + per-seat toggle + tests. <strong>Scope is mechanism-only</strong> (authorized by the epic&#x27;s #417 split): #427 adds the CLI and its tests but edits NO WF step, so <strong>on merge no WF2/WF3 run routes any seat through the executor</strong> — the mechanism is *verified* here, and the live choke point becomes effective when #417 wires the call sites and an operator opts a seat in. Default per-seat state is <code>inherit</code>, so merge changes no live behavior.</p>
+<p>Out of scope (later children): the WF2/WF3 *prose* call sites (#417); run-end <code>reconcile_run</code> over a whole WF run + telemetry rollups (#420); competitive rounds / bake-off (#428); complexity gate (#429). The <strong>build</strong> seat stays blocked — <code>enforce.check_pre</code> fails build closed (<code>gate_validation_unavailable</code>) until #429; this child touches only ship/intake/plan.</p>
+<h2>Confirmed facts (traced this session — evidence)</h2>
+<ul>
+<li>`engine.run_seat(seat, prompt, *, snapshot, quota, capture_root, context=(), correlation_id=None,</li>
+</ul>
+<p>  author_provider=None, run_id=None, effort=None, timeout=300.0, dispatch=_dispatch_real) -&gt;   Observation<code> (</code>engine.py:65<code>). The loop (</code>engine.py:92-113<code>) calls </code>dispatch(engine, req,   run_id=…, attempt_id=…, …)<code> <strong>exactly once per attempted target</strong> and returns on the first   non-availability status (</code>engine.py:111-112<code>) — so a wrapper on </code>dispatch<code> fires on the primary AND   each real fallback, the exact granularity we want. </code>attempt_id<code> is </code>f&quot;{i}-{uuid…}&quot;<code> where </code>i<code> is the   0-based index into </code>eligible_targets<code> (</code>engine.py:100`).</p>
+<ul>
+<li><code>AdapterRequest</code> (<code>adapters/base.py:21-32</code>) carries `seat, requested_model, transport,</li>
+</ul>
+<p>  credential_ref<code> — <strong>NOT</strong> </code>provider/auth_mode/pool/participation_mode<code>. So the dispatch wrapper   CANNOT reconstruct the full lane from </code>req`; it must source the target from the chain list (see   Enforcement wiring).</p>
+<ul>
+<li><code>routing.eligible_targets(seat, snap, author_provider=)</code> returns the ordered</li>
+</ul>
+<p>  <code>[primary, *chain]</code> target dicts (each <code>{model, lane:{provider,transport,auth_mode,pool,   credential_ref,participation_mode?}}</code>). Live targets (verified): <strong>ship</strong> sonnet-5→opus-4-8→fable-5   (all <code>claude</code>); <strong>intake</strong> opus-4-8→fable-5→sonnet-5; <strong>plan</strong> opus-4-8→fable-5→gpt-5.6-terra   (terra=<code>codex</code>). Pools: <code>claude:2, codex:4, zhipu:2</code>.</p>
+<ul>
+<li><code>enforce.check_pre(seat, target, snapshot, …) -&gt; PreReceipt</code> needs the FULL lane; <code>target_identity</code></li>
+</ul>
+<p>  (<code>enforce.py:34-49</code>) compares it verbatim to the seat&#x27;s declared chain identities   (<code>enforce.py:110-111</code>). <code>verify_post(obs) -&gt; PostCheck</code>; <code>RoutingAuditLog(capture_root, run_id)</code>   re-sanitizes and appends <code>run_id</code> as a subdir (<code>enforce.py:226-234</code>) — so its <code>capture_root</code> must   NOT already contain <code>run_id</code> (see Path derivation).</p>
+<ul>
+<li><code>hooks/model_routing_lib.py resolve(workspace, project, role) -&gt; (model, effort)</code> for roles</li>
+</ul>
+<p>  {review, analysis, implementation} — the &quot;prior behavior&quot; INHERIT preserves. Its <code>_load_block</code>   (<code>model_routing_lib.py:35</code>) is private and hardcoded to the <code>&quot;modelRouting&quot;</code> key.</p>
+<ul>
+<li><strong>Import feasibility (verified live):</strong> `PYTHONPATH=phase_executor/src python3 -c &quot;import</li>
+</ul>
+<p>  phase_executor.engine, .routing, .enforce&quot;<code> exits 0 under the plain repo interpreter — core modules   import stdlib + </code>jsonschema` only; the zhipuai worker is uv-isolated.</p>
+<ul>
+<li><strong><code>.rawgentic/</code> is NOT ignored repo-wide</strong> — the tracked <code>.gitignore</code> only has</li>
+</ul>
+<p>  <code>.rawgentic/review-state/*.json</code> + <code>.rawgentic_workspace.json</code>; the blanket ignore is checkout-local   (<code>.git/info/exclude:7</code>), absent in fresh clones / CI. #427 adds tracked ignores in the PROJECT repo (below).</p>
+<ul>
+<li><strong>Base = the project repo root, not the workspace root</strong> (finding V1): <code>&lt;workspace_dir&gt;</code> (where</li>
+</ul>
+<p>  <code>.rawgentic_workspace.json</code> lives) is NOT a git repo (confirmed <code>git -C /home/rocky00717/rawgentic   rev-parse</code> rc=128), so dirs there escape every repo&#x27;s <code>.gitignore</code>. <code>projects/rawgentic</code> IS a git   repo. Derived capture/permit dirs therefore go under the resolved project repo root   (<code>&lt;workspace_dir&gt;/&lt;project.path&gt;</code>), where the tracked <code>.gitignore</code> covers them.</p>
+<h2>Approach (recommended of 3)</h2>
+<p><strong>A — thin consumer hook <code>hooks/executor_routing_lib.py</code> (RECOMMENDED; I and the Codex peer converged).</strong> Pure core + thin <code>main(argv)</code> CLI in ONE file (repo §5 exemplar <code>registry_prune.py</code>); imports <code>phase_executor</code> via a <code>sys.path</code> shim <strong>inside <code>main</code></strong> (guarded, see below). Subcommands <code>resolve-seat</code> and <code>dispatch</code>. Toggle in the <code>.rawgentic_workspace.json</code> project block. *Pro:* keeps <code>phase_executor</code> extraction-clean; &quot;logic in hooks, judgment in skills&quot;. *Con:* one more hook. (Name <code>executor_routing_lib</code> aligns with the config key and cannot shadow the <code>phase_executor</code> package on direct execution.) <strong>B</strong> (toggle inside <code>phase_executor</code>) rejected — pollutes the extraction boundary. <strong>C</strong> (extend <code>model_routing_lib</code>) rejected — role→model resolution (fail-OPEN) vs seat execution (subprocess/audit, fail-CLOSED) are different responsibilities.</p>
+<h2>File changes</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>hooks/executor_routing_lib.py</code></td><td><strong>NEW.</strong> Pure core (<code>resolve_seat</code>, <code>dispatch_seat</code>, <code>WIRED_SEATS</code>, <code>DRIVER_ONLY</code>, config parse, path derivation, per-attempt <code>check_pre</code> dispatch wrapper) + thin <code>main(argv)</code>. Guarded <code>phase_executor</code> import inside <code>main</code>.</td></tr>
+<tr><td><code>hooks/model_routing_lib.py</code></td><td>Parameterize <code>_load_block(workspace, project, key=&quot;modelRouting&quot;, *, missing=_ABSENT)</code> (default preserves callers) so the glue reuses ONE loader AND can tell an ABSENT key from a present-but-non-dict value (finding V3: the old <code>_load_block</code> returns <code>{}</code> for both, erasing the absent-vs-malformed distinction A2/S7 needs).</td></tr>
+<tr><td><code>projects/rawgentic/.gitignore</code></td><td><strong>Add <code>/.rawgentic/runs/</code> and <code>/.rawgentic/runtime/</code></strong> (tracked, repo-distributed) so derived capture/permit dirs are ignored in every clone/CI — not the blanket <code>/.rawgentic/</code> (that would make the already-tracked <code>.rawgentic/review-state/README.md</code> &quot;tracked-yet-ignored&quot;).</td></tr>
+<tr><td><code>tests/hooks/test_executor_routing.py</code></td><td><strong>NEW.</strong> Both-path model assertions (stub <code>dispatch</code> records dispatched target + actual_model), per-attempt check_pre identity (primary + fallback), chain-fallback (named seat), driver-only, inherit-no-dispatch, absent-vs-malformed config, guarded-import→exit-5, path-safe validation, audit-sequence split, exit-code mapping, CLI-via-subprocess, <code>git check-ignore</code> on a representative capture path.</td></tr>
+<tr><td><code>tests/phase_executor/live/test_executor_routing_live.py</code></td><td><strong>NEW.</strong> <code>@pytest.mark.live</code> real ship-seat <code>claude --print</code>; asserts reported <code>actual_model == claude-sonnet-5</code> (skipped unless <code>RUN_LIVE=1</code>).</td></tr>
+<tr><td><code>.rawgentic_workspace.json</code></td><td>rawgentic project block gains <code>executorRouting</code> (below), all seats <code>inherit</code>.</td></tr>
+<tr><td><code>docs/config-reference.md</code></td><td>Document <code>executorRouting</code> + the seat↔WF-step mapping (for #417).</td></tr>
+<tr><td><code>README.md</code></td><td>Changelog entry (§2 exact shape) + count strings if any.</td></tr>
+<tr><td>version ×3 surfaces</td><td>3.44.0 → <strong>3.45.0</strong> (minor, feat).</td></tr>
+</tbody>
+</table>
+<h3><code>executorRouting</code> schema (<code>.rawgentic_workspace.json</code> project block)</h3>
+<p>Per-seat mode map (peer-adopted — explicit per-seat state, one-seat-at-a-time cutover):</p>
+<p>    &quot;executorRouting&quot;: { &quot;version&quot;: 1,       &quot;seats&quot;: { &quot;intake&quot;: &quot;inherit&quot;, &quot;plan&quot;: &quot;inherit&quot;, &quot;ship&quot;: &quot;inherit&quot; } }</p>
+<p><strong>Absence vs invalidity (Step-4 finding A2/S7 — this is an enforcement/verification boundary, so §3 says fail-CLOSED on invalidity, not fail-open):</strong></p>
+<ul>
+<li><strong>Absent</strong> block, or a seat <strong>absent</strong> from <code>seats</code> → that seat is <code>inherit</code> (legitimate</li>
+</ul>
+<p>  &quot;not configured yet&quot;; fail-safe).</p>
+<ul>
+<li><strong>Present but malformed</strong> — the <code>executorRouting</code> value present but NOT an object (a string/list —</li>
+</ul>
+<p>  finding V3), OR an object with an unsupported <code>version</code>, unknown seat key, or a mode other than   <code>inherit</code>/<code>executor</code> → <code>resolve-seat</code>/<code>dispatch</code> return <strong>exit 2</strong> (<code>{ok:false,error:{code:   &quot;malformed_config&quot;,…}}</code>). A typo&#x27;d <code>executor</code> must fail loud, NOT silently run the legacy path   (that would be a false-cutover: opted-in in intent, off in fact, with only a stderr hint a headless   run misses). <strong>The glue MUST distinguish absent (→inherit) from present-non-object (→exit 2)</strong> —   it reads the raw project-block value via <code>_load_block(..., missing=_ABSENT)</code> and branches on the   sentinel, never on an empty-dict collapse.</p>
+<h3>CLI contract (three-way tagged; JSON in / one JSON object out; diagnostics to stderr)</h3>
+<ul>
+<li><code>resolve-seat --seat &lt;s&gt; --workspace &lt;w&gt; --project &lt;p&gt;</code> → `{&quot;seat&quot;,&quot;action&quot;:&quot;inherit|executor|</li>
+</ul>
+<p>  driver_only&quot;,&quot;primary_model&quot;:&lt;str|null&gt;,&quot;reason&quot;}<code>. </code>driver_only<code> for </code>merge|ci_triage|   deploy_verify|step16<code>. </code>inherit<code> ⇒ orchestrator uses the pre-existing branch incl. its current   </code>model_routing_lib.resolve<code> call (</code>primary_model<code> null — resolve-seat never restates a legacy   model). </code>executor<code> ⇒ </code>primary_model<code> = </code>eligible_targets(seat)[0][&quot;model&quot;]`. <strong>Exit 0</strong> for a valid   known name; <strong>exit 2</strong> unknown name or malformed config.</p>
+<ul>
+<li>`dispatch --seat &lt;s&gt; --prompt-file &lt;f&gt; --run-id &lt;id&gt; [--context-file &lt;f&gt; …] [--correlation-id &lt;id&gt;]</li>
+</ul>
+<p>  [--author-provider &lt;p&gt;] [--effort &lt;e&gt;] [--timeout &lt;s&gt;] --workspace &lt;w&gt; --project &lt;p&gt;<code> → derive   capture/permit dirs → build snapshot + </code>QuotaCoordinator<code> + </code>RoutingAuditLog<code> → </code>run_seat<code> with the   per-attempt </code>check_pre<code> wrapper → </code>verify_post<code> once → append. stdout </code>{&quot;ok&quot;:true,&quot;action&quot;:   &quot;executor&quot;,&quot;seat&quot;,&quot;requested_model&quot;,&quot;actual_model&quot;,&quot;parse_status&quot;,&quot;verified&quot;:true,&quot;dispatched_lane&quot;,   &quot;audit_path&quot;,&quot;observation&quot;:{…}}<code>. Valid ONLY for a seat the config has in </code>executor` mode   (dispatch on an inherit/driver_only seat → exit 2).</p>
+<p><strong>Exit-code taxonomy</strong> (peer-adopted): <code>0</code> ok · <code>2</code> malformed input/config or invalid seat/mode · <code>3</code> chain-exhaustion / quota / timeout / availability (retryable) · <code>4</code> enforcement pre-check denial or requested≠actual identity breach (non-retryable) · <code>5</code> audit/capture/internal/import failure (non-retryable). Every non-zero emits <code>{&quot;ok&quot;:false,&quot;error&quot;:{&quot;code&quot;,&quot;message&quot;,&quot;retryable&quot;}}</code>; exit 5 carries the <code>correlation_id</code>. <strong>An executor failure NEVER converts to inherit/driver_inline</strong> — it fails loud so the orchestrator runs the ERROR protocol (owner directive: no driver-inline fallback for intake/plan; <code>inherit</code> is a rollout state decided BEFORE dispatch, not a runtime fallback).</p>
+<h2>Enforcement wiring (Step-4 finding S1 — the load-bearing correctness fix)</h2>
+<p><code>dispatch_seat</code> first computes <code>targets = routing.eligible_targets(seat, snapshot, author_provider)</code> (it needs <code>targets[0]</code> for <code>resolve-seat</code> anyway). It builds a <strong>dispatch decorator that closes over <code>targets</code></strong> and, on each call, selects the target by <strong>attempt index</strong> — parsing the leading <code>i</code> from <code>attempt_id</code> (<code>f&quot;{i}-…&quot;</code>, <code>engine.py:100</code>), NOT reconstructing the lane from <code>req</code> (which lacks provider/auth_mode/pool). For target <code>targets[i]</code> it calls <code>check_pre(seat, targets[i], snapshot, …)</code>, appends the receipt to <code>RoutingAuditLog</code>, and only then calls the real <code>_dispatch_real</code>. Because <code>run_seat</code> attempts <code>targets[i]</code> in order and stops on first success, the wrapper runs <code>check_pre</code> against the <strong>correct full-lane target</strong> for the primary and every real fallback. After <code>run_seat</code> returns, <code>verify_post</code> runs once on the final Observation, and the observation + post-check are appended. <strong>Deferred to #420:</strong> run-end <code>reconcile_run</code> over the whole WF run&#x27;s expected-seat ledger.</p>
+<h2>Audit sequences (Step-4 finding A6 — two distinct contracts)</h2>
+<ul>
+<li><strong>Pre-check denial</strong> (<code>check_pre</code> verdict=fail, BEFORE any provider call): append the **denial</li>
+</ul>
+<p>  receipt only** (no Observation exists); <code>run_seat</code> never dispatches that target; <code>dispatch</code> exits 4.</p>
+<ul>
+<li><strong>Identity breach</strong> (<code>verify_post</code> not verified, AFTER a successful dispatch): the pre-receipt +</li>
+</ul>
+<p>  the returned Observation + the failed post-check are all appended; exit 4.</p>
+<p>Separate tests assert each sequence&#x27;s audit shape.</p>
+<h2>Path derivation (rev 3 — base = PROJECT REPO ROOT; findings V1, V2, A3, S6)</h2>
+<p><strong>Base = the project repo root</strong>, resolved from the workspace config&#x27;s <code>project.path</code> (<code>&lt;workspace_dir&gt;/projects/rawgentic</code>) — NOT the workspace root. <code>&lt;workspace_dir&gt;</code> is NOT a git repo (finding V1), so dirs there would escape every repo&#x27;s <code>.gitignore</code>; <code>projects/rawgentic</code> IS a git repo, so repo-local dirs are covered by its tracked <code>.gitignore</code> and the check-ignore test is real.</p>
+<ul>
+<li><code>capture_root</code> — passed to BOTH <code>run_seat</code> AND <code>RoutingAuditLog</code>, <strong>run_id-LESS</strong> (finding V2):</li>
+</ul>
+<p>  <code>&lt;repo&gt;/.rawgentic/runs/</code>. The adapters prepend <code>run_id</code> via <code>create_capture</code> (<code>claude_cli.py:72</code>   et al.) and <code>RoutingAuditLog</code> appends <code>sanitize_component(run_id)</code> (<code>enforce.py:226-234</code>), so BOTH   land under <code>…/runs/&lt;run_id&gt;/</code> exactly once — captures at <code>…/runs/&lt;run_id&gt;/&lt;seat&gt;/&lt;attempt_id&gt;/</code>, the   audit file at <code>…/runs/&lt;run_id&gt;/routing-audit.jsonl</code> as a sibling. (rev 2 passed a run_id-ful root to   run_seat → the adapters double-nested run_id; fixed.)</p>
+<ul>
+<li>quota permits: <code>&lt;repo&gt;/.rawgentic/runtime/permits/&lt;pool-sig&gt;/</code>, <code>pool-sig</code> = short hash of</li>
+</ul>
+<p>  <code>snapshot.pool_concurrency()</code> (finding A3). All rawgentic WF2 runs share this project-repo permit   dir → a real <code>claude:2</code> ceiling ACROSS concurrent runs that agree on pools; incompatible pool defs   get separate namespaces (never a silent shared ceiling). rawgentic is the sole consumer of this hook   (kukakuka consumes <code>phase_executor</code> on its own path), so project-repo scope is exactly the   coordination needed.</p>
+<p><code>run_id</code> and <code>project</code> are validated path-safe (reject <code>/</code>, <code>..</code>, control chars, empty) before any path is built — exit 2 on violation. All dirs live under <code>&lt;repo&gt;/.rawgentic/</code>, ignored by the project repo&#x27;s tracked <code>.gitignore</code>.</p>
+<h2>Error handling and failure modes</h2>
+<ul>
+<li><strong>Chain exhausted / quota / timeout:</strong> exit 3 (retryable). No inline fallback.</li>
+<li><strong>Pre-check denial / identity breach:</strong> exit 4 (non-retryable) — audit sequences above.</li>
+<li><strong>Audit-write failure AFTER provider execution:</strong> exit 5, non-retryable, error carries</li>
+</ul>
+<p>  <code>correlation_id</code>; never auto-retry (would duplicate the external call).</p>
+<ul>
+<li><strong>Malformed executorRouting:</strong> exit 2 (present-malformed); inherit only for absence.</li>
+<li><strong>phase_executor import failure:</strong> the import runs <strong>inside <code>main()</code></strong> guarded by `try/except</li>
+</ul>
+<p>  ImportError` → exit 5 + the structured envelope (finding S3 — a module-level import would abort with   a bare traceback + exit 1, emitting neither). Fail-closed: a routing boundary that can&#x27;t load denies.</p>
+<h2>Security implications</h2>
+<ul>
+<li>Adapter owns the model flag; prompt on stdin (no argv injection) — inherited; glue passes</li>
+</ul>
+<p>  <code>--prompt-file</code> content as <code>run_seat</code>&#x27;s <code>prompt</code>.</p>
+<ul>
+<li>Capture/permit paths are <strong>derived</strong> from validated <code>run_id</code>/<code>project</code>, never caller-supplied.</li>
+<li>Derived dirs live under the <strong>project repo root</strong> and are ignored repo-wide via the added tracked</li>
+</ul>
+<p>  <code>projects/rawgentic/.gitignore</code> entries <code>/.rawgentic/runs/</code> + <code>/.rawgentic/runtime/</code> (findings   A4/S2/V1) — a <code>git check-ignore</code> test against a REAL runtime path (<code>.rawgentic/runs/&lt;id&gt;/…</code>) enforces   it, so captured prompts/observations can&#x27;t be committed in a fresh clone/CI. (The rev-2 workspace-root   base would have escaped every repo&#x27;s ignore — fixed.)</p>
+<ul>
+<li>Audit log append-only + contained path (<code>RoutingAuditLog</code>). No secrets in the glue; <code>credential_ref</code></li>
+</ul>
+<p>  is a config-dir NAME (E8), never a secret value.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: import phase_executor.{engine,routing,enforce,contract} under the repo CPython via a guarded sys.path.insert inside main()</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — tests/phase_executor/conftest.py applies the identical sys.path shim; live import test this session (PYTHONPATH=phase_executor/src python3 -c &quot;import phase_executor.engine, phase_executor.routing, phase_executor.enforce&quot;) exited 0; core modules import stdlib + jsonschema only   failure: fail-loud   surface: dispatch/resolve exit 5 with the ImportError message + envelope; test_executor_routing simulates the ImportError and asserts exit 5</p>
+<ul>
+<li>api: subprocess claude --print --model &lt;m&gt; --output-format json (and codex/zhipu adapters) via phase_executor.adapters</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — phase_executor.adapters.claude_cli, fixture-tested against captured provider output; bench cell-runner lineage (400+ cells) proves the invocation pattern   failure: fail-loud   surface: non-zero process exit / non-ok Observation.parse_status → dispatch exits 3/4. Live per-provider execution (creds/permissions in the target env) is proven at OPT-IN time by the @live test (RUN_LIVE=1), not on merge — #427 defaults every seat to inherit, so no unproven live call fires until an operator opts a seat in after running the @live preflight for that provider</p>
+<h2>Test strategy — asserts ACTUAL executing model, both paths (AC3)</h2>
+<ul>
+<li><strong>Executor ON (stubbed, no live call):</strong> inject a stub <code>dispatch</code> that RECORDS the attempted target</li>
+</ul>
+<p>  AND returns a provider-style Observation with <code>actual_model</code> = that target&#x27;s model (never assert   only the requested model). Assert <code>dispatch_seat</code> returns <code>actual_model == claude-opus-4-8</code> (intake,   plan) / <code>claude-sonnet-5</code> (ship); <code>verified==True</code>; audit line appended.</p>
+<ul>
+<li><strong>Per-attempt check_pre (finding S1):</strong> assert a <code>check_pre</code> receipt whose <code>target_identity</code> equals</li>
+</ul>
+<p>  the DECLARED chain entry&#x27;s identity was recorded for the primary AND a fallback attempt (catches the   target-plumbing bug if the wrapper ever reconstructs from <code>req</code>).</p>
+<ul>
+<li><strong>Chain-fallback (finding S4 — named seat, exact model):</strong> seat = <strong>intake</strong>; stub <code>targets[0]</code></li>
+</ul>
+<p>  (opus-4-8) as an availability failure → assert returned <code>actual_model == claude-fable-5</code>   (= <code>eligible_targets[1]</code> = intake chain[0]); assert both attempts got a check_pre receipt.</p>
+<ul>
+<li><strong>Executor OFF / inherit (finding S5 — assert what #427 owns):</strong> <code>resolve-seat</code> → <code>action==inherit</code>;</li>
+</ul>
+<p>  the injected dispatch spy has call-count 0. The <code>model_routing_lib.resolve</code> value is asserted only   as a <strong>no-touch guard</strong> (labeled as such — #427 does not edit that resolution), NOT as a &quot;live WF   inherit path preserved&quot; proof (there is no call site until #417).</p>
+<ul>
+<li><strong>Config:</strong> absent block → all inherit; present-non-object <code>executorRouting</code> (string/list) → exit 2</li>
+</ul>
+<p>  (finding V3 — assert absent≠present-non-object); present-object-malformed (bad version / unknown seat   / invalid mode) → exit 2.</p>
+<ul>
+<li><strong>Guards:</strong> driver-only name → <code>driver_only</code>; unknown name → exit 2; path-unsafe <code>run_id</code>/<code>project</code></li>
+</ul>
+<p>  → exit 2; guarded-import failure (monkeypatched sys.path) → exit 5 + envelope.</p>
+<ul>
+<li><strong>Audit sequences (A6):</strong> pre-check-denial → denial receipt only, no Observation, exit 4;</li>
+</ul>
+<p>  identity-breach → pre-receipt + Observation + failed post-check, exit 4.</p>
+<ul>
+<li><strong>Exit-code mapping:</strong> availability-fail → 3; verify_post breach → 4; audit-append failure → 5</li>
+</ul>
+<p>  (carries correlation_id); assert <code>retryable</code> flags.</p>
+<ul>
+<li><strong><code>.gitignore</code> (A4/S2/V1):</strong> <code>git check-ignore</code> (run inside <code>projects/rawgentic</code>) on a REAL derived</li>
+</ul>
+<p>  path (<code>.rawgentic/runs/&lt;id&gt;/routing-audit.jsonl</code>, <code>.rawgentic/runtime/permits/&lt;sig&gt;/…</code>) resolves via   the tracked <code>.gitignore</code> — the path the runtime actually writes, not a repo-relative decoy.</p>
+<ul>
+<li><strong>CLI-via-subprocess</strong> (repo convention): both subcommands via `subprocess.run([sys.executable,</li>
+</ul>
+<p>  CLI, …])` asserting stdout JSON + exit codes.</p>
+<ul>
+<li><strong>@live</strong> (<code>RUN_LIVE=1</code>, CI-skipped): real ship-seat call → reported <code>actual_model == claude-sonnet-5</code>.</li>
+</ul>
+<h2>Multi-PR assessment</h2>
+<p>Single PR. ~450–550 lines (one new hook + a small model_routing_lib tweak + two test files + config/doc/gitignore/version). Near the 500-line threshold but one cohesive mechanism, no separable phases.</p>
+<h2>Seat ↔ WF-step mapping (documentation for #417 — NOT behavior in #427)</h2>
+<table>
+<thead><tr><th>Seat</th><th>WF2 step it will wire (in #417)</th><th>Executor-ON model</th><th>OFF/inherit prior behavior</th></tr></thead>
+<tbody>
+<tr><td>intake</td><td>Step 2 (analyze codebase)</td><td>opus-4-8</td><td><code>analysis</code> role (sonnet) via Agent tool</td></tr>
+<tr><td>plan</td><td>Step 5 (implementation plan)</td><td>opus-4-8</td><td>inline / prior role dispatch</td></tr>
+<tr><td>ship</td><td>Step 12 (README/changelog/version×3/docs)</td><td>sonnet-5</td><td>orchestrator inline</td></tr>
+</tbody>
+</table>
+<p>Driver-only (NEVER a seat): merge, CI triage, deploy+verify, Step 16.</p>
+<h2>Review findings applied (Step-4 design critique — rev 1 → rev 2)</h2>
+<p>Opus self-review (7) + Codex adversarial (6), merged/deduped:</p>
+<ul>
+<li><strong>S1 (High, arch)</strong> decorator target-plumbing → Enforcement wiring now closes over <code>eligible_targets</code></li>
+</ul>
+<p>  and selects by <code>attempt_id</code> index; never reconstructs the lane from <code>req</code>. + per-attempt identity test.</p>
+<ul>
+<li><strong>A2/S7 (High/Med)</strong> malformed-config false cutover → absence→inherit, present-malformed→exit 2</li>
+</ul>
+<p>  (fail-closed; it&#x27;s an enforcement boundary).</p>
+<ul>
+<li><strong>A3 (High)</strong> permit-dir cross-pool ceiling → permit dir keyed by pool-signature; honest scope.</li>
+<li><strong>A4/S2 (High, security)</strong> <code>.git/info/exclude</code> local-only → add tracked <code>/.rawgentic/</code> + check-ignore test.</li>
+<li><strong>A1/S5 (Crit→Med)</strong> dormant-adapter overclaim → Problem statement rescoped to &quot;first consumer CLI,</li>
+</ul>
+<p>  mechanism-only, live choke point lands with #417&quot;; inherit test reframed as a no-touch guard.</p>
+<ul>
+<li><strong>S3 (Med)</strong> module-level import defeats exit-5 → import guarded inside <code>main()</code>.</li>
+<li><strong>S4 (Med)</strong> chain-fallback test wrong model → named intake, exact <code>claude-fable-5</code>.</li>
+<li><strong>A6 (Med)</strong> pre-check-denial vs identity-breach audit → two distinct sequences + tests.</li>
+<li><strong>S6 (Low)</strong> capture_root double-nest → RoutingAuditLog gets a root without <code>run_id</code>.</li>
+<li><strong>§3 note</strong> → parameterize <code>model_routing_lib._load_block(key=…)</code> to share one loader.</li>
+<li><strong>A5 (Med, feasibility, deferred-safe)</strong> live per-provider execution unproven → default-off means no</li>
+</ul>
+<p>  live call on merge; @live is the per-provider opt-in preflight (surfaced in platform_apis).</p>
+<h3>rev 2 → rev 3 (Step-4 re-gate verifier findings)</h3>
+<ul>
+<li><strong>V1 (High, security)</strong> gitignore fix mis-targeted at the non-git workspace root → **base = project</li>
+</ul>
+<p>  repo root** (<code>&lt;workspace_dir&gt;/&lt;project.path&gt;</code>); tracked <code>.gitignore</code> + check-ignore test now cover the   REAL paths.</p>
+<ul>
+<li><strong>V2 (Med, arch)</strong> adapter captures double-nested run_id → pass <code>run_seat</code> the run_id-LESS</li>
+</ul>
+<p>  <code>capture_root</code> (same root as RoutingAuditLog); adapters/audit each append run_id exactly once.</p>
+<ul>
+<li><strong>V3 (Med, completeness)</strong> <code>_load_block</code> collapsed absent and present-non-dict to <code>{}</code> → parameterize</li>
+</ul>
+<p>  it with a <code>missing</code> sentinel; glue exits 2 on present-non-object, inherits only on true absence.</p>
+<ul>
+<li>Confirmed resolved by the verifier against the code: S1 (decorator/attempt_id index), A3 (pool-sig),</li>
+</ul>
+<p>  A1/S5 (scope claims), S3 (guarded import), S6 (audit de-nest).</p>
+
+</main>
+<footer>Last updated: 2026-07-17 01:48 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

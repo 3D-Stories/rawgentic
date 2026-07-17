@@ -14,6 +14,38 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #422 — per-phase model routing + deterministic execution engine (auto-run)
+
+Route WF2/WF3 model seats from bench-#14 evidence through a deterministic `phase_executor`
+engine. Plan: `docs/planning/2026-07-16-per-phase-model-routing.md`. Children (dep order):
+#424 (E1 package) ✓ · #425 (E2 enforcement) ✓ · #426 (E3 seat-table config) ✓ ·
+**#427 (E4 seat cutover)** ← this slot · then #428 #429 #431 #430 #420 #419 #417.
+
+### #427 — ship/intake/plan seats through the executor (E4) · v3.45.0
+
+The FIRST consumer of `phase_executor`: `hooks/executor_routing_lib.py` — a `resolve-seat` /
+`dispatch` CLI routing the **ship / intake / plan** seats through `run_seat` as a verified choke
+point, gated by a per-seat `executorRouting` toggle in `.rawgentic_workspace.json` (default
+`inherit`; the executor is off until a seat is opted in, so merge is a no-op — the prose call sites
+land in #417). `dispatch` wires a per-attempt `check_pre` (primary + every fallback target, selected
+by the engine's attempt-index) → `run_seat` → `verify_post` → append-only routing-audit log; a
+three-way `inherit`/`executor`/`driver_only` tag (merge/CI/deploy/Step-16 stay driver-inline) and a
+granular fail-closed exit taxonomy (2 malformed · 3 availability/quota retryable · 4 enforcement
+breach · 5 internal/audit), structured `{ok:false,error}` on every non-zero. Capture/permit dirs
+derive under the project repo's git-ignored `.rawgentic/`; `reconcile_run` deferred to #420; the
+build seat stays fail-closed until #429. Supersedes #418.
+
+- **Design:** rev 3, hardened over a Codex peer consult + a Step-4 adversarial-on-design pass + a
+  verifier round (base=project-repo-root, run_id-less capture, pool-sig permits, per-attempt
+  check_pre, absent-vs-malformed config).
+- **Review:** Step-8a 2-reviewer (fixed a QuotaTimeout-escape High + exit-taxonomy gaps) + Step-11
+  3-agent + Codex adversarial-diff (fail-closed corrupt-workspace, repo-root containment,
+  RoutingError/schema-error in the taxonomy; D2 "post-check not appended" rejected — reconcile
+  recomputes verify_post).
+- **Verification:** full suite 3151+6skip → **3208+7skip** (0 failing); pylint hooks+tests 10/10;
+  security scan PASS (iac n/a). A **live** ship-seat `claude --print` spike (RUN_LIVE) verified the
+  real `actual_model==sonnet` end-to-end. No workflow-spine change → no diagram REV.
+
 ## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
 
 **Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped
