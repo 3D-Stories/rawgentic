@@ -1,0 +1,5 @@
+{
+  "model": "glm-4.5-flash",
+  "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+  "usage": {"prompt_tokens": 10, "completion_tokens": 22, "total_tokens": 32, "prompt_tokens_details": {"cached_tokens": 4}}
+}

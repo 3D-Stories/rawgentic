@@ -1,0 +1,21 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "Design looks sound.",
+  "stop_reason": "end_turn",
+  "session_id": "REDACTED",
+  "total_cost_usd": 1.4640460000000002,
+  "usage": {
+    "input_tokens": 21,
+    "cache_creation_input_tokens": 74499,
+    "cache_read_input_tokens": 862756,
+    "output_tokens": 9697,
+    "service_tier": "standard"
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {"inputTokens": 45068, "outputTokens": 16, "costUSD": 0.045147999999999994},
+    "claude-opus-4-8": {"inputTokens": 21, "outputTokens": 9697, "cacheReadInputTokens": 862756, "cacheCreationInputTokens": 74499, "costUSD": 1.4188980000000002}
+  },
+  "uuid": "REDACTED"
+}
