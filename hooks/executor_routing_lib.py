@@ -126,7 +126,17 @@ def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[s
     kind = classify_seat(seat)  # raises on unknown
     if kind == "driver_only":
         return "driver_only", "driver-only stage, never a seat"
-    modes = parse_executor_routing(_load_block(workspace_path, project, key="executorRouting", missing=_ABSENT))
+    # Fail CLOSED on a corrupt/unreadable workspace (strict_read=True): a config this
+    # enforcement boundary cannot evaluate must DENY (exit 2), not collapse into the same
+    # _ABSENT→inherit as a clean absence — else an executor-intended seat silently reverts to the
+    # legacy path on a mid-edit/corrupt workspace (a false cutover; Step-11 D3/A3). A genuinely
+    # absent workspace/entry still returns _ABSENT→inherit (that is "not configured", not "cannot
+    # evaluate"). model_routing keeps its fail-OPEN read (strict_read default False).
+    try:
+        raw = _load_block(workspace_path, project, key="executorRouting", missing=_ABSENT, strict_read=True)
+    except (OSError, ValueError) as exc:
+        raise MalformedConfig(f"workspace unreadable/corrupt — cannot evaluate executorRouting (fail-closed): {exc}") from exc
+    modes = parse_executor_routing(raw)
     mode = modes.get(seat, "inherit")
     if mode == "executor":
         return "executor", "seat routed through the executor"
@@ -148,12 +158,28 @@ def resolve_repo_root(workspace_path: str, project: str) -> Path:
     entry = _load_project_entry(workspace_path, project)
     if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
         raise MalformedConfig(f"cannot resolve repo root for project {project!r} (missing entry/path)")
-    return (Path(workspace_path).resolve().parent / entry["path"]).resolve()
+    ws_dir = Path(workspace_path).resolve().parent
+    root = (ws_dir / entry["path"]).resolve()
+    # Containment (Step-11 D4): project.path is workspace-RELATIVE. An absolute path (`/etc`) or a
+    # `../`-traversing one resolves OUTSIDE the workspace dir — which would write capture/permit
+    # dirs (prompts + observations) to an arbitrary location. Refuse anything not under ws_dir.
+    if root != ws_dir and ws_dir not in root.parents:
+        raise MalformedConfig(
+            f"project {project!r} path {entry['path']!r} escapes the workspace dir (absolute or ../ traversal) — refused")
+    return root
 
 
 def pool_signature(pool_concurrency: dict) -> str:
     """Short stable hash of the pool→concurrency map, so runs with INCOMPATIBLE pool definitions get
-    separate permit namespaces (never a silent shared ceiling; finding A3)."""
+    separate permit namespaces (never a silent shared ceiling; finding A3).
+
+    Named limit (Step-11 D1): keying the permit dir by the WHOLE map means any config change — even
+    to an unrelated pool — mints a new namespace, so runs straddling a mid-flight routing-table edit
+    can briefly each acquire a full allowance (the ceiling is not coordinated ACROSS the change). For
+    rawgentic this is not a live risk: one stable table, default-inherit until #417, and #420's
+    run-end reconcile records the digest per run to flag a cross-config straddle. Accepted trade-off:
+    guarding the more-dangerous silent-wrong-ceiling (incompatible defs sharing a dir) over the rarer
+    brief-over-allocation-during-a-table-edit."""
     return hashlib.sha256(json.dumps(pool_concurrency, sort_keys=True).encode("utf-8")).hexdigest()[:12]
 
 
@@ -204,7 +230,14 @@ def dispatch_seat(
     so every real attempt (primary + each fallback) is enforced and audited. ``verify_post`` runs
     once on the final Observation to drive the exit code.
     """
-    targets = routing.eligible_targets(seat, snapshot, author_provider=author_provider)
+    # eligible_targets → snapshot.seat raises RoutingError when the table lacks this seat (a
+    # stale/edited/wrong-project table). Catch it into the structured taxonomy — the dispatch path
+    # must not leak a bare traceback where _do_resolve's executor branch already maps it (Step-11 A2-F1).
+    try:
+        targets = routing.eligible_targets(seat, snapshot, author_provider=author_provider)
+    except routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=correlation_id, audit_path=str(audit.path))
 
     def wrapped_dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
         i = int(str(attempt_id).split("-", 1)[0])
@@ -344,14 +377,16 @@ def _do_dispatch(args) -> int:
     try:
         pe = _import_phase_executor()
     except ImportError as e:
-        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     try:
         action, _ = resolve_seat_action(args.seat, args.workspace, args.project)
         if action != "executor":
             raise MalformedConfig(f"dispatch called on a {action!r} seat {args.seat!r} — dispatch is only valid for an executor-mode seat")
         repo_root = resolve_repo_root(args.workspace, args.project)
     except MalformedConfig as e:
-        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     # phase_executor table load + path derivation: a missing/malformed shipped table fails CLOSED
     # (like the import guard) rather than crashing to a bare traceback (Step-8a R1/R2).
     try:
@@ -362,20 +397,24 @@ def _do_dispatch(args) -> int:
     except pe.routing.RoutingError as e:
         return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
     except OSError as e:
-        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     except Exception as e:  # noqa: BLE001 — e.g. jsonschema.ValidationError on a schema-invalid table
-        return _emit(_err(EXIT_INTERNAL, "routing_table_invalid", f"{type(e).__name__}: {e}", retryable=False))
+        return _emit(_err(EXIT_INTERNAL, "routing_table_invalid", f"{type(e).__name__}: {e}", retryable=False,
+                          correlation_id=args.correlation_id))
     # Trust-boundary CLI inputs: a missing/unreadable prompt or context file is bad input (exit 2).
     try:
         prompt = Path(args.prompt_file).read_text(encoding="utf-8")
         context = tuple(Path(c).read_text(encoding="utf-8") for c in (args.context_file or []))
     except OSError as e:
-        return _emit(_err(EXIT_MALFORMED, "prompt_or_context_unreadable", str(e), retryable=False))
+        return _emit(_err(EXIT_MALFORMED, "prompt_or_context_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     try:
         quota = pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency())
         audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
     except (OSError, ValueError) as e:
-        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False))
+        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     result = dispatch_seat(
         seat=args.seat, prompt=prompt, run_id=args.run_id,
         correlation_id=args.correlation_id, author_provider=args.author_provider,

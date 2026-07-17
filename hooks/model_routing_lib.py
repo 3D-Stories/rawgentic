@@ -40,20 +40,27 @@ def _warn(msg: str) -> None:
 _ABSENT: Final[object] = object()
 
 
-def _load_project_entry(workspace_path: str, project_name: str) -> dict | None:
+def _load_project_entry(workspace_path: str, project_name: str,
+                        *, strict_read: bool = False) -> dict | None:
     """Return the project's entry dict from the workspace, or None on any problem.
 
-    A real read error (unreadable / invalid JSON) is warned; a simply-absent workspace,
-    projects list, or project entry returns None quietly. Shared by `_load_block` and the
-    #427 executor-routing glue (one loader, one home)."""
+    A real read error (unreadable / invalid JSON) is warned then None (fail-open) — UNLESS
+    ``strict_read`` is set, in which case the read error is RAISED so an enforcement-boundary
+    caller (the #427 executor glue) can fail CLOSED rather than mistake a corrupt/unreadable
+    workspace for a clean absence (a false-cutover). A genuinely-absent workspace file
+    (FileNotFoundError), a missing projects list, or a missing entry returns None in BOTH modes —
+    those are true "not configured", not "cannot evaluate". Shared loader (one home) for
+    `_load_block` and the executor glue."""
     try:
         with open(workspace_path, encoding="utf-8") as f:
             ws = json.load(f)
     except FileNotFoundError:
-        return None
+        return None  # genuinely absent workspace — "not configured", not a read error
     except (OSError, ValueError) as exc:
-        # ValueError covers json.JSONDecodeError and UnicodeDecodeError (invalid
-        # UTF-8 bytes), both of which must fail open like any other bad workspace.
+        # ValueError covers json.JSONDecodeError and UnicodeDecodeError (invalid UTF-8). Fail
+        # open for modelRouting (default); fail closed (raise) for a strict executor-glue read.
+        if strict_read:
+            raise
         _warn(f"cannot read workspace ({exc}); using inherit")
         return None
     projects = ws.get("projects") if isinstance(ws, dict) else None
@@ -67,7 +74,7 @@ def _load_project_entry(workspace_path: str, project_name: str) -> dict | None:
 
 
 def _load_block(workspace_path: str, project_name: str, key: str = "modelRouting",
-                *, missing: object = _ABSENT) -> object:
+                *, missing: object = _ABSENT, strict_read: bool = False) -> object:
     """Return the project's ``<key>`` value from the workspace.
 
     - Key ABSENT (or workspace/entry unavailable) -> ``missing`` (default: the ``_ABSENT``
@@ -76,7 +83,7 @@ def _load_block(workspace_path: str, project_name: str, key: str = "modelRouting
       to ``{}``) so a caller can distinguish an absent key from a malformed one (#427). Callers
       that need a dict (e.g. ``resolve``) coerce a non-dict themselves.
     """
-    entry = _load_project_entry(workspace_path, project_name)
+    entry = _load_project_entry(workspace_path, project_name, strict_read=strict_read)
     if entry is None:
         return missing
     block = entry.get(key, _ABSENT)
@@ -116,8 +123,9 @@ def resolve(workspace_path: str, project_name: str, role: str) -> tuple[str, str
     """
     block = _load_block(workspace_path, project_name)
     if not isinstance(block, dict):
-        # Absent (the _ABSENT sentinel) or a malformed non-dict modelRouting -> fail open.
-        if block is not _ABSENT:
+        # Absent (the _ABSENT sentinel) or an explicit null -> silently inherit (parity with the
+        # pre-#427 `block is None` path); only a genuinely non-null, non-dict value warns.
+        if block is not _ABSENT and block is not None:
             _warn(f"modelRouting for '{project_name}' is not an object; using inherit")
         block = {}
     value = block.get(role, INHERIT)

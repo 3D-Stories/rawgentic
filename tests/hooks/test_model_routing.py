@@ -311,3 +311,10 @@ class TestLoadBlockKeyAndMissing:
         assert mr.resolve(self._ws(tmp_path, {"name": "x"}), "x", "review") == ("inherit", None)
         ws = self._ws(tmp_path, {"name": "x", "modelRouting": "bogus"})
         assert mr.resolve(ws, "x", "analysis") == ("inherit", None)
+
+    def test_explicit_null_modelrouting_no_warning(self, tmp_path, capsys):
+        # A2-F2: an explicit `modelRouting: null` resolves to inherit WITHOUT the spurious
+        # "not an object" warning (parity with the pre-#427 silent block-is-None path).
+        ws = self._ws(tmp_path, {"name": "x", "modelRouting": None})
+        assert mr.resolve(ws, "x", "review") == ("inherit", None)
+        assert "not an object" not in capsys.readouterr().err

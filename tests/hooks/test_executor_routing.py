@@ -388,6 +388,59 @@ def test_do_resolve_executor_missing_path_exit2(tmp_path):
     assert er._do_resolve(A()) == er.EXIT_MALFORMED
 
 
+def test_resolve_corrupt_workspace_fails_closed(tmp_path):
+    # Step-11 D3/A3: a PRESENT-but-corrupt/unreadable workspace must fail CLOSED (MalformedConfig →
+    # exit 2) for the enforcement glue, NOT silently collapse to inherit like a clean absence.
+    corrupt = tmp_path / "ws.json"
+    corrupt.write_text('{"projects": [ TRUNCATED not json', encoding="utf-8")
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_seat_action("ship", str(corrupt), "rawgentic")
+
+
+def test_resolve_absent_workspace_is_inherit_not_error(tmp_path):
+    # A genuinely-absent workspace is "not configured" → inherit (NOT a read-error fail-closed).
+    missing = str(tmp_path / "does-not-exist.json")
+    assert er.resolve_seat_action("ship", missing, "rawgentic")[0] == "inherit"
+
+
+def test_model_routing_stays_fail_open_on_corrupt_workspace(tmp_path):
+    # The shared loader must stay fail-OPEN for modelRouting (strict_read default False) — a corrupt
+    # workspace resolves to inherit, never raises (executor glue's strict read must not leak into it).
+    corrupt = tmp_path / "ws.json"
+    corrupt.write_text('{ not json', encoding="utf-8")
+    assert mr.resolve(str(corrupt), "rawgentic", "analysis") == ("inherit", None)
+
+
+@pytest.mark.parametrize("bad_path", ["/etc", "../../../../etc", "/tmp/evil"])
+def test_resolve_repo_root_rejects_escaping_path(tmp_path, bad_path):
+    # Step-11 D4: an absolute or ../-traversing project.path escapes the workspace dir → refused.
+    ws = _ws(tmp_path, path=bad_path)
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_repo_root(ws, "rawgentic")
+
+
+def test_dispatch_unknown_seat_in_table_exit2_not_traceback(tmp_path):
+    # Step-11 A2-F1: a routing table lacking the wired seat → RoutingError must map to structured
+    # exit 2, not escape as a bare traceback.
+    table = {
+        "schema_version": "1",
+        "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}, "zhipu": {"concurrency": 2}},
+        "seats": {"ship": {"primary": {"model": "claude-sonnet-5", "lane": _lane("claude")}, "chain": []}},
+        "forbidden_combinations": [],
+    }
+    snap = routing.RoutingSnapshot.from_table(table)  # note: NO "plan" seat
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.dispatch_seat(
+        seat="plan", prompt="hi", run_id="run1", correlation_id="wf2:step5", author_provider=None,
+        effort=None, timeout=5.0, context=(), snapshot=snap, quota=qc, audit=audit,
+        capture_root=str(tmp_path / "runs"), routing=routing, enforce=enforce, run_seat=run_seat,
+        dispatch_real=_stub(), quota_timeout=QuotaTimeout,
+    )
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "routing_table_invalid"
+
+
 def test_guarded_import_failure_exit5(tmp_path, monkeypatch):
     # A stale tree / missing dep => ImportError inside the subcommand => structured exit 5.
     def boom():
