@@ -191,6 +191,7 @@ def dispatch_seat(
     enforce,
     run_seat: Callable,
     dispatch_real: Callable,
+    quota_timeout=(),
 ) -> dict:
     """Run ``seat`` through the executor with per-attempt enforcement, returning a result dict with
     an ``exit`` code (see the exit taxonomy). ``phase_executor`` pieces are injected so tests drive a
@@ -204,7 +205,6 @@ def dispatch_seat(
     once on the final Observation to drive the exit code.
     """
     targets = routing.eligible_targets(seat, snapshot, author_provider=author_provider)
-    state = {"last_receipt": None}
 
     def wrapped_dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
         i = int(str(attempt_id).split("-", 1)[0])
@@ -225,7 +225,6 @@ def dispatch_seat(
         # EVERY attempt — an availability-failed fallback is a legitimate record reconcile forgives.
         stamped = dataclasses.replace(obs, dispatched_lane=dict(target["lane"]))
         audit.append_observation(stamped, receipt=receipt)
-        state["last_receipt"] = receipt
         return obs  # return the UN-stamped obs; run_seat stamps dispatched_lane on its own copy
 
     try:
@@ -240,8 +239,16 @@ def dispatch_seat(
     except routing.ChainExhausted as e:
         return _err(EXIT_AVAILABILITY, "chain_exhausted", str(e), retryable=True,
                     correlation_id=correlation_id, audit_path=str(audit.path))
+    except quota_timeout as e:  # pool saturation past the timeout — a retryable transient (R1 High)
+        return _err(EXIT_AVAILABILITY, "quota_timeout", str(e), retryable=True,
+                    correlation_id=correlation_id, audit_path=str(audit.path))
     except (OSError, ValueError) as e:  # audit/capture write failure AFTER a possible external call
         return _err(EXIT_INTERNAL, "audit_write_failed", str(e), retryable=False,
+                    correlation_id=correlation_id, audit_path=str(audit.path))
+    except Exception as e:  # noqa: BLE001 — outermost dispatch guard: a schema-validation error from
+        # audit append (jsonschema.ValidationError is NOT OSError/ValueError) or any other internal
+        # fault must still emit a structured exit 5 with the correlation id, never a bare traceback.
+        return _err(EXIT_INTERNAL, "internal_error", f"{type(e).__name__}: {e}", retryable=False,
                     correlation_id=correlation_id, audit_path=str(audit.path))
 
     pc = enforce.verify_post(final_obs)
@@ -290,10 +297,10 @@ def _import_phase_executor():
     import phase_executor.enforce as enforce  # noqa: PLC0415
     from phase_executor import run_seat  # noqa: PLC0415
     from phase_executor.engine import _dispatch_real  # noqa: PLC0415
-    from phase_executor.quota import QuotaCoordinator  # noqa: PLC0415
+    from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
     return types.SimpleNamespace(
         routing=routing, enforce=enforce, run_seat=run_seat,
-        dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator,
+        dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator, QuotaTimeout=QuotaTimeout,
     )
 
 
@@ -316,10 +323,19 @@ def _do_resolve(args) -> int:
             pe = _import_phase_executor()
         except ImportError as e:
             return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
-        repo_root = resolve_repo_root(args.workspace, args.project)
-        snap = pe.routing.snapshot_from_file(repo_root / _ROUTING_TABLE_REL)
-        targets = pe.routing.eligible_targets(args.seat, snap)
-        out["primary_model"] = targets[0]["model"] if targets else None
+        try:
+            repo_root = resolve_repo_root(args.workspace, args.project)
+            snap = pe.routing.snapshot_from_file(repo_root / _ROUTING_TABLE_REL)
+            targets = pe.routing.eligible_targets(args.seat, snap)
+            out["primary_model"] = targets[0]["model"] if targets else None
+        except MalformedConfig as e:
+            return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+        except pe.routing.RoutingError as e:
+            return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+        except OSError as e:
+            return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+        except Exception as e:  # noqa: BLE001 — never leak a bare traceback from resolve-seat
+            return _emit(_err(EXIT_INTERNAL, "internal_error", f"{type(e).__name__}: {e}", retryable=False))
     return _emit(out)
 
 
@@ -334,20 +350,39 @@ def _do_dispatch(args) -> int:
         if action != "executor":
             raise MalformedConfig(f"dispatch called on a {action!r} seat {args.seat!r} — dispatch is only valid for an executor-mode seat")
         repo_root = resolve_repo_root(args.workspace, args.project)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    # phase_executor table load + path derivation: a missing/malformed shipped table fails CLOSED
+    # (like the import guard) rather than crashing to a bare traceback (Step-8a R1/R2).
+    try:
         snap = pe.routing.snapshot_from_file(repo_root / _ROUTING_TABLE_REL)
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
-    prompt = Path(args.prompt_file).read_text(encoding="utf-8")
-    context = tuple(Path(c).read_text(encoding="utf-8") for c in (args.context_file or []))
-    quota = pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency())
-    audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+    except Exception as e:  # noqa: BLE001 — e.g. jsonschema.ValidationError on a schema-invalid table
+        return _emit(_err(EXIT_INTERNAL, "routing_table_invalid", f"{type(e).__name__}: {e}", retryable=False))
+    # Trust-boundary CLI inputs: a missing/unreadable prompt or context file is bad input (exit 2).
+    try:
+        prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+        context = tuple(Path(c).read_text(encoding="utf-8") for c in (args.context_file or []))
+    except OSError as e:
+        return _emit(_err(EXIT_MALFORMED, "prompt_or_context_unreadable", str(e), retryable=False))
+    try:
+        quota = pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency())
+        audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+    except (OSError, ValueError) as e:
+        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False))
     result = dispatch_seat(
         seat=args.seat, prompt=prompt, run_id=args.run_id,
         correlation_id=args.correlation_id, author_provider=args.author_provider,
         effort=args.effort, timeout=args.timeout, context=context,
         snapshot=snap, quota=quota, audit=audit, capture_root=paths["capture_root"],
         routing=pe.routing, enforce=pe.enforce, run_seat=pe.run_seat, dispatch_real=pe.dispatch_real,
+        quota_timeout=pe.QuotaTimeout,
     )
     return _emit(result)
 

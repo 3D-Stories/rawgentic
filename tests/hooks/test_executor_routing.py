@@ -21,8 +21,9 @@ er._ensure_pe_importable()  # put phase_executor/src on sys.path for this test m
 # pylint: disable=no-name-in-module
 from phase_executor import contract, enforce, routing  # noqa: E402
 from phase_executor.engine import run_seat  # noqa: E402
-from phase_executor.quota import QuotaCoordinator  # noqa: E402
+from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: E402
 # pylint: enable=no-name-in-module
+import jsonschema  # noqa: E402
 
 CLI = str(HOOKS / "executor_routing_lib.py")
 
@@ -326,6 +327,65 @@ def test_derived_dirs_ignored_by_tracked_gitignore(tmp_path):
     for path in (".rawgentic/runs/run1/routing-audit.jsonl", ".rawgentic/runtime/permits/abc/x"):
         r = subprocess.run(["git", "-C", str(fresh), "check-ignore", path], capture_output=True, text=True)
         assert r.returncode == 0, f"{path} NOT ignored by the tracked .gitignore alone (fresh clone would commit it)"
+
+
+def test_dispatch_quota_timeout_exit3(tmp_path):
+    # Step-8a R1 (High): a saturated pool past the timeout must map to the retryable exit 3, not a
+    # bare traceback. QuotaCoordinator with the claude pool limited to 0 + a tiny timeout.
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 0, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.dispatch_seat(
+        seat="ship", prompt="hi", run_id="run1", correlation_id="wf2:step12",
+        author_provider=None, effort=None, timeout=0.05, context=(),
+        snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
+        routing=routing, enforce=enforce, run_seat=run_seat, dispatch_real=_stub(),
+        quota_timeout=QuotaTimeout,
+    )
+    assert res["ok"] is False and res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "quota_timeout" and res["error"]["retryable"] is True
+
+
+def test_dispatch_audit_validation_error_exit5(tmp_path):
+    # Step-8a R2 F2: a jsonschema.ValidationError from audit append (NOT OSError/ValueError) must
+    # still emit a structured exit 5, not a bare traceback.
+    class SchemaBustedAudit:
+        path = tmp_path / "runs" / "run1" / "routing-audit.jsonl"
+        def append_receipt(self, receipt):
+            pass
+        def append_observation(self, obs, *, receipt):
+            raise jsonschema.exceptions.ValidationError("schema-invalid obs")
+    res, _ = _dispatch("ship", tmp_path, audit=SchemaBustedAudit())
+    assert res["ok"] is False and res["exit"] == er.EXIT_INTERNAL
+    assert res["error"].get("correlation_id") == "wf2:step5"
+
+
+def test_do_dispatch_missing_routing_table_structured(tmp_path):
+    # Step-8a R1 F2: a project repo lacking the shipped routing table must emit a structured exit,
+    # not crash. path points at a tmp dir with no phase_executor/.../routing-table.json.
+    repo = tmp_path / "projects" / "empty"
+    repo.mkdir(parents=True)
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}}, path="./projects/empty")
+    (tmp_path / "p.txt").write_text("hi")
+
+    class A:
+        seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
+        correlation_id = None; author_provider = None; effort = None; timeout = 5.0
+        workspace = ws; project = "rawgentic"
+    rc = er._do_dispatch(A())
+    assert rc in (er.EXIT_INTERNAL, er.EXIT_MALFORMED)  # structured, never a bare exit 1
+
+
+def test_do_resolve_executor_missing_path_exit2(tmp_path):
+    # Step-8a R1 F3: resolve_repo_root's MalformedConfig (no project.path) must be a structured
+    # exit 2 from _do_resolve's executor branch, not an uncaught escape.
+    p = tmp_path / "ws.json"
+    p.write_text(json.dumps({"projects": [
+        {"name": "rawgentic", "executorRouting": {"version": 1, "seats": {"ship": "executor"}}}
+    ]}), encoding="utf-8")  # note: NO "path" field
+
+    class A:
+        seat = "ship"; workspace = str(p); project = "rawgentic"
+    assert er._do_resolve(A()) == er.EXIT_MALFORMED
 
 
 def test_guarded_import_failure_exit5(tmp_path, monkeypatch):
