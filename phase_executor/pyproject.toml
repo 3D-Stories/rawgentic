@@ -1,0 +1,27 @@
+[project]
+name = "phase-executor"
+version = "0.1.0"
+description = "Deterministic model-seat execution engine — engine adapters, Observation JSON schemas, and declarative routing. Extracted from the rawgentic bench cell-runner; consumed by rawgentic and kukakuka."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+# The zhipuai adapter shells out via uv (uv sync --locked --extra glm, or uv run --with);
+# it is not imported into the test/host process. sniffio is declared because zhipuai 2.1.5
+# imports it without declaring it (upstream metadata bug).
+glm = [
+    "zhipuai>=2.1.5",
+    "sniffio",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# packages includes every file under src/phase_executor (schemas/*.json, routing/*.json,
+# workers/*.py included by default — no force-include needed).
+packages = ["src/phase_executor"]
