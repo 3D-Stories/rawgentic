@@ -1,0 +1,48 @@
+{
+  "schema_version": "1",
+  "pools": {
+    "claude": {"concurrency": 2},
+    "codex": {"concurrency": 4},
+    "zhipu": {"concurrency": 2}
+  },
+  "seats": {
+    "review": {
+      "floor": 80,
+      "primary": {
+        "model": "claude-fable-5",
+        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+      },
+      "chain": [
+        {
+          "model": "gpt-5.6-sol",
+          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+        },
+        {
+          "model": "claude-sonnet-5",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        }
+      ]
+    },
+    "build": {
+      "floor": 76,
+      "primary": {
+        "model": "claude-sonnet-5",
+        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+      },
+      "chain": [
+        {
+          "model": "claude-opus-4-8",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        },
+        {
+          "model": "gpt-5.6-terra",
+          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+        }
+      ]
+    }
+  },
+  "forbidden_combinations": [
+    {"model_pattern": "haiku", "reason": "rawgentic never routes a model seat to Haiku (config + hook enforced)."},
+    {"rule": "cross_model_author", "reason": "An adversarial reviewer must never share the author's engine (D9)."}
+  ]
+}
