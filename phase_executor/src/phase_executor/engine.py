@@ -144,11 +144,12 @@ class Candidate:
                 "pool": self.pool, "credential_ref": self.credential_ref}
 
     def as_target(self) -> dict:
-        """A routing target view for forbidden_combinations evaluation."""
-        return {
-            "model": self.model,
-            "lane": {"provider": self.provider, "transport": self.transport, "pool": self.pool},
-        }
+        """A routing target view for forbidden_combinations evaluation AND enforcement identity.
+        Single-sources the lane via ``lane()`` (#425 Step-8a: the forbidden-eval view, the
+        receipt/target_identity source, and the stamped dispatched_lane must be the SAME lane —
+        otherwise a competitive candidate's stamped 6-field lane cannot be reconciled against a
+        3-field as_target identity)."""
+        return {"model": self.model, "lane": self.lane()}
 
 
 def _harness_observation(c: "Candidate", *, run_id: str, digest: str, reason: str) -> contract.Observation:
