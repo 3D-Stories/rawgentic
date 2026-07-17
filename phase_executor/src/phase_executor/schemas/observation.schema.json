@@ -122,9 +122,10 @@
         "transport": {"type": "string", "minLength": 1},
         "auth_mode": {"type": "string", "minLength": 1},
         "pool": {"type": "string", "minLength": 1},
-        "credential_ref": {"type": ["string", "null"]}
+        "credential_ref": {"type": ["string", "null"]},
+        "participation_mode": {"type": "string"}
       },
-      "description": "The lane the executor ACTUALLY dispatched on (#425 B), stamped by the engine at dispatch — same shape as a routing-table lane. OPTIONAL/additive (a v1 producer that omits it still validates; kukakuka parity). Enables independent receipt<->observation binding in the run-end audit (enforce.reconcile_run)."
+      "description": "The lane the executor ACTUALLY dispatched on (#425 B), stamped by the engine at dispatch — the SAME shape as a routing-table $defs/lane (same required set + all 6 optional-inclusive properties, incl. participation_mode) so a lane can be stamped verbatim without projection. OPTIONAL/additive (a v1 producer that omits it still validates; kukakuka parity). Enables independent receipt<->observation binding in the run-end audit (enforce.reconcile_run)."
     },
     "routing_config_digest": {
       "type": "string",
