@@ -21,6 +21,16 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
   (the ONLY sanctioned way to read `.rawgentic.json` — never hand-derive, never probe the
   filesystem for config-level facts), `adversarial_review_lib.py is-enabled`,
   `work_summary.py summarize`, `render_artifact.py`, `security_scan.py scan`.
+- **Fourth layer (since #424): `phase_executor/`** — a self-contained uv-native package (src
+  layout: `phase_executor/pyproject.toml`+`uv.lock`, code under `phase_executor/src/phase_executor/`)
+  that is NOT part of the hooks/skills machinery. It is the deterministic model-seat execution
+  engine (Observation JSON-schema contract, engine adapters, routing, inter-process quota),
+  extraction-ready for kukakuka, so it deliberately does NOT import `hooks/`. Its tests live under
+  `tests/phase_executor/` (collected by the normal `pytest tests/` gate via a localized
+  `conftest.py` sys.path shim to `phase_executor/src` — the repo has no root packaging, so do NOT
+  add a root pyproject/conftest). Live provider-call tests are `@pytest.mark.live`, skipped unless
+  `RUN_LIVE=1` (they need real CLIs/SDK auth, never CI). The CI lint lanes (`pylint hooks/*.py`,
+  `pylint tests/`) do not yet cover `phase_executor/src/` — lint it directly when editing.
 - **The repo is NOT the running plugin.** Sessions load from
   `~/.claude/plugins/cache/rawgentic/rawgentic/<version>/` — editing this repo changes
   nothing live until reinstall AND a new session; one session can hold skills from
