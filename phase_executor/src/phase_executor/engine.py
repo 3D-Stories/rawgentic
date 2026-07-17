@@ -28,11 +28,8 @@ from .quota import QuotaCoordinator
 # provider (lane) -> adapter engine family
 PROVIDER_ENGINE = {"anthropic": "claude", "openai": "codex", "zhipuai": "zhipuai"}
 # Statuses that warrant a chain fallback: the transport failed to deliver a usable response.
-# NO_RESPONSE (empty transport / empty output) is included; a genuine parse_error (got bytes,
-# couldn't parse) and identity/usage failures are NOT — the model responded.
-AVAILABILITY_FAILURES = frozenset(
-    {contract.LAUNCH_ERROR, contract.NONZERO_EXIT, contract.TIMEOUT, contract.NO_RESPONSE}
-)
+# Single-sourced in contract so engine (fallback) and enforce (breach classification) agree.
+AVAILABILITY_FAILURES = contract.AVAILABILITY_FAILURES
 
 
 class InfeasibleBakeoff(RuntimeError):

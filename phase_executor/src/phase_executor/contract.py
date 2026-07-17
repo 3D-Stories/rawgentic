@@ -37,6 +37,13 @@ PARSE_STATUSES = frozenset(
     {OK, NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, PARSE_ERROR, NO_RESPONSE, IDENTITY_FAILURE, USAGE_UNAVAILABLE, HARNESS_ERROR}
 )
 
+# Statuses where the transport failed to deliver a usable envelope: a chain fallback is warranted
+# and the run-end audit treats them as legitimate (non-breach) attempts. Every OTHER non-ok status
+# (identity_failure, parse_error, usage_unavailable, harness_error) means an envelope WAS produced
+# but is not a clean success — routing enforcement treats an absent/mismatched identity there as a
+# breach (verified, not trusted). Single-sourced here so engine and enforce agree.
+AVAILABILITY_FAILURES = frozenset({NONZERO_EXIT, TIMEOUT, LAUNCH_ERROR, NO_RESPONSE})
+
 _SCHEMA_DIR = Path(__file__).resolve().parent / "schemas"
 
 _PROVIDER_PREFIXES = (

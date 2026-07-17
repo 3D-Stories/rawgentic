@@ -8,6 +8,7 @@
   "seats": {
     "review": {
       "floor": 80,
+      "role": "review",
       "primary": {
         "model": "claude-fable-5",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
@@ -25,6 +26,7 @@
     },
     "build": {
       "floor": 76,
+      "role": "build",
       "primary": {
         "model": "claude-sonnet-5",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}

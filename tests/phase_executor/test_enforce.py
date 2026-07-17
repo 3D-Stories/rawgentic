@@ -25,6 +25,7 @@ def _snapshot():
         "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}, "zhipu": {"concurrency": 2}},
         "seats": {
             "review": {
+                "role": "review",
                 "primary": {"model": "claude-fable-5", "lane": _lane("claude")},
                 "chain": [
                     {"model": "gpt-5.6-sol", "lane": _lane("codex", provider="openai")},
@@ -32,6 +33,7 @@ def _snapshot():
                 ],
             },
             "build": {
+                "role": "build",
                 "primary": {"model": "claude-sonnet-5", "lane": _lane("claude")},
                 "chain": [{"model": "gpt-5.6-terra", "lane": _lane("codex", provider="openai")}],
             },
@@ -451,3 +453,84 @@ def test_enforcement_api_exported_at_package_top_level():
                  "PostCheck", "ExpectedCall", "Reconcile", "target_identity", "audited_digests"]:
         assert hasattr(pe, name), f"missing top-level export: {name}"
         assert name in pe.__all__, f"missing from __all__: {name}"
+
+
+def test_reconcile_breach_not_forgiven_by_verified_sibling():
+    """Step-8a Finding 1: a wrong-model breach (requested!=actual, billed) on one attempt must NOT
+    be laundered by a sibling attempt that verified — only availability failures are forgivable."""
+    recs = [
+        _receipt_rec("n0"), _obs_rec("n0", requested="claude-fable-5", actual="claude-sonnet-5"),
+        _receipt_rec("n1"), _obs_rec("n1"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.unverified
+
+
+def test_reconcile_seat_drift_binding_mismatch():
+    """Step-8a Finding 2: an observation whose inner seat differs from its bound receipt's seat is
+    a binding_mismatch (defense-in-depth against seat drift)."""
+    obs = _obs_rec("n1")
+    obs["observation"]["seat"] = "build"  # receipt is a review receipt
+    recs = [_receipt_rec("n1"), obs]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("seat-drift" in x for x in res.binding_mismatch)
+
+
+# ---- Step-8a consolidated fixes: verify_post envelope semantics + seat role + require_nonempty ----
+
+def test_verify_post_identity_failure_is_breach():
+    """Step-8a: identity_failure (a produced envelope with absent/wrong model) is a BREACH, not a
+    benign non-ok — the earlier 'any non-ok is benign' let a real wrong-model attempt escape."""
+    pc = enforce.verify_post(_obs_dict(parse_status="identity_failure", actual_model=None, usage=None))
+    assert not pc.ok and not pc.verified and pc.reason == "identity_missing"
+
+
+def test_verify_post_usage_unavailable_matching_identity_is_verified():
+    """Step-8a: usage_unavailable with a MATCHING actual_model is verified (identity attested; only
+    token counts missing) — not wrongly refused (over-fail-closed)."""
+    pc = enforce.verify_post(_obs_dict(parse_status="usage_unavailable",
+                                       requested_model="claude-opus-4-8", actual_model="claude-opus-4-8", usage=None))
+    assert pc.ok and pc.verified
+
+
+def test_reconcile_identity_failure_not_forgiven_by_verified_sibling():
+    """Step-8a Finding: a real-envelope wrong-model attempt (identity_failure) must NOT be laundered
+    by a verified sibling — the case the first fix missed."""
+    recs = [
+        _receipt_rec("n0"), _obs_rec("n0", status="identity_failure"),
+        _receipt_rec("n1"), _obs_rec("n1"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.unverified
+
+
+def _role_snapshot(seat_name, role):
+    table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
+             "seats": {seat_name: {"role": role, "primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}} if role
+                      else {seat_name: {"primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}},
+             "forbidden_combinations": []}
+    return routing.RoutingSnapshot.from_table(table)
+
+
+def test_check_pre_role_enforces_on_renamed_seat():
+    """Step-8a: enforcement keys on the seat ROLE, so a review-role seat under ANY name still
+    requires author_provider (a name-based check silently skipped a renamed seat)."""
+    snap = _role_snapshot("code_review", "review")
+    t = _target("claude-fable-5", _lane("claude"))
+    r = check_pre("code_review", t, snap, correlation_id="c", attempt_id="0", author_provider=None)
+    assert "author_provider_missing" in r.violations
+
+
+def test_check_pre_no_role_no_requirement():
+    """A seat with no role carries no review/build requirement (explicit config, not a name guess)."""
+    snap = _role_snapshot("misc", None)
+    t = _target("claude-fable-5", _lane("claude"))
+    r = check_pre("misc", t, snap, correlation_id="c", attempt_id="0", author_provider=None)
+    assert r.verdict == "pass" and not r.violations
+
+
+def test_reconcile_require_nonempty_refuses_empty():
+    """Step-8a Finding 3: require_nonempty makes an empty expected-set refuse ship, not pass vacuously."""
+    assert enforce.reconcile_run([], [], initial_digest="sha256:d").ok  # default: empty is ok
+    res = enforce.reconcile_run([], [], initial_digest="sha256:d", require_nonempty=True)
+    assert not res.ok and res.orphan

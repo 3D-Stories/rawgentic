@@ -91,11 +91,11 @@ def check_pre(seat, target, snapshot, *, correlation_id, attempt_id, gate_digest
     Accumulates ALL violations (never short-circuits — the caller sees every problem):
     - ``off_chain``: the target's full identity is not one of the seat's declared chain entries.
     - ``forbidden``: a ``forbidden_combinations`` row matches (never-Haiku; cross_model_author).
-    - ``author_provider_missing``: a review seat with no ``author_provider`` (the cross_model_author
-      rule would otherwise be silently inert — fail closed).
-    - build gate (requirement DERIVED from ``seat == "build"``, never a caller bool):
-      ``gate_validation_unavailable`` when no ``gate_validator`` is supplied (fail closed until #429
-      provides one); ``gate_invalid`` when the validator rejects ``gate_digest``.
+    - ``author_provider_missing``: a ``role: "review"`` seat with no ``author_provider`` (the
+      cross_model_author rule would otherwise be silently inert — fail closed).
+    - build gate (requirement DERIVED from the seat's ``role == "build"``, never a caller bool or a
+      literal seat name): ``gate_validation_unavailable`` when no ``gate_validator`` is supplied
+      (fail closed until #429 provides one); ``gate_invalid`` when the validator rejects ``gate_digest``.
 
     Unknown seat -> ``routing.RoutingError`` (fail-loud). Returns a ``PreReceipt``;
     ``verdict == "pass"`` iff there are no violations.
@@ -108,9 +108,13 @@ def check_pre(seat, target, snapshot, *, correlation_id, attempt_id, gate_digest
     reason = routing.target_forbidden_reason(target, snapshot, author_provider=author_provider)
     if reason is not None:
         violations.append(f"forbidden: {reason}")
-    if seat == "review" and author_provider is None:
+    # Enforcement is keyed on the seat's declared ``role`` in the routing table, NOT its literal name
+    # (Step-8a: a name-based check silently disabled itself on a renamed seat, and is not portable to
+    # kukakuka's seat vocabulary). A seat with no ``role`` carries no review/build requirement.
+    role = seat_obj.get("role")
+    if role == "review" and author_provider is None:
         violations.append("author_provider_missing")
-    if seat == "build":
+    if role == "build":
         if gate_validator is None:
             violations.append("gate_validation_unavailable")
         elif not gate_validator(gate_digest):
@@ -143,15 +147,25 @@ class PostCheck:
 
 
 def verify_post(obs) -> PostCheck:
-    """Post-dispatch verification. On ``parse_status == "ok"`` the provider-reported ``actual_model``
-    MUST canonicalize-match ``requested_model``; a mismatch (``requested_actual_mismatch``) or a
-    missing identity (``identity_missing``) is a NON-retryable enforcement breach — the model
-    responded with the wrong/absent id, so retrying re-bills the same wrong route. A non-ok status
-    is an honest failure (already fell back in ``run_seat`` for availability): recorded, not a breach.
+    """Post-dispatch verification, keyed on whether an envelope was produced (Step-8a: the earlier
+    version treated EVERY non-ok status as benign, so ``identity_failure`` — the real-envelope
+    wrong-model case — escaped the breach check).
+
+    - An AVAILABILITY failure (``launch_error``/``nonzero_exit``/``timeout``/``no_response``) means no
+      usable envelope: ``ok=True, verified=False`` — an honest failure (``run_seat`` already fell
+      back), not a breach.
+    - Otherwise an envelope WAS produced (``ok``, ``usage_unavailable``, ``identity_failure``,
+      ``parse_error``, ``harness_error``): routing is VERIFIED iff the provider-attested
+      ``actual_model`` canonicalize-matches ``requested_model``. A missing identity
+      (``identity_missing``) or a mismatch (``requested_actual_mismatch``) is a NON-retryable breach
+      (``ok=False``) — retrying re-bills the same wrong route. (This VERIFIES a ``usage_unavailable``
+      call whose identity matches — identity is attested, only token counts are missing — instead of
+      wrongly refusing it.)
+
     Accepts an ``Observation`` or its dict form."""
     d = obs.to_dict() if isinstance(obs, contract.Observation) else obs
     status = d.get("parse_status")
-    if status != contract.OK:
+    if status in contract.AVAILABILITY_FAILURES:
         return PostCheck(ok=True, verified=False, reason=str(status), retryable=False)
     actual = d.get("actual_model")
     if not actual:
@@ -294,15 +308,23 @@ class Reconcile:
     orphan: tuple = ()
 
 
-def reconcile_run(expected, records, *, initial_digest):
+def reconcile_run(expected, records, *, initial_digest, require_nonempty=False):
     """Run-end audit: bind every expected seat call to a PASSED receipt + a VERIFIED observation,
     with the observation's OWN ``dispatched_lane``/digest matching the receipt (independent binding).
     Refuses ship (``ok=False``) on any anomaly. ``known_digests`` is derived INTERNALLY via
     ``audited_digests`` (not a caller input) from a trusted ``initial_digest``. The ``expected``
-    sequence must have unique ``(seat, correlation_id)`` tuples (else ValueError)."""
+    sequence must have unique ``(seat, correlation_id)`` tuples (else ValueError). Expects the
+    fail-closed-validated output of ``RoutingAuditLog.records()``; a raw record missing a required
+    receipt field fails loud (KeyError), never a silent pass.
+
+    ``require_nonempty`` (Step-8a defense-in-depth): when True, an EMPTY ``expected`` refuses ship
+    rather than passing vacuously — so a wiring bug that drops the expected-set cannot silently ship
+    a run in which nothing was verified."""
     exp_keys = [(e.seat, e.correlation_id) for e in expected]
     if len(exp_keys) != len(set(exp_keys)):
         raise ValueError("reconcile_run: expected has duplicate (seat, correlation_id) tuples")
+    if require_nonempty and not exp_keys:
+        return Reconcile(ok=False, orphan=("no-expected-calls: require_nonempty set but expected is empty",))
     exp_set = set(exp_keys)
     known = audited_digests(records, initial_digest)  # raises on a broken epoch chain
 
@@ -336,6 +358,9 @@ def reconcile_run(expected, records, *, initial_digest):
         rec = by_nonce.get(n)
         if rec is None:
             binding_mismatch.append(f"{n}:no-receipt")
+            continue
+        if inner.get("seat") != rec["seat"]:  # Step-8a Finding 2: obs seat must match its receipt's
+            binding_mismatch.append(f"{n}:seat-drift")
             continue
         lane = inner.get("dispatched_lane")
         if not lane:
@@ -375,10 +400,14 @@ def reconcile_run(expected, records, *, initial_digest):
             elif not pc.ok:
                 saw_breach = True
             # pc.ok and not verified => availability failure => a legitimate fallback attempt
-        if saw_verified:
-            continue
+        # A wrong-model BREACH (requested!=actual, non-retryable) is NEVER forgiven — evaluated
+        # BEFORE saw_verified, because a sibling attempt verifying must not launder a recorded,
+        # billed breach on the same call (Step-8a Finding 1: only availability failures are
+        # legitimate forgivable siblings, per the design).
         if saw_breach:
             unverified.append(key)
+        elif saw_verified:
+            continue
         elif saw_missing_obs:
             missing_obs.append(key)
         else:
