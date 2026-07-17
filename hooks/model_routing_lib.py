@@ -32,34 +32,56 @@ def _warn(msg: str) -> None:
     print(f"[model_routing] {msg}", file=sys.stderr)
 
 
-def _load_block(workspace_path: str, project_name: str) -> dict:
-    """Return the project's modelRouting dict, or {} on any problem (warned)."""
+# Sentinel distinguishing an ABSENT config key from a present-but-empty/malformed one.
+# `_load_block(..., missing=_ABSENT)` returns this only when the key is not present at all,
+# so a caller (e.g. the executor-routing glue, #427) can tell "not configured" (fail-safe to
+# inherit) from "present but not an object" (a malformed config to reject). `resolve` passes the
+# default and coerces anything non-dict back to {} so its fail-open contract is unchanged.
+_ABSENT: Final[object] = object()
+
+
+def _load_project_entry(workspace_path: str, project_name: str) -> dict | None:
+    """Return the project's entry dict from the workspace, or None on any problem.
+
+    A real read error (unreadable / invalid JSON) is warned; a simply-absent workspace,
+    projects list, or project entry returns None quietly. Shared by `_load_block` and the
+    #427 executor-routing glue (one loader, one home)."""
     try:
         with open(workspace_path, encoding="utf-8") as f:
             ws = json.load(f)
     except FileNotFoundError:
-        return {}
+        return None
     except (OSError, ValueError) as exc:
         # ValueError covers json.JSONDecodeError and UnicodeDecodeError (invalid
         # UTF-8 bytes), both of which must fail open like any other bad workspace.
         _warn(f"cannot read workspace ({exc}); using inherit")
-        return {}
+        return None
     projects = ws.get("projects") if isinstance(ws, dict) else None
     if not isinstance(projects, list):
-        return {}
-    entry = next(
+        return None
+    return next(
         (p for p in projects
          if isinstance(p, dict) and p.get("name") == project_name),
         None,
     )
+
+
+def _load_block(workspace_path: str, project_name: str, key: str = "modelRouting",
+                *, missing: object = _ABSENT) -> object:
+    """Return the project's ``<key>`` value from the workspace.
+
+    - Key ABSENT (or workspace/entry unavailable) -> ``missing`` (default: the ``_ABSENT``
+      sentinel). A caller wanting the legacy fail-open dict passes ``missing={}``.
+    - Key PRESENT -> the raw value, dict or not. A non-dict is returned VERBATIM (not coerced
+      to ``{}``) so a caller can distinguish an absent key from a malformed one (#427). Callers
+      that need a dict (e.g. ``resolve``) coerce a non-dict themselves.
+    """
+    entry = _load_project_entry(workspace_path, project_name)
     if entry is None:
-        return {}
-    block = entry.get("modelRouting")
-    if block is None:
-        return {}
-    if not isinstance(block, dict):
-        _warn(f"modelRouting for '{project_name}' is not an object; using inherit")
-        return {}
+        return missing
+    block = entry.get(key, _ABSENT)
+    if block is _ABSENT:
+        return missing
     return block
 
 
@@ -93,6 +115,11 @@ def resolve(workspace_path: str, project_name: str, role: str) -> tuple[str, str
     delegation block.)
     """
     block = _load_block(workspace_path, project_name)
+    if not isinstance(block, dict):
+        # Absent (the _ABSENT sentinel) or a malformed non-dict modelRouting -> fail open.
+        if block is not _ABSENT:
+            _warn(f"modelRouting for '{project_name}' is not an object; using inherit")
+        block = {}
     value = block.get(role, INHERIT)
     effort: str | None = None
     if isinstance(value, dict):
