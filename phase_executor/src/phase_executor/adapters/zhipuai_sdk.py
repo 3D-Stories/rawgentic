@@ -75,7 +75,7 @@ def _invoke_worker(payload: str, timeout: float) -> ProcOutcome:
     return last  # both attempts failed; return the last outcome for the Observation
 
 
-def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str) -> contract.Observation:
+def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
     payload = json.dumps({"model": req.requested_model, "prompt": req.prompt, "max_tokens": 1024})
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
@@ -88,7 +88,7 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     cap.write_output(parsed.text)
     obs = build_observation(
         req=req, engine=ENGINE, run_id=run_id, attempt_id=attempt_id, parsed=parsed, proc=proc,
-        timing_ms=timing_ms, queued_ms=0, raw_capture_path=str(cap.path), routing_config_digest=routing_config_digest,
+        timing_ms=timing_ms, queued_ms=queued_ms, raw_capture_path=str(cap.path), routing_config_digest=routing_config_digest, fallback_reason=fallback_reason,
     )
     cap.write_observation(obs.to_dict())
     cap.finalize()

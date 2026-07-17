@@ -78,7 +78,7 @@ def parse_codex(stdout_jsonl: str, *, requested_model: str, transport: str = "na
     return ParsedResult(text=text or "", actual_model=actual, usage=usage, payload=text)
 
 
-def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, cwd: Optional[str] = None) -> contract.Observation:
+def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None, cwd: Optional[str] = None) -> contract.Observation:
     import os  # noqa: PLC0415
     work = cwd or os.getcwd()
     cmd = build_command(req.requested_model, work, effort=req.effort or "high")
@@ -93,7 +93,7 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     cap.write_output(parsed.text)
     obs = build_observation(
         req=req, engine=ENGINE, run_id=run_id, attempt_id=attempt_id, parsed=parsed, proc=proc,
-        timing_ms=timing_ms, queued_ms=0, raw_capture_path=str(cap.path), routing_config_digest=routing_config_digest,
+        timing_ms=timing_ms, queued_ms=queued_ms, raw_capture_path=str(cap.path), routing_config_digest=routing_config_digest, fallback_reason=fallback_reason,
     )
     cap.write_observation(obs.to_dict())
     cap.finalize()
