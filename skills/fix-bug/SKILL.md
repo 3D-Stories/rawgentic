@@ -134,6 +134,12 @@ Resolution decision table (WF3 dispatches only `review`):
 | Tier 1: the named `pr-review-toolkit:*` agent ran | `primary` |
 | Tier 2: `rawgentic:rawgentic-reviewer` ran as the SUBSTITUTE for an unresolvable named type | `fallback` — the first real producer (#331) |
 | Tier 3: generic inline-prompt dispatch (`subagent_type` = `generic-review`) | `generic` |
+
+**Seat fallback chains + circuit breaker (#417).** WF3's `review` seat model is a config-declared chain (the routing table, interim fable → sol → sonnet, #426), tried in order on an AVAILABILITY failure with a chain-aware cross-model skip; a chain that exhausts its eligible entries is a handled hard failure, never a silent downgrade. This is DISTINCT from the per-slot agent-TYPE descent in the tier table above (which selects the reviewer type, not the model).
+
+**Concurrency ceiling (#417).** ≤ 3 concurrent Claude subagents (the standing cap); reserve one slot for the driver when it dispatches Claude work alongside them → an effective working ceiling of 2. Prose rule, no programmatic clamp — honor it when fanning out review agents (a codex/zhipu candidate consumes no Claude slot).
+
+**Driver seat — guidance, not enforcement (#417).** opus-4-8 is the recommended session/orchestrator model (the strong-model-on-top reliability floor; unbenchmarked until the driver-bench, #430). Guidance only — the harness owns the session model.
 </model-routing-resolve>
 
 <headless-mode>
