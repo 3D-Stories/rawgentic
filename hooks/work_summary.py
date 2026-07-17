@@ -488,6 +488,27 @@ def validate_record(record, *, strict=False) -> list:
                     if v is not None and not _is_str(v):
                         errs.append(f"dispatches[{i}].{field} must be a string "
                                     "or null")
+                # #420 routing telemetry — OPTIONAL per-dispatch fields, validated
+                # only-if-present so pre-#420 6-key entries + old records stay rc=0
+                # (populated once #417 wires the executor). Excludes prompt contents.
+                for field in ("preferred_model", "actual_model", "fallback_reason"):
+                    if field in item and item[field] is not None and not _is_str(item[field]):
+                        errs.append(f"dispatches[{i}].{field} must be a string or null")
+                for field in ("queued_ms", "concurrency"):
+                    if field in item and item[field] is not None:
+                        v = item[field]
+                        # non-negative: a queue-wait / permit-count is never < 0 (matches every
+                        # other count/duration field in this validator; Step-11 finding).
+                        if not isinstance(v, int) or isinstance(v, bool) or v < 0:
+                            errs.append(f"dispatches[{i}].{field} must be a non-negative int or null")
+                if "selector" in item and item["selector"] is not None:
+                    sel = item["selector"]
+                    if not isinstance(sel, dict):
+                        errs.append(f"dispatches[{i}].selector must be an object or null")
+                    else:
+                        for sk in ("risk_level", "complexity", "ceiling"):
+                            if sk in sel and sel[sk] is not None and not _is_str(sel[sk]):
+                                errs.append(f"dispatches[{i}].selector.{sk} must be a string or null")
 
     return errs
 

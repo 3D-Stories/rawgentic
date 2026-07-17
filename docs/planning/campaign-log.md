@@ -74,6 +74,13 @@ ceilings + parallel lanes fall out for free. No `credential_ref` → environment
 codex/zhipu untouched. + per-account setup runbook + ToS note in the phase_executor README.
 Small-standard lane; suite 3246+7 → 3252+7 (+6); no spine change → no diagram REV. (child 6/10)
 
+### #420 — routing telemetry in run records · v3.48.0
+
+Extends run-record `dispatches[]` with OPTIONAL per-dispatch routing telemetry (preferred/actual
+model, fallback_reason, queued_ms, concurrency, selector inputs) — validated-optional (old records +
+pre-#420 entries stay rc=0), populated once #417 wires the executor. Small-standard lane; suite
+3252+7 → 3262+7 (+10); no spine change → no diagram REV. (child 7/10)
+
 ## Epic #408 slot 2 — #393: disposition ledger for pass-N adversarial reviews · v3.40.0
 
 **Issue.** #393 (feature, standard, full spine; epic #408 auto-run child 2, scoped
