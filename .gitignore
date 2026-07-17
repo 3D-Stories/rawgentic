@@ -34,6 +34,12 @@ claude_docs/
 # repo's `.git/info/exclude` at runtime for app repos that lack this line.
 .rawgentic/review-state/*.json
 
+# #427: executor-routing capture + quota-permit dirs (routed-seat run records / receipts /
+# provider-reported observations / inter-process permits). Tracked here — NOT only in the
+# checkout-local .git/info/exclude — so a fresh clone or CI never commits captured prompts/obs.
+/.rawgentic/runs/
+/.rawgentic/runtime/
+
 # Vendored external command copies (#194): third-party prompt content — a durable
 # local copy, never committed (redistribution/licensing). See docs/external-references.md
 .rawgentic-vendored/

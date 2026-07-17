@@ -279,3 +279,42 @@ class TestSelectImplModel:
         # and a genuine high-risk task IS labelled as such
         _, hi_reason = mr.select_impl_model("sonnet", "high", "standard_feature")
         assert "high-risk/complex" in hi_reason
+
+
+class TestLoadBlockKeyAndMissing:
+    """#427: _load_block gains a key= and a missing sentinel so a caller can tell an ABSENT config
+    key from a present-but-non-dict one; resolve() stays fail-open regardless."""
+
+    def _ws(self, tmp_path, entry):
+        p = tmp_path / "w.json"
+        p.write_text(json.dumps({"projects": [entry]}), encoding="utf-8")
+        return str(p)
+
+    def test_absent_key_returns_missing_sentinel(self, tmp_path):
+        ws = self._ws(tmp_path, {"name": "x", "modelRouting": {"review": "opus"}})
+        assert mr._load_block(ws, "x", key="executorRouting") is mr._ABSENT
+
+    def test_present_non_dict_returned_raw(self, tmp_path):
+        ws = self._ws(tmp_path, {"name": "x", "executorRouting": "oops"})
+        assert mr._load_block(ws, "x", key="executorRouting") == "oops"
+
+    def test_present_dict_returned(self, tmp_path):
+        ws = self._ws(tmp_path, {"name": "x", "executorRouting": {"version": 1}})
+        assert mr._load_block(ws, "x", key="executorRouting") == {"version": 1}
+
+    def test_load_project_entry(self, tmp_path):
+        ws = self._ws(tmp_path, {"name": "x", "path": "./p"})
+        assert mr._load_project_entry(ws, "x")["path"] == "./p"
+        assert mr._load_project_entry(ws, "missing") is None
+
+    def test_resolve_still_fail_open_on_absent_and_nondict(self, tmp_path):
+        assert mr.resolve(self._ws(tmp_path, {"name": "x"}), "x", "review") == ("inherit", None)
+        ws = self._ws(tmp_path, {"name": "x", "modelRouting": "bogus"})
+        assert mr.resolve(ws, "x", "analysis") == ("inherit", None)
+
+    def test_explicit_null_modelrouting_no_warning(self, tmp_path, capsys):
+        # A2-F2: an explicit `modelRouting: null` resolves to inherit WITHOUT the spurious
+        # "not an object" warning (parity with the pre-#427 silent block-is-None path).
+        ws = self._ws(tmp_path, {"name": "x", "modelRouting": None})
+        assert mr.resolve(ws, "x", "review") == ("inherit", None)
+        assert "not an object" not in capsys.readouterr().err
