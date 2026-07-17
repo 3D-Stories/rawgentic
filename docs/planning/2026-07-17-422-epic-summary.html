@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #422 — Per-Phase Model Routing (close-out)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 12:02 MDT</div>
+<h1>Epic #422 — Per-Phase Model Routing (close-out)</h1>
+
+</header>
+<main>
+<h1>Epic #422 — per-phase model routing + deterministic execution engine (close-out)</h1>
+<p><strong>Status:</strong> CLOSED (2026-07-17). main @ <code>d10ae45</code> @ <strong>v3.51.0</strong>. 11 children merged/closed. Full suite <strong>3325 passed / 8 skipped</strong>, 0 regressions. Plan of record: <code>docs/planning/2026-07-16-per-phase-model-routing.md</code>.</p>
+<p>Route WF2/WF3 model seats from bench-#14 evidence through an extraction-clean <code>phase_executor</code> engine — purposeful per-phase seats (no generic fallback seat), competitive design rounds, code-gated build bake-offs, verified routing via hooks, kukakuka-generic contract, multi-account lanes.</p>
+<h2>The seat table it delivered</h2>
+<table>
+<thead><tr><th>Seat</th><th>Primary</th><th>Fallback chain</th></tr></thead>
+<tbody>
+<tr><td>orchestrator</td><td>opus-4-8 *(interim — #430 measures)*</td><td>session model</td></tr>
+<tr><td>intake</td><td>opus-4-8</td><td>opus → fable → sonnet</td></tr>
+<tr><td>design</td><td><strong>COMPETITIVE</strong> sol vs opus, glm-5.2 judge, winner ships</td><td>in-family author fallback</td></tr>
+<tr><td>plan</td><td>opus-4-8</td><td>opus → fable → terra</td></tr>
+<tr><td>build</td><td>sonnet-5 default; gate-flagged → bake-off {sonnet, opus, terra}</td><td>sonnet → opus → terra</td></tr>
+<tr><td>review</td><td>fable-5</td><td>fable → sol → sonnet (opus dropped, #4 by data)</td></tr>
+<tr><td>ship</td><td>sonnet-5</td><td>sonnet → opus → fable</td></tr>
+</tbody>
+</table>
+<h2>What shipped (11 children, v3.43.0 → v3.51.0)</h2>
+<p>Each ran the full 16-step WF2: design + adversarial gate, 3-agent code review, security scan, version ×3 surfaces, changelog, run-record.</p>
+<table>
+<thead><tr><th>#</th><th>Version</th><th>What</th></tr></thead>
+<tbody>
+<tr><td>#424</td><td>E1 (foundation)</td><td>phase_executor package — contract + adapters + engine + routing config</td></tr>
+<tr><td>#425</td><td>v3.43.0</td><td>routing enforcement — pre/post/run-end audit, <code>requested == actual</code></td></tr>
+<tr><td>#426</td><td>v3.44.0</td><td>seat-table config + fallback chains + review flip</td></tr>
+<tr><td>#427</td><td>v3.45.0 (PR #436)</td><td>ship / intake / plan seats through the executor</td></tr>
+<tr><td>#429</td><td>v3.46.0 (PR #437)</td><td>deterministic complexity gate <code>needs_bakeoff</code></td></tr>
+<tr><td>#431</td><td>v3.47.0 (PR #438)</td><td>multi-account Claude lanes via <code>CLAUDE_CONFIG_DIR</code></td></tr>
+<tr><td>#420</td><td>v3.48.0 (PR #439)</td><td>routing telemetry — emitted by the executor</td></tr>
+<tr><td>#419</td><td>v3.48.1 (PR #440)</td><td>model-routing.md — provenance + refresh-rule table</td></tr>
+<tr><td>#417</td><td>v3.49.0 (PR #441)</td><td>WF2/WF3 skill prose → executor calls + D9 backend rule</td></tr>
+<tr><td>#428</td><td>v3.50.0 (PR #442)</td><td>competitive rounds + build bake-off + glm-5.2 judge — live judging demonstrated</td></tr>
+<tr><td>#430</td><td>v3.51.0 (PR #443)</td><td>driver-bench — 7-dimension orchestrator scorer</td></tr>
+<tr><td>#414</td><td>closed</td><td>CCR config repair + gpt smoke (owner-gated; quarantined to darwin VM)</td></tr>
+</tbody>
+</table>
+<h2>The engine, in three layers</h2>
+<ul>
+<li><strong><code>phase_executor/</code></strong> (extraction-clean, imports no <code>hooks/</code>): Observation JSON-schema contract,</li>
+</ul>
+<p>  provider adapters, chain-aware fallback, competitive bake-off, inter-process quota, run-end audit   reconcile. <code>run_seat</code> / <code>run_competitive</code>.</p>
+<ul>
+<li><strong>rawgentic policy (<code>hooks/</code>)</strong>: the judge, failure strategy, sink, gate, telemetry, and</li>
+</ul>
+<p>  driver-bench — everything the engine takes as parameters. <code>bakeoff_policy</code>, <code>complexity_gate</code>,   <code>executor_routing_lib</code>, <code>model_routing_lib</code>, <code>driver_bench_lib</code>.</p>
+<ul>
+<li><strong>skills</strong>: WF2/WF3 prose shrunk to &quot;call the executor per seat,&quot; plus the D9 cross-model review</li>
+</ul>
+<p>  rule and the seat fallback / concurrency contract.</p>
+<h2>What changed, mechanically</h2>
+<ul>
+<li><strong>Competition, not a guess</strong> — design rounds run sol vs opus; gate-flagged builds bake off</li>
+</ul>
+<p>  {sonnet, opus, terra}; a glm-5.2 judge scores anonymized, shuffled drafts against the bench-#14   rubric; the winner&#x27;s exact bytes ship.</p>
+<ul>
+<li><strong>Verified, not trusted</strong> — every dispatch is pre-checked against the seat&#x27;s chain and</li>
+</ul>
+<p>  post-verified <code>requested == actual</code>; a chain that exhausts its eligible entries is a handled hard   failure, never a silent downgrade.</p>
+<ul>
+<li><strong>D9 cross-model review</strong> — the competitive winner&#x27;s engine picks the adversarial-review backend;</li>
+</ul>
+<p>  a gpt-authored winner is reviewed by glm, never gpt.</p>
+<ul>
+<li><strong>The orchestrator, measured</strong> — driver-bench scores the driver across 7 dimensions by running</li>
+</ul>
+<p>  fixtures through the real engine (a reproducibility baseline; the opus-vs-sonnet call waits on the   live campaign).</p>
+<h2>Honest record</h2>
+<p><strong>The overnight false-defer, corrected.</strong> #428/#430 were briefly deferred overnight on a wrong premise — &quot;no <code>ZHIPUAI_API_KEY</code>, zhipuai not installed.&quot; That was a shallow check of the system Python + shell env. The key is configured (<code>~/.config/rawgentic/glm-judge.env</code>), zhipuai 2.1.5 is in the bench venv, and a live glm-5.2 call succeeds. Once caught, both children shipped normally with live judging demonstrated.</p>
+<p><strong>Follow-ups (out of this epic&#x27;s scope):</strong></p>
+<ul>
+<li><code>enforce.check_pre</code> never got the #429 gate wiring — it still hard-denies <code>role==&quot;build&quot;</code>, so the</li>
+</ul>
+<p>  build seat has no audit path yet. Build-seat routing stays fail-closed until it lands.</p>
+<ul>
+<li>Driver-bench&#x27;s 3 live opus-vs-sonnet cells are an offline campaign; the orchestrator seat stays</li>
+</ul>
+<p>  opus until it reports.</p>
+<ul>
+<li>#434 (Observation-schema versioning policy) awaits an owner decision.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-17 12:02 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
