@@ -442,3 +442,12 @@ def test_reconcile_golden_fixture_ok():
     res = enforce.reconcile_run([enforce.ExpectedCall("review", "wf2-step11")], recs,
                                 initial_digest="sha256:epoch-a")
     assert res.ok, res
+
+
+def test_enforcement_api_exported_at_package_top_level():
+    """Task 7: the enforcement API is importable from the package root + in __all__."""
+    import phase_executor as pe
+    for name in ["check_pre", "verify_post", "RoutingAuditLog", "reconcile_run", "PreReceipt",
+                 "PostCheck", "ExpectedCall", "Reconcile", "target_identity", "audited_digests"]:
+        assert hasattr(pe, name), f"missing top-level export: {name}"
+        assert name in pe.__all__, f"missing from __all__: {name}"
