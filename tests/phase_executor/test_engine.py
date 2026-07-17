@@ -28,7 +28,10 @@ def _snapshot():
             },
             "solo": {"primary": {"model": "claude-opus-4-8", "lane": _lane("claude")}, "chain": []},
         },
-        "forbidden_combinations": [{"rule": "cross_model_author", "reason": "reviewer != author"}],
+        "forbidden_combinations": [
+            {"model_pattern": "haiku", "reason": "never Haiku"},
+            {"rule": "cross_model_author", "reason": "reviewer != author"},
+        ],
     }
     return routing.RoutingSnapshot.from_table(table)
 
@@ -46,13 +49,15 @@ def _obs(req, status=contract.OK, engine_name="claude"):
     )
 
 
-def _stub(status_by_engine=None, *, sleep=0.0, record=None):
+def _stub(status_by_engine=None, *, sleep=0.0, record=None, raise_engines=()):
     status_by_engine = status_by_engine or {}
     def dispatch(engine_name, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
         if sleep:
             time.sleep(sleep)
         if record is not None:
             record.append((engine_name, req.requested_model, fallback_reason))
+        if engine_name in raise_engines:
+            raise RuntimeError(f"boom-{engine_name}")
         st = status_by_engine.get(engine_name, contract.OK)
         return _obs(req, status=st, engine_name=engine_name)
     return dispatch
@@ -171,3 +176,59 @@ def test_infeasible_bakeoff_rejected(tmp_path):
     with pytest.raises(InfeasibleBakeoff):
         run_competitive(three_claude, judge=_judge_first, snapshot=_snapshot(), quota=qc,
                         capture_root=tmp_path, require_parallel=True, dispatch=_stub())
+
+
+# ---- run_competitive hardening (Step 11 findings) ---------------------------
+
+def test_candidate_exception_isolated_not_aborting_round(tmp_path):
+    """f4: one candidate raising -> harness_error Observation, others still judged."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    winner, losers, judge_obs, record = run_competitive(
+        _candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(), quota=qc,
+        capture_root=tmp_path, dispatch=_stub(raise_engines={"codex"}))  # codex candidate raises
+    assert record["n_candidates"] == 3
+    all_obs = [winner, *losers]
+    statuses = sorted(o.parse_status for o in all_obs)
+    assert "harness_error" in statuses  # the raising codex candidate recorded, not crashed
+    assert statuses.count("ok") == 2    # claude + zhipu still succeeded and were judged
+
+
+def test_forbidden_haiku_candidate_not_dispatched(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    calls = []
+    cands = _candidates_cross_pool() + [
+        Candidate(seat="design", model="claude-haiku-4-5", prompt="p", provider="anthropic", pool="claude"),
+    ]
+    winner, losers, judge_obs, record = run_competitive(
+        cands, judge=_judge_first, snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
+        dispatch=_stub(record=calls))
+    assert record["n_candidates"] == 4
+    assert not any("haiku" in m for _, m, _ in calls)  # haiku never dispatched
+    haiku_obs = [o for o in [winner, *losers] if "haiku" in o.requested_model]
+    assert haiku_obs and haiku_obs[0].parse_status == "harness_error"
+
+
+def test_cross_model_author_skips_same_provider(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    calls = []
+    # author is anthropic -> the anthropic (claude) candidate is forbidden, not dispatched
+    run_competitive(_candidates_cross_pool(), judge=_judge_first, author_provider="anthropic",
+                    snapshot=_snapshot(), quota=qc, capture_root=tmp_path, dispatch=_stub(record=calls))
+    assert not any(e == "claude" for e, _, _ in calls)  # claude candidate skipped
+    assert any(e == "codex" for e, _, _ in calls) and any(e == "zhipuai" for e, _, _ in calls)
+
+
+def test_unknown_pool_fails_closed(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    bad = [Candidate(seat="x", model="m", prompt="p", provider="anthropic", pool="ghost")]
+    with pytest.raises(ValueError):
+        run_competitive(bad, judge=_judge_first, snapshot=_snapshot(), quota=qc,
+                        capture_root=tmp_path, dispatch=_stub())
+
+
+def test_all_forbidden_chain_exhausted(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    haikus = [Candidate(seat="x", model="claude-haiku-4-5", prompt="p", provider="anthropic", pool="claude")]
+    with pytest.raises(routing.ChainExhausted):
+        run_competitive(haikus, judge=_judge_first, snapshot=_snapshot(), quota=qc,
+                        capture_root=tmp_path, dispatch=_stub())

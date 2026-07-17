@@ -107,7 +107,7 @@ def build_observation(
         parsed, req.requested_model,
         timed_out=proc.timed_out, exit_code=proc.returncode, launch_error=proc.launch_error,
     )
-    return contract.Observation(
+    obs = contract.Observation(
         run_id=run_id,
         attempt_id=attempt_id,
         correlation_id=req.correlation_id,
@@ -128,3 +128,7 @@ def build_observation(
         fallback_reason=fallback_reason,
         routing_config_digest=routing_config_digest,
     )
+    # Fail-loud on the write path: the schema is the normative artifact (contract.py), so an
+    # Observation that resolve_parse_status and the schema disagree about must never be emitted.
+    contract.validate_observation(obs.to_dict())
+    return obs

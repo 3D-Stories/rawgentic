@@ -101,19 +101,42 @@ def run_seat(
 
 @dataclass(frozen=True)
 class Candidate:
-    """One bake-off candidate. ``pool`` selects the quota pool; ``provider`` selects the adapter."""
+    """One bake-off candidate. ``pool`` selects the quota pool (REQUIRED — an unset/unknown pool
+    would run unbounded and silently defeat the ceiling, so run_competitive validates it against
+    the routing table); ``provider`` selects the adapter."""
     seat: str
     model: str
     prompt: str
     provider: str
+    pool: str
     transport: str = "native"
-    pool: str = ""
     credential_ref: Optional[str] = None
     context: Sequence[str] = ()
 
     @property
     def engine(self) -> str:
         return PROVIDER_ENGINE.get(self.provider, self.provider)
+
+    def as_target(self) -> dict:
+        """A routing target view for forbidden_combinations evaluation."""
+        return {
+            "model": self.model,
+            "lane": {"provider": self.provider, "transport": self.transport, "pool": self.pool},
+        }
+
+
+def _harness_observation(c: "Candidate", *, run_id: str, digest: str, reason: str) -> contract.Observation:
+    """A non-ok Observation standing in for a candidate that could not run (raised, or forbidden)."""
+    from .capture import hash_text  # noqa: PLC0415
+    obs = contract.Observation(
+        run_id=run_id, attempt_id="harness", correlation_id=None, seat=c.seat, engine=c.engine,
+        transport=c.transport, requested_model=c.model, actual_model=None, prompt_hash=hash_text(c.prompt),
+        context_hashes=[], usage=None, timing_ms=0, queued_ms=0,
+        process={"exit_code": None, "timed_out": False}, parse_status=contract.HARNESS_ERROR,
+        parsed_payload=None, raw_capture_path=None, fallback_reason=reason[:500], routing_config_digest=digest,
+    )
+    contract.validate_observation(obs.to_dict())
+    return obs
 
 
 def assert_parallel_feasible(candidates: Sequence[Candidate], snapshot: routing.RoutingSnapshot) -> None:
@@ -155,6 +178,7 @@ def run_competitive(
     quota: QuotaCoordinator,
     capture_root,
     run_id: Optional[str] = None,
+    author_provider: Optional[str] = None,
     require_parallel: bool = False,
     max_workers: Optional[int] = None,
     dispatch: Callable[..., contract.Observation] = _dispatch_real,
@@ -163,25 +187,56 @@ def run_competitive(
 
     Returns ``(winner, losers, judge_obs, record)``. ``judge`` returns a dict with ``winner_index``
     and optionally ``judge_obs``/``degraded``. On a judge exception, ``failure_strategy`` (if given)
-    must return the same shape; otherwise the exception propagates. Every candidate's permit is
-    released in ``_run_candidate``'s ``finally`` even on failure; a candidate that raises surfaces
-    its exception as a result error but never leaks a permit or cancels the others (E1 completes all,
-    judges among what returned)."""
+    must return the same shape; otherwise the exception propagates.
+
+    Enforcement (parity with run_seat — the engine's invariants apply to bake-offs too):
+    - Each candidate's ``pool`` MUST be a pool declared in the routing table, else ValueError
+      (an unknown/unset pool would run unbounded and defeat the ceiling).
+    - Each candidate is checked against the table's ``forbidden_combinations`` (never-Haiku, and
+      the cross_model_author rule when ``author_provider`` is given); a forbidden candidate is NOT
+      dispatched — it is recorded as a non-ok Observation. If NO candidate is eligible, raise
+      ChainExhausted.
+
+    Failure isolation (adopted f4): a candidate that raises inside dispatch is recorded as a
+    ``harness_error`` Observation (never cancels the others or aborts the round); its permit is
+    already released in ``_run_candidate``'s ``finally``. A sink exception never erases results."""
     run_id = run_id or _new_run_id()
     candidates = list(candidates)
+    # pool validation — fail closed on an unknown/unset pool (finding f: ceiling bypass)
+    known_pools = set(snapshot.pool_concurrency())
+    for c in candidates:
+        if c.pool not in known_pools:
+            raise ValueError(f"candidate {c.model!r}: pool {c.pool!r} is not a declared routing pool {sorted(known_pools)}")
+    # forbidden_combinations — bake-offs enforce the same invariants as run_seat
+    forbidden = {i: routing.target_forbidden_reason(c.as_target(), snapshot, author_provider=author_provider)
+                 for i, c in enumerate(candidates)}
+    runnable = [i for i in range(len(candidates)) if forbidden[i] is None]
+    if not runnable:
+        raise routing.ChainExhausted(
+            f"run_competitive: no eligible candidate (all {len(candidates)} forbidden"
+            + (f" for author_provider={author_provider!r}" if author_provider else "") + ")"
+        )
     if require_parallel:
-        assert_parallel_feasible(candidates, snapshot)
-    n = max_workers or max(1, len(candidates))
+        assert_parallel_feasible([candidates[i] for i in runnable], snapshot)
     results: List[contract.Observation] = [None] * len(candidates)  # type: ignore
+    for i, reason in forbidden.items():
+        if reason is not None:
+            results[i] = _harness_observation(candidates[i], run_id=run_id, digest=snapshot.config_digest,
+                                              reason=f"forbidden: {reason}")
+    n = max_workers or max(1, len(runnable))
     with _cf.ThreadPoolExecutor(max_workers=n) as ex:
         futs = {
-            ex.submit(_run_candidate, c, snapshot=snapshot, quota=quota, capture_root=capture_root,
-                      run_id=run_id, dispatch=dispatch): i
-            for i, c in enumerate(candidates)
+            ex.submit(_run_candidate, candidates[i], snapshot=snapshot, quota=quota,
+                      capture_root=capture_root, run_id=run_id, dispatch=dispatch): i
+            for i in runnable
         }
         for fut in _cf.as_completed(futs):
             i = futs[fut]
-            results[i] = fut.result()  # _run_candidate returns a (possibly non-ok) Observation; a raise here is a real bug
+            try:
+                results[i] = fut.result()
+            except Exception as exc:  # noqa: BLE001 — a raising candidate (QuotaTimeout, capture OSError) must not abort the round (f4)
+                results[i] = _harness_observation(candidates[i], run_id=run_id,
+                                                  digest=snapshot.config_digest, reason=f"dispatch raised: {exc}")
 
     judge_obs = None
     degraded = False
