@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF2/WF3 ↔ phase_executor — seat-placement architecture</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 12:58 MDT</div>
+<h1>WF2/WF3 ↔ phase_executor — seat-placement architecture</h1>
+
+</header>
+<main>
+<h1>WF2/WF3 ↔ phase_executor integration — seat-placement architecture</h1>
+<p><strong>Date:</strong> 2026-07-17 <strong>Status:</strong> DRAFT for owner review (option <strong>C</strong> of the #449 triage fork; unblocks the &quot;<strong>A</strong>&quot; integration work) <strong>Author:</strong> Claude (Opus 4.8), session 6d7297b7 <strong>Precedes:</strong> the real &quot;#417&quot; integration issue (to be filed after this doc lands) <strong>Grounds in:</strong> epic #422 (CLOSED), <code>docs/planning/2026-07-16-per-phase-model-routing.md</code>, the shipped <code>phase_executor/</code> engine, and the WF2/WF3 skills as of plugin v3.51.0</p>
+<p>---</p>
+<h2>0. TL;DR — the decision</h2>
+<p>Epic #422 built a model-seat <strong>execution engine</strong> but never connected WF2/WF3 to it (see §1). Before doing that wiring, one architectural fact settles *which* seats can even go there:</p>
+<blockquote><strong>The phase_executor is a single-shot, read-only model-dispatch engine — not an agentic, tool-using, worktree runner.</strong></blockquote>
+<blockquote>Confirmed: <code>claude --print --model X --output-format json --no-session-persistence</code>, prompt on stdin, no cwd/worktree/allowed-tools setup (<code>phase_executor/adapters/claude_cli.py:26</code>); <code>codex exec … -s read-only -C &lt;cwd&gt; …</code> (<code>codex_cli.py:33</code>); zhipuai one call. Each adapter is <code>run(request) -&gt; Observation</code> — one prompt, one completion.</blockquote>
+<p>So the integration is <strong>not</strong> &quot;route everything through the executor.&quot; It is:</p>
+<ul>
+<li><strong>Single completions over provided context</strong> → route through the executor. Gains: real <code>requested==actual</code> audit, a *real* effort knob, fallback chains, cross-model-invariant enforcement, competitive/bake-off.</li>
+<li><strong>Seats that need tools / a worktree / multi-turn iteration</strong> → stay on the <strong>Agent tool</strong> (the executor as built literally cannot edit a file, grep the repo, or iterate).</li>
+<li><strong>The driver/orchestrator seat is the session itself</strong> → never routed (a session cannot be its own subprocess).</li>
+</ul>
+<p><strong>Recommended placement:</strong></p>
+<table>
+<thead><tr><th>Seat (table)</th><th>WF2/WF3 phase</th><th>Placement</th><th>One-line why</th></tr></thead>
+<tbody>
+<tr><td>orchestrator</td><td>the whole run</td><td><strong>Session — never routed</strong></td><td>the driver *is* the session</td></tr>
+<tr><td>intake</td><td>Step 1 AC/triage synthesis</td><td><strong>Executor</strong></td><td>single completion over the issue text</td></tr>
+<tr><td>analysis</td><td>Step 2 codebase map / blast-radius</td><td><strong>Agent tool</strong></td><td>must Read/Grep/Glob the repo</td></tr>
+<tr><td>design</td><td>Step 3 design authoring</td><td><strong>Executor</strong> (competitive)</td><td>single completion; already competitive in the table</td></tr>
+<tr><td>design-critique</td><td>Step 4 quality-bar review</td><td><strong>Executor</strong></td><td>single completion over the design doc</td></tr>
+<tr><td>plan</td><td>Step 5 decomposition</td><td><strong>Executor</strong></td><td>single completion over the design</td></tr>
+<tr><td>build</td><td>Step 8 implementation</td><td><strong>Agent tool</strong> (worktree)</td><td>edits files, runs tests, iterates — executor is read-only</td></tr>
+<tr><td>build bake-off</td><td>Step 8 gate-flagged</td><td><strong>Hybrid</strong></td><td>executor generates candidate patches + judges; harness applies+tests</td></tr>
+<tr><td>review</td><td>Steps 8a / 11 diff review</td><td><strong>Hybrid</strong> — §4.6</td><td>exploratory review needs grep; a bounded cross-model review pass is executor-routed</td></tr>
+<tr><td>ship</td><td>Step 12+ PR/docs/push</td><td><strong>Session / Agent tool</strong></td><td>needs gh, git, file edits</td></tr>
+</tbody>
+</table>
+<p>Net: <strong>~4 seats move into the executor</strong> (intake, design, design-critique, plan), <strong>2 stay Agent-tool</strong> (analysis, build), <strong>2 are hybrid</strong> (build bake-off, review), <strong>1 is the session</strong> (driver). Two audit worlds coexist by design (§5).</p>
+<p>---</p>
+<h2>1. Why this doc exists (the gap)</h2>
+<p>Epic #422&#x27;s title: *&quot;route WF2/WF3 model seats … executed through a deterministic phase execution engine.&quot;* The engine shipped; <strong>WF2/WF3 were never connected to it.</strong></p>
+<p>Confirmed evidence:</p>
+<ul>
+<li><code>git log -S executor_routing -- skills/</code> and <code>-S dispatch_seat -- skills/</code> are <strong>both empty</strong> — no skill has ever referenced the executor.</li>
+<li><code>executor_routing_lib.WIRED_SEATS = frozenset({&quot;ship&quot;,&quot;intake&quot;,&quot;plan&quot;})</code> — and its only production consumers are <code>driver_bench_lib.py</code> (the bench) and <code>bakeoff_policy.py</code>. No workflow invokes it.</li>
+<li>The engine&#x27;s audit machinery (<code>RoutingAuditLog</code>, <code>verify_post</code>, <code>reconcile_run</code> in <code>phase_executor/enforce.py</code>) is invoked only from <code>executor_routing_lib</code> (CLI) and <code>driver_bench_lib</code>. The one registered <code>PostToolUse</code> hook on <code>Task</code> dispatch is <code>wal-post</code> (WAL logging), not routing enforcement. So <strong>a real WF2/WF3 run produces no <code>routing_audit.jsonl</code></strong> — the epic&#x27;s acceptance (&quot;routing audit reconciles, requested==actual throughout&quot;) is structurally unmeetable on the live path.</li>
+</ul>
+<p>Root cause: the single integration child (#417) was narrowed at issue-authoring — the epic row said *&quot;WF2/WF3 prose now just calls the executor per seat&quot;* (<code>2026-07-16-per-phase-model-routing.md:293</code>), but issue #417 was filed/closed as *&quot;fallback wiring, concurrency note, driver-seat guidance&quot;* and shipped only prose (PR #441). The engine↔workflow seam became nobody&#x27;s task.</p>
+<p><strong>This doc settles the prerequisite the epic skipped: which seats belong in the engine at all.</strong> The wiring itself is the follow-on &quot;A&quot; work (§7).</p>
+<p>---</p>
+<h2>2. The two execution models (confirmed from code)</h2>
+<table>
+<thead><tr><th>Property</th><th><strong>Agent tool</strong> (in-session subagent)</th><th><strong>phase_executor</strong> (subprocess dispatch)</th></tr></thead>
+<tbody>
+<tr><td>Invocation</td><td>harness <code>Agent</code> tool, <code>subagent_type</code> + <code>model:</code></td><td><code>claude --print</code> / <code>codex exec -s read-only</code> / zhipuai SDK, prompt on stdin</td></tr>
+<tr><td>Tools available</td><td>full per agent type (Read/Edit/Write/Bash/Grep/…)</td><td><strong>none productive</strong> — claude one-shot, codex read-only</td></tr>
+<tr><td>Worktree isolation</td><td>yes (<code>isolation: worktree</code>, e.g. <code>rawgentic-implementer</code>)</td><td>no</td></tr>
+<tr><td>Multi-turn / iteration</td><td>yes (a full agent loop)</td><td>no — single prompt→completion</td></tr>
+<tr><td>Model control</td><td>per-call <code>model:</code> (real override)</td><td>per-seat <code>-m</code> (real)</td></tr>
+<tr><td><strong>Effort control</strong></td><td><strong>record-only</strong> — Agent tool has no effort param</td><td><strong>real</strong> — <code>--effort</code> (claude), <code>-c model_reasoning_effort</code> (codex)</td></tr>
+<tr><td><code>requested==actual</code> audit</td><td><strong>none</strong></td><td><strong>yes</strong> — innermost-envelope id (<code>claude_cli.py:55-60</code>), <code>verify_post</code>, fail-closed on absent identity</td></tr>
+<tr><td>Fallback chains</td><td>none</td><td>yes — config chain, chain-aware cross-model skip</td></tr>
+<tr><td>Cross-model invariant</td><td>none</td><td>yes — <code>forbidden_combinations</code> (never-Haiku, D9)</td></tr>
+<tr><td>Competitive / bake-off</td><td>none</td><td>yes — <code>run_competitive</code> + <code>bakeoff_policy</code> glm judge</td></tr>
+<tr><td>Context vs orchestrator</td><td>shares harness context management</td><td>isolated subprocess, own context load</td></tr>
+<tr><td>Account/quota lanes</td><td>single session account</td><td>per-lane <code>CLAUDE_CONFIG_DIR</code> (#431), per-pool concurrency</td></tr>
+<tr><td>Cost / latency</td><td>in-session, harness-amortized</td><td>fresh subprocess + separate context load per call</td></tr>
+</tbody>
+</table>
+<p><strong>Reading of the table:</strong> the executor&#x27;s entire value proposition (audit, effort, fallback, cross-model) pays off exactly where a model *decision* must be trustworthy and routed — and where a single completion suffices. The Agent tool&#x27;s value (tools, worktree, iteration) is mandatory exactly where the seat must *touch the repo* or *iterate*. The two are complements, not substitutes.</p>
+<p>---</p>
+<h2>3. The decision axis (one question per seat)</h2>
+<blockquote><strong>Is this seat a single model completion over context I can pack into a prompt — or does it need tools, a worktree, or multiple turns?</strong></blockquote>
+<ul>
+<li><strong>Single completion</strong> → executor-eligible, and *should* go there for the audit + effort + fallback + cross-model gains.</li>
+<li><strong>Needs tools / worktree / iteration</strong> → Agent tool (the executor cannot do it as built).</li>
+<li><strong>Is the driver</strong> → the session.</li>
+</ul>
+<p>Corollary — do <strong>not</strong> force-fit an agentic seat into the executor by pre-serializing the repo into the prompt. That trades the tool&#x27;s strength (targeted exploration) for the engine&#x27;s audit, and usually loses (a reviewer that can&#x27;t grep for callers is a worse reviewer). Where both the audit *and* the exploration matter, use a <strong>hybrid</strong> (§4.6): keep the Agent-tool pass, add an executor-routed pass — the pattern WF5/WF13 already use with Codex.</p>
+<p>---</p>
+<h2>4. Per-seat placement, with rationale</h2>
+<h3>4.1 orchestrator / driver → <strong>Session (never routed)</strong> — confirmed constraint</h3>
+<p>The driver seat *is* the session that runs the workflow. A session cannot spawn itself as a subprocess. #422&#x27;s own table already marks it &quot;session model&quot; and the driver-seat note is guidance-only (the harness owns the session model). <strong>No change; not an executor seat.</strong></p>
+<h3>4.2 intake (Step 1 AC/triage synthesis) → <strong>Executor</strong></h3>
+<p>Turning an issue body into confirmed ACs / a complexity read is a single completion over the issue text. Executor-eligible; gains audit + routing. Low blast. (Already in <code>WIRED_SEATS</code>.)</p>
+<h3>4.3 analysis (Step 2 fan-out) → <strong>Agent tool</strong> — confirmed disqualifier</h3>
+<p>Step 2 maps components, traces blast radius, inventories tests — it *reads the repo* (Serena/Grep/Glob). A read-only single completion cannot do this without serializing the whole repo into a prompt. <strong>Stays Agent tool.</strong> Effort stays record-only here.</p>
+<h3>4.4 design (Step 3 authoring) → <strong>Executor (competitive)</strong></h3>
+<p>Design authoring is a single completion over the analysis + issue. The seat table already makes it <strong>competitive</strong> (sol vs opus, glm judge). <code>run_competitive</code> + <code>bakeoff_policy.make_glm_judge</code> exist for exactly this. Executor. This is the highest-value move — a routed, audited, cross-model-judged design.</p>
+<h3>4.5 design-critique (Step 4 quality-bar) → <strong>Executor</strong></h3>
+<p>The quality-bar rubric review is a single completion over the design doc (the doc fits a prompt). Executor-eligible; gains cross-model routing (review seat = fable) + audit. (The opt-in adversarial-on-design already goes cross-model via WF5 — this makes the *base* critique routed too.)</p>
+<h3>4.6 review (Steps 8a / 11 diff review) → <strong>Hybrid</strong> — the judgment call</h3>
+<p>A code review both (a) reads a bounded diff and (b) *explores* — greps for callers, checks context the diff doesn&#x27;t show. Pure-executor loses (b). Pure-Agent-tool loses the fable routing + <code>requested==actual</code> audit + cross-model guarantee. <strong>Recommendation:</strong> keep the <strong>Agent-tool exploratory reviewer</strong> (<code>rawgentic-reviewer</code>, with tools) as the primary Step 11 gate, and <strong>add an executor-routed bounded-diff review pass</strong> for the cross-model + audited dimension — packing the diff + the reviewer&#x27;s own gathered context into the prompt. Precedent: WF5 adversarial-review and WF13 peer-consult <strong>already</strong> route to a Codex/GLM subprocess — review-via-subprocess is proven here. This is the least risky way to get the audit without blinding the reviewer.</p>
+<h3>4.7 plan (Step 5 decomposition) → <strong>Executor</strong></h3>
+<p>Plan decomposition is a single completion over the design. Executor-eligible; gains audit + routing. (Already in <code>WIRED_SEATS</code>.)</p>
+<h3>4.8 build (Step 8 implementation) → <strong>Agent tool (worktree)</strong> — confirmed disqualifier</h3>
+<p>Implementation edits files, runs the test suite, and iterates red→green. The executor is <strong>read-only</strong> (<code>codex … -s read-only</code>; claude <code>--print</code> with no cwd). It <strong>cannot</strong> implement. <code>rawgentic-implementer</code> runs <code>isolation: worktree</code> for exactly this. <strong>Stays Agent tool.</strong> → This directly explains the &quot;build seat has no audit path&quot; gap (handoff follow-up #1, <code>enforce.check_pre</code> hard-denies <code>role==&quot;build&quot;</code>): under this architecture that deny is <strong>correct</strong> — build is not an executor seat. Its audit surface is the <code>DISPATCH</code> line (#330) + <code>run-record.dispatches[]</code>, not <code>routing_audit.jsonl</code>. *(Owner confirm — §6.)*</p>
+<h3>4.9 build bake-off (Step 8 gate-flagged) → <strong>Hybrid</strong></h3>
+<p>Confirmed shape (<code>bakeoff_policy.py:124</code>): candidates each produce a draft (patch/impl <strong>text</strong> — a single completion), then the harness applies+tests to produce deterministic <code>build_evidence</code>, then glm judges on that evidence. So: <strong>executor generates the candidate patches + runs the glm judge; the Agent-tool/harness applies and tests.</strong> Clean split; the winner&#x27;s patch is applied by the Agent-tool implementer.</p>
+<h3>4.10 ship (Step 12+ PR/docs) → <strong>Session / Agent tool</strong></h3>
+<p>Creating the PR, updating README/docs, pushing — all need <code>gh</code>, <code>git</code>, file edits. Not a single completion. <strong>Session/Agent tool.</strong> (In <code>WIRED_SEATS</code> today, but as a *routing-table* entry, not because Step 12 calls the executor — revisit in §6.)</p>
+<p>---</p>
+<h2>5. How the two audit worlds coexist (the integration contract)</h2>
+<p>After wiring, a WF2/WF3 run has <strong>two</strong> dispatch surfaces, each with its own audit — by design, not by accident:</p>
+<ul>
+<li><strong>Executor seats</strong> (intake, design, design-critique, plan, review-pass, bake-off candidates+judge): dispatched via <code>executor_routing_lib.dispatch_seat</code>; each writes a capture dir + a <code>RoutingAuditLog</code> record; <code>verify_post</code> enforces <code>requested==actual</code>; <strong>run-end <code>reconcile_run</code></strong> checks expected-vs-recorded seat calls. This is where the design doc&#x27;s *&quot;WF2 accepts only executor result envelopes so uninstrumented dispatch can&#x27;t sneak past the hooks&quot;* (<code>2026-07-16-…:208-209</code>) applies — <strong>scoped to executor seats only.</strong></li>
+<li><strong>Agent-tool seats</strong> (analysis, build, ship, exploratory-review): audited by the existing <code>DISPATCH issue=&lt;n&gt; …</code> canonical line (#330) + <code>run-record.dispatches[]</code>.</li>
+</ul>
+<p>The reconcile must therefore key off a <strong>per-seat placement manifest</strong> (this table as data), not &quot;every seat must have a routing_audit record&quot; — otherwise it would false-fail on the Agent-tool seats. That manifest is the natural home for §4 and dovetails with epic #448 (per-project phase-seat config).</p>
+<p>---</p>
+<h2>6. Open questions / risks (owner input wanted)</h2>
+<p>1. <strong><code>WIRED_SEATS</code> mismatch.</strong> Today <code>{ship, intake, plan}</code>. This doc says the executor-eligible set is <code>{intake, design, design-critique, plan, review-pass}</code> (+ bake-off). <code>ship</code> is a routing-table entry but Step 12 is not an executor call. → The wiring issue must reconcile <code>WIRED_SEATS</code> with §4. <strong>Confirm the target set.</strong> 2. <strong>build-deny is correct-by-design?</strong> §4.8 argues the <code>enforce.check_pre</code> <code>role==&quot;build&quot;</code> hard-deny is *right* (build isn&#x27;t an executor seat). Confirm — vs. the handoff&#x27;s framing of it as a gap to fix. 3. <strong>Review hybrid cost.</strong> §4.6 adds a second (executor) review pass. That&#x27;s more tokens per PR. Acceptable, or route only high-risk diffs cross-model? 4. <strong>Subprocess cost/latency.</strong> Each executor seat = a fresh <code>claude -p</code> context load (no shared cache with the session). Bounded by the ~4–6 seats we route; quantify with #449. 5. <strong>Effort for Agent-tool seats stays record-only</strong> — unchanged, accepted constraint (analysis/build/ship never get a real effort knob). 6. <strong>#449 re-aim.</strong> Under this architecture the driver-bench should bench the <strong>executor seats</strong> (design/plan/critique/review/bake-off) — which is exactly what it dispatches. So #449 stays valuable, re-scoped to &quot;bench the seats this doc places in the executor,&quot; and its data answers risk #4. Keep #449 after A, not before.</p>
+<p>---</p>
+<h2>7. Follow-on work (the &quot;A&quot; this unblocks)</h2>
+<p>1. <strong>The real &quot;#417&quot; (new issue / reopen #422):</strong> wire the §4 executor-eligible seats through <code>dispatch_seat</code>; emit <code>routing_audit.jsonl</code> on a real run; add the run-end <code>reconcile_run</code> keyed off the placement manifest (§5). Acceptance = *one real WF2 run where design/plan/critique route through the executor, audit reconciles, <code>requested==actual</code>* — the epic AC, now actually meetable. 2. <strong>Reconcile <code>WIRED_SEATS</code></strong> with §4 (add design + design-critique + review-pass; confirm ship/build). 3. <strong>Placement manifest as config</strong> — fold §4 into epic #448&#x27;s per-project phase-seat table so the reconcile reads it as data. 4. <strong>#449 re-scope</strong> — bench the executor-placed seats; answer risk #4. 5. <strong>Confirm the #429 build-deny</strong> as intended (§6.2).</p>
+<p>---</p>
+<h2>8. What is confirmed vs proposed</h2>
+<ul>
+<li><strong>Confirmed (read from code):</strong> the executor is single-shot/read-only (§0, §2); WF2/WF3 never call it (§1); the audit machinery&#x27;s only callers (§1); build bake-off candidate shape (§4.9); the seat table (#422).</li>
+<li><strong>Proposed (this doc&#x27;s decision, owner to ratify):</strong> the per-seat placement (§4), the two-audit-world contract + placement-manifest reconcile (§5), and the follow-on sequencing (§7).</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-17 12:58 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

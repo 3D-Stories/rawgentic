@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestrator/Executor — AC + gap analysis (reviewed)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 13:55 MDT</div>
+<h1>Orchestrator/Executor — AC + gap analysis (reviewed)</h1>
+
+</header>
+<main>
+<h1>Orchestrator/Executor architecture — acceptance criteria + gap analysis</h1>
+<p><strong>Date:</strong> 2026-07-17 <strong>Status:</strong> REVIEWED — consulted (WF13) + adversarially reviewed (WF5) by GPT Sol AND GLM 5.2; all 16 findings dispositioned (§5c) and folded in. <strong>Awaiting owner ratification</strong> (decision points in §6b). <strong>Author:</strong> Claude (Fable 5), session 6d7297b7 <strong>Supersedes:</strong> <code>2026-07-17-wf2-wf3-executor-seat-placement.md</code> (built on a wrong premise — see §3 &quot;throwaway&quot;) <strong>Grounds:</strong> all owner prompts this session, epic #422 artifacts, <code>phase_executor/</code> code, live CLI probes, external research (citations inline)</p>
+<p>---</p>
+<h2>1. What the owner asked for (requirement trace)</h2>
+<p>Every requirement below traces to a specific owner statement this session (P-numbers = prompt order):</p>
+<table>
+<thead><tr><th>#</th><th>Owner statement (paraphrase)</th><th>Requirement extracted</th></tr></thead>
+<tbody>
+<tr><td>P1</td><td>Handoff: &quot;#449 top priority — need bench tooling so we can adjust routing off real data&quot;</td><td>Live bench remains a deliverable; it must measure the path workflows actually use</td></tr>
+<tr><td>P3</td><td>&quot;when rawgentic routes to a phase agent, does it set the model and effort?&quot;</td><td>Model AND effort must be real, per-dispatch knobs</td></tr>
+<tr><td>P4</td><td>&quot;Didn&#x27;t we update rawgentic to ONLY use the phase-executor engine — WF2 orchestrator Agent-tool subagents no longer needed?&quot;</td><td>phase_executor is THE dispatch mechanism; Agent-tool phase-subagents retire</td></tr>
+<tr><td>P5</td><td>&quot;the entire purpose of the overnight epic was… everything in WF2 and WF3 routed through their own individual agent calls&quot;</td><td>Every WF2/WF3 phase = its own individual executor agent call</td></tr>
+<tr><td>P6</td><td>&quot;let&#x27;s do C then A — write the design doc&quot;</td><td>Architecture settled before integration work</td></tr>
+<tr><td>P7</td><td>&quot;2 components: 1) orchestrator 2) executor. Analysis and build ALSO run through phase_executor with its own access to grep, edit files… executor: (1) takes input (prompts or docs), (2) does thinking/designing/building/whatever, (3) provides output (docs or returned value)&quot;</td><td><strong>The core architecture.</strong> Two components; executor instances are full agents; simple input→work→output contract</td></tr>
+<tr><td>P8</td><td>&quot;consider using tmux to spin up each executor instance&quot;</td><td>tmux as the executor process model (evaluate honestly — see research)</td></tr>
+<tr><td>P9</td><td>&quot;complete analysis… full AC list… gap analysis… adversarial review with GPT Soul and GLM 5.2… thought partners… research with EXA/context7/web — facts not assumptions&quot;</td><td>This document + the consult/review pipeline</td></tr>
+<tr><td>P10</td><td>&quot;visual artifact with a proper VDL that draws my eyes to where it needs my attention&quot;</td><td>Decision-focused artifact deliverable</td></tr>
+<tr><td>P11</td><td>&quot;get answers out of the Soul and GLM consults; document uncertainties for my review&quot;</td><td>Open questions route to consults; residual uncertainty logged for owner</td></tr>
+</tbody>
+</table>
+<p>Standing context (epic #422, owner-approved rev 3): the seat table (orchestrator=opus interim · intake=opus · design=COMPETITIVE sol-vs-opus, glm judge · plan=opus · build=sonnet + gated bake-off · review=fable · ship=sonnet), fallback chains, never-Haiku, cross-model invariant (D9), <code>requested==actual</code> audit, multi-account lanes, routing telemetry.</p>
+<p>---</p>
+<h2>2. Acceptance criteria</h2>
+<h3>A. Architecture (two components)</h3>
+<ul>
+<li><strong>AC-A1</strong> — Exactly two runtime components. <strong>Orchestrator</strong>: the interactive Claude Code session that runs WF2/WF3 step logic, quality gates, and owner interaction. <strong>Executor</strong>: <code>phase_executor</code>, which spawns each phase seat as its own agent instance. Once wired, WF2/WF3 phase work has <strong>no third dispatch path</strong> — harness Agent-tool phase-subagents (<code>rawgentic-implementer</code>/<code>rawgentic-reviewer</code>/generic-analysis dispatch) retire from the workflows. *(P4, P5, P7)*</li>
+<li><strong>AC-A2</strong> — Executor contract: <strong>input</strong> = prompt + optional docs/context references; <strong>work</strong> = whatever the seat requires (thinking, designing, building, reviewing); <strong>output</strong> = docs/files produced in the workspace + a structured returned value (the Observation envelope, extended for work products — see AC-D4). *(P7 verbatim)*</li>
+<li><strong>AC-A3</strong> — Every WF2/WF3 phase seat (intake, analysis, design, plan, build, review — and ship-support work where it is a model call) dispatches as its <strong>own individual executor agent call</strong>. The orchestrator seat is the session itself and is never dispatched. *(P5; structural)*</li>
+</ul>
+<h3>B. Agentic capability</h3>
+<ul>
+<li><strong>AC-B1</strong> — Executor instances are <strong>full agents</strong> where the seat requires it: grep/read the repo, edit files in the project workspace, run commands (tests), iterate. Mechanism: headless <code>claude -p</code> with tool grants (<code>--allowedTools</code>/<code>--permission-mode</code>), or <code>codex exec -s workspace-write</code> for cross-model seats. Pure-completion seats (e.g. the glm judge) may stay one-shot. *(P7)*</li>
+<li><strong>AC-B2</strong> — Every <strong>mutating</strong> executor instance runs in an isolated <strong>engine-managed git worktree</strong> (§5b OQ-3 resolution: uniform across claude AND codex children; native <code>claude -p --worktree</code> is a claude-only optimization deferred to a later probe, never the primary mechanism). A worktree isolates the *checkout*, not the *agent* (a Bash-capable child can write outside it — gpt review #6): mutating launches additionally require <strong>provider-native write confinement</strong> — claude: permission-layer file scoping + sandbox settings; codex: its OS-level sandbox (<code>workspace-write</code> restricts writes to the workspace). A mutating launch whose confinement cannot be established is <strong>rejected</strong>. Promotion into the canonical branch is performed by the orchestrator, outside the child&#x27;s boundary.</li>
+<li><strong>AC-B3</strong> — <strong>Gate preservation, provider-neutral:</strong> an executor seat is never a gate bypass (&quot;fan-out is a dispatch mechanism, never a gate bypass&quot; — the #450 invariant). For <strong>claude</strong> children the workspace guardrails (wal-guard, security-guard, permission classifier, never-Haiku) are hook-layer and load in <code>-p</code> (F3 — docs-stated). For <strong>codex</strong> children NO claude-hook layer exists (gpt review #4): containment comes from the codex sandbox + supervisor-level checks, declared per-provider in the capability manifest. A <strong>fail-closed guardrail canary</strong> runs per provider × lane × permission profile before any mutation is allowed; <strong>codex mutating seats are unsupported until their canary/spike passes</strong>.</li>
+<li><strong>AC-B4</strong> — Every executor instance is <strong>cost-guarded by pre-launch reservation</strong>: an atomic reservation against the run + quota-pool budgets BEFORE launch, plus a hard per-invocation cap where the provider supports one (claude: <code>--max-budget-usd</code>, F2). Providers without a hard cap (codex, zhipu) must declare a compensating enforceable bound in the manifest (timeout + max-token/turn limits) — post-hoc Observation accounting alone is NOT a guard (gpt review #3). No unbounded fan-out.</li>
+</ul>
+<h3>C. Routing, model, effort</h3>
+<ul>
+<li><strong>AC-C1</strong> — Every seat dispatch sets <strong>model and effort explicitly</strong> from the seat table; <code>requested==actual</code> verified from provider-reported identity (existing <code>verify_post</code>). *(P3)*</li>
+<li><strong>AC-C2</strong> — Fallback chains (chain-aware cross-model skip), never-Haiku, and the D9 cross-model-author invariant are preserved unchanged (existing <code>engine.run_seat</code> + <code>routing/</code>).</li>
+<li><strong>AC-C3</strong> — The seat table stays config-driven and per-project (epic #448 alignment: #445 config table → #446 setup → #447 diagram).</li>
+</ul>
+<h3>D. Enforcement, audit, output contract</h3>
+<ul>
+<li><strong>AC-D1</strong> — Every executor dispatch produces an Observation (schema-versioned) + capture dir + <code>routing_audit.jsonl</code> entry; the <strong>run-end reconcile</strong> proves every expected seat call happened, audited, with no uninstrumented dispatch. This makes epic #422&#x27;s acceptance (&quot;routing audit reconciles, requested==actual throughout&quot;) actually meetable on a real run.</li>
+<li><strong>AC-D2</strong> — WF2/WF3 accept <strong>only executor result envelopes</strong> for phase work (the design doc&#x27;s sol orphan-work rule, now enforceable).</li>
+<li><strong>AC-D3</strong> — The <strong>build seat gets an audit path</strong>: <code>enforce.check_pre</code>&#x27;s <code>role==&quot;build&quot;</code> hard-deny is removed/rewired and <code>WIRED_SEATS</code> extends to the full seat set.</li>
+<li><strong>AC-D4</strong> — The Observation contract is <strong>extended for agentic work products</strong>: an agentic seat&#x27;s output is not just completion text — it needs the produced artifact references (changed files / commit SHA / doc paths / test results). Schema change ⇒ versioning policy decision (#434 is the open owner-gated issue; OQ-4).</li>
+</ul>
+<h3>E. Process model (tmux + headless)</h3>
+<ul>
+<li><strong>AC-E1</strong> — Each executor instance runs in its <strong>own tmux session</strong>: survives <strong>orchestrator</strong> compaction/restart (the tmux server owns the process, not the harness), observable live (<code>tmux attach</code>/<code>capture-pane</code>), killable/rescuable by name. *(P8)* <strong>A provider usage-limit exit is NOT survivable</strong> — the headless child exits code 1 (F11; gpt review #1): on that exit the supervisor records <code>quota_paused</code>, persists the provider session ID + worktree + capture dir + command digest, and later <strong>relaunches via <code>--resume &lt;session-id&gt;</code> from the same cwd</strong> (F10) with a resume-identity assertion before work continues. A <strong>tmux capability preflight</strong> (executable/version, create/exec/capture/kill/persist) runs once per environment; unsupported ⇒ fail-closed or an explicitly approved non-tmux supervisor fallback (gpt review #9).</li>
+<li><strong>AC-E2</strong> — Launch pattern is <strong>command-as-initial-pane-process</strong> (<code>tmux new-session -d -s &lt;name&gt; &#x27;&lt;cmd&gt;&#x27;</code>) — <strong>never</strong> <code>send-keys</code>-typed prompts into a TUI. Evidence: Anthropic&#x27;s own Agent-Teams tmux backend has a reproducible failure class doing exactly that (F7).</li>
+<li><strong>AC-E3</strong> — Inside tmux the instance is <strong>headless</strong> (<code>claude -p</code> / <code>codex exec</code>): completion = process exit + finalized <code>observation.json</code> sentinel, never TUI screen-scraping. *(F8)* Sentinel publication is <strong>atomic and durable</strong>: validate + fsync a temp file, <code>os.replace</code> to <code>observation.json</code>, fsync the directory; the collector validates schema + correlation identity before marking completion, and a malformed sentinel is a <strong>distinct audited state</strong>, not a silent job failure (gpt review #8; the repo&#x27;s <code>atomic_write_lib</code> pattern).</li>
+<li><strong>AC-E4</strong> — Dispatch becomes <strong>async-capable</strong>: launch → poll/wait on sentinel → consume. The pane command runs in a <strong>supervisor-owned process group</strong>; timeout ⇒ terminate the group, escalate after a grace period, <strong>verify no recorded PID survives</strong>, and only then emit the timeout Observation / release the worktree — <code>tmux kill-session</code> alone does not kill a daemonized child (gpt review #2). Orphan handling on resume via the durable job registry (§5b OQ-8): adopt only on full identity match, else quarantine. Session names encode <code>run_id/seat/attempt</code> (the existing <code>correlation_id</code> scheme).</li>
+<li><strong>AC-E5</strong> — Concurrency ceiling + per-pool quota lanes enforced <strong>at launch</strong> (existing <code>QuotaCoordinator</code>; <code>CLAUDE_CONFIG_DIR</code> multi-account lanes, #431).</li>
+</ul>
+<h3>F. WF2/WF3 integration</h3>
+<ul>
+<li><strong>AC-F1</strong> — WF2/WF3 skill prose rewired: per-step phase dispatches route through the executor (the real &quot;#417&quot; that never shipped). The <code>DISPATCH</code> audit line (#330) stays; its producer becomes the executor path.</li>
+<li><strong>AC-F2</strong> — All WF2/WF3 mandatory gates preserved (Steps 4, 8a, 9, 11, 11.5): same gates, executor-dispatched where they are model calls. The lane/trivial checks, loop-back budgets, and resume protocol are unchanged in semantics.</li>
+<li><strong>AC-F3</strong> — One <strong>real WF2 run</strong> post-wiring passes: review on fable, audit reconciles, <code>requested==actual</code> throughout — the #422 acceptance, demonstrated not proxied.</li>
+<li><strong>AC-F4</strong> — Migration strategy decided explicitly (hard cutover vs seat-by-seat; OQ-1) — never an ambiguous half-state like the one this doc exists to fix.</li>
+</ul>
+<h3>G. Bench (#449, re-aimed)</h3>
+<ul>
+<li><strong>AC-G1</strong> — driver-bench live cells run against the <strong>same executor path WF2/WF3 use</strong> (not a bench-only dispatch): real model calls, report to <code>docs/measurements/driver-bench/</code>, per-seat outcome (served/fallback/judge/audit), explicit cost line, <code>RUN_LIVE=1</code> gate, fail-closed legible skip on missing creds. (#449&#x27;s issue ACs, now pointed at the wired path.)</li>
+</ul>
+<h3>H. Meta (this analysis)</h3>
+<ul>
+<li><strong>AC-H1</strong> — Adversarially reviewed by GPT Sol AND GLM 5.2; both also consulted as thought partners; findings dispositioned (accept/discard with reason). *(P9)*</li>
+<li><strong>AC-H2</strong> — Load-bearing claims grounded in cited primary sources (docs pages, GitHub issues, local CLI/code probes) — confirmed vs inferred marked. *(P9)*</li>
+<li><strong>AC-H3</strong> — Final deliverable includes a decision-focused visual artifact (attention-directing VDL: owner decisions first, assumptions flagged confirm/deny). Residual uncertainties documented for owner review. *(P10, P11)*</li>
+</ul>
+<p>---</p>
+<h2>3. Gap analysis — reuse / modify / throwaway / build</h2>
+<h3>REUSE as-is (transport-agnostic; survives the architecture shift)</h3>
+<table>
+<thead><tr><th>Asset</th><th>Why it survives</th></tr></thead>
+<tbody>
+<tr><td><code>contract.py</code> + <code>observation.schema.json</code> / <code>routing-table.schema.json</code></td><td>The envelope is dispatch-agnostic; extend (AC-D4), don&#x27;t replace</td></tr>
+<tr><td><code>enforce.py</code> — <code>check_pre</code>/<code>verify_post</code>/<code>RoutingAuditLog</code>/<code>reconcile_run</code></td><td>The audit spine; needs seat-set extension only (AC-D3)</td></tr>
+<tr><td><code>routing/</code> — seat table, <code>eligible_targets</code>, chains, D9, never-Haiku</td><td>Pure policy; unchanged</td></tr>
+<tr><td><code>engine.run_seat</code> fallback loop + <code>dispatched_lane</code> stamping (<code>engine.py:65-117</code>)</td><td>Chain/quota/audit logic wraps *any* dispatch callable (it already takes <code>dispatch=</code> injected)</td></tr>
+<tr><td><code>QuotaCoordinator</code> + #431 <code>CLAUDE_CONFIG_DIR</code> lanes</td><td>Concurrency + account isolation apply identically to tmux children</td></tr>
+<tr><td><code>capture/</code> dir discipline (<code>create_capture</code>, finalize)</td><td>Becomes the async completion sentinel (AC-E3/E4)</td></tr>
+<tr><td><code>bakeoff_policy.py</code> + <code>run_competitive</code></td><td>Judge + anonymization + fail-closed policy unchanged; candidates become agentic instances</td></tr>
+<tr><td><code>model_routing_lib</code> role→model/effort config</td><td>Feeds the seat table; #448 extends it</td></tr>
+<tr><td><code>driver_bench_lib</code> scorer + 12 fixtures + stubbed baseline</td><td>The 7-dim scorer + fixtures stay; live path re-aims at the wired dispatch (AC-G1)</td></tr>
+<tr><td>WF2 <code>DISPATCH</code> line contract (#330) + run-record <code>dispatches[]</code></td><td>Format stays; producer changes</td></tr>
+<tr><td>gap-forensics in the superseded doc (§1: how the miss happened)</td><td>Valid history; referenced by the accountability record</td></tr>
+</tbody>
+</table>
+<h3>MODIFY (reuse with surgery)</h3>
+<table>
+<thead><tr><th>Asset</th><th>Surgery</th></tr></thead>
+<tbody>
+<tr><td><code>adapters/claude_cli.py</code></td><td>Add <strong>agentic invocation profile</strong>: <code>--allowedTools</code>/<code>--permission-mode</code>/worktree cwd/<code>--add-dir</code>/<code>--effort</code>/<code>--max-budget-usd</code>; keep one-shot mode for pure completions</td></tr>
+<tr><td><code>adapters/codex_cli.py</code></td><td>Add <code>-s workspace-write</code> profile for build-capable cross-model seats (today hardcoded <code>read-only</code>, <code>codex_cli.py:33</code>)</td></tr>
+<tr><td><code>adapters/base.py run_subprocess</code></td><td>Blocking mode stays (<code>base.py:61-81</code>, own-process-group + group-kill); ADD detached tmux-launch + sentinel-poll path alongside</td></tr>
+<tr><td><code>executor_routing_lib</code></td><td>Extend <code>WIRED_SEATS</code> to all seats; add async verbs (launch/status/collect); keep the fail-closed taxonomy</td></tr>
+<tr><td>WF2/WF3 <code>&lt;model-routing-resolve&gt;</code> + steps.md dispatch annotations</td><td>Rewrite to executor dispatch (the real #417); Agent-tool contract text retires (OQ-6: keep as fallback tier or delete)</td></tr>
+</tbody>
+</table>
+<h3>THROWAWAY</h3>
+<table>
+<thead><tr><th>Asset</th><th>Why</th></tr></thead>
+<tbody>
+<tr><td><code>2026-07-17-wf2-wf3-executor-seat-placement.md</code> §§0/2/4 — the &quot;executor is single-shot/read-only so analysis+build can&#x27;t route through it&quot; placement argument</td><td><strong>Wrong premise.</strong> Read the v1 adapter *configuration* as a *platform limit*. <code>claude -p</code> is a full headless agent (F1); codex has <code>workspace-write</code> (F4). Superseded by this doc</td></tr>
+<tr><td>Its &quot;hybrid review&quot; (Agent-tool explorer + executor bounded pass)</td><td>Moot — an executor review seat can grep/read itself (AC-B1)</td></tr>
+<tr><td>Its &quot;two audit worlds coexist&quot; contract (§5)</td><td>Collapses — with all phase work executor-routed there is ONE audit world (AC-D1/D2); the DISPATCH line remains only as the orchestrator-level record</td></tr>
+<tr><td>Agent-tool phase-dispatch as the *primary* mechanism (bundled <code>rawgentic-implementer</code>/<code>rawgentic-reviewer</code> contracts in skill prose)</td><td>Retired by AC-A1 (disposition of the agent definitions themselves = OQ-6)</td></tr>
+</tbody>
+</table>
+<h3>BUILD (new work)</h3>
+<table>
+<thead><tr><th>Item</th><th>ACs served</th></tr></thead>
+<tbody>
+<tr><td><strong>Seat capability manifest</strong>: per-seat tool grants, permission mode, worktree policy, budget (config, alongside #448&#x27;s seat table)</td><td>B1, B2, B4, C3</td></tr>
+<tr><td><strong>tmux supervisor module</strong> (<code>phase_executor/supervisor.py</code>): spawn command-as-pane-arg, sentinel wait, timeout kill, orphan reap, run-id session naming</td><td>E1–E4</td></tr>
+<tr><td><strong>Async dispatch API</strong>: engine launch/await split (or blocking <code>run_seat</code> wrapping tmux-wait — OQ-5 settles the shape)</td><td>E4</td></tr>
+<tr><td><strong>Worktree lifecycle</strong> for executor instances (native <code>--worktree</code> vs engine-managed — OQ-3)</td><td>B2</td></tr>
+<tr><td><strong>Guardrail live-verification</strong> harness: prove hooks fire inside <code>-p</code> children (red/green test, not prose) + a <code>--bare</code>-default drift-guard (F3a)</td><td>B3</td></tr>
+<tr><td><strong>Observation work-product extension</strong> (+ schema version bump per #434 policy)</td><td>D4</td></tr>
+<tr><td><strong>build-seat audit path</strong> (<code>enforce</code> rewire + <code>WIRED_SEATS</code> full set)</td><td>D3</td></tr>
+<tr><td><strong>WF2/WF3 skill rewiring</strong> (the real #417): per-step executor dispatch prose + resume-protocol integration with tmux sessions</td><td>F1, F2</td></tr>
+<tr><td><strong>The proving run</strong>: one real WF2 run, audit reconciled</td><td>F3</td></tr>
+<tr><td><strong>#449 live cells</strong> on the wired path + report</td><td>G1</td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>4. Research facts (confirmed; citations)</h2>
+<ul>
+<li><strong>F1 — <code>claude -p</code> is a full headless agent, not a completion API.</strong> Flags confirmed live on claude 2.1.212 (this host): <code>--allowedTools</code>, <code>--disallowedTools</code>, <code>--permission-mode</code>, <code>--add-dir</code>, <code>--dangerously-skip-permissions</code>, <code>--output-format json|stream-json</code>, <code>--input-format stream-json</code>, <code>--session-id</code>, <code>--resume</code>, <code>--fork-session</code>, <code>--no-session-persistence</code>. Headless children can edit files and run Bash when granted.</li>
+<li><strong>F2 — Per-instance cost + effort knobs exist</strong>: <code>--effort &lt;level&gt;</code> and <code>--max-budget-usd &lt;amount&gt;</code> confirmed on 2.1.212 (local <code>--help</code> probe).</li>
+<li><strong>F3 — Hooks and config surfaces in <code>-p</code> mode: docs-stated, project enablement UNVERIFIED</strong> (relabeled per both reviews — gpt #10, glm #2). Docs state: &quot;Without [<code>--bare</code>], <code>claude -p</code> loads the same context an interactive session would&quot; (CLAUDE.md, settings hooks, plugins, MCP), hooks on the same lifecycle. Source: https://code.claude.com/docs/en/headless.md, /docs/en/hooks.md. That proves the PLATFORM capability — not that THIS project&#x27;s hooks, lanes (<code>CLAUDE_CONFIG_DIR</code>), and permission profiles load in a <code>-p</code> child. AC-B3&#x27;s red/green canary is a <strong>mandatory launch gate</strong> asserting each expected guard by stable ID/digest per lane × profile, with an audit event on failure.</li>
+<li><strong>F3a — <code>--bare</code> landmine:</strong> <code>--bare</code> skips hooks/plugins/CLAUDE.md/MCP discovery, and docs state it is &quot;the recommended mode for scripted and SDK calls, and <strong>will become the default for <code>-p</code> in a future release</strong>.&quot; <strong>No explicit <code>--no-bare</code> opt-out flag was found in the 2.1.212 probe</strong> (glm #4) — so &quot;pinning&quot; cannot be a flag: the enforcement IS the AC-B3 startup canary (a child whose hooks didn&#x27;t fire fails closed before mutation) plus a CLI-version drift-guard. (headless.md)</li>
+<li><strong>F3b — <code>-p</code> permission behavior when a tool is NOT granted: the run ABORTS</strong> (no prompt, no hang): &quot;otherwise the run aborts when one is attempted&quot; (headless.md); <code>dontAsk</code> mode denies-never-asks; <code>--disallowedTools</code> patterns hold even in <code>bypassPermissions</code>. Per-seat tool grants must therefore be COMPLETE for the seat&#x27;s job, or the seat dies mid-run. Permission modes: <code>default|acceptEdits|plan|auto|dontAsk|bypassPermissions</code> (permission-modes.md).</li>
+<li><strong>F3c — Worktree-shared approvals (v2.1.211+):</strong> &quot;don&#x27;t ask again&quot; approvals save to the MAIN checkout&#x27;s <code>.claude/settings.local.json</code> and apply in every worktree of the repo — pre-approve a seat&#x27;s toolset once, all workers inherit. (worktrees.md)</li>
+<li><strong>F4 — codex sandbox modes</strong>: <code>codex exec -s read-only|workspace-write|danger-full-access</code> confirmed via local <code>--help</code>; v1 adapter *chose* read-only — a config choice, not a platform limit (<code>codex_cli.py:33</code>).</li>
+<li><strong>F5 — Native worktree support</strong>: <code>claude --worktree [name]</code>; <code>claude -p --worktree</code> skips the trust check; subagent <code>isolation: worktree</code>; worktree locking while an agent runs; periodic sweep cleanup (age &gt; <code>cleanupPeriodDays</code>, only if clean); <code>-p --worktree</code> worktrees are NOT auto-cleaned; <code>.worktreeinclude</code> copies untracked files (e.g. <code>.env</code>); <code>WorktreeCreate</code>/<code>WorktreeRemove</code> hooks can replace git logic; <code>worktree.baseRef: fresh|head</code>. Source: https://code.claude.com/docs/en/worktrees</li>
+<li><strong>F6 — Native <code>--tmux</code> flag exists</strong> (2.1.212): &quot;Create a tmux session for the worktree (requires <code>--worktree</code>)&quot;. Native CLI support for exactly P8&#x27;s shape. Maturity/headless interplay unverified (U-2).</li>
+<li><strong>F7 — The send-keys failure class is real and reproducible</strong> in Anthropic&#x27;s own Agent-Teams tmux backend: shell-init race loses the command (issues [#23513](https://github.com/anthropics/claude-code/issues/23513), [#25315](https://github.com/anthropics/claude-code/issues/25315)); silent exit-1 before debug init, &quot;manual run of the identical command succeeds&quot; ([#46349](https://github.com/anthropics/claude-code/issues/46349)); prompts never delivered / inbox never read ([#23477](https://github.com/anthropics/claude-code/issues/23477)); lifecycle-state loss → orphaned/duplicate teammates at scale (~30/400 runs, [#44701](https://github.com/anthropics/claude-code/issues/44701)). The documented robust fix in every thread: <strong>pass the command as the pane&#x27;s initial process</strong>, never send-keys.</li>
+<li><strong>F8 — The ecosystem converged on &quot;headless workers, tmux as optional supervisor&quot;.</strong> overstory [#85](https://github.com/jayminwest/overstory/issues/85) is a full postmortem of TUI-in-tmux agents (zombies, ~15s spawn overhead, beacon loss, trust dialogs) migrating to <code>claude -p --output-format stream-json</code> with process-exit lifecycle; maintainer verdict: &quot;workers mostly headless; coordinator/monitor interactive; tmux isolation is the hardening layer, not the transport.&quot; Prior art: twaldin/tmux-orchestrator (spawn/kill/message/watch scripts, worktree isolation, CLAUDE.md injection — but interactive agents needing an auto-approval watcher), claude-squad, primeline-ai/claude-tmux-orchestration, jeffdhooton/orch, omux, taco.</li>
+<li><strong>F9 — Existing engine machinery is dispatch-agnostic</strong> (local code read): <code>run_seat</code> takes <code>dispatch=</code> injected (<code>engine.py:77</code>); <code>run_subprocess</code> runs children in their own process group with group-kill on timeout (<code>base.py:61-81</code>); capture dir finalizes <code>observation.json</code> last (<code>claude_cli.py:95-96</code>) — a ready-made completion sentinel.</li>
+<li><strong>F10 — Session resume is cwd-scoped</strong>: <code>--resume &lt;id&gt;</code> must run from the SAME directory (or its worktrees) — session files live under <code>~/.claude/projects/&lt;encoded-cwd&gt;/&lt;id&gt;.jsonl</code> (or <code>$CLAUDE_CONFIG_DIR/projects/...</code>). Resuming from the wrong cwd silently returns a FRESH session. A per-seat resume must execute from that seat&#x27;s worktree path. (agent-sdk/sessions.md)</li>
+<li><strong>F11 — Quota is a shared pool; <code>-p</code> fails hard on usage limits</strong>: subscription usage is one rolling 5h+weekly pool across all surfaces and models; on a usage-limit hit <code>-p</code> exits code 1, NO retry; 429s retry with backoff up to <code>CLAUDE_CODE_MAX_RETRIES</code> (default 10); <code>CLAUDE_CODE_RETRY_WATCHDOG=1</code> allows indefinite 429/529 retries for unattended runs. One worker&#x27;s limit hit usually means the whole pool is dry — the supervisor must treat exit-1-usage-limit as a RUN-level pause signal, not a per-seat failure. (costs.md, errors.md)</li>
+<li><strong>F12 — Cost fields</strong>: <code>--output-format json</code> always carries <code>total_cost_usd</code> (client-side ESTIMATE, both success and error) + <code>modelUsage</code> per-model breakdown that INCLUDES subagent activity (<code>usage</code> undercounts on nesting — use <code>modelUsage</code>, which the v1 adapter already parses). No cross-call session total — the executor accumulates. (agent-sdk/cost-tracking.md)</li>
+<li><strong>F13 — Agent SDK (python/TS) is the docs-recommended substrate for production automation</strong> (&quot;CI/CD: SDK; production automation: SDK; one-off tasks: CLI&quot;) with programmatic permission callbacks (<code>can_use_tool</code>), native hook callbacks, per-call model+effort, streaming. BUT it is claude-only: codex/zhipuai seats still need CLI/SDK-of-their-own subprocess dispatch, and the existing multi-provider adapter symmetry is CLI-shaped. (agent-sdk/overview.md)</li>
+<li><strong>F14 — <code>--effort</code> values</strong>: <code>low|medium|high|xhigh|max</code> (+<code>ultracode</code> v2.1.203+); peer flag to <code>--model</code>; not marked &quot;print mode only&quot; (inferred applicable to <code>-p</code>; <code>/effort &lt;v&gt;</code> prompt-embedded works in <code>-p</code> on v2.1.205+). (cli-reference.md, headless.md)</li>
+</ul>
+<p><strong>Interpretation of F7+F8 for P8 (the tmux directive):</strong> tmux earns its place as the <strong>supervisor</strong> (survival, observability, rescue) — but the *transport* must be headless <code>-p</code> with the command as the pane&#x27;s initial process and completion by process exit + sentinel file. tmux-as-typed-TUI is the documented failure mode. This is a <strong>refinement</strong> of P8, not a rejection.</p>
+<p>---</p>
+<h2>5. Open questions — routed to the Sol + GLM consults (owner is out; P11)</h2>
+<ul>
+<li><strong>OQ-1 — Migration shape:</strong> hard cutover (P4 says Agent-tool &quot;no longer needed&quot;) vs seat-by-seat wiring with Agent-tool as a temporary fallback tier. Risk: a half-wired state is exactly the #422 failure mode; but a big-bang rewire of 2 workflows × 7 seats is a large blast radius.</li>
+<li><strong>OQ-2 — Child permission model:</strong> per-seat <code>--allowedTools</code> whitelist (must be COMPLETE — an un-granted tool call ABORTS the run, F3b) vs <code>--permission-mode acceptEdits</code>/<code>dontAsk</code> vs <code>bypassPermissions</code> (trusting the hook layer, which is confirmed active in <code>-p</code>, F3). Worktree-shared approvals (F3c) offer a fourth path: pre-approve seat toolsets once in the main checkout. What is the right risk posture for autonomous headless children in a repo with wal-guard/security-guard hooks?</li>
+<li><strong>OQ-3 — Worktree ownership:</strong> native <code>claude -p --worktree</code> (CLI owns creation; NOT auto-cleaned in -p; sweep rules apply) vs engine-managed <code>git worktree add/lock/remove</code> (executor owns lifecycle, uniform across providers — codex children get worktrees too). Which owns the lifecycle?</li>
+<li><strong>OQ-4 — Observation work-product extension:</strong> how should agentic outputs (changed files, commit SHA, test results, doc paths) ride the envelope — a <code>work_product</code> field vs <code>parsed_payload</code> conventions? Interacts with #434 (schema versioning policy, owner-gated).</li>
+<li><strong>OQ-5 — Engine API shape:</strong> keep <code>run_seat</code> synchronous (tmux-wait inside dispatch) vs a new launch/await split API. Sync keeps every existing caller (bakeoff, bench) working; async is what the orchestrator actually needs for parallel seats.</li>
+<li><strong>OQ-6 — Bundled Agent-tool agents</strong> (<code>rawgentic-implementer</code>/<code>rawgentic-reviewer</code>): retire entirely, or keep as a declared fallback tier when tmux/executor is unavailable (the resolution ladder&#x27;s <code>fallback</code> slot)?</li>
+<li><strong>OQ-7 — Cross-model agentic rights:</strong> does a codex design/build candidate get <code>workspace-write</code> in its own worktree (full symmetry with claude children), or are mutating seats claude-only with codex kept read-only?</li>
+<li><strong>OQ-8 — Orchestrator polling discipline:</strong> sentinel-poll cadence, per-seat timeout defaults, and how the WF2 resume protocol reconciles live tmux sessions found on resume (adopt? kill? re-attach?).</li>
+<li><strong>OQ-9 — Claude-adapter substrate:</strong> stay on CLI subprocess (<code>claude -p</code>, symmetric with codex/zhipu adapters, tmux-hostable) vs migrate the claude adapter to the Agent SDK (docs-recommended for production automation, F13 — programmatic permission callbacks + native hook callbacks + streaming, but claude-only, python-package dependency, and harder to host in a user-attachable tmux session).</li>
+</ul>
+<h2>5b. Consult synthesis (WF13, GPT Sol + GLM 5.2 — 2026-07-17; owner to ratify)</h2>
+<p>Both peers produced independent proposals (reports in <code>docs/reviews/peer-2026-07-17-orchestrator-executor-acceptance-criter-2026-07-17{,-glm}.md</code>). Resolutions below are <strong>consult-derived, owner-ratification pending</strong>:</p>
+<ul>
+<li><strong>OQ-1 (migration) — RESOLVED by synthesis of the fork.</strong> Sol: atomic run-level cutover, never mix architectures within a run, Agent-tool is not a runtime fallback. GLM: seat-by-seat under a flag, fallback tier until the proving run, then hard cut. <strong>Synthesis: a run-level architecture version — any single run is 100% executor or 100% legacy, never mixed (Sol&#x27;s invariant); staging happens ACROSS runs (GLM&#x27;s caution): prove seats in shadow/integration runs, then flip the default.</strong> Bounded legacy window; refuse legacy resumes after archival.</li>
+<li><strong>OQ-2 (permissions) — CONVERGED, refined by glm review #3:</strong> least-privilege per-seat grants + non-interactive denial, NEVER <code>bypassPermissions</code>; manifest validated for structural completeness BEFORE launch. <strong>But an autonomous agent&#x27;s full tool set is not enumerable a priori</strong> — omitted grants hard-abort the run (F3b). Mechanism: grant <strong>broad-but-gated tool categories</strong> and enforce restrictions via <strong>hook-layer deny-and-log</strong> (a PreToolUse DENY returns feedback the agent can adapt to; an ungranted tool aborts). Unexpected calls degrade gracefully — deny-and-log by default, abort reserved for the forbidden-combinations class. Startup guardrail canary before any mutation; non-bare enforced by the canary (no opt-out flag exists — F3a).</li>
+<li><strong>OQ-3 (worktrees) — CONVERGED: engine-managed lifecycle</strong> for every mutating provider (claude AND codex get identical isolation, deterministic paths, explicit cleanup, resume-safe cwd). Native <code>--worktree</code> demoted to a claude-only optimization to probe later. Sol adds: retain failed/dirty worktrees for diagnosis (with retention limits + secret-redaction policy); worktree population (.env etc.) needs an allowlist.</li>
+<li><strong>OQ-4 (work product) — CONVERGED:</strong> typed <code>work_product</code> object (kind, worktree_path, base/head SHA, changed_paths[], documents[], tests[{command_digest,status,exit_code,report_ref}], promotion status), never overloaded into <code>parsed_payload</code>; provider-native output preserved separately; <strong>the executor independently derives git changes/commit identity/exit evidence — never trusts the agent&#x27;s self-report.</strong> Schema version bump rides #434.</li>
+<li><strong>OQ-5 (API shape) — CONVERGED:</strong> async at core (<code>launch/status/await/cancel/recover</code>), synchronous <code>run_seat</code> compatibility wrapper so bakeoff/bench/sequential callers keep working.</li>
+<li><strong>OQ-6 (bundled agents) — Sol: retire from runtime</strong> (not a fallback); GLM: keep as declared fallback tier only until the proving run. Under the OQ-1 synthesis these agree: legacy runs use them until the flip; after archival they retire. Disposition of the agent definition files themselves = cleanup child.</li>
+<li><strong>OQ-7 (cross-model rights) — CONVERGED, CONDITIONAL:</strong> rights follow <strong>seat capability, not provider identity</strong> — a codex build/design job gets workspace-write only inside its engine-managed worktree under the same gates/budget/audit. <strong>Conditional on a spike</strong> (glm #6: <code>codex exec -s workspace-write</code> is <code>--help</code>-confirmed only; the adapter has never run it — hardcoded read-only today) and on the per-provider containment canary (gpt #4: codex loads NO claude hooks — its guard layer is the codex sandbox + supervisor checks). <strong>Codex mutating seats stay unsupported until both pass</strong>; the proving run must include a codex mutating cell.</li>
+<li><strong>OQ-8 (recovery) — Sol&#x27;s criteria adopted:</strong> durable job registry + run-prefixed tmux names; recovery ADOPTS a session only when identity, command digest, worktree, and capture dir all match; otherwise QUARANTINE for explicit cancellation. Supervisor distinguishes running / exited-without-sentinel / quota-paused / timed-out / orphaned.</li>
+<li><strong>OQ-9 (substrate) — CONVERGED:</strong> CLI initially (provider symmetry, tmux-transparent), behind an adapter interface so an SDK implementation can swap in without changing workflow/audit contracts.</li>
+<li><strong>U-3 (utility fan-out) — Sol&#x27;s rule adopted (matches P5 &quot;everything&quot;):</strong> ALL model-based dispatch routes through executor jobs — named phase seats AND utility fan-out; pure deterministic orchestration logic stays in-process; <strong>no second model-dispatch mechanism remains</strong>. *(Owner confirm — this retires Agent-tool use inside WF2 Step 2 fan-outs too.)*</li>
+<li><strong>New design elements adopted from Sol:</strong> (1) <strong>Promotion model</strong> — executor output is descriptive, never self-integrating; the orchestrator promotes the approved commit/patch into the canonical branch with base-SHA validation, clean-worktree requirement, explicit conflict result. (2) <strong>Expected-dispatch manifest at run start</strong> — refined per gpt #7: <strong>immutable required job templates + an append-only authorization ledger</strong> for dynamic work (fallback attempts, competitive candidates, loop-backs, retries, utility fan-out) — every dynamic expansion is authorized and recorded BEFORE launch with parent job, reason, attempt number, and budget linkage; the ledger freezes before final reconciliation; reconcile compares templates+ledger vs launch records vs Observations vs audit vs promotions; any mismatch blocks completion. (3) <strong>Quota-pool pause semantics</strong> — subscription exhaustion pauses the pool (preserving live state, resumable), never consumed as model-failure fallback attempts. (4) <strong>Effort mapping recorded twice</strong> — normalized policy value + requested provider-native value on every Observation.</li>
+</ul>
+<h2>5c. Adversarial-review disposition (WF5, both backends — all 16 ACCEPTED, folded in)</h2>
+<p>Reports: <code>docs/reviews/2026-07-17-orchestrator-executor-acceptance-criter-2026-07-17{,-glm}.md</code>. gpt: 10 (C1/H5/M4) · glm: 6 (H1/M4/L1); two independent duplicate catches (U-3 contradiction; F3 overstatement) — treated as high-signal convergence. No finding discarded; no reviewer conflict; the ambiguity flags (gpt #7, glm #3) were resolved by adopting the recommended mechanisms rather than deferring.</p>
+<table>
+<thead><tr><th>#</th><th>Finding</th><th>Fix landed in</th></tr></thead>
+<tbody>
+<tr><td>gpt 1 (Critical)</td><td>AC-E1 &quot;survives usage-pause&quot; contradicted F11 (child exits 1)</td><td>AC-E1 rewritten: quota_paused + persist + <code>--resume</code> relaunch</td></tr>
+<tr><td>gpt 2 (High)</td><td><code>tmux kill-session</code> ≠ process-tree kill</td><td>AC-E4: supervisor-owned process group, verify-dead, then Observation</td></tr>
+<tr><td>gpt 3 (High)</td><td>&quot;and/or&quot; allowed post-hoc-only cost accounting; codex/zhipu capless</td><td>AC-B4: pre-launch atomic reservation + per-provider declared bound</td></tr>
+<tr><td>gpt 4 (High)</td><td>codex loads no claude hooks — assumed shared gate layer</td><td>AC-B3 provider-neutral; codex mutating unsupported until canary/spike</td></tr>
+<tr><td>gpt 5 + glm 1 (High)</td><td>§5b vs §6 U-3 contradiction (dual-dispatch ambiguity)</td><td>§6 U-3 rewritten, single policy per architecture version</td></tr>
+<tr><td>gpt 6 (High)</td><td>worktree isolates checkout, not agent (no OS write boundary)</td><td>AC-B2: provider-native confinement required or launch rejected</td></tr>
+<tr><td>gpt 7 (Medium)</td><td>expected-dispatch manifest vs dynamic loop-backs/fallbacks</td><td>§5b(2): job templates + append-only authorization ledger</td></tr>
+<tr><td>gpt 8 (Medium)</td><td>observation.json publication not atomic/durable</td><td>AC-E3: tmp+fsync+rename+dir-fsync; malformed sentinel = audited state</td></tr>
+<tr><td>gpt 9 (Medium)</td><td>no tmux capability preflight</td><td>AC-E1: preflight per environment, fail-closed</td></tr>
+<tr><td>gpt 10 + glm 2 (Medium)</td><td>F3 &quot;confirmed&quot; overstated (platform ≠ project enablement)</td><td>F3 relabeled docs-stated/unverified; canary = mandatory launch gate</td></tr>
+<tr><td>glm 3 (Medium)</td><td>tool-grant completeness unknowable a priori; aborts mid-run</td><td>OQ-2: broad-but-gated grants + hook deny-and-log (feedback, not abort)</td></tr>
+<tr><td>glm 4 (Medium)</td><td>&quot;pin non-bare&quot; impossible — no opt-out flag exists</td><td>F3a: enforcement = startup canary + version drift-guard, not a flag</td></tr>
+<tr><td>glm 5 (Medium)</td><td>AC-B2 wording contradicted OQ-3 resolution (native-first)</td><td>AC-B2 rewritten: engine-managed primary</td></tr>
+<tr><td>glm 6 (Low)</td><td>OQ-7 workspace-write <code>--help</code>-confirmed only</td><td>OQ-7 marked CONDITIONAL on spike + canary</td></tr>
+</tbody>
+</table>
+<h2>6. Uncertainties for owner review (P11 — documented, not blocking)</h2>
+<ul>
+<li><strong>U-1</strong> — ~~Hooks in <code>-p</code>~~ RESOLVED → F3 (confirmed from docs). Residual: the <code>--bare</code> future-default flip (F3a) needs a drift-guard — new build item, not an uncertainty.</li>
+<li><strong>U-2</strong> — Native <code>--tmux</code> flag: composition with <code>-p</code> unverified (local help ties it to <code>--worktree</code> and mentions iTerm2; likely interactive convenience). Supervisor module remains the default plan; probe <code>claude -p --worktree --tmux</code> once in build.</li>
+<li><strong>U-3</strong> — Utility fan-out: <strong>RESOLVED in §5b (supersedes the earlier assumption here — both reviewers flagged the stale text, gpt #5 / glm #1):</strong> ALL model-based dispatch — named phase seats AND WF2 Step 2-style utility fan-out — routes through executor jobs; pure deterministic orchestration logic stays in-process; after the run-level architecture flip <strong>no second model-dispatch mechanism remains</strong>. Each run&#x27;s architecture version declares and enforces exactly one policy. *Owner ratification still pending (it retires Agent-tool use inside Step 2 fan-outs too).*</li>
+<li><strong>U-4</strong> — Whether the interim seat table (review=fable etc.) stays authoritative for the wired path until #449 data lands. Assumed yes. <strong>Assumption — confirm.</strong></li>
+<li><strong>U-5</strong> — Effort semantics per provider: <code>--effort</code> levels on claude CLI vs codex <code>model_reasoning_effort</code> values — mapping table needed; assumed the seat table&#x27;s effort vocabulary maps 1:1 per adapter. <strong>Assumption — verify in build.</strong></li>
+</ul>
+<p>---</p>
+<h2>6b. Owner decision points (concentrated — everything that needs YOUR answer)</h2>
+<table>
+<thead><tr><th>#</th><th>Decision</th><th>Recommendation on the table</th><th>Source</th></tr></thead>
+<tbody>
+<tr><td><strong>D-1</strong></td><td>Ratify the AC list (§2) as the target architecture</td><td>Ratify — traces 1:1 to your prompts; survived 2-model review</td><td>§1–§2</td></tr>
+<tr><td><strong>D-2</strong></td><td>ALL model dispatch through executor — including WF2 Step 2 utility fan-out (retires Agent-tool there too)</td><td>Adopt (Sol&#x27;s rule; matches your P5 &quot;everything&quot;)</td><td>§5b U-3</td></tr>
+<tr><td><strong>D-3</strong></td><td>Migration: run-level architecture version — a run is never mixed; staging happens across runs; bounded legacy window</td><td>Adopt (synthesis of Sol atomic × GLM staged)</td><td>§5b OQ-1</td></tr>
+<tr><td><strong>D-4</strong></td><td>Codex mutating seats: unsupported until containment spike + canary pass (claude-only mutation until then)</td><td>Adopt (gpt #4 + glm #6 — codex has no claude-hook layer)</td><td>§5c</td></tr>
+<tr><td><strong>D-5</strong></td><td>Observation <code>work_product</code> schema extension rides the #434 versioning decision (which is already owner-gated)</td><td>Decide #434 first or together</td><td>AC-D4</td></tr>
+<tr><td><strong>D-6</strong></td><td>Interim seat table (review=fable etc.) stays authoritative until #449 live data lands</td><td>Confirm (assumption U-4)</td><td>§6</td></tr>
+<tr><td><strong>D-7</strong></td><td>Sequencing: new epic for the wiring; #449 re-scoped to bench the wired path AFTER it exists; #448 children ride alongside</td><td>Confirm §7 order</td><td>§7</td></tr>
+</tbody>
+</table>
+<h2>7. Sequencing sketch (post-ratification)</h2>
+<p>1. <strong>Epic:</strong> orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1). 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product extension (D4, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → proving run (F3) → #449 live bench on the wired path (G1) → #448 config/setup/diagram children ride alongside. 3. #450 (ultracode) re-evaluated after wiring — its &quot;gate-preserving fan-out&quot; may collapse into the executor&#x27;s parallel-seat capability.</p>
+
+</main>
+<footer>Last updated: 2026-07-17 13:55 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
