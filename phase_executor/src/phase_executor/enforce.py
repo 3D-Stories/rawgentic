@@ -123,3 +123,35 @@ def check_pre(seat, target, snapshot, *, correlation_id, attempt_id, gate_digest
         verdict="pass" if not violations else "fail",
         violations=tuple(violations),
     )
+
+
+@dataclass(frozen=True)
+class PostCheck:
+    """Post-call verification result. ``verified`` = requested==actual proven; ``ok`` = no
+    enforcement breach. An honest availability/parse/identity failure is ``ok=True, verified=False``
+    (not a breach); a requested!=actual mismatch or a missing identity on an ``ok`` call is
+    ``ok=False`` and NON-retryable."""
+
+    ok: bool
+    verified: bool
+    reason: str
+    retryable: bool = False
+
+
+def verify_post(obs) -> PostCheck:
+    """Post-dispatch verification. On ``parse_status == "ok"`` the provider-reported ``actual_model``
+    MUST canonicalize-match ``requested_model``; a mismatch (``requested_actual_mismatch``) or a
+    missing identity (``identity_missing``) is a NON-retryable enforcement breach — the model
+    responded with the wrong/absent id, so retrying re-bills the same wrong route. A non-ok status
+    is an honest failure (already fell back in ``run_seat`` for availability): recorded, not a breach.
+    Accepts an ``Observation`` or its dict form."""
+    d = obs.to_dict() if isinstance(obs, contract.Observation) else obs
+    status = d.get("parse_status")
+    if status != contract.OK:
+        return PostCheck(ok=True, verified=False, reason=str(status), retryable=False)
+    actual = d.get("actual_model")
+    if not actual:
+        return PostCheck(ok=False, verified=False, reason="identity_missing", retryable=False)
+    if not contract.models_match(d.get("requested_model"), actual):
+        return PostCheck(ok=False, verified=False, reason="requested_actual_mismatch", retryable=False)
+    return PostCheck(ok=True, verified=True, reason="ok", retryable=False)

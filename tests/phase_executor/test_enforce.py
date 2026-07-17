@@ -126,3 +126,60 @@ def test_check_pre_unknown_seat_raises():
     snap = _snapshot()
     with pytest.raises(routing.RoutingError):
         check_pre("ghost", _target("x", _lane("claude")), snap, correlation_id="c", attempt_id="0")
+
+
+# ---- verify_post ----
+
+def _obs_dict(**over):
+    d = {"schema_version": "1", "run_id": "r", "attempt_id": "a", "seat": "review", "engine": "claude",
+         "transport": "native", "requested_model": "claude-opus-4-8", "actual_model": "claude-opus-4-8",
+         "prompt_hash": "sha256:x", "context_hashes": [], "usage": {"input": 1, "output": 1},
+         "timing_ms": 1, "queued_ms": 0, "process": {"exit_code": 0, "timed_out": False},
+         "parse_status": "ok", "parsed_payload": None, "raw_capture_path": None, "fallback_reason": None,
+         "routing_config_digest": "sha256:d"}
+    d.update(over)
+    return d
+
+
+def test_verify_post_ok_match():
+    pc = enforce.verify_post(_obs_dict())
+    assert pc.ok and pc.verified and pc.retryable is False
+
+
+def test_verify_post_mismatch_non_retryable():
+    pc = enforce.verify_post(_obs_dict(actual_model="claude-sonnet-5"))
+    assert not pc.ok and not pc.verified
+    assert pc.reason == "requested_actual_mismatch" and pc.retryable is False
+
+
+def test_verify_post_identity_missing_on_ok():
+    pc = enforce.verify_post(_obs_dict(actual_model=None))
+    assert not pc.ok and not pc.verified and pc.reason == "identity_missing"
+
+
+def test_verify_post_canonicalizes_provider_prefix_and_bracket():
+    pc = enforce.verify_post(_obs_dict(requested_model="claude-opus-4-8",
+                                       actual_model="us.anthropic.claude-opus-4-8[1m]"))
+    assert pc.ok and pc.verified  # same family through canonicalization
+
+
+def test_verify_post_non_ok_is_not_enforcement_breach():
+    pc = enforce.verify_post(_obs_dict(parse_status="launch_error", actual_model=None, usage=None))
+    assert pc.ok and not pc.verified and pc.reason == "launch_error"
+
+
+def test_verify_post_accepts_observation_object():
+    obs = contract.Observation(
+        run_id="r", attempt_id="a", seat="review", engine="claude", transport="native",
+        requested_model="glm-5.2", actual_model="glm-5.2", prompt_hash="sha256:x",
+        usage={"input": 1, "output": 1}, timing_ms=1, queued_ms=0,
+        process={"exit_code": 0, "timed_out": False}, parse_status="ok", parsed_payload=None,
+        raw_capture_path=None, fallback_reason=None, routing_config_digest="sha256:d")
+    pc = enforce.verify_post(obs)
+    assert pc.ok and pc.verified
+
+
+def test_verify_post_kukakuka_fixture_verified():
+    d = json.loads((FIXTURES / "kukakuka-observation.json").read_text())
+    pc = enforce.verify_post(d)  # glm-5.2 == glm-5.2 (ccr transport, provider-attested)
+    assert pc.ok and pc.verified
