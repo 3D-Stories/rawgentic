@@ -17,6 +17,13 @@ glm = [
     "sniffio",
 ]
 
+[tool.uv]
+# zhipuai (the glm extra) caps pyjwt at ~=2.8, whose 2.8.0 carries known CVEs
+# (GHSA-752w-5fwx-jx9f, GHSA-xgmm-8j9v-c9wx, PYSEC-2025/2026-*). Override past zhipuai's cap:
+# zhipuai only *encodes* its auth JWT (jwt.encode), and that API is stable 2.8->2.10 — verified
+# live that the glm seat call still succeeds under the override.
+override-dependencies = ["pyjwt>=2.10.1"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
