@@ -1,0 +1,22 @@
+{
+  "schema_version": "1",
+  "run_id": "room-42-run-7",
+  "attempt_id": "att-1",
+  "correlation_id": "turn-nonce-9c1f0a2b",
+  "seat": "council-member",
+  "engine": "zhipuai",
+  "transport": "ccr",
+  "requested_model": "glm-5.2",
+  "actual_model": "glm-5.2",
+  "prompt_hash": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+  "context_hashes": ["sha256:fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9"],
+  "usage": {"input": 1200, "output": 340, "cached": 128, "cost_proxy": 0.0219},
+  "timing_ms": 4200,
+  "queued_ms": 15,
+  "process": {"exit_code": 0, "timed_out": false},
+  "parse_status": "ok",
+  "parsed_payload": {"decision": "advance", "rationale": "..."},
+  "raw_capture_path": "/runs/room-42/att-1",
+  "fallback_reason": null,
+  "routing_config_digest": "sha256:cafef00dcafef00dcafef00dcafef00dcafef00dcafef00dcafef00dcafef00d0"
+}

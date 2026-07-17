@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rawgentic.dev/schemas/phase_executor/routing-table-1.json",
+  "title": "phase_executor routing table",
+  "description": "Declarative seat table as data. Each seat has a primary target and a fallback chain; each target carries a model id + a lane object. Concurrency is per-pool. Invariants (never-Haiku, cross-model author) are project-supplied forbidden_combinations rows. The engine is policy-free; projects own their tables.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "pools", "seats"],
+  "properties": {
+    "schema_version": {"type": "string", "const": "1"},
+    "pools": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "pool name -> concurrency limit. A lane names its pool; lanes sharing a quota share a pool.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["concurrency"],
+        "properties": {
+          "concurrency": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "seats": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {"$ref": "#/$defs/seat"}
+    },
+    "forbidden_combinations": {
+      "type": "array",
+      "description": "Project-owned invariant rows. A row matches a target when every present match-field matches; a matched target is rejected with the row's reason. `rule` names a relational invariant the engine evaluates in code (e.g. cross_model_author).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason"],
+        "properties": {
+          "reason": {"type": "string", "minLength": 1},
+          "engine": {"type": "string"},
+          "transport": {"type": "string"},
+          "auth_mode": {"type": "string"},
+          "model_pattern": {"type": "string", "description": "Substring matched against a target model id (case-insensitive), e.g. 'haiku'."},
+          "rule": {"type": "string", "enum": ["cross_model_author"]}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "lane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "transport", "auth_mode", "pool"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "transport": {"type": "string", "minLength": 1, "description": "e.g. native | ccr"},
+        "auth_mode": {"type": "string", "minLength": 1, "description": "e.g. subscription_oauth | api_key"},
+        "credential_ref": {"type": ["string", "null"], "description": "Names a config dir / env key (rawgentic: e.g. CLAUDE_CONFIG_DIR value). Never a secret value."},
+        "pool": {"type": "string", "minLength": 1, "description": "Concurrency pool key; must exist in top-level `pools`."},
+        "participation_mode": {"type": "string"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "lane"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "lane": {"$ref": "#/$defs/lane"}
+      }
+    },
+    "seat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "chain"],
+      "properties": {
+        "primary": {"$ref": "#/$defs/target"},
+        "chain": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/target"},
+          "description": "Fallback targets in order. Engine skips chain-ineligible entries (chain-aware skip), never blind next-entry."
+        },
+        "floor": {"type": ["number", "null"], "description": "Optional quality floor for this seat."}
+      }
+    }
+  }
+}

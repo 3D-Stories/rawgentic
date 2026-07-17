@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rawgentic.dev/schemas/phase_executor/observation-1.json",
+  "title": "phase_executor Observation",
+  "description": "Normative, language-neutral record of one model seat invocation. contract.py is one producer; a Rust producer (kukakuka) emits the same documents. actual_model + usage are mandatory evidence when parse_status == 'ok' (absent identity/usage on a successful call is a failure, not an unknown success), and MAY be null only for a non-success parse_status so a pre-envelope timeout is still recordable.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "attempt_id",
+    "seat",
+    "engine",
+    "transport",
+    "requested_model",
+    "actual_model",
+    "prompt_hash",
+    "context_hashes",
+    "usage",
+    "timing_ms",
+    "queued_ms",
+    "process",
+    "parse_status",
+    "parsed_payload",
+    "raw_capture_path",
+    "fallback_reason",
+    "routing_config_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Observation schema version. Bump on any breaking field change."
+    },
+    "run_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "minLength": 1},
+    "correlation_id": {
+      "type": ["string", "null"],
+      "description": "Opaque caller-supplied string (rawgentic: WF2 step/task id; kukakuka: room turn nonce). Optional."
+    },
+    "seat": {"type": "string", "minLength": 1},
+    "engine": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Provider adapter family, e.g. claude | codex | zhipuai. Open string so downstream projects can add engines."
+    },
+    "transport": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How the engine was reached, e.g. native | ccr. A proxy hop is auditable here plus the innermost upstream id in actual_model."
+    },
+    "requested_model": {"type": "string", "minLength": 1},
+    "actual_model": {
+      "type": ["string", "null"],
+      "description": "Provider-reported id from the INNERMOST envelope. MUST be a non-empty string when parse_status == 'ok'; MAY be null only for a non-success parse_status."
+    },
+    "prompt_hash": {"type": "string", "minLength": 1},
+    "context_hashes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Hashes of each context input, in order. Empty array when no extra context."
+    },
+    "usage": {
+      "type": ["object", "null"],
+      "description": "Real provider-reported token counts. Non-null with input+output present when parse_status == 'ok'; MAY be null only for a non-success parse_status.",
+      "properties": {
+        "input": {"type": "integer", "minimum": 0},
+        "output": {"type": "integer", "minimum": 0},
+        "cached": {"type": "integer", "minimum": 0},
+        "cost_proxy": {"type": ["number", "null"], "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "timing_ms": {"type": "integer", "minimum": 0},
+    "queued_ms": {"type": "integer", "minimum": 0},
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exit_code", "timed_out"],
+      "properties": {
+        "exit_code": {"type": ["integer", "null"]},
+        "timed_out": {"type": "boolean"}
+      }
+    },
+    "parse_status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "nonzero_exit",
+        "timeout",
+        "launch_error",
+        "parse_error",
+        "no_response",
+        "identity_failure",
+        "usage_unavailable",
+        "harness_error"
+      ],
+      "description": "ok = success with provider evidence. All others are non-success: actual_model/usage MAY be null. usage_unavailable = the call produced output and an identity but the provider surfaced no usage counts (a named degraded state, never a fabricated zero)."
+    },
+    "parsed_payload": {
+      "description": "The parsed provider output (structured object, text, or null on a pre-payload failure).",
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    },
+    "raw_capture_path": {
+      "type": ["string", "null"],
+      "description": "Path to the capture directory holding the raw transport bytes. Null only if capture was not written (harness/launch error before mkdir)."
+    },
+    "fallback_reason": {
+      "type": ["string", "null"],
+      "description": "Why a fallback chain entry was used, or null when the primary served."
+    },
+    "judge_degraded": {
+      "type": "boolean",
+      "description": "Competitive-round flag: the judge failed and a degraded winner policy was applied. Optional."
+    },
+    "routing_config_digest": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Digest of the immutable routing snapshot that served this call (epoch identity)."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"parse_status": {"const": "ok"}}
+      },
+      "then": {
+        "properties": {
+          "actual_model": {"type": "string", "minLength": 1},
+          "usage": {
+            "type": "object",
+            "required": ["input", "output"]
+          },
+          "process": {
+            "properties": {
+              "exit_code": {"const": 0},
+              "timed_out": {"const": false}
+            }
+          }
+        }
+      }
+    }
+  ]
+}
