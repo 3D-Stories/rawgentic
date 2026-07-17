@@ -1,0 +1,45 @@
+{
+  "name": "rawgentic",
+  "version": "3.44.0",
+  "description": "8 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, epic auto-run, incident response, peer consultation, post-run workflow self-assessment, session-history mining with human-gated skill candidates, whole-tree security scanning, security pattern syncing, opt-in operating-charter installation, session-registry housekeeping, org self-hosted runner admission, full-text session-history recall, and dangerous pattern blocking with per-project exceptions.",
+  "author": {
+    "name": "3D-Stories",
+    "url": "https://github.com/3D-Stories"
+  },
+  "homepage": "https://github.com/3D-Stories/rawgentic",
+  "repository": "https://github.com/3D-Stories/rawgentic",
+  "license": "MIT",
+  "keywords": [
+    "sdlc",
+    "workflow",
+    "tdd",
+    "code-review",
+    "quality-gates",
+    "conventional-commits",
+    "security-audit",
+    "incident-response",
+    "workspace-management",
+    "project-config",
+    "codex",
+    "agent-skills"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Rawgentic",
+    "shortDescription": "SDLC workflow skills with TDD, quality gates, and project config.",
+    "longDescription": "Rawgentic packages 20 workflow and workspace skills for disciplined software delivery. This Codex Phase 1 package exposes the skills through a private marketplace while Codex hook support is planned for Phase 2.",
+    "developerName": "3D-Stories",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/3D-Stories/rawgentic",
+    "defaultPrompt": [
+      "Create a tracked issue with rawgentic.",
+      "Implement a GitHub issue with rawgentic.",
+      "Interview me before building a feature."
+    ],
+    "brandColor": "#2563EB"
+  }
+}
