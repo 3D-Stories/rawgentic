@@ -42,10 +42,12 @@ def _assert_referential_integrity(table: dict) -> None:
     """Fail-closed cross-field semantic passes the JSON schema cannot express (#464 §C.2 + §D).
 
     Schema validation (``contract.validate_routing_table``) runs FIRST in ``load_routing_table``,
-    so a table reaching here on the production path already has a well-shaped manifest/policy. The
-    ``.get`` guards below are belt-and-suspenders for programmatic tables that call this pass
-    directly and bypass the schema. Every failure raises ``RoutingError`` naming the offending
-    seat/entry (fail-loud, no snapshot => no launch)."""
+    so a table reaching here on the production path already has a well-shaped manifest/policy —
+    there, every semantic failure raises ``RoutingError`` naming the offending seat/entry
+    (fail-loud, no snapshot => no launch). A programmatic caller that bypasses the schema gets a
+    ``RoutingError`` for a MISSING manifest, but an arbitrarily mis-typed field (a list manifest,
+    a null confinement) fails loud with a bare ``TypeError``/``AttributeError`` instead — still
+    fail-closed, just not legibly named; the schema layer owns shape validation."""
     pools = set(table.get("pools", {}))
     for seat_name, seat in table.get("seats", {}).items():
         targets = [seat["primary"], *seat.get("chain", [])]
