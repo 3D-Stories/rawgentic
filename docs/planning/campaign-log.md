@@ -97,7 +97,7 @@ entry-probe, canonical symlink-safe containment, statically-dead-seat check via 
   survived on its separate quota.
 - Suite 3428+8skip → 3483+8skip (+55). No workflow-spine change → no diagram REV.
 
-### #465 — W2: agentic adapter profiles · IN PROGRESS (~12:45 MDT)
+### #465 — W2: agentic adapter profiles · PR #486 (green-pending) · v3.56.0
 
 Conditional session persistence (claude resume), codex workspace-write sandbox pinning
 (three spike-#452 overrides, fail-closed composition), per-model effort gating with
@@ -105,7 +105,7 @@ recorded stepdown. Design converged adversarial pass 3 (volume loop-back pass 1 
 all budgets spent; 45-entry ledger). Progress: T1 effort contract + capability registry
 committed (bf1a081, suite 3525/8) · T2 LaunchProfile + fail-closed derivation committed
 (ca179b4, suite 3540/8; 8a dual review returned — schema-gap Medium fixed in-flight) ·
-T3 claude composition half-done · T4 codex / T5 engine / T6 version pending.
+all 6 tasks + 8a fixes on the 2 high-risk tasks committed; 3-agent Step 11 + codex diff (claude-mutating containment + grants fail-open fixed); **W7 security blocker recorded** — claude mutating dispatch forbidden until a real FS sandbox lands. Suite 3514/8 → 3576/10.
 
 ### #446 — seed + tweak phase-seat models through /rawgentic:setup · v3.55.0
 
