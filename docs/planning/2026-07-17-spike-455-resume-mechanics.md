@@ -271,3 +271,41 @@ All raw command transcripts for this spike live under
 (`probe1_2/`, `probe2_negctrl/`, `probe3_repo/` + `probe3_wt/`, `probe4/`, `probe4b/`,
 `probe_adapter_flag/`) and are cleaned up after this PR is opened, per the spike's own scratch
 discipline — this report's inline quotes are the durable record.
+
+## AC-doc disposition delta
+
+Exact text for the AC doc owner (docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md,
+PR #451, not applied here — that branch/doc is read-only from this spike) to fold into AC-E1 and
+F10/F11 once ratified:
+
+**AC-E1 — add, after the existing "tmux capability preflight" sentence:**
+> **Spike #455 (2026-07-17) confirms this mechanically holds**: session-id capture, cwd-scoped
+> `--resume`, and worktree-scoped `--resume` all behave as specified on claude 2.1.212, and an
+> abnormal exit (SIGKILL) of an already-established (≥1 completed turn) session leaves the session
+> file untouched and fully resumable — the interrupted turn is simply retried, not corrupted. The
+> one case with no recovery path: if the session's *first-ever* turn is killed before it prints its
+> JSON envelope, no `session_id` was ever observable and no session file exists — that attempt must
+> be treated as a fresh-dispatch retry, not a resume (matches AC-E1's existing quota_paused framing,
+> since there is nothing yet to persist in that case). **Confirmed implementation blocker**: `--resume`
+> is unreachable today because `phase_executor/src/phase_executor/adapters/claude_cli.py:26`
+> unconditionally passes `--no-session-persistence` to every dispatch; this must become conditional
+> (omitted whenever the seat's manifest declares `session_policy: resume`, AC-B1) before this AC is
+> wireable — a wiring-epic task, not a design change. Genuine provider usage-limit exit-1 (F11) was
+> NOT independently reproduced (spike safely avoided burning the shared quota pool to force it) —
+> residual risk that its residue characteristics could differ from a SIGKILL's, unconfirmed.
+
+**F10 — replace the sentence "Resuming from the wrong cwd silently returns a FRESH session." with:**
+> Resuming from the wrong cwd does **not** silently return a fresh session for the `--resume <id>`
+> invocation shape this design uses — spike #455 (2026-07-17, claude 2.1.212) reproduced it as a
+> **hard failure**: exit code 1, stderr `No conversation found with session ID: <id>`, no JSON
+> output at all. (The originally-cited docs source may describe a different invocation, e.g.
+> `--continue`'s "most recent session in this cwd" fallback, which was not tested.) This is a
+> **correction, not a new risk** — a loud, machine-detectable failure is easier for the supervisor's
+> resume-identity assertion to act on than a silent identity swap would have been.
+
+**F11 — append:**
+> Spike #455 (2026-07-17) did not independently reproduce a genuine usage-limit exit-1 (avoided
+> forcing real quota exhaustion). It DID confirm, via SIGKILL (a different abnormal-exit path), that
+> an interrupted turn on an already-established session leaves the session file byte-for-byte
+> unmodified and the session fully resumable afterward — consistent with, but not proof of, the same
+> holding for a provider-side usage-limit rejection specifically.
