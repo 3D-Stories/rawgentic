@@ -13,6 +13,11 @@
     "fullName": "org/repo-name",
     "defaultBranch": "main"
   },
+  "phaseExecutorTable": {
+    "$comment": "OPTIONAL versioned descriptor naming the project-owned phase-executor seat-table file (#445): a project-relative path to a routing-table JSON (phase_executor routing-table.schema.json) that is a complete replacement for the package default, never a merge overlay. Absent section = package default. This template is a reference example only — the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; file must be a relative path with no '..'). Seeded/tweaked by /rawgentic:setup (#446).",
+    "version": 1,
+    "file": "claude_docs/routing/phase-executor-table.json"
+  },
   "$comment:techStack": "Languages, frameworks, and infrastructure technologies. Consumed by setup, create-issue, implement-feature, optimize-perf, and update-deps for tooling selection.",
   "techStack": ["typescript", "react", "postgres", "docker"],
   "testing": {

@@ -580,3 +580,25 @@ class TestPhaseExecutorTable:
     def test_field_registered_in_canonical_set(self):
         from capabilities_lib import CAPABILITY_FIELDS
         assert "phase_executor_table" in CAPABILITY_FIELDS
+
+
+class TestConfigTemplateDocumentsPhaseExecutorTable:
+    """#445 AC3/PL-6: the annotated example template and config-reference document the new field.
+    The template is a reference EXAMPLE consumed by /rawgentic:setup (not a validating schema) —
+    the executable contract lives in derive_capabilities; these cells pin the two doc surfaces."""
+    _REPO = Path(__file__).resolve().parent.parent.parent
+
+    def test_template_parses_and_carries_example(self):
+        with open(self._REPO / "templates" / "rawgentic-json-schema.json") as f:
+            tpl = json.load(f)  # invalid JSON would raise — the validity half of the cell
+        pet = tpl.get("phaseExecutorTable")
+        assert isinstance(pet, dict), "template must carry a phaseExecutorTable example section"
+        assert pet.get("version") == 1
+        assert isinstance(pet.get("file"), str) and pet["file"]
+        comment = pet.get("$comment", "")
+        assert "complete replacement" in comment and "capabilities_lib" in comment
+
+    def test_config_reference_has_section(self):
+        with open(self._REPO / "docs" / "config-reference.md") as f:
+            text = f.read()
+        assert "### `phaseExecutorTable`" in text

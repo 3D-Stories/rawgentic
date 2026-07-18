@@ -259,6 +259,38 @@ The older `security.exceptions` array (per-rule + per-path exceptions) is still
 supported for backward compatibility but deprecated. Migrate to
 `guards.securityExcludePaths` for simpler path-based exclusions.
 
+### `phaseExecutorTable`
+
+Optional versioned descriptor naming the project-owned **phase-executor seat table** (#445 —
+"projects own their tables"; the engine is policy-free):
+
+```json
+"phaseExecutorTable": { "version": 1, "file": "claude_docs/routing/phase-executor-table.json" }
+```
+
+`file` is a project-relative path to a full routing-table JSON (the phase_executor
+`routing-table.schema.json` shape) that **completely replaces** the package default — never a
+merge overlay. Seeded verbatim from the package table by `/rawgentic:setup` (#446), so an
+un-tweaked project resolves a digest-identical table to the shipped default.
+
+Semantics (one shared resolution: `executor_routing_lib.resolve_table`, used by BOTH the
+executor CLI and the driver-bench):
+- **Absent section (or absent `.rawgentic.json`)** → the package default
+  (`phase_executor.routing.default_table_path()`). This is the only silent default.
+- **Present and valid** → the named file, loaded fail-closed (schema + referential integrity +
+  a statically-dead-seat check: a seat whose entire primary+chain is forbidden by context-free
+  `forbidden_combinations` rows refuses at resolution). `resolve-seat` reports `table_source` +
+  `config_digest` for auditability.
+- **Present but unusable** — malformed shape (`version` ≠ 1, absolute/`..` path), a declared
+  file that is missing/unreadable/a directory, a symlink escaping the project root, or content
+  that fails validation → **refuses (exit 2) with the path named; never a silent fallback to
+  the package default** (the same false-cutover posture as `executorRouting`).
+
+Distinct from two neighbors: [`modelRouting`](#modelrouting) routes *prose subagent roles*
+(fail-open); the workspace [`executorRouting`](#executorrouting) block decides *whether* a seat
+routes through the executor at all — `phaseExecutorTable` decides *which table* the executor
+routes on. Capability surface: [`phase_executor_table`](#config-loading-protocol).
+
 ## Workspace-File Fields
 
 Beyond each project's committed [`.rawgentic.json`](#core-sections), a few settings live in
