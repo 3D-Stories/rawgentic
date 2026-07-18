@@ -537,3 +537,82 @@ class TestProbeParallelismCleanupSafety:
         monkeypatch.setattr(capabilities_lib.shutil, "rmtree", boom)
         # The probe must still return a documented value, never raise.
         assert capabilities_lib.probe_parallelism(str(tmp_path)) == "worktree"
+
+
+# --- #445: phaseExecutorTable -> phase_executor_table ---
+
+class TestPhaseExecutorTable:
+    def _derive(self, **cfg_kwargs):
+        from capabilities_lib import derive_capabilities
+        return derive_capabilities(_base_config(**cfg_kwargs))
+
+    def test_absent_section_is_none(self):
+        assert self._derive()["phase_executor_table"] is None
+
+    def test_valid_descriptor_yields_file_path(self):
+        caps = self._derive(phaseExecutorTable={
+            "version": 1, "file": "claude_docs/routing/phase-executor-table.json"})
+        assert caps["phase_executor_table"] == "claude_docs/routing/phase-executor-table.json"
+
+    def test_comment_key_is_tolerated(self):
+        caps = self._derive(phaseExecutorTable={
+            "$comment": "docs", "version": 1, "file": "t.json"})
+        assert caps["phase_executor_table"] == "t.json"
+
+    @pytest.mark.parametrize("bad", [
+        "a-string", 7, [], True,                      # section not an object
+        {"file": "t.json"},                            # version missing
+        {"version": 2, "file": "t.json"},              # unsupported version
+        {"version": True, "file": "t.json"},           # bool masquerading as int
+        {"version": 1},                                # file missing
+        {"version": 1, "file": ""},                    # empty
+        {"version": 1, "file": None},                  # null
+        {"version": 1, "file": 3},                     # wrong type
+        {"version": 1, "file": "/abs/table.json"},     # absolute
+        {"version": 1, "file": "../escape.json"},      # traversal
+        {"version": 1, "file": "a/../../b.json"},      # embedded traversal
+    ])
+    def test_present_but_invalid_raises_never_none(self, bad):
+        from capabilities_lib import CapabilitiesError
+        with pytest.raises(CapabilitiesError):
+            self._derive(phaseExecutorTable=bad)
+
+    def test_field_registered_in_canonical_set(self):
+        from capabilities_lib import CAPABILITY_FIELDS
+        assert "phase_executor_table" in CAPABILITY_FIELDS
+
+
+class TestConfigTemplateDocumentsPhaseExecutorTable:
+    """#445 AC3/PL-6: the annotated example template and config-reference document the new field.
+    The template is a reference EXAMPLE consumed by /rawgentic:setup (not a validating schema) —
+    the executable contract lives in derive_capabilities; these cells pin the two doc surfaces."""
+    _REPO = Path(__file__).resolve().parent.parent.parent
+
+    def test_template_parses_and_carries_example(self):
+        with open(self._REPO / "templates" / "rawgentic-json-schema.json") as f:
+            tpl = json.load(f)  # invalid JSON would raise — the validity half of the cell
+        pet = tpl.get("phaseExecutorTable")
+        assert isinstance(pet, dict), "template must carry a phaseExecutorTable example section"
+        assert pet.get("version") == 1
+        assert isinstance(pet.get("file"), str) and pet["file"]
+        comment = pet.get("$comment", "")
+        assert "complete replacement" in comment and "capabilities_lib" in comment
+
+    def test_config_reference_has_section(self):
+        with open(self._REPO / "docs" / "config-reference.md") as f:
+            text = f.read()
+        assert "### `phaseExecutorTable`" in text
+
+
+class TestPhaseExecutorTableControlChars:
+    @pytest.mark.parametrize("bad", ["a\x00b.json", "a\nb.json", "dir\\t.json"])
+    def test_control_and_backslash_rejected(self, bad):
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        with pytest.raises(CapabilitiesError, match="control or backslash"):
+            derive_capabilities(_base_config(phaseExecutorTable={"version": 1, "file": bad}))
+
+
+def test_phase_executor_table_version_float_rejected():
+    from capabilities_lib import derive_capabilities, CapabilitiesError
+    with pytest.raises(CapabilitiesError, match="version must be 1"):
+        derive_capabilities(_base_config(phaseExecutorTable={"version": 1.0, "file": "t.json"}))

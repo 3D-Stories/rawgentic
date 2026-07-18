@@ -186,3 +186,37 @@ def test_cli_runs_and_writes_report():
     assert "72 cells" in proc.stdout
     report = json.loads((REPO / "docs" / "measurements" / "driver-bench" / "stubbed-baseline.json").read_text())
     assert report["n_cells"] == 72 and all(m == 1.0 for m in report["dimension_means"].values())
+
+
+# --- #445: bench resolves through the shared helper ---
+
+class TestBenchTableResolution:
+    def test_default_resolution_matches_package_digest(self):
+        pe = db._pe()
+        rt = db.resolve_bench_table()
+        assert rt.source == "package_default"
+        assert rt.snapshot.config_digest == pe.snapshot_from_file(TABLE).config_digest
+
+    def test_tmp_project_override_no_monkeypatch(self, tmp_path):
+        import json as _json
+        repo = tmp_path / "proj"
+        dst = repo / "conf" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(TABLE.read_bytes())
+        (repo / ".rawgentic.json").write_text(_json.dumps({
+            "version": 1, "project": {"type": "application"},
+            "repo": {"fullName": "o/f", "defaultBranch": "main"},
+            "phaseExecutorTable": {"version": 1, "file": "conf/t.json"}}), encoding="utf-8")
+        rt = db.resolve_bench_table(repo)
+        assert rt.source == "project_file"
+        assert rt.path == dst.resolve()
+
+    def test_import_failure_is_structured(self, monkeypatch):
+        def boom():
+            raise ImportError("forced")
+        monkeypatch.setattr(db, "_pe", boom)
+        with pytest.raises(db.FixtureError, match="phase_executor unavailable"):
+            db.resolve_bench_table()
+
+    def test_module_global_table_constant_retired(self):
+        assert not hasattr(db, "TABLE")

@@ -314,3 +314,17 @@ def test_missing_manifest_rejected_by_semantic_pass_464():
     del bad["seats"]["ship"]["manifest"]
     with pytest.raises(RoutingError, match="missing manifest"):
         routing._assert_referential_integrity(bad)
+
+
+# --- #445: package default-table accessor ---
+
+class TestDefaultTablePath:
+    def test_default_table_path_is_the_shipped_file(self):
+        p = routing.default_table_path()
+        assert p.is_file()
+        assert p == SHIPPED.resolve() or p.resolve() == SHIPPED.resolve()
+
+    def test_default_table_path_snapshot_loads(self):
+        snap = routing.snapshot_from_file(routing.default_table_path())
+        assert snap.config_digest.startswith("sha256:")
+        assert set(snap.table["seats"]) >= {"build", "review", "ship"}

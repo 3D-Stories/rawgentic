@@ -18,7 +18,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 Wire WF2/WF3 to the `phase_executor` engine per the ratified architecture (the real #417).
 Doc of record: `docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md`.
-Queue (topo, D-1 pins + D-2 insertion): **#464 (W1)** ← this slot · #480 · #445 · #446 ·
+Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · **#445** ← this slot · #446 ·
 #465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) ·
 #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign
 (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.
@@ -69,6 +69,31 @@ with a crashing-python3 shim; a drift-guard pins that no gating hook references 
   schema/project/freshness-bounds validation, future-timestamp bound, reader-routed statusline
   recipe, collision guard via project-equality).
 - **Session-limit resilience:** none needed this child (ran post-reset).
+
+### #445 — per-project phase-seat table in config + single executor resolution · v3.54.0
+
+Foundation child for #446 (setup seed/tweak) and #447 (diagram render): "projects own their
+tables" becomes real. New `.rawgentic.json` `phaseExecutorTable {version, file}` descriptor
+(complete-replacement pointer, never a merge overlay) → `phase_executor_table` capability
+(derive fail-closed incl. control-char/backslash rejection); ONE shared
+`executor_routing_lib.resolve_table` serves both consumers — executor CLI (`resolve-seat` gains
+`table_source` + `config_digest`) and driver-bench — resolving the declared override (lstat
+entry-probe, canonical symlink-safe containment, statically-dead-seat check via public
+`target_forbidden_reason`, uniform exit-2 for every declared-override failure) or the new
+`phase_executor.routing.default_table_path()` package accessor; `_ROUTING_TABLE_REL` + bench
+`TABLE` constants retired. `seed_table` byte-copies the package default (atomic no-clobber
+`os.link` publish) for #446.
+
+- **Full spine:** peer consult (gpt, blind) + 3 adversarial design passes (converged pass 3;
+  2 design loop-backs consumed — budget exactly spent) + adversarial plan pass + codex diff
+  pass; **36-entry disposition ledger** (DF-2 absent-config fail-closed DECLINED citing AC2;
+  DF-5 component-swap TOCTOU declined per trust model).
+- **Reviews:** 8a on the high-risk resolver commit (2 reviewers, 5 Lows fixed) + 3-agent
+  Step 11 (2 Lows fixed incl. exact exit-5 pin) + codex diff (3 adopted, fixed in-branch).
+- **Session-limit resilience:** 2nd occurrence — all 3 first-wave Step-11 reviewers died at
+  the window (marked `outcome=dead`, re-dispatched clean post-reset); codex diff review
+  survived on its separate quota.
+- Suite 3428+8skip → 3483+8skip (+55). No workflow-spine change → no diagram REV.
 
 ## Epic #422 — per-phase model routing + deterministic execution engine (auto-run)
 

@@ -30,7 +30,9 @@ import executor_routing_lib as _er
 _REPO = Path(__file__).resolve().parent.parent
 FIXTURE_DIR = _REPO / "docs" / "measurements" / "driver-bench" / "fixtures"
 DEFAULT_REPORT = _REPO / "docs" / "measurements" / "driver-bench" / "stubbed-baseline.json"
-TABLE = _REPO / "phase_executor" / "src" / "phase_executor" / "routing" / "rawgentic.routing-table.json"
+# #445: the module-global TABLE path constant is retired — the bench resolves its table through
+# executor_routing_lib.resolve_table (resolve_bench_table below), the SAME helper the executor
+# uses, honoring a project's phaseExecutorTable override and the package default otherwise.
 
 VALID_SEATS = frozenset({"intake", "plan", "build", "review", "ship"})
 WIRED_SEATS = _er.WIRED_SEATS  # the full 7-seat executor vocabulary (#464 §B); build now has a GATED audit path
@@ -289,9 +291,24 @@ def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus
     }
 
 
-def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR):
+def resolve_bench_table(repo_root=_REPO):
+    """#445 (P2-F1/P3-A3): bench half of the single shared resolution. `repo_root` defaults to
+    THIS repo (`_run_cli` takes no project — no cross-project bench exists); a test injects its
+    own root, no monkeypatching. An ImportError maps to the module's structured failure class
+    (FixtureError — the bench's one fail-closed signal), never a bare module traceback."""
+    try:
+        pe = _pe()
+    except ImportError as exc:
+        raise FixtureError(f"phase_executor unavailable — cannot resolve routing table: {exc}") from exc
+    return _er.resolve_table(Path(repo_root), pe.routing)
+
+
+def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO):
+    # Resolve FIRST: resolve_bench_table guards the phase_executor import (ImportError ->
+    # FixtureError); the direct _pe() after it cannot fail once resolution succeeded (diff-DF1).
+    resolved = resolve_bench_table(repo_root)
+    snapshot = resolved.snapshot
     pe = _pe()
-    snapshot = pe.snapshot_from_file(TABLE)
     tmp = _REPO / ".rawgentic" / "driver-bench-cap"
     shutil.rmtree(tmp, ignore_errors=True)  # hermetic run — never read stale accumulated capture state
     tmp.mkdir(parents=True, exist_ok=True)

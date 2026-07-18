@@ -126,6 +126,20 @@ def snapshot_from_file(path: os.PathLike | str) -> RoutingSnapshot:  # noqa: F82
     return RoutingSnapshot.from_table(load_routing_table(path))
 
 
+def default_table_path() -> Path:
+    """The package's shipped default routing table (#445).
+
+    A plain path accessor, not importlib.resources: the package has no wheel consumer today
+    (in-repo src layout on sys.path; CI runs from a checkout) so the JSON is always a real
+    filesystem path — revisit at extraction. `routing.py` is a module and `routing/` is a
+    sibling DATA directory (no __init__.py), so `with_name` composes the correct path. The
+    package exposes only ITS default; per-project override resolution is the config-aware
+    hooks layer's job (`executor_routing_lib.resolve_table`) — this module stays
+    extraction-clean.
+    """
+    return (Path(__file__).with_name("routing") / "rawgentic.routing-table.json").resolve()
+
+
 class RoutingConfig:
     """Holds the current immutable snapshot; ``reload`` swaps it atomically and emits an epoch
     event only when the digest changes. In-flight callers hold their own snapshot reference."""

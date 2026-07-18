@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime
+from pathlib import PurePosixPath
 
 
 # Canonical capability field set. The docs table (docs/config-reference.md) and
@@ -45,6 +46,7 @@ CAPABILITY_FIELDS = (
     "has_database",
     "has_docker",
     "migration_dir",
+    "phase_executor_table",
 )
 
 
@@ -238,6 +240,39 @@ def derive_capabilities(config) -> dict:
         else:
             caps["migration_dir"] = _require_nonempty_str(
                 mig, "config.database.migrationsDir")  # null/wrong/empty -> error
+
+    # --- phaseExecutorTable -> phase_executor_table (#445) ---
+    # Versioned descriptor naming the project-owned seat-table FILE (a complete replacement
+    # for the phase_executor package default, never a merge overlay). None ONLY when the
+    # section is ABSENT; a present-but-invalid section raises (fail-closed) — resolution must
+    # never silently fall back to the package default on a malformed override (the
+    # false-cutover class executor_routing_lib.parse_executor_routing refuses). Shape-only
+    # here: existence/content validation is load-time (executor_routing_lib.resolve_table).
+    pet = _optional_section(config, "phaseExecutorTable")  # raises if present-non-object
+    if pet is _MISSING:
+        caps["phase_executor_table"] = None
+    else:
+        version = pet.get("version", _MISSING)
+        # Bool is an int subclass — reject it explicitly (True == 1 would sneak through).
+        if version is _MISSING or not isinstance(version, int) or isinstance(version, bool) or version != 1:
+            raise CapabilitiesError(
+                f"config.phaseExecutorTable.version must be 1 "
+                f"(got {None if version is _MISSING else version!r}). Run /rawgentic:setup.")
+        file_val = _require_nonempty_str(
+            pet.get("file", _MISSING), "config.phaseExecutorTable.file")
+        p = PurePosixPath(file_val)
+        if p.is_absolute() or ".." in p.parts:
+            raise CapabilitiesError(
+                f"config.phaseExecutorTable.file must be a project-relative path with no "
+                f"'..' traversal (got {file_val!r}). Run /rawgentic:setup.")
+        if any(ord(c) < 0x20 for c in file_val) or "\\" in file_val:
+            # NUL/control chars make pathlib/os raise ValueError downstream (escaping the
+            # uniform exit-2 mapping); backslashes are path separators on no supported
+            # platform here and only invite confusion. Same class as _UNSAFE_COMPONENT.
+            raise CapabilitiesError(
+                f"config.phaseExecutorTable.file contains control or backslash characters "
+                f"(got {file_val!r}). Run /rawgentic:setup.")
+        caps["phase_executor_table"] = file_val
 
     # --- infrastructure.docker -> has_docker (must null-guard the docker object:
     #     infrastructure can legitimately exist with only `hosts` and no docker) ---

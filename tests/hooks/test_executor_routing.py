@@ -119,6 +119,19 @@ def _ws(tmp_path, executor_routing="__none__", project="rawgentic", path="."):
     return str(p)
 
 
+def _cfg(repo, pointer=None):
+    """Write a COMPLETE valid .rawgentic.json into a fake project (#445 P2-G1: derive
+    hard-requires repo+project sections, so a pointer-only fixture would itself exit 2)."""
+    cfg = {"version": 1,
+           "project": {"type": "application"},
+           "repo": {"fullName": "owner/fake", "defaultBranch": "main"}}
+    if pointer is not None:
+        cfg["phaseExecutorTable"] = {"version": 1, "file": pointer}
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / ".rawgentic.json").write_text(json.dumps(cfg), encoding="utf-8")
+    return repo / ".rawgentic.json"
+
+
 def _gate(*, bakeoff=False):
     """A #429 GateDecision + a matching plan-context (a subset of its input_snapshot). Benign inputs
     -> single outcome; risk_level high -> bake-off outcome (#464 §E)."""
@@ -390,20 +403,25 @@ def test_dispatch_audit_validation_error_exit5(tmp_path):
     assert res["error"].get("correlation_id") == "wf2:step5"
 
 
-def test_do_dispatch_missing_routing_table_structured(tmp_path):
-    # Step-8a R1 F2: a project repo lacking the shipped routing table must emit a structured exit,
-    # not crash. path points at a tmp dir with no phase_executor/.../routing-table.json.
+def test_do_dispatch_missing_routing_table_structured(tmp_path, monkeypatch):
+    # Step-8a R1 F2, #445-migrated: a config-less project now legitimately resolves the PACKAGE
+    # default (AC2) — the surviving hazard is the shipped default itself being missing/unreadable,
+    # which must still emit a structured exit, not crash. (A missing DECLARED override is the
+    # separate exit-2 cell test_dispatch_path_declared_missing_exit2.)
     repo = tmp_path / "projects" / "empty"
     repo.mkdir(parents=True)
     ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}}, path="./projects/empty")
     (tmp_path / "p.txt").write_text("hi")
+    monkeypatch.setattr(routing, "default_table_path", lambda: tmp_path / "gone-table.json")
 
     class A:
         seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
         correlation_id = None; author_provider = None; effort = None; timeout = 5.0
-        workspace = ws; project = "rawgentic"
+        workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
     rc = er._do_dispatch(A())
-    assert rc in (er.EXIT_INTERNAL, er.EXIT_MALFORMED)  # structured, never a bare exit 1
+    # EXACT exit 5 (Step-11 R1): a missing PACKAGE-DEFAULT table is the internal-fault class —
+    # exit 2 is reserved for declared-override config errors (the 8a-A1 documented asymmetry).
+    assert rc == er.EXIT_INTERNAL
 
 
 def test_do_resolve_executor_missing_path_exit2(tmp_path):
@@ -609,11 +627,14 @@ def test_build_gate_bakeoff_denied_receipt_only_exit4(tmp_path):
 def test_cli_build_stale_gate_exit4(tmp_path):
     # Integration through the CLI --gate-file / --plan-context wiring on the shipped table: a stale
     # (context-mismatched) gate is rejected pre-launch (exit 4), so no provider call is made.
+    # #445 migration (S1/P2-G1): the fake project declares a phaseExecutorTable override pointing
+    # at a copied table via a COMPLETE valid .rawgentic.json (derive hard-requires repo+project) —
+    # exercising the new override resolution end-to-end on the way to the gate check.
     repo = tmp_path / "projects" / "rawgentic"
-    table_dst = repo / er._ROUTING_TABLE_REL
+    table_dst = repo / "claude_docs" / "routing" / "phase-executor-table.json"
     table_dst.parent.mkdir(parents=True)
-    real_table = Path(er.__file__).resolve().parent.parent / er._ROUTING_TABLE_REL
-    table_dst.write_text(real_table.read_text(encoding="utf-8"), encoding="utf-8")
+    table_dst.write_bytes(routing.default_table_path().read_bytes())
+    _cfg(repo, pointer="claude_docs/routing/phase-executor-table.json")
     ws = _ws(tmp_path, {"version": 1, "seats": {"build": "executor"}}, path="./projects/rawgentic")
     gd, ctx = _gate()  # snapshot risk_level == "standard"
     gf = tmp_path / "gate.json"
@@ -679,3 +700,230 @@ def test_build_fallback_attempt_attestation_bound_464(tmp_path):
     assert all(r["gate_outcome"] == "single" for r in receipts)
     digests = {r["gate_input_digest"] for r in receipts}
     assert len(digests) == 2  # per-target binding: primary vs fallback differ
+
+
+# --- #445: per-project seat table — resolve_table / seed_table / CLI observability ---------------
+
+import os as _os
+
+
+def _proj_ws(tmp_path, pointer=None, seats=None):
+    """Fake project (complete valid config, optional pointer) + workspace binding it."""
+    repo = tmp_path / "projects" / "fake"
+    _cfg(repo, pointer=pointer)
+    ws = _ws(tmp_path, {"version": 1, "seats": seats or {"ship": "executor"}}, path="./projects/fake")
+    return repo, ws
+
+
+class TestResolveTable:
+    def test_absent_config_file_resolves_package_default(self, tmp_path):
+        repo = tmp_path / "noconfig"
+        repo.mkdir()
+        rt = er.resolve_table(repo, routing)
+        assert rt.source == "package_default"
+        assert rt.path == routing.default_table_path()
+        assert rt.snapshot.config_digest == routing.snapshot_from_file(routing.default_table_path()).config_digest
+
+    def test_absent_section_resolves_package_default(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo)  # complete config, no phaseExecutorTable
+        rt = er.resolve_table(repo, routing)
+        assert rt.source == "package_default"
+
+    def test_real_repo_resolves_digest_identical_to_shipped(self):
+        # rawgentic's own .rawgentic.json declares no phaseExecutorTable -> byte/digest-identical
+        # to the shipped package table (AC1 backward-compat).
+        repo = Path(er.__file__).resolve().parent.parent
+        rt = er.resolve_table(repo, routing)
+        assert rt.source == "package_default"
+        assert rt.snapshot.config_digest == routing.snapshot_from_file(
+            repo / "phase_executor/src/phase_executor/routing/rawgentic.routing-table.json").config_digest
+
+    def test_override_read_with_package_digest(self, tmp_path):
+        repo = tmp_path / "p"
+        repo.mkdir()
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(routing.default_table_path().read_bytes())
+        _cfg(repo, pointer="claude_docs/t.json")
+        rt = er.resolve_table(repo, routing)
+        assert rt.source == "project_file"
+        assert rt.path == dst.resolve()
+        assert rt.snapshot.config_digest == routing.snapshot_from_file(routing.default_table_path()).config_digest
+
+    # --- fail-closed matrix (helper level; CLI-level below) ---
+    def test_declared_but_missing_never_falls_back(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="nope/missing.json")
+        with pytest.raises(er.MalformedConfig, match="missing.json"):
+            er.resolve_table(repo, routing)
+
+    def test_pointer_names_a_directory(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="somedir")
+        (repo / "somedir").mkdir()
+        with pytest.raises(er.MalformedConfig, match="not a regular file"):
+            er.resolve_table(repo, routing)
+
+    @pytest.mark.skipif(_os.geteuid() == 0, reason="root ignores file permissions — cell cannot bite")
+    def test_pointer_unreadable_file(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="t.json")
+        t = repo / "t.json"
+        t.write_bytes(routing.default_table_path().read_bytes())
+        t.chmod(0)
+        try:
+            with pytest.raises(er.MalformedConfig, match="t.json"):
+                er.resolve_table(repo, routing)
+        finally:
+            t.chmod(0o644)
+
+    def test_symlink_escape_table_pointer_refused(self, tmp_path):
+        outside = tmp_path / "outside.json"
+        outside.write_bytes(routing.default_table_path().read_bytes())
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="link.json")
+        (repo / "link.json").symlink_to(outside)
+        with pytest.raises(er.MalformedConfig, match="outside the project root"):
+            er.resolve_table(repo, routing)
+
+    def test_dangling_symlink_config_is_malformed_not_absent(self, tmp_path):
+        repo = tmp_path / "p"
+        repo.mkdir()
+        (repo / ".rawgentic.json").symlink_to(tmp_path / "gone.json")
+        with pytest.raises(er.MalformedConfig, match="fail-closed"):
+            er.resolve_table(repo, routing)
+
+    def test_directory_as_config_is_malformed(self, tmp_path):
+        repo = tmp_path / "p"
+        (repo / ".rawgentic.json").mkdir(parents=True)
+        with pytest.raises(er.MalformedConfig):
+            er.resolve_table(repo, routing)
+
+    @pytest.mark.skipif(_os.geteuid() == 0, reason="root ignores file permissions — cell cannot bite")
+    def test_unreadable_config_is_malformed(self, tmp_path):
+        repo = tmp_path / "p"
+        cfgp = _cfg(repo)
+        cfgp.chmod(0)
+        try:
+            with pytest.raises(er.MalformedConfig):
+                er.resolve_table(repo, routing)
+        finally:
+            cfgp.chmod(0o644)
+
+    @pytest.mark.parametrize("bad_pointer", ["/abs/t.json", "../escape.json"])
+    def test_absolute_and_traversal_pointers_malformed(self, tmp_path, bad_pointer):
+        repo = tmp_path / "p"
+        _cfg(repo, pointer=bad_pointer)
+        with pytest.raises(er.MalformedConfig):
+            er.resolve_table(repo, routing)
+
+    def test_schema_invalid_override_content_exit2_class(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="t.json")
+        (repo / "t.json").write_text('{"schema_version": 1}', encoding="utf-8")
+        with pytest.raises(er.MalformedConfig, match="failed to load"):
+            er.resolve_table(repo, routing)
+
+    def test_statically_dead_seat_override_fails_at_resolution(self, tmp_path):
+        table = json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+        # Kill an entire seat's chain with a context-free rule (never-Haiku pattern style).
+        seat = table["seats"]["ship"]
+        for t in (seat["primary"], *seat.get("chain", [])):
+            t["model"] = "wombat-9"
+        table["forbidden_combinations"].append(
+            {"model_pattern": "wombat", "reason": "test: wombat models forbidden"})
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="t.json")
+        (repo / "t.json").write_text(json.dumps(table), encoding="utf-8")
+        with pytest.raises(er.MalformedConfig, match="statically dead") as ei:
+            er.resolve_table(repo, routing)
+        assert "ship" in str(ei.value) and "wombat" in str(ei.value)
+
+
+class TestSeedTable:
+    def test_seed_bytes_identical_and_round_trip(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo, pointer="claude_docs/routing/phase-executor-table.json")
+        dest = repo / "claude_docs" / "routing" / "phase-executor-table.json"
+        out = er.seed_table(dest)
+        assert out == dest
+        assert dest.read_bytes() == routing.default_table_path().read_bytes()
+        rt = er.resolve_table(repo, routing)
+        assert rt.source == "project_file"
+        assert rt.snapshot.config_digest == routing.snapshot_from_file(routing.default_table_path()).config_digest
+
+    def test_seed_refuses_overwrite(self, tmp_path):
+        dest = tmp_path / "t.json"
+        dest.write_text("{}", encoding="utf-8")
+        with pytest.raises(er.MalformedConfig, match="refusing to overwrite"):
+            er.seed_table(dest)
+
+
+class TestResolveSeatCliObservability:
+    def test_cli_default_reports_package_source_and_digest(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _run_cli("resolve-seat", "--seat", "ship", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["table_source"] == "package_default"
+        assert out["config_digest"].startswith("sha256:")
+
+    def test_cli_override_reports_project_source(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="claude_docs/t.json")
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(routing.default_table_path().read_bytes())
+        r = _run_cli("resolve-seat", "--seat", "ship", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["table_source"] == "project_file"
+
+    def test_cli_declared_missing_exit2_names_path(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="gone/t.json")
+        r = _run_cli("resolve-seat", "--seat", "ship", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == er.EXIT_MALFORMED
+        err = json.loads(r.stdout)["error"]
+        assert err["code"] == "malformed_config" and "gone/t.json" in err["message"]
+
+    def test_cli_dead_seat_exit2(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="t.json")
+        table = json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+        seat = table["seats"]["ship"]
+        for t in (seat["primary"], *seat.get("chain", [])):
+            t["model"] = "wombat-9"
+        table["forbidden_combinations"].append({"model_pattern": "wombat", "reason": "test"})
+        (repo / "t.json").write_text(json.dumps(table), encoding="utf-8")
+        r = _run_cli("resolve-seat", "--seat", "ship", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "statically dead" in json.loads(r.stdout)["error"]["message"]
+
+    def test_dispatch_path_declared_missing_exit2(self, tmp_path):
+        # Representative dispatch-path matrix cell (PL-3): same fail-closed class through
+        # _do_dispatch's resolution (stub-free — fails before any provider machinery).
+        repo, ws = _proj_ws(tmp_path, pointer="gone/t.json", seats={"ship": "executor"})
+        (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+
+        class A:
+            seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "r1"; context_file = None
+            correlation_id = "t"; author_provider = None; effort = None; timeout = 5.0
+            workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
+        assert er._do_dispatch(A()) == er.EXIT_MALFORMED
+
+    def test_seed_refuses_dangling_symlink_dest(self, tmp_path):
+        # 8a-B2: the is_symlink() half of the overwrite guard — a DANGLING symlink dest
+        # (exists() False, is_symlink() True) must refuse, not silently replace the link.
+        dest = tmp_path / "t.json"
+        dest.symlink_to(tmp_path / "gone.json")
+        with pytest.raises(er.MalformedConfig, match="refusing to overwrite"):
+            er.seed_table(dest)
+
+    def test_seed_leaves_no_tmp_on_success(self, tmp_path):
+        er.seed_table(tmp_path / "t.json")
+        assert [p.name for p in tmp_path.iterdir()] == ["t.json"]
+
+    def test_seed_parent_is_a_file_legible(self, tmp_path):
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        with pytest.raises(er.MalformedConfig, match="cannot create parent directory"):
+            er.seed_table(blocker / "t.json")
