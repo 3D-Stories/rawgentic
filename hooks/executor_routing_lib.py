@@ -36,6 +36,7 @@ import os
 import json
 import re
 import sys
+import tempfile
 import types
 from pathlib import Path
 from typing import Callable, Final, Optional
@@ -269,8 +270,10 @@ def resolve_table(repo_root: Path, routing_module) -> "ResolvedTable":
         # A DECLARED override that cannot load — unreadable (OSError), schema-invalid
         # (jsonschema.ValidationError), or semantically broken (RoutingError) — is a CONFIG
         # error: legible exit 2 naming the declared path, never the generic internal exit 5
-        # (#445 A4/AC4). The package-default path above deliberately propagates instead —
-        # a broken SHIPPED table is an internal fault, not a project-config one.
+        # (#445 A4/AC4). The package-default path above propagates unwrapped instead; at the
+        # CLI the existing arms then map RoutingError -> exit 2 and OSError/ValidationError ->
+        # exit 5 (8a-A1: propagation preserves the pre-#445 shipped-table mapping as-is, it
+        # does not promise a uniform internal-fault class).
         raise MalformedConfig(
             f"phaseExecutorTable.file {declared!r} ({resolved}) failed to load "
             f"({type(exc).__name__}: {exc})") from exc
@@ -307,7 +310,19 @@ def seed_table(dest: Path) -> Path:
     if dest.exists() or dest.is_symlink():
         raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(src.read_bytes())
+    # Atomic write per the repo hook convention (8a-B1): mkstemp in the target dir ->
+    # os.replace; the temp is unlinked on any failure so no *.tmp survives.
+    fd, tmp_name = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(src.read_bytes())
+        os.replace(tmp_name, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return dest
 
 
@@ -619,9 +634,11 @@ def _do_dispatch(args) -> int:
         snap = resolve_table(repo_root, pe.routing).snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
-        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     except pe.routing.RoutingError as e:
-        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
                           correlation_id=args.correlation_id))

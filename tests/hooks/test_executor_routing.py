@@ -907,3 +907,15 @@ class TestResolveSeatCliObservability:
             correlation_id = "t"; author_provider = None; effort = None; timeout = 5.0
             workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
         assert er._do_dispatch(A()) == er.EXIT_MALFORMED
+
+    def test_seed_refuses_dangling_symlink_dest(self, tmp_path):
+        # 8a-B2: the is_symlink() half of the overwrite guard — a DANGLING symlink dest
+        # (exists() False, is_symlink() True) must refuse, not silently replace the link.
+        dest = tmp_path / "t.json"
+        dest.symlink_to(tmp_path / "gone.json")
+        with pytest.raises(er.MalformedConfig, match="refusing to overwrite"):
+            er.seed_table(dest)
+
+    def test_seed_leaves_no_tmp_on_success(self, tmp_path):
+        er.seed_table(tmp_path / "t.json")
+        assert [p.name for p in tmp_path.iterdir()] == ["t.json"]
