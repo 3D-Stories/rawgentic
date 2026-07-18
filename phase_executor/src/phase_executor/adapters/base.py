@@ -62,7 +62,7 @@ class ProcOutcome:
     launch_error: Optional[str] = None
 
 
-def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optional[dict] = None) -> ProcOutcome:
+def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optional[dict] = None, cwd: Optional[str] = None) -> ProcOutcome:
     """Run ``cmd`` with ``stdin`` on stdin in its OWN process group; on timeout kill the whole
     group (no orphaned children), wait, and report ``timed_out``. Launch errors are captured,
     never raised, so the caller can still record an Observation.
@@ -76,7 +76,7 @@ def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optio
         proc = subprocess.Popen(
             list(cmd),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True, env=proc_env,
+            text=True, start_new_session=True, env=proc_env, cwd=cwd,
         )
     except OSError as exc:
         return ProcOutcome(returncode=None, stdout="", stderr=str(exc), timed_out=False, launch_error=str(exc))

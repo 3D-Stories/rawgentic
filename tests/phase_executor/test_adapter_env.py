@@ -42,3 +42,70 @@ def test_claude_env_none_or_empty_is_none():
 def test_claude_env_non_string_is_none():
     # defensive: a non-string credential_ref (schema drift) must not build a bogus env
     assert _claude_env(123) is None
+
+
+# --- #465 T3: claude launch profile composition ---
+
+from phase_executor import contract as _c
+from phase_executor.adapters import claude_cli as _cl
+
+
+def _profile(policy="fresh", grants=(), budget=None, worktree=None, engine="claude"):
+    m = {"session_policy": policy, "tool_grants": list(grants), "effort": "high",
+         "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 60}}
+    if budget is not None:
+        m["bounds"]["max_budget_usd"] = budget
+    return _c.profile_from_manifest(m, engine=engine, worktree=worktree)
+
+
+TODAY_CMD = ["claude", "--print", "--model", "claude-sonnet-5", "--output-format", "json",
+             "--no-session-persistence"]
+
+
+class TestClaudeProfileComposition:
+    def test_no_profile_is_todays_exact_argv(self):
+        assert _cl.build_command("claude-sonnet-5") == TODAY_CMD
+
+    def test_fresh_profile_pins_persistence_flag(self):
+        assert "--no-session-persistence" in _cl.build_command("claude-sonnet-5", profile=_profile("fresh"))
+
+    def test_resume_profile_omits_persistence_flag(self):
+        cmd = _cl.build_command("claude-sonnet-5", profile=_profile("resume"))
+        assert "--no-session-persistence" not in cmd
+
+    def test_unvalidated_session_value_refuses_at_spawn(self):
+        import dataclasses, pytest as _pt
+        p = _profile("fresh")
+        p2 = dataclasses.replace(p, session_policy="Fresh")  # hand-built inconsistent profile
+        with _pt.raises(_c.CompositionError, match="session_policy"):
+            _cl.build_command("claude-sonnet-5", profile=p2)
+
+    def test_grants_map_to_allowed_tools_wire_equals_record(self):
+        p = _profile("fresh", grants=("read", "edit", "bash"), budget=5.0, worktree="/tmp/wt")
+        cmd = _cl.build_command("claude-sonnet-5", profile=p)
+        i = cmd.index("--allowedTools")
+        assert cmd[i + 1] == "Read,Grep,Glob,Edit,Write,Bash,WebFetch,WebSearch"
+        j = cmd.index("--max-budget-usd")
+        assert cmd[j + 1] == "5.0"
+
+    def test_no_grants_no_flags(self):
+        cmd = _cl.build_command("claude-sonnet-5", profile=_profile("fresh"))
+        assert "--allowedTools" not in cmd and "--max-budget-usd" not in cmd
+
+    def test_mutating_grant_mismatch_refuses(self):
+        # The only real inconsistency vector: effective_grants injected past init=False
+        # (object.__setattr__) while mutating stays False — the pre-spawn assert catches it.
+        # (A dataclasses.replace()-laundered profile ZEROES effective_grants — nothing lands
+        # on the wire, fail-safe, deliberately NOT refused.)
+        import pytest as _pt
+        p = _profile("fresh")
+        object.__setattr__(p, "effective_grants", ("edit", "bash"))
+        with _pt.raises(_c.CompositionError, match="mutating"):
+            _cl.build_command("claude-sonnet-5", profile=p)
+
+    def test_replace_laundered_profile_grants_nothing(self):
+        import dataclasses
+        p = _profile("fresh", grants=("read", "edit"), budget=5.0, worktree="/tmp/wt")
+        p2 = dataclasses.replace(p, mutating=False)  # init=False field resets to ()
+        cmd = _cl.build_command("claude-sonnet-5", profile=p2)
+        assert "--allowedTools" not in cmd  # wire maps from effective_grants: nothing granted

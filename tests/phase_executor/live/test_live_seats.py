@@ -115,3 +115,22 @@ def test_live_review_seat_dispatch_on_fable_426(tmp_path):
     assert obs.requested_model == "claude-fable-5", "review primary is fable"
     assert obs.parse_status == "ok", f"expected ok, got {obs.parse_status}"
     assert models_match(obs.requested_model, obs.actual_model), f"requested {obs.requested_model} != actual {obs.actual_model}"
+
+
+@pytest.mark.live
+def test_claude_grants_budget_live_semantics(tmp_path):
+    """#465 deferred-to-target (executes in the W9 proving run #472): mapped-tool acceptance
+    + budget flag behavior under the REAL claude CLI — flag EXISTENCE was probe-confirmed;
+    this cell proves the semantics (launch succeeds with --allowedTools + --max-budget-usd,
+    envelope parses)."""
+    from phase_executor import contract
+    from phase_executor.adapters import claude_cli
+    from phase_executor.adapters.base import AdapterRequest
+    m = {"session_policy": "fresh", "tool_grants": ["read"], "effort": "low",
+         "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 120, "max_budget_usd": 0.5}}
+    profile = contract.profile_from_manifest(m, engine="claude")
+    req = AdapterRequest(seat="ship", requested_model="claude-sonnet-5",
+                         prompt="Reply with the single word: ok", timeout=120.0, profile=profile)
+    obs = claude_cli.run(req, run_id="live465", attempt_id="0-a", capture_root=tmp_path,
+                         routing_config_digest="sha256:live")
+    assert obs.parse_status == contract.OK and obs.actual_model
