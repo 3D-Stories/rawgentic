@@ -270,8 +270,7 @@ Optional versioned descriptor naming the project-owned **phase-executor seat tab
 
 `file` is a project-relative path to a full routing-table JSON (the phase_executor
 `routing-table.schema.json` shape) that **completely replaces** the package default — never a
-merge overlay. Seeded verbatim from the package table by `/rawgentic:setup` (#446), so an
-un-tweaked project resolves a digest-identical table to the shipped default.
+merge overlay. Seeded (and optionally per-seat tweaked) from the package table by `/rawgentic:setup` Step 2i (#446); an un-tweaked project resolves a digest-identical table to the shipped default.
 
 Semantics (one shared resolution: `executor_routing_lib.resolve_table`, used by BOTH the
 executor CLI and the driver-bench):

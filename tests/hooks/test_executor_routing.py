@@ -927,3 +927,242 @@ class TestResolveSeatCliObservability:
         blocker.write_text("x", encoding="utf-8")
         with pytest.raises(er.MalformedConfig, match="cannot create parent directory"):
             er.seed_table(blocker / "t.json")
+
+
+# --- #446: show-table (projection) ----------------------------------------------------------------
+
+class TestShowTable:
+    def test_human_summary_default_project(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == 0
+        assert "table_source: package_default" in r.stdout
+        assert "config_digest: sha256:" in r.stdout
+        assert "ship" in r.stdout and "review" in r.stdout
+
+    def test_json_projection_default(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic", "--json")
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["projection_version"] == 1
+        assert out["table_source"] == "package_default"
+        assert out["config_digest"].startswith("sha256:")
+        assert out["file"] is None
+        seats = {s["seat"]: s for s in out["seats"]}
+        assert set(seats) == {"intake", "analysis", "design", "plan", "build", "review", "ship"}
+        assert seats["build"]["role"] == "build"
+        assert isinstance(seats["ship"]["primary"], str) and seats["ship"]["chain"]
+        # build_bake_off reports the ACTUAL candidate constant, labeled informational.
+        import bakeoff_policy
+        assert out["build_bake_off"] == list(bakeoff_policy.BUILD_MODELS)
+        assert "not table-editable" in out["build_bake_off_note"]
+
+    def test_json_projection_override_carries_file(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="claude_docs/t.json")
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(routing.default_table_path().read_bytes())
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic", "--json")
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["table_source"] == "project_file"
+        assert out["file"] == "claude_docs/t.json"
+
+    def test_broken_override_exit2(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="gone.json")
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "gone.json" in json.loads(r.stdout)["error"]["message"]
+
+
+# --- #446: apply-table (sparse patch -> validated materialization) --------------------------------
+
+def _patch_file(tmp_path, patch):
+    p = tmp_path / "patch.json"
+    p.write_text(json.dumps(patch), encoding="utf-8")
+    return str(p)
+
+
+def _apply(ws, tmp_path, patch, dest="claude_docs/routing/phase-executor-table.json",
+           expected=None, candidate=None, extra=()):
+    args = ["apply-table", "--workspace", ws, "--project", "rawgentic",
+            "--patch-json", _patch_file(tmp_path, patch), "--dest", dest]
+    if expected is not None:
+        args += ["--expected-digest", expected]
+    if candidate is not None:
+        args += ["--expected-candidate-digest", candidate]
+    args += list(extra)
+    return _run_cli(*args)
+
+
+def _pkg_digest():
+    return routing.snapshot_from_file(routing.default_table_path()).config_digest
+
+
+class TestApplyTable:
+    def test_validate_only_prints_pointer_and_writes_nothing(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        before = sorted(p.name for p in repo.iterdir())
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected=_pkg_digest(), extra=["--validate-only"])
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["config_digest"].startswith("sha256:")
+        assert out["pointer"] == {"version": 1, "file": "claude_docs/routing/phase-executor-table.json"}
+        assert sorted(p.name for p in repo.iterdir()) == before
+
+    def test_validate_only_combined_with_reset_uses_package_base(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected=_pkg_digest(), extra=["--validate-only", "--reset-to-default"])
+        assert r.returncode == 0
+
+    def test_candidate_digest_forbidden_in_validate_only(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected=_pkg_digest(), candidate="sha256:deadbeef", extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "forbidden with --validate-only" in json.loads(r.stdout)["error"]["message"]
+
+    def test_materialize_requires_matching_candidate_digest(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        missing = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}}, expected=_pkg_digest())
+        assert missing.returncode == er.EXIT_MALFORMED
+        assert "requires --expected-candidate-digest" in json.loads(missing.stdout)["error"]["message"]
+        stale = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                       expected=_pkg_digest(), candidate="sha256:deadbeef")
+        assert stale.returncode == er.EXIT_MALFORMED
+        assert "candidate changed since validated" in json.loads(stale.stdout)["error"]["message"]
+        assert not (repo / "claude_docs" / "routing" / "phase-executor-table.json").exists()
+
+    def test_fresh_create_end_to_end(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected=_pkg_digest(), extra=["--validate-only"])
+        cand = json.loads(v.stdout)["config_digest"]
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected=_pkg_digest(), candidate=cand)
+        assert r.returncode == 0
+        dest = repo / "claude_docs" / "routing" / "phase-executor-table.json"
+        assert dest.is_file()
+        assert routing.snapshot_from_file(dest).config_digest == cand
+        table = json.loads(dest.read_text(encoding="utf-8"))
+        assert table["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        # lane came from the base table's existing opus rows
+        assert table["seats"]["ship"]["primary"]["lane"]["provider"] == "anthropic"
+
+    def test_untouched_seats_keep_existing_override_customizations(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="claude_docs/t.json")
+        base = json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+        base["seats"]["intake"]["primary"]["model"] = "claude-fable-5"  # pre-existing customization
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_text(json.dumps(base), encoding="utf-8")
+        base_digest = routing.snapshot_from_file(dst).config_digest
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="claude_docs/t.json", expected=base_digest, extra=["--validate-only"])
+        assert v.returncode == 0
+        cand = json.loads(v.stdout)["config_digest"]
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="claude_docs/t.json", expected=base_digest, candidate=cand)
+        assert r.returncode == 0
+        after = json.loads(dst.read_text(encoding="utf-8"))
+        assert after["seats"]["intake"]["primary"]["model"] == "claude-fable-5"  # kept (A3)
+        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+
+    def test_reseed_divergent_dest_refused(self, tmp_path):
+        # 8a-B2: reach the P3-G4 guard for REAL — validated candidate digest first, then
+        # assert the guard's own message (returncode-only was mutation-blind: the earlier
+        # candidate-digest guard also exits 2).
+        repo, ws = _proj_ws(tmp_path, pointer="claude_docs/t.json")
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(routing.default_table_path().read_bytes())
+        other = repo / "claude_docs" / "other.json"
+        other.write_bytes(routing.default_table_path().read_bytes())
+        d = routing.snapshot_from_file(dst).config_digest
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="claude_docs/other.json", expected=d, extra=["--validate-only"])
+        cand = json.loads(v.stdout)["config_digest"]
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="claude_docs/other.json", expected=d, candidate=cand)
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "is not the current phaseExecutorTable file" in json.loads(r.stdout)["error"]["message"]
+
+    def test_reset_to_default_reseed_over_existing_override(self, tmp_path):
+        # 8a-A out-of-scope note promoted: resetting an EXISTING override back to (patched)
+        # package base must be materializable — rt_current supplies the pointer path even
+        # when the patch base is the package table.
+        repo, ws = _proj_ws(tmp_path, pointer="claude_docs/t.json")
+        base = json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+        base["seats"]["intake"]["primary"]["model"] = "claude-fable-5"
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_text(json.dumps(base), encoding="utf-8")
+        cur = routing.snapshot_from_file(dst).config_digest  # diff-DF1: guard = CURRENT resolution
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="claude_docs/t.json", expected=cur,
+                   extra=["--validate-only", "--reset-to-default"])
+        assert v.returncode == 0
+        cand = json.loads(v.stdout)["config_digest"]
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="claude_docs/t.json", expected=cur, candidate=cand,
+                   extra=["--reset-to-default"])
+        assert r.returncode == 0
+        after = json.loads(dst.read_text(encoding="utf-8"))
+        assert after["seats"]["intake"]["primary"]["model"] != "claude-fable-5"  # reset took
+        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+
+    def test_symlinked_parent_dest_escape_refused(self, tmp_path):
+        # 8a-B1: an in-repo symlink dir pointing OUTSIDE the root must not let a
+        # fresh-create write escape (canonical containment, not lexical normpath).
+        outside = tmp_path / "OUTSIDE"
+        outside.mkdir()
+        repo, ws = _proj_ws(tmp_path)
+        (repo / "claude_docs").mkdir(exist_ok=True)
+        (repo / "claude_docs" / "routing").symlink_to(outside)
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected=_pkg_digest(), extra=["--validate-only"])
+        assert v.returncode == er.EXIT_MALFORMED
+        assert "outside the project root" in json.loads(v.stdout)["error"]["message"]
+        assert not (outside / "phase-executor-table.json").exists()
+
+    def test_stale_base_digest_exit2(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   expected="sha256:stale", extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "base table changed since shown" in json.loads(r.stdout)["error"]["message"]
+
+    def test_empty_patch_is_noop_boundary(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {}, expected=_pkg_digest(), extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "keep defaults" in json.loads(r.stdout)["error"]["message"]
+
+    def test_semantically_empty_seat_patch_refused(self, tmp_path):
+        # diff-DF3: {"ship": {}} must not materialize an unchanged table.
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {"ship": {}}, expected=_pkg_digest(), extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "keep defaults" in json.loads(r.stdout)["error"]["message"]
+        assert not (repo / "claude_docs" / "routing").exists()
+
+    @pytest.mark.parametrize("patch,frag", [
+        ({"wombat": {"primary": "claude-opus-4-8"}}, "unknown seat"),
+        ({"ship": {"floor": "opus"}}, "unknown field"),
+        ({"ship": {"primary": "claude-haiku-4-5"}}, "no known lane"),
+    ])
+    def test_bad_patch_shapes_exit2(self, tmp_path, patch, frag):
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, patch, expected=_pkg_digest(), extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert frag in json.loads(r.stdout)["error"]["message"]
+
+    def test_escaping_dest_refused_in_validate_only(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+                   dest="../outside.json", expected=_pkg_digest(), extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "outside the project root" in json.loads(r.stdout)["error"]["message"]

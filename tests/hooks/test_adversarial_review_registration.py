@@ -39,7 +39,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.54.0"
+    assert plugin["version"] == "3.55.0"
 
 
 def test_descriptions_consistent_count():
@@ -368,3 +368,33 @@ def test_config_reference_scope_out_dropped():
     doc = (REPO_ROOT / "docs" / "config-reference.md").read_text()
     assert "deliberate #403 scope-out" not in doc
     assert "does not yet collect" not in doc
+
+
+# --- #446: setup Step 2i — phase-executor seat table ---
+
+def test_setup_has_step_2i():
+    text = skill_corpus("setup")
+    assert "Step 2i" in text
+    assert "phaseExecutorTable" in text
+    assert "show-table" in text and "apply-table" in text
+    # AC2 no-op boundary: declining stages/touches nothing.
+    assert "stages nothing and touches nothing" in text.lower().replace("**", "")
+    # A2/Step-6 staging: the pointer is applied at the .rawgentic.json write (Step 6), not Step 8.
+    assert "phaseExecutorTable" in _section(text, "## Step 6:", "## Step 7:")
+
+
+def test_manifest_project_config_entries_have_setup_anchor():
+    """#446 S2 (second half — moved from the reconcile guard): every source: project_config
+    manifest entry must anchor to a real setup step that stages it."""
+    import importlib.util
+    import sys as _s
+    hooks_dir = REPO_ROOT / "hooks"
+    _s.path.insert(0, str(hooks_dir))
+    spec = importlib.util.spec_from_file_location(
+        "pur_anchor", str(hooks_dir / "post_update_reconcile.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    text = skill_corpus("setup")
+    for feat in mod.FEATURE_MANIFEST:
+        if feat.get("source") == "project_config":
+            assert feat["key"] in text, f"{feat['key']}: no setup-step anchor in the setup skill"

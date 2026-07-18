@@ -240,6 +240,20 @@ project's `.rawgentic_workspace.json` entry.
 
 **Read `references/integrations.md` before executing Step 2h.**
 
+## Step 2i: Phase-Executor Seat Table (optional, #446)
+
+Runs on **every** setup invocation (including Sub-flow A re-runs). Shows the RESOLVED
+per-phase seat models (`show-table`) and offers a sparse tweak (per-seat `primary`/`chain`
+only) validated through `apply-table --validate-only`. Declining or accepting the defaults
+**stages nothing and touches nothing** — the package-default resolution stands
+(byte-identical behavior). This step only COLLECTS: the validated `phaseExecutorTable`
+pointer is merged into the `.rawgentic.json` draft at Step 3 and applied at the Step 6
+write (it is a project-config field, NOT a workspace field — it never rides Step 8);
+materialization of the table file happens after the Step-5 confirm, immediately before
+Step 6.
+
+**Read `references/integrations.md` before executing Step 2i.**
+
 ---
 
 ## Step 3: Detect or Brainstorm
@@ -304,6 +318,10 @@ After user approval, write the final config to `<activeProject.path>/.rawgentic.
 Requirements:
 - Must include `"version": 1` as the first field
 - Must include the three required sections: `project`, `repo`, and at minimum an empty `custom: {}`
+- Include the `phaseExecutorTable` pointer when Step 2i staged one (materialize the table
+  file first — re-run `apply-table` with `--expected-candidate-digest` from the Step-2i
+  validate-only output; on any later abort the fresh-created file is retained and named in
+  a warning, never auto-deleted)
 - Omit optional sections that have no content (don't write empty objects/arrays for undetected capabilities)
 - Format as pretty-printed JSON (2-space indent)
 - Show the user the exact content before writing and get a final "go ahead"

@@ -368,7 +368,10 @@ class TestManifestDriftGuard:
         return fields
 
     def test_manifest_keys_match_setup_staged_fields(self):
-        manifest_keys = {f["key"] for f in pur.FEATURE_MANIFEST}
+        # #446 S2: the Step-8 write-back sentence stages only WORKSPACE-entry fields, so the
+        # set-equality is scoped to source-defaulted entries; project_config entries carry
+        # their own step anchors (asserted separately once setup Step 2i lands).
+        manifest_keys = {f["key"] for f in pur.FEATURE_MANIFEST if "source" not in f}
         assert manifest_keys == self._staged_fields(), (
             "hooks/post_update_reconcile.py FEATURE_MANIFEST must list exactly the "
             "workspace fields setup stages (SKILL.md write-back sentence). A new "
@@ -537,3 +540,94 @@ class TestStalenessWiring:
     def test_switch_skill_references_staleness_project(self):
         sw = (REPO_ROOT / "skills" / "switch" / "SKILL.md").read_text()
         assert "--staleness-project" in sw
+
+
+# --- #446: source-aware manifest (phaseExecutorTable lives in .rawgentic.json) ---
+
+def _ws_with_project(tmp_path, config=None, path="proj", entry_path=None):
+    """Workspace file + a project dir; config=None -> no .rawgentic.json (ENOENT)."""
+    proj = tmp_path / path
+    proj.mkdir(parents=True, exist_ok=True)
+    if config is not None:
+        (proj / ".rawgentic.json").write_text(
+            config if isinstance(config, str) else json.dumps(config), encoding="utf-8")
+    ws = tmp_path / ".rawgentic_workspace.json"
+    entry = {"name": "p1", "path": entry_path or path, "active": True,
+             "adversarialReview": {}, "modelRouting": {}, "peerConsult": {},
+             "designArtifact": {}, "headlessEnabled": False}
+    ws.write_text(json.dumps({"projects": [entry]}), encoding="utf-8")
+    return ws, entry
+
+
+BASE_CFG = {"version": 1, "project": {"type": "application"},
+            "repo": {"fullName": "o/p", "defaultBranch": "main"}}
+
+
+class TestProjectConfigSource:
+    def _gaps(self, tmp_path, ws, entry):
+        state, pcfg = pur._project_config_state(str(ws), entry)
+        return pur.project_feature_gaps(
+            entry, pur.FEATURE_MANIFEST, "3.55.0",
+            project_config=pcfg if state == "ok" else None), state
+
+    def test_gap_fires_when_key_missing(self, tmp_path):
+        ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
+        gaps, state = self._gaps(tmp_path, ws, entry)
+        assert state == "ok"
+        assert ("phaseExecutorTable", "phase-executor seat table (setup Step 2i)") in gaps
+
+    def test_no_gap_when_key_present(self, tmp_path):
+        cfg = dict(BASE_CFG, phaseExecutorTable={"version": 1, "file": "t.json"})
+        ws, entry = _ws_with_project(tmp_path, config=cfg)
+        gaps, state = self._gaps(tmp_path, ws, entry)
+        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+
+    def test_enoent_config_silent_no_gap(self, tmp_path):
+        ws, entry = _ws_with_project(tmp_path, config=None)
+        gaps, state = self._gaps(tmp_path, ws, entry)
+        assert state == "absent"
+        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+
+    def test_corrupt_config_uninspectable_no_gap(self, tmp_path):
+        ws, entry = _ws_with_project(tmp_path, config="{not json")
+        gaps, state = self._gaps(tmp_path, ws, entry)
+        assert state == "uninspectable:parse_error"
+        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+
+    def test_escaping_entry_path_uninspectable(self, tmp_path):
+        ws, entry = _ws_with_project(tmp_path, config=BASE_CFG, entry_path="../outside")
+        state, pcfg = pur._project_config_state(str(ws), entry)
+        assert state == "uninspectable:path_escape" and pcfg is None
+
+    def test_workspace_entries_unaffected(self, tmp_path):
+        ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
+        gaps = pur.project_feature_gaps(entry, pur.FEATURE_MANIFEST, "3.55.0")
+        # the 5 workspace-sourced keys behave exactly as before (all present in entry -> no gaps)
+        assert all(k == "phaseExecutorTable" for k, _ in gaps) or gaps == []
+
+    def test_staleness_cli_warns_on_uninspectable(self, tmp_path):
+        import subprocess, sys as _sys
+        ws, entry = _ws_with_project(tmp_path, config="{not json")
+        r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
+                            "--staleness-project", "p1", "--workspace", str(ws),
+                            "--state-dir", str(tmp_path)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0  # advisory, never blocks
+        assert "cannot inspect" in r.stderr and "p1" in r.stderr and "parse_error" in r.stderr
+
+    def test_staleness_cli_nudges_missing_key(self, tmp_path):
+        import subprocess, sys as _sys
+        ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
+        r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
+                            "--staleness-project", "p1", "--workspace", str(ws),
+                            "--state-dir", str(tmp_path)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0
+        assert "phase-executor seat table" in r.stdout
+
+    def test_reconcile_projects_skips_project_config_entries(self, tmp_path):
+        ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
+        # entry lacks phaseExecutorTable in the WORKSPACE dict (it never lives there) —
+        # reconcile_projects must NOT surface it as needs_question (P2-G1).
+        projects, changes, needs_q = pur.reconcile_projects([entry], pur.FEATURE_MANIFEST)
+        assert all(key != "phaseExecutorTable" for _, key, _ in needs_q)

@@ -309,29 +309,205 @@ def seed_table(dest: Path) -> Path:
     dest = Path(dest)
     if dest.exists() or dest.is_symlink():
         raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}")
+    _publish_bytes(dest, src.read_bytes(), op="seed_table")
+    return dest
+
+
+def _publish_bytes(dest: Path, data: bytes, *, op: str) -> None:
+    """#446 P3-G3: the atomic no-clobber publish factored out of seed_table (behavior
+    unchanged there) so apply-table can materialize PATCHED candidate bytes through the
+    same tested machinery. mkstemp in the target dir -> os.link (FileExistsError if dest
+    appeared since the caller's check — os.replace would silently clobber); temp always
+    unlinked; every failure legible MalformedConfig."""
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
     except (FileExistsError, OSError) as exc:  # e.g. an existing regular file where the dir should be
-        raise MalformedConfig(f"seed_table: cannot create parent directory for {dest}: {exc}") from exc
-    # Atomic no-clobber publish (8a-B1 + diff-DF4): mkstemp in the target dir, then
-    # os.link — which FAILS with FileExistsError if dest appeared since the check above
-    # (os.replace would silently clobber a concurrent create). Temp always unlinked.
+        raise MalformedConfig(f"{op}: cannot create parent directory for {dest}: {exc}") from exc
     fd, tmp_name = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
-            f.write(src.read_bytes())
+            f.write(data)
         try:
             os.link(tmp_name, dest)
         except FileExistsError as exc:
-            raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}") from exc
+            raise MalformedConfig(f"{op}: refusing to overwrite existing {dest}") from exc
         except OSError as exc:  # hardlink-unsupported filesystem (ENOTSUP/EPERM/EMLINK) — legible, not a traceback
-            raise MalformedConfig(f"seed_table: cannot publish table to {dest} ({exc})") from exc
+            raise MalformedConfig(f"{op}: cannot publish table to {dest} ({exc})") from exc
     finally:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
-    return dest
+
+
+# --- #446: sparse-patch apply-table ---------------------------------------------------------------
+_PATCH_FIELDS: Final[frozenset[str]] = frozenset({"primary", "chain"})
+
+
+def _lane_for_model(table: dict, model: str) -> Optional[dict]:
+    """Find the lane for a model from ANY existing row of the base table (patch values are
+    model-name strings; the lane vocabulary is whatever the base table already declares —
+    an unknown model fails closed rather than inventing a lane)."""
+    for seat in table.get("seats", {}).values():
+        for target in (seat["primary"], *seat.get("chain", [])):
+            if target.get("model") == model:
+                return target["lane"]
+    return None
+
+
+def apply_seat_patch(base_table: dict, patch: dict) -> dict:
+    """Apply a sparse per-seat patch (primary/chain model names ONLY) over a deep copy of
+    the base table (#446 B.2). Chain semantics: a supplied list REPLACES the whole chain;
+    omission inherits; explicit [] is intentional. Fail-closed on unknown seat, unknown
+    field, non-string model, or a model with no known lane in the base table."""
+    import copy  # noqa: PLC0415
+    if not isinstance(patch, dict):
+        raise MalformedConfig(f"apply-table: patch must be a JSON object (got {type(patch).__name__})")
+    if not patch:
+        raise MalformedConfig("apply-table: empty patch = keep defaults; nothing to write")
+    out = copy.deepcopy(base_table)
+    seats = out.get("seats", {})
+    for seat_name, edits in patch.items():
+        if seat_name not in seats:
+            raise MalformedConfig(f"apply-table: unknown seat {seat_name!r} (table has {sorted(seats)})")
+        if not isinstance(edits, dict):
+            raise MalformedConfig(f"apply-table: patch for seat {seat_name!r} must be an object")
+        if not edits:
+            raise MalformedConfig(
+                f"apply-table: empty patch for seat {seat_name!r} = keep defaults; nothing to write")
+        unknown = set(edits) - _PATCH_FIELDS
+        if unknown:
+            raise MalformedConfig(
+                f"apply-table: unknown field(s) {sorted(unknown)} for seat {seat_name!r} — "
+                f"only {sorted(_PATCH_FIELDS)} are editable (floor/role/manifest/policy inherit)")
+        def _target(model, slot):
+            if not isinstance(model, str) or not model:
+                raise MalformedConfig(f"apply-table: {slot} for seat {seat_name!r} must be a model name string")
+            lane = _lane_for_model(base_table, model)
+            if lane is None:
+                raise MalformedConfig(
+                    f"apply-table: model {model!r} has no known lane in the base table — "
+                    f"cannot route seat {seat_name!r} to it (add the lane via a table edit, not a patch)")
+            import copy as _c  # noqa: PLC0415
+            return {"model": model, "lane": _c.deepcopy(lane)}
+        if "primary" in edits:
+            seats[seat_name]["primary"] = _target(edits["primary"], "primary")
+        if "chain" in edits:
+            chain = edits["chain"]
+            if not isinstance(chain, list):
+                raise MalformedConfig(f"apply-table: chain for seat {seat_name!r} must be a list (whole-chain replace)")
+            seats[seat_name]["chain"] = [_target(m, f"chain[{i}]") for i, m in enumerate(chain)]
+    return out
+
+
+def _do_apply(args) -> int:
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        if args.validate_only and args.expected_candidate_digest:
+            raise MalformedConfig(
+                "apply-table: --expected-candidate-digest is forbidden with --validate-only "
+                "(validate-only is what PRINTS the candidate digest)")
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        # Dest CANONICAL containment FIRST — both modes reject identically (P2-A4r).
+        # resolve() (non-strict — the fresh-create leaf may not exist yet) canonicalizes a
+        # symlinked PARENT, so an in-repo symlink whose target escapes the root is refused —
+        # the S4 discipline, mirroring the read-side resolve_table check (8a-B1: a lexical
+        # normpath here was probe-bypassed via a symlinked parent dir).
+        root = repo_root.resolve()
+        dest = (repo_root / args.dest).resolve()
+        if dest != root and not dest.is_relative_to(root):
+            raise MalformedConfig(
+                f"apply-table: --dest {args.dest!r} resolves outside the project root {root} — refused")
+        try:
+            patch = json.loads(Path(args.patch_json).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise MalformedConfig(f"apply-table: cannot read patch {args.patch_json!r}: {exc}") from exc
+        # Base: the RESOLVED current table (A3) or the package default under --reset-to-default.
+        # rt_current is ALWAYS resolved: the re-seed dest==pointer guard needs it even when
+        # the PATCH BASE is the package table (8a-A note: without this, resetting an existing
+        # override could never materialize — base_rt None made the guard refuse every re-seed).
+        rt_current = resolve_table(repo_root, pe.routing)
+        # The TOCTOU guard ALWAYS checks the CURRENTLY-RESOLVED table (what show-table
+        # displayed) — under --reset-to-default the PATCH BASE is the package table, but
+        # the thing that must not have drifted since the user looked is still the current
+        # resolution (diff-DF1: guarding the package digest instead both broke the
+        # documented flow and left the override unguarded).
+        if args.expected_digest != rt_current.snapshot.config_digest:
+            raise MalformedConfig(
+                f"apply-table: base table changed since shown — --expected-digest "
+                f"{args.expected_digest!r} != resolved {rt_current.snapshot.config_digest!r}")
+        if args.reset_to_default:
+            base_snap = pe.routing.snapshot_from_file(pe.routing.default_table_path())
+        else:
+            base_snap = rt_current.snapshot
+        candidate = apply_seat_patch(base_snap.table, patch)
+        # Validate through EXACTLY the #445 load path: temp file OUTSIDE the project +
+        # snapshot_from_file (schema + referential integrity), then the dead-seat pass.
+        fd, tmp_name = tempfile.mkstemp(suffix=".routing-candidate.json")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(candidate, f, indent=2)
+                f.write("\n")
+            try:
+                cand_snap = pe.routing.snapshot_from_file(tmp_name)
+            except Exception as exc:  # noqa: BLE001 — uniform legible exit 2 for an invalid candidate
+                raise MalformedConfig(
+                    f"apply-table: patched table failed validation ({type(exc).__name__}: {exc})") from exc
+            _assert_no_dead_seat(cand_snap, pe.routing, "patched candidate")
+            cand_bytes = Path(tmp_name).read_bytes()
+        finally:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        pointer = {"version": 1, "file": os.path.relpath(dest, root)}
+        if args.validate_only:
+            print(json.dumps({"config_digest": cand_snap.config_digest, "pointer": pointer}, indent=2))
+            return EXIT_OK
+        # Materialization: bind to the Step-5-approved candidate (P3-1).
+        if not args.expected_candidate_digest:
+            raise MalformedConfig(
+                "apply-table: materialization requires --expected-candidate-digest "
+                "(the value --validate-only printed)")
+        if args.expected_candidate_digest != cand_snap.config_digest:
+            raise MalformedConfig(
+                f"apply-table: candidate changed since validated — --expected-candidate-digest "
+                f"{args.expected_candidate_digest!r} != recomputed {cand_snap.config_digest!r}")
+        if dest.exists() or dest.is_symlink():
+            # Re-seed: only the file the CURRENT pointer names may be replaced (P3-G4), and
+            # only while its content still matches the shown base digest (A1; base_rt.path is
+            # the resolved override — for a re-seed the base guard above already proved it).
+            if rt_current.source != "project_file" or dest.resolve() != rt_current.path:
+                raise MalformedConfig(
+                    f"apply-table: --dest {args.dest!r} is not the current phaseExecutorTable file — "
+                    f"refusing to overwrite (re-seed may only replace the pointed-to table)")
+            fd, tmp_name = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    f.write(cand_bytes)
+                os.replace(tmp_name, dest)
+            except OSError as exc:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise MalformedConfig(f"apply-table: cannot replace {dest}: {exc}") from exc
+        else:
+            _publish_bytes(dest, cand_bytes, op="apply-table")
+        print(json.dumps({"path": str(dest), "config_digest": cand_snap.config_digest,
+                          "pointer": pointer}, indent=2))
+        return EXIT_OK
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "table_io_error", str(e), retryable=False))
+    except Exception as e:  # noqa: BLE001 — never leak a bare traceback from a config-write boundary
+        return _emit(_err(EXIT_INTERNAL, "internal_error", f"{type(e).__name__}: {e}", retryable=False))
 
 
 def pool_signature(pool_concurrency: dict) -> str:
@@ -601,6 +777,64 @@ def _do_resolve(args) -> int:
     return _emit(out)
 
 
+def table_projection(rt: "ResolvedTable", repo_root: Path) -> dict:
+    """#446: the ONE library-owned projection of a resolved table for setup's Step 2i.
+
+    `build_bake_off` reports ``bakeoff_policy.BUILD_MODELS`` — the ACTUAL competitive
+    candidate constant — never the build seat's primary+chain rows (they coincide today by
+    accident and are mechanically decoupled; S1). `file` is the normalized project-relative
+    override path when the source is a project file, else None."""
+    import bakeoff_policy  # noqa: PLC0415 — sibling hook, lazy so resolve-only paths skip it
+    declared = None
+    if rt.source == "project_file":
+        declared = os.path.relpath(rt.path, repo_root.resolve())
+    seats = [{"seat": name, "role": seat.get("role"), "primary": seat["primary"]["model"],
+              "chain": [c["model"] for c in seat.get("chain", [])]}
+             for name, seat in rt.snapshot.table["seats"].items()]
+    return {
+        "projection_version": 1,
+        "table_source": rt.source,
+        "config_digest": rt.snapshot.config_digest,
+        "file": declared,
+        "seats": seats,
+        "build_bake_off": list(bakeoff_policy.BUILD_MODELS),
+        "build_bake_off_note": ("informational — not table-editable; candidates are "
+                                "bakeoff_policy.BUILD_MODELS, not routing-table rows; "
+                                "see the bake-off-config follow-up issue"),
+    }
+
+
+def _do_show(args) -> int:
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        rt = resolve_table(repo_root, pe.routing)
+        proj = table_projection(rt, repo_root)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+    except Exception as e:  # noqa: BLE001 — a display command never leaks a bare traceback
+        return _emit(_err(EXIT_INTERNAL, "internal_error", f"{type(e).__name__}: {e}", retryable=False))
+    if args.json:
+        print(json.dumps(proj, indent=2))
+        return EXIT_OK
+    for s in proj["seats"]:
+        chain = " -> ".join(s["chain"]) if s["chain"] else "(none)"
+        print(f"{s['seat']}: primary {s['primary']} | chain {chain} | role {s['role']}")
+    print(f"build bake-off (informational): {', '.join(proj['build_bake_off'])}")
+    print(f"table_source: {proj['table_source']}")
+    if proj["file"]:
+        print(f"file: {proj['file']}")
+    print(f"config_digest: {proj['config_digest']}")
+    return EXIT_OK
+
+
 def _load_gate_decision(path):
     """Rebuild a #429 ``complexity_gate.GateDecision`` from the JSON the bake-off writes (fields:
     decision, reason_codes, input_snapshot, policy_digest). ``verified_decision`` recomputes the
@@ -714,6 +948,23 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--workspace", required=True)
     d.add_argument("--project", required=True)
     d.set_defaults(fn=_do_dispatch)
+
+    st = sub.add_parser("show-table", help="#446: display the resolved seat table (setup Step 2i)")
+    st.add_argument("--workspace", required=True)
+    st.add_argument("--project", required=True)
+    st.add_argument("--json", action="store_true")
+    st.set_defaults(fn=_do_show)
+
+    ap = sub.add_parser("apply-table", help="#446: validate/materialize a sparse seat patch (setup Step 2i)")
+    ap.add_argument("--workspace", required=True)
+    ap.add_argument("--project", required=True)
+    ap.add_argument("--patch-json", required=True, dest="patch_json")
+    ap.add_argument("--dest", required=True)
+    ap.add_argument("--expected-digest", required=True, dest="expected_digest")
+    ap.add_argument("--expected-candidate-digest", dest="expected_candidate_digest")
+    ap.add_argument("--validate-only", action="store_true", dest="validate_only")
+    ap.add_argument("--reset-to-default", action="store_true", dest="reset_to_default")
+    ap.set_defaults(fn=_do_apply)
 
     args = p.parse_args(argv)
     return args.fn(args)
