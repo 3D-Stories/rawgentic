@@ -92,9 +92,13 @@ def run_seat(
     for i, target in enumerate(targets):
         lane = target["lane"]
         engine = _engine_for(lane)
+        # #465 AC3: resolve the requested effort against THIS target's model + engine ONCE,
+        # pass the native value to the adapter, and stamp the resolution object onto the
+        # returned Observation (the dispatched_lane precedent below). recorded == sent.
+        eff = contract.resolve_effort(target["model"], effort, engine=engine)
         req = AdapterRequest(
             seat=seat, requested_model=target["model"], prompt=prompt, transport=lane["transport"],
-            context=tuple(context), correlation_id=correlation_id, effort=effort, timeout=timeout,
+            context=tuple(context), correlation_id=correlation_id, effort=eff.native, timeout=timeout,
             credential_ref=lane.get("credential_ref"),
         )
         attempt_id = f"{i}-{uuid.uuid4().hex[:8]}"
@@ -107,7 +111,7 @@ def run_seat(
                            digest=snapshot.config_digest, queued_ms=queued_ms, fallback_reason=fallback_reason)
         # #425 B: stamp the lane we ACTUALLY dispatched on (this target, not the request) so the
         # run-end audit can bind receipt<->observation independently of the receipt object.
-        obs = replace(obs, dispatched_lane=dict(lane))
+        obs = replace(obs, dispatched_lane=dict(lane), effort=eff.to_dict())
         if obs.parse_status not in AVAILABILITY_FAILURES:
             return obs  # success or a non-availability failure (model responded) -> do not fall back
         last = obs
@@ -177,6 +181,10 @@ def assert_parallel_feasible(candidates: Sequence[Candidate], snapshot: routing.
 
 
 def _run_candidate(c: Candidate, *, snapshot, quota, capture_root, run_id, dispatch) -> contract.Observation:
+    # #465 AC3 scope: the competitive path takes NO effort input (a Candidate has no effort
+    # field), so there is nothing to resolve and no effort object is stamped — nothing was
+    # requested, so nothing is misrecorded. The codex adapter still applies its
+    # registry-sourced None default (ENGINE_NONE_EFFORT) so the wire stays byte-identical.
     req = AdapterRequest(
         seat=c.seat, requested_model=c.model, prompt=c.prompt, transport=c.transport,
         context=tuple(c.context), credential_ref=c.credential_ref,
