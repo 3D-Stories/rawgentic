@@ -181,3 +181,41 @@ def test_whole_issue_delegation_disabled_flag(tmp_path):
         "wholeIssueDelegation": {"enabled": False, "workflows": ["implement-feature"]},
     }])
     assert arl.is_enabled_for(str(ws), "p", "implement-feature", key="wholeIssueDelegation") is False
+
+
+# --- _coerce_effort_env (spike #456 follow-up: xhigh is live-supported) ---
+# Spike #456 (2026-07-18) live-falsified the old premise that xhigh is
+# unsupported on codex gpt-5.5: the endpoint's own 400 names xhigh in its
+# accepted set, and the glm judge endpoint accepts the identical enum. The
+# old set {low, medium, high} silently clamped an explicit xhigh request to
+# high — the exact quiet depth-drop the coercion exists to prevent.
+
+
+def test_effort_xhigh_accepted(monkeypatch):
+    """xhigh passes through — both backends accept it (spike #456)."""
+    monkeypatch.setenv("RAWGENTIC_ADV_REVIEW_EFFORT", "xhigh")
+    assert arl._coerce_effort_env("RAWGENTIC_ADV_REVIEW_EFFORT", "high") == "xhigh"
+
+
+def test_effort_xhigh_case_insensitive(monkeypatch):
+    monkeypatch.setenv("RAWGENTIC_ADV_REVIEW_EFFORT", "XHIGH")
+    assert arl._coerce_effort_env("RAWGENTIC_ADV_REVIEW_EFFORT", "high") == "xhigh"
+
+
+def test_effort_max_still_rejected_fail_safe(monkeypatch, capsys):
+    """max stays excluded: per-model on codex (gpt-5.5 rejects it) and this
+    lib has no dispatch-time model-capability gate — fail-safe to default."""
+    monkeypatch.setenv("RAWGENTIC_ADV_REVIEW_EFFORT", "max")
+    assert arl._coerce_effort_env("RAWGENTIC_ADV_REVIEW_EFFORT", "high") == "high"
+    assert "not in" in capsys.readouterr().err
+
+
+def test_effort_unknown_falls_back_with_warning(monkeypatch, capsys):
+    monkeypatch.setenv("RAWGENTIC_ADV_REVIEW_EFFORT", "banana")
+    assert arl._coerce_effort_env("RAWGENTIC_ADV_REVIEW_EFFORT", "high") == "high"
+    assert "banana" in capsys.readouterr().err
+
+
+def test_effort_empty_returns_default(monkeypatch):
+    monkeypatch.setenv("RAWGENTIC_ADV_REVIEW_EFFORT", "   ")
+    assert arl._coerce_effort_env("RAWGENTIC_ADV_REVIEW_EFFORT", "high") == "high"

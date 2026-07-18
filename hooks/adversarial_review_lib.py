@@ -56,7 +56,7 @@ _MAX_RETRIES_MIN, _MAX_RETRIES_MAX = 0, 5
 # The model is NOT pinned by default — OpenAI periodically retires selectable
 # model ids, so a hardcoded `-m gpt-5.x` would rot and break fresh installs;
 # leaving it unset lets Codex/config resolve the current recommended default.
-_EFFORT_ALLOWED: Final[frozenset] = frozenset({"low", "medium", "high"})
+_EFFORT_ALLOWED: Final[frozenset] = frozenset({"low", "medium", "high", "xhigh"})
 _EFFORT_DEFAULT = "high"
 
 
@@ -113,8 +113,12 @@ BLOCK_SECRETS: Final[bool] = _coerce_bool_env("RAWGENTIC_ADV_REVIEW_BLOCK_SECRET
 def _coerce_effort_env(name: str, default: str) -> str:
     """Parse a reasoning-effort env var. Unknown/empty -> default (fail-safe).
 
-    xhigh is deliberately NOT allowed: it is unsupported on the current default
-    model (gpt-5.5) and would be a hard runtime error, silently failing the gate.
+    Allowed: low|medium|high|xhigh — live-confirmed accepted by BOTH backends
+    (spike #456, 2026-07-18: codex gpt-5.5's own 400 error names xhigh in its
+    accepted set; the glm judge endpoint accepts the identical enum). max stays
+    excluded: it is per-model on codex (gpt-5.6-family only; gpt-5.5 rejects
+    it) and this lib has no dispatch-time model-capability gate — passing it
+    through would be a hard 400 at review time, silently failing the gate.
     """
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
