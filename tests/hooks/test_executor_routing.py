@@ -927,3 +927,50 @@ class TestResolveSeatCliObservability:
         blocker.write_text("x", encoding="utf-8")
         with pytest.raises(er.MalformedConfig, match="cannot create parent directory"):
             er.seed_table(blocker / "t.json")
+
+
+# --- #446: show-table (projection) ----------------------------------------------------------------
+
+class TestShowTable:
+    def test_human_summary_default_project(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == 0
+        assert "table_source: package_default" in r.stdout
+        assert "config_digest: sha256:" in r.stdout
+        assert "ship" in r.stdout and "review" in r.stdout
+
+    def test_json_projection_default(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path)
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic", "--json")
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["projection_version"] == 1
+        assert out["table_source"] == "package_default"
+        assert out["config_digest"].startswith("sha256:")
+        assert out["file"] is None
+        seats = {s["seat"]: s for s in out["seats"]}
+        assert set(seats) == {"intake", "analysis", "design", "plan", "build", "review", "ship"}
+        assert seats["build"]["role"] == "build"
+        assert isinstance(seats["ship"]["primary"], str) and seats["ship"]["chain"]
+        # build_bake_off reports the ACTUAL candidate constant, labeled informational.
+        import bakeoff_policy
+        assert out["build_bake_off"] == list(bakeoff_policy.BUILD_MODELS)
+        assert "not table-editable" in out["build_bake_off_note"]
+
+    def test_json_projection_override_carries_file(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="claude_docs/t.json")
+        dst = repo / "claude_docs" / "t.json"
+        dst.parent.mkdir(parents=True)
+        dst.write_bytes(routing.default_table_path().read_bytes())
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic", "--json")
+        assert r.returncode == 0
+        out = json.loads(r.stdout)
+        assert out["table_source"] == "project_file"
+        assert out["file"] == "claude_docs/t.json"
+
+    def test_broken_override_exit2(self, tmp_path):
+        repo, ws = _proj_ws(tmp_path, pointer="gone.json")
+        r = _run_cli("show-table", "--workspace", ws, "--project", "rawgentic")
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "gone.json" in json.loads(r.stdout)["error"]["message"]

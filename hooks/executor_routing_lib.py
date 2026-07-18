@@ -601,6 +601,64 @@ def _do_resolve(args) -> int:
     return _emit(out)
 
 
+def table_projection(rt: "ResolvedTable", repo_root: Path) -> dict:
+    """#446: the ONE library-owned projection of a resolved table for setup's Step 2i.
+
+    `build_bake_off` reports ``bakeoff_policy.BUILD_MODELS`` — the ACTUAL competitive
+    candidate constant — never the build seat's primary+chain rows (they coincide today by
+    accident and are mechanically decoupled; S1). `file` is the normalized project-relative
+    override path when the source is a project file, else None."""
+    import bakeoff_policy  # noqa: PLC0415 — sibling hook, lazy so resolve-only paths skip it
+    declared = None
+    if rt.source == "project_file":
+        declared = os.path.relpath(rt.path, repo_root.resolve())
+    seats = [{"seat": name, "role": seat.get("role"), "primary": seat["primary"]["model"],
+              "chain": [c["model"] for c in seat.get("chain", [])]}
+             for name, seat in rt.snapshot.table["seats"].items()]
+    return {
+        "projection_version": 1,
+        "table_source": rt.source,
+        "config_digest": rt.snapshot.config_digest,
+        "file": declared,
+        "seats": seats,
+        "build_bake_off": list(bakeoff_policy.BUILD_MODELS),
+        "build_bake_off_note": ("informational — not table-editable; candidates are "
+                                "bakeoff_policy.BUILD_MODELS, not routing-table rows; "
+                                "see the bake-off-config follow-up issue"),
+    }
+
+
+def _do_show(args) -> int:
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        rt = resolve_table(repo_root, pe.routing)
+        proj = table_projection(rt, repo_root)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+    except Exception as e:  # noqa: BLE001 — a display command never leaks a bare traceback
+        return _emit(_err(EXIT_INTERNAL, "internal_error", f"{type(e).__name__}: {e}", retryable=False))
+    if args.json:
+        print(json.dumps(proj, indent=2))
+        return EXIT_OK
+    for s in proj["seats"]:
+        chain = " -> ".join(s["chain"]) if s["chain"] else "(none)"
+        print(f"{s['seat']}: primary {s['primary']} · chain {chain} · role {s['role']}")
+    print(f"build bake-off (informational): {', '.join(proj['build_bake_off'])}")
+    print(f"table_source: {proj['table_source']}")
+    if proj["file"]:
+        print(f"file: {proj['file']}")
+    print(f"config_digest: {proj['config_digest']}")
+    return EXIT_OK
+
+
 def _load_gate_decision(path):
     """Rebuild a #429 ``complexity_gate.GateDecision`` from the JSON the bake-off writes (fields:
     decision, reason_codes, input_snapshot, policy_digest). ``verified_decision`` recomputes the
@@ -714,6 +772,12 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--workspace", required=True)
     d.add_argument("--project", required=True)
     d.set_defaults(fn=_do_dispatch)
+
+    st = sub.add_parser("show-table", help="#446: display the resolved seat table (setup Step 2i)")
+    st.add_argument("--workspace", required=True)
+    st.add_argument("--project", required=True)
+    st.add_argument("--json", action="store_true")
+    st.set_defaults(fn=_do_show)
 
     args = p.parse_args(argv)
     return args.fn(args)
