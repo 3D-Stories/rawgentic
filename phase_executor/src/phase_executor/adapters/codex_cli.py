@@ -25,13 +25,80 @@ from .base import AdapterRequest, ParsedResult, build_observation, run_subproces
 ENGINE = "codex"
 
 
-def build_command(model: str, cwd: str, *, effort: str = "high") -> list:
-    return [
-        "codex", "exec", "--json", "-m", model,
-        "-c", f"model_reasoning_effort={effort}",
+def build_command(model: str, cwd: str, *, effort: Optional[str] = "high") -> list:
+    """Read-only profile — byte-identical to the pre-#465 command when effort is set.
+    None effort omits the flag (provider default; #465 — the None policy lives in
+    model_capabilities.ENGINE_NONE_EFFORT, applied by run(), NOT re-defaulted here)."""
+    cmd = ["codex", "exec", "--json", "-m", model]
+    if effort:
+        cmd += ["-c", f"model_reasoning_effort={effort}"]
+    cmd += [
         "--ephemeral", "--color", "never", "-c", "project_doc_max_bytes=0",
         "-s", "read-only", "-C", cwd, "--skip-git-repo-check", "-",
     ]
+    return cmd
+
+
+# #465 B.4 — the three spike-#452 sandbox overrides (live Landlock-verified): the DEFAULT
+# workspace-write boundary is /tmp-WIDE; these pin it to the worktree ONLY. approval_policy
+# pinned per spike §4/§6 (belt-and-suspenders vs a user config.toml on-request; the W5
+# canary #468 asserts the BEHAVIOR — composition validation alone never unlocks dispatch).
+# Unsafe-char + containment refusal now lives in contract.canonical_contained_worktree
+# (shared with the claude adapter — one boundary home, #465 Step-11 DF-1). json.dumps still
+# escapes the writable_roots value as belt-and-suspenders.
+_WRITABLE_ROOTS_KEY = "sandbox_workspace_write.writable_roots="
+
+
+def build_mutating_command(model: str, worktree: str, *, effort: Optional[str] = "high",
+                           containment_root: str) -> list:
+    canon_wt = contract.canonical_contained_worktree(worktree, containment_root)
+    cmd = ["codex", "exec", "--json", "-m", model]
+    if effort:
+        cmd += ["-c", f"model_reasoning_effort={effort}"]
+    cmd += [
+        "--ephemeral", "--color", "never", "-c", "project_doc_max_bytes=0",
+        "-s", "workspace-write",
+        "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
+        "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        # json.dumps escapes the path so it cannot break out of the single-element array.
+        "-c", f"{_WRITABLE_ROOTS_KEY}{json.dumps([canon_wt])}",
+        "-c", "approval_policy=never",
+        "-C", canon_wt, "--skip-git-repo-check", "-",
+    ]
+    validate_mutating_composition(cmd, canon_wt)
+    return cmd
+
+
+def validate_mutating_composition(cmd: list, canonical_worktree: str) -> None:
+    """The compose-time refusal predicate (spike #452 report :153) — separately importable
+    so the W5 canary (#468) re-asserts the same invariant at runtime. Fail-closed: any
+    missing override, or a writable_roots array that is not EXACTLY [canonical_worktree],
+    refuses before spawn. The writable_roots check PARSES the arg back (not a substring
+    match against a self-built literal — 8a T4: substring was tautological and let a
+    path-injected second root through)."""
+    joined = " ".join(cmd)
+    for lit in ("-s workspace-write",
+                "sandbox_workspace_write.exclude_slash_tmp=true",
+                "sandbox_workspace_write.exclude_tmpdir_env_var=true"):
+        if lit not in joined:
+            raise contract.CompositionError(
+                f"codex mutating launch REFUSED: composition missing {lit!r} — a naive "
+                f"workspace-write boundary is /tmp-wide (spike #452)")
+    roots_arg = next((a for a in cmd if a.startswith(_WRITABLE_ROOTS_KEY)), None)
+    if roots_arg is None:
+        raise contract.CompositionError(
+            "codex mutating launch REFUSED: no sandbox_workspace_write.writable_roots override")
+    try:
+        roots = json.loads(roots_arg[len(_WRITABLE_ROOTS_KEY):])
+    except ValueError as exc:
+        raise contract.CompositionError(
+            f"codex mutating launch REFUSED: writable_roots is not valid JSON ({exc}) — "
+            f"refusing a malformed sandbox boundary") from exc
+    if roots != [canonical_worktree]:
+        raise contract.CompositionError(
+            f"codex mutating launch REFUSED: writable_roots {roots!r} is not exactly "
+            f"[{canonical_worktree!r}] — the boundary must name the worktree and nothing else")
+
 
 
 def parse_codex(stdout_jsonl: str, *, requested_model: str, transport: str = "native") -> ParsedResult:
@@ -81,7 +148,25 @@ def parse_codex(stdout_jsonl: str, *, requested_model: str, transport: str = "na
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None, cwd: Optional[str] = None) -> contract.Observation:
     import os  # noqa: PLC0415
     work = cwd or os.getcwd()
-    cmd = build_command(req.requested_model, work, effort=req.effort or "high")
+    # #465 S1: the None policy is registry-sourced — ONE constant feeds both the engine's
+    # resolver (adapter_default) and this fallback, so they agree by construction; wire is
+    # byte-identical on run_seat AND run_competitive.
+    from ..model_capabilities import ENGINE_NONE_EFFORT  # noqa: PLC0415
+    effective_effort = req.effort or ENGINE_NONE_EFFORT.get("codex")
+    profile = req.profile
+    if profile is not None and profile.mutating != bool({"edit", "bash"} & set(profile.effective_grants)):
+        raise contract.CompositionError(
+            f"codex launch: profile.mutating={profile.mutating} inconsistent with "
+            f"effective_grants={profile.effective_grants!r} — refusing to compose")
+    if profile is not None and profile.mutating:
+        if not req.containment_root:
+            raise contract.CompositionError(
+                "codex mutating launch REFUSED: AdapterRequest.containment_root is required "
+                "(executor-approved root; a mutating launch without it is the /tmp-wide hazard)")
+        cmd = build_mutating_command(req.requested_model, profile.worktree,
+                                     effort=effective_effort, containment_root=req.containment_root)
+    else:
+        cmd = build_command(req.requested_model, work, effort=effective_effort)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = time.monotonic()

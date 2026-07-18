@@ -30,6 +30,10 @@ class AdapterRequest:
     effort: Optional[str] = None
     timeout: float = 300.0
     credential_ref: Optional[str] = None
+    # #465: launch profile + executor-approved containment root. Defaults keep every
+    # pre-profile caller byte-identical (fresh/read-only; no containment needed read-only).
+    profile: "contract.LaunchProfile" = field(default_factory=lambda: contract.LaunchProfile())
+    containment_root: Optional[str] = None
 
 
 @dataclass
@@ -58,7 +62,7 @@ class ProcOutcome:
     launch_error: Optional[str] = None
 
 
-def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optional[dict] = None) -> ProcOutcome:
+def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optional[dict] = None, cwd: Optional[str] = None) -> ProcOutcome:
     """Run ``cmd`` with ``stdin`` on stdin in its OWN process group; on timeout kill the whole
     group (no orphaned children), wait, and report ``timed_out``. Launch errors are captured,
     never raised, so the caller can still record an Observation.
@@ -72,7 +76,7 @@ def run_subprocess(cmd: Sequence[str], stdin: str, timeout: float, *, env: Optio
         proc = subprocess.Popen(
             list(cmd),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, start_new_session=True, env=proc_env,
+            text=True, start_new_session=True, env=proc_env, cwd=cwd,
         )
     except OSError as exc:
         return ProcOutcome(returncode=None, stdout="", stderr=str(exc), timed_out=False, launch_error=str(exc))

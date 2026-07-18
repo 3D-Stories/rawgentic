@@ -22,8 +22,46 @@ from .base import AdapterRequest, ParsedResult, ProcOutcome, build_observation, 
 ENGINE = "claude"
 
 
-def build_command(model: str, *, effort: Optional[str] = None) -> list:
-    cmd = ["claude", "--print", "--model", model, "--output-format", "json", "--no-session-persistence"]
+# #465: effective_grants -> claude -p tool names (wire == record; the closure lives in
+# profile_from_manifest). Grants are capability SELECTION, not a sandbox.
+_GRANT_TOOLS = {"read": ("Read", "Grep", "Glob"), "edit": ("Edit", "Write"),
+                "bash": ("Bash",), "net": ("WebFetch", "WebSearch")}
+
+
+def build_command(model: str, *, effort: Optional[str] = None,
+                  profile: "Optional[contract.LaunchProfile]" = None) -> list:
+    """Compose the claude -p argv. No profile = today's exact command (byte-identical).
+
+    #465 three-way session branch AT COMPOSE TIME (profiles are publicly constructible, so
+    derivation-time validation alone is bypassable): None/fresh -> pin
+    --no-session-persistence; validated resume -> omit it (spike #455: the pin made resume
+    unreachable); ANY other value -> CompositionError. Pre-spawn invariant: mutating must
+    equal edit-or-bash in effective_grants (an injected inconsistent profile refuses)."""
+    cmd = ["claude", "--print", "--model", model, "--output-format", "json"]
+    if profile is None or profile.session_policy == "fresh":
+        cmd.append("--no-session-persistence")
+    elif profile.session_policy == "resume":
+        pass  # persistence stays on: session_id lands in the envelope (resume wiring = W3/W4)
+    else:
+        raise contract.CompositionError(
+            f"claude launch: session_policy {profile.session_policy!r} is not a validated "
+            f"value (fresh|resume) — refusing to compose")
+    if profile is not None:
+        if profile.mutating != bool({"edit", "bash"} & set(profile.effective_grants)):
+            raise contract.CompositionError(
+                f"claude launch: profile.mutating={profile.mutating} inconsistent with "
+                f"effective_grants={profile.effective_grants!r} — refusing to compose")
+        if profile.effective_grants:
+            tools = []
+            for g in profile.effective_grants:
+                mapped = _GRANT_TOOLS.get(g)
+                if mapped is None:  # DF-2: a grant with no tool mapping must not silently vanish
+                    raise contract.CompositionError(
+                        f"claude launch: unknown grant {g!r} has no --allowedTools mapping")
+                tools.extend(mapped)
+            cmd += ["--allowedTools", ",".join(tools)]
+        if profile.max_budget_usd is not None:
+            cmd += ["--max-budget-usd", str(profile.max_budget_usd)]
     if effort:
         cmd += ["--effort", effort]
     return cmd
@@ -78,11 +116,20 @@ def _claude_env(credential_ref: Optional[str]) -> Optional[dict]:
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
     """Live seat call. Writes a capture dir and returns an Observation."""
-    cmd = build_command(req.requested_model, effort=req.effort)
+    cmd = build_command(req.requested_model, effort=req.effort, profile=req.profile)
+    # #465 P3-1: a mutating claude launch pins cwd to the canonicalized worktree — claude
+    # has no OS sandbox here, so an ambient cwd must never receive Edit/Write/Bash effects.
+    cwd = None
+    if req.profile is not None and req.profile.mutating:
+        # #465 Step-11 DF-1: claude has NO OS sandbox, so cwd is the ONLY containment — a
+        # mutating claude launch MUST verify the worktree is contained under the
+        # executor-approved root (same boundary the codex adapter enforces), else Edit/Write
+        # could land in the canonical checkout. Shared helper, fail-closed.
+        cwd = contract.canonical_contained_worktree(req.profile.worktree, req.containment_root)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = time.monotonic()
-    proc = run_subprocess(cmd, req.prompt, req.timeout, env=_claude_env(req.credential_ref))
+    proc = run_subprocess(cmd, req.prompt, req.timeout, env=_claude_env(req.credential_ref), cwd=cwd)
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)

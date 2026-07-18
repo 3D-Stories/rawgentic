@@ -62,7 +62,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 11:29 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 13:33 MDT</div>
 <h1>Rawgentic Campaign Log</h1>
 
 </header>
@@ -71,7 +71,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
-<section class="mstone"><h3>Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run) <span class="chip c-conf">COMPLETE</span></h3><p>Wire WF2/WF3 to the <code>phase_executor</code> engine per the ratified architecture (the real #417). Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code>. Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · #445 ✓ · <strong>#446</strong> ← this slot · #465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) · #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.</p>
+<section class="mstone"><h3>Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run) <span class="chip c-conf">MERGED</span></h3><p><strong>Status: IN PROGRESS</strong> — 4 children merged (#464 #480 #445 #446), #465 (W2) building, #466–#474 pending. (The roadmap chip aggregates the merged sub-sections below; the epic itself is open until #474 closes it.)</p>
+<p>Wire WF2/WF3 to the <code>phase_executor</code> engine per the ratified architecture (the real #417). Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code>. Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · #445 ✓ · #446 ✓ · <strong>#465 (W2)</strong> ← IN PROGRESS · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) · #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.</p>
 <h3>#464 — capability manifest + WIRED_SEATS full set + attested build-audit path (W1) · v3.52.0</h3>
 <p>Every routing-table seat carries a required <code>manifest</code> (<code>session_policy</code> fresh ×7 per D-8, <code>tool_grants</code>, normalized <code>effort</code>, per-provider <code>confinement</code>, <code>bounds</code>), fail-closed at load (schema draft-2020-12 + semantic passes: confinement↔chain-provider coverage, <code>policy.enforced_roles ⊆ ENFORCEABLE_ROLES</code> evaluator ceiling, name↔role binding lint). Table grows to 7 seats (+<code>analysis</code> sonnet-primary, +<code>design</code> = the #428 competitive pair as a static row whose dispatch stays bake-off-owned; single-dispatch refused). <code>check_pre</code> drops the unconditional build hard-deny for a launch-bound <code>GateAttestation</code> (anti-replay <code>launch_input_digest</code>, outcome routing — a <code>bakeoff</code> outcome can never authorize single dispatch; receipts carry <code>role</code> + gate evidence; denied-build receipts stay audit-readable); unrecognized non-empty roles fail closed (#434 part 2, red-before-green on the typo&#x27;d-role cell). <code>dispatch_seat</code> gains the gated build path (<code>--gate-file</code> + <code>--plan-context</code> with EXACT canonical key-set equality) authenticated via the extracted <code>complexity_gate.verified_decision</code> (+<code>GateTamperError</code>, strict empty/missing-key context contract); driver-bench admits build audits.</p>
 <ul>
@@ -113,6 +114,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <ul>
 <li>Suite 3428+8skip → 3483+8skip (+55). No workflow-spine change → no diagram REV.</li>
 </ul>
+<h3>#465 — W2: agentic adapter profiles · PR #486 (green-pending) · v3.56.0</h3>
+<p>Conditional session persistence (claude resume), codex workspace-write sandbox pinning (three spike-#452 overrides, fail-closed composition), per-model effort gating with recorded stepdown. Design converged adversarial pass 3 (volume loop-back pass 1 — 7 High; all budgets spent; 45-entry ledger). Progress: T1 effort contract + capability registry committed (bf1a081, suite 3525/8) · T2 LaunchProfile + fail-closed derivation committed (ca179b4, suite 3540/8; 8a dual review returned — schema-gap Medium fixed in-flight) · all 6 tasks + 8a fixes on the 2 high-risk tasks committed; 3-agent Step 11 + codex diff (claude-mutating containment + grants fail-open fixed); <strong>W7 security blocker recorded</strong> — claude mutating dispatch forbidden until a real FS sandbox lands. Suite 3514/8 → 3576/10.</p>
 <h3>#446 — seed + tweak phase-seat models through /rawgentic:setup · v3.55.0</h3>
 <p>Setup Step 2i makes #445&#x27;s project-owned table usable: <code>show-table</code> (human + versioned <code>--json</code> projection; bake-off sets displayed from <code>bakeoff_policy.BUILD_MODELS</code>, labeled informational) + <code>apply-table</code> (sparse per-seat patch over the RESOLVED current table, validated in memory through #445&#x27;s load path — base + candidate digest guards, canonical symlink-safe dest containment, atomic no-clobber fresh-create via the factored <code>_publish_bytes</code>, digest-guarded replace re-seed incl. reset-to-default). Accept-defaults = strict no-op; fresh-create aborts retain-and-warn. Staleness goes source-aware (<code>phaseExecutorTable</code> nudged via switch, three-state fail-open; <code>reconcile_projects</code> skips project-config entries).</p>
 <ul>
@@ -453,7 +456,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
 
 </main>
-<footer>Last updated: 2026-07-18 11:29 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-18 13:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

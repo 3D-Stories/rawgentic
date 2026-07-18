@@ -100,3 +100,268 @@ def test_dispatched_lane_emitted_and_validates_when_set():
     d = _obs_ok(dispatched_lane=lane).to_dict()
     assert d["dispatched_lane"] == lane
     contract.validate_observation(d)
+
+
+# --- #465 T1: effort gate + stepdown + Observation.effort ---
+
+class TestResolveEffort:
+    def test_identity_all_levels_claude(self):
+        from phase_executor import contract
+        for lvl in ("low", "medium", "high", "xhigh", "max"):
+            r = contract.resolve_effort("claude-opus-4-8", lvl, engine="claude")
+            assert (r.requested, r.native, r.resolution) == (lvl, lvl, "identity")
+
+    def test_gpt55_max_steps_down_to_xhigh(self):
+        from phase_executor import contract
+        r = contract.resolve_effort("gpt-5.5", "max", engine="codex")
+        assert (r.native, r.resolution) == ("xhigh", "stepdown")
+        assert r.requested == "max" and isinstance(r.capability_revision, int)
+
+    def test_gpt56_sol_max_identity(self):
+        from phase_executor import contract
+        r = contract.resolve_effort("gpt-5.6-sol", "max", engine="codex")
+        assert (r.native, r.resolution) == ("max", "identity")
+
+    def test_codex_none_is_adapter_default_high(self):
+        from phase_executor import contract
+        r = contract.resolve_effort("gpt-5.6-terra", None, engine="codex")
+        assert (r.requested, r.native, r.resolution) == (None, "high", "adapter_default")
+
+    def test_claude_none_identity_null(self):
+        from phase_executor import contract
+        r = contract.resolve_effort("claude-fable-5", None, engine="claude")
+        assert (r.requested, r.native, r.resolution) == (None, None, "identity")
+
+    def test_unknown_model_requested_refuses(self):
+        from phase_executor import contract
+        import pytest as _pt
+        with _pt.raises(ValueError, match="no capability row"):
+            contract.resolve_effort("wombat-9", "high", engine="codex")
+
+    def test_unknown_model_none_passes(self):
+        from phase_executor import contract
+        r = contract.resolve_effort("wombat-9", None, engine="claude")
+        assert (r.native, r.resolution) == (None, "identity")
+
+    def test_bad_engine_refuses(self):
+        from phase_executor import contract
+        import pytest as _pt
+        with _pt.raises(ValueError, match="engine"):
+            contract.resolve_effort("claude-opus-4-8", "high", engine="zhipu")
+
+    def test_registry_covers_shipped_table(self):
+        from phase_executor import contract, model_capabilities, routing
+        table = routing.load_routing_table(routing.default_table_path())
+        models = set()
+        for seat in table["seats"].values():
+            for t in (seat["primary"], *seat.get("chain", [])):
+                models.add(contract.canonicalize_model_id(t["model"]))
+        missing = models - set(model_capabilities.SUPPORTED_EFFORT)
+        assert not missing, f"registry lacks rows for shipped models: {sorted(missing)}"
+
+    def test_observation_effort_round_trips_schema(self, tmp_path):
+        import json as _json
+        from phase_executor import contract
+        obs = contract.Observation(
+            run_id="r", attempt_id="0-a", correlation_id=None, seat="ship", engine="codex",
+            transport="native", requested_model="gpt-5.6-terra", actual_model="gpt-5.6-terra",
+            prompt_hash="sha256:x", context_hashes=[], usage={"input": 1, "output": 1, "cached": 0},
+            timing_ms=1, queued_ms=0, process={"exit_code": 0, "timed_out": False},
+            parse_status=contract.OK, parsed_payload="t", raw_capture_path=None,
+            fallback_reason=None, routing_config_digest="sha256:d",
+            effort={"requested": None, "native": "high", "resolution": "adapter_default",
+                    "capability_revision": 1},
+        )
+        d = obs.to_dict()
+        contract.validate_observation(d)  # schema accepts the new optional object
+        assert d["effort"]["native"] == "high"
+
+    def test_observation_without_effort_still_validates(self):
+        from phase_executor import contract
+        obs = contract.Observation(
+            run_id="r", attempt_id="0-a", correlation_id=None, seat="ship", engine="claude",
+            transport="native", requested_model="claude-sonnet-5", actual_model="claude-sonnet-5",
+            prompt_hash="sha256:x", context_hashes=[], usage={"input": 1, "output": 1, "cached": 0},
+            timing_ms=1, queued_ms=0, process={"exit_code": 0, "timed_out": False},
+            parse_status=contract.OK, parsed_payload="t", raw_capture_path=None,
+            fallback_reason=None, routing_config_digest="sha256:d",
+        )
+        d = obs.to_dict()
+        assert "effort" not in d  # emit-only-when-set
+        contract.validate_observation(d)
+
+
+# --- #465 T2: LaunchProfile + profile_from_manifest ---
+
+def _manifest(grants=("read",), policy="fresh", bounds=None):
+    return {"session_policy": policy, "tool_grants": list(grants),
+            "effort": "high", "confinement": {"anthropic": "hooks"},
+            "bounds": bounds or {"timeout_s": 900}}
+
+
+class TestLaunchProfile:
+    def test_default_profile_is_fresh_readonly(self):
+        from phase_executor import contract
+        p = contract.LaunchProfile()
+        assert p.session_policy == "fresh" and p.mutating is False
+        assert p.effective_grants == () and p.worktree is None
+
+    def test_effective_grants_not_constructor_injectable(self):
+        from phase_executor import contract
+        import pytest as _pt
+        with _pt.raises(TypeError):
+            contract.LaunchProfile(effective_grants=("bash",))
+
+    def test_readonly_derivation(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(_manifest(), engine="claude")
+        assert p.mutating is False and p.effective_grants == ("read",)
+
+    def test_bash_closure_implies_net(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(
+            _manifest(grants=("read", "edit", "bash"), bounds={"timeout_s": 60, "max_budget_usd": 5.0}),
+            engine="claude", worktree="/tmp/wt")
+        assert p.mutating is True
+        assert set(p.effective_grants) == {"read", "edit", "bash", "net"}
+        assert p.tool_grants == ("read", "edit", "bash")  # declared set unchanged
+
+    @pytest.mark.parametrize("policy", ["", "Fresh", "resumable", None])
+    def test_bad_session_policy_refuses(self, policy):
+        from phase_executor import contract
+        m = _manifest()
+        if policy is None:
+            del m["session_policy"]
+        else:
+            m["session_policy"] = policy
+        with pytest.raises(ValueError, match="session_policy"):
+            contract.profile_from_manifest(m, engine="claude")
+
+    def test_resume_policy_accepted(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(_manifest(policy="resume"), engine="claude")
+        assert p.session_policy == "resume"
+
+    def test_mutating_requires_worktree(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="worktree"):
+            contract.profile_from_manifest(
+                _manifest(grants=("edit",), bounds={"timeout_s": 60, "max_budget_usd": 5.0}),
+                engine="claude")
+
+    def test_mutating_claude_requires_budget(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="max_budget_usd"):
+            contract.profile_from_manifest(_manifest(grants=("edit",)), engine="claude", worktree="/tmp/wt")
+
+    def test_mutating_codex_no_budget_needed(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(_manifest(grants=("edit",)), engine="codex", worktree="/tmp/wt")
+        assert p.mutating is True and p.max_budget_usd is None
+
+    def test_mutating_zhipuai_refuses(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="zhipuai"):
+            contract.profile_from_manifest(_manifest(grants=("edit",)), engine="zhipuai", worktree="/tmp/wt")
+
+    def test_bad_engine_refuses(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="engine"):
+            contract.profile_from_manifest(_manifest(), engine="zhipu")
+
+    def test_adapter_request_gains_defaulted_fields(self):
+        from phase_executor.adapters.base import AdapterRequest
+        req = AdapterRequest(seat="ship", requested_model="claude-sonnet-5", prompt="hi")
+        assert req.profile.session_policy == "fresh" and req.profile.mutating is False
+        assert req.containment_root is None
+
+
+def test_manifest_schema_accepts_max_budget_usd():
+    """#465 8a-A1: the field profile_from_manifest reads must be schema-SPECIFIABLE
+    (bounds was additionalProperties:false with only timeout_s — the budget path was
+    dead against any schema-valid manifest); positivity enforced at the schema layer."""
+    import copy, json as _json, pathlib
+    from phase_executor import contract, routing
+    table = _json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+    t = copy.deepcopy(table)
+    t["seats"]["build"]["manifest"]["bounds"]["max_budget_usd"] = 25.0
+    contract.validate_routing_table(t)  # accepts
+    t["seats"]["build"]["manifest"]["bounds"]["max_budget_usd"] = 0
+    import pytest as _pt, jsonschema
+    with _pt.raises(jsonschema.ValidationError):
+        contract.validate_routing_table(t)  # zero refused at schema layer
+
+
+def test_mutating_claude_manifest_round_trips_schema_to_profile():
+    """#465 8a-B1: the positive mutating-claude derivation proven on a manifest that
+    ACTUALLY round-trips validate_routing_table (guards against the schema edit being
+    forgotten while raw-dict tests stay green)."""
+    import copy, json as _json
+    from phase_executor import contract, routing
+    table = _json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+    t = copy.deepcopy(table)
+    t["seats"]["build"]["manifest"]["bounds"]["max_budget_usd"] = 25.0
+    contract.validate_routing_table(t)
+    p = contract.profile_from_manifest(t["seats"]["build"]["manifest"],
+                                       engine="claude", worktree="/tmp/wt")
+    assert p.mutating is True and p.max_budget_usd == 25.0
+
+
+def test_infinite_budget_refused():
+    """#465 8a-B2: inf satisfies `> 0` but is no enforceable ceiling."""
+    import pytest as _pt
+    from phase_executor import contract
+    m = {"session_policy": "fresh", "tool_grants": ["edit"], "effort": "high",
+         "confinement": {"anthropic": "hooks"},
+         "bounds": {"timeout_s": 60, "max_budget_usd": float("inf")}}
+    with _pt.raises(ValueError, match="max_budget_usd"):
+        contract.profile_from_manifest(m, engine="claude", worktree="/tmp/wt")
+
+
+def test_profile_from_manifest_rejects_empty_grants():
+    import pytest as _pt
+    from phase_executor import contract
+    m = {"session_policy": "fresh", "tool_grants": [], "effort": "high",
+         "confinement": {}, "bounds": {"timeout_s": 60}}
+    with _pt.raises(ValueError, match="non-empty"):
+        contract.profile_from_manifest(m, engine="claude")
+
+
+def test_profile_from_manifest_rejects_unknown_grant():
+    import pytest as _pt
+    from phase_executor import contract
+    m = {"session_policy": "fresh", "tool_grants": ["read", "sudo"], "effort": "high",
+         "confinement": {}, "bounds": {"timeout_s": 60}}
+    with _pt.raises(ValueError, match="unknown tool_grants"):
+        contract.profile_from_manifest(m, engine="claude")
+
+
+def test_canonical_contained_worktree_shared_boundary(tmp_path):
+    import pytest as _pt, os as _os
+    from phase_executor import contract
+    root = tmp_path / "root"; wt = root / "wt"; wt.mkdir(parents=True)
+    assert contract.canonical_contained_worktree(str(wt), str(root)) == _os.path.realpath(str(wt))
+    with _pt.raises(contract.CompositionError, match="containment_root is required"):
+        contract.canonical_contained_worktree(str(wt), None)
+    with _pt.raises(contract.CompositionError, match="containment"):
+        contract.canonical_contained_worktree(str(root), str(root))  # == root
+    with _pt.raises(contract.CompositionError, match="absolute"):
+        contract.canonical_contained_worktree("rel/wt", str(root))
+
+
+def test_worktree_nul_byte_refused_via_composition_error(tmp_path):
+    # #465 Step-11 R2-F3: a NUL in the worktree must refuse via CompositionError (the raw-
+    # string unsafe-char check runs BEFORE realpath, which would otherwise raise ValueError).
+    import pytest as _pt
+    from phase_executor import contract
+    with _pt.raises(contract.CompositionError, match="unsafe"):
+        contract.canonical_contained_worktree(str(tmp_path) + "/a\x00b", str(tmp_path))
+
+
+def test_containment_root_filesystem_root_rejected():
+    # #465 Step-11 R2-F4: containment_root == '/' would refuse every worktree — reject it
+    # with a clear message instead of a confusing "fails containment under '/'".
+    import pytest as _pt
+    from phase_executor import contract
+    with _pt.raises(contract.CompositionError, match="filesystem root"):
+        contract.canonical_contained_worktree("/tmp/anything/wt", "/")

@@ -276,3 +276,70 @@ def test_run_competitive_stamps_dispatched_lane(tmp_path):
     assert lanes["claude-sonnet-5"] == {"provider": "anthropic", "transport": "native",
                                         "auth_mode": "subscription_oauth", "pool": "claude", "credential_ref": None}
     assert lanes["gpt-5.6-terra"]["provider"] == "openai" and lanes["gpt-5.6-terra"]["pool"] == "codex"
+
+
+# --- #465 T5: run_seat resolves effort + stamps resolution on the Observation ---
+
+def _codex_primary_snapshot():
+    table = {
+        "schema_version": "1",
+        "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}},
+        "seats": {
+            "build": {"primary": {"model": "gpt-5.6-terra", "lane": _lane("codex", provider="openai")},
+                      "chain": []},
+        },
+        "forbidden_combinations": [{"model_pattern": "haiku", "reason": "never Haiku"}],
+    }
+    return routing.RoutingSnapshot.from_table(table)
+
+
+def test_run_seat_resolves_effort_passes_native_and_stamps(tmp_path):
+    calls = []
+    qc = QuotaCoordinator(tmp_path / "p", {"claude": 2, "codex": 4, "zhipu": 2})
+    obs = run_seat("solo", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
+                   effort="max", dispatch=_stub(record=calls))
+    # native passed to the adapter (solo = claude-opus-4-8, supports max -> identity)
+    assert calls[0][1] == "claude-opus-4-8"
+    assert obs.effort == {"requested": "max", "native": "max", "resolution": "identity",
+                          "capability_revision": 1}
+
+
+def test_run_seat_none_effort_claude_identity_null(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "p", {"claude": 2, "codex": 4, "zhipu": 2})
+    obs = run_seat("solo", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
+                   dispatch=_stub())
+    assert obs.effort == {"requested": None, "native": None, "resolution": "identity",
+                          "capability_revision": 1}
+
+
+def test_run_seat_none_effort_codex_adapter_default_high(tmp_path):
+    seen = {}
+    qc = QuotaCoordinator(tmp_path / "p", {"claude": 2, "codex": 4})
+    def dispatch(engine_name, req, **kw):
+        seen["effort"] = req.effort
+        return _obs(req, engine_name=engine_name)
+    obs = run_seat("build", "hi", snapshot=_codex_primary_snapshot(), quota=qc,
+                   capture_root=tmp_path, dispatch=dispatch)
+    assert seen["effort"] == "high"  # native passed to the adapter
+    assert obs.effort == {"requested": None, "native": "high", "resolution": "adapter_default",
+                          "capability_revision": 1}
+
+
+def test_run_seat_stepdown_recorded(tmp_path):
+    # gpt-5.5 rejects max -> stepdown to xhigh, recorded on the Observation
+    table = {
+        "schema_version": "1", "pools": {"codex": {"concurrency": 4}},
+        "seats": {"build": {"primary": {"model": "gpt-5.5", "lane": _lane("codex", provider="openai")},
+                            "chain": []}},
+        "forbidden_combinations": [{"model_pattern": "haiku", "reason": "x"}],
+    }
+    snap = routing.RoutingSnapshot.from_table(table)
+    seen = {}
+    qc = QuotaCoordinator(tmp_path / "p", {"codex": 4})
+    def dispatch(engine_name, req, **kw):
+        seen["effort"] = req.effort
+        return _obs(req, engine_name=engine_name)
+    obs = run_seat("build", "hi", snapshot=snap, quota=qc, capture_root=tmp_path,
+                   effort="max", dispatch=dispatch)
+    assert seen["effort"] == "xhigh"
+    assert obs.effort["resolution"] == "stepdown" and obs.effort["native"] == "xhigh"
