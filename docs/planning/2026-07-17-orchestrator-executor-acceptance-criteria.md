@@ -1,7 +1,7 @@
 # Orchestrator/Executor architecture — acceptance criteria + gap analysis
 
 **Date:** 2026-07-17
-**Status:** REVIEWED — consulted (WF13) + adversarially reviewed (WF5) by GPT Sol AND GLM 5.2; all 16 findings dispositioned (§5c) and folded in. **Awaiting owner ratification** (decision points in §6b).
+**Status:** **RATIFIED** (owner, 2026-07-17) — consulted (WF13) + adversarially reviewed (WF5) by GPT Sol AND GLM 5.2, all 16 findings folded (§5c); then owner-ratified: D-1…D-8 approved, U-3/U-4/U-5 confirmed. D-4 and U-2 get conclusive answers via probe issues **#452** (codex containment) and **#453** (--tmux × -p). This document is now the target architecture the wiring epic is written against.
 **Author:** Claude (Fable 5), session 6d7297b7
 **Supersedes:** `2026-07-17-wf2-wf3-executor-seat-placement.md` (built on a wrong premise — see §3 "throwaway")
 **Grounds:** all owner prompts this session, epic #422 artifacts, `phase_executor/` code, live CLI probes, external research (citations inline)
