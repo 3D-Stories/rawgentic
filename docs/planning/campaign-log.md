@@ -18,7 +18,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 Wire WF2/WF3 to the `phase_executor` engine per the ratified architecture (the real #417).
 Doc of record: `docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md`.
-Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · **#445** ← this slot · #446 ·
+Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · #445 ✓ · **#446** ← this slot ·
 #465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) ·
 #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign
 (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.
@@ -94,6 +94,27 @@ entry-probe, canonical symlink-safe containment, statically-dead-seat check via 
   the window (marked `outcome=dead`, re-dispatched clean post-reset); codex diff review
   survived on its separate quota.
 - Suite 3428+8skip → 3483+8skip (+55). No workflow-spine change → no diagram REV.
+
+### #446 — seed + tweak phase-seat models through /rawgentic:setup · v3.55.0
+
+Setup Step 2i makes #445's project-owned table usable: `show-table` (human + versioned
+`--json` projection; bake-off sets displayed from `bakeoff_policy.BUILD_MODELS`, labeled
+informational) + `apply-table` (sparse per-seat patch over the RESOLVED current table,
+validated in memory through #445's load path — base + candidate digest guards, canonical
+symlink-safe dest containment, atomic no-clobber fresh-create via the factored
+`_publish_bytes`, digest-guarded replace re-seed incl. reset-to-default). Accept-defaults =
+strict no-op; fresh-create aborts retain-and-warn. Staleness goes source-aware
+(`phaseExecutorTable` nudged via switch, three-state fail-open; `reconcile_projects` skips
+project-config entries).
+
+- **S1 descope (owner-visible):** AC1's "build bake-off set" parenthetical descoped —
+  candidates are a module constant the table cannot carry; follow-up #484 filed + comment
+  on #446.
+- **Full spine:** peer consult + 3 design passes (2 design loop-backs + 1 spec-tighten w/
+  verifier — GLOBAL budget exactly spent) + plan pass + 8a (1 High: symlinked-parent write
+  escape, probe-proven + fixed) + 3-agent Step 11 + codex diff (reset TOCTOU guard fixed);
+  **40-entry ledger**.
+- Suite 3483+8skip → 3514+8skip (+31). No workflow-spine change → no diagram REV.
 
 ## Epic #422 — per-phase model routing + deterministic execution engine (auto-run)
 
