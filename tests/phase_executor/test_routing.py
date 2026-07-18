@@ -21,17 +21,36 @@ def _lane(pool, provider="anthropic", transport="native", auth="subscription_oau
     return {"provider": provider, "transport": transport, "auth_mode": auth, "credential_ref": None, "pool": pool}
 
 
+def _manifest(confinement=None, **over):
+    m = {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "high",
+        "confinement": confinement or {"anthropic": "hooks"},
+        "bounds": {"timeout_s": 1800},
+    }
+    m.update(over)
+    return m
+
+
 def _table(**over):
+    # #464 fixture migration (breaker S3): schema-valid per-seat manifest + top-level policy, and
+    # canonical-named seats declare their matching role so the Task-2 name<->role loader lint stays
+    # forward-compatible (the review seat's chain spans anthropic + openai, so its confinement
+    # covers both providers).
     t = {
         "schema_version": "1",
+        "policy": {"enforced_roles": ["review", "build"]},
         "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}},
         "seats": {
             "review": {
+                "role": "review",
                 "primary": {"model": "claude-fable-5", "lane": _lane("claude")},
                 "chain": [
                     {"model": "gpt-5.6-sol", "lane": _lane("codex", provider="openai")},
                     {"model": "claude-sonnet-5", "lane": _lane("claude")},
                 ],
+                "manifest": _manifest(confinement={"anthropic": "hooks", "openai": "codex-sandbox-readonly"}),
             }
         },
         "forbidden_combinations": [
@@ -137,10 +156,13 @@ def test_shipped_table_digest_stable_and_pools():
     assert snap.pool_concurrency()["claude"] == 2
 
 
-# --- #426: full seat table (intake/plan/build/review/ship) + fallback chains + provenance ---
+# --- #464 W1: full 7-seat table (intake/analysis/design/plan/build/review/ship) + manifest ×7
+#     + top-level policy section (extends the #426 5-seat set with analysis + design) ---
 
-_EXPECTED_SEATS_426 = {
+_EXPECTED_SEATS_464 = {
     "intake": ("claude-opus-4-8", ["claude-fable-5", "claude-sonnet-5"]),
+    "analysis": ("claude-sonnet-5", ["claude-opus-4-8", "claude-fable-5"]),
+    "design": ("gpt-5.6-sol", ["claude-opus-4-8"]),
     "plan": ("claude-opus-4-8", ["claude-fable-5", "gpt-5.6-terra"]),
     "build": ("claude-sonnet-5", ["claude-opus-4-8", "gpt-5.6-terra"]),
     "review": ("claude-fable-5", ["gpt-5.6-sol", "claude-sonnet-5"]),
@@ -148,13 +170,54 @@ _EXPECTED_SEATS_426 = {
 }
 
 
-def test_shipped_table_full_seat_set_426():
+def test_shipped_table_full_seat_set_464():
     table = load_routing_table(SHIPPED)
-    assert set(table["seats"]) == set(_EXPECTED_SEATS_426)
-    for seat, (primary, chain) in _EXPECTED_SEATS_426.items():
+    assert set(table["seats"]) == set(_EXPECTED_SEATS_464)
+    for seat, (primary, chain) in _EXPECTED_SEATS_464.items():
         s = table["seats"][seat]
         assert s["primary"]["model"] == primary, seat
         assert [c["model"] for c in s["chain"]] == chain, seat
+
+
+# Normative seat-value matrix — design §A (the shipped table's EXACT manifest values).
+_EXPECTED_MANIFEST_464 = {
+    "intake":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 900}},
+    "analysis": {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 1200}},
+    "design":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                 "confinement": {"openai": "codex-sandbox-readonly", "anthropic": "hooks"},
+                 "bounds": {"timeout_s": 1800}},
+    "plan":     {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                 "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
+                 "bounds": {"timeout_s": 1800}},
+    "build":    {"session_policy": "fresh", "tool_grants": ["read", "edit", "bash"], "effort": "high",
+                 "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-pinned"},
+                 "bounds": {"timeout_s": 3600}},
+    "review":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                 "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
+                 "bounds": {"timeout_s": 1800}},
+    "ship":     {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 900}},
+}
+
+
+def test_shipped_table_manifest_matrix_464():
+    table = load_routing_table(SHIPPED)
+    for seat, expected in _EXPECTED_MANIFEST_464.items():
+        assert table["seats"][seat]["manifest"] == expected, seat
+
+
+def test_shipped_table_policy_enforced_roles_464():
+    table = load_routing_table(SHIPPED)
+    assert table["policy"]["enforced_roles"] == ["review", "build"]
+
+
+def test_shipped_table_all_seats_session_policy_fresh_464():
+    """D-8 drift guard: every seat in the shipped table declares session_policy 'fresh'."""
+    table = load_routing_table(SHIPPED)
+    for seat, s in table["seats"].items():
+        assert s["manifest"]["session_policy"] == "fresh", seat
 
 
 def test_shipped_table_every_seat_has_fallback_chain_426():

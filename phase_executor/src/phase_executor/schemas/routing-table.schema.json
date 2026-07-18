@@ -46,9 +46,66 @@
     "provenance": {
       "description": "Optional evidence/authorship stamp for the seat table (e.g. the benchmark that decided the seats). Free-form object or string; the engine does not interpret it.",
       "type": ["object", "string"]
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Project-declared enforcement policy (#464). Optional at the schema level (programmatic legacy tables may omit it); the shipped table declares it. enforced_roles names the roles the loader treats as enforced — the engine evaluator registry (enforce.ENFORCEABLE_ROLES) is the ceiling; projects may narrow, never widen.",
+      "required": ["enforced_roles"],
+      "properties": {
+        "enforced_roles": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true,
+          "minItems": 1
+        }
+      }
     }
   },
   "$defs": {
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Per-seat capability manifest (#464). Declarative governance for the seat's dispatch; W2 (#465) gives the declaration operational meaning. session_policy is EXPLICIT (never defaulted); resume is legal only with an opt-in reason.",
+      "required": ["session_policy", "tool_grants", "effort", "confinement", "bounds"],
+      "properties": {
+        "session_policy": {"enum": ["fresh", "resume"]},
+        "tool_grants": {
+          "type": "array",
+          "items": {"enum": ["read", "edit", "bash", "net"]},
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
+        "confinement": {
+          "type": "object",
+          "minProperties": 1,
+          "description": "Per-provider confinement declaration; keys are provider names and must cover every provider in the seat's primary+chain lanes (loader semantic pass).",
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "bounds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["timeout_s"],
+          "properties": {
+            "timeout_s": {"type": "integer", "minimum": 1}
+          }
+        },
+        "resume_opt_in": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      },
+      "if": {
+        "required": ["session_policy"],
+        "properties": {"session_policy": {"const": "resume"}}
+      },
+      "then": {"required": ["resume_opt_in"]}
+    },
     "lane": {
       "type": "object",
       "additionalProperties": false,
@@ -74,7 +131,7 @@
     "seat": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["primary", "chain"],
+      "required": ["primary", "chain", "manifest"],
       "properties": {
         "primary": {"$ref": "#/$defs/target"},
         "chain": {
@@ -82,8 +139,9 @@
           "items": {"$ref": "#/$defs/target"},
           "description": "Fallback targets in order. Engine skips chain-ineligible entries (chain-aware skip), never blind next-entry."
         },
+        "manifest": {"$ref": "#/$defs/manifest"},
         "floor": {"type": ["number", "null"], "description": "Optional quality floor for this seat."},
-        "role": {"type": "string", "description": "Optional enforcement role, e.g. review | build. Routing enforcement (enforce.check_pre) keys its per-role requirements (review => author_provider required; build => gate required) on THIS field, not the seat's name — so a renamed seat still enforces and the vocabulary is portable. A seat with no role carries no review/build requirement."}
+        "role": {"type": "string", "minLength": 1, "description": "Optional enforcement role, e.g. review | build. Routing enforcement (enforce.check_pre) keys its per-role requirements (review => author_provider required; build => gate required) on THIS field, not the seat's name — so a renamed seat still enforces and the vocabulary is portable. A seat with no role carries no review/build requirement; an empty-string role is schema-illegal (minLength 1)."}
       }
     }
   }

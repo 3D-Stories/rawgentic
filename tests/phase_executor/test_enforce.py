@@ -294,8 +294,16 @@ def test_reload_on_epoch_exception_propagates(tmp_path):
     """Contract (Med#7 negative-path): RoutingConfig.reload must NOT swallow an on_epoch failure,
     so a lost audit epoch surfaces rather than silently dropping."""
     import json as _json
+    # #464 fixture migration: this table loads via RoutingConfig (validation path), so the seat
+    # needs a schema-valid manifest; the canonical review seat declares its role + a policy section
+    # for forward-compat with the Task-2 name<->role loader lint.
     table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
-             "seats": {"review": {"primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}},
+             "policy": {"enforced_roles": ["review", "build"]},
+             "seats": {"review": {"role": "review",
+                                  "primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": [],
+                                  "manifest": {"session_policy": "fresh", "tool_grants": ["read"],
+                                               "effort": "high", "confinement": {"anthropic": "hooks"},
+                                               "bounds": {"timeout_s": 1800}}}},
              "forbidden_combinations": []}
     p = tmp_path / "rt.json"
     p.write_text(_json.dumps(table))
