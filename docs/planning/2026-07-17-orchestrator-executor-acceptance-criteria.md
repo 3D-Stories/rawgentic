@@ -290,7 +290,7 @@ Reports: `docs/reviews/2026-07-17-orchestrator-executor-acceptance-criter-2026-0
 
 | Issue | W | Title | Depends on |
 |---|---|---|---|
-| #464 | W1 | capability manifest + WIRED_SEATS full set + build-audit path (absorbs #434 part 2: unrecognized `role` fail-closed in `check_pre`) | — |
+| #464 | W1 | capability manifest + WIRED_SEATS full set + build-audit path (absorbs #434 part 2: unrecognized `role` fail-closed in `check_pre`) — **SHIPPED v3.52.0** (manifest-in-table ×7, attested build gate w/ launch-input binding, design single-dispatch refused; bake-off audit-spine wiring + authoritative plan-context carried to W7 #470) | — |
 | #465 | W2 | agentic adapter profiles — conditional `--no-session-persistence`, codex sandbox-override pinning (Q2), effort gating | #464 |
 | #466 | W3 | engine-managed worktree lifecycle outside `/tmp` + orchestrator-side promotion (Q2) | #464 |
 | #467 | W4 | tmux supervisor, async dispatch, durable job registry, orphan reaper | #464 |
