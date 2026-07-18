@@ -446,6 +446,8 @@ def _load_gate_decision(path):
     obj = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(obj, dict):
         raise ValueError(f"gate file {path!r}: not a JSON object")
+    if not isinstance(obj.get("input_snapshot"), dict):
+        raise ValueError(f"gate file {path!r}: input_snapshot must be a JSON object")
     return complexity_gate.GateDecision(
         decision=obj["decision"],
         reason_codes=tuple(obj.get("reason_codes", ())),

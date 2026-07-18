@@ -627,3 +627,15 @@ def test_cli_build_stale_gate_exit4(tmp_path):
         correlation_id = "wf2:build"; author_provider = None; effort = None; timeout = 5.0
         workspace = ws; project = "rawgentic"; gate_file = str(gf); plan_context = str(cf)
     assert er._do_dispatch(A()) == er.EXIT_ENFORCEMENT
+
+
+def test_gate_file_nondict_snapshot_structured_exit2_464(tmp_path):
+    """#464 Step-8a (R1+R2 converged): a gate file whose input_snapshot is a NON-DICT (with a
+    self-consistent digest) must map to the structured exit-2 bad-input path, never a bare
+    TypeError traceback — the guard lives at the trust boundary (_load_gate_decision)."""
+    with pytest.raises(ValueError, match="input_snapshot"):
+        gate = {"decision": False, "reason_codes": [],
+                "input_snapshot": None, "policy_digest": "sha256:whatever"}
+        p = tmp_path / "gate.json"
+        p.write_text(json.dumps(gate), encoding="utf-8")
+        er._load_gate_decision(str(p))
