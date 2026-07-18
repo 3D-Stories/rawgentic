@@ -82,6 +82,35 @@ Standing context (epic #422, owner-approved rev 3): the seat table (orchestrator
 - **AC-H2** — Load-bearing claims grounded in cited primary sources (docs pages, GitHub issues, local CLI/code probes) — confirmed vs inferred marked. *(P9)*
 - **AC-H3** — Final deliverable includes a decision-focused visual artifact (attention-directing VDL: owner decisions first, assumptions flagged confirm/deny). Residual uncertainties documented for owner review. *(P10, P11)*
 
+### I. Telemetry (owner-directed 2026-07-17 — what gets captured, by consumer)
+
+- **AC-I1** — **Per-dispatch capture** (the Observation, extended): everything the envelope already carries (seat, engine, transport, requested/actual model, `prompt_hash`, `context_hashes`, usage {input, output, cached, cost_proxy}, `timing_ms`, `queued_ms`, exit/timeout, `parse_status`, `fallback_reason`, capture path) **plus the new-architecture fields**: requested + native effort (the U-5 dual record), `session_policy` used (D-8), worktree id, tmux session name, canary result, budget reserved vs spent, quota pool + lane, hook **denial events** (deny-and-log counts from OQ-2), and `work_product` refs (D-5). One envelope = the atomic telemetry unit; nothing about a dispatch is knowable only from logs.
+- **AC-I2** — **Per-run capture** (orchestrator level, extends the existing run-record): run_id, architecture_version (D-3), workflow + issue, **phase transitions with timestamps** (seat begin/end per WF step), gate outcomes + loop-back consumption per source, **review findings counts by severity per pass**, the expected-dispatch ledger reconciliation result, cost/usage rollup by model × seat, wall-clock per phase, human-interaction points (questions asked, wait durations), CI outcome, PR number.
+- **AC-I3** — **Cross-run history** (the self-improvement substrate, feeds AC-K): per-seat × per-model outcome rows joined against bench baselines — findings caught, gate pass rates, fallback frequency, canary failures, quota pauses, cost per merged PR, wall-time percentiles. Home: extend the existing Tier-2 store (`docs/measurements/run_records.jsonl` via `work_summary.py`) + a seat-outcomes sidecar; never a new parallel telemetry system.
+- **AC-I4** — **Operational/monitoring signals** (live, derived — never separately instrumented): per-seat liveness (tmux session alive + last capture write age), queue depth + pool saturation, stuck-seat detection (no sentinel past estimate), orphan count, capture-dir disk usage, error-taxonomy counts. Read from the job registry + capture dirs; a monitoring failure can never affect a run.
+
+| Consumer | Reads |
+|---|---|
+| Monitoring | I4 (liveness, stuck, orphans, saturation) |
+| Operational | I1/I2 (cost, budgets, quota pauses, denials) |
+| Tracking/audit | I1 + ledger reconcile (provenance, requested==actual) |
+| Visualization | I1/I2/I4 (the AC-J feeds) |
+| Self-improvement | I3 (+ bench reports, bakeoff sink) |
+
+### J. Live run visualization (owner-directed 2026-07-17)
+
+- **AC-J1** — Every orchestrator session can show, per active run: **(a)** which agents are running (seat, tmux session name, worktree), **(b)** model + effort — requested, and actual once known, **(c)** ETA per seat — honest estimate from AC-I3 wall-time percentiles for that seat × model, "no estimate" before history exists (never a fabricated number), **(d)** elapsed since seat start and since run start, **(e)** current WF phase/step, **(f)** what it is doing — correlation_id → step/task label + the last activity line (latest stream-json event / capture write).
+- **AC-J2** — **Data-first contract**: the feed is a supervisor/CLI verb (`status --run <id>`) returning JSON derived from the job registry + capture dirs; presentation layers (terminal statusline, tmux status bar, rendered HTML dashboard via the existing `render_artifact` dashboard style) consume that JSON — the JSON is the contract, presentation is swappable.
+- **AC-J3** — **Read-only invariant**: visualization reads registry/audit/capture only, never mutates run state; a dead or wedged viz cannot affect a run.
+
+### K. Self-improvement reflection — data + alerts now, learning later (owner-directed 2026-07-17)
+
+- **AC-K1** — **Data foundation first**: every run writes the AC-I3 outcome rows sufficient to later support per-seat model comparison, autocorrect proposals, and head-to-head experiments — captured NOW even though the learning loop ships later. A field not captured is an experiment that can't run.
+- **AC-K2** — **Baselines**: rolling per-seat × per-model baselines (p50/p90, robust to small n) computed from history; driver-bench stubbed baseline + live reports (#449) are the reference anchors for "expected" behavior.
+- **AC-K3** — **Alerts (ship now)**: threshold rules evaluated at run end (and at gate time where cheap) — examples: review Critical+High count > baseline p90 → "investigate: reviewer anomaly or genuinely risky change"; fallback fired > expected; canary failure; requested≠actual occurrence; seat cost or wall-time > p90; quota-pause frequency rising. Alerts are **advisory** — surfaced in the completion summary, session notes, and optionally an issue comment. **An alert is never a gate** — it asks the owner to look, it does not block.
+- **AC-K4** — **Experiment stub (schema only now)**: outcome rows reserve `experiment_id` + `arm` so future randomized head-to-head cells (starting with D-8's fresh-vs-resume review cell) record into the same store. **Explicitly out of scope now**: any autonomous routing change — every "autocorrect" is a *proposal* routed to the owner (a drafted WF1 issue), consistent with the user-in-the-loop principle (P11).
+- **AC-K5** — **Consumers wired, not duplicated**: WF14 (run-feedback) and WF17 (session-mining) read this store; alert thresholds become per-project config surfaced through setup (#446's natural home).
+
 ---
 
 ## 3. Gap analysis — reuse / modify / throwaway / build
@@ -135,6 +164,9 @@ Standing context (epic #422, owner-approved rev 3): the seat table (orchestrator
 | **WF2/WF3 skill rewiring** (the real #417): per-step executor dispatch prose + resume-protocol integration with tmux sessions | F1, F2 |
 | **The proving run**: one real WF2 run, audit reconciled | F3 |
 | **#449 live cells** on the wired path + report | G1 |
+| **Telemetry extension**: Observation new-architecture fields + per-run phase/gate capture + seat-outcomes sidecar on the Tier-2 store | I1–I3 |
+| **Status surface**: supervisor `status` verb (JSON contract) + terminal/HTML presentation | J1–J3 |
+| **Baselines + alert rules**: rolling per-seat×model p50/p90 + advisory alert evaluation at run end (thresholds → per-project config) | K2, K3, K5 |
 
 ---
 
@@ -238,5 +270,5 @@ Reports: `docs/reviews/2026-07-17-orchestrator-executor-acceptance-criter-2026-0
 ## 7. Sequencing sketch (post-ratification)
 
 1. **Epic:** orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1).
-2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product extension (D4, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → proving run (F3) → #449 live bench on the wired path (G1) → #448 config/setup/diagram children ride alongside.
+2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → **status surface (J1–J3, needs registry+capture live)** → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → **baselines + alerts (K2/K3, needs I3 history + bench anchors)** → #448 config/setup/diagram children ride alongside (alert thresholds join #446).
 3. #450 (ultracode) re-evaluated after wiring — its "gate-preserving fan-out" may collapse into the executor's parallel-seat capability.

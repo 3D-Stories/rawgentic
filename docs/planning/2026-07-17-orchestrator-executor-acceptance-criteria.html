@@ -53,7 +53,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-design">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 18:23 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 18:30 MDT</div>
 <h1>Orchestrator/Executor — AC + gap analysis (reviewed)</h1>
 
 </header>
@@ -132,6 +132,37 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li><strong>AC-H2</strong> — Load-bearing claims grounded in cited primary sources (docs pages, GitHub issues, local CLI/code probes) — confirmed vs inferred marked. *(P9)*</li>
 <li><strong>AC-H3</strong> — Final deliverable includes a decision-focused visual artifact (attention-directing VDL: owner decisions first, assumptions flagged confirm/deny). Residual uncertainties documented for owner review. *(P10, P11)*</li>
 </ul>
+<h3>I. Telemetry (owner-directed 2026-07-17 — what gets captured, by consumer)</h3>
+<ul>
+<li><strong>AC-I1</strong> — <strong>Per-dispatch capture</strong> (the Observation, extended): everything the envelope already carries (seat, engine, transport, requested/actual model, <code>prompt_hash</code>, <code>context_hashes</code>, usage {input, output, cached, cost_proxy}, <code>timing_ms</code>, <code>queued_ms</code>, exit/timeout, <code>parse_status</code>, <code>fallback_reason</code>, capture path) <strong>plus the new-architecture fields</strong>: requested + native effort (the U-5 dual record), <code>session_policy</code> used (D-8), worktree id, tmux session name, canary result, budget reserved vs spent, quota pool + lane, hook <strong>denial events</strong> (deny-and-log counts from OQ-2), and <code>work_product</code> refs (D-5). One envelope = the atomic telemetry unit; nothing about a dispatch is knowable only from logs.</li>
+<li><strong>AC-I2</strong> — <strong>Per-run capture</strong> (orchestrator level, extends the existing run-record): run_id, architecture_version (D-3), workflow + issue, <strong>phase transitions with timestamps</strong> (seat begin/end per WF step), gate outcomes + loop-back consumption per source, <strong>review findings counts by severity per pass</strong>, the expected-dispatch ledger reconciliation result, cost/usage rollup by model × seat, wall-clock per phase, human-interaction points (questions asked, wait durations), CI outcome, PR number.</li>
+<li><strong>AC-I3</strong> — <strong>Cross-run history</strong> (the self-improvement substrate, feeds AC-K): per-seat × per-model outcome rows joined against bench baselines — findings caught, gate pass rates, fallback frequency, canary failures, quota pauses, cost per merged PR, wall-time percentiles. Home: extend the existing Tier-2 store (<code>docs/measurements/run_records.jsonl</code> via <code>work_summary.py</code>) + a seat-outcomes sidecar; never a new parallel telemetry system.</li>
+<li><strong>AC-I4</strong> — <strong>Operational/monitoring signals</strong> (live, derived — never separately instrumented): per-seat liveness (tmux session alive + last capture write age), queue depth + pool saturation, stuck-seat detection (no sentinel past estimate), orphan count, capture-dir disk usage, error-taxonomy counts. Read from the job registry + capture dirs; a monitoring failure can never affect a run.</li>
+</ul>
+<table>
+<thead><tr><th>Consumer</th><th>Reads</th></tr></thead>
+<tbody>
+<tr><td>Monitoring</td><td>I4 (liveness, stuck, orphans, saturation)</td></tr>
+<tr><td>Operational</td><td>I1/I2 (cost, budgets, quota pauses, denials)</td></tr>
+<tr><td>Tracking/audit</td><td>I1 + ledger reconcile (provenance, requested==actual)</td></tr>
+<tr><td>Visualization</td><td>I1/I2/I4 (the AC-J feeds)</td></tr>
+<tr><td>Self-improvement</td><td>I3 (+ bench reports, bakeoff sink)</td></tr>
+</tbody>
+</table>
+<h3>J. Live run visualization (owner-directed 2026-07-17)</h3>
+<ul>
+<li><strong>AC-J1</strong> — Every orchestrator session can show, per active run: <strong>(a)</strong> which agents are running (seat, tmux session name, worktree), <strong>(b)</strong> model + effort — requested, and actual once known, <strong>(c)</strong> ETA per seat — honest estimate from AC-I3 wall-time percentiles for that seat × model, &quot;no estimate&quot; before history exists (never a fabricated number), <strong>(d)</strong> elapsed since seat start and since run start, <strong>(e)</strong> current WF phase/step, <strong>(f)</strong> what it is doing — correlation_id → step/task label + the last activity line (latest stream-json event / capture write).</li>
+<li><strong>AC-J2</strong> — <strong>Data-first contract</strong>: the feed is a supervisor/CLI verb (<code>status --run &lt;id&gt;</code>) returning JSON derived from the job registry + capture dirs; presentation layers (terminal statusline, tmux status bar, rendered HTML dashboard via the existing <code>render_artifact</code> dashboard style) consume that JSON — the JSON is the contract, presentation is swappable.</li>
+<li><strong>AC-J3</strong> — <strong>Read-only invariant</strong>: visualization reads registry/audit/capture only, never mutates run state; a dead or wedged viz cannot affect a run.</li>
+</ul>
+<h3>K. Self-improvement reflection — data + alerts now, learning later (owner-directed 2026-07-17)</h3>
+<ul>
+<li><strong>AC-K1</strong> — <strong>Data foundation first</strong>: every run writes the AC-I3 outcome rows sufficient to later support per-seat model comparison, autocorrect proposals, and head-to-head experiments — captured NOW even though the learning loop ships later. A field not captured is an experiment that can&#x27;t run.</li>
+<li><strong>AC-K2</strong> — <strong>Baselines</strong>: rolling per-seat × per-model baselines (p50/p90, robust to small n) computed from history; driver-bench stubbed baseline + live reports (#449) are the reference anchors for &quot;expected&quot; behavior.</li>
+<li><strong>AC-K3</strong> — <strong>Alerts (ship now)</strong>: threshold rules evaluated at run end (and at gate time where cheap) — examples: review Critical+High count &gt; baseline p90 → &quot;investigate: reviewer anomaly or genuinely risky change&quot;; fallback fired &gt; expected; canary failure; requested≠actual occurrence; seat cost or wall-time &gt; p90; quota-pause frequency rising. Alerts are <strong>advisory</strong> — surfaced in the completion summary, session notes, and optionally an issue comment. <strong>An alert is never a gate</strong> — it asks the owner to look, it does not block.</li>
+<li><strong>AC-K4</strong> — <strong>Experiment stub (schema only now)</strong>: outcome rows reserve <code>experiment_id</code> + <code>arm</code> so future randomized head-to-head cells (starting with D-8&#x27;s fresh-vs-resume review cell) record into the same store. <strong>Explicitly out of scope now</strong>: any autonomous routing change — every &quot;autocorrect&quot; is a *proposal* routed to the owner (a drafted WF1 issue), consistent with the user-in-the-loop principle (P11).</li>
+<li><strong>AC-K5</strong> — <strong>Consumers wired, not duplicated</strong>: WF14 (run-feedback) and WF17 (session-mining) read this store; alert thresholds become per-project config surfaced through setup (#446&#x27;s natural home).</li>
+</ul>
 <p>---</p>
 <h2>3. Gap analysis — reuse / modify / throwaway / build</h2>
 <h3>REUSE as-is (transport-agnostic; survives the architecture shift)</h3>
@@ -186,6 +217,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <tr><td><strong>WF2/WF3 skill rewiring</strong> (the real #417): per-step executor dispatch prose + resume-protocol integration with tmux sessions</td><td>F1, F2</td></tr>
 <tr><td><strong>The proving run</strong>: one real WF2 run, audit reconciled</td><td>F3</td></tr>
 <tr><td><strong>#449 live cells</strong> on the wired path + report</td><td>G1</td></tr>
+<tr><td><strong>Telemetry extension</strong>: Observation new-architecture fields + per-run phase/gate capture + seat-outcomes sidecar on the Tier-2 store</td><td>I1–I3</td></tr>
+<tr><td><strong>Status surface</strong>: supervisor <code>status</code> verb (JSON contract) + terminal/HTML presentation</td><td>J1–J3</td></tr>
+<tr><td><strong>Baselines + alert rules</strong>: rolling per-seat×model p50/p90 + advisory alert evaluation at run end (thresholds → per-project config)</td><td>K2, K3, K5</td></tr>
 </tbody>
 </table>
 <p>---</p>
@@ -284,10 +318,10 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </tbody>
 </table>
 <h2>7. Sequencing sketch (post-ratification)</h2>
-<p>1. <strong>Epic:</strong> orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1). 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product extension (D4, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → proving run (F3) → #449 live bench on the wired path (G1) → #448 config/setup/diagram children ride alongside. 3. #450 (ultracode) re-evaluated after wiring — its &quot;gate-preserving fan-out&quot; may collapse into the executor&#x27;s parallel-seat capability.</p>
+<p>1. <strong>Epic:</strong> orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1). 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → <strong>status surface (J1–J3, needs registry+capture live)</strong> → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → <strong>baselines + alerts (K2/K3, needs I3 history + bench anchors)</strong> → #448 config/setup/diagram children ride alongside (alert thresholds join #446). 3. #450 (ultracode) re-evaluated after wiring — its &quot;gate-preserving fan-out&quot; may collapse into the executor&#x27;s parallel-seat capability.</p>
 
 </main>
-<footer>Last updated: 2026-07-17 18:23 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-17 18:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
