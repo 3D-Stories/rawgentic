@@ -286,5 +286,22 @@ Reports: `docs/reviews/2026-07-17-orchestrator-executor-acceptance-criter-2026-0
 
 1. **Epic:** orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1).
 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → **status surface (J1–J3, needs registry+capture live)** → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → **baselines + alerts (K2/K3, needs I3 history + bench anchors)** → #448 config/setup/diagram children ride alongside (alert thresholds join #446).
-3. **Realized 2026-07-18 as epic #475** — manifest #464 (W1) → adapters #465 (W2) → worktrees #466 (W3) → supervisor #467 (W4) → canary #468 (W5) → work_product/telemetry #469 (W6, schema v2 per #434(b)) → WF2/WF3 rewiring #470 (W7, diagram REV expected) → status surface #471 (W8) → proving run #472 (W9, incl. codex mutating cell + Q6 quota probe) → bench #449 (W10, session_policy A/B) → baselines/alerts #473 (W11) → flip + legacy retirement #474 (W12, closes the epic); #445/#446/#447 ride alongside.
+3. **Realized 2026-07-18 as epic #475.** The filed children, dependency order (deps live in each child's body for the epic driver; epic checkboxes = queue):
+
+| Issue | W | Title | Depends on |
+|---|---|---|---|
+| #464 | W1 | capability manifest + WIRED_SEATS full set + build-audit path (absorbs #434 part 2: unrecognized `role` fail-closed in `check_pre`) | — |
+| #465 | W2 | agentic adapter profiles — conditional `--no-session-persistence`, codex sandbox-override pinning (Q2), effort gating | #464 |
+| #466 | W3 | engine-managed worktree lifecycle outside `/tmp` + orchestrator-side promotion (Q2) | #464 |
+| #467 | W4 | tmux supervisor, async dispatch, durable job registry, orphan reaper | #464 |
+| #468 | W5 | fail-closed guardrail canary + `--bare` drift-guard (lane assertion per Q3; Q5 non-auto mutating cell) | #465 |
+| #469 | W6 | Observation `work_product` + telemetry I1–I3, `schema_version: "2"` per #434(b) | #434 (decided + closed) |
+| #470 | W7 | WF2/WF3 skill rewiring — the real #417 (**diagram REV expected**) | #465, #467, #468 |
+| #471 | W8 | live run status surface | #467, #469 |
+| #472 | W9 | proving run — real WF2, codex mutating cell, Q6 controlled quota probe | #470, #468, #466 |
+| #449 | W10 | driver-bench on the wired path + `session_policy` fresh/resume A/B (re-scoped, retitled) | #472 |
+| #473 | W11 | baselines + alerts from telemetry history + bench anchors | #469, #449 |
+| #474 | W12 | migration flip + legacy retirement — **its PR closes the epic** | #472, #449 |
+
+   Absorbed from closed epic #448, riding alongside: #445 (config seat table, aligns W1) · #446 (setup integration + alert thresholds, joins W11) · #447 (diagram child, coordinates with W7's REV).
 4. #450 (ultracode) re-evaluated after wiring — its "gate-preserving fan-out" may collapse into the executor's parallel-seat capability.

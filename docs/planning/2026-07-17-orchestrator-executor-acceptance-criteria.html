@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 23:21 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 23:25 MDT</div>
 <h1>Orchestrator/Executor — AC + gap analysis (RATIFIED)</h1>
 
 </header>
@@ -317,10 +317,28 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </tbody>
 </table>
 <h2>7. Sequencing sketch (post-ratification)</h2>
-<p>1. <strong>Epic:</strong> orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1). 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → <strong>status surface (J1–J3, needs registry+capture live)</strong> → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → <strong>baselines + alerts (K2/K3, needs I3 history + bench anchors)</strong> → #448 config/setup/diagram children ride alongside (alert thresholds join #446). 3. <strong>Realized 2026-07-18 as epic #475</strong> — manifest #464 (W1) → adapters #465 (W2) → worktrees #466 (W3) → supervisor #467 (W4) → canary #468 (W5) → work_product/telemetry #469 (W6, schema v2 per #434(b)) → WF2/WF3 rewiring #470 (W7, diagram REV expected) → status surface #471 (W8) → proving run #472 (W9, incl. codex mutating cell + Q6 quota probe) → bench #449 (W10, session_policy A/B) → baselines/alerts #473 (W11) → flip + legacy retirement #474 (W12, closes the epic); #445/#446/#447 ride alongside. 4. #450 (ultracode) re-evaluated after wiring — its &quot;gate-preserving fan-out&quot; may collapse into the executor&#x27;s parallel-seat capability.</p>
+<p>1. <strong>Epic:</strong> orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1). 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → <strong>status surface (J1–J3, needs registry+capture live)</strong> → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → <strong>baselines + alerts (K2/K3, needs I3 history + bench anchors)</strong> → #448 config/setup/diagram children ride alongside (alert thresholds join #446). 3. <strong>Realized 2026-07-18 as epic #475.</strong> The filed children, dependency order (deps live in each child&#x27;s body for the epic driver; epic checkboxes = queue):</p>
+<table>
+<thead><tr><th>Issue</th><th>W</th><th>Title</th><th>Depends on</th></tr></thead>
+<tbody>
+<tr><td>#464</td><td>W1</td><td>capability manifest + WIRED_SEATS full set + build-audit path (absorbs #434 part 2: unrecognized <code>role</code> fail-closed in <code>check_pre</code>)</td><td>—</td></tr>
+<tr><td>#465</td><td>W2</td><td>agentic adapter profiles — conditional <code>--no-session-persistence</code>, codex sandbox-override pinning (Q2), effort gating</td><td>#464</td></tr>
+<tr><td>#466</td><td>W3</td><td>engine-managed worktree lifecycle outside <code>/tmp</code> + orchestrator-side promotion (Q2)</td><td>#464</td></tr>
+<tr><td>#467</td><td>W4</td><td>tmux supervisor, async dispatch, durable job registry, orphan reaper</td><td>#464</td></tr>
+<tr><td>#468</td><td>W5</td><td>fail-closed guardrail canary + <code>--bare</code> drift-guard (lane assertion per Q3; Q5 non-auto mutating cell)</td><td>#465</td></tr>
+<tr><td>#469</td><td>W6</td><td>Observation <code>work_product</code> + telemetry I1–I3, <code>schema_version: &quot;2&quot;</code> per #434(b)</td><td>#434 (decided + closed)</td></tr>
+<tr><td>#470</td><td>W7</td><td>WF2/WF3 skill rewiring — the real #417 (<strong>diagram REV expected</strong>)</td><td>#465, #467, #468</td></tr>
+<tr><td>#471</td><td>W8</td><td>live run status surface</td><td>#467, #469</td></tr>
+<tr><td>#472</td><td>W9</td><td>proving run — real WF2, codex mutating cell, Q6 controlled quota probe</td><td>#470, #468, #466</td></tr>
+<tr><td>#449</td><td>W10</td><td>driver-bench on the wired path + <code>session_policy</code> fresh/resume A/B (re-scoped, retitled)</td><td>#472</td></tr>
+<tr><td>#473</td><td>W11</td><td>baselines + alerts from telemetry history + bench anchors</td><td>#469, #449</td></tr>
+<tr><td>#474</td><td>W12</td><td>migration flip + legacy retirement — <strong>its PR closes the epic</strong></td><td>#472, #449</td></tr>
+</tbody>
+</table>
+<p>   Absorbed from closed epic #448, riding alongside: #445 (config seat table, aligns W1) · #446 (setup integration + alert thresholds, joins W11) · #447 (diagram child, coordinates with W7&#x27;s REV). 4. #450 (ultracode) re-evaluated after wiring — its &quot;gate-preserving fan-out&quot; may collapse into the executor&#x27;s parallel-seat capability.</p>
 
 </main>
-<footer>Last updated: 2026-07-17 23:21 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-17 23:25 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
