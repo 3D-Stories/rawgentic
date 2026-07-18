@@ -53,7 +53,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-design">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 18:38 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 18:44 MDT</div>
 <h1>Orchestrator/Executor — AC + gap analysis (RATIFIED)</h1>
 
 </header>
@@ -114,6 +114,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li><strong>AC-E3</strong> — Inside tmux the instance is <strong>headless</strong> (<code>claude -p</code> / <code>codex exec</code>): completion = process exit + finalized <code>observation.json</code> sentinel, never TUI screen-scraping. *(F8)* Sentinel publication is <strong>atomic and durable</strong>: validate + fsync a temp file, <code>os.replace</code> to <code>observation.json</code>, fsync the directory; the collector validates schema + correlation identity before marking completion, and a malformed sentinel is a <strong>distinct audited state</strong>, not a silent job failure (gpt review #8; the repo&#x27;s <code>atomic_write_lib</code> pattern).</li>
 <li><strong>AC-E4</strong> — Dispatch becomes <strong>async-capable</strong>: launch → poll/wait on sentinel → consume. The pane command runs in a <strong>supervisor-owned process group</strong>; timeout ⇒ terminate the group, escalate after a grace period, <strong>verify no recorded PID survives</strong>, and only then emit the timeout Observation / release the worktree — <code>tmux kill-session</code> alone does not kill a daemonized child (gpt review #2). Orphan handling on resume via the durable job registry (§5b OQ-8): adopt only on full identity match, else quarantine. Session names encode <code>run_id/seat/attempt</code> (the existing <code>correlation_id</code> scheme).</li>
 <li><strong>AC-E5</strong> — Concurrency ceiling + per-pool quota lanes enforced <strong>at launch</strong> (existing <code>QuotaCoordinator</code>; <code>CLAUDE_CONFIG_DIR</code> multi-account lanes, #431).</li>
+<li><strong>AC-E6</strong> — <strong>Orphan cleanup (owner-directed 2026-07-17): no tmux-session graveyard.</strong> Three tiers: (1) <strong>normal path leaves zero residue</strong> — the supervisor kills the session immediately after the Observation is collected (collect ⇒ kill, same transaction); (2) <strong>sweep for the abnormal</strong> — a reaper verb (run at run-end and orchestrator session-start, the <code>registry_prune.py</code> precedent) inventories <code>tmux ls</code> against the job registry: sessions with a finalized sentinel are killed; quarantined/unknown sessions are listed owner-visibly and auto-killed past an age threshold ONLY when their worktree is clean (mirrors Claude Code&#x27;s own worktree-sweep only-if-clean rule); a session whose registry entry is live with a fresh heartbeat is NEVER swept; (3) <strong>companion residue</strong> — the same sweep applies the retention policy to engine worktrees (dirty ⇒ retained-for-diagnosis with retention limit + secret-redaction, per the Sol risk) and capture dirs (age-bounded). The AC-J status surface and AC-I4 orphan count expose the inventory so a leak is visible before it is a pile.</li>
 </ul>
 <h3>F. WF2/WF3 integration</h3>
 <ul>
@@ -208,7 +209,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <thead><tr><th>Item</th><th>ACs served</th></tr></thead>
 <tbody>
 <tr><td><strong>Seat capability manifest</strong>: per-seat tool grants, permission mode, worktree policy, budget (config, alongside #448&#x27;s seat table)</td><td>B1, B2, B4, C3</td></tr>
-<tr><td><strong>tmux supervisor module</strong> (<code>phase_executor/supervisor.py</code>): spawn command-as-pane-arg, sentinel wait, timeout kill, orphan reap, run-id session naming</td><td>E1–E4</td></tr>
+<tr><td><strong>tmux supervisor module</strong> (<code>phase_executor/supervisor.py</code>): spawn command-as-pane-arg, sentinel wait, timeout kill, run-id session naming, <strong>collect⇒kill + reaper sweep (sessions/worktrees/capture dirs, only-if-clean, owner-visible quarantine)</strong></td><td>E1–E4, <strong>E6</strong></td></tr>
 <tr><td><strong>Async dispatch API</strong>: engine launch/await split (or blocking <code>run_seat</code> wrapping tmux-wait — OQ-5 settles the shape)</td><td>E4</td></tr>
 <tr><td><strong>Worktree lifecycle</strong> for executor instances (native <code>--worktree</code> vs engine-managed — OQ-3)</td><td>B2</td></tr>
 <tr><td><strong>Guardrail live-verification</strong> harness: prove hooks fire inside <code>-p</code> children (red/green test, not prose) + a <code>--bare</code>-default drift-guard (F3a)</td><td>B3</td></tr>
@@ -321,7 +322,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>1. <strong>Epic:</strong> orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1). 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → <strong>status surface (J1–J3, needs registry+capture live)</strong> → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → <strong>baselines + alerts (K2/K3, needs I3 history + bench anchors)</strong> → #448 config/setup/diagram children ride alongside (alert thresholds join #446). 3. #450 (ultracode) re-evaluated after wiring — its &quot;gate-preserving fan-out&quot; may collapse into the executor&#x27;s parallel-seat capability.</p>
 
 </main>
-<footer>Last updated: 2026-07-17 18:38 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-17 18:44 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
