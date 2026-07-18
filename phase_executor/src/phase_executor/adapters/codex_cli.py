@@ -43,11 +43,27 @@ def build_command(model: str, cwd: str, *, effort: Optional[str] = "high") -> li
 # workspace-write boundary is /tmp-WIDE; these pin it to the worktree ONLY. approval_policy
 # pinned per spike §4/§6 (belt-and-suspenders vs a user config.toml on-request; the W5
 # canary #468 asserts the BEHAVIOR — composition validation alone never unlocks dispatch).
+# Characters that would break the hand-checked writable_roots JSON array OR let a
+# worktree leaf inject a SECOND writable root (8a T4, both reviewers: a path like
+# `a","/etc","` widened the boundary to /etc while the substring validator still passed).
+# json.dumps escapes them for the ARG, but a path carrying them is a red flag we refuse
+# outright — belt-and-suspenders before W3/W4 ever derive a worktree name from a branch ref.
+_UNSAFE_WORKTREE_CHARS = ('"', "'", "\\", "]", "[", ",", "\n", "\r", "\x00")
+_WRITABLE_ROOTS_KEY = "sandbox_workspace_write.writable_roots="
+
+
 def build_mutating_command(model: str, worktree: str, *, effort: Optional[str] = "high",
                            containment_root: str) -> list:
     import os as _os  # noqa: PLC0415
+    if not _os.path.isabs(worktree):
+        raise contract.CompositionError(
+            f"codex mutating launch: worktree must be an absolute path (got {worktree!r})")
     canon_wt = _os.path.realpath(worktree)
     canon_root = _os.path.realpath(containment_root)
+    if any(c in canon_wt for c in _UNSAFE_WORKTREE_CHARS):
+        raise contract.CompositionError(
+            f"codex mutating launch: worktree path {canon_wt!r} contains a character unsafe "
+            f"for the writable_roots array — refused (would risk a sandbox-boundary injection)")
     if canon_wt == canon_root or not canon_wt.startswith(canon_root + _os.sep):
         raise contract.CompositionError(
             f"codex mutating launch: worktree {worktree!r} fails containment under "
@@ -60,7 +76,8 @@ def build_mutating_command(model: str, worktree: str, *, effort: Optional[str] =
         "-s", "workspace-write",
         "-c", "sandbox_workspace_write.exclude_slash_tmp=true",
         "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-        "-c", f'sandbox_workspace_write.writable_roots=["{canon_wt}"]',
+        # json.dumps escapes the path so it cannot break out of the single-element array.
+        "-c", f"{_WRITABLE_ROOTS_KEY}{json.dumps([canon_wt])}",
         "-c", "approval_policy=never",
         "-C", canon_wt, "--skip-git-repo-check", "-",
     ]
@@ -71,20 +88,32 @@ def build_mutating_command(model: str, worktree: str, *, effort: Optional[str] =
 def validate_mutating_composition(cmd: list, canonical_worktree: str) -> None:
     """The compose-time refusal predicate (spike #452 report :153) — separately importable
     so the W5 canary (#468) re-asserts the same invariant at runtime. Fail-closed: any
-    missing override, or writable_roots not naming EXACTLY the canonical worktree, refuses
-    before spawn."""
+    missing override, or a writable_roots array that is not EXACTLY [canonical_worktree],
+    refuses before spawn. The writable_roots check PARSES the arg back (not a substring
+    match against a self-built literal — 8a T4: substring was tautological and let a
+    path-injected second root through)."""
     joined = " ".join(cmd)
-    required = (
-        "-s workspace-write",
-        "sandbox_workspace_write.exclude_slash_tmp=true",
-        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
-        f'sandbox_workspace_write.writable_roots=["{canonical_worktree}"]',
-    )
-    for lit in required:
+    for lit in ("-s workspace-write",
+                "sandbox_workspace_write.exclude_slash_tmp=true",
+                "sandbox_workspace_write.exclude_tmpdir_env_var=true"):
         if lit not in joined:
             raise contract.CompositionError(
                 f"codex mutating launch REFUSED: composition missing {lit!r} — a naive "
                 f"workspace-write boundary is /tmp-wide (spike #452)")
+    roots_arg = next((a for a in cmd if a.startswith(_WRITABLE_ROOTS_KEY)), None)
+    if roots_arg is None:
+        raise contract.CompositionError(
+            "codex mutating launch REFUSED: no sandbox_workspace_write.writable_roots override")
+    try:
+        roots = json.loads(roots_arg[len(_WRITABLE_ROOTS_KEY):])
+    except ValueError as exc:
+        raise contract.CompositionError(
+            f"codex mutating launch REFUSED: writable_roots is not valid JSON ({exc}) — "
+            f"refusing a malformed sandbox boundary") from exc
+    if roots != [canonical_worktree]:
+        raise contract.CompositionError(
+            f"codex mutating launch REFUSED: writable_roots {roots!r} is not exactly "
+            f"[{canonical_worktree!r}] — the boundary must name the worktree and nothing else")
 
 
 

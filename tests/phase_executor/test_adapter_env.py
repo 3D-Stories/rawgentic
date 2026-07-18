@@ -141,7 +141,8 @@ class TestCodexProfiles:
         assert "-c sandbox_workspace_write.exclude_tmpdir_env_var=true" in j
         import os as _os
         canon = _os.path.realpath(str(wt))
-        assert f'sandbox_workspace_write.writable_roots=["{canon}"]' in j
+        import json as _json
+        assert f"sandbox_workspace_write.writable_roots={_json.dumps([canon])}" in j
         assert "-c approval_policy=never" in j
         assert cmd[cmd.index("-C") + 1] == canon
 
@@ -161,6 +162,40 @@ class TestCodexProfiles:
         mutated = [a for a in cmd if drop not in a]
         with pytest.raises(contract.CompositionError):
             _cx.validate_mutating_composition(mutated, canon)
+
+    def test_worktree_with_injection_chars_refused(self, tmp_path):
+        # 8a T4 (both reviewers): a leaf name that could inject a second writable_roots
+        # entry must refuse at compose time — the validator no longer substring-matches
+        # a self-built literal.
+        # realpath does not require the path to exist, so a synthetic injecting leaf
+        # (a quote/bracket a real single dir COULD legally carry) is refused pre-spawn.
+        from phase_executor import contract
+        root = tmp_path / "root"; root.mkdir()
+        evil = str(root) + '/a"],x'
+        with pytest.raises(contract.CompositionError, match="unsafe"):
+            _cx.build_mutating_command("gpt-5.6-terra", evil, effort="high",
+                                       containment_root=str(root))
+
+    def test_validator_rejects_extra_writable_root(self, tmp_path):
+        # Even if a caller hand-injects a second root past build, the re-parsing validator
+        # refuses (structural, not substring).
+        from phase_executor import contract
+        import os as _os
+        root = tmp_path / "root"; wt = root / "wt"; wt.mkdir(parents=True)
+        canon = _os.path.realpath(str(wt))
+        cmd = _cx.build_mutating_command("gpt-5.6-terra", str(wt), effort="high",
+                                         containment_root=str(root))
+        i = next(k for k, a in enumerate(cmd)
+                 if a.startswith("sandbox_workspace_write.writable_roots="))
+        cmd[i] = 'sandbox_workspace_write.writable_roots=["%s","/etc"]' % canon
+        with pytest.raises(contract.CompositionError, match="not exactly"):
+            _cx.validate_mutating_composition(cmd, canon)
+
+    def test_relative_worktree_refused(self, tmp_path):
+        from phase_executor import contract
+        with pytest.raises(contract.CompositionError, match="absolute"):
+            _cx.build_mutating_command("gpt-5.6-terra", "rel/wt", effort="high",
+                                       containment_root=str(tmp_path))
 
     def test_worktree_escaping_root_refuses(self, tmp_path):
         from phase_executor import contract
