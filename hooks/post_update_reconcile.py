@@ -63,6 +63,14 @@ FEATURE_MANIFEST = [
      "nudge": "peer consult (WF13)", "since": "2.46.0"},
     {"key": "designArtifact", "policy": "needs-question",
      "nudge": "HTML design-artifact lifecycle", "since": "2.63.0"},
+    # #446: source "project_config" = the key lives in the PROJECT's .rawgentic.json, not
+    # the workspace entry. Consumed ONLY by the source-aware project_feature_gaps (with a
+    # parsed config passed in); reconcile_projects SKIPS these entirely (its needs-question
+    # loop reads the workspace entry, where this key never appears — un-skipped it would
+    # nudge every project on the version crossing, even configured ones).
+    {"key": "phaseExecutorTable", "policy": "needs-question",
+     "nudge": "phase-executor seat table (setup Step 2i)", "since": "3.55.0",
+     "source": "project_config"},
 ]
 
 
@@ -101,7 +109,7 @@ def _newly_crossed(manifest, last, current):
     return out
 
 
-def project_feature_gaps(project, manifest, current):
+def project_feature_gaps(project, manifest, current, project_config=None):
     """#234: answer-required (needs-question) features a project has NOT configured
     that EXIST at `current` (their `since` <= current). This is PER-PROJECT and
     independent of the reconcile marker — it surfaces a project left behind even when
@@ -109,7 +117,13 @@ def project_feature_gaps(project, manifest, current):
     `main()` deliberately does not. Returns [(key, nudge_label), ...] sorted by key.
 
     A feature with no/unparseable `since`, or an unparseable `current`, counts as
-    present (fail-open toward nudging — a bad version string must never silence it)."""
+    present (fail-open toward nudging — a bad version string must never silence it).
+
+    #446 source-awareness (PURE — the caller does the I/O): entries without `source`
+    check the workspace entry (`key in project`, byte-identical to before); entries with
+    `source == "project_config"` check the PARSED `.rawgentic.json` passed as
+    `project_config`. `project_config is None` means absent-or-uninspectable -> NO gap
+    for those entries (fail-open; the caller owns the uninspectable stderr warning)."""
     cur_t = _ver_tuple(current)
     out = []
     if not isinstance(project, dict):
@@ -118,12 +132,49 @@ def project_feature_gaps(project, manifest, current):
         if feat.get("policy") != "needs-question":
             continue
         key = feat.get("key")
-        if not key or key in project:  # present (any value) = already answered
+        if not key:
+            continue
+        if feat.get("source") == "project_config":
+            if project_config is None or not isinstance(project_config, dict):
+                continue  # fail-open: cannot confirm absence
+            if key in project_config:
+                continue  # present (any value) = answered
+        elif key in project:  # workspace-entry source (the default): present = answered
             continue
         s_t = _ver_tuple(feat.get("since"))
         if cur_t is None or s_t is None or s_t <= cur_t:
             out.append((key, feat.get("nudge", key)))
     return sorted(out)
+
+
+def _project_config_state(workspace_path, entry):
+    """(state, parsed_config) for an entry's `.rawgentic.json` (#446 — the I/O half the
+    pure gap function must not do). Three states (A5): 'ok' (parsed dict), 'absent'
+    (plain ENOENT — silent, the run-setup nudge owns it), 'uninspectable' (present but
+    unreadable/unparseable, a non-dict, or an entry path escaping the workspace root —
+    the caller emits ONE stable stderr warning so a regression is observable). Never
+    raises; never reuses _load_json (which collapses ENOENT and parse errors)."""
+    try:
+        root = Path(workspace_path).resolve().parent
+        rel = entry.get("path")
+        if not isinstance(rel, str) or not rel:
+            return "uninspectable", None
+        proj = (root / rel).resolve()
+        if proj != root and root not in proj.parents:
+            return "uninspectable", None  # traversal — never follow outside the workspace
+        cfg = proj / ".rawgentic.json"
+        try:
+            with open(cfg, encoding="utf-8") as f:
+                parsed = json.load(f)
+        except FileNotFoundError:
+            return "absent", None
+        except (OSError, ValueError):
+            return "uninspectable", None
+        if not isinstance(parsed, dict):
+            return "uninspectable", None
+        return "ok", parsed
+    except Exception:  # noqa: BLE001 — advisory pass: any surprise is uninspectable, never a crash
+        return "uninspectable", None
 
 
 def _sanitize_name(name):
@@ -164,7 +215,13 @@ def _run_staleness(args, current, manifest):
         p = next((x for x in projects
                   if isinstance(x, dict) and x.get("name") == args.staleness_project), None)
         if isinstance(p, dict):
-            gaps = project_feature_gaps(p, manifest, current)
+            state, pcfg = _project_config_state(args.workspace, p)
+            if state == "uninspectable":
+                print(f"post_update_reconcile: cannot inspect project config for "
+                      f"{args.staleness_project!r} ({p.get('path')!r}/.rawgentic.json) — "
+                      f"project_config staleness checks skipped", file=sys.stderr)
+            gaps = project_feature_gaps(p, manifest, current,
+                                        project_config=pcfg if state == "ok" else None)
             if gaps:
                 parts.append(_staleness_nudge(args.staleness_project, gaps, current))
         # explicit switch: always show, no once-per-version marker
@@ -180,7 +237,13 @@ def _run_staleness(args, current, manifest):
             if not isinstance(p, dict) or not p.get("active"):
                 continue
             name = p.get("name", "?")
-            gaps = project_feature_gaps(p, manifest, current)
+            state, pcfg = _project_config_state(args.workspace, p)
+            if state == "uninspectable":
+                print(f"post_update_reconcile: cannot inspect project config for "
+                      f"{name!r} ({p.get('path')!r}/.rawgentic.json) — "
+                      f"project_config staleness checks skipped", file=sys.stderr)
+            gaps = project_feature_gaps(p, manifest, current,
+                                        project_config=pcfg if state == "ok" else None)
             if not gaps:
                 continue
             marker = _staleness_marker_path(args.state_dir, name)
@@ -214,6 +277,11 @@ def reconcile_projects(projects, manifest):
         for feat in manifest:
             key = feat.get("key")
             if not key:
+                continue
+            if feat.get("source") == "project_config":
+                # #446 P2-G1: this key lives in .rawgentic.json, never the workspace entry —
+                # `key in p` is always False here, so an un-skipped entry would nudge EVERY
+                # project on its version crossing. The source-aware staleness pass owns it.
                 continue
             policy = feat.get("policy")
             present = key in p
