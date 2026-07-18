@@ -186,6 +186,43 @@ class EffortResolution:
                 "resolution": self.resolution, "capability_revision": self.capability_revision}
 
 
+_UNSAFE_WORKTREE_CHARS = ('"', "'", "\\", "]", "[", ",", "\n", "\r", "\x00")
+
+
+def canonical_contained_worktree(worktree, containment_root) -> str:
+    """#465: THE shared mutating-worktree boundary check (both adapters call it — claude
+    has no OS sandbox so cwd is its ONLY containment, codex adds Landlock). Fail-closed:
+    the worktree must be an absolute path, carry no character that could break a config
+    array, canonicalize to a path strictly UNDER the executor-approved containment_root,
+    and never equal the root itself. Returns the canonical worktree or raises."""
+    import os as _os  # noqa: PLC0415
+    if not isinstance(worktree, str) or not worktree:
+        raise CompositionError("mutating launch: worktree must be a non-empty path string")
+    if not containment_root:
+        raise CompositionError(
+            "mutating launch: containment_root is required (executor-approved root; a "
+            "mutating launch without it is the /tmp-wide hazard)")
+    if any(c in worktree for c in _UNSAFE_WORKTREE_CHARS):  # RAW string, before realpath (NUL would crash realpath)
+        raise CompositionError(
+            f"mutating launch: worktree path {worktree!r} carries an unsafe character — refused")
+    if not _os.path.isabs(worktree):
+        raise CompositionError(f"mutating launch: worktree must be absolute (got {worktree!r})")
+    canon_wt = _os.path.realpath(worktree)
+    canon_root = _os.path.realpath(containment_root)
+    if canon_root == _os.sep:
+        raise CompositionError(
+            "mutating launch: containment_root cannot be the filesystem root '/' — name a "
+            "real approved directory (a '/' root would refuse every worktree)")
+    if any(c in canon_wt for c in _UNSAFE_WORKTREE_CHARS):
+        raise CompositionError(
+            f"mutating launch: canonical worktree {canon_wt!r} carries an unsafe character — refused")
+    if canon_wt == canon_root or not canon_wt.startswith(canon_root + _os.sep):
+        raise CompositionError(
+            f"mutating launch: worktree {worktree!r} fails containment under "
+            f"{containment_root!r} (canonicalized {canon_wt!r} vs root {canon_root!r})")
+    return canon_wt
+
+
 class CompositionError(RuntimeError):
     """A launch composition/profile that must not spawn (#465 — fail-closed at compose time)."""
 
@@ -216,7 +253,13 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
     max_budget_usd (the enforceable cost bound — codex's bound is the enforced timeout);
     mutating is restricted to {claude, codex} (a zhipuai manifest with edit/bash refuses).
     The bash=>net closure is recorded in effective_grants (grants are capability
-    selection, NOT a sandbox — OS confinement is the security layer). TRUST BOUNDARY
+    SELECTION, never a sandbox). SECURITY-LAYER ASYMMETRY (Step-11 R2-F1, W7 BLOCKER):
+    the codex mutating path is OS-confined (Landlock workspace-write pinned to the
+    worktree); the CLAUDE mutating path has NO OS sandbox here — only a cwd pin +
+    path-containment refusal + a --max-budget-usd cap, so an absolute-path Edit/Write/Bash
+    is NOT filesystem-confined. W7 MUST NOT wire a mutating-CLAUDE dispatch until claude
+    gains a real FS sandbox (bwrap/landlock around run_subprocess) — a binding cross-child
+    constraint, fail-closed today because W2 dispatches no mutating profile. TRUST BOUNDARY
     (8a-B): the manifest carries no provider field — `engine` is CALLER-supplied and, on
     the wired path, comes from `_engine_for(lane)` (config-controlled, engine.py:52); the
     derivation trusts that caller, a manifest cannot self-attest its provider."""
@@ -228,6 +271,18 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
             f"profile_from_manifest: session_policy must be one of {sorted(_SESSION_POLICIES)} "
             f"(got {policy!r}; #464 made it explicit, never defaulted)")
     grants = tuple(manifest.get("tool_grants") or ())
+    # #465 Step-11 DF-2: grants are capability SELECTION — an empty or unknown grant set must
+    # never silently produce an unrestricted command (claude with no --allowedTools gets ALL
+    # tools). The schema already pins tool_grants to a non-empty enum array; this is the
+    # fail-closed backstop for a hand-built/malformed manifest reaching the derivation.
+    _valid = {"read", "edit", "bash", "net"}
+    if not grants:
+        raise ValueError("profile_from_manifest: tool_grants must be a non-empty subset of "
+                         f"{sorted(_valid)} (a seat manifest always grants at least 'read')")
+    unknown = set(grants) - _valid
+    if unknown:
+        raise ValueError(f"profile_from_manifest: unknown tool_grants {sorted(unknown)} "
+                         f"(valid: {sorted(_valid)})")
     effective = tuple(dict.fromkeys(grants + (("net",) if "bash" in grants and "net" not in grants else ())))
     mutating = "edit" in grants or "bash" in grants
     bounds = manifest.get("bounds") or {}

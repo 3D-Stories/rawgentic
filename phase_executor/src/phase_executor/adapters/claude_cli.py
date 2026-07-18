@@ -54,9 +54,12 @@ def build_command(model: str, *, effort: Optional[str] = None,
         if profile.effective_grants:
             tools = []
             for g in profile.effective_grants:
-                tools.extend(_GRANT_TOOLS.get(g, ()))
-            if tools:
-                cmd += ["--allowedTools", ",".join(tools)]
+                mapped = _GRANT_TOOLS.get(g)
+                if mapped is None:  # DF-2: a grant with no tool mapping must not silently vanish
+                    raise contract.CompositionError(
+                        f"claude launch: unknown grant {g!r} has no --allowedTools mapping")
+                tools.extend(mapped)
+            cmd += ["--allowedTools", ",".join(tools)]
         if profile.max_budget_usd is not None:
             cmd += ["--max-budget-usd", str(profile.max_budget_usd)]
     if effort:
@@ -118,8 +121,11 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     # has no OS sandbox here, so an ambient cwd must never receive Edit/Write/Bash effects.
     cwd = None
     if req.profile is not None and req.profile.mutating:
-        import os as _os  # noqa: PLC0415
-        cwd = _os.path.realpath(req.profile.worktree)
+        # #465 Step-11 DF-1: claude has NO OS sandbox, so cwd is the ONLY containment — a
+        # mutating claude launch MUST verify the worktree is contained under the
+        # executor-approved root (same boundary the codex adapter enforces), else Edit/Write
+        # could land in the canonical checkout. Shared helper, fail-closed.
+        cwd = contract.canonical_contained_worktree(req.profile.worktree, req.containment_root)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = time.monotonic()

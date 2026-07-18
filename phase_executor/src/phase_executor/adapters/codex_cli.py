@@ -43,31 +43,15 @@ def build_command(model: str, cwd: str, *, effort: Optional[str] = "high") -> li
 # workspace-write boundary is /tmp-WIDE; these pin it to the worktree ONLY. approval_policy
 # pinned per spike §4/§6 (belt-and-suspenders vs a user config.toml on-request; the W5
 # canary #468 asserts the BEHAVIOR — composition validation alone never unlocks dispatch).
-# Characters that would break the hand-checked writable_roots JSON array OR let a
-# worktree leaf inject a SECOND writable root (8a T4, both reviewers: a path like
-# `a","/etc","` widened the boundary to /etc while the substring validator still passed).
-# json.dumps escapes them for the ARG, but a path carrying them is a red flag we refuse
-# outright — belt-and-suspenders before W3/W4 ever derive a worktree name from a branch ref.
-_UNSAFE_WORKTREE_CHARS = ('"', "'", "\\", "]", "[", ",", "\n", "\r", "\x00")
+# Unsafe-char + containment refusal now lives in contract.canonical_contained_worktree
+# (shared with the claude adapter — one boundary home, #465 Step-11 DF-1). json.dumps still
+# escapes the writable_roots value as belt-and-suspenders.
 _WRITABLE_ROOTS_KEY = "sandbox_workspace_write.writable_roots="
 
 
 def build_mutating_command(model: str, worktree: str, *, effort: Optional[str] = "high",
                            containment_root: str) -> list:
-    import os as _os  # noqa: PLC0415
-    if not _os.path.isabs(worktree):
-        raise contract.CompositionError(
-            f"codex mutating launch: worktree must be an absolute path (got {worktree!r})")
-    canon_wt = _os.path.realpath(worktree)
-    canon_root = _os.path.realpath(containment_root)
-    if any(c in canon_wt for c in _UNSAFE_WORKTREE_CHARS):
-        raise contract.CompositionError(
-            f"codex mutating launch: worktree path {canon_wt!r} contains a character unsafe "
-            f"for the writable_roots array — refused (would risk a sandbox-boundary injection)")
-    if canon_wt == canon_root or not canon_wt.startswith(canon_root + _os.sep):
-        raise contract.CompositionError(
-            f"codex mutating launch: worktree {worktree!r} fails containment under "
-            f"{containment_root!r} (canonicalized: {canon_wt!r} vs root {canon_root!r})")
+    canon_wt = contract.canonical_contained_worktree(worktree, containment_root)
     cmd = ["codex", "exec", "--json", "-m", model]
     if effort:
         cmd += ["-c", f"model_reasoning_effort={effort}"]

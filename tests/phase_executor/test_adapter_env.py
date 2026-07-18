@@ -50,7 +50,7 @@ from phase_executor import contract as _c
 from phase_executor.adapters import claude_cli as _cl
 
 
-def _profile(policy="fresh", grants=(), budget=None, worktree=None, engine="claude"):
+def _profile(policy="fresh", grants=("read",), budget=None, worktree=None, engine="claude"):
     m = {"session_policy": policy, "tool_grants": list(grants), "effort": "high",
          "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 60}}
     if budget is not None:
@@ -88,9 +88,16 @@ class TestClaudeProfileComposition:
         j = cmd.index("--max-budget-usd")
         assert cmd[j + 1] == "5.0"
 
-    def test_no_grants_no_flags(self):
-        cmd = _cl.build_command("claude-sonnet-5", profile=_profile("fresh"))
+    def test_no_profile_no_flags(self):
+        # The byte-identical case is the DEFAULT profile (no manifest) — empty grants,
+        # so no --allowedTools, no budget. A derived read-only [read] profile DOES compose
+        # --allowedTools (grants are capability selection), covered by the grants cell.
+        cmd = _cl.build_command("claude-sonnet-5", profile=_c.LaunchProfile())
         assert "--allowedTools" not in cmd and "--max-budget-usd" not in cmd
+
+    def test_readonly_profile_composes_read_tools(self):
+        cmd = _cl.build_command("claude-sonnet-5", profile=_profile("fresh", grants=("read",)))
+        assert cmd[cmd.index("--allowedTools") + 1] == "Read,Grep,Glob"
 
     def test_mutating_grant_mismatch_refuses(self):
         # The only real inconsistency vector: effective_grants injected past init=False
@@ -236,3 +243,21 @@ class TestCodexProfiles:
         with pytest.raises(contract.CompositionError, match="mutating"):
             _cx.run(req, run_id="r", attempt_id="0-a", capture_root=tmp_path,
                     routing_config_digest="sha256:d")
+
+
+class TestClaudeMutatingContainment:
+    def test_mutating_run_requires_contained_worktree(self, tmp_path):
+        # #465 Step-11 DF-1: claude has no OS sandbox — a mutating profile whose worktree
+        # is NOT under containment_root (or containment_root absent) must refuse at run().
+        from phase_executor import contract
+        from phase_executor.adapters import claude_cli
+        from phase_executor.adapters.base import AdapterRequest
+        m = {"session_policy": "fresh", "tool_grants": ["edit"], "effort": "high",
+             "confinement": {}, "bounds": {"timeout_s": 60, "max_budget_usd": 5.0}}
+        wt = tmp_path / "root" / "wt"; wt.mkdir(parents=True)
+        profile = contract.profile_from_manifest(m, engine="claude", worktree=str(wt))
+        req = AdapterRequest(seat="build", requested_model="claude-sonnet-5", prompt="hi",
+                             profile=profile)  # containment_root ABSENT
+        with pytest.raises(contract.CompositionError, match="containment_root is required"):
+            claude_cli.run(req, run_id="r", attempt_id="0-a", capture_root=tmp_path,
+                           routing_config_digest="sha256:d")

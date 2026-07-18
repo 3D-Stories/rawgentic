@@ -16,10 +16,12 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
 
+**Status: IN PROGRESS** — 4 children merged (#464 #480 #445 #446), #465 (W2) building, #466–#474 pending. (The roadmap chip aggregates the merged sub-sections below; the epic itself is open until #474 closes it.)
+
 Wire WF2/WF3 to the `phase_executor` engine per the ratified architecture (the real #417).
 Doc of record: `docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md`.
 Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · #445 ✓ · #446 ✓ · **#465 (W2)** ← IN PROGRESS ·
-#465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) ·
+#466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) ·
 #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign
 (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.
 

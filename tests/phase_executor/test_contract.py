@@ -316,3 +316,52 @@ def test_infinite_budget_refused():
          "bounds": {"timeout_s": 60, "max_budget_usd": float("inf")}}
     with _pt.raises(ValueError, match="max_budget_usd"):
         contract.profile_from_manifest(m, engine="claude", worktree="/tmp/wt")
+
+
+def test_profile_from_manifest_rejects_empty_grants():
+    import pytest as _pt
+    from phase_executor import contract
+    m = {"session_policy": "fresh", "tool_grants": [], "effort": "high",
+         "confinement": {}, "bounds": {"timeout_s": 60}}
+    with _pt.raises(ValueError, match="non-empty"):
+        contract.profile_from_manifest(m, engine="claude")
+
+
+def test_profile_from_manifest_rejects_unknown_grant():
+    import pytest as _pt
+    from phase_executor import contract
+    m = {"session_policy": "fresh", "tool_grants": ["read", "sudo"], "effort": "high",
+         "confinement": {}, "bounds": {"timeout_s": 60}}
+    with _pt.raises(ValueError, match="unknown tool_grants"):
+        contract.profile_from_manifest(m, engine="claude")
+
+
+def test_canonical_contained_worktree_shared_boundary(tmp_path):
+    import pytest as _pt, os as _os
+    from phase_executor import contract
+    root = tmp_path / "root"; wt = root / "wt"; wt.mkdir(parents=True)
+    assert contract.canonical_contained_worktree(str(wt), str(root)) == _os.path.realpath(str(wt))
+    with _pt.raises(contract.CompositionError, match="containment_root is required"):
+        contract.canonical_contained_worktree(str(wt), None)
+    with _pt.raises(contract.CompositionError, match="containment"):
+        contract.canonical_contained_worktree(str(root), str(root))  # == root
+    with _pt.raises(contract.CompositionError, match="absolute"):
+        contract.canonical_contained_worktree("rel/wt", str(root))
+
+
+def test_worktree_nul_byte_refused_via_composition_error(tmp_path):
+    # #465 Step-11 R2-F3: a NUL in the worktree must refuse via CompositionError (the raw-
+    # string unsafe-char check runs BEFORE realpath, which would otherwise raise ValueError).
+    import pytest as _pt
+    from phase_executor import contract
+    with _pt.raises(contract.CompositionError, match="unsafe"):
+        contract.canonical_contained_worktree(str(tmp_path) + "/a\x00b", str(tmp_path))
+
+
+def test_containment_root_filesystem_root_rejected():
+    # #465 Step-11 R2-F4: containment_root == '/' would refuse every worktree — reject it
+    # with a clear message instead of a confusing "fails containment under '/'".
+    import pytest as _pt
+    from phase_executor import contract
+    with _pt.raises(contract.CompositionError, match="filesystem root"):
+        contract.canonical_contained_worktree("/tmp/anything/wt", "/")
