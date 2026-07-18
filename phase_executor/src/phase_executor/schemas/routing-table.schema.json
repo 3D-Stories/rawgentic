@@ -5,9 +5,16 @@
   "description": "Declarative seat table as data. Each seat has a primary target and a fallback chain; each target carries a model id + a lane object. Concurrency is per-pool. Invariants (never-Haiku, cross-model author) are project-supplied forbidden_combinations rows. The engine is policy-free; projects own their tables.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "pools", "seats"],
+  "required": [
+    "schema_version",
+    "pools",
+    "seats"
+  ],
   "properties": {
-    "schema_version": {"type": "string", "const": "1"},
+    "schema_version": {
+      "type": "string",
+      "const": "1"
+    },
     "pools": {
       "type": "object",
       "minProperties": 1,
@@ -15,16 +22,23 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["concurrency"],
+        "required": [
+          "concurrency"
+        ],
         "properties": {
-          "concurrency": {"type": "integer", "minimum": 1}
+          "concurrency": {
+            "type": "integer",
+            "minimum": 1
+          }
         }
       }
     },
     "seats": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": {"$ref": "#/$defs/seat"}
+      "additionalProperties": {
+        "$ref": "#/$defs/seat"
+      }
     },
     "forbidden_combinations": {
       "type": "array",
@@ -32,30 +46,57 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reason"],
+        "required": [
+          "reason"
+        ],
         "properties": {
-          "reason": {"type": "string", "minLength": 1},
-          "engine": {"type": "string"},
-          "transport": {"type": "string"},
-          "auth_mode": {"type": "string"},
-          "model_pattern": {"type": "string", "description": "Substring matched against a target model id (case-insensitive), e.g. 'haiku'."},
-          "rule": {"type": "string", "enum": ["cross_model_author"]}
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "engine": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
+          },
+          "auth_mode": {
+            "type": "string"
+          },
+          "model_pattern": {
+            "type": "string",
+            "description": "Substring matched against a target model id (case-insensitive), e.g. 'haiku'."
+          },
+          "rule": {
+            "type": "string",
+            "enum": [
+              "cross_model_author"
+            ]
+          }
         }
       }
     },
     "provenance": {
       "description": "Optional evidence/authorship stamp for the seat table (e.g. the benchmark that decided the seats). Free-form object or string; the engine does not interpret it.",
-      "type": ["object", "string"]
+      "type": [
+        "object",
+        "string"
+      ]
     },
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Project-declared enforcement policy (#464). Optional at the schema level (programmatic legacy tables may omit it); the shipped table declares it. enforced_roles names the roles the loader treats as enforced — the engine evaluator registry (enforce.ENFORCEABLE_ROLES) is the ceiling; projects may narrow, never widen.",
-      "required": ["enforced_roles"],
+      "description": "Project-declared enforcement policy (#464). Optional at the schema level (programmatic legacy tables may omit it); the shipped table declares it. enforced_roles names the roles the loader treats as enforced \u2014 the engine evaluator registry (enforce.ENFORCEABLE_ROLES) is the ceiling; projects may narrow, never widen.",
+      "required": [
+        "enforced_roles"
+      ],
       "properties": {
         "enforced_roles": {
           "type": "array",
-          "items": {"type": "string", "minLength": 1},
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
           "uniqueItems": true,
           "minItems": 1
         }
@@ -67,81 +108,191 @@
       "type": "object",
       "additionalProperties": false,
       "description": "Per-seat capability manifest (#464). Declarative governance for the seat's dispatch; W2 (#465) gives the declaration operational meaning. session_policy is EXPLICIT (never defaulted); resume is legal only with an opt-in reason.",
-      "required": ["session_policy", "tool_grants", "effort", "confinement", "bounds"],
+      "required": [
+        "session_policy",
+        "tool_grants",
+        "effort",
+        "confinement",
+        "bounds"
+      ],
       "properties": {
-        "session_policy": {"enum": ["fresh", "resume"]},
+        "session_policy": {
+          "enum": [
+            "fresh",
+            "resume"
+          ]
+        },
         "tool_grants": {
           "type": "array",
-          "items": {"enum": ["read", "edit", "bash", "net"]},
+          "items": {
+            "enum": [
+              "read",
+              "edit",
+              "bash",
+              "net"
+            ]
+          },
           "uniqueItems": true,
           "minItems": 1
         },
-        "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
+        "effort": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
         "confinement": {
           "type": "object",
           "minProperties": 1,
           "description": "Per-provider confinement declaration; keys are provider names and must cover every provider in the seat's primary+chain lanes (loader semantic pass).",
-          "additionalProperties": {"type": "string", "minLength": 1}
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
         },
         "bounds": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["timeout_s"],
+          "required": [
+            "timeout_s"
+          ],
           "properties": {
-            "timeout_s": {"type": "integer", "minimum": 1}
+            "timeout_s": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_budget_usd": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "#465: enforceable dollar cap for mutating CLAUDE launches (--max-budget-usd). Optional; REQUIRED by profile_from_manifest before a mutating claude profile can derive. Positive by schema so a zero/negative bound can never masquerade as a cap."
+            }
           }
         },
         "resume_opt_in": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["reason"],
+          "required": [
+            "reason"
+          ],
           "properties": {
-            "reason": {"type": "string", "minLength": 1}
+            "reason": {
+              "type": "string",
+              "minLength": 1
+            }
           }
         }
       },
       "if": {
-        "required": ["session_policy"],
-        "properties": {"session_policy": {"const": "resume"}}
+        "required": [
+          "session_policy"
+        ],
+        "properties": {
+          "session_policy": {
+            "const": "resume"
+          }
+        }
       },
-      "then": {"required": ["resume_opt_in"]}
+      "then": {
+        "required": [
+          "resume_opt_in"
+        ]
+      }
     },
     "lane": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "transport", "auth_mode", "pool"],
+      "required": [
+        "provider",
+        "transport",
+        "auth_mode",
+        "pool"
+      ],
       "properties": {
-        "provider": {"type": "string", "minLength": 1},
-        "transport": {"type": "string", "minLength": 1, "description": "e.g. native | ccr"},
-        "auth_mode": {"type": "string", "minLength": 1, "description": "e.g. subscription_oauth | api_key"},
-        "credential_ref": {"type": ["string", "null"], "description": "Names a config dir / env key (rawgentic: e.g. CLAUDE_CONFIG_DIR value). Never a secret value."},
-        "pool": {"type": "string", "minLength": 1, "description": "Concurrency pool key; must exist in top-level `pools`."},
-        "participation_mode": {"type": "string"}
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "type": "string",
+          "minLength": 1,
+          "description": "e.g. native | ccr"
+        },
+        "auth_mode": {
+          "type": "string",
+          "minLength": 1,
+          "description": "e.g. subscription_oauth | api_key"
+        },
+        "credential_ref": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Names a config dir / env key (rawgentic: e.g. CLAUDE_CONFIG_DIR value). Never a secret value."
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Concurrency pool key; must exist in top-level `pools`."
+        },
+        "participation_mode": {
+          "type": "string"
+        }
       }
     },
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["model", "lane"],
+      "required": [
+        "model",
+        "lane"
+      ],
       "properties": {
-        "model": {"type": "string", "minLength": 1},
-        "lane": {"$ref": "#/$defs/lane"}
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lane": {
+          "$ref": "#/$defs/lane"
+        }
       }
     },
     "seat": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["primary", "chain", "manifest"],
+      "required": [
+        "primary",
+        "chain",
+        "manifest"
+      ],
       "properties": {
-        "primary": {"$ref": "#/$defs/target"},
+        "primary": {
+          "$ref": "#/$defs/target"
+        },
         "chain": {
           "type": "array",
-          "items": {"$ref": "#/$defs/target"},
+          "items": {
+            "$ref": "#/$defs/target"
+          },
           "description": "Fallback targets in order. Engine skips chain-ineligible entries (chain-aware skip), never blind next-entry."
         },
-        "manifest": {"$ref": "#/$defs/manifest"},
-        "floor": {"type": ["number", "null"], "description": "Optional quality floor for this seat."},
-        "role": {"type": "string", "minLength": 1, "description": "Optional enforcement role, e.g. review | build. Routing enforcement (enforce.check_pre) keys its per-role requirements (review => author_provider required; build => gate required) on THIS field, not the seat's name — so a renamed seat still enforces and the vocabulary is portable. A seat with no role carries no review/build requirement; an empty-string role is schema-illegal (minLength 1)."}
+        "manifest": {
+          "$ref": "#/$defs/manifest"
+        },
+        "floor": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "Optional quality floor for this seat."
+        },
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional enforcement role, e.g. review | build. Routing enforcement (enforce.check_pre) keys its per-role requirements (review => author_provider required; build => gate required) on THIS field, not the seat's name \u2014 so a renamed seat still enforces and the vocabulary is portable. A seat with no role carries no review/build requirement; an empty-string role is schema-illegal (minLength 1)."
+        }
       }
     }
   }

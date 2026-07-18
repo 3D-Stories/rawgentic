@@ -274,3 +274,45 @@ class TestLaunchProfile:
         req = AdapterRequest(seat="ship", requested_model="claude-sonnet-5", prompt="hi")
         assert req.profile.session_policy == "fresh" and req.profile.mutating is False
         assert req.containment_root is None
+
+
+def test_manifest_schema_accepts_max_budget_usd():
+    """#465 8a-A1: the field profile_from_manifest reads must be schema-SPECIFIABLE
+    (bounds was additionalProperties:false with only timeout_s — the budget path was
+    dead against any schema-valid manifest); positivity enforced at the schema layer."""
+    import copy, json as _json, pathlib
+    from phase_executor import contract, routing
+    table = _json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+    t = copy.deepcopy(table)
+    t["seats"]["build"]["manifest"]["bounds"]["max_budget_usd"] = 25.0
+    contract.validate_routing_table(t)  # accepts
+    t["seats"]["build"]["manifest"]["bounds"]["max_budget_usd"] = 0
+    import pytest as _pt, jsonschema
+    with _pt.raises(jsonschema.ValidationError):
+        contract.validate_routing_table(t)  # zero refused at schema layer
+
+
+def test_mutating_claude_manifest_round_trips_schema_to_profile():
+    """#465 8a-B1: the positive mutating-claude derivation proven on a manifest that
+    ACTUALLY round-trips validate_routing_table (guards against the schema edit being
+    forgotten while raw-dict tests stay green)."""
+    import copy, json as _json
+    from phase_executor import contract, routing
+    table = _json.loads(routing.default_table_path().read_text(encoding="utf-8"))
+    t = copy.deepcopy(table)
+    t["seats"]["build"]["manifest"]["bounds"]["max_budget_usd"] = 25.0
+    contract.validate_routing_table(t)
+    p = contract.profile_from_manifest(t["seats"]["build"]["manifest"],
+                                       engine="claude", worktree="/tmp/wt")
+    assert p.mutating is True and p.max_budget_usd == 25.0
+
+
+def test_infinite_budget_refused():
+    """#465 8a-B2: inf satisfies `> 0` but is no enforceable ceiling."""
+    import pytest as _pt
+    from phase_executor import contract
+    m = {"session_policy": "fresh", "tool_grants": ["edit"], "effort": "high",
+         "confinement": {"anthropic": "hooks"},
+         "bounds": {"timeout_s": 60, "max_budget_usd": float("inf")}}
+    with _pt.raises(ValueError, match="max_budget_usd"):
+        contract.profile_from_manifest(m, engine="claude", worktree="/tmp/wt")

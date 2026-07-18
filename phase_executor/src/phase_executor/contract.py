@@ -216,7 +216,10 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
     max_budget_usd (the enforceable cost bound — codex's bound is the enforced timeout);
     mutating is restricted to {claude, codex} (a zhipuai manifest with edit/bash refuses).
     The bash=>net closure is recorded in effective_grants (grants are capability
-    selection, NOT a sandbox — OS confinement is the security layer)."""
+    selection, NOT a sandbox — OS confinement is the security layer). TRUST BOUNDARY
+    (8a-B): the manifest carries no provider field — `engine` is CALLER-supplied and, on
+    the wired path, comes from `_engine_for(lane)` (config-controlled, engine.py:52); the
+    derivation trusts that caller, a manifest cannot self-attest its provider."""
     if engine not in _EFFORT_ENGINES:
         raise ValueError(f"profile_from_manifest: unknown engine {engine!r} (valid: {sorted(_EFFORT_ENGINES)})")
     policy = manifest.get("session_policy")
@@ -236,7 +239,9 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
                 f"(mutating is restricted to {sorted(_MUTATING_ENGINES)}; zhipuai stays one-shot)")
         if not worktree:
             raise ValueError("profile_from_manifest: a mutating profile REQUIRES a worktree")
-        if engine == "claude" and not (isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0):
+        import math  # noqa: PLC0415
+        if engine == "claude" and not (isinstance(budget, (int, float)) and not isinstance(budget, bool)
+                                       and math.isfinite(budget) and budget > 0):
             raise ValueError(
                 "profile_from_manifest: a mutating CLAUDE profile REQUIRES a positive "
                 "bounds.max_budget_usd (the enforceable cost bound)")
