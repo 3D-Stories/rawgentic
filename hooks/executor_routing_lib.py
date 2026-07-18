@@ -408,26 +408,29 @@ def _do_apply(args) -> int:
                 "apply-table: --expected-candidate-digest is forbidden with --validate-only "
                 "(validate-only is what PRINTS the candidate digest)")
         repo_root = resolve_repo_root(args.workspace, args.project)
-        # Dest normalization + containment FIRST — both modes reject identically (P2-A4r).
+        # Dest CANONICAL containment FIRST — both modes reject identically (P2-A4r).
+        # resolve() (non-strict — the fresh-create leaf may not exist yet) canonicalizes a
+        # symlinked PARENT, so an in-repo symlink whose target escapes the root is refused —
+        # the S4 discipline, mirroring the read-side resolve_table check (8a-B1: a lexical
+        # normpath here was probe-bypassed via a symlinked parent dir).
         root = repo_root.resolve()
-        dest = repo_root / args.dest
-        dest_norm = os.path.normpath(str(dest))
-        if not (dest_norm == str(root) or Path(dest_norm).is_relative_to(root)):
+        dest = (repo_root / args.dest).resolve()
+        if dest != root and not dest.is_relative_to(root):
             raise MalformedConfig(
                 f"apply-table: --dest {args.dest!r} resolves outside the project root {root} — refused")
-        dest = Path(dest_norm)
         try:
             patch = json.loads(Path(args.patch_json).read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise MalformedConfig(f"apply-table: cannot read patch {args.patch_json!r}: {exc}") from exc
         # Base: the RESOLVED current table (A3) or the package default under --reset-to-default.
+        # rt_current is ALWAYS resolved: the re-seed dest==pointer guard needs it even when
+        # the PATCH BASE is the package table (8a-A note: without this, resetting an existing
+        # override could never materialize — base_rt None made the guard refuse every re-seed).
+        rt_current = resolve_table(repo_root, pe.routing)
         if args.reset_to_default:
-            base_rt = None
-            base_path = pe.routing.default_table_path()
-            base_snap = pe.routing.snapshot_from_file(base_path)
+            base_snap = pe.routing.snapshot_from_file(pe.routing.default_table_path())
         else:
-            base_rt = resolve_table(repo_root, pe.routing)
-            base_snap = base_rt.snapshot
+            base_snap = rt_current.snapshot
         if args.expected_digest != base_snap.config_digest:
             raise MalformedConfig(
                 f"apply-table: base table changed since shown — --expected-digest "
@@ -469,7 +472,7 @@ def _do_apply(args) -> int:
             # Re-seed: only the file the CURRENT pointer names may be replaced (P3-G4), and
             # only while its content still matches the shown base digest (A1; base_rt.path is
             # the resolved override — for a re-seed the base guard above already proved it).
-            if base_rt is None or base_rt.source != "project_file" or dest.resolve() != base_rt.path:
+            if rt_current.source != "project_file" or dest.resolve() != rt_current.path:
                 raise MalformedConfig(
                     f"apply-table: --dest {args.dest!r} is not the current phaseExecutorTable file — "
                     f"refusing to overwrite (re-seed may only replace the pointed-to table)")
