@@ -1,7 +1,7 @@
 # Orchestrator/Executor architecture — acceptance criteria + gap analysis
 
 **Date:** 2026-07-17
-**Status:** **RATIFIED** (owner, 2026-07-17) — consulted (WF13) + adversarially reviewed (WF5) by GPT Sol AND GLM 5.2, all 16 findings folded (§5c); then owner-ratified: D-1…D-8 approved, U-3/U-4/U-5 confirmed. D-4 and U-2 get conclusive answers via probe issues **#452** (codex containment) and **#453** (--tmux × -p). This document is now the target architecture the wiring epic is written against. **Spike verdicts folded in (2026-07-18, issues #452–#456, PRs #458–#462):** D-4 conditional pass (§6b note), U-2 resolved-negative (§6), U-5 resolved (§6), F3/F3a verified live + F3b revised (§4), F10 corrected + F11 annotated (§4), OQ-2 sharpened incl. the lane CRITICAL, OQ-7 spike condition discharged (§5b).
+**Status:** **RATIFIED** (owner, 2026-07-17) — consulted (WF13) + adversarially reviewed (WF5) by GPT Sol AND GLM 5.2, all 16 findings folded (§5c); then owner-ratified: D-1…D-8 approved, U-3/U-4/U-5 confirmed. D-4 and U-2 get conclusive answers via probe issues **#452** (codex containment) and **#453** (--tmux × -p). This document is now the target architecture the wiring epic is written against. **Spike verdicts folded in (2026-07-18, issues #452–#456, PRs #458–#462):** D-4 conditional pass (§6b note), U-2 resolved-negative (§6), U-5 resolved (§6), F3/F3a verified live + F3b revised (§4), F10 corrected + F11 annotated (§4), OQ-2 sharpened incl. the lane CRITICAL, OQ-7 spike condition discharged (§5b). **EXECUTION STATE (2026-07-18): wiring epic #475 FILED** — children #464–#474 in dependency order + #449 re-scoped as W10, #445/#446/#447 absorbed, #448 closed superseded; owner decisions Q1–Q6 recorded (#457 comments) and baked into child ACs; **#434 decided (b) and closed** (schema_version bumps on breaking-for-old-copies changes — v2 ships with W6 #469); adversarial-review xhigh effort fix shipped v3.51.1 (#463). This document is now in execution.
 **Author:** Claude (Fable 5), session 6d7297b7
 **Supersedes:** `2026-07-17-wf2-wf3-executor-seat-placement.md` (built on a wrong premise — see §3 "throwaway")
 **Grounds:** all owner prompts this session, epic #422 artifacts, `phase_executor/` code, live CLI probes, external research (citations inline)
@@ -263,15 +263,45 @@ Reports: `docs/reviews/2026-07-17-orchestrator-executor-acceptance-criter-2026-0
 | **D-2** | ALL model dispatch through executor — including WF2 Step 2 utility fan-out (retires Agent-tool there too) | Adopt (Sol's rule; matches your P5 "everything") | §5b U-3 |
 | **D-3** | Migration: run-level architecture version — a run is never mixed; staging happens across runs; bounded legacy window | Adopt (synthesis of Sol atomic × GLM staged) | §5b OQ-1 |
 | **D-4** | Codex mutating seats: unsupported until containment spike + canary pass (claude-only mutation until then) — **spike #452: CONDITIONAL PASS, resolution note below** | Adopt (gpt #4 + glm #6 — codex has no claude-hook layer) | §5c |
-| **D-5** | Observation `work_product` schema extension rides the #434 versioning decision (which is already owner-gated) | Decide #434 first or together | AC-D4 |
+| **D-5** | Observation `work_product` schema extension rides the #434 versioning decision (which is already owner-gated) — **RESOLVED 2026-07-18: #434 decided (b)** (schema_version bumps on breaking-for-old-copies changes; v1 frozen; consumers validate by declared version) and closed; `work_product` + AC-I1 fields ship as `schema_version: "2"` with W6 (#469); the #434 role fail-closed fix rides W1 (#464) | Decide #434 first or together | AC-D4 |
 | **D-6** | Interim seat table (review=fable etc.) stays authoritative until #449 live data lands | Confirm (assumption U-4) | §6 |
-| **D-7** | Sequencing: new epic for the wiring; #449 re-scoped to bench the wired path AFTER it exists; #448 children ride alongside | Confirm §7 order | §7 |
+| **D-7** | Sequencing: new epic for the wiring; #449 re-scoped to bench the wired path AFTER it exists; #448 children ride alongside — **SATISFIED 2026-07-18: epic #475 filed** (spike verdicts first, per this decision); #449 retitled as W10; #448 closed superseded | Confirm §7 order | §7 |
 | **D-8** | Review seats: `session_policy: fresh` default (cross-review context via fenced dispositions-carry, not session memory); resume stays opt-in per seat | Adopt fresh default + one #449 A/B cell to settle by data | OQ-10, AC-B1 |
 
 **D-4 spike result (#452, PR #458 — 2026-07-18): CONDITIONAL PASS.** `codex exec -s workspace-write` runs headless on this host with no approval hang and IS OS-enforced — Landlock (filesystem) + seccomp (network) via `codex-linux-sandbox`, NOT bwrap (the `docs/codex-reliability.md` §3 userns/AppArmor issue does not apply). **But the default sandbox is NOT worktree-confined:** default writable roots are `{workspace/cwd} ∪ {all of /tmp} ∪ {$TMPDIR}` — a mutating child in a `/tmp`-resident engine worktree wrote into the sibling worktree and the canonical checkout (live-verified; `$HOME` blocked). Worktree-only confinement was live-verified ONLY with three explicit overrides: `sandbox_workspace_write.exclude_slash_tmp=true`, `sandbox_workspace_write.exclude_tmpdir_env_var=true`, `sandbox_workspace_write.writable_roots=[<worktree>]`. Net: codex mutating seats stay claude-only until (a) the adapter launch composition pins those three overrides for every mutating seat (or worktrees relocate outside `/tmp`/`$TMPDIR`), AND (b) the AC-B3 containment canary (spike report §5: positive control + an out-of-worktree negative-control write that MUST fail) is implemented and gates each launch fail-closed. The spike is satisfied; the D-4 gate now rests on canary implementation, not further probing.
+
+## 6c. Owner decisions 2026-07-18 (post-spike, pre-epic — recorded on #457)
+
+| Q | Decision | Lands in |
+|---|---|---|
+| Q1 | GO — wiring epic filed after decomposition approval | epic #475 |
+| Q2 | BOTH — codex confinement = 3 `sandbox_workspace_write.*` overrides pinned per mutating launch AND engine worktrees relocated outside `/tmp`/`$TMPDIR` | W2 #465 + W3 #466, proven per launch by W5 #468 |
+| Q3 | SPLIT — #431 owns lane provisioning; the canary child owns the fail-closed per-lane `init.plugins[]` assertion | W5 #468 |
+| Q4 | FILE+FIX NOW — sysop secret-scan worktree `.git`-file bug | shipped: sysop#24 / sysop#25 MERGED; fix live host-wide (canonical checkout updated + live-verified) |
+| Q5 | Hooks + canary = the load-bearing control (F3b: grants don't gate on auto-mode hosts); add the un-granted-mutating-tool-under-non-auto-profile cell | W5 #468 |
+| Q6 | SIGKILL residue proxy accepted for design; ONE controlled usage-limit probe | W9 #472 (timed near a pool reset) |
+| #434 | Option (b) — `schema_version` bumps when a change breaks older vendored copies; v1 frozen | W6 #469 (v2 + normative policy text); role fail-closed part in W1 #464 |
 
 ## 7. Sequencing sketch (post-ratification)
 
 1. **Epic:** orchestrator/executor wiring (the real #417, resurrected as its own epic — references this doc + the accountability trace in the superseded doc §1).
 2. Children (dependency order): capability manifest + WIRED_SEATS/build-audit (D3) → agentic adapter profiles (B1/B4) → tmux supervisor + async dispatch (E1–E5) → worktree lifecycle (B2) → guardrail live-verification (B3) → Observation work-product + telemetry extension (D4/I1, after #434 decision) → WF2/WF3 skill rewiring (F1/F2) → **status surface (J1–J3, needs registry+capture live)** → proving run (F3, exercises the status surface too) → #449 live bench on the wired path (G1) → **baselines + alerts (K2/K3, needs I3 history + bench anchors)** → #448 config/setup/diagram children ride alongside (alert thresholds join #446).
-3. #450 (ultracode) re-evaluated after wiring — its "gate-preserving fan-out" may collapse into the executor's parallel-seat capability.
+3. **Realized 2026-07-18 as epic #475.** The filed children, dependency order (deps live in each child's body for the epic driver; epic checkboxes = queue):
+
+| Issue | W | Title | Depends on |
+|---|---|---|---|
+| #464 | W1 | capability manifest + WIRED_SEATS full set + build-audit path (absorbs #434 part 2: unrecognized `role` fail-closed in `check_pre`) | — |
+| #465 | W2 | agentic adapter profiles — conditional `--no-session-persistence`, codex sandbox-override pinning (Q2), effort gating | #464 |
+| #466 | W3 | engine-managed worktree lifecycle outside `/tmp` + orchestrator-side promotion (Q2) | #464 |
+| #467 | W4 | tmux supervisor, async dispatch, durable job registry, orphan reaper | #464 |
+| #468 | W5 | fail-closed guardrail canary + `--bare` drift-guard (lane assertion per Q3; Q5 non-auto mutating cell) | #465 |
+| #469 | W6 | Observation `work_product` + telemetry I1–I3, `schema_version: "2"` per #434(b) | #434 (decided + closed) |
+| #470 | W7 | WF2/WF3 skill rewiring — the real #417 (**diagram REV expected**) | #465, #467, #468 |
+| #471 | W8 | live run status surface | #467, #469 |
+| #472 | W9 | proving run — real WF2, codex mutating cell, Q6 controlled quota probe | #470, #468, #466 |
+| #449 | W10 | driver-bench on the wired path + `session_policy` fresh/resume A/B (re-scoped, retitled) | #472 |
+| #473 | W11 | baselines + alerts from telemetry history + bench anchors | #469, #449 |
+| #474 | W12 | migration flip + legacy retirement — **its PR closes the epic** | #472, #449 |
+
+   Absorbed from closed epic #448, riding alongside: #445 (config seat table, aligns W1) · #446 (setup integration + alert thresholds, joins W11) · #447 (diagram child, coordinates with W7's REV).
+4. #450 (ultracode) re-evaluated after wiring — its "gate-preserving fan-out" may collapse into the executor's parallel-seat capability.
