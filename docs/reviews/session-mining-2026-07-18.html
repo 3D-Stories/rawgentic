@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF17 session-mining — 2026-07-18</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-17 23:25 MDT</div>
+<h1>WF17 session-mining — 2026-07-18</h1>
+
+</header>
+<main>
+<h1>WF17 session-mining — 2026-07-18</h1>
+<p><strong>Run:</strong> session 11d19ee3, plugin v3.51.1, index refreshed this run (203 files indexed, 3760 unchanged, 1535 vanished — 30-day retention churn; 7872 messages added; corpus now ~5300 files / ~91k messages). Detect: 1058 signals across 220 patterns, 19 queue events appended. Propose: <strong>2 proposed, 0 borderline, 0 suppressed, 0 pending-WF1.</strong></p>
+<h2>Coverage honesty</h2>
+<p>v1 does not inspect raw <code>tool_use</code>/<code>tool_result</code> payloads and therefore CANNOT conclude that command sequences or tool errors are absent — the detectors see assistant/user text only. Neither candidate below hit its row limit (<code>limit_hit: false</code> on both), so their recurrence counts are complete over the indexed text, not lower bounds. The 1535 vanished files are sessions deleted by Claude Code&#x27;s 30-day retention — patterns that lived only in those sessions are unmineable now.</p>
+<h2>Proposed candidates</h2>
+<h3>1. <code>same error</code> — friction detector, recurrence 3 (key 267c4b3b…)</h3>
+<p>Coverage: 4 rows / limit 500, limit not hit.</p>
+<p>Miner assessment: <strong>false positive — recommend decline.</strong> The three distinct sessions match the generic bigram &quot;same error&quot; inside unrelated prose, not a recurring friction about one actual error: (a) a classifier-outage status line (&quot;Still down. Same error, config-derive still blocked by the auto-classifier outage&quot;), (b) a code-review note about error-message hygiene (&quot;…terser than <code>provision()</code>&#x27;s … for the same error code&quot;), (c) a review comment (&quot;The test repeats the same error (lines 7-8)&quot;). A fourth quote does not contain the phrase at all (index-snippet adjacency). No shared root cause, no automatable workflow.</p>
+<p>Evidence (verbatim, redaction-reviewed — no secret values present):</p>
+<ul>
+<li><code>e6117a98-737a-4d47-8871-93c40c8a905a</code>: &quot;Still down. Same error, config-derive still blocked by</li>
+</ul>
+<p>  the auto-classifier outage. Options to move now (both bypass the down classifier)…&quot;</p>
+<ul>
+<li><code>0640df90-a7d3-4a0e-91b4-c7103870324f</code>: &quot;…<code>decommission()</code> BAD_NAME message (line 215) is terser</li>
+</ul>
+<p>  than <code>provision()</code>&#x27;s (line 125) — minor error-message-hygiene inconsistency for the same error   code…&quot;</p>
+<ul>
+<li><code>a6ad888c-180d-4350-bb18-d34ab722f68d</code>: &quot;…The test repeats the same error (lines 7-8). This is a</li>
+</ul>
+<p>  NEW comment introduced by this PR.&quot;</p>
+<h3>2. <code>traceback most recent call</code> — error_proxy detector, recurrence 3 (key 5ebf954c…)</h3>
+<p>Coverage: 3 rows / limit 500, limit not hit.</p>
+<p>Miner assessment: <strong>false positive — recommend decline.</strong> None of the three quotes is an actual recurring traceback: two are index-snippets of review verdict prose with no visible traceback content, and the third is <strong>self-referential</strong> — a session discussing THIS detector&#x27;s own redaction rule (&quot;the friction/error detectors specifically mine phrases like … &#x27;traceback most recent call&#x27;&quot;). The detector matched documentation of itself.</p>
+<p>Evidence (verbatim, redaction-reviewed):</p>
+<ul>
+<li><code>ef6d060f-00c7-402c-b03c-c1f2ef8f4202</code>: spec-compliance review prose (snippet adjacency; no</li>
+</ul>
+<p>  traceback text in the quote).</p>
+<ul>
+<li><code>b3994fee-bf43-4b30-bad8-56f34e3bf454</code>: slopslap crash-analysis verdict prose (snippet adjacency).</li>
+<li><code>01b89659-ae14-4db1-9bac-2c648921676e</code>: &quot;…the friction/error detectors specifically mine phrases</li>
+</ul>
+<p>  like &#x27;no such file or directory&#x27; and &#x27;traceback most recent call&#x27; — whose actionable evidence is   exactly the path/command/traceback. This rule masks that content…&quot;</p>
+<h2>Borderline matches</h2>
+<p>None.</p>
+<h2>Pending-WF1 accepted candidates (prior runs)</h2>
+<p>None.</p>
+<h2>Dispositions this run</h2>
+<p>Recorded at the human gate; see the queue (<code>claude_docs/.mining/candidates.jsonl</code>) for the authoritative record.</p>
+<h2>Detector-quality observation (for the WF17 backlog, not actioned here)</h2>
+<p>Both proposals this run are generic-phrase matches inside REVIEW PROSE — sessions in this workspace quote error phrases constantly while reviewing code that handles errors. A future detector refinement (report-only note): weight down matches whose surrounding text is review/verdict prose, and exclude self-referential matches originating from session-mining&#x27;s own design/test sessions.</p>
+
+</main>
+<footer>Last updated: 2026-07-17 23:25 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
