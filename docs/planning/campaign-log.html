@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rawgentic modernization — campaign log</title>
+<title>Rawgentic Campaign Log</title>
 <style>
 :root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
 --line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
@@ -62,8 +62,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 06:02 MDT</div>
-<h1>Rawgentic modernization — campaign log</h1>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 09:41 MDT</div>
+<h1>Rawgentic Campaign Log</h1>
 
 </header>
 <main>
@@ -71,7 +71,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
-<section class="mstone"><h3>Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run) <span class="chip c-plan">—</span></h3><p>Wire WF2/WF3 to the <code>phase_executor</code> engine per the ratified architecture (the real #417). Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code>. Queue (topo, D-1 pins + D-2 insertion): <strong>#464 (W1)</strong> ← this slot · #480 · #445 · #446 · #465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) · #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.</p>
+<section class="mstone"><h3>Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run) <span class="chip c-conf">COMPLETE</span></h3><p>Wire WF2/WF3 to the <code>phase_executor</code> engine per the ratified architecture (the real #417). Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code>. Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · <strong>#445</strong> ← this slot · #446 · #465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) · #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.</p>
 <h3>#464 — capability manifest + WIRED_SEATS full set + attested build-audit path (W1) · v3.52.0</h3>
 <p>Every routing-table seat carries a required <code>manifest</code> (<code>session_policy</code> fresh ×7 per D-8, <code>tool_grants</code>, normalized <code>effort</code>, per-provider <code>confinement</code>, <code>bounds</code>), fail-closed at load (schema draft-2020-12 + semantic passes: confinement↔chain-provider coverage, <code>policy.enforced_roles ⊆ ENFORCEABLE_ROLES</code> evaluator ceiling, name↔role binding lint). Table grows to 7 seats (+<code>analysis</code> sonnet-primary, +<code>design</code> = the #428 competitive pair as a static row whose dispatch stays bake-off-owned; single-dispatch refused). <code>check_pre</code> drops the unconditional build hard-deny for a launch-bound <code>GateAttestation</code> (anti-replay <code>launch_input_digest</code>, outcome routing — a <code>bakeoff</code> outcome can never authorize single dispatch; receipts carry <code>role</code> + gate evidence; denied-build receipts stay audit-readable); unrecognized non-empty roles fail closed (#434 part 2, red-before-green on the typo&#x27;d-role cell). <code>dispatch_seat</code> gains the gated build path (<code>--gate-file</code> + <code>--plan-context</code> with EXACT canonical key-set equality) authenticated via the extracted <code>complexity_gate.verified_decision</code> (+<code>GateTamperError</code>, strict empty/missing-key context contract); driver-bench admits build audits.</p>
 <ul>
@@ -95,6 +95,23 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  reviewer + adversarial diff (5 Mediums adopted: lazy writer import, reader   schema/project/freshness-bounds validation, future-timestamp bound, reader-routed statusline   recipe, collision guard via project-equality).</p>
 <ul>
 <li><strong>Session-limit resilience:</strong> none needed this child (ran post-reset).</li>
+</ul>
+<h3>#445 — per-project phase-seat table in config + single executor resolution · v3.54.0</h3>
+<p>Foundation child for #446 (setup seed/tweak) and #447 (diagram render): &quot;projects own their tables&quot; becomes real. New <code>.rawgentic.json</code> <code>phaseExecutorTable {version, file}</code> descriptor (complete-replacement pointer, never a merge overlay) → <code>phase_executor_table</code> capability (derive fail-closed incl. control-char/backslash rejection); ONE shared <code>executor_routing_lib.resolve_table</code> serves both consumers — executor CLI (<code>resolve-seat</code> gains <code>table_source</code> + <code>config_digest</code>) and driver-bench — resolving the declared override (lstat entry-probe, canonical symlink-safe containment, statically-dead-seat check via public <code>target_forbidden_reason</code>, uniform exit-2 for every declared-override failure) or the new <code>phase_executor.routing.default_table_path()</code> package accessor; <code>_ROUTING_TABLE_REL</code> + bench <code>TABLE</code> constants retired. <code>seed_table</code> byte-copies the package default (atomic no-clobber <code>os.link</code> publish) for #446.</p>
+<ul>
+<li><strong>Full spine:</strong> peer consult (gpt, blind) + 3 adversarial design passes (converged pass 3;</li>
+</ul>
+<p>  2 design loop-backs consumed — budget exactly spent) + adversarial plan pass + codex diff   pass; <strong>36-entry disposition ledger</strong> (DF-2 absent-config fail-closed DECLINED citing AC2;   DF-5 component-swap TOCTOU declined per trust model).</p>
+<ul>
+<li><strong>Reviews:</strong> 8a on the high-risk resolver commit (2 reviewers, 5 Lows fixed) + 3-agent</li>
+</ul>
+<p>  Step 11 (2 Lows fixed incl. exact exit-5 pin) + codex diff (3 adopted, fixed in-branch).</p>
+<ul>
+<li><strong>Session-limit resilience:</strong> 2nd occurrence — all 3 first-wave Step-11 reviewers died at</li>
+</ul>
+<p>  the window (marked <code>outcome=dead</code>, re-dispatched clean post-reset); codex diff review   survived on its separate quota.</p>
+<ul>
+<li>Suite 3428+8skip → 3483+8skip (+55). No workflow-spine change → no diagram REV.</li>
 </ul></section>
 <section class="mstone"><h3>Epic #422 — per-phase model routing + deterministic execution engine (auto-run) <span class="chip c-conf">SHIPPED</span></h3><p>Route WF2/WF3 model seats from bench-#14 evidence through a deterministic <code>phase_executor</code> engine. Plan: <code>docs/planning/2026-07-16-per-phase-model-routing.md</code>. Children (dep order): #424 (E1 package) ✓ · #425 (E2 enforcement) ✓ · #426 (E3 seat-table config) ✓ · <strong>#427 (E4 seat cutover)</strong> ← this slot · then #428 #429 #431 #430 #420 #419 #417.</p>
 <h3>#427 — ship/intake/plan seats through the executor (E4) · v3.45.0</h3>
@@ -421,9 +438,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
 <p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#480 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>35 added · 3428/3436 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: not_configured</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>8</td><td>8</td><td>pass</td></tr></tbody></table></section>
+
 </main>
-<footer>Last updated: 2026-07-18 06:02 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-18 09:41 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
