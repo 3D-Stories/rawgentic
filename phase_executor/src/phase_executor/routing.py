@@ -39,12 +39,54 @@ def load_routing_table(path: os.PathLike | str) -> dict:
 
 
 def _assert_referential_integrity(table: dict) -> None:
+    """Fail-closed cross-field semantic passes the JSON schema cannot express (#464 §C.2 + §D).
+
+    Schema validation (``contract.validate_routing_table``) runs FIRST in ``load_routing_table``,
+    so a table reaching here on the production path already has a well-shaped manifest/policy —
+    there, every semantic failure raises ``RoutingError`` naming the offending seat/entry
+    (fail-loud, no snapshot => no launch). A programmatic caller that bypasses the schema gets a
+    ``RoutingError`` for a MISSING manifest, but an arbitrarily mis-typed field (a list manifest,
+    a null confinement) fails loud with a bare ``TypeError``/``AttributeError`` instead — still
+    fail-closed, just not legibly named; the schema layer owns shape validation."""
     pools = set(table.get("pools", {}))
     for seat_name, seat in table.get("seats", {}).items():
-        for target in [seat["primary"], *seat.get("chain", [])]:
+        targets = [seat["primary"], *seat.get("chain", [])]
+        for target in targets:
             pool = target["lane"]["pool"]
             if pool not in pools:
                 raise RoutingError(f"seat {seat_name!r} target {target['model']!r} names undeclared pool {pool!r}")
+        # (a) CONFINEMENT COVERAGE: every provider a seat can dispatch on (primary + chain lanes)
+        # must be declared in its manifest.confinement map — no lane may run unconfined.
+        manifest = seat.get("manifest")
+        if manifest is None:
+            raise RoutingError(f"seat {seat_name!r} missing manifest")
+        confined = set(manifest.get("confinement", {}))
+        lane_providers = {t["lane"]["provider"] for t in targets}
+        uncovered = lane_providers - confined
+        if uncovered:
+            raise RoutingError(
+                f"seat {seat_name!r} confinement does not cover lane provider(s) {sorted(uncovered)} "
+                f"(declared: {sorted(confined)})"
+            )
+        # (c) NAME<->ROLE BINDING LINT: a canonically-named seat must declare the matching role.
+        # check_pre keys its per-role requirements on `role` (renamed-seat portability), so a
+        # seat NAMED 'build'/'review' with a missing/mismatched role would silently escape those
+        # requirements — a table-authoring hole this closes at load.
+        if seat_name in ("build", "review") and seat.get("role") != seat_name:
+            raise RoutingError(
+                f"seat named {seat_name!r} must declare role {seat_name!r} (got {seat.get('role')!r})"
+            )
+    # (b) ENFORCED-ROLES BOUND: a table may not declare a role enforced that the engine has no
+    # evaluator for (contract.ENFORCEABLE_ROLES is the ceiling). Policy is optional (programmatic
+    # legacy tables omit it); the shipped table always declares it.
+    policy = table.get("policy")
+    if policy is not None:
+        for role in policy.get("enforced_roles", ()):
+            if role not in contract.ENFORCEABLE_ROLES:
+                raise RoutingError(
+                    f"policy.enforced_roles entry {role!r} is not in ENFORCEABLE_ROLES "
+                    f"{sorted(contract.ENFORCEABLE_ROLES)} (nothing evaluates it)"
+                )
 
 
 def canonical_bytes(table: dict) -> bytes:

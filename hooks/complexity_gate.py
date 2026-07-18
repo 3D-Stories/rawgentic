@@ -38,6 +38,14 @@ SECURITY_SURFACE_PATTERNS: Final[tuple[str, ...]] = (
 _BOUNDARY = r"(?:^|[/_.\-])"
 _BOUNDARY_END = r"s?(?:$|[/_.\-])"
 
+# The CALLER-FACT subset of a GateDecision's input_snapshot: the plan facts an independent caller
+# holds and must cross-check in FULL (#464 Step-11 diff review, reopening step6-H1 — comparing only
+# supplied keys silently disables the omitted-field stale checks). Excludes derived keys
+# (security_surface_hit — gate-computed from files) and gate-internal policy keys (thresholds,
+# threshold_invalid). The build dispatch boundary requires exact key-set equality against this.
+REQUIRED_PLAN_CONTEXT_KEYS: Final[frozenset[str]] = frozenset(
+    {"risk_level", "complexity", "lines", "file_count"})
+
 
 def _anchor(pattern: str) -> str:
     if pattern.startswith(r"\."):
@@ -167,6 +175,56 @@ def decision_from_snapshot(snap: dict) -> bool:
     calls this at admission on the digest-verified snapshot — the authoritative decision, so a
     tampered ``GateDecision.decision`` cannot force or suppress a bake-off (#428 M7)."""
     return bool(reasons_from_snapshot(snap))
+
+
+class GateTamperError(RuntimeError):
+    """A ``GateDecision`` failed authentication: either its ``policy_digest`` does not recompute from
+    ``input_snapshot`` (edited between plan and run), or an ``expected_context`` fact does not match
+    the snapshot (a stale/reused decision minted for different plan inputs)."""
+
+
+def verified_decision(gate_decision, expected_context=None) -> bool:
+    """Single-sourced authentication for ALL gate consumers (#464 — extracted from
+    ``bakeoff_policy._verified_decision``, which now wraps this).
+
+    (1) Recompute the #429 ``policy_digest`` over ``input_snapshot`` and refuse a snapshot edited
+    between plan and run (``GateTamperError``). (2) If ``expected_context`` is given, cross-check
+    each of the caller's OWN plan facts against the snapshot so a stale decision minted for DIFFERENT
+    plan inputs is rejected — the message names the offending key but NEVER the values (they may
+    carry plan text). (3) Return the AUTHORITATIVE bake-off decision RE-DERIVED from the (now
+    integrity-verified) snapshot — NOT ``gate_decision.decision``, which the digest does not bind.
+
+    ``expected_context`` = the caller's own plan facts (a subset of the ``input_snapshot`` keys);
+    ``None`` = digest-only (bakeoff_policy's internal carve-out — it mints the gate in-process one
+    call earlier and holds no separate plan doc). Honest limit: this is an IN-PROCESS trust boundary
+    with an unkeyed digest — it defends against authoring errors and stale reuse, not a hostile
+    in-process caller who can fabricate a self-consistent decision."""
+    snapshot = gate_decision.input_snapshot
+    expected = _policy_digest(snapshot)  # single-source digest
+    if expected != gate_decision.policy_digest:
+        raise GateTamperError(
+            f"#429 gate policy_digest mismatch (input_snapshot edited between plan and run): "
+            f"expected {expected}, got {gate_decision.policy_digest}")
+    if expected_context is not None:
+        # {} is NOT the carve-out: only None means digest-only. An emptied programmatic context
+        # must fail loud, never silently disable the stale-decision defense (#464 Step-8a).
+        if not expected_context:
+            raise GateTamperError(
+                "#429 gate: empty expected_context — only None (digest-only carve-out) or a "
+                "non-empty mapping is accepted")
+        for key, value in expected_context.items():
+            # Distinguish an ABSENT snapshot key from a present-but-mismatched one; a None-valued
+            # expected fact must not collapse into .get()'s None default (#464 Step-8a).
+            # Do NOT leak the values — they may carry plan text.
+            if key not in snapshot:
+                raise GateTamperError(
+                    f"#429 gate context mismatch: input_snapshot[{key!r}] missing "
+                    f"(stale/reused decision)")
+            if snapshot[key] != value:
+                raise GateTamperError(
+                    f"#429 gate context mismatch: input_snapshot[{key!r}] != expected "
+                    f"(stale/reused decision)")
+    return decision_from_snapshot(snapshot)
 
 
 def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:

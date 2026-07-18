@@ -24,6 +24,7 @@ from phase_executor.engine import run_seat  # noqa: E402
 from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: E402
 # pylint: enable=no-name-in-module
 import jsonschema  # noqa: E402
+import complexity_gate as cg  # noqa: E402
 
 CLI = str(HOOKS / "executor_routing_lib.py")
 
@@ -52,7 +53,11 @@ def _snapshot():
                                {"model": "gpt-5.6-terra", "lane": _lane("codex", provider="openai")}]},
             "review": {"role": "review",
                        "primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []},
+            "build": {"role": "build",  # #464 §E: a build-role seat for the attested-gate dispatch path
+                      "primary": {"model": "claude-sonnet-5", "lane": _lane("claude")},
+                      "chain": [{"model": "claude-opus-4-8", "lane": _lane("claude")}]},
         },
+        "policy": {"enforced_roles": ["review", "build"]},  # #464 §D: table-declared enforced roles
         "forbidden_combinations": [
             {"model_pattern": "haiku", "reason": "never Haiku"},
             {"rule": "cross_model_author", "reason": "reviewer != author"},
@@ -112,6 +117,32 @@ def _ws(tmp_path, executor_routing="__none__", project="rawgentic", path="."):
     p = tmp_path / "ws.json"
     p.write_text(json.dumps({"projects": [entry]}), encoding="utf-8")
     return str(p)
+
+
+def _gate(*, bakeoff=False):
+    """A #429 GateDecision + a matching plan-context (a subset of its input_snapshot). Benign inputs
+    -> single outcome; risk_level high -> bake-off outcome (#464 §E)."""
+    task = {"risk_level": "high" if bakeoff else "standard"}
+    gd = cg.needs_bakeoff(task, {"complexity": "standard"}, {"files": [], "lines": 1, "file_count": 1})
+    # Step-11 diff review (REOPENS step6-H1): the context must be the COMPLETE canonical key set —
+    # a partial subset silently disables the omitted-field stale checks.
+    return gd, {k: gd.input_snapshot[k] for k in sorted(cg.REQUIRED_PLAN_CONTEXT_KEYS)}
+
+
+def _dispatch_build(tmp_path, gate_decision, plan_context, **kw):
+    """Dispatch the build-role seat through the REAL dispatch_seat with a stub provider, threading the
+    gate evidence the build path requires (#464 §E)."""
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.dispatch_seat(
+        seat="build", prompt="hi", run_id="run1", correlation_id=kw.pop("cid", "wf2:build"),
+        author_provider=None, effort=None, timeout=5.0, context=(),
+        snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
+        routing=routing, enforce=enforce, run_seat=run_seat,
+        dispatch_real=kw.pop("dispatch_real", _stub()),
+        gate_decision=gate_decision, plan_context=plan_context,
+    )
+    return res, audit
 
 
 # --- config parse (V3: absent vs invalid) ------------------------------------------------------
@@ -453,3 +484,198 @@ def test_guarded_import_failure_exit5(tmp_path, monkeypatch):
         workspace = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}}); project = "rawgentic"
     (tmp_path / "p.txt").write_text("hi")
     assert er._do_dispatch(A()) == er.EXIT_INTERNAL
+
+
+# --- #464 §B: WIRED_SEATS is the full 7-seat vocabulary; design is single-dispatch-refused --------
+def test_wired_seats_is_the_full_seven():
+    assert er.WIRED_SEATS == frozenset(
+        {"intake", "analysis", "design", "plan", "build", "review", "ship"})
+    assert er.COMPETITIVE_ONLY == frozenset({"design"})
+
+
+def test_parse_design_opt_in_rejected():
+    # design is in the vocabulary but competitive-only — opting it into single-dispatch is refused.
+    with pytest.raises(er.MalformedConfig):
+        er.parse_executor_routing({"version": 1, "seats": {"design": "executor"}})
+
+
+def test_parse_analysis_opt_in_accepted():
+    # analysis is a newly-wired non-competitive seat — it CAN be single-dispatched.
+    assert er.parse_executor_routing({"version": 1, "seats": {"analysis": "executor"}}) \
+        == {"analysis": "executor"}
+
+
+def test_classify_design_is_wired_vocabulary():
+    # classify keeps returning "wired" (vocabulary); the refusal lives on the resolve/dispatch path.
+    assert er.classify_seat("design") == "wired"
+
+
+def test_resolve_design_refused_exit2(tmp_path):
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_seat_action("design", _ws(tmp_path), "rawgentic")
+
+
+def test_cli_resolve_design_refused_exit2(tmp_path):
+    r = _run_cli("resolve-seat", "--seat", "design", "--workspace", _ws(tmp_path), "--project", "rawgentic")
+    assert r.returncode == er.EXIT_MALFORMED
+    assert json.loads(r.stdout)["ok"] is False
+
+
+def test_dispatch_design_refused_exit2(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.dispatch_seat(
+        seat="design", prompt="hi", run_id="run1", correlation_id="wf2:design",
+        author_provider=None, effort=None, timeout=5.0, context=(),
+        snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
+        routing=routing, enforce=enforce, run_seat=run_seat, dispatch_real=_stub())
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "competitive_only_seat"
+
+
+# --- #464 §E: build-dispatch gate (attested, launch-bound, context-cross-checked) -----------------
+def test_build_missing_gate_file_exit2_no_receipt(tmp_path):
+    res, audit = _dispatch_build(tmp_path, None, {"risk_level": "standard"})
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "gate_file_required"
+    assert audit.records() == []  # denial pre-check_pre: no receipt minted
+
+
+def test_build_missing_plan_context_exit2_no_receipt(tmp_path):
+    gd, _ = _gate()
+    res, audit = _dispatch_build(tmp_path, gd, None)
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "plan_context_required"
+    assert audit.records() == []
+
+
+def test_build_empty_plan_context_exit2_no_receipt(tmp_path):
+    # empty {} counts as MISSING — a defense that can be silently emptied is no defense (#464 §E).
+    gd, _ = _gate()
+    res, audit = _dispatch_build(tmp_path, gd, {})
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "plan_context_required"
+    assert audit.records() == []
+
+
+def test_build_tampered_gate_exit4_no_receipt(tmp_path):
+    # input_snapshot edited but policy_digest stale -> verified_decision raises GateTamperError.
+    gd, ctx = _gate()
+    tampered = cg.GateDecision(decision=gd.decision, reason_codes=gd.reason_codes,
+                               input_snapshot={**gd.input_snapshot, "lines": 999},
+                               policy_digest=gd.policy_digest)
+    res, audit = _dispatch_build(tmp_path, tampered, ctx)
+    assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "gate_tampered"
+    assert audit.records() == []  # denial happens pre-check_pre; no attestation to bind
+
+
+def test_build_stale_gate_context_mismatch_exit4(tmp_path):
+    # Integration on the REAL dispatch path (design §E): a valid-digest gate whose independently
+    # sourced plan context disagrees with the snapshot is a stale/reused decision -> refused.
+    gd, ctx = _gate()  # snapshot risk_level == "standard"
+    res, audit = _dispatch_build(tmp_path, gd, dict(ctx, risk_level="high"))  # mismatched plan fact
+    assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "gate_tampered"
+    assert audit.records() == []
+
+
+def test_build_happy_path_single_outcome(tmp_path):
+    gd, ctx = _gate()  # single outcome (no bake-off)
+    res, audit = _dispatch_build(tmp_path, gd, ctx)
+    assert res["ok"] is True and res["exit"] == 0
+    assert res["actual_model"] == "claude-sonnet-5" and res["verified"] is True
+    recs = audit.records()
+    receipts = [r for r in recs if r["kind"] == "receipt"]
+    assert receipts and all(r["verdict"] == "pass" for r in receipts)
+    r0 = receipts[0]
+    assert r0["role"] == "build" and r0["gate_outcome"] == "single"
+    assert r0["gate_input_digest"] and r0["gate_digest"] == gd.policy_digest
+    assert any(r["kind"] == "observation" for r in recs)
+
+
+def test_build_gate_bakeoff_denied_receipt_only_exit4(tmp_path):
+    # a valid attestation whose outcome is "bakeoff" cannot be re-presented to the single-dispatch
+    # path (pass-2 P1) -> check_pre gate_requires_bakeoff -> receipt-only exit 4.
+    gd, ctx = _gate(bakeoff=True)
+    res, audit = _dispatch_build(tmp_path, gd, ctx)
+    assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
+    recs = audit.records()
+    assert any(r["kind"] == "receipt" and r["verdict"] == "fail"
+               and "gate_requires_bakeoff" in r["violations"] for r in recs)
+    assert not any(r["kind"] == "observation" for r in recs)
+
+
+def test_cli_build_stale_gate_exit4(tmp_path):
+    # Integration through the CLI --gate-file / --plan-context wiring on the shipped table: a stale
+    # (context-mismatched) gate is rejected pre-launch (exit 4), so no provider call is made.
+    repo = tmp_path / "projects" / "rawgentic"
+    table_dst = repo / er._ROUTING_TABLE_REL
+    table_dst.parent.mkdir(parents=True)
+    real_table = Path(er.__file__).resolve().parent.parent / er._ROUTING_TABLE_REL
+    table_dst.write_text(real_table.read_text(encoding="utf-8"), encoding="utf-8")
+    ws = _ws(tmp_path, {"version": 1, "seats": {"build": "executor"}}, path="./projects/rawgentic")
+    gd, ctx = _gate()  # snapshot risk_level == "standard"
+    gf = tmp_path / "gate.json"
+    gf.write_text(json.dumps({"decision": gd.decision, "reason_codes": list(gd.reason_codes),
+                              "input_snapshot": gd.input_snapshot, "policy_digest": gd.policy_digest}),
+                  encoding="utf-8")
+    cf = tmp_path / "ctx.json"
+    cf.write_text(json.dumps(dict(ctx, risk_level="high")), encoding="utf-8")  # mismatched fact
+    (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+
+    class A:
+        seat = "build"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
+        correlation_id = "wf2:build"; author_provider = None; effort = None; timeout = 5.0
+        workspace = ws; project = "rawgentic"; gate_file = str(gf); plan_context = str(cf)
+    assert er._do_dispatch(A()) == er.EXIT_ENFORCEMENT
+
+
+def test_gate_file_nondict_snapshot_structured_exit2_464(tmp_path):
+    """#464 Step-8a (R1+R2 converged): a gate file whose input_snapshot is a NON-DICT (with a
+    self-consistent digest) must map to the structured exit-2 bad-input path, never a bare
+    TypeError traceback — the guard lives at the trust boundary (_load_gate_decision)."""
+    with pytest.raises(ValueError, match="input_snapshot"):
+        gate = {"decision": False, "reason_codes": [],
+                "input_snapshot": None, "policy_digest": "sha256:whatever"}
+        p = tmp_path / "gate.json"
+        p.write_text(json.dumps(gate), encoding="utf-8")
+        er._load_gate_decision(str(p))
+
+
+@pytest.mark.parametrize("missing", ["risk_level", "complexity", "lines", "file_count"])
+def test_build_partial_context_refused_per_field_464(tmp_path, missing):
+    """Step-11 diff review (REOPENS 464-step6-H1): a PARTIAL plan context — any canonical key
+    omitted — must be refused BEFORE verification (comparing only supplied keys silently disables
+    the omitted-field stale-decision checks). Exact key-set equality is the contract."""
+    gd, ctx = _gate()
+    partial = {k: v for k, v in ctx.items() if k != missing}
+    res, audit = _dispatch_build(tmp_path, gd, partial)
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "plan_context_incomplete"
+    assert missing in res["error"]["message"]  # names the missing KEY, never values
+    assert audit.records() == []
+
+
+def test_build_extra_context_key_refused_464(tmp_path):
+    gd, ctx = _gate()
+    ctx = dict(ctx, thresholds={"BAKEOFF_DIFF_LINES": 1})  # gate-internal key smuggled in
+    res, audit = _dispatch_build(tmp_path, gd, ctx)
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "plan_context_incomplete"
+    assert audit.records() == []
+
+
+def test_build_fallback_attempt_attestation_bound_464(tmp_path):
+    """Step-11 A2: a build CHAIN FALLBACK attempt (index > 0, different target) must mint its own
+    launch-bound attestation — receipt for the fallback passes with a gate_input_digest DISTINCT
+    from the primary attempt's (per-target binding, no mint-against-primary regression)."""
+    gd, ctx = _gate()
+    res, audit = _dispatch_build(tmp_path, gd, ctx,
+                                 dispatch_real=_stub({"claude-sonnet-5": contract.NONZERO_EXIT}))
+    assert res["ok"] is True and res["actual_model"] == "claude-opus-4-8"
+    receipts = [r for r in audit.records() if r["kind"] == "receipt"]
+    assert len(receipts) == 2 and all(r["verdict"] == "pass" for r in receipts)
+    assert all(r["gate_outcome"] == "single" for r in receipts)
+    digests = {r["gate_input_digest"] for r in receipts}
+    assert len(digests) == 2  # per-target binding: primary vs fallback differ

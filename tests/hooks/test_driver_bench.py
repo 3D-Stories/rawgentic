@@ -106,10 +106,21 @@ def test_token_burn_absent_usage_fails_closed(env):
     assert db.run_fixture(fx, **env)["token_burn"] == 0.0
 
 
-def test_audit_on_nonwired_seat_fails_closed(env):
+def test_audit_on_build_seat_scores_with_gate(env):
+    # #464 §E: build now HAS an audit path — the bench threads a single-outcome #429 gate so check_pre
+    # admits it. A complete receipt+observation pair scores 1.0.
     fx = copy.deepcopy(_fx("f11-audit-intake"))
-    fx["primary_seat"] = "build"                          # build has no audit path (hard-denied)
-    fx["responses"] = {"build": [{"parse_status": "ok", "actual_model": "claude-sonnet-5", "payload": "x"}]}
+    fx["primary_seat"] = "build"
+    fx["responses"] = {"build": [{"parse_status": "ok", "actual_model": "claude-sonnet-5",
+                                  "payload": "x", "usage": {"input": 1, "output": 1}}]}
+    assert db.run_fixture(fx, **env)["audit_completeness"] == 1.0
+
+
+def test_audit_on_nonwired_seat_fails_closed(env):
+    # a seat OUTSIDE the executor vocabulary (WIRED_SEATS) has no audit path -> fail closed to 0.0.
+    fx = copy.deepcopy(_fx("f11-audit-intake"))
+    fx["primary_seat"] = "ghost"                          # not in WIRED_SEATS
+    fx["responses"] = {}
     result = db.run_fixture(fx, **env)["audit_completeness"]
     assert isinstance(result, dict) and result["score"] == 0.0 and "error" in result
 

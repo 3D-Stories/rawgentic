@@ -21,17 +21,36 @@ def _lane(pool, provider="anthropic", transport="native", auth="subscription_oau
     return {"provider": provider, "transport": transport, "auth_mode": auth, "credential_ref": None, "pool": pool}
 
 
+def _manifest(confinement=None, **over):
+    m = {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "high",
+        "confinement": confinement or {"anthropic": "hooks"},
+        "bounds": {"timeout_s": 1800},
+    }
+    m.update(over)
+    return m
+
+
 def _table(**over):
+    # #464 fixture migration (breaker S3): schema-valid per-seat manifest + top-level policy, and
+    # canonical-named seats declare their matching role so the Task-2 name<->role loader lint stays
+    # forward-compatible (the review seat's chain spans anthropic + openai, so its confinement
+    # covers both providers).
     t = {
         "schema_version": "1",
+        "policy": {"enforced_roles": ["review", "build"]},
         "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}},
         "seats": {
             "review": {
+                "role": "review",
                 "primary": {"model": "claude-fable-5", "lane": _lane("claude")},
                 "chain": [
                     {"model": "gpt-5.6-sol", "lane": _lane("codex", provider="openai")},
                     {"model": "claude-sonnet-5", "lane": _lane("claude")},
                 ],
+                "manifest": _manifest(confinement={"anthropic": "hooks", "openai": "codex-sandbox-readonly"}),
             }
         },
         "forbidden_combinations": [
@@ -137,10 +156,13 @@ def test_shipped_table_digest_stable_and_pools():
     assert snap.pool_concurrency()["claude"] == 2
 
 
-# --- #426: full seat table (intake/plan/build/review/ship) + fallback chains + provenance ---
+# --- #464 W1: full 7-seat table (intake/analysis/design/plan/build/review/ship) + manifest ×7
+#     + top-level policy section (extends the #426 5-seat set with analysis + design) ---
 
-_EXPECTED_SEATS_426 = {
+_EXPECTED_SEATS_464 = {
     "intake": ("claude-opus-4-8", ["claude-fable-5", "claude-sonnet-5"]),
+    "analysis": ("claude-sonnet-5", ["claude-opus-4-8", "claude-fable-5"]),
+    "design": ("gpt-5.6-sol", ["claude-opus-4-8"]),
     "plan": ("claude-opus-4-8", ["claude-fable-5", "gpt-5.6-terra"]),
     "build": ("claude-sonnet-5", ["claude-opus-4-8", "gpt-5.6-terra"]),
     "review": ("claude-fable-5", ["gpt-5.6-sol", "claude-sonnet-5"]),
@@ -148,13 +170,54 @@ _EXPECTED_SEATS_426 = {
 }
 
 
-def test_shipped_table_full_seat_set_426():
+def test_shipped_table_full_seat_set_464():
     table = load_routing_table(SHIPPED)
-    assert set(table["seats"]) == set(_EXPECTED_SEATS_426)
-    for seat, (primary, chain) in _EXPECTED_SEATS_426.items():
+    assert set(table["seats"]) == set(_EXPECTED_SEATS_464)
+    for seat, (primary, chain) in _EXPECTED_SEATS_464.items():
         s = table["seats"][seat]
         assert s["primary"]["model"] == primary, seat
         assert [c["model"] for c in s["chain"]] == chain, seat
+
+
+# Normative seat-value matrix — design §A (the shipped table's EXACT manifest values).
+_EXPECTED_MANIFEST_464 = {
+    "intake":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 900}},
+    "analysis": {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 1200}},
+    "design":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                 "confinement": {"openai": "codex-sandbox-readonly", "anthropic": "hooks"},
+                 "bounds": {"timeout_s": 1800}},
+    "plan":     {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                 "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
+                 "bounds": {"timeout_s": 1800}},
+    "build":    {"session_policy": "fresh", "tool_grants": ["read", "edit", "bash"], "effort": "high",
+                 "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-pinned"},
+                 "bounds": {"timeout_s": 3600}},
+    "review":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                 "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
+                 "bounds": {"timeout_s": 1800}},
+    "ship":     {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 900}},
+}
+
+
+def test_shipped_table_manifest_matrix_464():
+    table = load_routing_table(SHIPPED)
+    for seat, expected in _EXPECTED_MANIFEST_464.items():
+        assert table["seats"][seat]["manifest"] == expected, seat
+
+
+def test_shipped_table_policy_enforced_roles_464():
+    table = load_routing_table(SHIPPED)
+    assert table["policy"]["enforced_roles"] == ["review", "build"]
+
+
+def test_shipped_table_all_seats_session_policy_fresh_464():
+    """D-8 drift guard: every seat in the shipped table declares session_policy 'fresh'."""
+    table = load_routing_table(SHIPPED)
+    for seat, s in table["seats"].items():
+        assert s["manifest"]["session_policy"] == "fresh", seat
 
 
 def test_shipped_table_every_seat_has_fallback_chain_426():
@@ -183,3 +246,71 @@ def test_shipped_table_provenance_bench14_426():
     table = load_routing_table(SHIPPED)
     assert "provenance" in table, "seat table must carry a provenance stamp"
     assert "14" in json.dumps(table["provenance"]), "provenance names bench #14"
+
+
+# --- #464 W1 (Task 2): fail-closed loader SEMANTIC passes (design §C.2 + §D) ---
+#     (a) confinement coverage, (b) enforced-roles bound, (c) name<->role binding lint.
+#     Each cell starts from the schema-valid shipped table and makes ONE mutation, so the sole
+#     failure exercised is the semantic pass under test.
+
+def _shipped_dict():
+    """Fresh mutable deep copy of the shipped (schema- AND semantically-valid) table."""
+    return json.loads(SHIPPED.read_text(encoding="utf-8"))
+
+
+def _write(tmp_path, table):
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps(table))
+    return p
+
+
+def test_load_shipped_table_passes_all_semantic_checks_464():
+    """Positive guard: the shipped 7-seat table clears confinement coverage, the enforced-roles
+    bound, and the name<->role lint (load_routing_table raises if any pass fails)."""
+    table = load_routing_table(SHIPPED)
+    assert set(table["seats"]) == set(_EXPECTED_SEATS_464)
+
+
+def test_confinement_missing_chain_provider_rejected_464(tmp_path):
+    """(a) design's chain carries an openai lane; dropping 'openai' from its confinement map
+    leaves a lane provider unconfined -> fail closed, message names the seat."""
+    bad = _shipped_dict()
+    del bad["seats"]["design"]["manifest"]["confinement"]["openai"]
+    with pytest.raises(RoutingError, match="design"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_enforced_roles_outside_registry_rejected_464(tmp_path):
+    """(b) policy.enforced_roles may not name a role the engine has no evaluator for ('judge'):
+    schema-valid string, but appears-enforced-but-isn't -> fail closed at load."""
+    bad = _shipped_dict()
+    bad["policy"]["enforced_roles"] = ["review", "judge"]
+    with pytest.raises(RoutingError, match="judge"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_name_role_binding_build_missing_role_rejected_464(tmp_path):
+    """(c) a seat NAMED 'build' must declare role 'build' — omitting it would silently bypass the
+    attestation gate (which keys on role), so the loader rejects it."""
+    bad = _shipped_dict()
+    del bad["seats"]["build"]["role"]
+    with pytest.raises(RoutingError, match="build"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_name_role_binding_review_wrong_role_rejected_464(tmp_path):
+    """(c) a seat named 'review' must declare role 'review', not a near-miss like 'reviewer'."""
+    bad = _shipped_dict()
+    bad["seats"]["review"]["role"] = "reviewer"
+    with pytest.raises(RoutingError, match="review"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_missing_manifest_rejected_by_semantic_pass_464():
+    """Belt-and-suspenders: a programmatic table that bypasses schema still fails closed at the
+    referential-integrity pass with a legible 'missing manifest' message (schema would catch it on
+    the load path; this guards direct callers of the semantic pass)."""
+    bad = _shipped_dict()
+    del bad["seats"]["ship"]["manifest"]
+    with pytest.raises(RoutingError, match="missing manifest"):
+        routing._assert_referential_integrity(bad)

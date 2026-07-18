@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#464 W1 — Capability Manifest + Attested Build Gate (design r3)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 04:43 MDT</div>
+<h1>#464 W1 — Capability Manifest + Attested Build Gate (design r3)</h1>
+
+</header>
+<main>
+<h1>#464 (W1) — Per-seat capability manifest + WIRED_SEATS full set + build-audit path — design</h1>
+<p>Status: REVISED r3 (Step 3 revision after Step 4 pass-2 breaker — owner applied a 9-finding package 2026-07-18 on top of pass-1&#x27;s 11; TWO <code>design</code> loop-backs consumed (budget exhausted); all High dispositions in <code>claude_docs/.wf2-state/464/dispositions.jsonl</code> (9 entries). Author draft written BLIND; then synthesized with (a) a 3-approach brainstorm (sonnet subagent) and (b) an independent cross-model peer proposal (WF13 consult, backend <strong>gpt</strong>, report: <code>docs/reviews/peer-rawgentic-peer-problem-464-2026-07-18.md</code>). Provenance per decision below.</p>
+<p>Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code> (AC-B1, AC-B3, AC-B4, AC-D3, D-8, U-5, OQ-2). Absorbed: #434 part 2 (owner decision verbatim, issuecomment-5010034928).</p>
+<h2>Approach (selected)</h2>
+<p><strong>Manifest-in-table, full 7-seat table, attested build gate.</strong> Per-seat <code>manifest</code> object inside the existing routing table (one source of truth, AC4); table extended to all 7 seats each with its OWN manifest; structural+semantic validation fail-closed at load; <code>check_pre</code> stays a policy evaluator and gains (i) table-declared enforced-roles checking and (ii) a build-gate <strong>attestation</strong> requirement with launch-input binding, authenticated at the hooks boundary.</p>
+<p>Alternatives weighed and rejected:</p>
+<ul>
+<li><strong>Separate manifest file / top-level sibling <code>capabilities</code> map</strong> (brainstorm approach 3):</li>
+</ul>
+<p>  cleanest schema diff, but a second seat-keyed map is a parallel-table shape AC4 forbids in   spirit, and it leaves seat rows and their governance split across two sections.</p>
+<ul>
+<li><strong>No design row, candidates borrow manifests from scanned seats</strong> (peer proposal): rejected —</li>
+</ul>
+<p>  a design candidate whose lane was scanned from the <code>build</code> seat would inherit build&#x27;s WRITE   tool grants for a design dispatch (over-grant). Design gets its own row + manifest instead.</p>
+<ul>
+<li><strong>Loader-defaulted session_policy</strong> (absent → fresh): rejected by author + peer convergently —</li>
+</ul>
+<p>  explicit fields are digest-covered and auditable; an enforcement boundary that silently fills   in policy is the fail-open shape this epic removes.</p>
+<ul>
+<li><strong><code>gate_denied</code> violation on a non-allow gate decision</strong> (peer): rejected — #429&#x27;s</li>
+</ul>
+<p>  <code>GateDecision</code> routes bake-off-vs-single (its fail-closed direction is &quot;force bake-off&quot;),   it never denies build outright; an &quot;allow&quot; framing misreads its semantics.</p>
+<h2>Fork resolutions</h2>
+<h3>A. Manifest location — inside each routing-table seat (author + peer convergent)</h3>
+<p>Each of the 7 seats in <code>phase_executor/src/phase_executor/routing/rawgentic.routing-table.json</code> gains a REQUIRED <code>manifest</code> object:</p>
+<pre><code>&quot;manifest&quot;: {
+  &quot;session_policy&quot;: &quot;fresh&quot;,                     // enum: fresh | resume (D-8); EXPLICIT, no defaulting
+  &quot;tool_grants&quot;: [&quot;read&quot;],                       // broad-but-gated categories (OQ-2): read|edit|bash|net; unique items
+  &quot;effort&quot;: &quot;high&quot;,                              // normalized enum low|medium|high|xhigh|max (U-5); identity value, W2 translates
+  &quot;confinement&quot;: {&quot;anthropic&quot;: &quot;hooks&quot;},         // per-provider declaration map (AC-B3), keys must cover every chain lane provider
+  &quot;bounds&quot;: {&quot;timeout_s&quot;: 1800}                  // AC-B4 compensating bound; required for all seats
+}</code></pre>
+<ul>
+<li><code>session_policy</code> explicit on EVERY seat. Shipped table: <code>fresh</code> everywhere. D-8&#x27;s &quot;default</li>
+</ul>
+<p>  fresh for review/judge&quot; = shipped VALUES + a drift-guard test pinning that every enforced-role   <code>review</code> seat (and <code>design</code>) declares <code>fresh</code>.</p>
+<ul>
+<li><code>resume</code> opt-in (peer contribution, adopted): schema `if session_policy == &quot;resume&quot; then</li>
+</ul>
+<p>  require resume_opt_in: {reason: &lt;non-empty string&gt;}<code> — resume is legal but never silent.   Dialect fact (breaker A5; pass-2 P7 evidence bar): the schema declares   </code>$schema: draft/2020-12<code> (routing-table.schema.json:2); the LIVE host validator is   jsonschema 4.10.3 (executed </code>import jsonschema<code> probe this session — not inferred from the   </code>&gt;=4.0<code> range at phase_executor/pyproject.toml:8), and 2020-12 </code>if<code>/</code>then<code> is implemented   from jsonschema 4.x. Implementation must ALSO cite the resolved version in   </code>phase_executor/uv.lock` and land the executed RED cell (resume without opt-in rejected) as   the mechanical proof under CI&#x27;s own environment; if it ever fails to reject, the loader   semantic pass (§C.2) is the fallback home for the same rule.</p>
+<ul>
+<li>D-8 &quot;judge&quot; mapping (breaker S5): in this table &quot;judge&quot; maps to the <code>design</code> competitive-round</li>
+</ul>
+<p>  seat. The glm bake-off JUDGE itself is not a routing-table seat (it dispatches via   <code>adversarial_review_lib.glm_complete</code> inside <code>bakeoff_policy</code>) — its session behavior is   adapter-level scope (W2 #465), deliberately NOT governed by this table.</p>
+<ul>
+<li>No singular <code>provider</code> manifest field (issue body lists it; disposition: redundant — provider</li>
+</ul>
+<p>  is a per-lane fact and chains legitimately span providers; the <code>confinement</code> map keyed by   provider subsumes the declaration, validated to cover every chain provider).</p>
+<ul>
+<li><code>additionalProperties: false</code> on manifest (unknown fields rejected).</li>
+<li>**Normative seat-value matrix (pass-3 R3 — the shipped table&#x27;s exact manifest values; the</li>
+</ul>
+<p>  JSON example above is illustrative only):**</p>
+<table>
+<thead><tr><th>seat</th><th>role</th><th>session_policy</th><th>tool_grants</th><th>effort</th><th>confinement</th><th>bounds.timeout_s</th></tr></thead>
+<tbody>
+<tr><td>intake</td><td>—</td><td>fresh</td><td>[read]</td><td>medium</td><td>anthropic: hooks</td><td>900</td></tr>
+<tr><td>analysis</td><td>—</td><td>fresh</td><td>[read]</td><td>medium</td><td>anthropic: hooks</td><td>1200</td></tr>
+<tr><td>design</td><td>—</td><td>fresh</td><td>[read]</td><td>high</td><td>openai: codex-sandbox-readonly · anthropic: hooks</td><td>1800</td></tr>
+<tr><td>plan</td><td>—</td><td>fresh</td><td>[read]</td><td>high</td><td>anthropic: hooks · openai: codex-sandbox-readonly</td><td>1800</td></tr>
+<tr><td>build</td><td>build</td><td>fresh</td><td>[read, edit, bash]</td><td>high</td><td>anthropic: hooks · openai: codex-sandbox-pinned</td><td>3600</td></tr>
+<tr><td>review</td><td>review</td><td>fresh</td><td>[read]</td><td>high</td><td>anthropic: hooks · openai: codex-sandbox-readonly</td><td>1800</td></tr>
+<tr><td>ship</td><td>—</td><td>fresh</td><td>[read]</td><td>medium</td><td>anthropic: hooks</td><td>900</td></tr>
+</tbody>
+</table>
+<p>  Confinement value vocabulary (declaration strings; W2 #465 gives them operational meaning):   <code>hooks</code> = claude hook-layer containment (F3, spike #454); <code>codex-sandbox-readonly</code> = codex   default read-only sandbox; <code>codex-sandbox-pinned</code> = the Q2 three-override worktree pinning.   Only <code>build</code> carries write grants — every other seat is read-only (no borrowed over-grants,   §B P3 rule). Each seat&#x27;s confinement keys exactly cover its chain&#x27;s lane providers.</p>
+<ul>
+<li>Routing-table <code>schema_version</code> stays <code>&quot;1&quot;</code>: validator and table ship in lockstep in-package</li>
+</ul>
+<p>  (no vendored external copies — unlike the Observation schema, whose #434 policy governs   cross-repo consumers). The table digest changes — an audited epoch by design; verified no test   pins a digest literal (<code>test_shipped_table_digest_stable_and_pools</code> checks prefix only;   <code>test_digest_golden_vector</code> hashes an inline fixture).</p>
+<h3>B. Seat vocabulary — table extends to the full 7; WIRED_SEATS mirrors it (author, over peer)</h3>
+<ul>
+<li><code>analysis</code>: real row — primary <code>claude-sonnet-5</code>, chain <code>[claude-opus-4-8, claude-fable-5]</code></li>
+</ul>
+<p>  (mirrors the owner-approved modelRouting analysis=sonnet signal; W10 bench adjusts later).   No <code>role</code>. Launch feasibility (breaker A4, discarded with citation): every model+lane pair in   the new rows exists VERBATIM in shipped seats today (sonnet/opus/fable/sol all appear in   intake/plan/build/review/ship chains, same lanes) and the adapters launch them live   (#426 review-on-fable live-verified, requested==actual) — working-precedent feasibility,   no new provider surface.</p>
+<ul>
+<li><code>design</code>: real row — primary <code>gpt-5.6-sol</code>, chain <code>[claude-opus-4-8]</code> — exactly the #428</li>
+</ul>
+<p>  <code>DESIGN_MODELS</code> pair (bakeoff_policy.py:29). DISPATCH remains competitive (bake-off owns it);   the row gives design its OWN manifest (read-only grants — no borrowed over-grants) and declares   the candidate set in the one table. Its <code>confinement</code> map carries BOTH providers   (<code>{&quot;openai&quot;: …, &quot;anthropic&quot;: …}</code>) — the §C.2 semantic check requires coverage of every chain   lane provider (this holds for plan/build/review too, whose chains include openai).   <code>bakeoff_policy._candidates_for</code> keeps scanning by model id (behavior preserved; dedupe by   target identity checked at implementation). Drift-guard (breaker A6): set EQUALITY —   <code>set(DESIGN_MODELS) == set(design-row models)</code> — one-directional subset would let a row-added   model silently never become a candidate. Provenance note in the table updated (design: static   row, competitive dispatch). <strong>Candidate-manifest resolution rule (pass-2 P3, normative):</strong> a   competitive candidate&#x27;s governing manifest is ALWAYS the REQUESTED seat&#x27;s (the <code>design</code> row),   never the seat its lane happened to be discovered from — a duplicate model id found via the   build chain must NOT resolve build&#x27;s write-granting manifest for a design dispatch. W1 states   the rule + ships a duplicate-model-id test pinning it; runtime enforcement of manifests is   W2 #465 (which implements resolution per this rule).</p>
+<ul>
+<li><strong>Single-dispatch opt-in split (breaker S2):</strong> <code>WIRED_SEATS</code> is the enforcement/naming</li>
+</ul>
+<p>  VOCABULARY (all 7). The <code>executorRouting</code> opt-in gate is narrower:   <code>parse_executor_routing</code>/<code>classify_seat</code> REJECT <code>design</code> opt-in with a legible error   (competitive owns its dispatch; single-dispatching it would bypass the bake-off). The other 6   stay single-dispatchable — build legitimately so, because its single dispatch is exactly the   gate-attested path (§E) and the #429 gate itself decides bake-off-vs-single.</p>
+<ul>
+<li><code>hooks/executor_routing_lib.py:46</code>: `WIRED_SEATS = frozenset({&quot;intake&quot;, &quot;analysis&quot;, &quot;design&quot;,</li>
+</ul>
+<p>  &quot;plan&quot;, &quot;build&quot;, &quot;review&quot;, &quot;ship&quot;})<code> (AC2 verbatim), documented as the executor seat   VOCABULARY. </code>DRIVER_ONLY` unchanged.</p>
+<ul>
+<li><code>tests/phase_executor/test_routing.py</code> <code>_EXPECTED_SEATS_426</code> → 7-seat <code>_464</code> rewrite;</li>
+</ul>
+<p>  <code>tests/hooks/test_driver_bench.py:109</code> repointed (build now has an audit path) + a new   negative (build with NO gate attestation stays fail-closed).</p>
+<h3>C. Validation gate placement — fail-closed at LOAD; check_pre stays a policy evaluator (brainstorm + peer convergent, author&#x27;s dispatch-time manifest check dropped)</h3>
+<p>1. <strong>Schema (structural):</strong> <code>routing-table.schema.json</code> requires <code>manifest</code> per seat with full    shape (enums, required keys, <code>additionalProperties: false</code>, resume-opt-in conditional).    Every production dispatch path loads via <code>load_routing_table</code> →    <code>contract.validate_routing_table</code> (routing.py:36; sole entry executor_routing_lib.py:393) —    missing/malformed manifest = snapshot never constructed = launch refused (AC1). 2. <strong>Semantic (cross-field, jsonschema-unfriendly):</strong> extend the loader&#x27;s    <code>_assert_referential_integrity</code> pass (routing.py:41): every seat&#x27;s <code>confinement</code> keys must    cover every provider in its primary+chain lanes; <code>policy.enforced_roles</code> well-formed (fork D);    <strong>name↔role binding lint (breaker A2):</strong> a seat NAMED <code>build</code> must declare <code>role: &quot;build&quot;</code>,    a seat named <code>review</code> must declare <code>role: &quot;review&quot;</code> — fail-closed at load. This closes the    authoring-error hole (a canonical build seat with role omitted would otherwise bypass the    attestation gate entirely, since gating keys on the optional role). <code>check_pre</code> stays    role-keyed (renamed-seat portability, the #425 Step-8a lesson, preserved); the lint is a    table-authoring guard, not an enforcement re-coupling. Shipped-table drift-guard test pins    both bindings. 3. <code>RoutingSnapshot.from_table</code> (no validation, verified routing.py:66-71) remains the    test-fixture convenience — documented, not a production path. <code>check_pre</code> does NOT re-run    structural manifest checks (saves ~20 existing enforce-test fixtures from churn; convergent    brainstorm + peer recommendation against the author draft&#x27;s second layer).</p>
+<h3>D. Unrecognized role — fail-closed, keyed on TABLE-declared enforced roles (peer, adopted over author&#x27;s code constant)</h3>
+<p>The table gains a top-level <code>policy</code> section: <code>&quot;policy&quot;: {&quot;enforced_roles&quot;: [&quot;review&quot;, &quot;build&quot;]}</code>. Precedent: <code>forbidden_combinations</code> — routing.py&#x27;s own docstring: &quot;The engine is policy-free: invariants … are project-supplied rows in the table, evaluated here as data.&quot; A table-declared set also rides #445&#x27;s per-project extraction for free and matches the owner&#x27;s wording (&quot;project-recognized enforced-roles set, not a hard schema enum&quot;) literally. Schema requires <code>policy.enforced_roles</code> (unique, non-empty strings).</p>
+<p><strong>Evaluator-registry bound (pass-2 P4):</strong> <code>enforce.py</code> exports <code>ENFORCEABLE_ROLES: Final[frozenset[str]] = frozenset({&quot;review&quot;, &quot;build&quot;})</code> — the roles the engine actually has evaluators for. The loader semantic pass rejects any <code>policy.enforced_roles</code> entry outside <code>ENFORCEABLE_ROLES</code> (fail-closed at load): a table cannot declare a role &quot;enforced&quot; that nothing evaluates (appears-enforced-but-isn&#x27;t). <code>enforced_roles</code> therefore ⊆ <code>ENFORCEABLE_ROLES</code>; projects may narrow, never widen, until the engine ships a new evaluator.</p>
+<p><code>check_pre</code> (reads the set from the snapshot):</p>
+<pre><code>role = seat_obj.get(&quot;role&quot;)
+enforced = frozenset(snapshot.table.get(&quot;policy&quot;, {}).get(&quot;enforced_roles&quot;, ()))
+if role and role not in enforced:
+    violations.append(f&quot;unrecognized_role: {role!r} not in {sorted(enforced)}&quot;)</code></pre>
+<ul>
+<li><code>role</code> absent stays legal (test_enforce.py:515 must keep passing). Empty string (breaker S4):</li>
+</ul>
+<p>  <code>if role and …</code> treats <code>&quot;&quot;</code> as absent — matching AC6&#x27;s &quot;NON-EMPTY&quot; carve-out verbatim — and   the schema adds <code>minLength: 1</code> on <code>role</code> so a config can never DECLARE an empty role in the   first place (the truthiness guard covers only programmatic tables).</p>
+<ul>
+<li>A table with <code>policy</code> absent (programmatic legacy fixtures): <code>enforced</code> is empty → ANY</li>
+</ul>
+<p>  non-empty role fails closed — the safe direction; shipped table always declares it.</p>
+<ul>
+<li>RED cell: <code>role: &quot;biuld&quot;</code> → <code>unrecognized_role</code> (silently passes on main today).</li>
+</ul>
+<h3>E. Build-audit path — deny → bound GateAttestation; authentication at the hooks boundary (peer-strengthened)</h3>
+<p>The bare &quot;gate_digest is non-None&quot; presence check (author draft) is insufficient — any caller could hand <code>check_pre</code> a junk string (peer finding, adopted). Replacement:</p>
+<ul>
+<li><strong><code>GateAttestation</code></strong> frozen dataclass in <code>enforce.py</code> (extraction-clean, pure stdlib):</li>
+</ul>
+<p>  <code>{gate_outcome: &quot;bakeoff&quot;|&quot;single&quot;, policy_digest: str, input_digest: str}</code>. A raw dict does   NOT satisfy it (isinstance check — narrow constructor as the in-process trust boundary; honest   limit: not cryptographic proof, same trust class as the existing receipt chain).</p>
+<ul>
+<li><strong>Launch-input binding (anti-replay):</strong> new pure helper in <code>enforce.py</code></li>
+</ul>
+<p>  <code>launch_input_digest(seat, target, correlation_id) -&gt; str</code> (sha256 over canonical JSON —   same canonicalization idiom as routing.canonical_bytes). Hooks mint the attestation binding it   to the exact launch; <code>check_pre</code> recomputes from its own args and compares. A gate decision   replayed against a different launch fails closed. Canonical digest construction lives   extraction-clean in phase_executor; hooks call it (peer risk item, adopted).</p>
+<ul>
+<li><strong><code>check_pre</code> role==&quot;build&quot; branch</strong> (replaces enforce.py:121-126):</li>
+<li>attestation <code>None</code> → <code>gate_missing</code></li>
+<li>not a <code>GateAttestation</code> / bad shape / <code>input_digest</code> mismatch → <code>gate_invalid: &lt;detail&gt;</code></li>
+<li>well-formed + bound → no violation; <code>gate_outcome</code> + digests recorded in the receipt.</li>
+</ul>
+<p>  Docstring keeps E2&#x27;s honest limit: <code>check_pre</code> verifies shape+binding, never the gate&#x27;s   AUTHENTICITY (no hooks import) — that is the hooks boundary&#x27;s job.</p>
+<ul>
+<li><strong>Hooks boundary</strong> (<code>executor_routing_lib.py</code>): <code>dispatch_seat</code> gains a gate param (CLI</li>
+</ul>
+<p>  <code>--gate-file</code>); REQUIRED for seats whose table <code>role == &quot;build&quot;</code> (verified: today&#x27;s signature   has no gate-evidence param at all, :202-221). It authenticates the #429 <code>GateDecision</code> via   the digest recompute now extracted from <code>bakeoff_policy._verified_decision:281-294</code> into a   public <code>complexity_gate.verified_decision(gate_decision, expected_context=None)</code> (bakeoff_policy   refactored to call it — one helper, one home), then mints the bound <code>GateAttestation</code>   (<code>gate_outcome</code> from <code>decision_from_snapshot</code>) and calls <code>check_pre</code>. Missing/tampered gate →   exit 4, receipt-only, no launch.</p>
+<ul>
+<li>**Expected-context cross-check (pass-1 A1, HARDENED by pass-2 P5+SR1 — mandatory on the</li>
+</ul>
+<p>    build path):<strong> <code>verified_decision(gate_decision, expected_context)</code> compares each canonical     context key against the GateDecision&#x27;s <code>input_snapshot</code>; ANY mismatch fails verification. On     the BUILD dispatch path <code>expected_context</code> is </strong>MANDATORY and independently sourced<strong>: the     CLI gains <code>--plan-context &lt;file&gt;</code> (distinct from <code>--gate-file</code> — deriving context from the     gate file itself would be circular and detect nothing), carrying the canonical field set     (<code>complexity_gate.REQUIRED_PLAN_CONTEXT_KEYS</code> = {risk_level, complexity, lines, file_count}     — the caller-fact subset; derived + gate-internal keys excluded) from the caller&#x27;s own plan     facts, with EXACT key-set equality enforced at dispatch (Step-11 diff review closed the     partial-context gap: comparing only supplied keys silently disabled the omitted-field     checks). Missing/empty/partial/extra-key context → structured exit-2 refusal     (<code>plan_context_required</code> / <code>plan_context_incomplete</code>), no attestation minted — omission can     never silently disable the defense.     </strong>Denial-audit taxonomy (Step-11 diff review M3, adopted-partial):<strong> pre-<code>check_pre</code>     refusals (missing/incomplete args → exit 2; tampered/stale gate → exit 4) mint NO receipt —     <code>check_pre</code> is deliberately the ONLY receipt minter (the same trust rationale that declined     R1), so the structured error JSON is the record for pre-gate denials; only dispatches that     reach <code>check_pre</code> (e.g. a bakeoff-outcome attestation re-presented to single dispatch) get     denial receipts. The reviewer&#x27;s mint-receipt-on-tamper alternative was declined to preserve     the single-minter invariant.     <code>verified_decision(ctx=None)</code> remains legal ONLY for bakeoff_policy&#x27;s existing internal     call (which holds no separate plan doc; its gate file IS minted in-process one call     earlier). A hooks-integration test asserts the REAL dispatch path rejects a stale decision     minted for different plan inputs. </strong>Named residual (pass-3 R2, owner-declined for W1):** a     caller submitting a COHERENT stale pair (old gate file + its matching old context file)     passes the cross-check — caller error under the declared non-hostile model. The closing fix     (orchestrator-held authoritative plan context minted at dispatch, no second file) is W7     #470&#x27;s wiring — on the W7 carry list. Exception-type note: today the tamper path raises     <code>bakeoff_policy.JudgeError</code>; the extracted helper raises <code>complexity_gate.GateTamperError</code>     and <code>bakeoff_policy</code> translates at its call site so <code>run_build_bakeoff</code>&#x27;s &quot;raises on     tamper&quot; contract holds unchanged.</p>
+<ul>
+<li><strong>Gate-outcome routing (pass-2 P1):</strong> a valid attestation does NOT blanket-authorize single</li>
+</ul>
+<p>    dispatch. <code>dispatch_seat</code> requires <code>gate_outcome == &quot;single&quot;</code>; an attestation whose outcome     is <code>&quot;bakeoff&quot;</code> gets a typed refusal (<code>gate_requires_bakeoff</code>, enforcement exit 4, receipt     recorded, no launch) — the gate&#x27;s routing decision cannot be bypassed by re-presenting its     own evidence to the single-dispatch path. Competitive routing itself is wired in W7 #470.</p>
+<ul>
+<li><strong>Trust boundary, stated honestly (breaker A1):</strong> this is an IN-PROCESS trust chain — the</li>
+</ul>
+<p>    digests are unkeyed, so a malicious in-process caller can fabricate a self-consistent     GateDecision. That is the SAME trust class as the entire existing receipt/audit chain     (nothing in this repo is cryptographically attested; there is no key infrastructure).     The controls here defend against authoring errors, stale reuse, and cross-launch replay —     not against a hostile caller inside the process. HMAC/signed attestations are a named     follow-up ONLY if kukakuka ever needs cross-process trust.</p>
+<ul>
+<li><strong>Audit path (AC-D3, scoped — breaker S1):</strong> the receipt→observation→<code>reconcile_run</code> spine</li>
+</ul>
+<p>  covers the <strong><code>dispatch_seat</code> single-dispatch path</strong> — the sole <code>check_pre</code> caller   (executor_routing_lib.py:245; verified <code>check_pre</code> appears nowhere in engine.py). The #428   competitive bake-off (<code>run_build_bakeoff</code> → <code>run_competitive</code>, no-bake-off fallback   <code>run_seat</code> at bakeoff_policy.py:327) does NOT mint receipts today and its results persist via   the caller sink to <code>bakeoff_results.jsonl</code> — a different, existing stream. W1 does not claim   otherwise: a bake-off build is reconciled via <code>bakeoff_results.jsonl</code>, and <code>reconcile_run</code>&#x27;s   expected-set must simply not enumerate a bake-off-served build call (the expected-set is   caller-supplied). <strong>Wiring the competitive path into the RoutingAuditLog spine is carried to   W7 #470 as an explicit constraint</strong> (owner disposition 2026-07-18) — noted on #470 when this   design is applied. Receipt field mapping (pass-1 A3, HARDENED by pass-2 P2): <code>PreReceipt</code>   gains <code>role</code> (from the seat object — check_pre knows it), <code>gate_outcome</code>, and   <code>gate_input_digest</code>; the pre-existing <code>gate_digest</code> field (enforce.py:64, today always None   in production) is REPURPOSED with defined semantics: it carries the attestation&#x27;s   <code>policy_digest</code>. <code>_validate_record</code> gains a conditional requirement — a receipt with   <code>role == &quot;build&quot;</code> MUST carry non-null <code>gate_outcome</code> + <code>gate_input_digest</code> (fail-closed:   a new build receipt cannot validate ungated) — while receipts WITHOUT a <code>role</code> key (all   historical logs) validate exactly as today. So the audit can PROVE a new build launch was   gated, and old logs still parse. The binding observation carries nothing new (attestation   evidence lives on the RECEIPT side; <code>reconcile_run</code> binding logic untouched — role-aware   reconcile requirements land with W7&#x27;s expected-set extension).   <code>driver_bench_lib._score_audit:197</code> now admits build; the bench build-audit fixture supplies   a fixture gate decision.</p>
+<h2>File changes</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>phase_executor/src/phase_executor/schemas/routing-table.schema.json</code></td><td>per-seat required <code>manifest</code>; top-level <code>policy.enforced_roles</code>; resume-opt-in conditional</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/routing/rawgentic.routing-table.json</code></td><td>+analysis +design rows; manifest ×7; <code>policy</code> section; provenance note</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/enforce.py</code></td><td><code>GateAttestation</code>, <code>launch_input_digest</code>, <code>ENFORCEABLE_ROLES</code> export, check_pre surgery (D+E incl. outcome routing), <code>PreReceipt</code> +<code>role</code>/<code>gate_outcome</code>/<code>gate_input_digest</code> (gate_digest = policy digest), <code>_validate_record</code> build-receipt conditional, docstrings</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/routing.py</code></td><td><code>_assert_referential_integrity</code>: confinement↔chain-provider cross-check, policy shape</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/__init__.py</code></td><td>export <code>GateAttestation</code>, <code>launch_input_digest</code></td></tr>
+<tr><td><code>hooks/executor_routing_lib.py</code></td><td>WIRED_SEATS full 7; design opt-in rejected in <code>parse_executor_routing</code>/<code>classify_seat</code>; <code>--gate-file</code> + <code>--plan-context</code> params (build path: both MANDATORY); gate-outcome routing (<code>single</code> only); build authentication + attestation minting</td></tr>
+<tr><td><code>hooks/complexity_gate.py</code></td><td>public <code>verified_decision(gate_decision, expected_context=None)</code> + <code>GateTamperError</code> (extracted from bakeoff_policy)</td></tr>
+<tr><td><code>hooks/bakeoff_policy.py</code></td><td>call the extracted helper</td></tr>
+<tr><td><code>hooks/driver_bench_lib.py</code></td><td>build-audit path in <code>_score_audit</code> (fixture gate supply), comments</td></tr>
+<tr><td>tests (enforce/routing/schemas/executor_routing/driver_bench)</td><td>red-before-green cells + updated pins (see plan)</td></tr>
+<tr><td><code>README.md</code> + version ×3 surfaces + AC-doc §7 row</td><td>minor bump (feat) 3.51.2 → 3.52.0; changelog entry</td></tr>
+</tbody>
+</table>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>Missing/malformed manifest or policy section: load refused (schema/semantic, fail-closed) — no snapshot, no launch.</li>
+<li>Unknown seat name: unchanged <code>RoutingError</code> fail-loud (enforce.py:107).</li>
+<li>Unrecognized non-empty role: fail-closed violation; empty <code>enforced_roles</code> fails ALL non-empty roles (safe direction).</li>
+<li>Build without attestation: <code>gate_missing</code>; junk/unbound attestation: <code>gate_invalid</code>; tampered GateDecision: hooks-side <code>verified_decision</code> raises — never dispatches.</li>
+<li>Confinement not covering a chain provider: load refused (semantic pass).</li>
+</ul>
+<h2>Security implications</h2>
+<p>This IS the enforcement surface; every change tightens (fail-open roles → fail-closed; unconditional build deny → authenticated, launch-bound attestation; no manifest → structurally validated governance). The one loosening — build seats may dispatch — is gated on the authenticated #429 gate + unchanged forbidden rules (never-Haiku, cross_model_author). Actual mutating-launch confinement remains W2/W5 (declared here, enforced there — receipts/docs must not imply resume or confinement are OPERATIONAL yet; peer risk item, adopted into docs wording). <strong>Sequencing (pass-2 P6, owner-DECLINED with evidence):</strong> enabling the build path before W2/W5 enforce manifests is safe because the launch surface is DORMANT until W7 — <code>executorRouting</code> defaults to <code>inherit</code> (no live cutover; merging changes no workflow), no workflow dispatches build through the executor before W7 #470&#x27;s rewiring, and the campaign queue lands W2 #465 and W5 #468 BEFORE W7 — so by the time any workflow can reach a build dispatch, tool grants, confinement pinning, and the canary are live. The W1 unlock is owner-ratified epic architecture (AC-D3; Q1–Q6 decisions 2026-07-18). No secrets touched; <code>credential_ref</code> semantics unchanged.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis: none</p>
+<p>(pure stdlib + jsonschema — already a runtime dep of the package, <code>phase_executor/pyproject.toml:8</code>; both call-site idioms precedented at contract.py:160/:166)</p>
+<h2>Multi-PR assessment</h2>
+<p>Single PR. Coherent enforcement surface; tests dominate line count; splitting schema from check_pre surgery would ship a half-wired state.</p>
+<h2>Test plan (red-before-green anchors)</h2>
+<p>1. RED: <code>check_pre(role=&quot;build&quot;, attestation=&lt;valid bound&gt;)</code> expecting pass — fails on main (<code>gate_validation_unavailable</code>). 2. RED: <code>check_pre(role=&quot;biuld&quot;)</code> expecting <code>unrecognized_role</code> — silently passes on main (#434 part 2 cell). 3. RED: shipped-table assertions — manifest ×7, policy section, 7-seat set (main has 5, no manifest). 4. RED: schema rejects a seat without <code>manifest</code>; resume without <code>resume_opt_in</code> (proves the 2020-12 <code>if/then</code> under jsonschema 4.10.3 — breaker A5); confinement missing a chain provider; empty-string <code>role</code> (minLength 1); name↔role binding lint — <code>build</code> seat without <code>role: &quot;build&quot;</code> refused at load (breaker A2). 5. Attestation cells: missing → <code>gate_missing</code>; raw dict → <code>gate_invalid</code>; input_digest mismatch (cross-launch replay) → <code>gate_invalid</code>; <code>gate_outcome == &quot;bakeoff&quot;</code> presented to single dispatch → <code>gate_requires_bakeoff</code> refusal (pass-2 P1); FORGED-but-self-consistent GateDecision with mismatched <code>expected_context</code> → <code>verified_decision</code> fails; build dispatch with MISSING/empty/partial/extra-key <code>--plan-context</code> → structured exit-2 refusal (<code>plan_context_required</code>/<code>plan_context_incomplete</code>), no attestation (pass-2 P5 + Step-11 exact-set tighten); stale decision (different plan inputs) rejected ON THE REAL DISPATCH PATH (integration, not just unit); valid+bound+outcome-single → pass with receipt carrying <code>role</code>, <code>gate_outcome</code>, <code>gate_input_digest</code>, <code>gate_digest</code>=policy digest; new receipt with <code>role==&quot;build&quot;</code> but null gate fields FAILS <code>_validate_record</code> (pass-2 P2); old role-less receipts still validate. 6. Must-survive: role=None no-requirement (test_enforce.py:515); empty-string role treated as absent in check_pre (breaker S4); off_chain/forbidden/review cells; <code>test_digest_golden_vector</code> (inline fixture, untouched); old audit logs (no gate fields) still validate (<code>_RECEIPT_REQUIRED</code> unchanged). 7. Rewritten by design: test_enforce.py:101/:109 (deny → attestation semantics); test_driver_bench.py:109 (positive build-audit + fail-closed negative); routing-test fixture migration (breaker S3 + pass-2 SR2): <code>_table()</code> helper (test_routing.py:24-43) + every test caller of <code>load_routing_table</code>/<code>validate_routing_table</code> gains schema-valid manifest+policy AND canonical-named seats gain their matching <code>role</code> (the <code>_table()</code> review seat currently has none — the name↔role lint would red it) (grep ALL callers, not just enforce fixtures — enforce fixtures use unvalidated <code>from_table</code> and survive). 8. Hooks integration: authenticated gate → dispatch → receipt(gate fields) → observation → reconcile ok; tampered gate raises pre-dispatch (<code>GateTamperError</code>→<code>JudgeError</code> translation holds for bakeoff); missing <code>--gate-file</code> on build seat → exit 4; non-build seats need no gate; <code>executorRouting.seats.design = executor</code> → <code>MalformedConfig</code> exit 2 (breaker S2). 9. Drift guards: enforced-role review seats + design declare <code>fresh</code>; <code>set(DESIGN_MODELS) == set(design-row models)</code> (EQUALITY — breaker A6); shipped-table name↔role bindings (build/review); <code>policy.enforced_roles ⊆ ENFORCEABLE_ROLES</code> loader rejection cell (pass-2 P4); duplicate-model-id manifest-resolution cell — candidate discovered via another seat&#x27;s chain resolves the DESIGN row&#x27;s manifest (pass-2 P3, rule-pin; enforcement W2); <code>verified_decision</code> single-sourced (bakeoff_policy imports it).</p>
+
+</main>
+<footer>Last updated: 2026-07-18 04:43 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

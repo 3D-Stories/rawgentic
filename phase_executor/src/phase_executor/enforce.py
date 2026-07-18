@@ -20,6 +20,7 @@ consistency (pre-checked target == dispatched target), not physical provider att
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -29,6 +30,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import capture, contract, routing
+from .contract import ENFORCEABLE_ROLES  # re-export: enforce.ENFORCEABLE_ROLES is the public-API home (#464 §D)
 
 
 def target_identity(target: dict) -> tuple:
@@ -50,6 +52,44 @@ def target_identity(target: dict) -> tuple:
 
 
 @dataclass(frozen=True)
+class GateAttestation:
+    """Authenticated #429 gate evidence, minted at the HOOKS boundary AFTER the GateDecision is
+    authenticated (digest recompute), and bound to ONE launch via ``input_digest`` (#464 §E).
+
+    An ``isinstance`` check against this type is the in-process trust boundary — a raw dict never
+    satisfies it, so ``check_pre`` cannot be handed a hand-rolled attestation. Honest limit: this is
+    NOT cryptographic (the digests are unkeyed) — the SAME trust class as the existing receipt/audit
+    chain. It defends against authoring errors, stale reuse, and cross-launch replay, never a hostile
+    in-process caller (HMAC/signed attestations are the named follow-up if cross-process trust is
+    ever needed).
+
+    Fields:
+    - ``gate_outcome``: the #429 routing decision — ``"bakeoff"`` | ``"single"``.
+    - ``policy_digest``: the gate's policy digest (recorded into the receipt's ``gate_digest`` slot).
+    - ``input_digest``: ``launch_input_digest(seat, target, correlation_id)`` for the exact launch
+      this attestation authorizes; ``check_pre`` recomputes it and rejects a mismatch.
+    """
+
+    gate_outcome: str
+    policy_digest: str
+    input_digest: str
+
+
+def launch_input_digest(seat: str, target: dict, correlation_id: str) -> str:
+    """The canonical digest binding a gate attestation to ONE launch: sha256 over canonical JSON of
+    the seat, the target's full identity, and the correlation id. Uses ``routing.canonical_bytes``
+    (sort_keys, compact separators, ensure_ascii) so the digest is cross-language reproducible. Hooks
+    mint an attestation carrying this digest; ``check_pre`` recomputes it from its own args and
+    refuses a mismatch (stale/replayed gate evidence cannot cross launches)."""
+    payload = {
+        "seat": seat,
+        "target_identity": list(target_identity(target)),
+        "correlation_id": correlation_id,
+    }
+    return "sha256:" + hashlib.sha256(routing.canonical_bytes(payload)).hexdigest()
+
+
+@dataclass(frozen=True)
 class PreReceipt:
     """A pre-dispatch receipt minted by ``check_pre``. The caller records it to the audit log
     BEFORE launching; a ``fail`` verdict means the call must NOT launch. Bound to its observation at
@@ -65,6 +105,11 @@ class PreReceipt:
     author_provider: Optional[str]
     verdict: str  # "pass" | "fail"
     violations: tuple = ()
+    # #464 §E: the seat's role + attestation evidence, so the audit can PROVE a build launch was
+    # gated. Defaulted (None) so old constructors and role-less legacy receipts are unchanged.
+    role: Optional[str] = None
+    gate_outcome: Optional[str] = None
+    gate_input_digest: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -79,6 +124,9 @@ class PreReceipt:
             "author_provider": self.author_provider,
             "verdict": self.verdict,
             "violations": list(self.violations),
+            "role": self.role,
+            "gate_outcome": self.gate_outcome,
+            "gate_input_digest": self.gate_input_digest,
         }
 
 
@@ -88,21 +136,33 @@ def _declared_identities(seat_obj: dict) -> set:
 
 
 def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, gate_digest=None,
-              author_provider=None, nonce=None) -> PreReceipt:
+              author_provider=None, nonce=None, attestation: "GateAttestation | None" = None) -> PreReceipt:
     """Pre-dispatch enforcement, evaluated against the EXACT snapshot that will serve the call.
 
     Accumulates ALL violations (never short-circuits — the caller sees every problem):
     - ``off_chain``: the target's full identity is not one of the seat's declared chain entries.
     - ``forbidden``: a ``forbidden_combinations`` row matches (never-Haiku; cross_model_author).
+    - ``unrecognized_role`` (#464 §D): the seat's declared ``role`` is non-empty but NOT in the
+      table's ``policy.enforced_roles`` set — fail closed. A missing/empty role carries no
+      requirement; a policy-less programmatic table has an EMPTY enforced set, so ANY non-empty role
+      fails (the safe direction). Keying on the TABLE-declared set (not a code constant) keeps the
+      engine policy-free and rides #445's per-project extraction.
     - ``author_provider_missing``: a ``role: "review"`` seat with no ``author_provider`` (the
       cross_model_author rule would otherwise be silently inert — fail closed).
-    - build gate (requirement DERIVED from the seat's ``role == "build"``): fails CLOSED
-      unconditionally with ``gate_validation_unavailable`` — E2 cannot authenticate a gate decision,
-      so build routing is blocked until #429 supplies an authenticated validator (E3/E4 must not
-      enable build routing before then).
+    - build gate (requirement DERIVED from the seat's ``role == "build"``, #464 §E): the build path
+      proceeds ONLY on an authenticated, launch-bound ``GateAttestation``. ``gate_missing`` (none
+      supplied); ``gate_invalid: <detail>`` (not a ``GateAttestation``; an unknown ``gate_outcome``;
+      or an ``input_digest`` != ``launch_input_digest(seat, target, correlation_id)`` — stale/replayed
+      evidence); ``gate_requires_bakeoff`` (a valid attestation whose outcome is ``"bakeoff"`` — the
+      single-dispatch path may only proceed on a ``"single"`` outcome; the gate's routing decision is
+      not bypassable). This module verifies the attestation's SHAPE + launch BINDING + outcome, and
+      NEVER the gate's AUTHENTICITY (extraction-clean, no hooks import): authenticating the #429
+      GateDecision (digest recompute) is the hooks boundary's job.
 
     Unknown seat -> ``routing.RoutingError`` (fail-loud). Returns a ``PreReceipt``;
-    ``verdict == "pass"`` iff there are no violations.
+    ``verdict == "pass"`` iff there are no violations. When an attestation is present, its
+    ``gate_outcome`` / ``input_digest`` and (as ``gate_digest``) ``policy_digest`` are recorded on the
+    receipt so the audit can prove a build launch was gated.
     """
     seat_obj = snapshot.seat(seat)  # raises routing.RoutingError on an unknown seat
     tid = target_identity(target)
@@ -114,16 +174,35 @@ def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, 
         violations.append(f"forbidden: {reason}")
     # Enforcement is keyed on the seat's declared ``role`` in the routing table, NOT its literal name
     # (Step-8a: a name-based check silently disabled itself on a renamed seat, and is not portable to
-    # kukakuka's seat vocabulary). A seat with no ``role`` carries no review/build requirement.
+    # kukakuka's seat vocabulary). A seat with no ``role`` (or an empty-string role) carries no
+    # review/build requirement.
     role = seat_obj.get("role")
+    enforced = frozenset(snapshot.table.get("policy", {}).get("enforced_roles", ()))
+    if role and role not in enforced:
+        # #464 §D: a non-empty role the TABLE does not enforce fails closed (an empty enforced set —
+        # a policy-less programmatic table — fails ALL non-empty roles: the safe direction).
+        violations.append(f"unrecognized_role: {role!r} not in {sorted(enforced)}")
     if role == "review" and author_provider is None:
         violations.append("author_provider_missing")
     if role == "build":
-        # E2 cannot AUTHENTICATE a gate decision — that is #429's job (an authenticated validator
-        # bound to correlation/target/digest). Until #429 lands, a build seat fails CLOSED
-        # unconditionally (Step-11: accepting a caller-supplied validator was a `lambda:True` bypass;
-        # E3/E4 must not enable build routing before #429). #429 replaces this branch with real validation.
-        violations.append("gate_validation_unavailable")
+        # #464 §E: the build path proceeds ONLY on an authenticated, launch-bound GateAttestation.
+        # This module verifies SHAPE + BINDING + outcome; the hooks boundary authenticates the #429
+        # GateDecision (digest recompute) before minting the attestation — enforce never imports
+        # hooks, so it cannot and does not verify gate AUTHENTICITY (honest, extraction-clean limit).
+        if attestation is None:
+            violations.append("gate_missing")
+        elif not isinstance(attestation, GateAttestation):
+            violations.append("gate_invalid: not a GateAttestation")
+        elif attestation.gate_outcome not in ("bakeoff", "single"):
+            violations.append(f"gate_invalid: unknown outcome {attestation.gate_outcome!r}")
+        elif attestation.input_digest != launch_input_digest(seat, target, correlation_id):
+            violations.append("gate_invalid: input digest mismatch (stale/replayed gate evidence)")
+        elif attestation.gate_outcome != "single":
+            violations.append("gate_requires_bakeoff")
+    # #464 §E: only a real GateAttestation feeds the receipt (a junk/absent attestation records
+    # nothing); its policy_digest repurposes the pre-existing gate_digest slot (today always None in
+    # production). An explicit gate_digest arg is still honoured when no attestation is present.
+    valid_attestation = attestation if isinstance(attestation, GateAttestation) else None
     return PreReceipt(
         nonce=nonce or uuid.uuid4().hex,
         seat=seat,
@@ -131,10 +210,13 @@ def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, 
         attempt_id=attempt_id,
         target_identity=tid,
         config_digest=snapshot.config_digest,
-        gate_digest=gate_digest,
+        gate_digest=valid_attestation.policy_digest if valid_attestation is not None else gate_digest,
         author_provider=author_provider,
         verdict="pass" if not violations else "fail",
         violations=tuple(violations),
+        role=role or None,
+        gate_outcome=valid_attestation.gate_outcome if valid_attestation is not None else None,
+        gate_input_digest=valid_attestation.input_digest if valid_attestation is not None else None,
     )
 
 
@@ -209,6 +291,26 @@ def _validate_record(obj, lineno: int) -> None:
         raise ValueError(f"audit line {lineno}: {kind} missing fields {missing}")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
+    if kind == "receipt" and obj.get("role") == "build" and obj.get("verdict") == "pass":
+        # #464 §E: an APPROVED build receipt must PROVE it was gated — truthy gate_outcome +
+        # gate_input_digest (fail-closed; empty strings prove nothing). A verdict='fail' build
+        # receipt legitimately carries null gate fields (gate_missing / gate_invalid denials are
+        # recorded BEFORE the verdict check) and must stay readable — else one denial poisons the
+        # whole run's audit log. Receipts with NO 'role' key (all historical logs) skip this
+        # branch and validate exactly as today; _RECEIPT_REQUIRED is unchanged.
+        if not obj.get("gate_outcome") or not obj.get("gate_input_digest"):
+            raise ValueError(f"audit line {lineno}: build receipt missing gate evidence")
+        # Step-11 diff review (reopens step4p2-P2): the reader guard exists for corrupt/tampered
+        # logs — a PASS build receipt claiming any outcome but "single" is corruption (check_pre
+        # fails a bakeoff outcome), and gate digests must be sha256-canonical, not merely truthy.
+        if obj["gate_outcome"] != "single":
+            raise ValueError(f"audit line {lineno}: pass build receipt with non-single "
+                             f"gate_outcome {obj['gate_outcome']!r}")
+        for field in ("gate_input_digest", "gate_digest"):
+            val = obj.get(field)
+            if not isinstance(val, str) or not val.startswith("sha256:"):
+                raise ValueError(f"audit line {lineno}: build receipt {field} not a canonical "
+                                 f"sha256 digest")
     if kind == "epoch":
         if not isinstance(obj["seq"], int) or isinstance(obj["seq"], bool):
             raise ValueError(f"audit line {lineno}: epoch seq not an int")

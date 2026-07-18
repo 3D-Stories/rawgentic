@@ -279,19 +279,17 @@ def _candidates_for(snapshot, models, prompt, *, seat):
 
 
 def _verified_decision(gate_decision) -> bool:
-    """M7 anti-tamper: (1) recompute the #429 policy_digest over ``input_snapshot`` and refuse a
-    snapshot edited between plan and run; (2) return the AUTHORITATIVE bake-off decision RE-DERIVED
-    from the (now integrity-verified) snapshot — NOT ``gate_decision.decision``, which the digest does
-    not bind. So editing the ``decision`` field alone (to force or suppress a bake-off) has no effect:
-    the executor trusts only what the digest covers. Single-sources both via complexity_gate."""
+    """M7 anti-tamper, now single-sourced via ``complexity_gate.verified_decision`` (#464). Kept as a
+    thin wrapper because callers/tests reference it; it translates the extracted helper's
+    ``GateTamperError`` back to ``JudgeError`` so ``run_build_bakeoff``'s raises-on-tamper contract is
+    unchanged. The recompute-digest + authoritative-decision semantics (trust only what the digest
+    covers, NOT ``gate_decision.decision``) live there. No ``expected_context`` here: bakeoff_policy
+    mints its gate in-process one call earlier and holds no separate plan doc (the ctx=None carve-out)."""
     import complexity_gate  # noqa: PLC0415
-    snap = gate_decision.input_snapshot
-    expected = complexity_gate._policy_digest(snap)  # single-source digest
-    if expected != gate_decision.policy_digest:
-        raise JudgeError(
-            f"#429 gate policy_digest mismatch (input_snapshot edited between plan and run): "
-            f"expected {expected}, got {gate_decision.policy_digest}")
-    return complexity_gate.decision_from_snapshot(snap)
+    try:
+        return complexity_gate.verified_decision(gate_decision)
+    except complexity_gate.GateTamperError as exc:
+        raise JudgeError(str(exc)) from exc
 
 
 def run_design_round(prompt, *, snapshot, quota, capture_root, headless, seed,

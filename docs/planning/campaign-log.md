@@ -14,6 +14,44 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
+
+Wire WF2/WF3 to the `phase_executor` engine per the ratified architecture (the real #417).
+Doc of record: `docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md`.
+Queue (topo, D-1 pins + D-2 insertion): **#464 (W1)** ← this slot · #480 · #445 · #446 ·
+#465 (W2) · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) ·
+#472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign
+(owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.
+
+### #464 — capability manifest + WIRED_SEATS full set + attested build-audit path (W1) · v3.52.0
+
+Every routing-table seat carries a required `manifest` (`session_policy` fresh ×7 per D-8,
+`tool_grants`, normalized `effort`, per-provider `confinement`, `bounds`), fail-closed at load
+(schema draft-2020-12 + semantic passes: confinement↔chain-provider coverage,
+`policy.enforced_roles ⊆ ENFORCEABLE_ROLES` evaluator ceiling, name↔role binding lint). Table
+grows to 7 seats (+`analysis` sonnet-primary, +`design` = the #428 competitive pair as a static
+row whose dispatch stays bake-off-owned; single-dispatch refused). `check_pre` drops the
+unconditional build hard-deny for a launch-bound `GateAttestation` (anti-replay
+`launch_input_digest`, outcome routing — a `bakeoff` outcome can never authorize single
+dispatch; receipts carry `role` + gate evidence; denied-build receipts stay audit-readable);
+unrecognized non-empty roles fail closed (#434 part 2, red-before-green on the typo'd-role
+cell). `dispatch_seat` gains the gated build path (`--gate-file` + `--plan-context` with EXACT
+canonical key-set equality) authenticated via the extracted `complexity_gate.verified_decision`
+(+`GateTamperError`, strict empty/missing-key context contract); driver-bench admits build
+audits.
+
+- **Design:** r3 — peer consult (gpt) + 3-approach brainstorm + THREE adversarial design passes
+  with a dispositions ledger, then a 4th adversarial DIFF pass at Step 11 that caught 2 genuine
+  failed-remediations (partial-context acceptance; truthiness-only receipt validation) — fixed
+  same-PR. 14-entry terminal-disposition ledger; 2 design loop-backs consumed (budget
+  exhausted, pass-3 clean); owner resolved 3 breakers live, Step-11 fixes applied under the
+  D-3 overnight posture.
+- **Carried forward:** W7 #470 — bake-off audit-spine wiring + orchestrator-minted plan-context
+  (issuecomment-5010761468); W2 #465 — runtime manifest resolution per the design-row rule.
+- **Session-limit resilience (live):** the 04:20 window hit mid-Step-11 — 3 reviewer agents died
+  vacuous and were re-dispatched clean after reset; the codex diff review (separate quota)
+  survived and its sidecar was joined on schedule.
+
 ## Epic #422 — per-phase model routing + deterministic execution engine (auto-run)
 
 Route WF2/WF3 model seats from bench-#14 evidence through a deterministic `phase_executor`

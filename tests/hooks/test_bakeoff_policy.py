@@ -310,6 +310,41 @@ def test_build_bakeoff_gate_false_runs_single_seat_uniform_shape():
     assert called == {"seat": "build", "prompt": "build this"}
 
 
+# ---- design-seat manifest data invariants (#464 §B) -------------------------------------------
+def _shipped_seats():
+    return json.loads(TABLE.read_text())["seats"]
+
+
+def _seat_models(spec):
+    return {spec["primary"]["model"], *(e["model"] for e in spec.get("chain", []))}
+
+
+def test_design_models_equals_design_seat_models():
+    # §B breaker A6: SET EQUALITY, not subset. A one-directional subset would let a model ADDED to
+    # the design row silently never become a bake-off candidate (bakeoff_policy scans DESIGN_MODELS,
+    # so a table-only model would never dispatch). Read from the SHIPPED table.
+    design = _shipped_seats()["design"]
+    assert set(bp.DESIGN_MODELS) == _seat_models(design)
+
+
+def test_design_row_manifest_read_only_for_models_shared_with_other_chains():
+    """§B P3 (normative rule pin, DATA invariant): a competitive candidate's governing manifest is
+    ALWAYS the REQUESTED design row's, NEVER the seat its lane happened to be discovered from — a
+    duplicate model id found via e.g. the build chain must not resolve build's WRITE-granting
+    manifest for a design dispatch. This pins the data that makes the rule meaningful: for every
+    DESIGN_MODELS id that ALSO lives in another seat's chain (opus appears in build/analysis/ship
+    chains; build is write-granting), the design row declares read-only tool_grants (["read"]), so a
+    candidate that must resolve the design manifest never inherits write grants. Runtime resolution
+    enforcement is W2 #465; W1 pins only the data invariant."""
+    seats = _shipped_seats()
+    other_chain_models = set().union(
+        *({e["model"] for e in spec.get("chain", [])}
+          for name, spec in seats.items() if name != "design"))
+    shared = set(bp.DESIGN_MODELS) & other_chain_models
+    assert shared, "rule is only meaningful when a DESIGN_MODEL also lives in another seat's chain"
+    assert seats["design"]["manifest"]["tool_grants"] == ["read"]
+
+
 # ---- integration + wall-clock AC (real quota, real pools, sleeping stub authors) --------------
 def _sleeping_dispatch(delay):
     def dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):

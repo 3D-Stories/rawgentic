@@ -6,12 +6,19 @@ from phase_executor.routing import RoutingConfig
 
 
 def _table(concurrency=2):
+    # #464 fixture migration: loaded via RoutingConfig (validation path), so the review seat needs
+    # a schema-valid manifest; the canonical seat declares its role + a policy section for
+    # forward-compat with the Task-2 name<->role loader lint.
     return {
         "schema_version": "1",
+        "policy": {"enforced_roles": ["review", "build"]},
         "pools": {"claude": {"concurrency": concurrency}},
-        "seats": {"review": {"primary": {"model": "claude-fable-5",
+        "seats": {"review": {"role": "review",
+                  "primary": {"model": "claude-fable-5",
                   "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "pool": "claude"}},
-                  "chain": []}},
+                  "chain": [],
+                  "manifest": {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+                               "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 1800}}}},
     }
 
 

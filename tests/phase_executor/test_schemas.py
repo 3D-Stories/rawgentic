@@ -125,6 +125,83 @@ def test_routing_table_requires_pools_and_seats():
         jsonschema.validate({"schema_version": "1", "seats": {}}, RT_SCHEMA)
 
 
+# --- #464 W1: per-seat capability manifest + top-level policy section (schema) ---
+
+_ANTH_LANE = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
+              "credential_ref": None, "pool": "claude"}
+
+
+def _rt_manifest(**over):
+    m = {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "high",
+        "confinement": {"anthropic": "hooks"},
+        "bounds": {"timeout_s": 1800},
+    }
+    m.update(over)
+    return m
+
+
+def _rt_valid():
+    """A minimal routing table valid under the #464 (manifest + policy) schema."""
+    return {
+        "schema_version": "1",
+        "policy": {"enforced_roles": ["review", "build"]},
+        "pools": {"claude": {"concurrency": 2}},
+        "seats": {
+            "intake": {
+                "primary": {"model": "claude-opus-4-8", "lane": dict(_ANTH_LANE)},
+                "chain": [],
+                "manifest": _rt_manifest(),
+            }
+        },
+    }
+
+
+def test_rt_schema_rejects_seat_missing_manifest():
+    # Base is legal under the pre-#464 schema (no manifest, no policy); the new schema requires
+    # a manifest on every seat, so an otherwise-valid seat without one is rejected.
+    t = {
+        "schema_version": "1",
+        "pools": {"claude": {"concurrency": 2}},
+        "seats": {"intake": {"primary": {"model": "claude-opus-4-8", "lane": dict(_ANTH_LANE)},
+                             "chain": []}},
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(t, RT_SCHEMA)
+
+
+def test_rt_schema_rejects_resume_without_opt_in():
+    """2020-12 if/then under the installed validator (jsonschema 4.10.3): session_policy 'resume'
+    demands a resume_opt_in object — resume is legal but never silent."""
+    t = _rt_valid()
+    t["seats"]["intake"]["manifest"]["session_policy"] = "resume"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(t, RT_SCHEMA)
+
+
+def test_rt_schema_accepts_resume_with_opt_in():
+    t = _rt_valid()
+    t["seats"]["intake"]["manifest"]["session_policy"] = "resume"
+    t["seats"]["intake"]["manifest"]["resume_opt_in"] = {"reason": "explicit continuation of prior seat"}
+    jsonschema.validate(t, RT_SCHEMA)
+
+
+def test_rt_schema_rejects_empty_string_role():
+    t = _rt_valid()
+    t["seats"]["intake"]["role"] = ""  # minLength 1 makes an empty role schema-illegal
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(t, RT_SCHEMA)
+
+
+def test_rt_schema_rejects_unknown_manifest_key():
+    t = _rt_valid()
+    t["seats"]["intake"]["manifest"]["bogus"] = 1  # additionalProperties: false on manifest
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(t, RT_SCHEMA)
+
+
 def test_observation_dispatched_lane_optional_and_valid():
     """#425 B: dispatched_lane is optional (absent validates — kukakuka v1 parity) and,
     when present, validates as a lane object."""

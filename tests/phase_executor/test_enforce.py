@@ -23,6 +23,9 @@ def _snapshot():
     table = {
         "schema_version": "1",
         "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}, "zhipu": {"concurrency": 2}},
+        # #464 Task 3 (§D): table-declared enforced-roles set — check_pre reads it from the snapshot.
+        # build+review are recognized here so their per-role requirements fire (not unrecognized_role).
+        "policy": {"enforced_roles": ["review", "build"]},
         "seats": {
             "review": {
                 "role": "review",
@@ -48,6 +51,22 @@ def _snapshot():
 
 def _target(model, lane):
     return {"model": model, "lane": lane}
+
+
+def _build_target():
+    """The build seat's declared primary target (claude-sonnet-5 via the claude lane)."""
+    return _target("claude-sonnet-5", _lane("claude"))
+
+
+def _attestation(*, seat="build", target=None, correlation_id="c", outcome="single",
+                 policy_digest="sha256:pol"):
+    """A GateAttestation minted bound to the given launch (input_digest recomputed from the args)."""
+    target = _build_target() if target is None else target
+    return enforce.GateAttestation(
+        gate_outcome=outcome,
+        policy_digest=policy_digest,
+        input_digest=enforce.launch_input_digest(seat, target, correlation_id),
+    )
 
 
 # ---- target_identity ----
@@ -98,21 +117,30 @@ def test_check_pre_review_requires_author_provider():
     assert "author_provider_missing" in r.violations
 
 
-def test_check_pre_build_gate_validation_unavailable():
+def test_check_pre_build_valid_attestation_passes():
+    """#464 §E (rewrites the pre-#429 unconditional deny): a build seat with a valid, launch-bound,
+    single-outcome GateAttestation PASSES; the receipt carries role + gate_outcome + gate_input_digest,
+    and gate_digest is repurposed to the attestation's policy_digest."""
     snap = _snapshot()
-    t = _target("claude-sonnet-5", _lane("claude"))
-    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", gate_digest="anything")
-    assert r.verdict == "fail"
-    assert "gate_validation_unavailable" in r.violations  # no validator -> fail closed
+    t = _build_target()
+    att = _attestation(seat="build", target=t, correlation_id="c", outcome="single",
+                       policy_digest="sha256:pol")
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", attestation=att)
+    assert r.verdict == "pass" and not r.violations
+    assert r.role == "build"
+    assert r.gate_outcome == "single"
+    assert r.gate_input_digest == enforce.launch_input_digest("build", t, "c")
+    assert r.gate_digest == "sha256:pol"  # policy_digest repurposes the gate_digest receipt slot
 
 
-def test_check_pre_build_always_fails_closed_until_429():
-    # Step-11: E2 removed the caller-supplied gate_validator (a lambda:True bypass). A build seat
-    # fails closed unconditionally until #429 supplies an authenticated validator.
+def test_check_pre_build_missing_attestation_gate_missing():
+    """#464 §E (rewrites the pre-#429 deny): a build seat with NO attestation fails CLOSED with
+    gate_missing — the build path may only proceed on authenticated gate evidence."""
     snap = _snapshot()
-    t = _target("claude-sonnet-5", _lane("claude"))
-    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", gate_digest="anything")
-    assert r.verdict == "fail" and "gate_validation_unavailable" in r.violations
+    t = _build_target()
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0")
+    assert r.verdict == "fail" and "gate_missing" in r.violations
+    assert r.role == "build" and r.gate_outcome is None and r.gate_input_digest is None
 
 
 def test_check_pre_unknown_seat_raises():
@@ -294,8 +322,16 @@ def test_reload_on_epoch_exception_propagates(tmp_path):
     """Contract (Med#7 negative-path): RoutingConfig.reload must NOT swallow an on_epoch failure,
     so a lost audit epoch surfaces rather than silently dropping."""
     import json as _json
+    # #464 fixture migration: this table loads via RoutingConfig (validation path), so the seat
+    # needs a schema-valid manifest; the canonical review seat declares its role + a policy section
+    # for forward-compat with the Task-2 name<->role loader lint.
     table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
-             "seats": {"review": {"primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}},
+             "policy": {"enforced_roles": ["review", "build"]},
+             "seats": {"review": {"role": "review",
+                                  "primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": [],
+                                  "manifest": {"session_policy": "fresh", "tool_grants": ["read"],
+                                               "effort": "high", "confinement": {"anthropic": "hooks"},
+                                               "bounds": {"timeout_s": 1800}}}},
              "forbidden_combinations": []}
     p = tmp_path / "rt.json"
     p.write_text(_json.dumps(table))
@@ -446,6 +482,18 @@ def test_enforcement_api_exported_at_package_top_level():
         assert name in pe.__all__, f"missing from __all__: {name}"
 
 
+def test_enforceable_roles_exported_at_package_top_level_464():
+    """#464 Task 2 (design §D): ENFORCEABLE_ROLES — the evaluator-registry bound — is public API,
+    names exactly the roles check_pre evaluates, and is a single object shared across the modules
+    (defined in contract, the shared leaf; re-exported through enforce, the public-API home)."""
+    import phase_executor as pe
+    assert hasattr(pe, "ENFORCEABLE_ROLES")
+    assert "ENFORCEABLE_ROLES" in pe.__all__
+    assert pe.ENFORCEABLE_ROLES == frozenset({"review", "build"})
+    assert enforce.ENFORCEABLE_ROLES is pe.ENFORCEABLE_ROLES
+    assert contract.ENFORCEABLE_ROLES is pe.ENFORCEABLE_ROLES
+
+
 def test_reconcile_breach_not_forgiven_by_verified_sibling():
     """Step-8a Finding 1: a wrong-model breach (requested!=actual, billed) on one attempt must NOT
     be laundered by a sibling attempt that verified — only availability failures are forgivable."""
@@ -497,6 +545,9 @@ def test_reconcile_identity_failure_not_forgiven_by_verified_sibling():
 
 def _role_snapshot(seat_name, role):
     table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
+             # #464 Task 3 (§D): recognize review+build so a role-carrying seat's per-role requirement
+             # fires without also tripping unrecognized_role (the fixture is about role-keying, not roster).
+             "policy": {"enforced_roles": ["review", "build"]},
              "seats": {seat_name: {"role": role, "primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}} if role
                       else {seat_name: {"primary": {"model": "claude-fable-5", "lane": _lane("claude")}, "chain": []}},
              "forbidden_combinations": []}
@@ -561,3 +612,180 @@ def test_target_identity_includes_participation_mode():
     a = target_identity(_target("claude-fable-5", dict(base)))
     b = target_identity(_target("claude-fable-5", dict(base, participation_mode="council")))
     assert a != b and len(a) == 7
+
+
+# ---- #464 Task 3: unrecognized-role fail-closed (§D) + attested build gate (§E) ----
+
+def test_check_pre_unrecognized_role_typo_fails_closed_464():
+    """#464 §D / #434 part 2: a typo'd role ('biuld') NOT in the table's enforced_roles fails CLOSED
+    with unrecognized_role. This silently PASSES on main (nothing keyed on an unknown role)."""
+    table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
+             "policy": {"enforced_roles": ["review", "build"]},
+             "seats": {"builder": {"role": "biuld",
+                                   "primary": {"model": "claude-fable-5", "lane": _lane("claude")},
+                                   "chain": []}},
+             "forbidden_combinations": []}
+    snap = routing.RoutingSnapshot.from_table(table)
+    t = _target("claude-fable-5", _lane("claude"))
+    r = check_pre("builder", t, snap, correlation_id="c", attempt_id="0")
+    assert r.verdict == "fail"
+    assert any(v.startswith("unrecognized_role") for v in r.violations)
+    assert "biuld" in " ".join(r.violations)  # the offending role is named
+
+
+def test_check_pre_empty_string_role_treated_as_absent_464():
+    """#464 §D (breaker S4): an empty-string role is treated as ABSENT — no unrecognized_role, no
+    per-role requirement — and normalizes to None on the receipt."""
+    table = {"schema_version": "1", "pools": {"claude": {"concurrency": 2}},
+             "policy": {"enforced_roles": ["review", "build"]},
+             "seats": {"misc": {"role": "",
+                                "primary": {"model": "claude-fable-5", "lane": _lane("claude")},
+                                "chain": []}},
+             "forbidden_combinations": []}
+    snap = routing.RoutingSnapshot.from_table(table)
+    t = _target("claude-fable-5", _lane("claude"))
+    r = check_pre("misc", t, snap, correlation_id="c", attempt_id="0", author_provider=None)
+    assert r.verdict == "pass" and not r.violations
+    assert r.role is None  # "" normalized to None on the receipt
+
+
+def test_check_pre_build_raw_dict_attestation_rejected_464():
+    """#464 §E: a raw dict is NOT a GateAttestation (the isinstance check is the in-process trust
+    boundary) — fail closed with gate_invalid, no AttributeError populating the receipt."""
+    snap = _snapshot()
+    t = _build_target()
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0",
+                  attestation={"gate_outcome": "single", "policy_digest": "sha256:pol",
+                               "input_digest": enforce.launch_input_digest("build", t, "c")})
+    assert r.verdict == "fail"
+    assert any("not a GateAttestation" in v for v in r.violations)
+    assert r.gate_outcome is None and r.gate_input_digest is None  # nothing extracted from a junk shape
+
+
+def test_check_pre_build_unknown_outcome_invalid_464():
+    """#464 §E: an attestation with an out-of-vocabulary gate_outcome is gate_invalid (checked before
+    the digest binding)."""
+    snap = _snapshot()
+    t = _build_target()
+    att = enforce.GateAttestation(gate_outcome="sideways", policy_digest="sha256:pol",
+                                  input_digest=enforce.launch_input_digest("build", t, "c"))
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", attestation=att)
+    assert r.verdict == "fail"
+    assert any("unknown outcome" in v for v in r.violations)
+
+
+def test_check_pre_build_input_digest_mismatch_replay_464():
+    """#464 §E (anti-replay): a valid attestation whose input_digest was minted for a DIFFERENT
+    launch (correlation_id) fails closed — stale/replayed gate evidence cannot cross launches."""
+    snap = _snapshot()
+    t = _build_target()
+    att = enforce.GateAttestation(gate_outcome="single", policy_digest="sha256:pol",
+                                  input_digest=enforce.launch_input_digest("build", t, "DIFFERENT-cid"))
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", attestation=att)
+    assert r.verdict == "fail"
+    assert any("input digest mismatch" in v for v in r.violations)
+
+
+def test_check_pre_build_bakeoff_outcome_requires_bakeoff_464():
+    """#464 §E (pass-2 P1): a valid, launch-bound attestation whose outcome is 'bakeoff' may NOT
+    proceed on the single-dispatch path — gate_requires_bakeoff. The gate's routing decision is not
+    bypassable by re-presenting its own evidence to single dispatch."""
+    snap = _snapshot()
+    t = _build_target()
+    att = _attestation(seat="build", target=t, correlation_id="c", outcome="bakeoff")
+    r = check_pre("build", t, snap, correlation_id="c", attempt_id="0", attestation=att)
+    assert r.verdict == "fail" and "gate_requires_bakeoff" in r.violations
+
+
+def test_launch_input_digest_deterministic_and_sensitive_464():
+    """#464 §E: launch_input_digest is deterministic (same inputs -> same digest) and sensitive to
+    each of seat, target, and correlation_id (any change -> a different digest)."""
+    t1 = _target("claude-sonnet-5", _lane("claude"))
+    d1 = enforce.launch_input_digest("build", t1, "c")
+    assert d1.startswith("sha256:")
+    assert d1 == enforce.launch_input_digest("build", t1, "c")  # deterministic
+    assert enforce.launch_input_digest("review", t1, "c") != d1  # seat-sensitive
+    assert enforce.launch_input_digest("build", t1, "OTHER") != d1  # correlation-sensitive
+    t2 = _target("claude-fable-5", _lane("claude"))
+    assert enforce.launch_input_digest("build", t2, "c") != d1  # target-sensitive
+
+
+def test_validate_record_build_receipt_requires_gate_evidence_464():
+    """#464 §E (pass-2 P2): a NEW build receipt (role == 'build') must carry non-null gate_outcome +
+    gate_input_digest (fail-closed) — a build launch cannot validate ungated; receipts with NO role
+    key (all historical logs) validate exactly as today."""
+    # build receipt with null gate fields -> refused
+    rec = _receipt_rec("n1", seat="build")
+    rec["role"] = "build"
+    rec["gate_outcome"] = None
+    rec["gate_input_digest"] = None
+    with pytest.raises(ValueError):
+        enforce._validate_record(rec, 1)
+    # build receipt with canonical gate evidence -> validates (Step-11 tighten: gate_digest must
+    # also be sha256-canonical; _receipt_rec's default None would now be rejected)
+    rec["gate_outcome"] = "single"
+    rec["gate_input_digest"] = "sha256:x"
+    rec["gate_digest"] = "sha256:pol"
+    enforce._validate_record(rec, 1)  # no raise
+    # a historical receipt with NO 'role' key -> validates exactly as today (_RECEIPT_REQUIRED unchanged)
+    enforce._validate_record(_receipt_rec("n2"), 1)  # no raise
+
+
+def test_validate_record_denied_build_receipt_still_readable_464(tmp_path):
+    """#464 Step-8a review (both reviewers converged): a DENIED build launch legitimately mints a
+    verdict='fail' receipt with NULL gate fields (gate_missing / gate_invalid paths) and the caller
+    records it BEFORE checking the verdict — so the audit log must stay readable. Only a
+    verdict='pass' build receipt must prove gating; a fail receipt with null gate evidence
+    validates, else one denial poisons the whole run's audit (records() raises on line 1)."""
+    snap = _snapshot()
+    denied = enforce.check_pre("build", snap.table["seats"]["build"]["primary"], snap,
+                               correlation_id="c-denied", attempt_id="0")  # no attestation
+    assert denied.verdict == "fail" and "gate_missing" in denied.violations
+    assert denied.gate_outcome is None and denied.gate_input_digest is None
+    log = enforce.RoutingAuditLog(tmp_path, "run-denied")
+    log.append_receipt(denied)
+    recs = log.records()  # must NOT raise — the denial is a legitimate audit line
+    assert recs[0]["verdict"] == "fail" and recs[0]["role"] == "build"
+    # tightening (empty-string evasion): a PASS build receipt with empty-string gate fields is refused
+    rec = _receipt_rec("n3", seat="build")
+    rec["role"] = "build"
+    rec["gate_outcome"] = ""
+    rec["gate_input_digest"] = ""
+    with pytest.raises(ValueError):
+        enforce._validate_record(rec, 1)
+
+
+def test_gate_attestation_and_launch_digest_exported_464():
+    """#464 §E: GateAttestation + launch_input_digest are public API (enforce home, re-exported at
+    the package top level and in __all__)."""
+    import phase_executor as pe
+    assert hasattr(pe, "GateAttestation") and "GateAttestation" in pe.__all__
+    assert hasattr(pe, "launch_input_digest") and "launch_input_digest" in pe.__all__
+    assert pe.GateAttestation is enforce.GateAttestation
+    assert pe.launch_input_digest is enforce.launch_input_digest
+
+
+def test_validate_record_pass_build_receipt_requires_single_outcome_464():
+    """Step-11 diff review (REOPENS 464-step4p2-P2): the audit READER must reject a corrupt log
+    claiming a PASS build receipt with a non-'single' outcome — a 'bakeoff' outcome can never
+    legitimately authorize single dispatch (check_pre fails it), so a pass+bakeoff line is
+    corruption/tampering. Digests must also be sha256-canonical, not arbitrary truthy strings."""
+    rec = _receipt_rec("n4", seat="build")
+    rec["role"] = "build"
+    rec["gate_outcome"] = "bakeoff"
+    rec["gate_input_digest"] = "sha256:abc"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_outcome"] = "frobnicate"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_outcome"] = "single"
+    rec["gate_input_digest"] = "not-a-digest"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_input_digest"] = "sha256:abc"
+    rec["gate_digest"] = "junk"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_digest"] = "sha256:def"
+    enforce._validate_record(rec, 1)  # canonical single receipt validates

@@ -3,7 +3,10 @@
   "provenance": {
     "source": "bench #14",
     "plan": "docs/planning/2026-07-16-per-phase-model-routing.md §1",
-    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design=COMPETITIVE is wired in E5/#428, not a static seat here."
+    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design is now a static row (#464) whose DISPATCH remains competitive (bake-off owns it, E5/#428). Per-seat capability manifests and the top-level policy section land with #464 (W1, epic #475)."
+  },
+  "policy": {
+    "enforced_roles": ["review", "build"]
   },
   "pools": {
     "claude": {"concurrency": 2},
@@ -12,6 +15,13 @@
   },
   "seats": {
     "intake": {
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "medium",
+        "confinement": {"anthropic": "hooks"},
+        "bounds": {"timeout_s": 900}
+      },
       "primary": {
         "model": "claude-opus-4-8",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
@@ -27,7 +37,56 @@
         }
       ]
     },
+    "analysis": {
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "medium",
+        "confinement": {"anthropic": "hooks"},
+        "bounds": {"timeout_s": 1200}
+      },
+      "primary": {
+        "model": "claude-sonnet-5",
+        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+      },
+      "chain": [
+        {
+          "model": "claude-opus-4-8",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        },
+        {
+          "model": "claude-fable-5",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        }
+      ]
+    },
+    "design": {
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "high",
+        "confinement": {"openai": "codex-sandbox-readonly", "anthropic": "hooks"},
+        "bounds": {"timeout_s": 1800}
+      },
+      "primary": {
+        "model": "gpt-5.6-sol",
+        "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+      },
+      "chain": [
+        {
+          "model": "claude-opus-4-8",
+          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        }
+      ]
+    },
     "plan": {
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "high",
+        "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
+        "bounds": {"timeout_s": 1800}
+      },
       "primary": {
         "model": "claude-opus-4-8",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
@@ -46,6 +105,13 @@
     "build": {
       "floor": 76,
       "role": "build",
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read", "edit", "bash"],
+        "effort": "high",
+        "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-pinned"},
+        "bounds": {"timeout_s": 3600}
+      },
       "primary": {
         "model": "claude-sonnet-5",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
@@ -64,6 +130,13 @@
     "review": {
       "floor": 80,
       "role": "review",
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "high",
+        "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
+        "bounds": {"timeout_s": 1800}
+      },
       "primary": {
         "model": "claude-fable-5",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
@@ -80,6 +153,13 @@
       ]
     },
     "ship": {
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": ["read"],
+        "effort": "medium",
+        "confinement": {"anthropic": "hooks"},
+        "bounds": {"timeout_s": 900}
+      },
       "primary": {
         "model": "claude-sonnet-5",
         "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
