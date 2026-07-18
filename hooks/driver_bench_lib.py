@@ -214,7 +214,8 @@ def _score_audit(fx, snapshot, quota, capture_root):
             {"risk_level": "standard"}, {"complexity": "standard"},
             {"files": [], "lines": 1, "file_count": 1})
         gate_kwargs = {"gate_decision": gd,
-                       "plan_context": {"risk_level": gd.input_snapshot["risk_level"]}}
+                       "plan_context": {k: gd.input_snapshot[k]
+                                        for k in complexity_gate.REQUIRED_PLAN_CONTEXT_KEYS}}
     _er.dispatch_seat(
         seat=seat, prompt="p", run_id="run", correlation_id=None, author_provider=None,
         effort=None, timeout=300.0, context=(), snapshot=snapshot, quota=quota, audit=audit,

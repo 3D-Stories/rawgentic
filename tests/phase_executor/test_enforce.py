@@ -721,9 +721,11 @@ def test_validate_record_build_receipt_requires_gate_evidence_464():
     rec["gate_input_digest"] = None
     with pytest.raises(ValueError):
         enforce._validate_record(rec, 1)
-    # build receipt with both gate fields present -> validates
+    # build receipt with canonical gate evidence -> validates (Step-11 tighten: gate_digest must
+    # also be sha256-canonical; _receipt_rec's default None would now be rejected)
     rec["gate_outcome"] = "single"
     rec["gate_input_digest"] = "sha256:x"
+    rec["gate_digest"] = "sha256:pol"
     enforce._validate_record(rec, 1)  # no raise
     # a historical receipt with NO 'role' key -> validates exactly as today (_RECEIPT_REQUIRED unchanged)
     enforce._validate_record(_receipt_rec("n2"), 1)  # no raise
@@ -761,3 +763,29 @@ def test_gate_attestation_and_launch_digest_exported_464():
     assert hasattr(pe, "launch_input_digest") and "launch_input_digest" in pe.__all__
     assert pe.GateAttestation is enforce.GateAttestation
     assert pe.launch_input_digest is enforce.launch_input_digest
+
+
+def test_validate_record_pass_build_receipt_requires_single_outcome_464():
+    """Step-11 diff review (REOPENS 464-step4p2-P2): the audit READER must reject a corrupt log
+    claiming a PASS build receipt with a non-'single' outcome — a 'bakeoff' outcome can never
+    legitimately authorize single dispatch (check_pre fails it), so a pass+bakeoff line is
+    corruption/tampering. Digests must also be sha256-canonical, not arbitrary truthy strings."""
+    rec = _receipt_rec("n4", seat="build")
+    rec["role"] = "build"
+    rec["gate_outcome"] = "bakeoff"
+    rec["gate_input_digest"] = "sha256:abc"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_outcome"] = "frobnicate"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_outcome"] = "single"
+    rec["gate_input_digest"] = "not-a-digest"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_input_digest"] = "sha256:abc"
+    rec["gate_digest"] = "junk"
+    with pytest.raises(ValueError, match="gate"):
+        enforce._validate_record(rec, 1)
+    rec["gate_digest"] = "sha256:def"
+    enforce._validate_record(rec, 1)  # canonical single receipt validates

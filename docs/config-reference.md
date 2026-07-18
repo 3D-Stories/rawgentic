@@ -271,7 +271,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 | `critiqueMethod` | `string` | **Deprecated / ignored (#205).** Formerly selected the critique tool; the external reflexion dependency was removed and quality gates now use the in-repo quality-bar rubric. A leftover value in a workspace file is inert. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"], "backend"?: "gpt" \| "glm" \| "both" }`. Default disabled; `backend` absent → `gpt`. A present-but-INVALID `backend` value refuses at run time (exit 2, no egress) rather than silently defaulting (#403). Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`, or a `{model, effort}` object; string shorthand ≡ `{model, effort: null}`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown model or effort values warn and resolve to `inherit`/`null`, never block. See [`modelRouting`](#modelrouting). |
-| `executorRouting` | `object` | Opt-in per-seat routing of the `ship`/`intake`/`plan` seats THROUGH the deterministic phase-execution engine (#427, E4). Shape: `{ "version": 1, "seats": { "ship"\|"intake"\|"plan": "inherit" \| "executor" } }`. An **absent** block, or a seat **absent** from `seats`, is `inherit` (prior behavior — the executor is off, so merge changes nothing until a seat is opted in). A **present-but-malformed** block (non-object value, unsupported `version`, unknown seat key, or a mode outside `{inherit, executor}`) refuses at run time (exit 2), NOT a silent inherit — an enforcement/verification boundary fails closed, not open (contrast `modelRouting`). Consumed by `hooks/executor_routing_lib.py` (`resolve-seat` / `dispatch`); the WF2/WF3 prose that calls it lands in #417. See [`executorRouting`](#executorrouting). |
+| `executorRouting` | `object` | Opt-in per-seat routing of executor seats THROUGH the deterministic phase-execution engine (#427, E4; vocabulary extended to the full 7-seat set by #464/W1). Shape: `{ "version": 1, "seats": { "ship"\|"intake"\|"plan"\|"analysis"\|"build"\|"review": "inherit" \| "executor" } }`. `design` is **competitive-only** (the bake-off owns its dispatch, #428) — declaring it here refuses at run time (exit 2), as does any unknown seat key. An **absent** block, or a seat **absent** from `seats`, is `inherit` (prior behavior — the executor is off, so merge changes nothing until a seat is opted in). A **present-but-malformed** block (non-object value, unsupported `version`, unknown/competitive-only seat key, or a mode outside `{inherit, executor}`) refuses at run time (exit 2), NOT a silent inherit — an enforcement/verification boundary fails closed, not open (contrast `modelRouting`). A `build`-role dispatch additionally requires an authenticated launch-bound gate (`--gate-file` + the complete `--plan-context`, #464 §E). Consumed by `hooks/executor_routing_lib.py` (`resolve-seat` / `dispatch`); the WF2/WF3 prose that calls it lands in #417. See [`executorRouting`](#executorrouting). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"], "backend"?: "gpt" \| "glm" \| "both" }` — mirrors `adversarialReview` incl. the #403 backend field. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `runFeedback` | `object` \| `bool` | Opt-in embedded post-run self-assessment (WF14, `/rawgentic:run-feedback`) at workflow completion. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }` — same loader and fail-closed semantics as `peerConsult` (`load_adversarial_review_config(..., key="runFeedback")`). Default disabled. Wired at WF2 Step 16 / WF3 Step 14 (rawgentic #338); the standalone skill always works regardless. |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
@@ -524,10 +524,13 @@ normal per-task path. Default disabled; absent field → unchanged behavior.
 
 ### `executorRouting`
 
-Opt-in per-seat routing of the `ship` / `intake` / `plan` seats THROUGH the deterministic
-phase-execution engine (`phase_executor`), #427 (epic #422, E4). A **per-project entry in
-`.rawgentic_workspace.json`** (sibling to `modelRouting`), NOT in `.rawgentic.json` — it is
-workspace-scoped runtime policy, not committed to the project repo. Shape:
+Opt-in per-seat routing of executor seats THROUGH the deterministic phase-execution engine
+(`phase_executor`), #427 (epic #422, E4). Since #464 (W1, epic #475) the accepted seat
+vocabulary is the full set `ship` / `intake` / `plan` / `analysis` / `build` / `review`
+(`design` is competitive-only — the bake-off owns its dispatch — and is refused here). A
+**per-project entry in `.rawgentic_workspace.json`** (sibling to `modelRouting`), NOT in
+`.rawgentic.json` — it is workspace-scoped runtime policy, not committed to the project repo.
+Shape:
 
 ```json
 "executorRouting": { "version": 1, "seats": { "ship": "inherit", "intake": "inherit", "plan": "inherit" } }
@@ -556,9 +559,12 @@ enforcement/verification choke point, so a config it cannot evaluate denies rath
 Seat ↔ WF-step mapping (the prose wiring lands in #417): `intake` → WF2 Step 2 (analyze),
 `plan` → Step 5 (plan), `ship` → Step 12 (README/changelog/version/docs). Driver-only stages
 (`merge`, `ci_triage`, `deploy_verify`, `step16`) are NEVER seats — `resolve-seat` returns
-`driver_only` for them. The `build` seat is NOT wired here and stays fail-closed in
-`phase_executor.enforce.check_pre` until #429. Capture/permit dirs are derived under the project
-repo's git-ignored `.rawgentic/runs/` + `.rawgentic/runtime/`.
+`driver_only` for them. Since #464 (W1) the `build` seat IS dispatchable, but only through the
+attested gate path: `phase_executor.enforce.check_pre` requires a launch-bound `GateAttestation`
+(minted at the hooks boundary from an authenticated #429 `GateDecision` via `--gate-file` plus
+the complete canonical `--plan-context`; a `bakeoff` outcome refuses single dispatch). `design`
+is competitive-only and refused from single-dispatch. Capture/permit dirs are derived under the
+project repo's git-ignored `.rawgentic/runs/` + `.rawgentic/runtime/`.
 
 ### Adversarial Review Data Handling
 

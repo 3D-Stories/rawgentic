@@ -300,6 +300,17 @@ def _validate_record(obj, lineno: int) -> None:
         # branch and validate exactly as today; _RECEIPT_REQUIRED is unchanged.
         if not obj.get("gate_outcome") or not obj.get("gate_input_digest"):
             raise ValueError(f"audit line {lineno}: build receipt missing gate evidence")
+        # Step-11 diff review (reopens step4p2-P2): the reader guard exists for corrupt/tampered
+        # logs — a PASS build receipt claiming any outcome but "single" is corruption (check_pre
+        # fails a bakeoff outcome), and gate digests must be sha256-canonical, not merely truthy.
+        if obj["gate_outcome"] != "single":
+            raise ValueError(f"audit line {lineno}: pass build receipt with non-single "
+                             f"gate_outcome {obj['gate_outcome']!r}")
+        for field in ("gate_input_digest", "gate_digest"):
+            val = obj.get(field)
+            if not isinstance(val, str) or not val.startswith("sha256:"):
+                raise ValueError(f"audit line {lineno}: build receipt {field} not a canonical "
+                                 f"sha256 digest")
     if kind == "epoch":
         if not isinstance(obj["seq"], int) or isinstance(obj["seq"], bool):
             raise ValueError(f"audit line {lineno}: epoch seq not an int")

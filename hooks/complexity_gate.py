@@ -38,6 +38,14 @@ SECURITY_SURFACE_PATTERNS: Final[tuple[str, ...]] = (
 _BOUNDARY = r"(?:^|[/_.\-])"
 _BOUNDARY_END = r"s?(?:$|[/_.\-])"
 
+# The CALLER-FACT subset of a GateDecision's input_snapshot: the plan facts an independent caller
+# holds and must cross-check in FULL (#464 Step-11 diff review, reopening step6-H1 — comparing only
+# supplied keys silently disables the omitted-field stale checks). Excludes derived keys
+# (security_surface_hit — gate-computed from files) and gate-internal policy keys (thresholds,
+# threshold_invalid). The build dispatch boundary requires exact key-set equality against this.
+REQUIRED_PLAN_CONTEXT_KEYS: Final[frozenset[str]] = frozenset(
+    {"risk_level", "complexity", "lines", "file_count"})
+
 
 def _anchor(pattern: str) -> str:
     if pattern.startswith(r"\."):

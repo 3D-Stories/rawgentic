@@ -223,9 +223,20 @@ could hand `check_pre` a junk string (peer finding, adopted). Replacement:
     the BUILD dispatch path `expected_context` is **MANDATORY and independently sourced**: the
     CLI gains `--plan-context <file>` (distinct from `--gate-file` — deriving context from the
     gate file itself would be circular and detect nothing), carrying the canonical field set
-    (the `input_snapshot` keys: task risk/id, issue complexity, files, size estimates) from the
-    caller's own plan facts. Missing/empty/partial context → `GateContextError`, dispatch
-    refused (exit 2), no attestation minted — omission can never silently disable the defense.
+    (`complexity_gate.REQUIRED_PLAN_CONTEXT_KEYS` = {risk_level, complexity, lines, file_count}
+    — the caller-fact subset; derived + gate-internal keys excluded) from the caller's own plan
+    facts, with EXACT key-set equality enforced at dispatch (Step-11 diff review closed the
+    partial-context gap: comparing only supplied keys silently disabled the omitted-field
+    checks). Missing/empty/partial/extra-key context → structured exit-2 refusal
+    (`plan_context_required` / `plan_context_incomplete`), no attestation minted — omission can
+    never silently disable the defense.
+    **Denial-audit taxonomy (Step-11 diff review M3, adopted-partial):** pre-`check_pre`
+    refusals (missing/incomplete args → exit 2; tampered/stale gate → exit 4) mint NO receipt —
+    `check_pre` is deliberately the ONLY receipt minter (the same trust rationale that declined
+    R1), so the structured error JSON is the record for pre-gate denials; only dispatches that
+    reach `check_pre` (e.g. a bakeoff-outcome attestation re-presented to single dispatch) get
+    denial receipts. The reviewer's mint-receipt-on-tamper alternative was declined to preserve
+    the single-minter invariant.
     `verified_decision(ctx=None)` remains legal ONLY for bakeoff_policy's existing internal
     call (which holds no separate plan doc; its gate file IS minted in-process one call
     earlier). A hooks-integration test asserts the REAL dispatch path rejects a stale decision
@@ -330,7 +341,7 @@ check_pre surgery would ship a half-wired state.
 2. RED: `check_pre(role="biuld")` expecting `unrecognized_role` — silently passes on main (#434 part 2 cell).
 3. RED: shipped-table assertions — manifest ×7, policy section, 7-seat set (main has 5, no manifest).
 4. RED: schema rejects a seat without `manifest`; resume without `resume_opt_in` (proves the 2020-12 `if/then` under jsonschema 4.10.3 — breaker A5); confinement missing a chain provider; empty-string `role` (minLength 1); name↔role binding lint — `build` seat without `role: "build"` refused at load (breaker A2).
-5. Attestation cells: missing → `gate_missing`; raw dict → `gate_invalid`; input_digest mismatch (cross-launch replay) → `gate_invalid`; `gate_outcome == "bakeoff"` presented to single dispatch → `gate_requires_bakeoff` refusal (pass-2 P1); FORGED-but-self-consistent GateDecision with mismatched `expected_context` → `verified_decision` fails; build dispatch with MISSING/empty/partial `--plan-context` → `GateContextError`, refused, no attestation (pass-2 P5); stale decision (different plan inputs) rejected ON THE REAL DISPATCH PATH (integration, not just unit); valid+bound+outcome-single → pass with receipt carrying `role`, `gate_outcome`, `gate_input_digest`, `gate_digest`=policy digest; new receipt with `role=="build"` but null gate fields FAILS `_validate_record` (pass-2 P2); old role-less receipts still validate.
+5. Attestation cells: missing → `gate_missing`; raw dict → `gate_invalid`; input_digest mismatch (cross-launch replay) → `gate_invalid`; `gate_outcome == "bakeoff"` presented to single dispatch → `gate_requires_bakeoff` refusal (pass-2 P1); FORGED-but-self-consistent GateDecision with mismatched `expected_context` → `verified_decision` fails; build dispatch with MISSING/empty/partial/extra-key `--plan-context` → structured exit-2 refusal (`plan_context_required`/`plan_context_incomplete`), no attestation (pass-2 P5 + Step-11 exact-set tighten); stale decision (different plan inputs) rejected ON THE REAL DISPATCH PATH (integration, not just unit); valid+bound+outcome-single → pass with receipt carrying `role`, `gate_outcome`, `gate_input_digest`, `gate_digest`=policy digest; new receipt with `role=="build"` but null gate fields FAILS `_validate_record` (pass-2 P2); old role-less receipts still validate.
 6. Must-survive: role=None no-requirement (test_enforce.py:515); empty-string role treated as absent in check_pre (breaker S4); off_chain/forbidden/review cells; `test_digest_golden_vector` (inline fixture, untouched); old audit logs (no gate fields) still validate (`_RECEIPT_REQUIRED` unchanged).
 7. Rewritten by design: test_enforce.py:101/:109 (deny → attestation semantics); test_driver_bench.py:109 (positive build-audit + fail-closed negative); routing-test fixture migration (breaker S3 + pass-2 SR2): `_table()` helper (test_routing.py:24-43) + every test caller of `load_routing_table`/`validate_routing_table` gains schema-valid manifest+policy AND canonical-named seats gain their matching `role` (the `_table()` review seat currently has none — the name↔role lint would red it) (grep ALL callers, not just enforce fixtures — enforce fixtures use unvalidated `from_table` and survive).
 8. Hooks integration: authenticated gate → dispatch → receipt(gate fields) → observation → reconcile ok; tampered gate raises pre-dispatch (`GateTamperError`→`JudgeError` translation holds for bakeoff); missing `--gate-file` on build seat → exit 4; non-build seats need no gate; `executorRouting.seats.design = executor` → `MalformedConfig` exit 2 (breaker S2).

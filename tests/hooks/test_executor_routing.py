@@ -124,7 +124,9 @@ def _gate(*, bakeoff=False):
     -> single outcome; risk_level high -> bake-off outcome (#464 §E)."""
     task = {"risk_level": "high" if bakeoff else "standard"}
     gd = cg.needs_bakeoff(task, {"complexity": "standard"}, {"files": [], "lines": 1, "file_count": 1})
-    return gd, {"risk_level": gd.input_snapshot["risk_level"]}
+    # Step-11 diff review (REOPENS step6-H1): the context must be the COMPLETE canonical key set —
+    # a partial subset silently disables the omitted-field stale checks.
+    return gd, {k: gd.input_snapshot[k] for k in sorted(cg.REQUIRED_PLAN_CONTEXT_KEYS)}
 
 
 def _dispatch_build(tmp_path, gate_decision, plan_context, **kw):
@@ -571,8 +573,8 @@ def test_build_tampered_gate_exit4_no_receipt(tmp_path):
 def test_build_stale_gate_context_mismatch_exit4(tmp_path):
     # Integration on the REAL dispatch path (design §E): a valid-digest gate whose independently
     # sourced plan context disagrees with the snapshot is a stale/reused decision -> refused.
-    gd, _ = _gate()  # snapshot risk_level == "standard"
-    res, audit = _dispatch_build(tmp_path, gd, {"risk_level": "high"})  # mismatched plan fact
+    gd, ctx = _gate()  # snapshot risk_level == "standard"
+    res, audit = _dispatch_build(tmp_path, gd, dict(ctx, risk_level="high"))  # mismatched plan fact
     assert res["ok"] is False and res["exit"] == er.EXIT_ENFORCEMENT
     assert res["error"]["code"] == "gate_tampered"
     assert audit.records() == []
@@ -613,13 +615,13 @@ def test_cli_build_stale_gate_exit4(tmp_path):
     real_table = Path(er.__file__).resolve().parent.parent / er._ROUTING_TABLE_REL
     table_dst.write_text(real_table.read_text(encoding="utf-8"), encoding="utf-8")
     ws = _ws(tmp_path, {"version": 1, "seats": {"build": "executor"}}, path="./projects/rawgentic")
-    gd, _ = _gate()  # snapshot risk_level == "standard"
+    gd, ctx = _gate()  # snapshot risk_level == "standard"
     gf = tmp_path / "gate.json"
     gf.write_text(json.dumps({"decision": gd.decision, "reason_codes": list(gd.reason_codes),
                               "input_snapshot": gd.input_snapshot, "policy_digest": gd.policy_digest}),
                   encoding="utf-8")
     cf = tmp_path / "ctx.json"
-    cf.write_text(json.dumps({"risk_level": "high"}), encoding="utf-8")  # mismatched fact
+    cf.write_text(json.dumps(dict(ctx, risk_level="high")), encoding="utf-8")  # mismatched fact
     (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
 
     class A:
@@ -639,3 +641,41 @@ def test_gate_file_nondict_snapshot_structured_exit2_464(tmp_path):
         p = tmp_path / "gate.json"
         p.write_text(json.dumps(gate), encoding="utf-8")
         er._load_gate_decision(str(p))
+
+
+@pytest.mark.parametrize("missing", ["risk_level", "complexity", "lines", "file_count"])
+def test_build_partial_context_refused_per_field_464(tmp_path, missing):
+    """Step-11 diff review (REOPENS 464-step6-H1): a PARTIAL plan context — any canonical key
+    omitted — must be refused BEFORE verification (comparing only supplied keys silently disables
+    the omitted-field stale-decision checks). Exact key-set equality is the contract."""
+    gd, ctx = _gate()
+    partial = {k: v for k, v in ctx.items() if k != missing}
+    res, audit = _dispatch_build(tmp_path, gd, partial)
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "plan_context_incomplete"
+    assert missing in res["error"]["message"]  # names the missing KEY, never values
+    assert audit.records() == []
+
+
+def test_build_extra_context_key_refused_464(tmp_path):
+    gd, ctx = _gate()
+    ctx = dict(ctx, thresholds={"BAKEOFF_DIFF_LINES": 1})  # gate-internal key smuggled in
+    res, audit = _dispatch_build(tmp_path, gd, ctx)
+    assert res["ok"] is False and res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "plan_context_incomplete"
+    assert audit.records() == []
+
+
+def test_build_fallback_attempt_attestation_bound_464(tmp_path):
+    """Step-11 A2: a build CHAIN FALLBACK attempt (index > 0, different target) must mint its own
+    launch-bound attestation — receipt for the fallback passes with a gate_input_digest DISTINCT
+    from the primary attempt's (per-target binding, no mint-against-primary regression)."""
+    gd, ctx = _gate()
+    res, audit = _dispatch_build(tmp_path, gd, ctx,
+                                 dispatch_real=_stub({"claude-sonnet-5": contract.NONZERO_EXIT}))
+    assert res["ok"] is True and res["actual_model"] == "claude-opus-4-8"
+    receipts = [r for r in audit.records() if r["kind"] == "receipt"]
+    assert len(receipts) == 2 and all(r["verdict"] == "pass" for r in receipts)
+    assert all(r["gate_outcome"] == "single" for r in receipts)
+    digests = {r["gate_input_digest"] for r in receipts}
+    assert len(digests) == 2  # per-target binding: primary vs fallback differ

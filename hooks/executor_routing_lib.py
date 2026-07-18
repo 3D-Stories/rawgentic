@@ -286,6 +286,18 @@ def dispatch_seat(
                         f"build seat {seat!r} requires a non-empty plan context (--plan-context); an "
                         f"empty context can never silently disable the stale-decision defense",
                         retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
+        # Step-11 diff review (reopens step6-H1): exact key-set equality — a PARTIAL context
+        # (any canonical key omitted) or a smuggled extra key silently narrows the cross-check,
+        # so both refuse BEFORE verification. Names keys only, never values (plan text).
+        supplied = frozenset(plan_context)
+        required = complexity_gate.REQUIRED_PLAN_CONTEXT_KEYS
+        if supplied != required:
+            missing = sorted(required - supplied)
+            extra = sorted(supplied - required)
+            return _err(EXIT_MALFORMED, "plan_context_incomplete",
+                        f"build seat {seat!r} plan context must carry exactly {sorted(required)}; "
+                        f"missing={missing} extra={extra}",
+                        retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
         try:
             bakeoff = complexity_gate.verified_decision(gate_decision, expected_context=plan_context)
         except complexity_gate.GateTamperError as e:
