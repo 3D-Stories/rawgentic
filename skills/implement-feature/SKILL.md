@@ -305,6 +305,7 @@ Emitters: the key MUST land in the type's slot — a key anywhere else on the li
 ignored by consumers. Deliberately un-keyed informational markers (path-estimate,
 path-estimate refresh, trivial-work suggestion, headless Step 14/15 skip) are declared
 deferrals, not misses — they are print-and-continue advisories no consumer attributes.
+Step-entry state (#480, observational): at each numbered step ENTRY, run `python3 hooks/step_state.py write --project <project> --workflow wf2 --step <N> --step-title "<step name>" --issue <issue number> --session-id "$CLAUDE_CODE_SESSION_ID"` — fail-open (never gates; any failure is ignored and the step proceeds).
 </step-tracking>
 
 <references>

@@ -232,3 +232,23 @@ def test_no_gating_hook_references_step_state():
         text = (HOOKS_DIR / name).read_text(encoding="utf-8")
         assert "step_state" not in text, f"{name} references step_state"
         assert "state.json" not in text, f"{name} references state.json"
+
+
+# --- per-workflow prose pins (AC6): the entry-call line exists in each skill --------------
+
+def test_step_entry_prose_pin_all_five_skills():
+    """#480 AC6: each of the five workflow skills carries the one canonical step-entry
+    call sentence (anchored to the invocation literal in ONE file each — content pin)."""
+    repo = HOOKS_DIR.parent
+    expected = {
+        "create-issue": "--workflow wf1",
+        "implement-feature": "--workflow wf2",
+        "fix-bug": "--workflow wf3",
+        "adversarial-review": "--workflow wf5",
+        "epic-run": "--workflow epic-run",
+    }
+    for skill, token in expected.items():
+        text = (repo / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+        assert "step_state.py write --project" in text, f"{skill}: entry-call line missing"
+        assert token in text, f"{skill}: wrong workflow token"
+        assert "fail-open" in text.lower(), f"{skill}: fail-open clause missing"

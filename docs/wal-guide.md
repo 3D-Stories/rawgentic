@@ -245,3 +245,34 @@ printf '{"session_id":"%s","project":"%s","project_path":"./projects/%s","starte
   "$CLAUDE_CODE_SESSION_ID" "$P" "$P" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$PWD" \
   >> claude_docs/session_registry.jsonl
 ```
+
+## Step-entry state record (#480)
+
+Alongside the per-project WAL, workflows write a tiny **observational "now" pointer** at each
+numbered step ENTRY: `claude_docs/wal/<project>.state.json` (one file per project,
+overwrite-in-place, atomic tmp+rename, last-writer-wins). Shape:
+
+```json
+{"schema_version": 1, "project": "rawgentic", "workflow": "wf2", "step": "8a",
+ "step_title": "Code review", "issue": 480, "session_id": "…", "entered_at": "2026-07-18T11:22:33Z"}
+```
+
+- **Writer:** `python3 hooks/step_state.py write --project P --workflow W --step N
+  --step-title T --session-id S [--issue I] [--state-dir D]` — called by one prose line in each
+  of the five workflow skills (WF1/WF2/WF3/WF5 + epic-run). **Fail-open everywhere**: every
+  runtime failure exits 0 with a stderr note; it is never a gate, and a drift-guard test pins
+  that no gating hook (`hooks.json`, `wal-guard`, `wal-bind-guard`) references it.
+- **Reader:** `python3 hooks/step_state.py read --project P [--max-age-min M]` (default 240)
+  prints the JSON only when the record exists, parses, and is fresh — else nothing, always
+  exit 0. `wal-context` prefers a fresh record over the notes-grep, but ONLY when the record's
+  `session_id` matches the current session (a concurrent same-project session's record is
+  suppressed, falling back to the notes-grep — the file itself stays project-scoped).
+- **Statusline consumption** (project-scoped by design):
+  ```bash
+  jq -r '"\(.workflow) Step \(.step) (\(.step_title)) — #\(.issue // "-")"' \
+    ~/rawgentic/claude_docs/wal/rawgentic.state.json
+  ```
+  Staleness: compare `entered_at` to now (or shell out to `step_state.py read`, which owns the
+  freshness logic). Dead-session records age out via the same window.
+- **Git:** session-local like the WAL — `claude_docs/` is already ignored where a repo hosts it
+  (verified via `git check-ignore`); no per-file ignore entry is needed.

@@ -74,6 +74,8 @@ rather than guessing:
   out-of-scope list naming what's deferred.
 </quality-bar>
 
+Step-entry state (#480, observational): at each numbered step ENTRY, run `python3 hooks/step_state.py write --project <project> --workflow wf1 --step <N> --step-title "<step name>" --session-id "$CLAUDE_CODE_SESSION_ID"` — fail-open (never gates; any failure is ignored and the step proceeds).
+
 ## Step 1: Understand the request
 
 1. Classify as **feature** or **bug**. If ambiguous, ask: "Feature request (new

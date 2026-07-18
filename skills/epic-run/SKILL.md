@@ -12,6 +12,8 @@ with honest blocker handling. The driver contract lives in
 `docs/multi-issue-driver.md` + `hooks/driver_lib.py`; this skill is the interactive
 front-end for it.
 
+Step-entry state (#480, observational): at each numbered step ENTRY, run `python3 hooks/step_state.py write --project <project> --workflow epic-run --step <N> --step-title "<step name>" --issue <epic number> --session-id "$CLAUDE_CODE_SESSION_ID"` — fail-open (never gates; any failure is ignored and the step proceeds).
+
 ## Step 1: Derive the queue from the epic
 
 - Read the epic issue. The queue is its task-list checkboxes, exactly the shape
