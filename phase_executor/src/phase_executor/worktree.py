@@ -165,8 +165,9 @@ def decide_disposition(inspection: WorktreeInspection, observation_status: str) 
     tree_differs=False): the disposition is ``clean`` and the worktree is force-removed. This is
     NOT a leak — removal destroys the gitignored file, it does not persist it — and gitignored
     content is not promotable work product (``add -A`` respects .gitignore). A gitignored secret is
-    only ever *retained* on a dirty-or-failed disposition, where the os.walk in ``_retain`` redacts
-    it. So there is no path on which a gitignored secret survives un-redacted into durable storage."""
+    only ever *retained* on a dirty-or-failed disposition, where the os.walk in ``_retain`` scans
+    it (best-effort — see the redaction block; detection is heuristic, not a categorical
+    guarantee)."""
     if observation_status != contract.OK:
         return "retain"
     if inspection.dirty or inspection.tree_differs:
@@ -363,10 +364,16 @@ class WorktreeManager:
     def create(self, repo: str, identity: WorktreeIdentity, base_sha: str, *, root: str) -> WorktreeHandle:
         repo = os.path.realpath(repo)
         canon_root = resolve_root(root, forbid_tmp=self._forbid_tmp)
-        if self._read_index(canon_root).get("pressure"):
+        # Recompute retention from the on-disk records (don't trust a latched `pressure` flag): aged
+        # dirty records and now-evictable clean ones are dropped here, so `pressure` self-heals as
+        # records age out rather than blocking creates forever (the flag is only re-derived on a
+        # _retain otherwise). Retained worktrees are never live, so live_identities=() is safe.
+        if self._recompute_retention(canon_root):
             raise WorktreeError(
-                "retention is under pressure (retained count over limit, all protected) — "
-                "resolve/evict retained worktrees before creating new ones")
+                "retention is still under pressure after recompute (retained count over limit, all "
+                "pinned or not-yet-aged) — widen the retention limit or wait for records to age out "
+                "(the W4 reaper #467 is the durable resolver); manually removing .retained dirs will "
+                "NOT clear it (the index is the source of truth)")
         rc, out, err = self._git("-C", repo, "rev-parse", "--verify", f"{base_sha}^{{commit}}")
         if rc != 0:
             raise WorktreeError(f"base_sha {base_sha!r} is not a commit in {repo}: {err.strip()}")
@@ -456,12 +463,19 @@ class WorktreeManager:
             raise WorktreeError(f"base tree resolve failed: {err.strip()}")
         return out.strip()
 
-    def _candidate_tree(self, handle: WorktreeHandle) -> str:
+    def _candidate_tree(self, handle: WorktreeHandle, *, strict: bool = False) -> str:
         """Build the immutable candidate tree capturing the whole filesystem work product
         (dirty-tracked + untracked, respecting .gitignore) via a temp index that MUST live in
-        ``.meta`` (probe gotcha: an in-worktree index gets swept by ``add -A``). Returns the
-        tree SHA only — ``changed_paths`` is computed separately by ``_candidate_changed`` (promote
-        needs it; inspect does not, so inspect pays no diff subprocess)."""
+        ``.meta`` (probe gotcha: an in-worktree index gets swept by ``add -A``). Returns the tree
+        SHA only — ``changed_paths`` is computed separately by ``_candidate_changed``.
+
+        ``strict`` picks the failure mode for an UNREADABLE path (child chmod-000):
+        - ``strict=False`` (inspect/retain teardown): ``add -A --ignore-errors`` skips it and
+          continues — teardown must not strand, and the retain-path scan surfaces it separately.
+        - ``strict=True`` (PROMOTE): NO ``--ignore-errors``. A skipped unreadable file would
+          silently REVERT that path to its base content (or drop an untracked one) in the promoted
+          tree while ``changed_paths`` stays silent — so promote fails loud instead (never a silent
+          partial promotion)."""
         import tempfile  # noqa: PLC0415
 
         meta_dir = os.path.join(handle.root, ".meta")
@@ -474,12 +488,14 @@ class WorktreeManager:
                 "--git-dir", handle.gitdir, "--work-tree", handle.path, "read-tree", handle.base_sha, env=env)
             if rc != 0:
                 raise WorktreeError(f"read-tree failed: {err.strip()}")
-            # --ignore-errors: a child-planted UNREADABLE file (chmod 000) must not abort the whole
-            # candidate build (that would strand teardown). Unreadable files can't be promoted
-            # anyway and are surfaced separately by the retain-path redaction scan. Ignore add's rc;
-            # a genuine break shows up as a write-tree failure below.
-            self._git(
-                "--git-dir", handle.gitdir, "--work-tree", handle.path, "add", "-A", "--ignore-errors", env=env)
+            add_args = ["--git-dir", handle.gitdir, "--work-tree", handle.path, "add", "-A"]
+            if not strict:
+                add_args.append("--ignore-errors")
+            rc, _o, err = self._git(*add_args, env=env)
+            if strict and rc != 0:
+                raise WorktreeError(
+                    f"promote: cannot build a complete candidate tree (unreadable path?): "
+                    f"{err.strip()} — refusing rather than silently promoting a partial/reverted tree")
             rc, out, err = self._git(
                 "--git-dir", handle.gitdir, "--work-tree", handle.path, "write-tree", env=env)
             if rc != 0:
@@ -532,7 +548,7 @@ class WorktreeManager:
         silently revert peer commits), commits parented on ``base_sha`` (NEVER on
         ``expected_target_sha``), and compare-and-swaps the ref. Returns a ``PromotionResult`` —
         ``promoted=False`` with a reason on a stale base or a moved target, never a silent revert."""
-        tree = self._candidate_tree(handle)
+        tree = self._candidate_tree(handle, strict=True)  # promote never silently drops/reverts
         changed = self._candidate_changed(handle, tree)
         if path_policy is not None:
             outside = [p for p in changed if not path_policy(p)]
@@ -562,9 +578,11 @@ class WorktreeManager:
             "--git-dir", handle.gitdir, "--work-tree", handle.path,
             "update-ref", target_ref, new_commit, expected_target_sha)
         if rc != 0:
+            # CAS refused: the ref moved, was deleted, or otherwise did not equal expected. Safe
+            # (no write) either way; the reason covers both moved-and-missing.
             return PromotionResult(
                 promoted=False, base_sha=handle.base_sha, head_sha=head_sha,
-                changed_paths=tuple(changed), reason="target advanced")
+                changed_paths=tuple(changed), reason="target advanced or ref state changed")
         return PromotionResult(
             promoted=True, new_target_sha=new_commit, base_sha=handle.base_sha,
             head_sha=head_sha, changed_paths=tuple(changed), reason="")
@@ -627,13 +645,22 @@ class WorktreeManager:
         self._enforce_and_persist(handle.root, record, live_identities)
         return record
 
-    # -- redaction (VERIFIED: no-follow, exact populated dests, walk, re-read assert) -----
+    # -- redaction --------------------------------------------------------
+    # BEST-EFFORT, not a guarantee. What is VERIFIED is that a redaction that RAN landed (the
+    # re-read assert) and that every FAILURE is surfaced (redaction_failures/redaction_incomplete).
+    # Detection itself is heuristic: a secret in an encoding/name outside the patterns below, or
+    # past the scan cap, may not be flagged. A file left un-redacted because nothing matched is NOT
+    # marked incomplete (best-effort residual). The retained tree is 0700 same-user; treat
+    # `redaction_incomplete=False` as "the scans that ran passed", never as "provably secret-free".
 
     _MARKER = "[redacted: populated allowlist secret]\n"
+    _SCAN_CAP = 1 << 20  # first 1 MiB scanned; a larger file flags scan-truncated (-> incomplete)
     _SECRET_NAME_GLOBS = (
-        ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", ".npmrc",
+        ".env", ".env.*", "*.pem", "*.key", "*.p8", "*.p12", "*.pfx", "*.keystore", ".npmrc",
         ".netrc", ".git-credentials", "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*",
         "authorized_keys", "known_hosts", "*service-account*.json", "*credentials*",
+        "secrets*", "*secret*", "*token*", "*.ini", "kubeconfig", "*.kubeconfig",
+        "config.json", "settings.json", "vault.*",
     )
 
     @classmethod
@@ -647,8 +674,12 @@ class WorktreeManager:
         import re  # noqa: PLC0415
 
         return re.compile(
-            rb"-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|"
-            rb"(secret|token|password|api[_-]?key)\s*[:=]\s*\S",
+            rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|"      # PEM private keys
+            rb"A(?:KIA|SIA)[0-9A-Z]{16}|"                    # AWS long-term + temp access keys
+            rb"xox[baprs]-[0-9A-Za-z-]{10,}|"                # Slack tokens
+            rb"gh[pousr]_[0-9A-Za-z]{20,}|"                  # GitHub tokens
+            # keyword (possibly suffixed like aws_secret_access_key) + optional quote + : or =
+            rb"(secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*[\"']?\s*[:=]\s*[\"']?\S",
             re.IGNORECASE,
         )
 
@@ -670,25 +701,35 @@ class WorktreeManager:
                 path = os.path.join(dirpath, fn)
                 if os.path.islink(path):
                     continue  # never follow/scan a symlink (also enforced by O_NOFOLLOW)
-                hit = self._is_secret_name(fn) or self._content_matches(path, pattern, failures)
-                if hit:
+                if self._is_secret_name(fn):
                     self._overwrite_marker(path, "scan", redactions, failures)
+                    continue
+                matched, truncated = self._scan_content(path, pattern, failures)
+                if matched:
+                    self._overwrite_marker(path, "scan", redactions, failures)
+                elif truncated:
+                    # couldn't fully scan -> surface (fail-closed) rather than silently pass
+                    failures.append({"path": path, "kind": "scan-truncated",
+                                     "error": f"file exceeds {self._SCAN_CAP} bytes; not fully scanned"})
         return redactions, failures
 
-    def _content_matches(self, path: str, pattern, failures: list) -> bool:
+    def _scan_content(self, path: str, pattern, failures: list) -> tuple:
+        """Return ``(matched, truncated)``. ``truncated`` means the file is larger than the scan
+        cap, so a no-match is inconclusive (caller flags it incomplete)."""
         try:
             fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError as exc:
             failures.append({"path": path, "kind": "scan-open", "error": str(exc)})
-            return False
+            return False, False
         try:
-            data = os.read(fd, 1 << 20)  # first 1 MiB is enough to flag a secret
+            size = os.fstat(fd).st_size
+            data = os.read(fd, self._SCAN_CAP)
         except OSError as exc:
             failures.append({"path": path, "kind": "scan-read", "error": str(exc)})
-            return False
+            return False, False
         finally:
             os.close(fd)
-        return bool(pattern.search(data))
+        return bool(pattern.search(data)), size > self._SCAN_CAP
 
     def _overwrite_marker(self, path: str, kind: str, redactions: list, failures: list) -> None:
         marker = self._MARKER.encode("utf-8")
@@ -696,6 +737,19 @@ class WorktreeManager:
             fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
         except OSError as exc:
             failures.append({"path": path, "kind": kind, "error": f"open: {exc}"})
+            return
+        try:
+            nlink = os.fstat(fd).st_nlink
+        except OSError as exc:
+            os.close(fd)
+            failures.append({"path": path, "kind": kind, "error": f"fstat: {exc}"})
+            return
+        if nlink > 1:
+            # HARDLINK: O_NOFOLLOW does not catch a hardlink, and ftruncate would corrupt the
+            # SHARED inode — including a second link OUTSIDE the retained tree. Break our link
+            # instead (unlink our name, write a fresh file); the outside link keeps its content.
+            os.close(fd)
+            self._redact_hardlink(path, marker, kind, redactions, failures)
             return
         try:
             os.ftruncate(fd, 0)
@@ -719,6 +773,20 @@ class WorktreeManager:
             failures.append({"path": path, "kind": kind, "error": "reread-mismatch"})
             return
         redactions.append({"path": path, "kind": kind})
+        return
+
+    def _redact_hardlink(self, path: str, marker: bytes, kind: str, redactions: list, failures: list) -> None:
+        try:
+            os.unlink(path)  # remove OUR link only; the outside link keeps the original content
+            nfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(nfd, marker)
+            finally:
+                os.close(nfd)
+        except OSError as exc:
+            failures.append({"path": path, "kind": kind, "error": f"hardlink-rewrite: {exc}"})
+            return
+        redactions.append({"path": path, "kind": kind, "hardlink_broken": True})
 
     # -- persistent retention index (CF-6) -------------------------------
 
@@ -740,6 +808,10 @@ class WorktreeManager:
         capture.atomic_write_text(Path(self._index_file(root)), json.dumps(data, indent=2, sort_keys=True))
 
     def _enforce_and_persist(self, root: str, record: RetentionRecord, live_identities) -> None:
+        """Add ``record``, evict per policy, persist the index.
+        ponytail: single-writer read-modify-write. W3 finalizes serially per orchestrator, so no
+        lock. If finalize/promote ever runs concurrently, guard this + `_recompute_retention` with
+        an flock on the index (a lost update would orphan a RetentionRecord from the W4 reaper)."""
         import shutil  # noqa: PLC0415
 
         index = self._read_index(root)
@@ -754,3 +826,27 @@ class WorktreeManager:
             "live_identities": [_identity_dict(i) for i in live_identities],
             "pressure": pressure,
         })
+
+    def _recompute_retention(self, root: str) -> bool:
+        """Re-derive eviction + pressure from the on-disk records so a latched `pressure` self-heals
+        as records age out (retained worktrees are never live -> live_identities=()). Evicts newly
+        eligible records, rewrites the index, returns the recomputed pressure. A fresh root with no
+        index short-circuits without creating one."""
+        import shutil  # noqa: PLC0415
+
+        index = self._read_index(root)
+        records = _records_from_index(index)
+        if not records:
+            if index.get("pressure"):
+                self._write_index(root, {"records": [], "live_identities": [], "pressure": False})
+            return False
+        evict, pressure = select_evictions(records, self._retention, self._clock(), live_identities=())
+        if evict:
+            evict_ids = {id(r) for r in evict}
+            for rec in evict:
+                shutil.rmtree(rec.path, ignore_errors=True)
+            records = [r for r in records if id(r) not in evict_ids]
+        self._write_index(root, {
+            "records": [_record_to_dict(r) for r in records], "live_identities": [], "pressure": pressure,
+        })
+        return pressure

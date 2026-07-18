@@ -192,10 +192,78 @@ def test_gitignored_only_success_is_cleaned_not_retained(repo, tmp_path):
     assert not os.path.exists(h.path)  # worktree + its gitignored file destroyed (no leak, no retain)
 
 
+def _dirty_rec(path, ident, created):
+    os.makedirs(path, exist_ok=True)
+    return wt.RetentionRecord(path=path, identity=ident, reason="dirty-tree", dirty=True,
+                              created_at=created, retained_at=created, base_sha="0" * 40)
+
+
 def test_pressure_blocks_next_create(repo, tmp_path):
+    """Genuine pressure: over-limit with every slot dirty-not-yet-aged -> recompute confirms
+    pressure -> create refuses (records must ACTUALLY produce pressure, not a stale flag)."""
     root = str(tmp_path / "wtroot")
     os.makedirs(os.path.join(root, ".meta"), exist_ok=True)
-    m = _mgr()
-    m._write_index(root, {"records": [], "live_identities": [], "pressure": True})  # noqa: SLF001
+    m = _mgr(retention=wt.RetentionPolicy(max_retained_count=1, max_age_s=1000), clock=lambda: 100.0)
+    recs = [_dirty_rec(os.path.join(root, ".retained", f"r{i}"), wt.WorktreeIdentity(f"r{i}", "s", "a"), 99.0)
+            for i in range(2)]  # 2 dirty, age 1 << 1000 -> not evictable, over limit 1
+    m._write_index(root, {"records": [wt._record_to_dict(r) for r in recs],  # noqa: SLF001
+                          "live_identities": [], "pressure": False})
     with pytest.raises(wt.WorktreeError):
         m.create(str(repo), _ident(), _base(repo), root=root)
+
+
+def test_pressure_self_heals_when_records_age_out(repo, tmp_path):
+    """Fix (CAS-review F2): a latched pressure does NOT block forever — create recomputes from the
+    on-disk records, evicts the now-aged dirty ones, and proceeds."""
+    root = str(tmp_path / "wtroot")
+    os.makedirs(os.path.join(root, ".meta"), exist_ok=True)
+    m = _mgr(retention=wt.RetentionPolicy(max_retained_count=1, max_age_s=10), clock=lambda: 10_000.0)
+    aged = [_dirty_rec(os.path.join(root, ".retained", f"old{i}"), wt.WorktreeIdentity(f"o{i}", "s", "a"), 1.0)
+            for i in range(2)]  # created at t=1, now=10000 -> age 9999 >> 10 -> evictable
+    m._write_index(root, {"records": [wt._record_to_dict(r) for r in aged],  # noqa: SLF001
+                          "live_identities": [], "pressure": True})  # latched True
+    h = m.create(str(repo), _ident(), _base(repo), root=root)  # must NOT raise
+    assert os.path.isdir(h.path)
+    idx = json.load(open(m._index_file(root)))  # noqa: SLF001
+    assert idx["pressure"] is False  # cleared
+
+
+def test_retain_strengthened_content_detection(repo, tmp_path):
+    """Fix (redaction-review F1): JSON-quoted + keyword-suffixed secrets are now caught."""
+    m = _mgr()
+    h = m.create(str(repo), _ident(), _base(repo), root=str(tmp_path / "wtroot"))
+    with open(os.path.join(h.path, "conf.json"), "w") as f:  # name not a secret-glob
+        f.write('{"database_password": "hunter2"}\n')
+    with open(os.path.join(h.path, "app.py"), "w") as f:
+        f.write("SECRET_KEY = 'aabbccddeeff'\n")
+    rec = m.finalize(h, contract.TIMEOUT)
+    assert "hunter2" not in open(os.path.join(rec.path, "conf.json")).read()
+    assert "aabbccddeeff" not in open(os.path.join(rec.path, "app.py")).read()
+
+
+def test_retain_large_unmatched_file_flags_truncated(repo, tmp_path):
+    """Fix (redaction-review F1): a file larger than the scan cap that isn't otherwise redacted is
+    surfaced as scan-truncated -> redaction_incomplete, never a silent pass."""
+    m = _mgr()
+    h = m.create(str(repo), _ident(), _base(repo), root=str(tmp_path / "wtroot"))
+    with open(os.path.join(h.path, "big.bin"), "w") as f:
+        f.write("x" * (wt.WorktreeManager._SCAN_CAP + 10))  # noqa: SLF001
+    rec = m.finalize(h, contract.TIMEOUT)
+    assert rec.redaction_incomplete is True
+    assert any(fl["kind"] == "scan-truncated" for fl in rec.redaction_failures)
+
+
+def test_retain_hardlink_does_not_corrupt_outside_file(repo, tmp_path):
+    """Fix (redaction-review F2): a child-planted hardlink to an OUTSIDE file must NOT be
+    ftruncated (that corrupts the shared inode). We break our link + write a fresh marker; the
+    outside file keeps its content."""
+    m = _mgr()
+    outside = tmp_path / "outside.pem"
+    outside.write_text(_fake_pem("KEEPME"))
+    h = m.create(str(repo), _ident(), _base(repo), root=str(tmp_path / "wtroot"))
+    os.link(str(outside), os.path.join(h.path, "linked.pem"))  # HARDLINK (name matches *.pem)
+    rec = m.finalize(h, contract.TIMEOUT)
+    # outside file untouched (still the PEM); in-tree link replaced with the marker
+    assert "KEEPME" in outside.read_text()
+    assert outside.read_text().startswith("-----BEGIN")
+    assert open(os.path.join(rec.path, "linked.pem")).read().startswith("[redacted")

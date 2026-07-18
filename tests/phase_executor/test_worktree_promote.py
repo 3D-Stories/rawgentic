@@ -122,7 +122,7 @@ def test_promote_refuses_on_cas_mismatch(repo, mgr, tmp_path):
     res = mgr.promote(h, target_ref="refs/heads/integration",
                       expected_target_sha=base, message="cas")
     assert res.promoted is False
-    assert res.reason == "target advanced"
+    assert res.reason == "target advanced or ref state changed"
 
 
 def test_promote_path_policy_refuses_outside_paths(repo, mgr, tmp_path):
@@ -132,6 +132,22 @@ def test_promote_path_policy_refuses_outside_paths(repo, mgr, tmp_path):
     with pytest.raises(wt.WorktreeError):
         mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
                     message="policed", path_policy=lambda p: p.endswith(".md"))
+
+
+def test_promote_fails_loud_on_unreadable_path(repo, mgr, tmp_path):
+    """Fix (CAS-review F1): a child chmod-000 on a tracked file would make `add -A --ignore-errors`
+    silently REVERT it to base in the promoted tree. promote uses strict mode and fails loud."""
+    base = _base(repo)
+    h = mgr.create(str(repo), _ident(), base, root=str(tmp_path / "wtroot"))
+    tracked = os.path.join(h.path, "a.txt")
+    (open(tracked, "w")).write("CHILD_EDIT\n")  # modify tracked, then make it unreadable
+    os.chmod(tracked, 0o000)
+    try:
+        with pytest.raises(wt.WorktreeError):
+            mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
+                        message="should refuse")
+    finally:
+        os.chmod(tracked, 0o600)
 
 
 def test_child_dispatch_surface_never_references_promote():
