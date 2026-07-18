@@ -31,7 +31,7 @@ ENV (all optional, frozen at lib import unless noted — shared with WF5/adversa
   RAWGENTIC_ADV_REVIEW_TIMEOUT     (default 600)    — per-attempt invocation timeout (seconds), both backends
   RAWGENTIC_ADV_REVIEW_MAX_RETRIES (default 1)      — retries on transient failure, both backends
   RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS (default off)  — when set, block egress if secrets detected
-  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — reasoning effort (low|medium|high), both backends
+  RAWGENTIC_ADV_REVIEW_EFFORT      (default high)   — reasoning effort (low|medium|high|xhigh), both backends
   RAWGENTIC_ADV_REVIEW_MODEL       (default unset)  — override the gpt peer model (`codex exec -m`); unset = inherit Codex/config default (do NOT hardcode a model id)
   RAWGENTIC_ADV_REVIEW_GLM_MODEL   (default glm-5.2) — glm model slug
   ZHIPUAI_API_KEY / ZHIPU_API_KEY / GLM_API_KEY (read at call time) — glm credential; a Coding Plan subscription key works

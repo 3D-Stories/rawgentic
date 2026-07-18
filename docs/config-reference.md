@@ -581,7 +581,7 @@ with tools forbidden, structured-JSON output, and these env-tunable knobs:
 
 | Env var | Default | Effect |
 | --- | --- | --- |
-| `RAWGENTIC_ADV_REVIEW_EFFORT` | `high` | Codex reasoning effort (`low`\|`medium`\|`high`). Pinned explicitly so a fresh `~/.codex/config.toml` that defaults to medium does not silently shallow the review. Unknown values fall back to `high`. |
+| `RAWGENTIC_ADV_REVIEW_EFFORT` | `high` | Reasoning effort (`low`\|`medium`\|`high`\|`xhigh`), both backends — xhigh live-confirmed on both (spike #456); `max` deliberately excluded (per-model on codex, no dispatch-time gate here). Pinned explicitly so a fresh `~/.codex/config.toml` that defaults to medium does not silently shallow the review. Unknown values fall back to `high`. |
 | `RAWGENTIC_ADV_REVIEW_MODEL` | _unset_ | Override the reviewer model (`codex exec -m`). Unset = inherit the Codex/config default. **Don't hardcode a model id** — OpenAI retires them over time. |
 | `RAWGENTIC_ADV_REVIEW_TIMEOUT` | `600` | Codex invocation timeout (seconds). 600 (was 300) gives high-effort reviews of large artifacts headroom so they don't silently fail-closed. |
 | `RAWGENTIC_ADV_REVIEW_MAX_BYTES` | `200000` | Artifact size cap; over-cap truncates and warns. |
