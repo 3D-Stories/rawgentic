@@ -130,6 +130,10 @@ class Observation:
     correlation_id: Optional[str] = None
     judge_degraded: Optional[bool] = None
     dispatched_lane: Optional[dict] = None
+    # #465 AC3: the effort resolution actually used for this dispatch — an object
+    # {requested, native, resolution, capability_revision}; optional-additive (absent on
+    # legacy records; consumers tolerate absence — the dispatched_lane precedent).
+    effort: Optional[dict] = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -161,9 +165,64 @@ class Observation:
         # dispatched_lane (#425 B): the lane the executor actually dispatched on, stamped by the
         # engine at dispatch — enables independent receipt<->observation binding at run-end audit.
         # Optional/additive (kukakuka v1 parity): emitted only when set.
+        if self.effort is not None:
+            out["effort"] = dict(self.effort)
         if self.dispatched_lane is not None:
             out["dispatched_lane"] = dict(self.dispatched_lane)
         return out
+
+
+
+@dataclass(frozen=True)
+class EffortResolution:
+    """One effort resolution (#465): dataclass fields == the serialized JSON keys."""
+    requested: Optional[str]
+    native: Optional[str]
+    resolution: str            # "identity" | "stepdown" | "adapter_default"
+    capability_revision: int
+
+    def to_dict(self) -> dict:
+        return {"requested": self.requested, "native": self.native,
+                "resolution": self.resolution, "capability_revision": self.capability_revision}
+
+
+_EFFORT_ENGINES = frozenset({"claude", "codex", "zhipuai"})
+
+
+def resolve_effort(model: str, requested: Optional[str], *, engine: str) -> "EffortResolution":
+    """Per-model effort gate + nearest-lower stepdown (#465 B.1, spike #456 rule).
+
+    Fail-closed: an unknown engine, an unknown effort name, or an UNKNOWN MODEL with a
+    REQUESTED effort refuses (ValueError — dispatch-configuration error; never guess a
+    capability, never let a silent clamp happen). None-effort applies the per-ENGINE
+    policy from model_capabilities.ENGINE_NONE_EFFORT (codex -> "high", recorded as
+    adapter_default); other engines pass None through (provider default, identity).
+    """
+    from . import model_capabilities as mc  # local: keeps contract import-light
+    if engine not in _EFFORT_ENGINES:
+        raise ValueError(f"resolve_effort: unknown engine {engine!r} (valid: {sorted(_EFFORT_ENGINES)})")
+    rev = mc.CAPABILITY_REVISION
+    if requested is None:
+        none_native = mc.ENGINE_NONE_EFFORT.get(engine)
+        if none_native is not None:
+            return EffortResolution(None, none_native, "adapter_default", rev)
+        return EffortResolution(None, None, "identity", rev)
+    if requested not in mc.EFFORT_LADDER:
+        raise ValueError(f"resolve_effort: unknown effort {requested!r} (ladder: {mc.EFFORT_LADDER})")
+    supported = mc.SUPPORTED_EFFORT.get(canonicalize_model_id(model))
+    if supported is None:
+        raise ValueError(
+            f"resolve_effort: model {model!r} has no capability row in model_capabilities."
+            f"SUPPORTED_EFFORT — cannot gate a requested effort (fix the registry)")
+    if requested in supported:
+        return EffortResolution(requested, requested, "identity", rev)
+    idx = mc.EFFORT_LADDER.index(requested)
+    for lvl in reversed(mc.EFFORT_LADDER[:idx]):
+        if lvl in supported:
+            return EffortResolution(requested, lvl, "stepdown", rev)
+    raise ValueError(
+        f"resolve_effort: model {model!r} supports no level at or below {requested!r} "
+        f"(supported: {supported}) — cannot step down")
 
 
 def validate_observation(obs: dict) -> None:

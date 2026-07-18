@@ -32,13 +32,25 @@
       "const": "1",
       "description": "Observation schema version. Bump on any breaking field change."
     },
-    "run_id": {"type": "string", "minLength": 1},
-    "attempt_id": {"type": "string", "minLength": 1},
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1
+    },
     "correlation_id": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Opaque caller-supplied string (rawgentic: WF2 step/task id; kukakuka: room turn nonce). Optional."
     },
-    "seat": {"type": "string", "minLength": 1},
+    "seat": {
+      "type": "string",
+      "minLength": 1
+    },
     "engine": {
       "type": "string",
       "minLength": 1,
@@ -49,37 +61,82 @@
       "minLength": 1,
       "description": "How the engine was reached, e.g. native | ccr. A proxy hop is auditable here plus the innermost upstream id in actual_model."
     },
-    "requested_model": {"type": "string", "minLength": 1},
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
     "actual_model": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Provider-reported id from the INNERMOST envelope. MUST be a non-empty string when parse_status == 'ok'; MAY be null only for a non-success parse_status."
     },
-    "prompt_hash": {"type": "string", "minLength": 1},
+    "prompt_hash": {
+      "type": "string",
+      "minLength": 1
+    },
     "context_hashes": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+        "type": "string"
+      },
       "description": "Hashes of each context input, in order. Empty array when no extra context."
     },
     "usage": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Real provider-reported token counts. Non-null with input+output present when parse_status == 'ok'; MAY be null only for a non-success parse_status.",
       "properties": {
-        "input": {"type": "integer", "minimum": 0},
-        "output": {"type": "integer", "minimum": 0},
-        "cached": {"type": "integer", "minimum": 0},
-        "cost_proxy": {"type": ["number", "null"], "minimum": 0}
+        "input": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cached": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost_proxy": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        }
       },
       "additionalProperties": false
     },
-    "timing_ms": {"type": "integer", "minimum": 0},
-    "queued_ms": {"type": "integer", "minimum": 0},
+    "timing_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "queued_ms": {
+      "type": "integer",
+      "minimum": 0
+    },
     "process": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["exit_code", "timed_out"],
+      "required": [
+        "exit_code",
+        "timed_out"
+      ],
       "properties": {
-        "exit_code": {"type": ["integer", "null"]},
-        "timed_out": {"type": "boolean"}
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
       }
     },
     "parse_status": {
@@ -99,14 +156,27 @@
     },
     "parsed_payload": {
       "description": "The parsed provider output (structured object, text, or null on a pre-payload failure).",
-      "type": ["object", "array", "string", "number", "boolean", "null"]
+      "type": [
+        "object",
+        "array",
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
     },
     "raw_capture_path": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Path to the capture directory holding the raw transport bytes. Null only if capture was not written (harness/launch error before mkdir)."
     },
     "fallback_reason": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Why a fallback chain entry was used, or null when the primary served."
     },
     "judge_degraded": {
@@ -116,39 +186,129 @@
     "dispatched_lane": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "transport", "auth_mode", "pool"],
+      "required": [
+        "provider",
+        "transport",
+        "auth_mode",
+        "pool"
+      ],
       "properties": {
-        "provider": {"type": "string", "minLength": 1},
-        "transport": {"type": "string", "minLength": 1},
-        "auth_mode": {"type": "string", "minLength": 1},
-        "pool": {"type": "string", "minLength": 1},
-        "credential_ref": {"type": ["string", "null"]},
-        "participation_mode": {"type": "string"}
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auth_mode": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pool": {
+          "type": "string",
+          "minLength": 1
+        },
+        "credential_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "participation_mode": {
+          "type": "string"
+        }
       },
-      "description": "The lane the executor ACTUALLY dispatched on (#425 B), stamped by the engine at dispatch — the SAME shape as a routing-table $defs/lane (same required set + all 6 optional-inclusive properties, incl. participation_mode) so a lane can be stamped verbatim without projection. OPTIONAL/additive (a v1 producer that omits it still validates; kukakuka parity). Enables independent receipt<->observation binding in the run-end audit (enforce.reconcile_run)."
+      "description": "The lane the executor ACTUALLY dispatched on (#425 B), stamped by the engine at dispatch \u2014 the SAME shape as a routing-table $defs/lane (same required set + all 6 optional-inclusive properties, incl. participation_mode) so a lane can be stamped verbatim without projection. OPTIONAL/additive (a v1 producer that omits it still validates; kukakuka parity). Enables independent receipt<->observation binding in the run-end audit (enforce.reconcile_run)."
     },
     "routing_config_digest": {
       "type": "string",
       "minLength": 1,
       "description": "Digest of the immutable routing snapshot that served this call (epoch identity)."
+    },
+    "effort": {
+      "type": "object",
+      "description": "#465: the effort resolution used for this dispatch (optional-additive; absent on legacy records). requested = normalized level asked for (null = none requested); native = value sent on the wire (null = provider default); resolution = how native was chosen.",
+      "additionalProperties": false,
+      "required": [
+        "requested",
+        "native",
+        "resolution",
+        "capability_revision"
+      ],
+      "properties": {
+        "requested": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            null
+          ]
+        },
+        "native": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            null
+          ]
+        },
+        "resolution": {
+          "enum": [
+            "identity",
+            "stepdown",
+            "adapter_default"
+          ]
+        },
+        "capability_revision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
     }
   },
   "allOf": [
     {
       "if": {
-        "properties": {"parse_status": {"const": "ok"}}
+        "properties": {
+          "parse_status": {
+            "const": "ok"
+          }
+        }
       },
       "then": {
         "properties": {
-          "actual_model": {"type": "string", "minLength": 1},
+          "actual_model": {
+            "type": "string",
+            "minLength": 1
+          },
           "usage": {
             "type": "object",
-            "required": ["input", "output"]
+            "required": [
+              "input",
+              "output"
+            ]
           },
           "process": {
             "properties": {
-              "exit_code": {"const": 0},
-              "timed_out": {"const": false}
+              "exit_code": {
+                "const": 0
+              },
+              "timed_out": {
+                "const": false
+              }
             }
           }
         }
