@@ -241,6 +241,20 @@ def test_retain_strengthened_content_detection(repo, tmp_path):
     assert "aabbccddeeff" not in open(os.path.join(rec.path, "app.py")).read()
 
 
+def test_retain_does_not_over_redact_benign_files(repo, tmp_path):
+    """Step-11 regression F2: benign files an engineer needs to debug must survive retention intact
+    (broad name-globs like *.ini / *token* were dropped; the regex no longer matches token_count)."""
+    m = _mgr()
+    h = m.create(str(repo), _ident(), _base(repo), root=str(tmp_path / "wtroot"))
+    with open(os.path.join(h.path, "tox.ini"), "w") as f:  # name dropped from secret globs
+        f.write("[tox]\nenvlist = py312\n")
+    with open(os.path.join(h.path, "counts.py"), "w") as f:  # content no longer over-matches
+        f.write("token_count = 5\naccess_key_id_length = 3\n")
+    rec = m.finalize(h, contract.TIMEOUT)  # retained
+    assert "[tox]" in open(os.path.join(rec.path, "tox.ini")).read()  # untouched
+    assert "token_count = 5" in open(os.path.join(rec.path, "counts.py")).read()  # untouched
+
+
 def test_retain_large_unmatched_file_flags_truncated(repo, tmp_path):
     """Fix (redaction-review F1): a file larger than the scan cap that isn't otherwise redacted is
     surfaced as scan-truncated -> redaction_incomplete, never a silent pass."""
@@ -251,6 +265,26 @@ def test_retain_large_unmatched_file_flags_truncated(repo, tmp_path):
     rec = m.finalize(h, contract.TIMEOUT)
     assert rec.redaction_incomplete is True
     assert any(fl["kind"] == "scan-truncated" for fl in rec.redaction_failures)
+
+
+def test_retain_fifo_does_not_hang_teardown(repo, tmp_path):
+    """A child-planted FIFO named like a secret must NOT block `_retain` forever (O_NONBLOCK +
+    S_ISREG guard); it is surfaced as a non-regular skip, not silently scanned."""
+    import signal
+
+    m = _mgr()
+    h = m.create(str(repo), _ident(), _base(repo), root=str(tmp_path / "wtroot"))
+    os.mkfifo(os.path.join(h.path, "secret.key"))  # name matches *.key
+    def _boom(sig, frm):  # noqa: ANN001
+        raise TimeoutError("finalize hung on the FIFO")
+    old = signal.signal(signal.SIGALRM, _boom)
+    signal.alarm(15)
+    try:
+        rec = m.finalize(h, contract.TIMEOUT)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old)
+    assert any("secret.key" in fl["path"] for fl in rec.redaction_failures)
 
 
 def test_retain_hardlink_does_not_corrupt_outside_file(repo, tmp_path):

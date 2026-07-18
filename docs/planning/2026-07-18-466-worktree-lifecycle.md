@@ -62,8 +62,9 @@ claude gets a real FS sandbox. The live negative-write proof is the W5 canary (#
 - `WorktreeIdentity(run_id, seat, attempt)` — `attempt` is the SAME `attempt_id` STRING the engine
   already builds (`engine.py:104`, `f"{i}-{uuid4().hex[:8]}"`), so worktree ↔ capture-dir ↔ the
   future W4 registry share one identity (S-M3). `run_id`/`seat` mirror capture's inputs.
-- `WorktreeConfig(root, retention, populate_allowlist)`; `RetentionPolicy(max_retained_count=20,
-  max_age_s=604800, pinned: frozenset=())`.
+- `RetentionPolicy(max_retained_count=20, max_age_s=604800, pinned: frozenset=())` — the manager
+  takes `retention` directly, `root` per-`create`, and the allowlist per-`populate` (no aggregate
+  `WorktreeConfig`: it was unused dead code; W7 adds a config vehicle when it actually threads one).
 - `WorktreeHandle(path, identity, base_sha, root, gitdir, repo)` — `gitdir` = the trusted admin
   dir; `repo` = the canonical repo working-copy path (CF-5), validated at create and recorded in
   `.meta`, so every later `worktree remove`/`prune`/`list` uses a trusted `repo`, never an
@@ -106,12 +107,14 @@ Pure functions:
   under the worktree.
 
 **Persistent retention index (CF-6):** `<root>/.meta/retention-index.json` (atomic, 0700) holds
-every `RetentionRecord`, the live-state source (identities considered live at decision time), and
-the current `pressure` flag. `_retain`, eviction, and create-admission all update it, so W4's
-reaper (#467) reconstructs `records` / `live_identities` / unresolved `pressure` from disk rather
-than needing W3's in-process state.
+every `RetentionRecord` and the current `pressure` flag. `_retain`, eviction, and create-admission
+all update it, so W4's reaper (#467) reconstructs `records` / unresolved `pressure` from disk rather
+than needing W3's in-process state. **Liveness is NOT persisted here** (Step-11 AC-review): W3
+cannot keep a `live_identities` set authoritative (a later `create` clears it), so `live_identities`
+is used only TRANSIENTLY for a single eviction decision and never written — the W4 reaper must
+source liveness from its own job registry (#467 scope), never from this index.
 
-### B.2 `WorktreeManager` (I/O; injected `run(cmd, cwd=None, env=None) -> (rc, out, err)`)
+### B.2 `WorktreeManager` (I/O; injected `run(cmd, env=None) -> (rc, out, err)`)
 
 - `create(repo, identity, base_sha) -> WorktreeHandle`: `resolve_root`; peel `base_sha^{commit}`
   in the canonical repo (fail-loud if unknown); `planned_path` +
@@ -144,17 +147,24 @@ than needing W3's in-process state.
     --expire=now` and **assert** the original path is gone via `worktree list --porcelain` (A-M1).
     The retained tree is now a **plain directory** — safe to read for diagnosis, never a navigable
     git worktree; W4 sweeps it by path (S-L3).
-    **(2) redact the MOVED tree (VERIFIED, A-H6/S-L1/S-L2/CF-2):** first overwrite the EXACT
+    **(2) redact the MOVED tree — BEST-EFFORT, not a categorical guarantee (A-H6/S-L1/S-L2/CF-2;
+    Step-11 hardening):** first overwrite the EXACT
     `populated[]` destinations (from trusted `.meta`, pending+complete) with a
     `[redacted: populated allowlist secret]` marker (keep the filename, S-L2). Then **walk the
     moved retained tree directly** (`os.walk(followlinks=False)` over the plain dir — enumerates
     committed AND gitignored files that `status` never lists, closing the CF-2 leak) and scan each
-    **regular no-follow** file (`O_NOFOLLOW`; a symlink raises ELOOP and is skipped, never
-    followed) by name
-    (`.env*, *.pem, *.key, *.p12, *.pfx, *.keystore, .npmrc, .netrc, .git-credentials,
-    id_rsa*, id_ed25519*, authorized_keys, known_hosts, *service-account*.json, *credentials*`)
-    and by content (PEM `-----BEGIN … PRIVATE KEY-----`, `AKIA[0-9A-Z]{16}`,
-    `(?i)(secret|token|password|api[_-]?key)\s*[:=]\s*\S`), overwriting matched contents with the
+    **regular no-follow** file (`O_NOFOLLOW`; a symlink raises ELOOP and is skipped; **`O_NONBLOCK`
+    + an `S_ISREG` fstat guard** so a child-planted FIFO/socket can't hang the open forever
+    (teardown DoS) — a non-regular node is recorded as a failure, not scanned; **a hardlink
+    (`st_nlink>1`) is redacted by breaking OUR link + writing a fresh marker, never `ftruncate`,
+    which would corrupt a shared inode OUTSIDE the tree**) by name
+    (`.env*, *.pem, *.key, *.p8, *.p12, *.pfx, *.keystore, .npmrc, .netrc, .git-credentials,
+    id_rsa*, id_ed25519*, authorized_keys, known_hosts, *service-account*.json, *credentials*,
+    kubeconfig` — genuinely-secret names only; broad substrings dropped to avoid nuking benign
+    files) and by content (PEM/AWS/Slack/GitHub tokens + a bounded, non-backtracking
+    keyword-assignment regex — detection is heuristic; a file past the 1 MiB scan cap or in an
+    un-matched encoding is surfaced/left as a best-effort residual, never claimed clean),
+    overwriting matched contents with the
     marker; **record every read/scan/write outcome, re-read + assert each redacted file, and
     surface `redaction_failures[]`** — any failure marks the record `redaction_incomplete` (owner-
     visible, never a silent "redacted").
@@ -174,7 +184,10 @@ called by the ORCHESTRATOR process only. **Independence + dirty capture (A-H1):*
    `--git-dir=<handle.gitdir> --work-tree=<path>`, `read-tree <base_sha>` then `add -A` (respects
    `.gitignore` so child-gitignored files are NOT carried into canonical; subject to `path_policy`:
    refuse if any changed path is outside the promotable allowlist/denylist) then `write-tree` →
-   the candidate tree object.
+   the candidate tree object. **Strict mode (Step-11 T4 fix):** promote's `add -A` runs WITHOUT
+   `--ignore-errors` and fails loud on an unreadable path — a silently-skipped file would REVERT
+   that path to base in the promoted tree while `changed_paths` stayed silent. (The inspect/retain
+   teardown path keeps `--ignore-errors` so a child chmod-000 can't strand it.)
 2. `changed_paths` = `diff --name-only <base_sha> <candidate-tree>` (independent of the child's
    self-report, OQ-4); `head_sha` from the worktree HEAD via the trusted gitdir.
 3. **Base-staleness guard (CF-1) — refuse a silent revert:** when `target_ref` already exists,

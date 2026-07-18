@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
@@ -44,13 +45,6 @@ class RetentionPolicy:
     max_retained_count: int = 20
     max_age_s: int = 604800  # 7 days
     pinned: frozenset = frozenset()
-
-
-@dataclass(frozen=True)
-class WorktreeConfig:
-    root: str
-    retention: RetentionPolicy = RetentionPolicy()
-    populate_allowlist: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -655,12 +649,15 @@ class WorktreeManager:
 
     _MARKER = "[redacted: populated allowlist secret]\n"
     _SCAN_CAP = 1 << 20  # first 1 MiB scanned; a larger file flags scan-truncated (-> incomplete)
+    # Genuinely-secret FILE names only. Broad substrings (*token*, *secret*, *.ini, config.json,
+    # settings.json, secrets*) were dropped (Step-11 regression F2): they wiped benign files
+    # (tokenizer.py, the stdlib secrets.py, tox.ini, VS Code settings.json) and gutted retention's
+    # debugging value — a secret INSIDE such a file is still caught by the content scan.
     _SECRET_NAME_GLOBS = (
         ".env", ".env.*", "*.pem", "*.key", "*.p8", "*.p12", "*.pfx", "*.keystore", ".npmrc",
         ".netrc", ".git-credentials", "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*",
         "authorized_keys", "known_hosts", "*service-account*.json", "*credentials*",
-        "secrets*", "*secret*", "*token*", "*.ini", "kubeconfig", "*.kubeconfig",
-        "config.json", "settings.json", "vault.*",
+        "kubeconfig", "*.kubeconfig",
     )
 
     @classmethod
@@ -673,13 +670,18 @@ class WorktreeManager:
     def _secret_content_re():
         import re  # noqa: PLC0415
 
+        # NB: an EXPLICIT keyword alternation, NOT keyword + `[\w.-]*` — the unbounded suffix was an
+        # O(n^2) ReDoS (Step-11 regression F1: `secretsecret…` with no separator backtracks ~93 min
+        # on a 1 MiB child-planted file, uninterruptible C-level) AND over-matched `token_count = 5`.
+        # Listing compound keys (secret_access_key, api_key, …) keeps the real catches, bounded.
         return re.compile(
             rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----|"      # PEM private keys
             rb"A(?:KIA|SIA)[0-9A-Z]{16}|"                    # AWS long-term + temp access keys
             rb"xox[baprs]-[0-9A-Za-z-]{10,}|"                # Slack tokens
             rb"gh[pousr]_[0-9A-Za-z]{20,}|"                  # GitHub tokens
-            # keyword (possibly suffixed like aws_secret_access_key) + optional quote + : or =
-            rb"(secret|token|password|passwd|api[_-]?key|access[_-]?key)[\w.-]*[\"']?\s*[:=]\s*[\"']?\S",
+            rb"(password|passwd|secret[_-]?access[_-]?key|secret[_-]?key|secret|"
+            rb"api[_-]?key|access[_-]?key|auth[_-]?token|access[_-]?token|token)"
+            rb"[\"']?\s*[:=]\s*[\"']?\S",                    # optional quote + : or = + a value char
             re.IGNORECASE,
         )
 
@@ -716,34 +718,45 @@ class WorktreeManager:
     def _scan_content(self, path: str, pattern, failures: list) -> tuple:
         """Return ``(matched, truncated)``. ``truncated`` means the file is larger than the scan
         cap, so a no-match is inconclusive (caller flags it incomplete)."""
+        # O_NONBLOCK so a child-planted FIFO/socket named like a secret can't BLOCK the open forever
+        # (teardown DoS); the S_ISREG guard then skips every non-regular node.
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError as exc:
             failures.append({"path": path, "kind": "scan-open", "error": str(exc)})
             return False, False
         try:
-            size = os.fstat(fd).st_size
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                failures.append({"path": path, "kind": "scan-nonregular", "error": "not a regular file"})
+                return False, False
             data = os.read(fd, self._SCAN_CAP)
         except OSError as exc:
             failures.append({"path": path, "kind": "scan-read", "error": str(exc)})
             return False, False
         finally:
             os.close(fd)
-        return bool(pattern.search(data)), size > self._SCAN_CAP
+        return bool(pattern.search(data)), st.st_size > self._SCAN_CAP
 
     def _overwrite_marker(self, path: str, kind: str, redactions: list, failures: list) -> None:
         marker = self._MARKER.encode("utf-8")
+        # O_NONBLOCK so a child-planted FIFO/socket can't block the open forever (teardown DoS).
         try:
-            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK)
         except OSError as exc:
             failures.append({"path": path, "kind": kind, "error": f"open: {exc}"})
             return
         try:
-            nlink = os.fstat(fd).st_nlink
+            st = os.fstat(fd)
         except OSError as exc:
             os.close(fd)
             failures.append({"path": path, "kind": kind, "error": f"fstat: {exc}"})
             return
+        if not stat.S_ISREG(st.st_mode):
+            os.close(fd)
+            failures.append({"path": path, "kind": kind, "error": "non-regular file, not redacted"})
+            return
+        nlink = st.st_nlink
         if nlink > 1:
             # HARDLINK: O_NOFOLLOW does not catch a hardlink, and ftruncate would corrupt the
             # SHARED inode — including a second link OUTSIDE the retained tree. Break our link
@@ -780,11 +793,14 @@ class WorktreeManager:
             os.unlink(path)  # remove OUR link only; the outside link keeps the original content
             nfd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             try:
-                os.write(nfd, marker)
+                wrote = os.write(nfd, marker)
             finally:
                 os.close(nfd)
         except OSError as exc:
             failures.append({"path": path, "kind": kind, "error": f"hardlink-rewrite: {exc}"})
+            return
+        if wrote != len(marker):  # short write (ENOSPC/EINTR): surface, don't claim success
+            failures.append({"path": path, "kind": kind, "error": "hardlink-short-write"})
             return
         redactions.append({"path": path, "kind": kind, "hardlink_broken": True})
 
@@ -800,7 +816,7 @@ class WorktreeManager:
             with open(self._index_file(root), encoding="utf-8") as fh:
                 return json.load(fh)
         except (OSError, ValueError):
-            return {"records": [], "live_identities": [], "pressure": False}
+            return {"records": [], "pressure": False}
 
     def _write_index(self, root: str, data: dict) -> None:
         import json  # noqa: PLC0415
@@ -808,10 +824,13 @@ class WorktreeManager:
         capture.atomic_write_text(Path(self._index_file(root)), json.dumps(data, indent=2, sort_keys=True))
 
     def _enforce_and_persist(self, root: str, record: RetentionRecord, live_identities) -> None:
-        """Add ``record``, evict per policy, persist the index.
+        """Add ``record``, evict per policy, persist the index. ``live_identities`` is used
+        TRANSIENTLY for THIS eviction decision (don't evict a currently-live sibling) but is NOT
+        persisted: W3 cannot keep it authoritative (a later ``create`` clears it), so the W4 reaper
+        (#467) must source liveness from its own job registry, never from this index (CF-6).
         ponytail: single-writer read-modify-write. W3 finalizes serially per orchestrator, so no
         lock. If finalize/promote ever runs concurrently, guard this + `_recompute_retention` with
-        an flock on the index (a lost update would orphan a RetentionRecord from the W4 reaper)."""
+        an flock on the index (a lost update would orphan a RetentionRecord from the reaper)."""
         import shutil  # noqa: PLC0415
 
         index = self._read_index(root)
@@ -821,11 +840,7 @@ class WorktreeManager:
         for rec in evict:
             shutil.rmtree(rec.path, ignore_errors=True)
         kept = [r for r in records if id(r) not in evict_ids]
-        self._write_index(root, {
-            "records": [_record_to_dict(r) for r in kept],
-            "live_identities": [_identity_dict(i) for i in live_identities],
-            "pressure": pressure,
-        })
+        self._write_index(root, {"records": [_record_to_dict(r) for r in kept], "pressure": pressure})
 
     def _recompute_retention(self, root: str) -> bool:
         """Re-derive eviction + pressure from the on-disk records so a latched `pressure` self-heals
@@ -838,7 +853,7 @@ class WorktreeManager:
         records = _records_from_index(index)
         if not records:
             if index.get("pressure"):
-                self._write_index(root, {"records": [], "live_identities": [], "pressure": False})
+                self._write_index(root, {"records": [], "pressure": False})
             return False
         evict, pressure = select_evictions(records, self._retention, self._clock(), live_identities=())
         if evict:
@@ -846,7 +861,5 @@ class WorktreeManager:
             for rec in evict:
                 shutil.rmtree(rec.path, ignore_errors=True)
             records = [r for r in records if id(r) not in evict_ids]
-        self._write_index(root, {
-            "records": [_record_to_dict(r) for r in records], "live_identities": [], "pressure": pressure,
-        })
+        self._write_index(root, {"records": [_record_to_dict(r) for r in records], "pressure": pressure})
         return pressure

@@ -203,6 +203,26 @@ def test_parse_porcelain_v2_records():
     assert untracked_list == ["evil.txt"]
 
 
+def test_secret_regex_is_linear_not_redos():
+    """Step-11 regression F1: the content regex must NOT backtrack quadratically on a no-delimiter
+    keyword run (the ReDoS the 8a `[\\w.-]*` suffix introduced hung ~93 min on 1 MiB)."""
+    import time
+    pat = wt.WorktreeManager._secret_content_re()  # noqa: SLF001
+    blob = b"secret" * 8000  # 48 KB of the worst-case input (keyword, never a separator)
+    t = time.time()
+    pat.search(blob)
+    assert time.time() - t < 1.0  # linear ~ a few ms; a quadratic regression takes ~12s here
+
+
+def test_secret_regex_matches_real_rejects_benign():
+    pat = wt.WorktreeManager._secret_content_re()  # noqa: SLF001
+    for s in (b'{"database_password": "x"}', b"SECRET_KEY = 'abcdef'",
+              b"aws_secret_access_key=Y", b'api_key: "z"', b"token = \"t\""):
+        assert pat.search(s), s
+    for s in (b"token_count = 5", b"access_key_id_length = 3", b"tokens_used = 10"):
+        assert not pat.search(s), s
+
+
 def test_allowlist_resolves_contained_pair(tmp_path):
     src = tmp_path / "src"; wtd = tmp_path / "wt"
     src.mkdir(); wtd.mkdir()
