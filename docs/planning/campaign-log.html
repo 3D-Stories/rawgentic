@@ -62,7 +62,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 04:50 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 06:02 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -85,7 +85,17 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <ul>
 <li><strong>Session-limit resilience (live):</strong> the 04:20 window hit mid-Step-11 — 3 reviewer agents died</li>
 </ul>
-<p>  vacuous and were re-dispatched clean after reset; the codex diff review (separate quota)   survived and its sidecar was joined on schedule.</p></section>
+<p>  vacuous and were re-dispatched clean after reset; the codex diff review (separate quota)   survived and its sidecar was joined on schedule.</p>
+<h3>#480 — step-ENTRY state record: machine-readable current position (D-2 insertion) · v3.53.0</h3>
+<p>Owner-directed mid-campaign insertion. New <code>hooks/step_state.py</code> (pure core + thin CLI, stdlib) writes an observational &quot;now&quot; pointer — <code>claude_docs/wal/&lt;project&gt;.state.json</code>, atomic overwrite-in-place, last-writer-wins — at each numbered step ENTRY of all five workflow skills (one canonical prose line each, pin-tested). <code>wal-context</code> prefers a FRESH record over the notes-grep, <strong>session-scoped</strong> (a concurrent same-project session&#x27;s record is suppressed and the byte-identical grep fallback runs — the raw file stays project-scoped for the owner&#x27;s statusline, whose recipe routes through the validating <code>read</code> subcommand). Fail-open EVERYWHERE, live-proved with a crashing-python3 shim; a drift-guard pins that no gating hook references it.</p>
+<ul>
+<li><strong>Lane run:</strong> small-standard (7-impl estimate; lane-widened to 9 real — version surfaces).</li>
+<li><strong>Reviews:</strong> 8a on the wal-context commit (converged session-scoping Medium fixed) + lane</li>
+</ul>
+<p>  reviewer + adversarial diff (5 Mediums adopted: lazy writer import, reader   schema/project/freshness-bounds validation, future-timestamp bound, reader-routed statusline   recipe, collision guard via project-equality).</p>
+<ul>
+<li><strong>Session-limit resilience:</strong> none needed this child (ran post-reset).</li>
+</ul></section>
 <section class="mstone"><h3>Epic #422 — per-phase model routing + deterministic execution engine (auto-run) <span class="chip c-conf">SHIPPED</span></h3><p>Route WF2/WF3 model seats from bench-#14 evidence through a deterministic <code>phase_executor</code> engine. Plan: <code>docs/planning/2026-07-16-per-phase-model-routing.md</code>. Children (dep order): #424 (E1 package) ✓ · #425 (E2 enforcement) ✓ · #426 (E3 seat-table config) ✓ · <strong>#427 (E4 seat cutover)</strong> ← this slot · then #428 #429 #431 #430 #420 #419 #417.</p>
 <h3>#427 — ship/intake/plan seats through the executor (E4) · v3.45.0</h3>
 <p>The FIRST consumer of <code>phase_executor</code>: <code>hooks/executor_routing_lib.py</code> — a <code>resolve-seat</code> / <code>dispatch</code> CLI routing the <strong>ship / intake / plan</strong> seats through <code>run_seat</code> as a verified choke point, gated by a per-seat <code>executorRouting</code> toggle in <code>.rawgentic_workspace.json</code> (default <code>inherit</code>; the executor is off until a seat is opted in, so merge is a no-op — the prose call sites land in #417). <code>dispatch</code> wires a per-attempt <code>check_pre</code> (primary + every fallback target, selected by the engine&#x27;s attempt-index) → <code>run_seat</code> → <code>verify_post</code> → append-only routing-audit log; a three-way <code>inherit</code>/<code>executor</code>/<code>driver_only</code> tag (merge/CI/deploy/Step-16 stay driver-inline) and a granular fail-closed exit taxonomy (2 malformed · 3 availability/quota retryable · 4 enforcement breach · 5 internal/audit), structured <code>{ok:false,error}</code> on every non-zero. Capture/permit dirs derive under the project repo&#x27;s git-ignored <code>.rawgentic/</code>; <code>reconcile_run</code> deferred to #420; the build seat stays fail-closed until #429. Supersedes #418.</p>
@@ -411,9 +421,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
 <p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#464 (feature, complex)</td></tr><tr><th>Lane</th><td>full</td></tr><tr><th>Tests</th><td>61 added · 3393/3401 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: not_configured</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>19</td><td>19</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>8a</td><td>Per-task Review</td><td>7</td><td>7</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>5</td><td>5</td><td>pass</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#480 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>35 added · 3428/3436 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: not_configured</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>fast_path</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>8</td><td>8</td><td>pass</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-18 04:50 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-18 06:02 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
