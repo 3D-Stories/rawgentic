@@ -1100,13 +1100,14 @@ class TestApplyTable:
         dst = repo / "claude_docs" / "t.json"
         dst.parent.mkdir(parents=True)
         dst.write_text(json.dumps(base), encoding="utf-8")
+        cur = routing.snapshot_from_file(dst).config_digest  # diff-DF1: guard = CURRENT resolution
         v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
-                   dest="claude_docs/t.json", expected=_pkg_digest(),
+                   dest="claude_docs/t.json", expected=cur,
                    extra=["--validate-only", "--reset-to-default"])
         assert v.returncode == 0
         cand = json.loads(v.stdout)["config_digest"]
         r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
-                   dest="claude_docs/t.json", expected=_pkg_digest(), candidate=cand,
+                   dest="claude_docs/t.json", expected=cur, candidate=cand,
                    extra=["--reset-to-default"])
         assert r.returncode == 0
         after = json.loads(dst.read_text(encoding="utf-8"))
@@ -1139,6 +1140,14 @@ class TestApplyTable:
         r = _apply(ws, tmp_path, {}, expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "keep defaults" in json.loads(r.stdout)["error"]["message"]
+
+    def test_semantically_empty_seat_patch_refused(self, tmp_path):
+        # diff-DF3: {"ship": {}} must not materialize an unchanged table.
+        repo, ws = _proj_ws(tmp_path)
+        r = _apply(ws, tmp_path, {"ship": {}}, expected=_pkg_digest(), extra=["--validate-only"])
+        assert r.returncode == er.EXIT_MALFORMED
+        assert "keep defaults" in json.loads(r.stdout)["error"]["message"]
+        assert not (repo / "claude_docs" / "routing").exists()
 
     @pytest.mark.parametrize("patch,frag", [
         ({"wombat": {"primary": "claude-opus-4-8"}}, "unknown seat"),

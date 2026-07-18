@@ -591,13 +591,13 @@ class TestProjectConfigSource:
     def test_corrupt_config_uninspectable_no_gap(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config="{not json")
         gaps, state = self._gaps(tmp_path, ws, entry)
-        assert state == "uninspectable"
+        assert state == "uninspectable:parse_error"
         assert all(k != "phaseExecutorTable" for k, _ in gaps)
 
     def test_escaping_entry_path_uninspectable(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG, entry_path="../outside")
         state, pcfg = pur._project_config_state(str(ws), entry)
-        assert state == "uninspectable" and pcfg is None
+        assert state == "uninspectable:path_escape" and pcfg is None
 
     def test_workspace_entries_unaffected(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)
@@ -613,7 +613,7 @@ class TestProjectConfigSource:
                             "--state-dir", str(tmp_path)],
                            capture_output=True, text=True)
         assert r.returncode == 0  # advisory, never blocks
-        assert "cannot inspect" in r.stderr and "p1" in r.stderr
+        assert "cannot inspect" in r.stderr and "p1" in r.stderr and "parse_error" in r.stderr
 
     def test_staleness_cli_nudges_missing_key(self, tmp_path):
         import subprocess, sys as _sys

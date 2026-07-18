@@ -158,23 +158,25 @@ def _project_config_state(workspace_path, entry):
         root = Path(workspace_path).resolve().parent
         rel = entry.get("path")
         if not isinstance(rel, str) or not rel:
-            return "uninspectable", None
+            return "uninspectable:invalid_path", None
         proj = (root / rel).resolve()
         if proj != root and root not in proj.parents:
-            return "uninspectable", None  # traversal — never follow outside the workspace
+            return "uninspectable:path_escape", None  # traversal — never follow outside the workspace
         cfg = proj / ".rawgentic.json"
         try:
             with open(cfg, encoding="utf-8") as f:
                 parsed = json.load(f)
         except FileNotFoundError:
             return "absent", None
-        except (OSError, ValueError):
-            return "uninspectable", None
+        except OSError:
+            return "uninspectable:io_error", None
+        except ValueError:
+            return "uninspectable:parse_error", None
         if not isinstance(parsed, dict):
-            return "uninspectable", None
+            return "uninspectable:non_object", None
         return "ok", parsed
     except Exception:  # noqa: BLE001 — advisory pass: any surprise is uninspectable, never a crash
-        return "uninspectable", None
+        return "uninspectable:unexpected_error", None
 
 
 def _sanitize_name(name):
@@ -216,10 +218,11 @@ def _run_staleness(args, current, manifest):
                   if isinstance(x, dict) and x.get("name") == args.staleness_project), None)
         if isinstance(p, dict):
             state, pcfg = _project_config_state(args.workspace, p)
-            if state == "uninspectable":
+            if state.startswith("uninspectable"):
                 print(f"post_update_reconcile: cannot inspect project config for "
-                      f"{args.staleness_project!r} ({p.get('path')!r}/.rawgentic.json) — "
-                      f"project_config staleness checks skipped", file=sys.stderr)
+                      f"{args.staleness_project!r} ({p.get('path')!r}/.rawgentic.json) "
+                      f"[{state.split(':', 1)[-1]}] — project_config staleness checks skipped",
+                      file=sys.stderr)
             gaps = project_feature_gaps(p, manifest, current,
                                         project_config=pcfg if state == "ok" else None)
             if gaps:
@@ -238,10 +241,11 @@ def _run_staleness(args, current, manifest):
                 continue
             name = p.get("name", "?")
             state, pcfg = _project_config_state(args.workspace, p)
-            if state == "uninspectable":
+            if state.startswith("uninspectable"):
                 print(f"post_update_reconcile: cannot inspect project config for "
-                      f"{name!r} ({p.get('path')!r}/.rawgentic.json) — "
-                      f"project_config staleness checks skipped", file=sys.stderr)
+                      f"{name!r} ({p.get('path')!r}/.rawgentic.json) "
+                      f"[{state.split(':', 1)[-1]}] — project_config staleness checks skipped",
+                      file=sys.stderr)
             gaps = project_feature_gaps(p, manifest, current,
                                         project_config=pcfg if state == "ok" else None)
             if not gaps:

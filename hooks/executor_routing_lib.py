@@ -372,6 +372,9 @@ def apply_seat_patch(base_table: dict, patch: dict) -> dict:
             raise MalformedConfig(f"apply-table: unknown seat {seat_name!r} (table has {sorted(seats)})")
         if not isinstance(edits, dict):
             raise MalformedConfig(f"apply-table: patch for seat {seat_name!r} must be an object")
+        if not edits:
+            raise MalformedConfig(
+                f"apply-table: empty patch for seat {seat_name!r} = keep defaults; nothing to write")
         unknown = set(edits) - _PATCH_FIELDS
         if unknown:
             raise MalformedConfig(
@@ -427,14 +430,19 @@ def _do_apply(args) -> int:
         # the PATCH BASE is the package table (8a-A note: without this, resetting an existing
         # override could never materialize — base_rt None made the guard refuse every re-seed).
         rt_current = resolve_table(repo_root, pe.routing)
+        # The TOCTOU guard ALWAYS checks the CURRENTLY-RESOLVED table (what show-table
+        # displayed) — under --reset-to-default the PATCH BASE is the package table, but
+        # the thing that must not have drifted since the user looked is still the current
+        # resolution (diff-DF1: guarding the package digest instead both broke the
+        # documented flow and left the override unguarded).
+        if args.expected_digest != rt_current.snapshot.config_digest:
+            raise MalformedConfig(
+                f"apply-table: base table changed since shown — --expected-digest "
+                f"{args.expected_digest!r} != resolved {rt_current.snapshot.config_digest!r}")
         if args.reset_to_default:
             base_snap = pe.routing.snapshot_from_file(pe.routing.default_table_path())
         else:
             base_snap = rt_current.snapshot
-        if args.expected_digest != base_snap.config_digest:
-            raise MalformedConfig(
-                f"apply-table: base table changed since shown — --expected-digest "
-                f"{args.expected_digest!r} != resolved {base_snap.config_digest!r}")
         candidate = apply_seat_patch(base_snap.table, patch)
         # Validate through EXACTLY the #445 load path: temp file OUTSIDE the project +
         # snapshot_from_file (schema + referential integrity), then the dead-seat pass.

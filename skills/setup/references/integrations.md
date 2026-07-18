@@ -224,9 +224,11 @@ workspace file (Step 8).
    making it configurable), `table_source`, and `config_digest`. If the project already
    declares `phaseExecutorTable`, this IS the current override — change-or-keep applies,
    never rewrite silently.
-2. **Ask**: "Keep the default seat models? (Enter = keep)". Declining or keeping
-   **stages nothing and touches nothing** — the package-default resolution stands,
-   byte-identical to not running this step. `show-table` is read-only.
+2. **Ask**: "Keep the current resolved seat models? (Enter = keep)". Declining or keeping
+   **stages nothing and touches nothing** — the current resolution (package default, or the
+   project's existing override when one is declared) stands, byte-identical to not running
+   this step (diff-DF4: for an overridden project Enter keeps the OVERRIDE — never imply a
+   reset happened). `show-table` is read-only.
 3. **On tweak**: collect a sparse per-seat patch — `primary` and/or `chain` model names
    only (a supplied chain REPLACES the whole chain; models must already have a lane in
    the base table). Write it to a temp patch file, then validate WITHOUT writing:
