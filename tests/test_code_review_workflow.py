@@ -83,3 +83,10 @@ def test_162_decision_reopened_with_computable_status():
     # the built-in arm runs ADDITIVE to hand-rolled (coverage never drops)
     low = doc.lower()
     assert "additional" in low and "never drops" in low
+
+
+def test_docs_only_prs_skipped_via_paths_ignore():
+    """#478: a diff confined to docs/** must not burn the advisory lane's
+    subscription quota — paths-ignore under pull_request. Deliberately narrow:
+    skills/** markdown, README.md, CLAUDE.md still trigger review."""
+    assert re.search(r"pull_request:\n(?:.*\n)*?    paths-ignore:\n      - \"docs/\*\*\"", _text())

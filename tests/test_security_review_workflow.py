@@ -129,3 +129,9 @@ def test_promotion_and_auth_setup_documented_in_workflow():
     assert "10 clean" in text
     assert "setup-token" in text  # owner-gated OAuth setup named
     assert "self-hosted" in text  # zero-secret alternative named (AC4)
+
+
+def test_docs_only_prs_skipped_via_paths_ignore():
+    """#478: same paths-ignore as the code-review lane — docs-only diffs skip
+    this advisory lane; anything touching non-docs paths still runs it."""
+    assert re.search(r"pull_request:\n(?:.*\n)*?    paths-ignore:\n      - \"docs/\*\*\"", _text())

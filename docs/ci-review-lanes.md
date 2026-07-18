@@ -26,6 +26,14 @@ secret → a `::warning::` inside a green check). That is fixed:
 So a green review check now means what you'd expect. (The lanes drop the old
 `continue-on-error` mask; a `::warning::` inside a green check was not enough.)
 
+**Docs-only PRs skip both lanes entirely (#478).** A diff confined to `docs/**` does
+not trigger them (`paths-ignore` in each workflow's `on:` block) — an ABSENT check on
+such a PR means *path-skipped by design*, not "not reviewed"-red. Scope is deliberately
+narrow: `skills/**` markdown (product source), `README.md`, and `CLAUDE.md` still
+trigger review. The `test` and `lint` lanes stay unconditional on every PR — docs are
+load-bearing here (drift-guard tests pin doc sentences and README counts), so a
+docs-only diff can legitimately fail them.
+
 ## Activate (one-time, owner)
 
 The lanes need an auth secret. **Two options — OAuth is preferred:**
