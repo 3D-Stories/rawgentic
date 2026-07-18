@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import hashlib
+import os
 import json
 import re
 import sys
@@ -39,7 +40,8 @@ import types
 from pathlib import Path
 from typing import Callable, Final, Optional
 
-# Sibling hook import (hooks/*.py import each other via PYTHONPATH=hooks / sys.path.insert).
+# Sibling hook imports (hooks/*.py import each other via PYTHONPATH=hooks / sys.path.insert).
+import capabilities_lib  # #445 sanctioned .rawgentic.json reader for the seat-table pointer
 import complexity_gate  # #429 gate authentication for the build-dispatch path (#464 §E)
 from model_routing_lib import _ABSENT, _load_block, _load_project_entry
 
@@ -63,8 +65,10 @@ EXIT_INTERNAL: Final[int] = 5       # audit/capture/internal/import failure (non
 
 _UNSAFE_COMPONENT: Final[re.Pattern] = re.compile(r"[/\\]|\.\.|[\x00-\x1f]")
 
-# Routing table shipped inside the package (the §1 seat table as data).
-_ROUTING_TABLE_REL: Final[str] = "phase_executor/src/phase_executor/routing/rawgentic.routing-table.json"
+# #445: the routing table is resolved per-project via resolve_table() — the retired
+# _ROUTING_TABLE_REL repo-relative constant only ever existed in THIS repo's layout, so any
+# other project ENOENT'd. The package default now comes from phase_executor.routing.
+# default_table_path(); a project override comes from .rawgentic.json phaseExecutorTable.
 
 
 # --- errors ------------------------------------------------------------------------------------
@@ -184,6 +188,127 @@ def resolve_repo_root(workspace_path: str, project: str) -> Path:
         raise MalformedConfig(
             f"project {project!r} path {entry['path']!r} escapes the workspace dir (absolute or ../ traversal) — refused")
     return root
+
+
+@dataclasses.dataclass(frozen=True)
+class ResolvedTable:
+    """One resolved routing epoch + its provenance (#445).
+
+    `source` is `"project_file"` (config-declared override) or `"package_default"`.
+    Guarantee: deterministic resolution given an unchanged filesystem — each consumer
+    resolves independently and holds its own pinned snapshot (the package's epoch
+    discipline); no cross-consumer transaction is claimed."""
+    snapshot: object  # phase_executor.routing.RoutingSnapshot (typed loosely: lazy package import)
+    source: str
+    path: Path
+
+
+def resolve_table(repo_root: Path, routing_module) -> "ResolvedTable":
+    """THE single seat-table resolution both consumers call (#445, AC2).
+
+    Fail-mode: fail-CLOSED (enforcement boundary). A declared-but-unusable override is
+    ``MalformedConfig`` (exit 2 at the CLI) — never a silent package fallback (the
+    false-cutover class ``parse_executor_routing`` refuses). ONLY a truly-absent config
+    file or an absent ``phaseExecutorTable`` section means "not configured" -> package
+    default. ``routing_module`` is the caller's lazily-imported ``phase_executor.routing``
+    (keeps the ``_import_phase_executor`` structured-exit discipline + testability).
+
+    Content-level failures (schema violation, referential integrity) propagate as the
+    package's ``RoutingError``/validation errors — the CLI already maps those to exit 2;
+    pointer-ACCESS failures are wrapped here with the declared path named (#445 A4/P2-F2).
+    """
+    cfg_path = repo_root / ".rawgentic.json"
+    # Entry-presence probe: lstat does NOT follow symlinks, so ONLY FileNotFoundError means
+    # truly absent. A dangling symlink lstats fine here, then fails inside load_config's
+    # open() -> CapabilitiesError -> MalformedConfig (fail-closed, never mistaken for absent).
+    try:
+        os.lstat(cfg_path)
+        cfg_present = True
+    except FileNotFoundError:
+        cfg_present = False
+    except OSError as exc:
+        raise MalformedConfig(f"cannot probe project config {cfg_path}: {exc}") from exc
+
+    declared = None
+    if cfg_present:
+        try:
+            caps = capabilities_lib.derive_capabilities(capabilities_lib.load_config(str(cfg_path)))
+        except capabilities_lib.CapabilitiesError as exc:
+            raise MalformedConfig(
+                f"project config {cfg_path} cannot be evaluated (fail-closed): {exc}") from exc
+        declared = caps["phase_executor_table"]
+
+    if declared is None:
+        default_path = routing_module.default_table_path()
+        snap = routing_module.snapshot_from_file(default_path)
+        _assert_no_dead_seat(snap, routing_module, default_path)
+        return ResolvedTable(snapshot=snap, source="package_default", path=default_path)
+
+    # Canonical containment (PL-1): resolve(strict=True) follows symlinks, so an in-repo
+    # symlink whose TARGET escapes repo_root is refused; a missing file / broken symlink
+    # raises here (declared-but-missing is an error, never a fallback).
+    candidate = repo_root / declared
+    root = repo_root.resolve()
+    try:
+        resolved = candidate.resolve(strict=True)
+    except (FileNotFoundError, OSError) as exc:
+        raise MalformedConfig(
+            f"phaseExecutorTable.file {declared!r} declared in {cfg_path} is not usable "
+            f"({type(exc).__name__}: {exc}) — a declared override never falls back") from exc
+    if resolved != root and root not in resolved.parents:
+        raise MalformedConfig(
+            f"phaseExecutorTable.file {declared!r} resolves to {resolved} outside the project "
+            f"root {root} (symlink escape or traversal) — refused")
+    if not resolved.is_file():
+        raise MalformedConfig(
+            f"phaseExecutorTable.file {declared!r} resolves to {resolved} which is not a "
+            f"regular file — refused")
+    try:
+        snap = routing_module.snapshot_from_file(resolved)
+    except Exception as exc:  # noqa: BLE001 — uniform exit-2 for EVERY declared-override problem
+        # A DECLARED override that cannot load — unreadable (OSError), schema-invalid
+        # (jsonschema.ValidationError), or semantically broken (RoutingError) — is a CONFIG
+        # error: legible exit 2 naming the declared path, never the generic internal exit 5
+        # (#445 A4/AC4). The package-default path above deliberately propagates instead —
+        # a broken SHIPPED table is an internal fault, not a project-config one.
+        raise MalformedConfig(
+            f"phaseExecutorTable.file {declared!r} ({resolved}) failed to load "
+            f"({type(exc).__name__}: {exc})") from exc
+    _assert_no_dead_seat(snap, routing_module, resolved)
+    return ResolvedTable(snapshot=snap, source="project_file", path=resolved)
+
+
+def _assert_no_dead_seat(snap, routing_module, path) -> None:
+    """Pass (d) (#445, hooks layer by design — A2): a seat whose ENTIRE primary+chain is
+    forbidden by CONTEXT-FREE forbidden_combinations rows is statically dead — fail at
+    resolution, not first-dispatch. ``eligible_targets(..., author_provider=None)`` evaluates
+    exactly the context-free rows (``_row_matches`` skips ``cross_model_author`` without an
+    author); per-target reasons come from the PUBLIC ``target_forbidden_reason`` (P3-A1)."""
+    for seat_name, seat in snap.table.get("seats", {}).items():
+        if routing_module.eligible_targets(seat_name, snap, author_provider=None):
+            continue
+        reasons = []
+        for target in (seat["primary"], *seat.get("chain", [])):
+            why = routing_module.target_forbidden_reason(target, snap, author_provider=None)
+            reasons.append(f"{target.get('model')!r}: {why or 'forbidden'}")
+        raise MalformedConfig(
+            f"routing table {path}: seat {seat_name!r} is statically dead — every target in "
+            f"primary+chain is forbidden by context-free rules ({'; '.join(reasons)})")
+
+
+def seed_table(dest: Path) -> Path:
+    """Verbatim byte-copy of the package default table to ``dest`` (#445 B.4, for #446's
+    setup flow — a write-capable context; the read-only resolve/dispatch paths never call
+    this). Refuses to overwrite: #446's tweak UX owns edits. Byte equality is the seed
+    guarantee; the canonical config_digest is the routing-audit guarantee."""
+    pe = _import_phase_executor()
+    src = pe.routing.default_table_path()
+    dest = Path(dest)
+    if dest.exists() or dest.is_symlink():
+        raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(src.read_bytes())
+    return dest
 
 
 def pool_signature(pool_concurrency: dict) -> str:
@@ -435,9 +560,13 @@ def _do_resolve(args) -> int:
             return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
         try:
             repo_root = resolve_repo_root(args.workspace, args.project)
-            snap = pe.routing.snapshot_from_file(repo_root / _ROUTING_TABLE_REL)
-            targets = pe.routing.eligible_targets(args.seat, snap)
+            rt = resolve_table(repo_root, pe.routing)
+            targets = pe.routing.eligible_targets(args.seat, rt.snapshot)
             out["primary_model"] = targets[0]["model"] if targets else None
+            # #445 P3-A2 observability: which table this seat would route on, auditable from
+            # the CLI output alone (the dispatch path pins routing_config_digest per Observation).
+            out["table_source"] = rt.source
+            out["config_digest"] = rt.snapshot.config_digest
         except MalformedConfig as e:
             return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
         except pe.routing.RoutingError as e:
@@ -483,10 +612,11 @@ def _do_dispatch(args) -> int:
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
                           correlation_id=args.correlation_id))
-    # phase_executor table load + path derivation: a missing/malformed shipped table fails CLOSED
-    # (like the import guard) rather than crashing to a bare traceback (Step-8a R1/R2).
+    # Table resolution + path derivation: a missing/malformed table (package default OR a
+    # project phaseExecutorTable override) fails CLOSED (like the import guard) rather than
+    # crashing to a bare traceback (Step-8a R1/R2; #445 resolve_table).
     try:
-        snap = pe.routing.snapshot_from_file(repo_root / _ROUTING_TABLE_REL)
+        snap = resolve_table(repo_root, pe.routing).snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
