@@ -246,3 +246,71 @@ def test_shipped_table_provenance_bench14_426():
     table = load_routing_table(SHIPPED)
     assert "provenance" in table, "seat table must carry a provenance stamp"
     assert "14" in json.dumps(table["provenance"]), "provenance names bench #14"
+
+
+# --- #464 W1 (Task 2): fail-closed loader SEMANTIC passes (design §C.2 + §D) ---
+#     (a) confinement coverage, (b) enforced-roles bound, (c) name<->role binding lint.
+#     Each cell starts from the schema-valid shipped table and makes ONE mutation, so the sole
+#     failure exercised is the semantic pass under test.
+
+def _shipped_dict():
+    """Fresh mutable deep copy of the shipped (schema- AND semantically-valid) table."""
+    return json.loads(SHIPPED.read_text(encoding="utf-8"))
+
+
+def _write(tmp_path, table):
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps(table))
+    return p
+
+
+def test_load_shipped_table_passes_all_semantic_checks_464():
+    """Positive guard: the shipped 7-seat table clears confinement coverage, the enforced-roles
+    bound, and the name<->role lint (load_routing_table raises if any pass fails)."""
+    table = load_routing_table(SHIPPED)
+    assert set(table["seats"]) == set(_EXPECTED_SEATS_464)
+
+
+def test_confinement_missing_chain_provider_rejected_464(tmp_path):
+    """(a) design's chain carries an openai lane; dropping 'openai' from its confinement map
+    leaves a lane provider unconfined -> fail closed, message names the seat."""
+    bad = _shipped_dict()
+    del bad["seats"]["design"]["manifest"]["confinement"]["openai"]
+    with pytest.raises(RoutingError, match="design"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_enforced_roles_outside_registry_rejected_464(tmp_path):
+    """(b) policy.enforced_roles may not name a role the engine has no evaluator for ('judge'):
+    schema-valid string, but appears-enforced-but-isn't -> fail closed at load."""
+    bad = _shipped_dict()
+    bad["policy"]["enforced_roles"] = ["review", "judge"]
+    with pytest.raises(RoutingError, match="judge"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_name_role_binding_build_missing_role_rejected_464(tmp_path):
+    """(c) a seat NAMED 'build' must declare role 'build' — omitting it would silently bypass the
+    attestation gate (which keys on role), so the loader rejects it."""
+    bad = _shipped_dict()
+    del bad["seats"]["build"]["role"]
+    with pytest.raises(RoutingError, match="build"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_name_role_binding_review_wrong_role_rejected_464(tmp_path):
+    """(c) a seat named 'review' must declare role 'review', not a near-miss like 'reviewer'."""
+    bad = _shipped_dict()
+    bad["seats"]["review"]["role"] = "reviewer"
+    with pytest.raises(RoutingError, match="review"):
+        load_routing_table(_write(tmp_path, bad))
+
+
+def test_missing_manifest_rejected_by_semantic_pass_464():
+    """Belt-and-suspenders: a programmatic table that bypasses schema still fails closed at the
+    referential-integrity pass with a legible 'missing manifest' message (schema would catch it on
+    the load path; this guards direct callers of the semantic pass)."""
+    bad = _shipped_dict()
+    del bad["seats"]["ship"]["manifest"]
+    with pytest.raises(RoutingError, match="missing manifest"):
+        routing._assert_referential_integrity(bad)

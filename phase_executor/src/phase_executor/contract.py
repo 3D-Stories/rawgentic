@@ -19,9 +19,19 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Final, Optional
 
 SCHEMA_VERSION = "1"
+
+# The seat roles the engine actually has ``check_pre`` evaluators for. The loader semantic pass
+# (``routing._assert_referential_integrity``) rejects any ``policy.enforced_roles`` entry outside
+# this set: a table must not declare a role "enforced" that nothing evaluates
+# (appears-enforced-but-isn't). So ``enforced_roles`` is a SUBSET of ENFORCEABLE_ROLES — projects
+# may narrow, never widen, until the engine ships a new evaluator. Defined HERE (the shared leaf),
+# not in enforce.py, because both routing.py and enforce.py need it and ``enforce`` imports
+# ``routing`` — so ``routing`` must not import ``enforce`` (cycle). enforce.py re-exports it so the
+# public API reads ``enforce.ENFORCEABLE_ROLES``.
+ENFORCEABLE_ROLES: Final[frozenset[str]] = frozenset({"review", "build"})
 
 # parse_status vocabulary (mirrors observation.schema.json enum).
 OK = "ok"

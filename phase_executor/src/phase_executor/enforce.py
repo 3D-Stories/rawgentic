@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import capture, contract, routing
+from .contract import ENFORCEABLE_ROLES  # re-export: enforce.ENFORCEABLE_ROLES is the public-API home (#464 §D)
 
 
 def target_identity(target: dict) -> tuple:

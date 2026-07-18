@@ -454,6 +454,18 @@ def test_enforcement_api_exported_at_package_top_level():
         assert name in pe.__all__, f"missing from __all__: {name}"
 
 
+def test_enforceable_roles_exported_at_package_top_level_464():
+    """#464 Task 2 (design §D): ENFORCEABLE_ROLES — the evaluator-registry bound — is public API,
+    names exactly the roles check_pre evaluates, and is a single object shared across the modules
+    (defined in contract, the shared leaf; re-exported through enforce, the public-API home)."""
+    import phase_executor as pe
+    assert hasattr(pe, "ENFORCEABLE_ROLES")
+    assert "ENFORCEABLE_ROLES" in pe.__all__
+    assert pe.ENFORCEABLE_ROLES == frozenset({"review", "build"})
+    assert enforce.ENFORCEABLE_ROLES is pe.ENFORCEABLE_ROLES
+    assert contract.ENFORCEABLE_ROLES is pe.ENFORCEABLE_ROLES
+
+
 def test_reconcile_breach_not_forgiven_by_verified_sibling():
     """Step-8a Finding 1: a wrong-model breach (requested!=actual, billed) on one attempt must NOT
     be laundered by a sibling attempt that verified — only availability failures are forgivable."""

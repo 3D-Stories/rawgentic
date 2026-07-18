@@ -10,7 +10,8 @@ Public API:
 - Engine:    ``run_seat``, ``run_competitive``, ``Candidate``, ``InfeasibleBakeoff``
 - Adapters:  ``AdapterRequest``, ``parse_claude``, ``parse_codex``, ``parse_zhipuai``, ``ADAPTERS``
 - Enforcement: ``check_pre``, ``verify_post``, ``RoutingAuditLog``, ``reconcile_run``, ``PreReceipt``,
-             ``PostCheck``, ``ExpectedCall``, ``Reconcile``, ``target_identity``, ``audited_digests``
+             ``PostCheck``, ``ExpectedCall``, ``Reconcile``, ``target_identity``, ``audited_digests``,
+             ``ENFORCEABLE_ROLES``
 
 The normative artifacts are the committed JSON Schemas (``schemas/observation.schema.json``,
 ``schemas/routing-table.schema.json``); this package is one producer of those documents.
@@ -37,6 +38,7 @@ from .routing import (
     snapshot_from_file,
 )
 from .enforce import (
+    ENFORCEABLE_ROLES,
     ExpectedCall,
     PostCheck,
     PreReceipt,
@@ -60,6 +62,6 @@ __all__ = [
     "run_seat", "run_competitive", "Candidate", "InfeasibleBakeoff",
     "AdapterRequest", "parse_claude", "parse_codex", "parse_zhipuai", "ADAPTERS",
     "check_pre", "verify_post", "RoutingAuditLog", "reconcile_run", "PreReceipt", "PostCheck",
-    "ExpectedCall", "Reconcile", "target_identity", "audited_digests",
+    "ExpectedCall", "Reconcile", "target_identity", "audited_digests", "ENFORCEABLE_ROLES",
     "__version__",
 ]
