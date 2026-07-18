@@ -52,6 +52,24 @@ audits.
   vacuous and were re-dispatched clean after reset; the codex diff review (separate quota)
   survived and its sidecar was joined on schedule.
 
+### #480 — step-ENTRY state record: machine-readable current position (D-2 insertion) · v3.53.0
+
+Owner-directed mid-campaign insertion. New `hooks/step_state.py` (pure core + thin CLI, stdlib)
+writes an observational "now" pointer — `claude_docs/wal/<project>.state.json`, atomic
+overwrite-in-place, last-writer-wins — at each numbered step ENTRY of all five workflow skills
+(one canonical prose line each, pin-tested). `wal-context` prefers a FRESH record over the
+notes-grep, **session-scoped** (a concurrent same-project session's record is suppressed and the
+byte-identical grep fallback runs — the raw file stays project-scoped for the owner's statusline,
+whose recipe routes through the validating `read` subcommand). Fail-open EVERYWHERE, live-proved
+with a crashing-python3 shim; a drift-guard pins that no gating hook references it.
+
+- **Lane run:** small-standard (7-impl estimate; lane-widened to 9 real — version surfaces).
+- **Reviews:** 8a on the wal-context commit (converged session-scoping Medium fixed) + lane
+  reviewer + adversarial diff (5 Mediums adopted: lazy writer import, reader
+  schema/project/freshness-bounds validation, future-timestamp bound, reader-routed statusline
+  recipe, collision guard via project-equality).
+- **Session-limit resilience:** none needed this child (ran post-reset).
+
 ## Epic #422 — per-phase model routing + deterministic execution engine (auto-run)
 
 Route WF2/WF3 model seats from bench-#14 evidence through a deterministic `phase_executor`
