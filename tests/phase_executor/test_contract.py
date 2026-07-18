@@ -189,3 +189,88 @@ class TestResolveEffort:
         d = obs.to_dict()
         assert "effort" not in d  # emit-only-when-set
         contract.validate_observation(d)
+
+
+# --- #465 T2: LaunchProfile + profile_from_manifest ---
+
+def _manifest(grants=("read",), policy="fresh", bounds=None):
+    return {"session_policy": policy, "tool_grants": list(grants),
+            "effort": "high", "confinement": {"anthropic": "hooks"},
+            "bounds": bounds or {"timeout_s": 900}}
+
+
+class TestLaunchProfile:
+    def test_default_profile_is_fresh_readonly(self):
+        from phase_executor import contract
+        p = contract.LaunchProfile()
+        assert p.session_policy == "fresh" and p.mutating is False
+        assert p.effective_grants == () and p.worktree is None
+
+    def test_effective_grants_not_constructor_injectable(self):
+        from phase_executor import contract
+        import pytest as _pt
+        with _pt.raises(TypeError):
+            contract.LaunchProfile(effective_grants=("bash",))
+
+    def test_readonly_derivation(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(_manifest(), engine="claude")
+        assert p.mutating is False and p.effective_grants == ("read",)
+
+    def test_bash_closure_implies_net(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(
+            _manifest(grants=("read", "edit", "bash"), bounds={"timeout_s": 60, "max_budget_usd": 5.0}),
+            engine="claude", worktree="/tmp/wt")
+        assert p.mutating is True
+        assert set(p.effective_grants) == {"read", "edit", "bash", "net"}
+        assert p.tool_grants == ("read", "edit", "bash")  # declared set unchanged
+
+    @pytest.mark.parametrize("policy", ["", "Fresh", "resumable", None])
+    def test_bad_session_policy_refuses(self, policy):
+        from phase_executor import contract
+        m = _manifest()
+        if policy is None:
+            del m["session_policy"]
+        else:
+            m["session_policy"] = policy
+        with pytest.raises(ValueError, match="session_policy"):
+            contract.profile_from_manifest(m, engine="claude")
+
+    def test_resume_policy_accepted(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(_manifest(policy="resume"), engine="claude")
+        assert p.session_policy == "resume"
+
+    def test_mutating_requires_worktree(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="worktree"):
+            contract.profile_from_manifest(
+                _manifest(grants=("edit",), bounds={"timeout_s": 60, "max_budget_usd": 5.0}),
+                engine="claude")
+
+    def test_mutating_claude_requires_budget(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="max_budget_usd"):
+            contract.profile_from_manifest(_manifest(grants=("edit",)), engine="claude", worktree="/tmp/wt")
+
+    def test_mutating_codex_no_budget_needed(self):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(_manifest(grants=("edit",)), engine="codex", worktree="/tmp/wt")
+        assert p.mutating is True and p.max_budget_usd is None
+
+    def test_mutating_zhipuai_refuses(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="zhipuai"):
+            contract.profile_from_manifest(_manifest(grants=("edit",)), engine="zhipuai", worktree="/tmp/wt")
+
+    def test_bad_engine_refuses(self):
+        from phase_executor import contract
+        with pytest.raises(ValueError, match="engine"):
+            contract.profile_from_manifest(_manifest(), engine="zhipu")
+
+    def test_adapter_request_gains_defaulted_fields(self):
+        from phase_executor.adapters.base import AdapterRequest
+        req = AdapterRequest(seat="ship", requested_model="claude-sonnet-5", prompt="hi")
+        assert req.profile.session_policy == "fresh" and req.profile.mutating is False
+        assert req.containment_root is None

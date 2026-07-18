@@ -30,6 +30,10 @@ class AdapterRequest:
     effort: Optional[str] = None
     timeout: float = 300.0
     credential_ref: Optional[str] = None
+    # #465: launch profile + executor-approved containment root. Defaults keep every
+    # pre-profile caller byte-identical (fresh/read-only; no containment needed read-only).
+    profile: "contract.LaunchProfile" = field(default_factory=lambda: contract.LaunchProfile())
+    containment_root: Optional[str] = None
 
 
 @dataclass

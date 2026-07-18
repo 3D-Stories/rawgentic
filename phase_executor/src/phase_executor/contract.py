@@ -186,6 +186,67 @@ class EffortResolution:
                 "resolution": self.resolution, "capability_revision": self.capability_revision}
 
 
+class CompositionError(RuntimeError):
+    """A launch composition/profile that must not spawn (#465 — fail-closed at compose time)."""
+
+
+@dataclass(frozen=True)
+class LaunchProfile:
+    """One seat launch profile (#465 B.2). The dataclass default is fresh/read-only — the
+    byte-identical compat path for every pre-profile caller. `effective_grants` is
+    init=False: populated ONLY by `profile_from_manifest` (the bash=>net closure lives
+    there); a hand-built inconsistent profile is caught by the adapters' pre-spawn assert
+    (mutating == edit-or-bash in effective_grants)."""
+    session_policy: str = "fresh"
+    mutating: bool = False
+    worktree: Optional[str] = None
+    tool_grants: tuple = ()
+    max_budget_usd: Optional[float] = None
+    effective_grants: tuple = field(default=(), init=False)
+
+
+_SESSION_POLICIES = frozenset({"fresh", "resume"})
+_MUTATING_ENGINES = frozenset({"claude", "codex"})
+
+
+def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str] = None) -> "LaunchProfile":
+    """THE launch-profile derivation (#465 B.2). Fail-closed on every invariant:
+    session_policy REQUIRED in {fresh, resume} (#464 made it non-defaultable); mutating
+    (edit/bash granted) requires a worktree; mutating claude requires a positive
+    max_budget_usd (the enforceable cost bound — codex's bound is the enforced timeout);
+    mutating is restricted to {claude, codex} (a zhipuai manifest with edit/bash refuses).
+    The bash=>net closure is recorded in effective_grants (grants are capability
+    selection, NOT a sandbox — OS confinement is the security layer)."""
+    if engine not in _EFFORT_ENGINES:
+        raise ValueError(f"profile_from_manifest: unknown engine {engine!r} (valid: {sorted(_EFFORT_ENGINES)})")
+    policy = manifest.get("session_policy")
+    if policy not in _SESSION_POLICIES:
+        raise ValueError(
+            f"profile_from_manifest: session_policy must be one of {sorted(_SESSION_POLICIES)} "
+            f"(got {policy!r}; #464 made it explicit, never defaulted)")
+    grants = tuple(manifest.get("tool_grants") or ())
+    effective = tuple(dict.fromkeys(grants + (("net",) if "bash" in grants and "net" not in grants else ())))
+    mutating = "edit" in grants or "bash" in grants
+    bounds = manifest.get("bounds") or {}
+    budget = bounds.get("max_budget_usd")
+    if mutating:
+        if engine not in _MUTATING_ENGINES:
+            raise ValueError(
+                f"profile_from_manifest: engine {engine!r} has no mutating profile "
+                f"(mutating is restricted to {sorted(_MUTATING_ENGINES)}; zhipuai stays one-shot)")
+        if not worktree:
+            raise ValueError("profile_from_manifest: a mutating profile REQUIRES a worktree")
+        if engine == "claude" and not (isinstance(budget, (int, float)) and not isinstance(budget, bool) and budget > 0):
+            raise ValueError(
+                "profile_from_manifest: a mutating CLAUDE profile REQUIRES a positive "
+                "bounds.max_budget_usd (the enforceable cost bound)")
+    profile = LaunchProfile(session_policy=policy, mutating=mutating, worktree=worktree,
+                            tool_grants=grants,
+                            max_budget_usd=float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else None)
+    object.__setattr__(profile, "effective_grants", effective)
+    return profile
+
+
 _EFFORT_ENGINES = frozenset({"claude", "codex", "zhipuai"})
 
 
