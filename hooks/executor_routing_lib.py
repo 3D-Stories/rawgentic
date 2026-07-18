@@ -826,7 +826,7 @@ def _do_show(args) -> int:
         return EXIT_OK
     for s in proj["seats"]:
         chain = " -> ".join(s["chain"]) if s["chain"] else "(none)"
-        print(f"{s['seat']}: primary {s['primary']} · chain {chain} · role {s['role']}")
+        print(f"{s['seat']}: primary {s['primary']} | chain {chain} | role {s['role']}")
     print(f"build bake-off (informational): {', '.join(proj['build_bake_off'])}")
     print(f"table_source: {proj['table_source']}")
     if proj["file"]:

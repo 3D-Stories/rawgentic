@@ -208,6 +208,37 @@ Mirror Step 2d (Adversarial Review). Check the project entry's `peerConsult` fie
   consult, so never copy Step 2d's answer. Stage into `peerConsult.backend`;
   the default `gpt` MAY omit the field.
 
+## Step 2h: HTML Design-Artifact Lifecycle (#174) Integration
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs).
+
+Mirror Step 2d. Check the project entry's `designArtifact` field.
+
+The design-artifact lifecycle gives each issue a browsable HTML design doc: WF1
+renders + publishes the issue spec and comments the URL; WF2/WF3 create-or-update
+the `.md`+`.html` (with this run's telemetry embedded) inside the feature PR before
+`gh pr create`. Rendering is `hooks/render_artifact.py` — self-contained, CSP-safe,
+escape-first, with a mountain-time datetime stamp. The renderer ships seven
+design-language templates (plain, roadmap, report, design, dashboard, review, spec);
+see `docs/design-language.md`. Default OFF (byte-identical when declined).
+
+- **If `designArtifact` is not set** (first-time configuration): ask two questions:
+  1. "Give each issue a living HTML design artifact (rendered spec + run telemetry,
+     committed under `docs/planning/`)? (y/n) [default: n]"
+     - **no →** stage `"designArtifact": { "enabled": false, "workflows": [] }`.
+     - **yes →** ask the second question:
+  2. "One artifact **per issue** (default), or **shared-doc mode** — a single rolling
+     `docs/*.md` program doc updated across every issue (best for multi-issue
+     campaigns; one dashboard-style doc, not N files)?"
+     - **per-issue →** stage
+       `"designArtifact": { "enabled": true, "workflows": ["create-issue", "implement-feature", "fix-bug"] }`.
+     - **shared-doc →** ask for the doc path (must be a project-relative `docs/*.md`;
+       an absolute path or `..` traversal or a non-`docs/*.md` value falls back to
+       per-issue) and stage it as `"sharedDoc": "<docs/…․md>"` alongside the above.
+- **If `designArtifact` is already set** (re-configuration): show current status
+  (enabled + per-issue vs `sharedDoc: <path>`) and allow changing. The standalone
+  `hooks/render_artifact.py` works regardless of this setting.
+
 ## Step 2i: Phase-Executor Seat Table (#446) Integration
 
 This step runs on **every** setup invocation (including Sub-flow A re-runs). It COLLECTS
@@ -254,34 +285,3 @@ workspace file (Step 8).
    cancel): a fresh-created file is RETAINED and named in a warning to the user (never
    auto-deleted); a re-seed needs no cleanup (the pointer pre-exists unchanged — the
    replace was the commit).
-
-## Step 2h: HTML Design-Artifact Lifecycle (#174) Integration
-
-This step runs on **every** setup invocation (including Sub-flow A re-runs).
-
-Mirror Step 2d. Check the project entry's `designArtifact` field.
-
-The design-artifact lifecycle gives each issue a browsable HTML design doc: WF1
-renders + publishes the issue spec and comments the URL; WF2/WF3 create-or-update
-the `.md`+`.html` (with this run's telemetry embedded) inside the feature PR before
-`gh pr create`. Rendering is `hooks/render_artifact.py` — self-contained, CSP-safe,
-escape-first, with a mountain-time datetime stamp. The renderer ships seven
-design-language templates (plain, roadmap, report, design, dashboard, review, spec);
-see `docs/design-language.md`. Default OFF (byte-identical when declined).
-
-- **If `designArtifact` is not set** (first-time configuration): ask two questions:
-  1. "Give each issue a living HTML design artifact (rendered spec + run telemetry,
-     committed under `docs/planning/`)? (y/n) [default: n]"
-     - **no →** stage `"designArtifact": { "enabled": false, "workflows": [] }`.
-     - **yes →** ask the second question:
-  2. "One artifact **per issue** (default), or **shared-doc mode** — a single rolling
-     `docs/*.md` program doc updated across every issue (best for multi-issue
-     campaigns; one dashboard-style doc, not N files)?"
-     - **per-issue →** stage
-       `"designArtifact": { "enabled": true, "workflows": ["create-issue", "implement-feature", "fix-bug"] }`.
-     - **shared-doc →** ask for the doc path (must be a project-relative `docs/*.md`;
-       an absolute path or `..` traversal or a non-`docs/*.md` value falls back to
-       per-issue) and stage it as `"sharedDoc": "<docs/…․md>"` alongside the above.
-- **If `designArtifact` is already set** (re-configuration): show current status
-  (enabled + per-issue vs `sharedDoc: <path>`) and allow changing. The standalone
-  `hooks/render_artifact.py` works regardless of this setting.
