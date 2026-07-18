@@ -40,10 +40,16 @@ from pathlib import Path
 from typing import Callable, Final, Optional
 
 # Sibling hook import (hooks/*.py import each other via PYTHONPATH=hooks / sys.path.insert).
+import complexity_gate  # #429 gate authentication for the build-dispatch path (#464 §E)
 from model_routing_lib import _ABSENT, _load_block, _load_project_entry
 
 # --- constants ---------------------------------------------------------------------------------
-WIRED_SEATS: Final[frozenset[str]] = frozenset({"ship", "intake", "plan"})
+# The executor seat VOCABULARY (#464 §B, AC2): the names enforcement/naming recognises — NOT proof
+# each is single-dispatchable. ``COMPETITIVE_ONLY`` seats ARE in the vocabulary but the bake-off owns
+# their dispatch, so they are refused from single-dispatch executorRouting / resolve-seat / dispatch.
+WIRED_SEATS: Final[frozenset[str]] = frozenset(
+    {"intake", "analysis", "design", "plan", "build", "review", "ship"})
+COMPETITIVE_ONLY: Final[frozenset[str]] = frozenset({"design"})
 DRIVER_ONLY: Final[frozenset[str]] = frozenset({"merge", "ci_triage", "deploy_verify", "step16"})
 VALID_MODES: Final[frozenset[str]] = frozenset({"inherit", "executor"})
 SUPPORTED_VERSION: Final[int] = 1
@@ -101,6 +107,10 @@ def parse_executor_routing(raw: object) -> dict:
     for seat, mode in seats.items():
         if seat not in WIRED_SEATS:
             raise MalformedConfig(f"executorRouting.seats has unknown seat {seat!r} (wired: {sorted(WIRED_SEATS)})")
+        if seat in COMPETITIVE_ONLY:
+            raise MalformedConfig(
+                f"seat {seat!r} is competitive-only (bake-off owns its dispatch) — "
+                f"cannot opt into single-dispatch executorRouting")
         if mode not in VALID_MODES:
             raise MalformedConfig(f"executorRouting.seats[{seat!r}] mode {mode!r} not in {sorted(VALID_MODES)}")
         modes[seat] = mode
@@ -126,6 +136,13 @@ def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[s
     kind = classify_seat(seat)  # raises on unknown
     if kind == "driver_only":
         return "driver_only", "driver-only stage, never a seat"
+    if seat in COMPETITIVE_ONLY:
+        # #464 §B: design is in the vocabulary but competitive owns its dispatch — single-dispatching
+        # it would bypass the bake-off. Refuse on BOTH the resolve-seat and dispatch CLI paths (they
+        # share this entry), before any workspace read or provider call.
+        raise MalformedConfig(
+            f"seat {seat!r} is competitive-only (bake-off owns its dispatch) — "
+            f"cannot single-dispatch it through the executor")
     # Fail CLOSED on a corrupt/unreadable workspace (strict_read=True): a config this
     # enforcement boundary cannot evaluate must DENY (exit 2), not collapse into the same
     # _ABSENT→inherit as a clean absence — else an executor-intended seat silently reverts to the
@@ -217,6 +234,8 @@ def dispatch_seat(
     enforce,
     run_seat: Callable,
     dispatch_real: Callable,
+    gate_decision=None,
+    plan_context=None,
     quota_timeout=(),
 ) -> dict:
     """Run ``seat`` through the executor with per-attempt enforcement, returning a result dict with
@@ -229,22 +248,68 @@ def dispatch_seat(
     (``f"{i}-..."``), calls ``check_pre`` on that exact target, appends the receipt, then dispatches;
     so every real attempt (primary + each fallback) is enforced and audited. ``verify_post`` runs
     once on the final Observation to drive the exit code.
+
+    #464 §E — build gate: a seat whose TABLE role == ``"build"`` REQUIRES both an authenticated #429
+    ``gate_decision`` and an independently-sourced ``plan_context``. The gate is authenticated ONCE
+    here (pre-loop, pre-receipt) via ``complexity_gate.verified_decision`` so a missing/tampered/stale
+    gate fails closed BEFORE any receipt is minted; the launch-bound ``GateAttestation`` is minted
+    PER-ATTEMPT (its ``input_digest`` binds to the exact target, which differs across fallbacks) and
+    passed into ``check_pre``. Non-build seats pass ``attestation=None`` — byte-identical to #427.
     """
+    # #464 §B: a competitive-only seat (design) can never be single-dispatched — the bake-off owns
+    # its dispatch. Refuse BEFORE table load / provider call (exit 2, malformed-input class).
+    if seat in COMPETITIVE_ONLY:
+        return _err(EXIT_MALFORMED, "competitive_only_seat",
+                    f"seat {seat!r} is competitive-only (bake-off owns its dispatch) — cannot single-dispatch it",
+                    retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
     # eligible_targets → snapshot.seat raises RoutingError when the table lacks this seat (a
     # stale/edited/wrong-project table). Catch it into the structured taxonomy — the dispatch path
     # must not leak a bare traceback where _do_resolve's executor branch already maps it (Step-11 A2-F1).
     try:
         targets = routing.eligible_targets(seat, snapshot, author_provider=author_provider)
+        role = snapshot.seat(seat).get("role")
     except routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=correlation_id, audit_path=str(audit.path))
 
+    # #464 §E: authenticate the build gate ONCE (pre-loop, pre-receipt). Missing evidence is a
+    # malformed input (exit 2); a tampered/stale gate is an enforcement denial (exit 4). Either way
+    # no receipt is minted — the denial happens before check_pre, so no attestation exists to bind.
+    gate_outcome = None
+    if role == "build":
+        if gate_decision is None:
+            return _err(EXIT_MALFORMED, "gate_file_required",
+                        f"build seat {seat!r} requires an authenticated #429 gate decision (--gate-file)",
+                        retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
+        if not isinstance(plan_context, dict) or not plan_context:
+            return _err(EXIT_MALFORMED, "plan_context_required",
+                        f"build seat {seat!r} requires a non-empty plan context (--plan-context); an "
+                        f"empty context can never silently disable the stale-decision defense",
+                        retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
+        try:
+            bakeoff = complexity_gate.verified_decision(gate_decision, expected_context=plan_context)
+        except complexity_gate.GateTamperError as e:
+            return _err(EXIT_ENFORCEMENT, "gate_tampered", str(e), retryable=False,
+                        correlation_id=correlation_id, audit_path=str(audit.path))
+        gate_outcome = "bakeoff" if bakeoff else "single"
+
     def wrapped_dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
         i = int(str(attempt_id).split("-", 1)[0])
         target = targets[i]
+        # #464 §E: mint the launch-bound attestation PER-ATTEMPT — input_digest binds to THIS target.
+        # check_pre verifies its shape + binding + outcome; a "bakeoff" outcome or a bad digest fails
+        # the verdict (receipt-only). Non-build seats pass None (byte-identical to #427).
+        attestation = None
+        if role == "build":
+            attestation = enforce.GateAttestation(
+                gate_outcome=gate_outcome,
+                policy_digest=gate_decision.policy_digest,
+                input_digest=enforce.launch_input_digest(seat, target, correlation_id),
+            )
         receipt = enforce.check_pre(
             seat, target, snapshot,
             correlation_id=correlation_id, attempt_id=attempt_id, author_provider=author_provider,
+            attestation=attestation,
         )
         audit.append_receipt(receipt)  # recorded BEFORE launch — a fail verdict must not dispatch
         if receipt.verdict == "fail":
@@ -372,6 +437,23 @@ def _do_resolve(args) -> int:
     return _emit(out)
 
 
+def _load_gate_decision(path):
+    """Rebuild a #429 ``complexity_gate.GateDecision`` from the JSON the bake-off writes (fields:
+    decision, reason_codes, input_snapshot, policy_digest). ``verified_decision`` recomputes the
+    digest over ``input_snapshot``, so a round-tripped snapshot must be byte-reproducible — it is,
+    the snapshot holds only JSON-safe scalars (``complexity_gate._json_safe``). A malformed object
+    raises (ValueError/KeyError/TypeError); the caller maps it to exit 2 (bad input)."""
+    obj = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(obj, dict):
+        raise ValueError(f"gate file {path!r}: not a JSON object")
+    return complexity_gate.GateDecision(
+        decision=obj["decision"],
+        reason_codes=tuple(obj.get("reason_codes", ())),
+        input_snapshot=obj["input_snapshot"],
+        policy_digest=obj["policy_digest"],
+    )
+
+
 def _do_dispatch(args) -> int:
     # Guarded import: a stale tree / missing dep fails CLOSED to exit 5 (never a silent inherit).
     try:
@@ -409,6 +491,18 @@ def _do_dispatch(args) -> int:
     except OSError as e:
         return _emit(_err(EXIT_MALFORMED, "prompt_or_context_unreadable", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #464 §E: optional build-gate evidence. A build-role seat REQUIRES both (validated inside
+    # dispatch_seat, which reads the seat's role from the table); a non-build seat ignores them. An
+    # unreadable/malformed gate file or plan context is bad input (exit 2).
+    gate_decision = plan_context = None
+    try:
+        if args.gate_file:
+            gate_decision = _load_gate_decision(args.gate_file)
+        if args.plan_context:
+            plan_context = json.loads(Path(args.plan_context).read_text(encoding="utf-8"))
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return _emit(_err(EXIT_MALFORMED, "gate_input_unreadable", f"{type(e).__name__}: {e}",
+                          retryable=False, correlation_id=args.correlation_id))
     try:
         quota = pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency())
         audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
@@ -421,6 +515,7 @@ def _do_dispatch(args) -> int:
         effort=args.effort, timeout=args.timeout, context=context,
         snapshot=snap, quota=quota, audit=audit, capture_root=paths["capture_root"],
         routing=pe.routing, enforce=pe.enforce, run_seat=pe.run_seat, dispatch_real=pe.dispatch_real,
+        gate_decision=gate_decision, plan_context=plan_context,
         quota_timeout=pe.QuotaTimeout,
     )
     return _emit(result)
@@ -441,6 +536,8 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--prompt-file", required=True, dest="prompt_file")
     d.add_argument("--run-id", required=True, dest="run_id")
     d.add_argument("--context-file", action="append", dest="context_file")
+    d.add_argument("--gate-file", dest="gate_file")          # #464 §E: #429 GateDecision JSON (build seat)
+    d.add_argument("--plan-context", dest="plan_context")    # #464 §E: independently-sourced plan facts
     d.add_argument("--correlation-id", dest="correlation_id")
     d.add_argument("--author-provider", dest="author_provider")
     d.add_argument("--effort")

@@ -33,7 +33,7 @@ DEFAULT_REPORT = _REPO / "docs" / "measurements" / "driver-bench" / "stubbed-bas
 TABLE = _REPO / "phase_executor" / "src" / "phase_executor" / "routing" / "rawgentic.routing-table.json"
 
 VALID_SEATS = frozenset({"intake", "plan", "build", "review", "ship"})
-WIRED_SEATS = _er.WIRED_SEATS  # {intake, plan, ship} — the only seats with an audit path
+WIRED_SEATS = _er.WIRED_SEATS  # the full 7-seat executor vocabulary (#464 §B); build now has a GATED audit path
 DIMENSIONS = ("seat_selection", "recovery", "gate", "enforcement", "winner_propagation",
               "audit_completeness", "token_burn")
 
@@ -194,7 +194,8 @@ def _score_winner(fx, snapshot, quota, capture_root):
 def _score_audit(fx, snapshot, quota, capture_root):
     pe = _pe()
     seat = fx["primary_seat"]
-    if seat not in WIRED_SEATS:  # H1: only intake/plan/ship have an audit path (build hard-denied)
+    if seat not in WIRED_SEATS:  # H1: a seat OUTSIDE the executor vocabulary has no audit path; build
+        # is IN the vocabulary now (#464 §B) but its audit path is GATED — the gate is threaded below.
         raise FixtureError(f"fixture {fx['id']}: audit_completeness needs a WIRED seat {sorted(WIRED_SEATS)}, got {seat!r}")
     # Per-cell isolation (Step-11 finding): a hardcoded run_id + shared capture_root would accumulate
     # every cell's dispatches into ONE audit file, so records() would read the cross-cell total. Give
@@ -203,11 +204,22 @@ def _score_audit(fx, snapshot, quota, capture_root):
     shutil.rmtree(audit_root, ignore_errors=True)
     audit_root.mkdir(parents=True, exist_ok=True)
     audit = pe.enforce.RoutingAuditLog(str(audit_root), "run")
+    # #464 §E: a build-role seat's audit path requires an authenticated, launch-bound gate. Mint a
+    # fixture #429 gate whose benign inputs yield a SINGLE outcome (no bake-off) + a matching plan
+    # context so complexity_gate.verified_decision authenticates it (passed via injected params, not
+    # files — the bench drives the INTERNAL dispatch_seat). Non-build seats need no gate.
+    gate_kwargs = {}
+    if snapshot.seat(seat).get("role") == "build":
+        gd = complexity_gate.needs_bakeoff(
+            {"risk_level": "standard"}, {"complexity": "standard"},
+            {"files": [], "lines": 1, "file_count": 1})
+        gate_kwargs = {"gate_decision": gd,
+                       "plan_context": {"risk_level": gd.input_snapshot["risk_level"]}}
     _er.dispatch_seat(
         seat=seat, prompt="p", run_id="run", correlation_id=None, author_provider=None,
         effort=None, timeout=300.0, context=(), snapshot=snapshot, quota=quota, audit=audit,
         capture_root=str(audit_root), routing=pe.routing, enforce=pe.enforce,
-        run_seat=pe.run_seat, dispatch_real=_seat_dispatch(fx))
+        run_seat=pe.run_seat, dispatch_real=_seat_dispatch(fx), **gate_kwargs)
     records = audit.records()
     receipts = [r for r in records if r.get("kind") == "receipt"]
     observations = [r for r in records if r.get("kind") == "observation"]
