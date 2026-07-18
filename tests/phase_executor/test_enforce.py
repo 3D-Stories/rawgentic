@@ -729,6 +729,30 @@ def test_validate_record_build_receipt_requires_gate_evidence_464():
     enforce._validate_record(_receipt_rec("n2"), 1)  # no raise
 
 
+def test_validate_record_denied_build_receipt_still_readable_464(tmp_path):
+    """#464 Step-8a review (both reviewers converged): a DENIED build launch legitimately mints a
+    verdict='fail' receipt with NULL gate fields (gate_missing / gate_invalid paths) and the caller
+    records it BEFORE checking the verdict — so the audit log must stay readable. Only a
+    verdict='pass' build receipt must prove gating; a fail receipt with null gate evidence
+    validates, else one denial poisons the whole run's audit (records() raises on line 1)."""
+    snap = _snapshot()
+    denied = enforce.check_pre("build", snap.table["seats"]["build"]["primary"], snap,
+                               correlation_id="c-denied", attempt_id="0")  # no attestation
+    assert denied.verdict == "fail" and "gate_missing" in denied.violations
+    assert denied.gate_outcome is None and denied.gate_input_digest is None
+    log = enforce.RoutingAuditLog(tmp_path, "run-denied")
+    log.append_receipt(denied)
+    recs = log.records()  # must NOT raise — the denial is a legitimate audit line
+    assert recs[0]["verdict"] == "fail" and recs[0]["role"] == "build"
+    # tightening (empty-string evasion): a PASS build receipt with empty-string gate fields is refused
+    rec = _receipt_rec("n3", seat="build")
+    rec["role"] = "build"
+    rec["gate_outcome"] = ""
+    rec["gate_input_digest"] = ""
+    with pytest.raises(ValueError):
+        enforce._validate_record(rec, 1)
+
+
 def test_gate_attestation_and_launch_digest_exported_464():
     """#464 §E: GateAttestation + launch_input_digest are public API (enforce home, re-exported at
     the package top level and in __all__)."""

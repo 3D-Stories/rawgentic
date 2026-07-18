@@ -291,11 +291,14 @@ def _validate_record(obj, lineno: int) -> None:
         raise ValueError(f"audit line {lineno}: {kind} missing fields {missing}")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
-    if kind == "receipt" and obj.get("role") == "build":
-        # #464 §E: a NEW build receipt must PROVE it was gated — non-null gate_outcome +
-        # gate_input_digest (fail-closed). Receipts with NO 'role' key (all historical logs) skip
-        # this branch and validate exactly as today; _RECEIPT_REQUIRED is unchanged.
-        if obj.get("gate_outcome") is None or obj.get("gate_input_digest") is None:
+    if kind == "receipt" and obj.get("role") == "build" and obj.get("verdict") == "pass":
+        # #464 §E: an APPROVED build receipt must PROVE it was gated — truthy gate_outcome +
+        # gate_input_digest (fail-closed; empty strings prove nothing). A verdict='fail' build
+        # receipt legitimately carries null gate fields (gate_missing / gate_invalid denials are
+        # recorded BEFORE the verdict check) and must stay readable — else one denial poisons the
+        # whole run's audit log. Receipts with NO 'role' key (all historical logs) skip this
+        # branch and validate exactly as today; _RECEIPT_REQUIRED is unchanged.
+        if not obj.get("gate_outcome") or not obj.get("gate_input_digest"):
             raise ValueError(f"audit line {lineno}: build receipt missing gate evidence")
     if kind == "epoch":
         if not isinstance(obj["seq"], int) or isinstance(obj["seq"], bool):
