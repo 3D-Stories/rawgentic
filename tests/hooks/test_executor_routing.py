@@ -419,7 +419,9 @@ def test_do_dispatch_missing_routing_table_structured(tmp_path, monkeypatch):
         correlation_id = None; author_provider = None; effort = None; timeout = 5.0
         workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
     rc = er._do_dispatch(A())
-    assert rc in (er.EXIT_INTERNAL, er.EXIT_MALFORMED)  # structured, never a bare exit 1
+    # EXACT exit 5 (Step-11 R1): a missing PACKAGE-DEFAULT table is the internal-fault class —
+    # exit 2 is reserved for declared-override config errors (the 8a-A1 documented asymmetry).
+    assert rc == er.EXIT_INTERNAL
 
 
 def test_do_resolve_executor_missing_path_exit2(tmp_path):
