@@ -11,7 +11,7 @@ Public API:
 - Adapters:  ``AdapterRequest``, ``parse_claude``, ``parse_codex``, ``parse_zhipuai``, ``ADAPTERS``
 - Enforcement: ``check_pre``, ``verify_post``, ``RoutingAuditLog``, ``reconcile_run``, ``PreReceipt``,
              ``PostCheck``, ``ExpectedCall``, ``Reconcile``, ``target_identity``, ``audited_digests``,
-             ``ENFORCEABLE_ROLES``
+             ``ENFORCEABLE_ROLES``, ``GateAttestation``, ``launch_input_digest``
 
 The normative artifacts are the committed JSON Schemas (``schemas/observation.schema.json``,
 ``schemas/routing-table.schema.json``); this package is one producer of those documents.
@@ -40,12 +40,14 @@ from .routing import (
 from .enforce import (
     ENFORCEABLE_ROLES,
     ExpectedCall,
+    GateAttestation,
     PostCheck,
     PreReceipt,
     Reconcile,
     RoutingAuditLog,
     audited_digests,
     check_pre,
+    launch_input_digest,
     reconcile_run,
     target_identity,
     verify_post,
@@ -63,5 +65,6 @@ __all__ = [
     "AdapterRequest", "parse_claude", "parse_codex", "parse_zhipuai", "ADAPTERS",
     "check_pre", "verify_post", "RoutingAuditLog", "reconcile_run", "PreReceipt", "PostCheck",
     "ExpectedCall", "Reconcile", "target_identity", "audited_digests", "ENFORCEABLE_ROLES",
+    "GateAttestation", "launch_input_digest",
     "__version__",
 ]
