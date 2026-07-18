@@ -304,9 +304,11 @@ def resolve_bench_table(repo_root=_REPO):
 
 
 def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO):
-    pe = _pe()
+    # Resolve FIRST: resolve_bench_table guards the phase_executor import (ImportError ->
+    # FixtureError); the direct _pe() after it cannot fail once resolution succeeded (diff-DF1).
     resolved = resolve_bench_table(repo_root)
     snapshot = resolved.snapshot
+    pe = _pe()
     tmp = _REPO / ".rawgentic" / "driver-bench-cap"
     shutil.rmtree(tmp, ignore_errors=True)  # hermetic run — never read stale accumulated capture state
     tmp.mkdir(parents=True, exist_ok=True)

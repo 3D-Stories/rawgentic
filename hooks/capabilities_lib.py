@@ -265,6 +265,13 @@ def derive_capabilities(config) -> dict:
             raise CapabilitiesError(
                 f"config.phaseExecutorTable.file must be a project-relative path with no "
                 f"'..' traversal (got {file_val!r}). Run /rawgentic:setup.")
+        if any(ord(c) < 0x20 for c in file_val) or "\\" in file_val:
+            # NUL/control chars make pathlib/os raise ValueError downstream (escaping the
+            # uniform exit-2 mapping); backslashes are path separators on no supported
+            # platform here and only invite confusion. Same class as _UNSAFE_COMPONENT.
+            raise CapabilitiesError(
+                f"config.phaseExecutorTable.file contains control or backslash characters "
+                f"(got {file_val!r}). Run /rawgentic:setup.")
         caps["phase_executor_table"] = file_val
 
     # --- infrastructure.docker -> has_docker (must null-guard the docker object:

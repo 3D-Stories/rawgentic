@@ -252,7 +252,7 @@ def resolve_table(repo_root: Path, routing_module) -> "ResolvedTable":
     root = repo_root.resolve()
     try:
         resolved = candidate.resolve(strict=True)
-    except (FileNotFoundError, OSError) as exc:
+    except (FileNotFoundError, OSError, ValueError) as exc:  # ValueError: embedded NUL (belt to derive's reject)
         raise MalformedConfig(
             f"phaseExecutorTable.file {declared!r} declared in {cfg_path} is not usable "
             f"({type(exc).__name__}: {exc}) — a declared override never falls back") from exc
@@ -310,19 +310,22 @@ def seed_table(dest: Path) -> Path:
     if dest.exists() or dest.is_symlink():
         raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Atomic write per the repo hook convention (8a-B1): mkstemp in the target dir ->
-    # os.replace; the temp is unlinked on any failure so no *.tmp survives.
+    # Atomic no-clobber publish (8a-B1 + diff-DF4): mkstemp in the target dir, then
+    # os.link — which FAILS with FileExistsError if dest appeared since the check above
+    # (os.replace would silently clobber a concurrent create). Temp always unlinked.
     fd, tmp_name = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(src.read_bytes())
-        os.replace(tmp_name, dest)
-    except BaseException:
+        try:
+            os.link(tmp_name, dest)
+        except FileExistsError as exc:
+            raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}") from exc
+    finally:
         try:
             os.unlink(tmp_name)
         except OSError:
             pass
-        raise
     return dest
 
 

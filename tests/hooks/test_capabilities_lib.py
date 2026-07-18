@@ -602,3 +602,11 @@ class TestConfigTemplateDocumentsPhaseExecutorTable:
         with open(self._REPO / "docs" / "config-reference.md") as f:
             text = f.read()
         assert "### `phaseExecutorTable`" in text
+
+
+class TestPhaseExecutorTableControlChars:
+    @pytest.mark.parametrize("bad", ["a\x00b.json", "a\nb.json", "dir\\t.json"])
+    def test_control_and_backslash_rejected(self, bad):
+        from capabilities_lib import derive_capabilities, CapabilitiesError
+        with pytest.raises(CapabilitiesError, match="control or backslash"):
+            derive_capabilities(_base_config(phaseExecutorTable={"version": 1, "file": bad}))
