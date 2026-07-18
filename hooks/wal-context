@@ -104,18 +104,24 @@ _do_context() {
     # failure from aborting _do_context under `set -e` — which would emit NO
     # context at all, the one regression this block must never cause.
     STATE_LINE=""
-    STATE_FILE="$WAL_CLAUDE_DOCS/wal/${WAL_PROJECT}.state.json"
-    if [ -f "$STATE_FILE" ]; then
-        STATE_JSON=$(python3 "$SCRIPT_DIR/step_state.py" read \
-            --project "$WAL_PROJECT" --state-dir "$WAL_CLAUDE_DOCS/wal" 2>/dev/null || true)
-        if [ -n "$STATE_JSON" ]; then
-            STATE_LINE=$(printf '%s' "$STATE_JSON" | "$WAL_JQ" -r '
-                "  Current step: " + (.workflow // "-") + " Step " + (.step // "-")
-                + " (" + (.step_title // "-") + ") — issue #"
-                + (if .issue == null then "-" else (.issue | tostring) end)
-                + " [state @ " + (.entered_at // "-") + "]"
-            ' 2>/dev/null || true)
-        fi
+    # No [ -f ] pre-check: the helper owns existence/parse/staleness AND the sanitized
+    # filename (a raw-name pre-check could disagree with the helper's sanitization and
+    # silently disable the feature — Step-8a R1 F2). Foreign-session records are
+    # SUPPRESSED (Step-8a converged Medium, AC2): last-writer-wins is per-PROJECT for the
+    # statusline, but injected session context must only describe THIS session — a
+    # mismatched session_id falls through to the byte-identical notes-grep path.
+    # Newlines in step_title are flattened so the line can never split the context format.
+    STATE_JSON=$(python3 "$SCRIPT_DIR/step_state.py" read \
+        --project "$WAL_PROJECT" --state-dir "$WAL_CLAUDE_DOCS/wal" 2>/dev/null || true)
+    if [ -n "$STATE_JSON" ]; then
+        STATE_LINE=$(printf '%s' "$STATE_JSON" | "$WAL_JQ" -r --arg sid "$WAL_SESSION_ID" '
+            if (.session_id // "") == $sid then
+              "  Current step: " + (.workflow // "-") + " Step " + (.step // "-")
+              + " (" + ((.step_title // "-") | gsub("[\\n\\r]"; " ")) + ") — issue #"
+              + (if .issue == null then "-" else (.issue | tostring) end)
+              + " [state @ " + (.entered_at // "-") + "]"
+            else empty end
+        ' 2>/dev/null || true)
     fi
 
     # --- Session notes status ---

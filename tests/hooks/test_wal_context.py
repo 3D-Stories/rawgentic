@@ -297,3 +297,54 @@ class TestStepStateFailOpenStructure:
         window = text[idx:idx + 300]
         assert "|| true" in window, \
             "step_state.py invocation is not wrapped in the fail-open '|| true' idiom"
+
+
+class TestStepStateSessionScoping:
+    """#480 Step-8a (converged R1+R2 Medium): AC2's session_id disambiguation must be REAL —
+    a foreign session's fresh record must not masquerade as this session's position."""
+
+    def test_foreign_session_state_falls_back_to_grep(self, make_workspace):
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+            session_notes={"testproj": _NOTES_S1},
+        )
+        _write_state(ws, session_id="OTHER-session")  # fresh but not ours
+        stdout, _, rc = run_hook("wal-context", {"session_id": "s1", "cwd": str(ws.root)},
+                                 cwd=ws.root)
+        assert rc == 0
+        ctx = parse_hook_output(stdout).get("additionalContext", "")
+        assert "Current step:" not in ctx          # foreign record suppressed
+        assert "Grep task" in ctx                  # byte-identical grep fallback
+
+    def test_fresh_state_full_line_pinned(self, make_workspace):
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+            session_notes={"testproj": _NOTES_S1},
+        )
+        _write_state(ws)
+        stdout, _, rc = run_hook("wal-context", {"session_id": "s1", "cwd": str(ws.root)},
+                                 cwd=ws.root)
+        assert rc == 0
+        ctx = parse_hook_output(stdout).get("additionalContext", "")
+        # the FULL rendered prefix as ONE substring (R1 Low: connective + em-dash pinned)
+        assert "  Current step: wf2 Step 8a (Code review) — issue #480 [state @ " in ctx
+
+    def test_newline_in_title_stays_single_line(self, make_workspace):
+        ws = make_workspace(
+            registry_entries=[{"session_id": "s1", "project": "testproj",
+                               "project_path": "./projects/testproj"}],
+            session_notes={"testproj": _NOTES_S1},
+        )
+        _write_state(ws, step_title="Code\nreview")
+        stdout, _, rc = run_hook("wal-context", {"session_id": "s1", "cwd": str(ws.root)},
+                                 cwd=ws.root)
+        assert rc == 0
+        ctx = parse_hook_output(stdout).get("additionalContext", "")
+        for line in ctx.splitlines():
+            if "Current step:" in line:
+                assert "[state @" in line  # title newline flattened; line intact
+                break
+        else:
+            raise AssertionError("Current step line missing")
