@@ -235,3 +235,238 @@ def validate_allowlist(entries: Iterable, worktree_root: str, source_root: str) 
             raise ValueError(f"allowlist dst {dst_rel!r} escapes worktree_root")
         out.append((src_abs, dst_abs))
     return out
+
+
+# ---------------------------------------------------------------------------
+# B.2 — WorktreeManager (I/O; injected git runner)
+# ---------------------------------------------------------------------------
+
+
+class WorktreeError(RuntimeError):
+    """A worktree lifecycle operation that must fail loud (create/inspect/promote)."""
+
+
+def _identity_dict(identity: WorktreeIdentity) -> dict:
+    return {"run_id": identity.run_id, "seat": identity.seat, "attempt": identity.attempt}
+
+
+def _meta_name(identity: WorktreeIdentity) -> str:
+    return "__".join(
+        component_for(x) for x in (identity.run_id, identity.seat, identity.attempt)
+    )
+
+
+def _parse_porcelain_v2(out: str) -> tuple:
+    """Parse ``status --porcelain=v2 -z`` NUL-separated records into (changed, untracked). A
+    rename record (``2 …``) is followed by its origPath as a separate NUL field — consume it."""
+    changed: list = []
+    untracked: list = []
+    records = out.split("\x00")
+    i = 0
+    while i < len(records):
+        rec = records[i]
+        if not rec:
+            i += 1
+            continue
+        tag = rec[0]
+        if tag == "?":
+            untracked.append(rec[2:])
+        elif tag in ("1", "u"):
+            changed.append(rec.split(" ", 8)[-1])
+        elif tag == "2":
+            changed.append(rec.split(" ", 9)[-1])
+            i += 1  # skip the origPath NUL field that trails a rename
+        # tag "!" (ignored) intentionally dropped
+        i += 1
+    return changed, untracked
+
+
+class WorktreeManager:
+    """Owns the git worktree lifecycle. ``run(cmd, env=None) -> (rc, out, err)`` is injected so the
+    pure git mechanics are unit-tested against real git in a tmp repo. Every git call that touches a
+    worktree uses the TRUSTED admin gitdir (never ``git -C <worktree>``, which trusts a child-
+    rewritable ``.git`` pointer). ``forbid_tmp`` is passed to ``resolve_root`` (default True; a
+    hermetic in-/tmp integration test sets False). ``clock`` supplies retention timestamps."""
+
+    def __init__(self, run, *, forbid_tmp: bool = True, clock=None):
+        self._run = run
+        self._forbid_tmp = forbid_tmp
+        if clock is None:
+            import time  # noqa: PLC0415
+
+            clock = time.time
+        self._clock = clock
+
+    def _git(self, *args, env=None):
+        return self._run(["git", *args], env=env)
+
+    # -- metadata --------------------------------------------------------
+
+    def _meta_file(self, handle: WorktreeHandle) -> str:
+        return os.path.join(handle.root, ".meta", _meta_name(handle.identity) + ".json")
+
+    def _read_meta(self, handle: WorktreeHandle) -> dict:
+        import json  # noqa: PLC0415
+
+        with open(self._meta_file(handle), encoding="utf-8") as fh:
+            return json.load(fh)
+
+    def _write_meta(self, handle: WorktreeHandle, meta: dict) -> None:
+        import json  # noqa: PLC0415
+
+        capture.atomic_write_text(Path(self._meta_file(handle)), json.dumps(meta, indent=2, sort_keys=True))
+
+    # -- create ----------------------------------------------------------
+
+    def create(self, repo: str, identity: WorktreeIdentity, base_sha: str, *, root: str) -> WorktreeHandle:
+        repo = os.path.realpath(repo)
+        canon_root = resolve_root(root, forbid_tmp=self._forbid_tmp)
+        rc, out, err = self._git("-C", repo, "rev-parse", "--verify", f"{base_sha}^{{commit}}")
+        if rc != 0:
+            raise WorktreeError(f"base_sha {base_sha!r} is not a commit in {repo}: {err.strip()}")
+        verified = out.strip()
+        planned = planned_path(canon_root, identity)
+        canon_wt = contract.canonical_contained_worktree(planned, canon_root)
+        for d in (canon_root, os.path.join(canon_root, ".meta"), os.path.join(canon_root, ".retained")):
+            os.makedirs(d, exist_ok=True)
+            os.chmod(d, 0o700)
+        os.makedirs(os.path.dirname(canon_wt), exist_ok=True)
+        if os.path.exists(canon_wt):
+            raise WorktreeError(f"worktree leaf already exists (git refuses reuse): {canon_wt}")
+        rc, out, err = self._git("-C", repo, "worktree", "add", "--detach", canon_wt, verified)
+        if rc != 0:
+            raise WorktreeError(f"git worktree add failed: {err.strip()}")
+        # From here a failure leaves a REGISTERED checkout with no handle -> compensate (CF-4).
+        try:
+            gitdir = self._discover_gitdir(repo, canon_wt)
+            handle = WorktreeHandle(
+                path=canon_wt, identity=identity, base_sha=verified,
+                root=canon_root, gitdir=gitdir, repo=repo,
+            )
+            self._write_meta(handle, {
+                "identity": _identity_dict(identity), "base_sha": verified,
+                "gitdir": gitdir, "repo": repo, "created_at": self._clock(), "populated": [],
+            })
+        except BaseException:
+            self._compensate_create(repo, canon_wt)  # raises hard if it cannot remove the orphan
+            raise
+        return handle
+
+    def _discover_gitdir(self, repo: str, canon_wt: str) -> str:
+        """Trusted admin-dir discovery (CF-9): read ONLY under canonical ``.git`` — never the
+        child-writable worktree ``.git`` file. ``rev-parse --git-common-dir`` gives the canonical
+        ``.git``; the admin dir is the ``worktrees/<name>`` whose ``gitdir`` file points at this
+        worktree's ``.git``."""
+        rc, out, err = self._git("-C", repo, "rev-parse", "--git-common-dir")
+        if rc != 0:
+            raise WorktreeError(f"git rev-parse --git-common-dir failed: {err.strip()}")
+        common = out.strip()
+        if not os.path.isabs(common):
+            common = os.path.realpath(os.path.join(repo, common))
+        wt_dotgit = os.path.realpath(os.path.join(canon_wt, ".git"))
+        worktrees = os.path.join(common, "worktrees")
+        for name in sorted(os.listdir(worktrees)):
+            gitdir_file = os.path.join(worktrees, name, "gitdir")
+            try:
+                with open(gitdir_file, encoding="utf-8") as fh:
+                    content = fh.read().strip()
+            except OSError:
+                continue
+            if os.path.realpath(content) == wt_dotgit:
+                return os.path.join(worktrees, name)
+        raise WorktreeError(f"trusted admin gitdir not found under {worktrees} for {canon_wt}")
+
+    def _compensate_create(self, repo: str, canon_wt: str) -> None:
+        rc, _out, err = self._git("-C", repo, "worktree", "remove", "--force", canon_wt)
+        self._git("-C", repo, "worktree", "prune")
+        if os.path.exists(canon_wt):
+            raise WorktreeError(
+                f"CREATE COMPENSATION FAILED — orphan worktree remains at {canon_wt} "
+                f"(rc={rc}): {err.strip()}")
+
+    # -- inspect ---------------------------------------------------------
+
+    def inspect(self, handle: WorktreeHandle) -> WorktreeInspection:
+        rc, out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "status", "--porcelain=v2", "-z", "--untracked-files=all",
+        )
+        if rc != 0:
+            raise WorktreeError(f"status failed via trusted gitdir: {err.strip()}")
+        changed, untracked = _parse_porcelain_v2(out)
+        dirty = bool(changed or untracked)
+        base_tree = self._base_tree(handle)
+        cand_tree, _changed_paths = self._candidate_tree(handle)
+        tree_differs = cand_tree != base_tree
+        return WorktreeInspection(
+            dirty=dirty, changed=tuple(changed), untracked=tuple(untracked), tree_differs=tree_differs,
+        )
+
+    def _base_tree(self, handle: WorktreeHandle) -> str:
+        rc, out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "rev-parse", f"{handle.base_sha}^{{tree}}",
+        )
+        if rc != 0:
+            raise WorktreeError(f"base tree resolve failed: {err.strip()}")
+        return out.strip()
+
+    def _candidate_tree(self, handle: WorktreeHandle) -> tuple:
+        """Build the immutable candidate tree capturing the whole filesystem work product
+        (dirty-tracked + untracked, respecting .gitignore) via a temp index that MUST live in
+        ``.meta`` (probe gotcha: an in-worktree index gets swept by ``add -A``). Returns
+        ``(tree_sha, changed_paths)``."""
+        import tempfile  # noqa: PLC0415
+
+        meta_dir = os.path.join(handle.root, ".meta")
+        os.makedirs(meta_dir, exist_ok=True)
+        fd, idx = tempfile.mkstemp(dir=meta_dir, prefix=".idx-")
+        os.close(fd)
+        env = {"GIT_INDEX_FILE": idx}
+        try:
+            rc, _o, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path, "read-tree", handle.base_sha, env=env)
+            if rc != 0:
+                raise WorktreeError(f"read-tree failed: {err.strip()}")
+            rc, _o, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path, "add", "-A", env=env)
+            if rc != 0:
+                raise WorktreeError(f"add -A failed: {err.strip()}")
+            rc, out, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path, "write-tree", env=env)
+            if rc != 0:
+                raise WorktreeError(f"write-tree failed: {err.strip()}")
+            tree = out.strip()
+            rc, out, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path,
+                "diff", "--name-only", handle.base_sha, tree, env=env)
+            changed = [ln for ln in out.split("\n") if ln.strip()]
+            return tree, changed
+        finally:
+            try:
+                os.unlink(idx)
+            except OSError:
+                pass
+
+    # -- populate (write-ahead, CF-7) ------------------------------------
+
+    def populate(self, handle: WorktreeHandle, source_root: str, allowlist) -> None:
+        import shutil  # noqa: PLC0415
+
+        pairs = validate_allowlist(allowlist, handle.path, source_root)
+        for src_abs, dst_abs in pairs:
+            self._meta_populate(handle, dst_abs, "pending")  # write-ahead BEFORE copy
+            os.makedirs(os.path.dirname(dst_abs), exist_ok=True)
+            shutil.copy2(src_abs, dst_abs)
+            self._meta_populate(handle, dst_abs, "complete")
+
+    def _meta_populate(self, handle: WorktreeHandle, dst_abs: str, state: str) -> None:
+        meta = self._read_meta(handle)
+        pop = meta.setdefault("populated", [])
+        for entry in pop:
+            if entry.get("dst") == dst_abs:
+                entry["state"] = state
+                break
+        else:
+            pop.append({"dst": dst_abs, "state": state})
+        self._write_meta(handle, meta)
