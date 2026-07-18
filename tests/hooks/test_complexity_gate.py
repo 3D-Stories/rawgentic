@@ -269,3 +269,21 @@ def test_decision_from_snapshot_matches_needs_bakeoff():
         gd = pl.needs_bakeoff(task, issue, plan_est, cfg=cfg)
         assert pl.decision_from_snapshot(gd.input_snapshot) == gd.decision
         assert pl.reasons_from_snapshot(gd.input_snapshot) == gd.reason_codes
+
+
+def test_verified_decision_empty_context_refused_464():
+    """#464 Step-8a (R2 Medium): {} must NOT silently degrade to digest-only — only None is the
+    sanctioned carve-out. An emptied programmatic context would otherwise disable the
+    stale-decision defense with no error (adopted-P5: omission can never silently disable)."""
+    gd = _gate(bake=True)
+    with pytest.raises(pl.GateTamperError, match="empty expected_context"):
+        pl.verified_decision(gd, expected_context={})
+
+
+def test_verified_decision_absent_key_with_none_value_refused_464():
+    """#464 Step-8a (R1 Low): expected_context={'k': None} where k is ABSENT from the snapshot
+    must fail (missing-key), not silently pass via None == .get() collapse."""
+    gd = _gate(bake=True)
+    assert "no_such_key" not in gd.input_snapshot
+    with pytest.raises(pl.GateTamperError, match="missing"):
+        pl.verified_decision(gd, expected_context={"no_such_key": None})

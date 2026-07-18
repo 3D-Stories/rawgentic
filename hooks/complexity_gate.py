@@ -198,9 +198,21 @@ def verified_decision(gate_decision, expected_context=None) -> bool:
             f"#429 gate policy_digest mismatch (input_snapshot edited between plan and run): "
             f"expected {expected}, got {gate_decision.policy_digest}")
     if expected_context is not None:
+        # {} is NOT the carve-out: only None means digest-only. An emptied programmatic context
+        # must fail loud, never silently disable the stale-decision defense (#464 Step-8a).
+        if not expected_context:
+            raise GateTamperError(
+                "#429 gate: empty expected_context — only None (digest-only carve-out) or a "
+                "non-empty mapping is accepted")
         for key, value in expected_context.items():
-            if snapshot.get(key) != value:
-                # Do NOT leak the values — they may carry plan text.
+            # Distinguish an ABSENT snapshot key from a present-but-mismatched one; a None-valued
+            # expected fact must not collapse into .get()'s None default (#464 Step-8a).
+            # Do NOT leak the values — they may carry plan text.
+            if key not in snapshot:
+                raise GateTamperError(
+                    f"#429 gate context mismatch: input_snapshot[{key!r}] missing "
+                    f"(stale/reused decision)")
+            if snapshot[key] != value:
                 raise GateTamperError(
                     f"#429 gate context mismatch: input_snapshot[{key!r}] != expected "
                     f"(stale/reused decision)")
