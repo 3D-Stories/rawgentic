@@ -109,3 +109,95 @@ class TestClaudeProfileComposition:
         p2 = dataclasses.replace(p, mutating=False)  # init=False field resets to ()
         cmd = _cl.build_command("claude-sonnet-5", profile=p2)
         assert "--allowedTools" not in cmd  # wire maps from effective_grants: nothing granted
+
+
+# --- #465 T4: codex launch profiles ---
+import pytest
+
+from phase_executor.adapters import codex_cli as _cx
+
+TODAY_CODEX = ["codex", "exec", "--json", "-m", "gpt-5.6-terra",
+               "-c", "model_reasoning_effort=high",
+               "--ephemeral", "--color", "never", "-c", "project_doc_max_bytes=0",
+               "-s", "read-only", "-C", "/tmp/x", "--skip-git-repo-check", "-"]
+
+
+class TestCodexProfiles:
+    def test_readonly_argv_unchanged(self):
+        assert _cx.build_command("gpt-5.6-terra", "/tmp/x", effort="high") == TODAY_CODEX
+
+    def test_none_effort_omits_flag(self):
+        cmd = _cx.build_command("gpt-5.6-terra", "/tmp/x", effort=None)
+        assert "model_reasoning_effort=high" not in " ".join(cmd)
+        assert not any(a.startswith("model_reasoning_effort") for a in cmd)
+
+    def test_mutating_composition_exact(self, tmp_path):
+        root = tmp_path / "root"; wt = root / "wt"; wt.mkdir(parents=True)
+        cmd = _cx.build_mutating_command("gpt-5.6-terra", str(wt), effort="high",
+                                         containment_root=str(root))
+        j = " ".join(cmd)
+        assert "-s workspace-write" in j
+        assert "-c sandbox_workspace_write.exclude_slash_tmp=true" in j
+        assert "-c sandbox_workspace_write.exclude_tmpdir_env_var=true" in j
+        import os as _os
+        canon = _os.path.realpath(str(wt))
+        assert f'sandbox_workspace_write.writable_roots=["{canon}"]' in j
+        assert "-c approval_policy=never" in j
+        assert cmd[cmd.index("-C") + 1] == canon
+
+    @pytest.mark.parametrize("drop", [
+        "sandbox_workspace_write.exclude_slash_tmp=true",
+        "sandbox_workspace_write.exclude_tmpdir_env_var=true",
+        "sandbox_workspace_write.writable_roots",
+        "workspace-write",
+    ])
+    def test_validator_refuses_each_missing_override(self, tmp_path, drop):
+        from phase_executor import contract
+        root = tmp_path / "root"; wt = root / "wt"; wt.mkdir(parents=True)
+        import os as _os
+        canon = _os.path.realpath(str(wt))
+        cmd = _cx.build_mutating_command("gpt-5.6-terra", str(wt), effort="high",
+                                         containment_root=str(root))
+        mutated = [a for a in cmd if drop not in a]
+        with pytest.raises(contract.CompositionError):
+            _cx.validate_mutating_composition(mutated, canon)
+
+    def test_worktree_escaping_root_refuses(self, tmp_path):
+        from phase_executor import contract
+        root = tmp_path / "root"; root.mkdir()
+        outside = tmp_path / "outside"; outside.mkdir()
+        with pytest.raises(contract.CompositionError, match="containment"):
+            _cx.build_mutating_command("gpt-5.6-terra", str(outside), effort="high",
+                                       containment_root=str(root))
+
+    def test_worktree_equal_to_root_refuses(self, tmp_path):
+        from phase_executor import contract
+        root = tmp_path / "root"; root.mkdir()
+        with pytest.raises(contract.CompositionError, match="containment"):
+            _cx.build_mutating_command("gpt-5.6-terra", str(root), effort="high",
+                                       containment_root=str(root))
+
+    def test_run_requires_containment_root_when_mutating(self, tmp_path):
+        from phase_executor import contract
+        from phase_executor.adapters.base import AdapterRequest
+        m = {"session_policy": "fresh", "tool_grants": ["edit"], "effort": "high",
+             "confinement": {"openai": "worktree"}, "bounds": {"timeout_s": 60}}
+        profile = contract.profile_from_manifest(m, engine="codex", worktree=str(tmp_path / "wt"))
+        req = AdapterRequest(seat="build", requested_model="gpt-5.6-terra", prompt="hi",
+                             profile=profile)  # containment_root ABSENT
+        with pytest.raises(contract.CompositionError, match="containment_root"):
+            _cx.run(req, run_id="r", attempt_id="0-a", capture_root=tmp_path,
+                    routing_config_digest="sha256:d")
+
+    def test_mutating_grant_mismatch_refuses_codex(self, tmp_path):
+        from phase_executor import contract
+        p = contract.profile_from_manifest(
+            {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
+             "confinement": {"openai": "worktree"}, "bounds": {"timeout_s": 60}}, engine="codex")
+        object.__setattr__(p, "effective_grants", ("edit",))
+        from phase_executor.adapters.base import AdapterRequest
+        req = AdapterRequest(seat="build", requested_model="gpt-5.6-terra", prompt="hi",
+                             profile=p, containment_root=str(tmp_path))
+        with pytest.raises(contract.CompositionError, match="mutating"):
+            _cx.run(req, run_id="r", attempt_id="0-a", capture_root=tmp_path,
+                    routing_config_digest="sha256:d")

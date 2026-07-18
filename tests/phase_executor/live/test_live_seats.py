@@ -134,3 +134,21 @@ def test_claude_grants_budget_live_semantics(tmp_path):
     obs = claude_cli.run(req, run_id="live465", attempt_id="0-a", capture_root=tmp_path,
                          routing_config_digest="sha256:live")
     assert obs.parse_status == contract.OK and obs.actual_model
+
+
+@pytest.mark.live
+def test_codex_mutating_confinement_live(tmp_path):
+    """#465 deferred-to-target (W5 canary #468 + W9 proving run #472 execute this):
+    BEHAVIORAL confinement of the composed mutating command — in-worktree write succeeds,
+    outside write blocked, observed cwd == worktree, no approval prompt hang."""
+    import subprocess, sys, os
+    from phase_executor.adapters import codex_cli
+    root = tmp_path / "root"; wt = root / "wt"; wt.mkdir(parents=True)
+    sibling = root / "sibling"; sibling.mkdir()
+    cmd = codex_cli.build_mutating_command("gpt-5.6-terra", str(wt), effort="low",
+                                           containment_root=str(root))
+    prompt = ("Run exactly these shell commands and report their outcomes: "
+              f"1) pwd  2) touch inside.txt  3) touch {sibling}/outside.txt")
+    r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=300)
+    assert (wt / "inside.txt").exists()          # in-worktree write landed
+    assert not (sibling / "outside.txt").exists() # sibling write BLOCKED by the sandbox
