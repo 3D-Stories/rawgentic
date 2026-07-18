@@ -191,6 +191,68 @@ def test_absent_threshold_uses_default_silently():
     assert not any("threshold" in r or "BAKEOFF" in r for r in d.reason_codes)
 
 
+# --- verified_decision: single-sourced gate authentication (#464, extracted from bakeoff_policy) --
+def _gate(*, bake):
+    """A genuine GateDecision (snapshot+digest+decision consistent). bake=True -> risk_high fires."""
+    task = {"risk_level": "high" if bake else "standard"}
+    issue = {"complexity": "standard"}
+    plan_est = {"files": ["src/app.py"], "lines": 1, "file_count": 1}
+    return pl.needs_bakeoff(task, issue, plan_est, cfg={})
+
+
+def test_verified_decision_returns_snapshot_decision_true():
+    gd = _gate(bake=True)
+    assert gd.decision is True
+    assert pl.verified_decision(gd) is True
+
+
+def test_verified_decision_returns_snapshot_decision_false():
+    gd = _gate(bake=False)
+    assert gd.decision is False
+    assert pl.verified_decision(gd) is False
+
+
+def test_verified_decision_uses_snapshot_not_decision_field():
+    # authoritative bool comes from the digest-verified snapshot, never the (unbound) decision field
+    real = _gate(bake=True)
+    tampered = pl.GateDecision(decision=False, reason_codes=(), input_snapshot=real.input_snapshot,
+                               policy_digest=real.policy_digest)
+    assert pl.verified_decision(tampered) is True
+
+
+def test_verified_decision_tampered_digest_raises():
+    gd = pl.GateDecision(decision=True, reason_codes=(), input_snapshot={"a": 1},
+                         policy_digest="sha256:deadbeef")
+    with pytest.raises(pl.GateTamperError, match="policy_digest mismatch"):
+        pl.verified_decision(gd)
+
+
+def test_verified_decision_expected_context_match_passes():
+    gd = _gate(bake=True)  # snapshot risk_level == "high"
+    assert pl.verified_decision(gd, expected_context={"risk_level": "high"}) is True
+
+
+def test_verified_decision_expected_context_mismatch_raises_naming_key():
+    gd = _gate(bake=True)  # snapshot risk_level == "high", not "standard"
+    with pytest.raises(pl.GateTamperError, match="context mismatch") as exc:
+        pl.verified_decision(gd, expected_context={"risk_level": "standard"})
+    assert "risk_level" in str(exc.value)  # names the offending key
+
+
+def test_verified_decision_expected_context_none_is_digest_only():
+    # bakeoff carve-out: ctx=None skips the cross-check; the digest is still enforced
+    gd = _gate(bake=False)
+    assert pl.verified_decision(gd, expected_context=None) is False
+
+
+def test_verified_decision_context_mismatch_does_not_leak_value():
+    # the expected value may carry plan text -> it must never appear in the raised message
+    gd = _gate(bake=True)
+    with pytest.raises(pl.GateTamperError) as exc:
+        pl.verified_decision(gd, expected_context={"risk_level": "SECRET_PLAN_TEXT"})
+    assert "SECRET_PLAN_TEXT" not in str(exc.value)
+
+
 def test_decision_from_snapshot_matches_needs_bakeoff():
     # #428 M7 single-source contract: the decision re-derived from a snapshot ALONE must equal the
     # decision needs_bakeoff computed, across representative inputs — incl. a threshold-invalid case
