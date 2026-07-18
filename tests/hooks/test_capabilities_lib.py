@@ -610,3 +610,9 @@ class TestPhaseExecutorTableControlChars:
         from capabilities_lib import derive_capabilities, CapabilitiesError
         with pytest.raises(CapabilitiesError, match="control or backslash"):
             derive_capabilities(_base_config(phaseExecutorTable={"version": 1, "file": bad}))
+
+
+def test_phase_executor_table_version_float_rejected():
+    from capabilities_lib import derive_capabilities, CapabilitiesError
+    with pytest.raises(CapabilitiesError, match="version must be 1"):
+        derive_capabilities(_base_config(phaseExecutorTable={"version": 1.0, "file": "t.json"}))

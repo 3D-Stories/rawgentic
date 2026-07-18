@@ -309,7 +309,10 @@ def seed_table(dest: Path) -> Path:
     dest = Path(dest)
     if dest.exists() or dest.is_symlink():
         raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}")
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, OSError) as exc:  # e.g. an existing regular file where the dir should be
+        raise MalformedConfig(f"seed_table: cannot create parent directory for {dest}: {exc}") from exc
     # Atomic no-clobber publish (8a-B1 + diff-DF4): mkstemp in the target dir, then
     # os.link — which FAILS with FileExistsError if dest appeared since the check above
     # (os.replace would silently clobber a concurrent create). Temp always unlinked.
@@ -321,6 +324,8 @@ def seed_table(dest: Path) -> Path:
             os.link(tmp_name, dest)
         except FileExistsError as exc:
             raise MalformedConfig(f"seed_table: refusing to overwrite existing {dest}") from exc
+        except OSError as exc:  # hardlink-unsupported filesystem (ENOTSUP/EPERM/EMLINK) — legible, not a traceback
+            raise MalformedConfig(f"seed_table: cannot publish table to {dest} ({exc})") from exc
     finally:
         try:
             os.unlink(tmp_name)

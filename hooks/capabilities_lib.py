@@ -254,7 +254,7 @@ def derive_capabilities(config) -> dict:
     else:
         version = pet.get("version", _MISSING)
         # Bool is an int subclass — reject it explicitly (True == 1 would sneak through).
-        if version is _MISSING or isinstance(version, bool) or version != 1:
+        if version is _MISSING or not isinstance(version, int) or isinstance(version, bool) or version != 1:
             raise CapabilitiesError(
                 f"config.phaseExecutorTable.version must be 1 "
                 f"(got {None if version is _MISSING else version!r}). Run /rawgentic:setup.")

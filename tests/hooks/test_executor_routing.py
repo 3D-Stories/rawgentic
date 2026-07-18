@@ -919,3 +919,9 @@ class TestResolveSeatCliObservability:
     def test_seed_leaves_no_tmp_on_success(self, tmp_path):
         er.seed_table(tmp_path / "t.json")
         assert [p.name for p in tmp_path.iterdir()] == ["t.json"]
+
+    def test_seed_parent_is_a_file_legible(self, tmp_path):
+        blocker = tmp_path / "blocker"
+        blocker.write_text("x", encoding="utf-8")
+        with pytest.raises(er.MalformedConfig, match="cannot create parent directory"):
+            er.seed_table(blocker / "t.json")
