@@ -34,6 +34,13 @@ on:
     # builtin review (WF2 drafts + un-drafts PRs on the suspend/resume path).
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main]
+    # #478: a diff confined to docs/** skips this ADVISORY lane (near-zero
+    # review yield on report/planning markdown; each run costs shared
+    # subscription quota). Deliberately narrow — skills/** markdown (product
+    # source), README.md, and CLAUDE.md still trigger review. test/lint stay
+    # unconditional: the drift guards make docs-only diffs able to fail them.
+    paths-ignore:
+      - "docs/**"
 
 permissions:
   pull-requests: write

@@ -36,6 +36,10 @@ name: Claude Security Review
 on:
   pull_request:
     branches: [main]
+    # #478: docs-only diffs skip this ADVISORY lane (same rationale + same
+    # narrow scope as claude-code-review.yml — see that file's on-block note).
+    paths-ignore:
+      - "docs/**"
 
 permissions:
   pull-requests: write
