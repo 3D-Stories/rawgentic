@@ -187,6 +187,22 @@ def test_allowlist_rejects_absolute(tmp_path):
         wt.validate_allowlist([("/etc/passwd", ".env")], str(wtd), str(src))
 
 
+def test_parse_porcelain_v2_records():
+    # ordinary changed (1), untracked (?), rename (2 + trailing origPath NUL), unmerged (u)
+    ordinary = "1 .M N... 100644 100644 100644 h1 h2 a.txt"
+    untracked = "? evil.txt"
+    rename = "2 R. N... 100644 100644 100644 h1 h2 R100 new.txt"
+    origpath = "old.txt"
+    unmerged = "u UU N... 100644 100644 100644 100644 h1 h2 h3 conflicted.txt"
+    out = "\x00".join([ordinary, untracked, rename, origpath, unmerged]) + "\x00"
+    changed, untracked_list = wt._parse_porcelain_v2(out)
+    assert "a.txt" in changed
+    assert "new.txt" in changed
+    assert "conflicted.txt" in changed  # u-record path at index 10, not 8 (Finding #2)
+    assert "old.txt" not in changed  # rename origPath consumed, not mis-read as a record
+    assert untracked_list == ["evil.txt"]
+
+
 def test_allowlist_resolves_contained_pair(tmp_path):
     src = tmp_path / "src"; wtd = tmp_path / "wt"
     src.mkdir(); wtd.mkdir()

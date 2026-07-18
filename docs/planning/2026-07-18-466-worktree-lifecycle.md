@@ -83,12 +83,17 @@ Pure functions:
   the full boundary check is `contract.canonical_contained_worktree(planned, root)` at create
   time (S-M2 — the SAME boundary the #465 adapters enforce at dispatch, so any W3 worktree is
   guaranteed dispatchable; `realpath` works on the not-yet-existing leaf).
-- `decide_disposition(inspection, observation_status) -> "clean"|"retain"` (CF-2): retain when
-  the Observation status is failure/timeout/cancel, OR the worktree is porcelain-dirty, OR the
-  **candidate tree differs from `base_sha`** (`tree_differs` from a `diff --name-only base
-  <candidate>` — catches child work that porcelain misses, e.g. gitignored files that later get
-  promoted). `clean` (safe force-remove) fires ONLY when the obs succeeded AND the tree equals
-  base AND nothing is dirty. A failed obs retains even on a clean tree.
+- `decide_disposition(inspection, observation_status) -> "clean"|"retain"`: retain when the
+  Observation status is failure/timeout/cancel, OR the worktree is porcelain-dirty, OR
+  **`tree_differs`** (the candidate tree != `base_sha`). `tree_differs` guards a HEAD-advanced /
+  committed work-product that a status-vs-HEAD read would call clean — reachable only on the
+  W7-gated unconfined/claude path (an OS-confined codex child cannot commit or move HEAD, so
+  `tree_differs` tracks `dirty` there); it is NOT a gitignore signal (`add -A` respects .gitignore).
+  `clean` (safe force-remove) fires ONLY when the obs succeeded AND the tree equals base AND
+  nothing is dirty. A failed obs retains even on a clean tree. **Gitignored-only content on a
+  SUCCESSFUL obs is force-removed, not retained — that destroys it (no leak, and it is not
+  promotable work product); a gitignored secret is only ever redacted on the retain path's os.walk
+  (CF-2), so it never survives un-redacted into durable retention.**
 - `select_evictions(records, policy, now, live_identities) -> (evict: list, pressure: bool)`
   (A-H2): over `max_retained_count` → evict oldest **clean, non-pinned, non-live** first, then
   oldest **dirty past `max_age_s`**; NEVER a live/pinned one; if every over-limit slot is

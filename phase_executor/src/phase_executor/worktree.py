@@ -68,7 +68,11 @@ class WorktreeInspection:
     dirty: bool
     changed: tuple
     untracked: tuple
-    tree_differs: bool  # candidate-tree != base_sha (catches gitignored child work porcelain misses)
+    tree_differs: bool  # candidate-tree != base_sha; guards a HEAD-advanced/committed work-product
+    # that a status-vs-HEAD read would call clean. For the ONLY sanctioned seat (an OS-confined
+    # codex child that cannot commit or move HEAD) it never diverges from `dirty`; it becomes
+    # load-bearing only on the unconfined/claude path (W7-gated). NOT a gitignore signal — `add -A`
+    # respects .gitignore; gitignored child secrets are closed by the retain-path os.walk, not here.
 
 
 @dataclass(frozen=True)
@@ -153,8 +157,16 @@ def planned_path(root: str, identity: WorktreeIdentity) -> str:
 def decide_disposition(inspection: WorktreeInspection, observation_status: str) -> str:
     """``"clean"`` (safe to force-remove) ONLY when the observation succeeded (``status == ok``)
     AND the tree is not dirty AND the candidate tree equals base. Otherwise ``"retain"`` — a
-    failed/timed-out/cancelled obs retains even a clean tree, and ``tree_differs`` retains child
-    work that porcelain-dirty misses (CF-2: gitignored files)."""
+    failed/timed-out/cancelled obs retains even a clean tree, and ``tree_differs`` retains a
+    HEAD-advanced/committed work-product a status-vs-HEAD read would call clean (the W7-gated
+    unconfined path — NOT gitignored work, which the retain-path os.walk redacts instead).
+
+    Deliberate contract for gitignored-only content on a SUCCESSFUL obs (dirty=False,
+    tree_differs=False): the disposition is ``clean`` and the worktree is force-removed. This is
+    NOT a leak — removal destroys the gitignored file, it does not persist it — and gitignored
+    content is not promotable work product (``add -A`` respects .gitignore). A gitignored secret is
+    only ever *retained* on a dirty-or-failed disposition, where the os.walk in ``_retain`` redacts
+    it. So there is no path on which a gitignored secret survives un-redacted into durable storage."""
     if observation_status != contract.OK:
         return "retain"
     if inspection.dirty or inspection.tree_differs:
@@ -256,6 +268,33 @@ def _meta_name(identity: WorktreeIdentity) -> str:
     )
 
 
+def _identity_from_dict(data: dict) -> WorktreeIdentity:
+    return WorktreeIdentity(run_id=data["run_id"], seat=data["seat"], attempt=data["attempt"])
+
+
+def _record_to_dict(record: RetentionRecord) -> dict:
+    return {
+        "path": record.path, "identity": _identity_dict(record.identity), "reason": record.reason,
+        "dirty": record.dirty, "created_at": record.created_at, "retained_at": record.retained_at,
+        "base_sha": record.base_sha, "redactions": list(record.redactions),
+        "redaction_failures": list(record.redaction_failures),
+        "redaction_incomplete": record.redaction_incomplete,
+    }
+
+
+def _records_from_index(index: dict) -> list:
+    out = []
+    for r in index.get("records", []):
+        out.append(RetentionRecord(
+            path=r["path"], identity=_identity_from_dict(r["identity"]), reason=r["reason"],
+            dirty=r["dirty"], created_at=r["created_at"], retained_at=r["retained_at"],
+            base_sha=r["base_sha"], redactions=tuple(r.get("redactions", ())),
+            redaction_failures=tuple(r.get("redaction_failures", ())),
+            redaction_incomplete=r.get("redaction_incomplete", False),
+        ))
+    return out
+
+
 def _parse_porcelain_v2(out: str) -> tuple:
     """Parse ``status --porcelain=v2 -z`` NUL-separated records into (changed, untracked). A
     rename record (``2 …``) is followed by its origPath as a separate NUL field — consume it."""
@@ -271,8 +310,10 @@ def _parse_porcelain_v2(out: str) -> tuple:
         tag = rec[0]
         if tag == "?":
             untracked.append(rec[2:])
-        elif tag in ("1", "u"):
-            changed.append(rec.split(" ", 8)[-1])
+        elif tag == "1":
+            changed.append(rec.split(" ", 8)[-1])  # ordinary: path at token index 8
+        elif tag == "u":
+            changed.append(rec.split(" ", 10)[-1])  # unmerged: 11 tokens, path at index 10
         elif tag == "2":
             changed.append(rec.split(" ", 9)[-1])
             i += 1  # skip the origPath NUL field that trails a rename
@@ -288,7 +329,7 @@ class WorktreeManager:
     rewritable ``.git`` pointer). ``forbid_tmp`` is passed to ``resolve_root`` (default True; a
     hermetic in-/tmp integration test sets False). ``clock`` supplies retention timestamps."""
 
-    def __init__(self, run, *, forbid_tmp: bool = True, clock=None):
+    def __init__(self, run, *, forbid_tmp: bool = True, clock=None, retention: RetentionPolicy = None):
         self._run = run
         self._forbid_tmp = forbid_tmp
         if clock is None:
@@ -296,6 +337,7 @@ class WorktreeManager:
 
             clock = time.time
         self._clock = clock
+        self._retention = retention if retention is not None else RetentionPolicy()
 
     def _git(self, *args, env=None):
         return self._run(["git", *args], env=env)
@@ -321,6 +363,10 @@ class WorktreeManager:
     def create(self, repo: str, identity: WorktreeIdentity, base_sha: str, *, root: str) -> WorktreeHandle:
         repo = os.path.realpath(repo)
         canon_root = resolve_root(root, forbid_tmp=self._forbid_tmp)
+        if self._read_index(canon_root).get("pressure"):
+            raise WorktreeError(
+                "retention is under pressure (retained count over limit, all protected) — "
+                "resolve/evict retained worktrees before creating new ones")
         rc, out, err = self._git("-C", repo, "rev-parse", "--verify", f"{base_sha}^{{commit}}")
         if rc != 0:
             raise WorktreeError(f"base_sha {base_sha!r} is not a commit in {repo}: {err.strip()}")
@@ -396,8 +442,7 @@ class WorktreeManager:
         changed, untracked = _parse_porcelain_v2(out)
         dirty = bool(changed or untracked)
         base_tree = self._base_tree(handle)
-        cand_tree, _changed_paths = self._candidate_tree(handle)
-        tree_differs = cand_tree != base_tree
+        tree_differs = self._candidate_tree(handle) != base_tree
         return WorktreeInspection(
             dirty=dirty, changed=tuple(changed), untracked=tuple(untracked), tree_differs=tree_differs,
         )
@@ -411,11 +456,12 @@ class WorktreeManager:
             raise WorktreeError(f"base tree resolve failed: {err.strip()}")
         return out.strip()
 
-    def _candidate_tree(self, handle: WorktreeHandle) -> tuple:
+    def _candidate_tree(self, handle: WorktreeHandle) -> str:
         """Build the immutable candidate tree capturing the whole filesystem work product
         (dirty-tracked + untracked, respecting .gitignore) via a temp index that MUST live in
-        ``.meta`` (probe gotcha: an in-worktree index gets swept by ``add -A``). Returns
-        ``(tree_sha, changed_paths)``."""
+        ``.meta`` (probe gotcha: an in-worktree index gets swept by ``add -A``). Returns the
+        tree SHA only — ``changed_paths`` is computed separately by ``_candidate_changed`` (promote
+        needs it; inspect does not, so inspect pays no diff subprocess)."""
         import tempfile  # noqa: PLC0415
 
         meta_dir = os.path.join(handle.root, ".meta")
@@ -428,25 +474,32 @@ class WorktreeManager:
                 "--git-dir", handle.gitdir, "--work-tree", handle.path, "read-tree", handle.base_sha, env=env)
             if rc != 0:
                 raise WorktreeError(f"read-tree failed: {err.strip()}")
-            rc, _o, err = self._git(
-                "--git-dir", handle.gitdir, "--work-tree", handle.path, "add", "-A", env=env)
-            if rc != 0:
-                raise WorktreeError(f"add -A failed: {err.strip()}")
+            # --ignore-errors: a child-planted UNREADABLE file (chmod 000) must not abort the whole
+            # candidate build (that would strand teardown). Unreadable files can't be promoted
+            # anyway and are surfaced separately by the retain-path redaction scan. Ignore add's rc;
+            # a genuine break shows up as a write-tree failure below.
+            self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path, "add", "-A", "--ignore-errors", env=env)
             rc, out, err = self._git(
                 "--git-dir", handle.gitdir, "--work-tree", handle.path, "write-tree", env=env)
             if rc != 0:
                 raise WorktreeError(f"write-tree failed: {err.strip()}")
-            tree = out.strip()
-            rc, out, err = self._git(
-                "--git-dir", handle.gitdir, "--work-tree", handle.path,
-                "diff", "--name-only", handle.base_sha, tree, env=env)
-            changed = [ln for ln in out.split("\n") if ln.strip()]
-            return tree, changed
+            return out.strip()
         finally:
             try:
                 os.unlink(idx)
             except OSError:
                 pass
+
+    def _candidate_changed(self, handle: WorktreeHandle, tree: str) -> list:
+        """``diff --name-only -z`` between base and the candidate tree — ``-z`` so a path with a
+        newline (core.quotePath) can't mis-parse (the list gates the promote allowlist)."""
+        rc, out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "diff", "--name-only", "-z", handle.base_sha, tree)
+        if rc != 0:
+            raise WorktreeError(f"candidate diff failed: {err.strip()}")
+        return [p for p in out.split("\x00") if p]
 
     # -- populate (write-ahead, CF-7) ------------------------------------
 
@@ -460,6 +513,62 @@ class WorktreeManager:
             shutil.copy2(src_abs, dst_abs)
             self._meta_populate(handle, dst_abs, "complete")
 
+    # -- promote (Task 4, AC-3) — orchestrator-only, CAS-guarded --------
+
+    _ZERO_SHA = "0" * 40
+
+    def _worktree_head(self, handle: WorktreeHandle) -> str:
+        rc, out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path, "rev-parse", "HEAD")
+        if rc != 0:
+            raise WorktreeError(f"worktree HEAD resolve failed: {err.strip()}")
+        return out.strip()
+
+    def promote(self, handle: WorktreeHandle, *, target_ref: str, expected_target_sha: str,
+                message: str, path_policy=None) -> PromotionResult:
+        """Promote the worktree's filesystem work product onto ``target_ref`` — orchestrator-only,
+        CAS-guarded (B.3). Builds an immutable candidate tree (dirty + untracked, no child commit
+        needed), guards against a stale base (CF-1: a candidate rooted at a stale base would
+        silently revert peer commits), commits parented on ``base_sha`` (NEVER on
+        ``expected_target_sha``), and compare-and-swaps the ref. Returns a ``PromotionResult`` —
+        ``promoted=False`` with a reason on a stale base or a moved target, never a silent revert."""
+        tree = self._candidate_tree(handle)
+        changed = self._candidate_changed(handle, tree)
+        if path_policy is not None:
+            outside = [p for p in changed if not path_policy(p)]
+            if outside:
+                raise WorktreeError(
+                    f"promote refused: {len(outside)} changed path(s) outside promotable policy: "
+                    f"{outside[:3]}")
+        head_sha = self._worktree_head(handle)
+        ref_exists = bool(expected_target_sha) and expected_target_sha != self._ZERO_SHA
+        # CF-1 base-staleness guard: for an EXISTING ref, the worktree must have been cut at the
+        # current tip (base == expected). Otherwise a candidate rooted at the stale base silently
+        # reverts whatever landed between base and expected — refuse and let the caller re-cut.
+        if ref_exists and handle.base_sha != expected_target_sha:
+            return PromotionResult(
+                promoted=False, base_sha=handle.base_sha, head_sha=head_sha,
+                changed_paths=tuple(changed), reason="base stale — rebase")
+        commit_args = [
+            "--git-dir", handle.gitdir, "--work-tree", handle.path, "commit-tree", tree, "-m", message]
+        if handle.base_sha and handle.base_sha != self._ZERO_SHA:
+            commit_args += ["-p", handle.base_sha]  # parent on the REAL base, never on expected
+        rc, out, err = self._git(*commit_args)
+        if rc != 0:
+            raise WorktreeError(f"commit-tree failed: {err.strip()}")
+        new_commit = out.strip()
+        # atomic compare-and-swap: <old>=expected (all-zeros => "must not exist" create semantics)
+        rc, _out, _err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "update-ref", target_ref, new_commit, expected_target_sha)
+        if rc != 0:
+            return PromotionResult(
+                promoted=False, base_sha=handle.base_sha, head_sha=head_sha,
+                changed_paths=tuple(changed), reason="target advanced")
+        return PromotionResult(
+            promoted=True, new_target_sha=new_commit, base_sha=handle.base_sha,
+            head_sha=head_sha, changed_paths=tuple(changed), reason="")
+
     def _meta_populate(self, handle: WorktreeHandle, dst_abs: str, state: str) -> None:
         meta = self._read_meta(handle)
         pop = meta.setdefault("populated", [])
@@ -470,3 +579,178 @@ class WorktreeManager:
         else:
             pop.append({"dst": dst_abs, "state": state})
         self._write_meta(handle, meta)
+
+    # -- finalize / disposition (Task 3) ---------------------------------
+
+    def finalize(self, handle: WorktreeHandle, observation_status: str, *, live_identities=()):
+        """THE only public disposition entry (A-H4). Inspect, decide, route to private _clean or
+        _retain. Returns ``None`` on a clean disposition, else the ``RetentionRecord``."""
+        inspection = self.inspect(handle)
+        disposition = decide_disposition(inspection, observation_status)
+        if disposition == "clean":
+            self._clean(handle)
+            return None
+        return self._retain(handle, inspection, observation_status, live_identities=live_identities)
+
+    def _clean(self, handle: WorktreeHandle) -> None:
+        rc, _out, err = self._git("-C", handle.repo, "worktree", "remove", "--force", handle.path)
+        self._git("-C", handle.repo, "worktree", "prune")
+        if os.path.exists(handle.path):
+            raise WorktreeError(f"clean removal left residue at {handle.path} (rc={rc}): {err.strip()}")
+
+    def _retain(self, handle: WorktreeHandle, inspection: WorktreeInspection,
+                observation_status: str, *, live_identities=()) -> RetentionRecord:
+        import shutil  # noqa: PLC0415
+
+        created_at = float(self._read_meta(handle).get("created_at") or self._clock())
+        # (1) MOVE + unregister FIRST (so the redaction scan runs over the durable tree, and the
+        #     original path is de-registered before we touch contents).
+        dest = os.path.join(handle.root, ".retained", _meta_name(handle.identity))
+        if os.path.exists(dest):
+            shutil.rmtree(dest)  # a prior retain of the same identity — replace
+        shutil.move(handle.path, dest)
+        os.chmod(dest, 0o700)
+        self._git("-C", handle.repo, "worktree", "prune", "--expire=now")
+        rc, out, _err = self._git("-C", handle.repo, "worktree", "list", "--porcelain")
+        if rc == 0 and any(ln == f"worktree {handle.path}" for ln in out.split("\n")):
+            raise WorktreeError(f"retain: worktree still registered after prune: {handle.path}")
+        # (2) redact the MOVED tree (CF-2 — walk catches gitignored/committed secrets porcelain misses)
+        redactions, failures = self._redact_tree(handle, dest)
+        record = RetentionRecord(
+            path=dest, identity=handle.identity,
+            reason=("failed-observation" if observation_status != contract.OK else "dirty-tree"),
+            dirty=inspection.dirty, created_at=created_at, retained_at=self._clock(),
+            base_sha=handle.base_sha, redactions=tuple(redactions),
+            redaction_failures=tuple(failures), redaction_incomplete=bool(failures),
+        )
+        # (3) enforce the retention limit + persist the index (CF-6)
+        self._enforce_and_persist(handle.root, record, live_identities)
+        return record
+
+    # -- redaction (VERIFIED: no-follow, exact populated dests, walk, re-read assert) -----
+
+    _MARKER = "[redacted: populated allowlist secret]\n"
+    _SECRET_NAME_GLOBS = (
+        ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "*.keystore", ".npmrc",
+        ".netrc", ".git-credentials", "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*",
+        "authorized_keys", "known_hosts", "*service-account*.json", "*credentials*",
+    )
+
+    @classmethod
+    def _is_secret_name(cls, name: str) -> bool:
+        import fnmatch  # noqa: PLC0415
+
+        return any(fnmatch.fnmatch(name, pat) for pat in cls._SECRET_NAME_GLOBS)
+
+    @staticmethod
+    def _secret_content_re():
+        import re  # noqa: PLC0415
+
+        return re.compile(
+            rb"-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|"
+            rb"(secret|token|password|api[_-]?key)\s*[:=]\s*\S",
+            re.IGNORECASE,
+        )
+
+    def _redact_tree(self, handle: WorktreeHandle, dest: str) -> tuple:
+        redactions: list = []
+        failures: list = []
+        # (a) exact populated destinations first (from trusted .meta; remap OLD worktree path -> dest)
+        meta = self._read_meta(handle)
+        for entry in meta.get("populated", []):
+            old = entry.get("dst")
+            if not old:
+                continue
+            rel = os.path.relpath(old, handle.path)
+            self._overwrite_marker(os.path.join(dest, rel), "populated", redactions, failures)
+        # (b) walk the moved tree, no-follow; scan each REGULAR file by name + content
+        pattern = self._secret_content_re()
+        for dirpath, _dirs, files in os.walk(dest, followlinks=False):
+            for fn in files:
+                path = os.path.join(dirpath, fn)
+                if os.path.islink(path):
+                    continue  # never follow/scan a symlink (also enforced by O_NOFOLLOW)
+                hit = self._is_secret_name(fn) or self._content_matches(path, pattern, failures)
+                if hit:
+                    self._overwrite_marker(path, "scan", redactions, failures)
+        return redactions, failures
+
+    def _content_matches(self, path: str, pattern, failures: list) -> bool:
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        except OSError as exc:
+            failures.append({"path": path, "kind": "scan-open", "error": str(exc)})
+            return False
+        try:
+            data = os.read(fd, 1 << 20)  # first 1 MiB is enough to flag a secret
+        except OSError as exc:
+            failures.append({"path": path, "kind": "scan-read", "error": str(exc)})
+            return False
+        finally:
+            os.close(fd)
+        return bool(pattern.search(data))
+
+    def _overwrite_marker(self, path: str, kind: str, redactions: list, failures: list) -> None:
+        marker = self._MARKER.encode("utf-8")
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+        except OSError as exc:
+            failures.append({"path": path, "kind": kind, "error": f"open: {exc}"})
+            return
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, marker)
+        except OSError as exc:
+            failures.append({"path": path, "kind": kind, "error": f"write: {exc}"})
+            return
+        finally:
+            os.close(fd)
+        # re-read (no-follow) + assert the content is exactly the marker
+        try:
+            rfd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                got = os.read(rfd, len(marker) + 1)
+            finally:
+                os.close(rfd)
+        except OSError as exc:
+            failures.append({"path": path, "kind": kind, "error": f"reread: {exc}"})
+            return
+        if got != marker:
+            failures.append({"path": path, "kind": kind, "error": "reread-mismatch"})
+            return
+        redactions.append({"path": path, "kind": kind})
+
+    # -- persistent retention index (CF-6) -------------------------------
+
+    def _index_file(self, root: str) -> str:
+        return os.path.join(root, ".meta", "retention-index.json")
+
+    def _read_index(self, root: str) -> dict:
+        import json  # noqa: PLC0415
+
+        try:
+            with open(self._index_file(root), encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return {"records": [], "live_identities": [], "pressure": False}
+
+    def _write_index(self, root: str, data: dict) -> None:
+        import json  # noqa: PLC0415
+
+        capture.atomic_write_text(Path(self._index_file(root)), json.dumps(data, indent=2, sort_keys=True))
+
+    def _enforce_and_persist(self, root: str, record: RetentionRecord, live_identities) -> None:
+        import shutil  # noqa: PLC0415
+
+        index = self._read_index(root)
+        records = _records_from_index(index) + [record]
+        evict, pressure = select_evictions(records, self._retention, self._clock(), live_identities)
+        evict_ids = {id(r) for r in evict}
+        for rec in evict:
+            shutil.rmtree(rec.path, ignore_errors=True)
+        kept = [r for r in records if id(r) not in evict_ids]
+        self._write_index(root, {
+            "records": [_record_to_dict(r) for r in kept],
+            "live_identities": [_identity_dict(i) for i in live_identities],
+            "pressure": pressure,
+        })
