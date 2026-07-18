@@ -41,6 +41,7 @@ truth (skills no longer hand-derive it in prose). The fields are:
 | `has_database` | `config.database.type` exists |
 | `has_docker` | `config.infrastructure.docker.composeFiles` is a non-empty array |
 | `migration_dir` | `config.database.migrationsDir` (else `null`) |
+| `phase_executor_table` | `config.phaseExecutorTable.file` when the versioned descriptor is present and valid (`version` must be 1; `file` a project-relative path, no `..`); `null` ONLY when the section is absent — a present-but-invalid section raises, never silently falls back (#445) |
 
 **Parallelism probe (`probe-parallelism`, #136).** Separate from the config-derived
 capabilities above (it inspects git, not `.rawgentic.json`), a sibling subcommand
