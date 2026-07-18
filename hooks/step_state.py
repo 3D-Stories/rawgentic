@@ -30,11 +30,15 @@ import re
 import sys
 from datetime import datetime, timedelta, timezone
 
-from atomic_write_lib import atomic_write_text
+# atomic_write_lib imports LAZILY inside cmd_write (Step-11 review): a top-level
+# sibling import would traceback (exit 1) on ImportError before main()'s fail-open
+# boundary, and `read` has no writer dependency at all — a lone copy of this file
+# must still serve reads.
 
 SCHEMA_VERSION = 1
 WORKSPACE_MARKER = ".rawgentic_workspace.json"
 DEFAULT_MAX_AGE_MIN = 240
+CLOCK_SKEW_MIN = 5  # future-dated entered_at beyond this is corrupt, not "fresh forever"
 
 # Local reimplementation of the phase_executor/capture.py `sanitize_component`
 # idiom (that module deliberately doesn't import `hooks/` — see its own
@@ -66,7 +70,14 @@ def find_state_dir(cwd: str) -> "str | None":
     found -> return `<that>/claude_docs/wal` (may not exist yet; the writer
     creates it). If no workspace file is found all the way to the filesystem
     root, fall back to `<cwd>/claude_docs/wal` ONLY if it already exists;
-    otherwise return None (caller fails open: no write, stderr note)."""
+    otherwise return None (caller fails open: no write, stderr note).
+
+    Divergence note (Step-11 review, the C21 resolver class): this DELIBERATELY
+    does not read `claudeDocsPath` from the workspace file (wal-lib.sh's
+    wal_resolve_claude_docs does) — today no project sets it, and the dormant
+    migration also symlinks `<ws>/claude_docs`, so the paths converge. A future
+    claudeDocsPath adopter must reconcile all three resolvers or the writer and
+    reader silently diverge (feature degrades to the notes-grep, fail-safe)."""
     d = os.path.abspath(cwd)
     while True:
         if os.path.isfile(os.path.join(d, WORKSPACE_MARKER)):
@@ -142,8 +153,12 @@ def cmd_write(args) -> int:
                           args.session_id, issue, datetime.now(timezone.utc))
     path = _state_path(state_dir, project)
     try:
+        from atomic_write_lib import atomic_write_text  # noqa: PLC0415 — lazy: see module header
         atomic_write_text(path, json.dumps(record) + "\n",
                           prefix=".step_state.", mkdir=True)
+    except ImportError as exc:
+        print(f"step_state write: atomic_write_lib unavailable: {exc} "
+              "(fail-open)", file=sys.stderr)
     except OSError as exc:
         print(f"step_state write: could not write {path}: {exc} "
               "(fail-open)", file=sys.stderr)
@@ -173,10 +188,29 @@ def cmd_read(args) -> int:
 
     if not isinstance(record, dict):
         return 0
+    # Structural honesty (Step-11 review): a record missing its required fields,
+    # carrying the wrong schema, or labeled for a DIFFERENT project (sanitize
+    # collisions / mislabeled files) must read as "nothing to show" — never a
+    # placeholder line that suppresses a consumer's valid fallback.
+    if record.get("schema_version") != SCHEMA_VERSION:
+        return 0
+    if record.get("project") != project:
+        return 0
+    for field in ("workflow", "step", "step_title", "session_id"):
+        val = record.get(field)
+        if not isinstance(val, str) or not val:
+            return 0
+    if record.get("issue") is not None and not isinstance(record.get("issue"), int):
+        return 0
     entered_at = _parse_entered_at(record.get("entered_at"))
     if entered_at is None:
         return 0
-    if datetime.now(timezone.utc) - entered_at > timedelta(minutes=args.max_age_min):
+    if args.max_age_min < 0:
+        return 0
+    age = datetime.now(timezone.utc) - entered_at
+    # Reject stale AND far-future timestamps (a corrupt future date must not be
+    # immortal-fresh); a small skew allowance covers real clock drift.
+    if age > timedelta(minutes=args.max_age_min) or age < timedelta(minutes=-CLOCK_SKEW_MIN):
         return 0
 
     print(text.rstrip("\n"))

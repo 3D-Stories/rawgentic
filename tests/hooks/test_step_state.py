@@ -252,3 +252,71 @@ def test_step_entry_prose_pin_all_five_skills():
         assert "step_state.py write --project" in text, f"{skill}: entry-call line missing"
         assert token in text, f"{skill}: wrong workflow token"
         assert "fail-open" in text.lower(), f"{skill}: fail-open clause missing"
+
+
+# --- Step-11 join fixes (#480): reader honesty + import fail-open ------------------
+
+def test_read_works_without_writer_dependency(tmp_path):
+    """Step-11 adversarial M2: a missing atomic_write_lib must not break `read` —
+    the writer dep imports lazily so ImportError stays inside the fail-open boundary.
+    Proved by running a LONE copy of step_state.py with no hooks siblings."""
+    import os as _os
+    import shutil
+    lone = tmp_path / "lone"
+    lone.mkdir()
+    shutil.copy(HOOKS_DIR / "step_state.py", lone / "step_state.py")
+    # strip PYTHONPATH: the pytest invocation exports PYTHONPATH=hooks, which would
+    # leak the writer dep back into the "lone" subprocess and vacuously pass this cell
+    env = {k: v for k, v in _os.environ.items() if k != "PYTHONPATH"}
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_state(tmp_path, "p", now)
+    r = subprocess.run([sys.executable, str(lone / "step_state.py"), "read",
+                        "--project", "p", "--state-dir", str(tmp_path)],
+                       capture_output=True, text=True, env=env, cwd=str(lone))
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["project"] == "p"
+    # and a WRITE without the dep fails OPEN (stderr note, exit 0, no crash)
+    w = subprocess.run([sys.executable, str(lone / "step_state.py"), "write",
+                        "--project", "p", "--workflow", "wf2", "--step", "1",
+                        "--step-title", "T", "--session-id", "s",
+                        "--state-dir", str(tmp_path)],
+                       capture_output=True, text=True, env=env, cwd=str(lone))
+    assert w.returncode == 0
+    assert "fail-open" in w.stderr
+
+
+def test_read_rejects_future_timestamp(tmp_path):
+    """Step-11 adversarial M4: a corrupt FUTURE entered_at must not be immortal-fresh."""
+    future = (datetime.now(timezone.utc) + timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_state(tmp_path, "p", future)
+    r = _run(["read", "--project", "p", "--state-dir", str(tmp_path)])
+    assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+def test_read_rejects_structurally_corrupt_record(tmp_path):
+    """Step-11 adversarial M3: a record with only entered_at must not render as
+    placeholder state (required fields validated)."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (tmp_path / "p.state.json").write_text(
+        json.dumps({"entered_at": now, "session_id": "s"}), encoding="utf-8")
+    r = _run(["read", "--project", "p", "--state-dir", str(tmp_path)])
+    assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+def test_read_rejects_project_mismatch(tmp_path):
+    """Step-11 adversarial M5 (partial adopt): a sanitize-collision or mislabeled file
+    must not present another project's state — stored project must equal the request."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rec = {"schema_version": 1, "project": "OTHER", "workflow": "wf2", "step": "1",
+           "step_title": "T", "issue": None, "session_id": "s", "entered_at": now}
+    (tmp_path / "p.state.json").write_text(json.dumps(rec), encoding="utf-8")
+    r = _run(["read", "--project", "p", "--state-dir", str(tmp_path)])
+    assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+def test_read_negative_max_age_prints_nothing(tmp_path):
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    _write_state(tmp_path, "p", now)
+    r = _run(["read", "--project", "p", "--state-dir", str(tmp_path),
+              "--max-age-min", "-5"])
+    assert r.returncode == 0 and r.stdout.strip() == ""

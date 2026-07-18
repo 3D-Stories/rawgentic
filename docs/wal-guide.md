@@ -267,12 +267,16 @@ overwrite-in-place, atomic tmp+rename, last-writer-wins). Shape:
   exit 0. `wal-context` prefers a fresh record over the notes-grep, but ONLY when the record's
   `session_id` matches the current session (a concurrent same-project session's record is
   suppressed, falling back to the notes-grep — the file itself stays project-scoped).
-- **Statusline consumption** (project-scoped by design):
+- **Statusline consumption** (project-scoped by design) — go THROUGH the reader, which owns
+  freshness/validation (the raw file is never removed, so reading it directly would display a
+  dead run's state indefinitely):
   ```bash
-  jq -r '"\(.workflow) Step \(.step) (\(.step_title)) — #\(.issue // "-")"' \
-    ~/rawgentic/claude_docs/wal/rawgentic.state.json
+  python3 ~/rawgentic/projects/rawgentic/hooks/step_state.py read --project rawgentic \
+    --state-dir ~/rawgentic/claude_docs/wal \
+  | jq -r '"\(.workflow) Step \(.step) (\(.step_title)) — #\(.issue // "-")"'
   ```
-  Staleness: compare `entered_at` to now (or shell out to `step_state.py read`, which owns the
-  freshness logic). Dead-session records age out via the same window.
+  Empty output = no current (fresh, valid) state — render nothing. The reader rejects stale
+  records (default window 240 min), far-future timestamps, wrong-project/collision files, and
+  structurally corrupt records; a dead session's record simply falls out of the window.
 - **Git:** session-local like the WAL — `claude_docs/` is already ignored where a repo hosts it
   (verified via `git check-ignore`); no per-file ignore entry is needed.
