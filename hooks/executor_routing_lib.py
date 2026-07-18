@@ -39,7 +39,7 @@ import sys
 import tempfile
 import types
 from pathlib import Path
-from typing import Callable, Final, Optional
+from typing import Any, Callable, Final, Optional
 
 # Sibling hook imports (hooks/*.py import each other via PYTHONPATH=hooks / sys.path.insert).
 import capabilities_lib  # #445 sanctioned .rawgentic.json reader for the seat-table pointer
@@ -199,7 +199,7 @@ class ResolvedTable:
     Guarantee: deterministic resolution given an unchanged filesystem — each consumer
     resolves independently and holds its own pinned snapshot (the package's epoch
     discipline); no cross-consumer transaction is claimed."""
-    snapshot: object  # phase_executor.routing.RoutingSnapshot (typed loosely: lazy package import)
+    snapshot: Any  # phase_executor.routing.RoutingSnapshot (Any: lazy package import — a concrete annotation would need a module-level phase_executor import)
     source: str
     path: Path
 
