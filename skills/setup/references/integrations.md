@@ -208,6 +208,51 @@ Mirror Step 2d (Adversarial Review). Check the project entry's `peerConsult` fie
   consult, so never copy Step 2d's answer. Stage into `peerConsult.backend`;
   the default `gpt` MAY omit the field.
 
+## Step 2i: Phase-Executor Seat Table (#446) Integration
+
+This step runs on **every** setup invocation (including Sub-flow A re-runs). It COLLECTS
+only — the staged pointer is merged into the `.rawgentic.json` draft at Step 3 and written
+at Step 6; the table file materializes after the Step-5 confirm. It never touches the
+workspace file (Step 8).
+
+1. **Show the resolved table** (read-only):
+   ```bash
+   python3 hooks/executor_routing_lib.py show-table --workspace <ws> --project <name>
+   ```
+   Displays one line per seat (primary, chain, role), the informational build bake-off
+   set (`bakeoff_policy.BUILD_MODELS` — NOT table-editable; a follow-up issue tracks
+   making it configurable), `table_source`, and `config_digest`. If the project already
+   declares `phaseExecutorTable`, this IS the current override — change-or-keep applies,
+   never rewrite silently.
+2. **Ask**: "Keep the default seat models? (Enter = keep)". Declining or keeping
+   **stages nothing and touches nothing** — the package-default resolution stands,
+   byte-identical to not running this step. `show-table` is read-only.
+3. **On tweak**: collect a sparse per-seat patch — `primary` and/or `chain` model names
+   only (a supplied chain REPLACES the whole chain; models must already have a lane in
+   the base table). Write it to a temp patch file, then validate WITHOUT writing:
+   ```bash
+   python3 hooks/executor_routing_lib.py apply-table --workspace <ws> --project <name> \
+     --patch-json <patch> --dest <dest> --expected-digest <digest-from-show-table> \
+     --validate-only
+   ```
+   - Fresh create: `<dest>` is the constant `claude_docs/routing/phase-executor-table.json`.
+   - Re-seed (override exists): `<dest>` is the EXISTING `phaseExecutorTable.file`.
+   - Add `--reset-to-default` (combinable with `--validate-only`) to start from the
+     package table instead of the current override — confirm that choice separately.
+   - Success prints `{config_digest, pointer}`; stage the printed pointer literal
+     `{"version": 1, "file": "<dest>"}` for the Step-3 draft merge and KEEP the printed
+     candidate `config_digest` for materialization. Failure (exit 2) prints the
+     validator's legible message (bad seat/field, unknown-lane model, statically-dead
+     seat, drifted base) — offer edit-answers / use-defaults / cancel.
+4. **Materialize (post-Step-5 confirm, immediately before Step 6)**: re-run the SAME
+   `apply-table` invocation without `--validate-only`, adding
+   `--expected-candidate-digest <the digest kept from step 3>`. Fresh create is atomic
+   no-clobber; re-seed atomically replaces only the pointed-to file and only while its
+   content still matches `--expected-digest`. On any later abort (Step-6 failure,
+   cancel): a fresh-created file is RETAINED and named in a warning to the user (never
+   auto-deleted); a re-seed needs no cleanup (the pointer pre-exists unchanged — the
+   replace was the commit).
+
 ## Step 2h: HTML Design-Artifact Lifecycle (#174) Integration
 
 This step runs on **every** setup invocation (including Sub-flow A re-runs).
