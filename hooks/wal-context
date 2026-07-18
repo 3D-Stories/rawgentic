@@ -93,9 +93,38 @@ _do_context() {
 
     CONTEXT="SESSION CONTEXT [${WAL_PROJECT} | ${WAL_SESSION_ID} | ${WAL_PROTECTION_LEVEL}]:"
 
+    # --- Step-entry state — preferred over notes-grep when fresh (#480) ---
+    # A fresh step-entry state file is the authoritative "now" pointer. The
+    # tested helper (step_state.py, a sibling of this hook) owns ALL staleness
+    # and parse logic — no jq date math is duplicated here (it prints the JSON
+    # only when the record exists, parses, and is within its 240-min default).
+    # FAIL-OPEN: python3 missing, a helper crash, or a jq parse failure each
+    # leave STATE_LINE empty and we fall through to the byte-identical
+    # notes-grep path below. The `|| true` on each substitution keeps any
+    # failure from aborting _do_context under `set -e` — which would emit NO
+    # context at all, the one regression this block must never cause.
+    STATE_LINE=""
+    STATE_FILE="$WAL_CLAUDE_DOCS/wal/${WAL_PROJECT}.state.json"
+    if [ -f "$STATE_FILE" ]; then
+        STATE_JSON=$(python3 "$SCRIPT_DIR/step_state.py" read \
+            --project "$WAL_PROJECT" --state-dir "$WAL_CLAUDE_DOCS/wal" 2>/dev/null || true)
+        if [ -n "$STATE_JSON" ]; then
+            STATE_LINE=$(printf '%s' "$STATE_JSON" | "$WAL_JQ" -r '
+                "  Current step: " + (.workflow // "-") + " Step " + (.step // "-")
+                + " (" + (.step_title // "-") + ") — issue #"
+                + (if .issue == null then "-" else (.issue | tostring) end)
+                + " [state @ " + (.entered_at // "-") + "]"
+            ' 2>/dev/null || true)
+        fi
+    fi
+
     # --- Session notes status ---
     NOTES_FILE="$NOTES_DIR/${WAL_PROJECT}.md"
-    if [ -f "$NOTES_FILE" ]; then
+    if [ -n "$STATE_LINE" ]; then
+        # Fresh state supersedes the notes-grep Task/Status line (#480).
+        CONTEXT="${CONTEXT}
+${STATE_LINE}"
+    elif [ -f "$NOTES_FILE" ]; then
         # Find last session header for this session_id
         LAST_HEADER=$(grep "ID: ${WAL_SESSION_ID}" "$NOTES_FILE" 2>/dev/null | tail -1 || true)
         if [ -n "$LAST_HEADER" ]; then
