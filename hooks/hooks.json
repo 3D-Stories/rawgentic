@@ -87,7 +87,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/step_state_post.py",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/step_state_post.py",
             "args": [],
             "timeout": 10
           }

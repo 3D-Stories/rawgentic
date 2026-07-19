@@ -49,6 +49,21 @@ class TestDetectMarker:
     def test_plain_command_is_none(self):
         assert ssp.detect_marker("git status --porcelain") is None
 
+    def test_pathological_whitespace_is_fast(self):
+        # 8a R2 #499: the v1 regex blew up super-quadratically on a marker
+        # prefix + long whitespace run (measured >10s @5000 spaces) — on a
+        # hook that runs for EVERY Bash call. Must stay linear.
+        import time
+        evil = "### WF2 Step 1:" + " " * 8000
+        start = time.monotonic()
+        assert ssp.detect_marker(evil) is None
+        assert time.monotonic() - start < 0.1, "detect_marker must not backtrack"
+
+    def test_overlong_marker_line_skipped(self):
+        long_line = "### WF2 Step 11: " + "x" * 5000 + " — DONE (#492: y)"
+        assert ssp.detect_marker(long_line) is None, (
+            "lines beyond the cap are skipped — real markers are short")
+
     def test_unkeyed_legacy_marker_still_detects_without_issue(self):
         cmd = "cat >> n.md <<'EOF'\n### WF2 Step 7: Create Branch — DONE (feature/x cut)\nEOF"
         hit = ssp.detect_marker(cmd)
@@ -56,15 +71,31 @@ class TestDetectMarker:
 
 
 class TestDetectSignature:
-    def test_signature_table(self):
-        assert ssp.detect_signature("python3 hooks/security_scan.py scan --json")[0] == "11.5"
-        assert ssp.detect_signature("gh pr create --repo x --title t")[0] == "12"
-        assert ssp.detect_signature("gh pr merge 500 --squash")[0] == "14"
-        assert ssp.detect_signature("python3 hooks/work_summary.py summarize --record-file f")[0] == "16"
-        assert ssp.detect_signature("python3 hooks/capabilities_lib.py derive --config c")[0] == "1"
+    def test_wf2_signature_table(self):
+        assert ssp.detect_signature("python3 hooks/security_scan.py scan --json", "wf2")[0] == "11.5"
+        assert ssp.detect_signature("gh pr create --repo x --title t", "wf2")[0] == "12"
+        assert ssp.detect_signature("gh pr merge 500 --squash", "wf2")[0] == "14"
+        assert ssp.detect_signature("python3 hooks/work_summary.py summarize --record-file f", "wf2")[0] == "16"
+
+    def test_wf3_signature_table(self):
+        # 8a R1 #499: the same commands land on DIFFERENT step numbers in WF3
+        # (fix-bug steps.md: PR=10, merge=12, summary=14; no scan step).
+        assert ssp.detect_signature("gh pr create --repo x -t t", "wf3") == ("10", "Create Pull Request")
+        assert ssp.detect_signature("gh pr merge 7 --squash", "wf3") == ("12", "Merge and Deploy")
+        assert ssp.detect_signature("python3 hooks/work_summary.py summarize -r f", "wf3")[0] == "14"
+        assert ssp.detect_signature("python3 hooks/security_scan.py scan", "wf3") is None
+
+    def test_unknown_workflow_never_stamps(self):
+        assert ssp.detect_signature("gh pr create --repo x -t t", "wf5") is None
+        assert ssp.detect_signature("gh pr create --repo x -t t", None) is None
+
+    def test_derive_row_dropped(self):
+        # Inert on a true first entry (no prior state) and corrupting later —
+        # removed rather than per-workflow-titled.
+        assert ssp.detect_signature("python3 hooks/capabilities_lib.py derive -c c", "wf2") is None
 
     def test_no_signature_is_none(self):
-        assert ssp.detect_signature("ls -la && git log") is None
+        assert ssp.detect_signature("ls -la && git log", "wf2") is None
 
 
 def _mk_workspace(tmp_path, session_id="sess-1", project="rawgentic"):
@@ -117,6 +148,18 @@ class TestHookFlow:
         assert r.returncode == 0
         rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
         assert rec["step"] == "12" and rec["workflow"] == "wf2" and rec["issue"] == 492
+
+    def test_wf3_session_gets_wf3_numbering(self, tmp_path):
+        ws = _mk_workspace(tmp_path)
+        wf3_marker = "cat >> n.md <<'EOF'\n### WF3 Step 9: Code Review — DONE (#77: clean)\nEOF"
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": wf3_marker}})
+        r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                           "tool_input": {"command": "gh pr create --repo x -t t"}})
+        assert r.returncode == 0
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["workflow"] == "wf3" and rec["step"] == "10", (
+            "a WF3 session must get WF3's step numbering, never WF2's")
 
     def test_signature_skipped_on_foreign_session_record(self, tmp_path):
         ws = _mk_workspace(tmp_path)
