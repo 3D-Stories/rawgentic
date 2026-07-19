@@ -222,7 +222,7 @@ this via `--loopback-counters` (divergence or a malformed counters file fails rc
 not persisted); with the flag omitted it auto-discovers the cwd-relative path and
 checks only when the file exists. `reviewer_kind` is likewise re-derived at assembly
 time from the gate-defining mechanism per the merged-gate precedence enumeration
-(#340) below — the additive adversarial layer never changes it; read the gate's
+(#340) above — the additive adversarial layer never changes it; read the gate's
 session-note markers, not memory.
 
 **`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
