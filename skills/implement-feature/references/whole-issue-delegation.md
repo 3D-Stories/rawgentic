@@ -134,9 +134,9 @@ Delegation can **never** block Step 8. On `ok=False`:
 
 ## Gates after a valid receipt
 
-- **Step 8a** — for every high-risk task (tagged in Step 5 OR in
-  `normalized["promoted_task_ids"]`), dispatch the per-task review on that task's
-  `receipt["task_shas"][id]`. Coverage via
+- **Step 8a** — the ONE accumulated wave (#492) covering every high-risk task's
+  `receipt["task_shas"][id]` (tagged in Step 5 OR in
+  `normalized["promoted_task_ids"]`) — one review-log entry per covered task. Coverage via
   `plan_lib.assert_review_coverage(<log>, plan_tasks, receipt["task_shas"])`.
 - **Step 9** — re-run the full suite from the orchestrator.
 - **Steps 11 / 11.5** — unchanged (full diff review + security scan).
