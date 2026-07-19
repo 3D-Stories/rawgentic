@@ -966,6 +966,15 @@ Execute the implementation plan task by task.
    git push origin <branch_name>
    ```
 
+**Early smoke-install (deploy-bearing projects only, #494).** On a project with
+`capabilities.has_deploy`, after the first runnable commit of the plan, run the cheap live
+smoke-install/boot check per `<early-smoke-install>` (SKILL.md) before continuing to the next
+task — a crash-on-boot or environment/port clash found here is a 2-minute fix, not an
+hours-later cutover surprise. When `has_deploy == false` the directive does not apply — skip
+silently. In whole-issue delegation the branch only advances at collect time (item 4b of that
+sub-mode) — run the smoke once right after the first runnable commit lands on the branch,
+before the receipt gates.
+
 <!-- model-routing: role=implementation -->
 **Optional implementation delegation (`implementation` role).** When routing resolved the `implementation` role to a non-`inherit` model, execute each plan task via a subagent instead of inline, subject to a per-task **clean-state boundary**. The resolved `implementation` model is a **CEILING, not a blanket assignment** — pick the cheapest sufficient model per task (issue #132), so a well-specified mechanical task is not built on the ceiling model when a cheaper one suffices. When the resolved `implementation` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it) — effort is role-wide from `<model-routing-resolve>`, not part of `select_impl_model`'s ceiling logic.
 
@@ -1606,6 +1615,10 @@ Deployed (or manual deployment instructions provided and confirmed).
 **[Headless: SKIP — no deployment occurred (Step 14 was skipped), so there is nothing to verify. Proceed to Step 16.]**
 
 **If `capabilities.has_deploy == false` AND no deployment was performed:** Skip with note "No deployment target — verification deferred to manual testing."
+
+The `<early-smoke-install>` early boot check (Step 8, deploy-bearing projects) is additional
+to this step and never substitutes for it — this post-deploy verification runs in full
+regardless of what the early smoke showed.
 
 **If deployment was performed:**
 

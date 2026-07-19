@@ -331,6 +331,21 @@ self-review dispatch → security; Step 8a Reviewer 1 → mechanical, Reviewer 2
 tier), Reviewer 2 → architecture + security (strong; #492).
 </review-lens-routing>
 
+<early-smoke-install>
+A deploy-bearing child that defers ALL live verification to the final Step-14/15 deploy
+surfaces a crash-on-boot or an environment/port clash hours later at the live cutover, when
+it was a 2-minute fix right after the commit that introduced it (#494; the 3dstories-fleet
+timing post-mortem's move #2 — a Config crash and a mempalace port clash were exactly such
+finds). The canonical directive: on a deploy-bearing project (`capabilities.has_deploy`),
+after the first runnable commit boots something, run a cheap live smoke-install/boot check
+(install / start / health) before continuing implementation — crash-on-boot and
+environment/port clashes surface while they are still a 2-minute fix. The directive is
+capability-gated: code-only projects (`has_deploy == false`, e.g. rawgentic itself) are
+unaffected — the directive never runs there. The early smoke is distinct from and additional
+to the mandatory Step-15 post-deploy smoketest — Step 15 is never weakened or replaced by
+it: an early boot check proves the commit starts, not that the deployed app works.
+</early-smoke-install>
+
 <step-tracking>
 Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
 trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's
@@ -404,7 +419,7 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), parallel-group/files validation, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
 - **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
 - **Step 7 — Create feature branch.** Branch from a freshly-fetched `origin/<default>` and assert the base; never pull into the current checkout. (read references/steps.md §7 before executing)
-- **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; optional per-task or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
+- **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; early smoke-install after the first runnable commit on deploy-bearing projects (`<early-smoke-install>`, #494); optional per-task or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
 - **Step 8a — Per-task review (conditional).** Fires when any `riskLevel: high` task exists: ONE accumulated wave of 2 reviewers over the set of high-risk commits (#492), deferrals persisted, review log (one entry per covered task) + review-state pointer (local, git-excluded) updated. (read references/steps.md §8a before executing)
 - **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage assertion; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
 - **Step 10 — Conditional memorization (background).** Runs in parallel with Step 11; never blocks. (read references/steps.md §10 before executing)
