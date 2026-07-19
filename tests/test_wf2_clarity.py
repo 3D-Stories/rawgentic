@@ -1498,3 +1498,27 @@ class TestSourceOfTruthTelemetryFields:
         assert ("`loop_backs.used` MUST be read at assembly time from "
                 "`claude_docs/.wf2-state/<issue>/loopback_counters.json`") in doc, (
             "run-record.md must pin the counters-file read contract (#512)")
+
+
+class TestTimingAssembly:
+    """#506: Step 16 assembly embeds the step-state timing object — computed
+    from the per-run history, never hand-estimated — as the record's optional
+    `timing` key."""
+
+    def _step16(self) -> str:
+        steps = (REFERENCES / "steps.md").read_text()
+        return " ".join(steps[steps.index("## Step 16: Workflow Completion Summary"):].split())
+
+    def test_step16_runs_timing_subcommand(self):
+        assert ("python3 hooks/step_state.py timing --project <project> "
+                "--issue <issue>") in self._step16(), (
+            "§16 assembly must compute timing via the step_state CLI (#506)")
+
+    def test_step16_never_fabricates_durations(self):
+        assert ("hand-estimate durations into `timing`" in self._step16()), (
+            "§16 must forbid hand-estimated durations (#506 AC4)")
+
+    def test_run_record_doc_pins_timing_schema(self):
+        doc = " ".join((REFERENCES / "run-record.md").read_text().split())
+        assert "**`timing` (OPTIONAL, #506):**" in doc, (
+            "run-record.md must document the timing key (#506 AC5)")

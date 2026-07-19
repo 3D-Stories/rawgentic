@@ -1677,6 +1677,16 @@ measurable signal — not just a sentence the user reads once.
    `reviewer_kind` is re-derived at assembly time from the gate-defining mechanism per
    run-record.md's merged-gate precedence enumeration (#340) — the additive adversarial
    layer NEVER changes it; read the gate's own session-note markers, not memory.
+   **Per-step timing (#506):** compute the run's timing object from the step-state
+   history and embed its stdout verbatim as the record's `timing` key:
+   ```bash
+   python3 hooks/step_state.py timing --project <project> --issue <issue>
+   ```
+   (run from the workspace root, where `claude_docs/wal/history/` lives; a
+   `"status": "absent"` result is embedded as-is or the key omitted — either is
+   honest). Never hand-estimate durations into `timing` — the object comes only
+   from the CLI over the persisted history (hand-reconstructed wall-clocks
+   measured ~2× off, the #506 motivation).
    In short: every documented key must be **present** (a dropped field is a
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
    `findings`, and `workflow` is `"implement-feature"`. **Canonical names (#116):** use

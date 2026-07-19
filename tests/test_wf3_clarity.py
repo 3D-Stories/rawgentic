@@ -484,3 +484,17 @@ class TestSessionUniqueRunRecordPathWF3:
         sec = _section(text, "## Step 14: Completion Summary", "## Workflow Resumption")
         assert self.PLACEHOLDER in sec, (
             "Step 14 assembly must use the session-unique record path")
+
+
+class TestTimingAssemblyWF3:
+    """#506 (WF3 surface): Step 14 assembly embeds the timing object the same
+    way WF2's Step 16 does."""
+
+    def test_step14_runs_timing_subcommand(self):
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        sec = " ".join(_section(text, "## Step 14: Completion Summary",
+                                "## Workflow Resumption").split())
+        assert ("python3 hooks/step_state.py timing --project <project> "
+                "--issue <issue>") in sec, (
+            "WF3 Step 14 assembly must compute timing via the step_state CLI (#506)")
+        assert "hand-estimate durations into `timing`" in sec
