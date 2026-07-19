@@ -438,7 +438,7 @@ data and drive the summary through `hooks/work_summary.py` — its stdout IS the
 completion summary and it appends the record to the Tier-2 telemetry store. The
 full schema, field-presence rules, and per-gate `status` conventions live in
 `references/run-record.md` — read it before assembling. Render + persist with
-`python3 hooks/work_summary.py summarize --record-file /tmp/wf2-run-record.json --project-root <activeProject.path>`
+`python3 hooks/work_summary.py summarize --record-file /tmp/wf2-run-record-<issue>-<session-id>.json --project-root <activeProject.path>`
 (rc 0 = persisted; rc 1 = summary rendered but the record failed validation — a
 telemetry gap; rc 2 = usage error). Full detail in `references/steps.md` §16.
 

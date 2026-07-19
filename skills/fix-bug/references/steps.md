@@ -455,7 +455,7 @@ Review-clean code + optional project knowledge updates.
    ```bash
    python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
      --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
-     --telemetry /tmp/wf3-run-record.json --style <style>
+     --telemetry /tmp/wf3-run-record-<issue>-<session-id>.json --style <style>
    git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
    ```
    Fields not knowable pre-PR (PR #, CI, merge SHA) fill on the next slot's pass.
@@ -613,8 +613,12 @@ read once.
    ```
    If the PR has **not** merged, do NOT close the issue — leave the `(closes #<issue>)`
    linkage to close it on the owner's merge; add a status comment instead if useful.
-3. **Assemble the run-record** and write it to `/tmp/wf3-run-record.json` (use the
-   Write tool, or a `cat > … <<'JSON'` heredoc). Every key below must be
+3. **Assemble the run-record** and write it to `/tmp/wf3-run-record-<issue>-<session-id>.json` (use the
+   Write tool, or a `cat > … <<'JSON'` heredoc). The path is **session-unique by
+   contract (#511)**: `<issue>` is this run's issue number and `<session-id>` is
+   `$CLAUDE_CODE_SESSION_ID` (a bash block may write `"${CLAUDE_CODE_SESSION_ID}"`
+   directly) — a fixed shared literal is a standing race in a multi-session
+   workspace; never substitute a shared path. Every key below must be
    **present**; "nullable" means `null` is an allowed value, NOT that the key may
    be omitted (a dropped field is a telemetry gap). Counts are non-negative
    integers and `resolved` may not exceed `findings`:
@@ -681,7 +685,7 @@ read once.
    an empty array). Assembly does NOT compare against the start-time
    observability line count — under-count detection is owned entirely by
    WF14's dispatch-completeness rubric. OUTPUT is the `dispatches` key of
-   `/tmp/wf3-run-record.json`; the full schema shape lives in
+   `/tmp/wf3-run-record-<issue>-<session-id>.json`; the full schema shape lives in
    `skills/implement-feature/references/run-record.md` (WF3 reuses the same
    `dispatches[]` shape).
 
@@ -689,7 +693,7 @@ read once.
    do not persist across Bash tool calls):
    ```bash
    python3 hooks/work_summary.py summarize \
-     --record-file /tmp/wf3-run-record.json \
+     --record-file /tmp/wf3-run-record-<issue>-<session-id>.json \
      --project-root <activeProject.path>
    rc=$?
    ```
@@ -702,7 +706,7 @@ read once.
    - `rc == 0`: record valid and persisted. Done.
    - `rc == 1`: the summary still rendered (the user keeps it) but the record
      FAILED validation and was **not** persisted — a telemetry gap. The stderr
-     lists the bad fields; fix `/tmp/wf3-run-record.json` and re-run. If it
+     lists the bad fields; fix `/tmp/wf3-run-record-<issue>-<session-id>.json` and re-run. If it
      genuinely can't be fixed, record the gap in session notes.
    - `rc == 2`: usage error / unreadable record file — fix the invocation.
 
@@ -716,7 +720,7 @@ read once.
    the peerConsult opt-in pattern, no marker noise. Exit 0 → invoke the
    `/rawgentic:run-feedback` core path (the #337 embed contract — zero interactive
    dependency). When enabled, invoke the run-feedback core path non-interactively
-   with explicit `--record /tmp/wf3-run-record.json --wf 3 --session-notes
+   with explicit `--record /tmp/wf3-run-record-<issue>-<session-id>.json --wf 3 --session-notes
    <notes-path>`; an assessment failure never blocks workflow completion — log and
    continue. Run it regardless of item 5's rc — the record FILE exists on rc 1 too,
    and WF14 routes a schema-invalid record to degraded mode; on rc 2 WF14's own

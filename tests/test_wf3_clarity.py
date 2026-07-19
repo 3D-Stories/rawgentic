@@ -418,7 +418,7 @@ class TestRunFeedbackWiringWF3:
 
     WIRING = (
         "When enabled, invoke the run-feedback core path non-interactively "
-        "with explicit `--record /tmp/wf3-run-record.json --wf 3 "
+        "with explicit `--record /tmp/wf3-run-record-<issue>-<session-id>.json --wf 3 "
         "--session-notes <notes-path>`; an assessment failure never blocks "
         "workflow completion — log and continue."
     )
@@ -459,3 +459,28 @@ class TestDesignArtifactStyleWF3:
         assert "--style" in self._step10(), (
             "Step 10's render invocation must pass `--style` (WF2/WF3 symmetry, "
             "#344 Task 5)")
+
+
+class TestSessionUniqueRunRecordPathWF3:
+    """#511 (WF3 surface): same session-unique convention as WF2 —
+    `/tmp/wf3-run-record-<issue>-<session-id>.json` at the Step 10 telemetry
+    site and the Step 14 assembly; no fixed shared literal remains."""
+
+    PLACEHOLDER = "/tmp/wf3-run-record-<issue>-<session-id>.json"
+
+    def test_no_fixed_shared_literal_remains(self):
+        assert "/tmp/wf3-run-record.json" not in _text(), (
+            "fixed shared run-record literal must not reappear in the WF3 "
+            "corpus (#511)")
+
+    def test_step10_telemetry_uses_session_unique_path(self):
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        sec = _section(text, "## Step 10: Create Pull Request", "## Step 12: Merge and Deploy")
+        assert self.PLACEHOLDER in sec, (
+            "Step 10 --telemetry must use the session-unique record path")
+
+    def test_step14_assembly_uses_session_unique_path(self):
+        text = (REPO_ROOT / "skills" / "fix-bug" / "references" / "steps.md").read_text()
+        sec = _section(text, "## Step 14: Completion Summary", "## Workflow Resumption")
+        assert self.PLACEHOLDER in sec, (
+            "Step 14 assembly must use the session-unique record path")

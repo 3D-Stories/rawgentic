@@ -1437,12 +1437,12 @@ recorded for the PR body and session notes.
    and commit BOTH inside THIS feature PR (one PR per issue; no trailing artifact commits).
    Render with the shared helper —
    never hand-roll HTML — embedding this run's **telemetry** read from the run-record
-   structure (Step 16's `/tmp/wf2-run-record.json`; gate findings/resolved, tests +
+   structure (Step 16's `/tmp/wf2-run-record-<issue>-<session-id>.json`; gate findings/resolved, tests +
    suite delta, security-scan, lane, `usage`), never hand-retyped:
    ```bash
    python3 hooks/render_artifact.py --md docs/planning/<issue>-<slug>.md \
      --out docs/planning/<issue>-<slug>.html --title "#<issue> <title>" \
-     --telemetry /tmp/wf2-run-record.json --style <style>
+     --telemetry /tmp/wf2-run-record-<issue>-<session-id>.json --style <style>
    git add docs/planning/<issue>-<slug>.md docs/planning/<issue>-<slug>.html
    ```
    **Style (#199, vocabulary expanded #344):** Design artifacts render with the
@@ -1663,8 +1663,12 @@ measurable signal — not just a sentence the user reads once.
    rendered summary then reflects deploy: not_applicable for the headless run.
 
 2. **Assemble the run-record** from the workflow so far and write it to
-   `/tmp/wf2-run-record.json` (use the Write tool, or a `cat > … <<'JSON'`
-   heredoc). The full schema, the field-presence rules, and the per-gate `status`
+   `/tmp/wf2-run-record-<issue>-<session-id>.json` (use the Write tool, or a `cat > … <<'JSON'`
+   heredoc). The path is **session-unique by contract (#511)**: `<issue>` is this run's
+   issue number and `<session-id>` is `$CLAUDE_CODE_SESSION_ID` (a bash block may write
+   `"${CLAUDE_CODE_SESSION_ID}"` directly) — a fixed shared literal was clobbered live by
+   concurrent sessions (sentinel epic #45 vs the #467 run, finding T-2); never substitute
+   a shared path. The full schema, the field-presence rules, and the per-gate `status`
    conventions live in **`references/run-record.md`** — read it before assembling.
    In short: every documented key must be **present** (a dropped field is a
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
@@ -1725,14 +1729,14 @@ measurable signal — not just a sentence the user reads once.
    `dispatches` key entirely (never an empty array). Assembly does NOT compare
    against the start-time observability line count — under-count detection is
    owned entirely by WF14's dispatch-completeness rubric. OUTPUT is the
-   `dispatches` key of `/tmp/wf2-run-record.json`; the full schema shape lives
+   `dispatches` key of `/tmp/wf2-run-record-<issue>-<session-id>.json`; the full schema shape lives
    in `references/run-record.md`.
 
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):
    ```bash
    python3 hooks/work_summary.py summarize \
-     --record-file /tmp/wf2-run-record.json \
+     --record-file /tmp/wf2-run-record-<issue>-<session-id>.json \
      --project-root <activeProject.path>
    rc=$?
    ```
@@ -1745,7 +1749,7 @@ measurable signal — not just a sentence the user reads once.
    - `rc == 0`: record valid and persisted. Done.
    - `rc == 1`: the summary still rendered (the user keeps Step 16 output) but the
      record FAILED validation and was **not** persisted — a telemetry gap. The
-     stderr lists exactly which fields are wrong; fix `/tmp/wf2-run-record.json`
+     stderr lists exactly which fields are wrong; fix `/tmp/wf2-run-record-<issue>-<session-id>.json`
      and re-run so the substrate stays complete. If it genuinely can't be fixed,
      record the gap in session notes rather than ignoring it.
    - `rc == 2`: usage error / unreadable record file — fix the invocation.
@@ -1760,7 +1764,7 @@ measurable signal — not just a sentence the user reads once.
    the peerConsult opt-in pattern, no marker noise. Exit 0 → invoke the
    `/rawgentic:run-feedback` core path (the #337 embed contract — zero interactive
    dependency). When enabled, invoke the run-feedback core path non-interactively
-   with explicit `--record /tmp/wf2-run-record.json --wf 2 --session-notes
+   with explicit `--record /tmp/wf2-run-record-<issue>-<session-id>.json --wf 2 --session-notes
    <notes-path>`; an assessment failure never blocks workflow completion — log and
    continue. Run it regardless of item 4's rc — the record FILE exists on rc 1 too,
    and WF14 routes a schema-invalid record to degraded mode (an assessed degraded
