@@ -7,7 +7,7 @@ default-off**; when it is not enabled Step 8 behaves exactly as it does today.
 ## Why this exists
 
 Per-task delegation (#132) still runs the whole per-task ceremony — dispatch,
-suite re-run, diff, commit inspection — inside the orchestrator's own loop. An
+scoped-suite re-run, diff, commit inspection — inside the orchestrator's own loop. An
 orchestrator working a multi-issue backlog accumulates all of that in its own
 context and bloats fast. Whole-issue delegation hands ONE build-subagent the
 entire branch so the orchestrator's context holds a **receipt**, not the build.
