@@ -29,10 +29,13 @@ literal "git commit " / "git checkout -b " text — an echo, a grep, a heredoc
 body, not just a notes append — can stamp entry state. The commit row is
 monotonic-bounded; the checkout row is not, so a quoted needle can regress
 the pointer backward MID-RUN within the same issue (display-only consumers,
-session-scoped, self-corrects at the next marker). A cross-issue branch-cut
-fired before the new issue's first marker stamps the PRIOR issue number
-(same self-correcting class — the signature path reuses the existing
-record's issue by design).
+session-scoped, self-corrects at the next marker). A compound input chaining
+a real commit with a later-step command (``git commit … && gh pr create``)
+loses the downstream stamp — classify-and-stop suppresses it, a CHOSEN
+trade-off (a lagging pointer beats a false non-monotonic jump from message
+prose; pinned by test). A conventional cross-issue branch-cut REBINDS the
+issue from the branch name (``feature/<n>-…`` / ``fix/<n>-…``); an
+unconventional branch name still reuses the existing record's issue.
 epic-run carve-out: its markers are not ``### WF<n>``-shaped and it has no
 signature table, so its skill prose KEEPS the mandatory manual write.
 """
@@ -121,6 +124,20 @@ def detect_marker(command: str) -> "dict | None":
     issue = int(m.group(4)) if m.group(4) else None
     return {"workflow": f"wf{m.group(1)}", "step": m.group(2),
             "step_title": f"{title} ✓done", "issue": issue}
+
+
+_BRANCH_ISSUE_RE = re.compile(r"git checkout -b (?:feature|fix)/(\d{1,9})\b")
+
+
+def _branch_issue(command) -> "int | None":
+    """Issue number from a conventional branch-cut (`feature/<n>-…` /
+    `fix/<n>-…`), else None. Lets the branch-cut stamp REBIND the issue for a
+    same-session follow-up run instead of carrying the prior issue forward
+    (Step-11 join, #502 adversarial F2). Runs only post-prefilter."""
+    if not isinstance(command, str):
+        return None
+    m = _BRANCH_ISSUE_RE.search(command)
+    return int(m.group(1)) if m else None
 
 
 def _step_num(step) -> "float | None":
@@ -238,8 +255,10 @@ def main() -> int:
     if signature is None:
         return 0
     step, title = signature
-    _write(root, project, state["workflow"], step, title,
-           state.get("issue"), session_id)
+    issue = _branch_issue(command)
+    if issue is None:
+        issue = state.get("issue")
+    _write(root, project, state["workflow"], step, title, issue, session_id)
     return 0
 
 

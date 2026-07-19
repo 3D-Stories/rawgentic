@@ -153,9 +153,11 @@ review anticipated.
 
 - **Lane run:** small-standard (standard_feature, 3 impl files); Task 2 (hot-path hook infra)
   riskLevel high → one 8a wave. TDD red (cf7c94e, 8 failing) → green (530af76, 58 scoped, pylint
-  10.00); suite 3695+10skip → 3705+10skip (+10 tests).
-- **Reviews:** single 8a wave (sonnet mechanical / opus security) + lane Step-11 + adversarial
-  diff review (fires on high-risk task) — results in the PR.
+  10.00); suite 3695+10skip → 3710+10skip (+15 tests incl. the 8a + Step-11 hardening guards).
+- **Reviews:** 8a wave (sonnet mechanical / opus security) fixed commit-graph false match +
+  classify-definitively ordering (d182273); Step-11 (opus lane + gpt adversarial, 4+2 findings
+  identity-merged) adopted branch-name issue REBIND + the pinned compound-input trade-off +
+  these count corrections — full dispositions in the PR.
 - PR / merge SHA: filled at close-out.
 
 ## Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0

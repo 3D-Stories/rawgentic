@@ -148,6 +148,26 @@ class TestDetectSignature:
         assert ssp.detect_signature(cmd, "wf2", current_step="5") == ("8", "Implementation")
         assert ssp.detect_signature(cmd, "wf2", current_step="11") is None
 
+    def test_compound_commit_suppresses_downstream_stamp_pinned(self):
+        # Step-11 join (#502): CHOSEN trade-off, pinned so the suite is green
+        # because this is decided, not because it is untested. A compound
+        # input chaining a real commit with a later-step command loses the
+        # downstream stamp (classify-and-stop) — a lagging pointer that
+        # self-corrects at the next marker is preferred over the alternative
+        # (message prose firing a false non-monotonic jump). Documented in
+        # the module docstring's residual paragraph.
+        cmd = 'git commit -m "fixes" && gh pr create --repo x -t t'
+        assert ssp.detect_signature(cmd, "wf2", current_step="11") is None
+
+    def test_branch_issue_parsed_from_branch_name(self):
+        # Step-11 join (#502, adversarial F2 adopted): the branch-cut stamp
+        # rebinds the issue from the conventional branch name instead of
+        # carrying the prior issue forward.
+        assert ssp._branch_issue("git checkout -b feature/502-entry-sigs origin/main") == 502
+        assert ssp._branch_issue("git checkout -b fix/77-null-deref origin/main") == 77
+        assert ssp._branch_issue("git checkout -b spike/unconventional") is None
+        assert ssp._branch_issue("ls -la") is None
+
 
 def _mk_workspace(tmp_path, session_id="sess-1", project="rawgentic"):
     (tmp_path / ".rawgentic_workspace.json").write_text('{"version": 1, "projects": []}')
@@ -274,6 +294,20 @@ class TestHookFlow:
         assert r.returncode == 0
         rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
         assert rec["session_id"] == "sess-1" and rec["step"] == "11"
+
+    def test_branch_cut_rebinds_issue_from_branch_name(self, tmp_path):
+        # Step-11 join (#502, adversarial F2 adopted): a same-session
+        # follow-up issue's branch-cut stamps the NEW issue parsed from the
+        # branch name, not the prior run's stale issue.
+        ws = _mk_workspace(tmp_path)
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": MARKER_CMD}})  # issue 492, step 11
+        r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                           "tool_input": {"command": "git checkout -b feature/502-entry origin/main"}})
+        assert r.returncode == 0
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["step"] == "7" and rec["issue"] == 502, (
+            "the branch-cut stamp must rebind to the branch name's issue")
 
     def test_garbage_stdin_fails_open(self, tmp_path):
         ws = _mk_workspace(tmp_path)
