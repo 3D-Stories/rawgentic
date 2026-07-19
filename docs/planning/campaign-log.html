@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-19 00:40 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-19 01:33 MDT</div>
 <h1>Rawgentic Campaign Log</h1>
 
 </header>
@@ -47,7 +47,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
 <h2>Epic #493 — WF2 speed levers (manual drive)</h2>
-<p><strong>Status: IN PROGRESS</strong> — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 merged (PR #498, f01e6bc, v3.61.0); #492 merged (PR #500, 88f01c0, v3.62.0); #494 in PR (v3.64.0). Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.</p>
+<p><strong>Status: COMPLETE (2026-07-19, 6/6 merged, epic closed)</strong> — #488 (PR #495, 46ae9b0, v3.58.0); #489 (PR #496, a59096f, v3.59.0); #490 (PR #497, 031e01c, v3.60.0); #491 (PR #498, f01e6bc, v3.61.0); #492 (PR #500, 88f01c0, v3.62.0); #494 (PR #503, 72f1d04, v3.64.0). Suite 3634+10skip → 3695+10skip across the epic, zero regressions. Levers inert for live sessions until owner plugin reinstall + fresh session. Follow-up: #502. Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.</p>
 <p>Per-child WF2 wall-clock levers derived from the epic #475 run-timing profile (~1h52m/child; review-wait ~20% of wall-clock, much of it orchestrator idle-blocking). All children run the small-standard lane; the levers are applied MANUALLY while building them (scoped pytest during iteration, probe-before-design, pipelined reviews). AUTO MODE merge grant (owner, 2026-07-18, scoped to this run).</p>
 <h3>#488 — review-wave pipelining: never idle-wait · v3.58.0</h3>
 <p>New canonical <code>&lt;review-pipelining&gt;</code> block in implement-feature&#x27;s SKILL.md: after dispatching any review wave (Step 4 design critique, Step 8a per-task, Step 11 pre-PR), immediately draft the next phase&#x27;s non-committing artifact (plan, next task&#x27;s tests, PR body, version/changelog edits) and reconcile findings on the wave&#x27;s return. Hard boundary pinned in the same block: committing, branching, pushing, and every gate verdict still WAIT — only idle time is reclaimed, no gate skipped, no verdict pre-empted; a gate finding always wins over a stale draft. Three wave-site pointers in references/steps.md (§4 item 7 · §8a item 2 · §11 item 2), single-source per the drift-guard doctrine; guards: <code>TestReviewPipelining</code> (canonical sentence, gate-semantics sentence, ≥3 pointer sites).</p>
@@ -121,7 +121,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </ul>
 <p>  adversarial diff review (fires on high-risk task) — results in the PR.</p>
 <ul>
-<li>PR / merge SHA: filled by the next slot&#x27;s pass.</li>
+<li>PR #500, squash-merged 88f01c0 (2026-07-19), all 4 CI lanes green.</li>
 </ul>
 <h3>#494 — early smoke-install after first runnable commit (deploy-bearing) · v3.64.0</h3>
 <p>New canonical <code>&lt;early-smoke-install&gt;</code> block in implement-feature&#x27;s SKILL.md: on a deploy-bearing project (<code>capabilities.has_deploy</code>), after the first runnable commit boots something, run a cheap live smoke-install/boot check (install / start / health) before continuing implementation — crash-on-boot and environment/port clashes surface as 2-minute fixes instead of hours-later cutover surprises (the 3dstories-fleet timing post-mortem&#x27;s move #2: a Config crash + a mempalace port clash). Capability-gated: code-only projects (<code>has_deploy == false</code>, rawgentic itself) unaffected — the directive never runs there. Step 8 gains the first-runnable-commit site (incl. whole-issue-delegation collect-time timing); Step 15 gains a never-substitutes note — the mandatory post-deploy smoketest is not weakened or replaced. Guards: <code>TestEarlySmokeInstall</code> (canonical sentence, gating sentence, Step-15 distinct + ≥2 pointer sites).</p>
@@ -134,7 +134,20 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </ul>
 <p>  opt-in — results in the PR.</p>
 <ul>
-<li>PR / merge SHA: filled at epic wrap.</li>
+<li>PR #503, squash-merged 72f1d04 (2026-07-19), all 4 CI lanes green; Step-11 F1 (Low, band-dropped, verified real) adopted as tightening 6f23f58.</li>
+</ul>
+<h2>Standalone — #502: entry signatures for the step-state pointer (owner-ordered, post-#493) · v3.65.0</h2>
+<p>Born live during #494: the statusline sat on &quot;step 5&quot; through all of Step 8 (small-standard-lane dead zone — Step 6 skipped, Step 7 marker-less, Step 8&#x27;s marker appends at step end), and the owner asked twice. Fix: <code>_SIGNATURES</code> rows become <code>(needle, hit, entry_only)</code>; <code>git checkout -b </code> stamps branch-cut entry (WF2 S7 / WF3 S6, non-monotonic for same-session follow-up issues) and <code>git commit</code> becomes a monotonic entry stamp (WF2 S8 / WF3 S7 — fires only below the target, so Step-11/12 commits never regress the pointer). <code>detect_signature</code> grows optional <code>current_step</code>; <code>_step_num</code> compares off the hot path; ReDoS posture + foreign-session gate untouched (tested). Completion-time advance stays the #499 design — these are the cheap unambiguous entry stamps its review anticipated.</p>
+<ul>
+<li><strong>Lane run:</strong> small-standard (standard_feature, 3 impl files); Task 2 (hot-path hook infra)</li>
+</ul>
+<p>  riskLevel high → one 8a wave. TDD red (cf7c94e, 8 failing) → green (530af76, 58 scoped, pylint   10.00); suite 3695+10skip → 3710+10skip (+15 tests incl. the 8a + Step-11 hardening guards).</p>
+<ul>
+<li><strong>Reviews:</strong> 8a wave (sonnet mechanical / opus security) fixed commit-graph false match +</li>
+</ul>
+<p>  classify-definitively ordering (d182273); Step-11 (opus lane + gpt adversarial, 4+2 findings   identity-merged) adopted branch-name issue REBIND + the pinned compound-input trade-off +   these count corrections — full dispositions in the PR.</p>
+<ul>
+<li>PR / merge SHA: filled at close-out.</li>
 </ul>
 <h2>Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0</h2>
 <p>Born live: the statusline froze twice during the #493 run (manual #480 step-entry writes skipped under batching). New PostToolUse hook <code>step_state_post.py</code> — marker detector (session-notes DONE markers parsed from the append command&#x27;s heredoc body) + signature detector (derive/scan/pr-create/pr-merge/summarize), both writing through the existing <code>step_state.py write</code> CLI; conservative context rules (registry session match; foreign records never stamped); fail-open, empty stdout. Manual per-step calls now OPTIONAL in all five skills; the no-gating-hook guard recut + PostToolUse-only registration pin.</p>
@@ -546,7 +559,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p>
 
 </main>
-<footer>Last updated: 2026-07-19 00:40 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-19 01:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

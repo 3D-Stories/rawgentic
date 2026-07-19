@@ -16,7 +16,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #493 — WF2 speed levers (manual drive)
 
-**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 merged (PR #498, f01e6bc, v3.61.0); #492 merged (PR #500, 88f01c0, v3.62.0); #494 in PR (v3.64.0).
+**Status: COMPLETE (2026-07-19, 6/6 merged, epic closed)** — #488 (PR #495, 46ae9b0, v3.58.0); #489 (PR #496, a59096f, v3.59.0); #490 (PR #497, 031e01c, v3.60.0); #491 (PR #498, f01e6bc, v3.61.0); #492 (PR #500, 88f01c0, v3.62.0); #494 (PR #503, 72f1d04, v3.64.0). Suite 3634+10skip → 3695+10skip across the epic, zero regressions. Levers inert for live sessions until owner plugin reinstall + fresh session. Follow-up: #502.
 Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
 
@@ -118,7 +118,7 @@ one-wave `estimate_agents`, shared-block examples corrected, mirror guards recom
   wave, dogfooding the rule it ships. Suite 3666+10skip → 3669+10skip (+3 guards).
 - **Reviews:** single 8a wave (sonnet mechanical / opus security) + lane Step-11 +
   adversarial diff review (fires on high-risk task) — results in the PR.
-- PR / merge SHA: filled by the next slot's pass.
+- PR #500, squash-merged 88f01c0 (2026-07-19), all 4 CI lanes green.
 
 ### #494 — early smoke-install after first runnable commit (deploy-bearing) · v3.64.0
 
@@ -137,7 +137,28 @@ mandatory post-deploy smoketest is not weakened or replaced. Guards: `TestEarlyS
   (mirrors #488–#490). TDD red (f8cf18f) → green (5c9f199); suite 3692+10skip → 3695+10skip.
 - **Reviews:** lane Step-11 reviewer (opus, security seat) + adversarial diff review per the
   opt-in — results in the PR.
-- PR / merge SHA: filled at epic wrap.
+- PR #503, squash-merged 72f1d04 (2026-07-19), all 4 CI lanes green; Step-11 F1 (Low, band-dropped, verified real) adopted as tightening 6f23f58.
+
+## Standalone — #502: entry signatures for the step-state pointer (owner-ordered, post-#493) · v3.65.0
+
+Born live during #494: the statusline sat on "step 5" through all of Step 8 (small-standard-lane
+dead zone — Step 6 skipped, Step 7 marker-less, Step 8's marker appends at step end), and the
+owner asked twice. Fix: `_SIGNATURES` rows become `(needle, hit, entry_only)`; `git checkout -b `
+stamps branch-cut entry (WF2 S7 / WF3 S6, non-monotonic for same-session follow-up issues) and
+`git commit` becomes a monotonic entry stamp (WF2 S8 / WF3 S7 — fires only below the target, so
+Step-11/12 commits never regress the pointer). `detect_signature` grows optional `current_step`;
+`_step_num` compares off the hot path; ReDoS posture + foreign-session gate untouched (tested).
+Completion-time advance stays the #499 design — these are the cheap unambiguous entry stamps its
+review anticipated.
+
+- **Lane run:** small-standard (standard_feature, 3 impl files); Task 2 (hot-path hook infra)
+  riskLevel high → one 8a wave. TDD red (cf7c94e, 8 failing) → green (530af76, 58 scoped, pylint
+  10.00); suite 3695+10skip → 3710+10skip (+15 tests incl. the 8a + Step-11 hardening guards).
+- **Reviews:** 8a wave (sonnet mechanical / opus security) fixed commit-graph false match +
+  classify-definitively ordering (d182273); Step-11 (opus lane + gpt adversarial, 4+2 findings
+  identity-merged) adopted branch-name issue REBIND + the pinned compound-input trade-off +
+  these count corrections — full dispositions in the PR.
+- PR / merge SHA: filled at close-out.
 
 ## Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0
 

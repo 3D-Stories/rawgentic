@@ -24,6 +24,18 @@ quoted inside an echo/grep still stamps entry-time state (bounded to the
 session's own workflow/issue, display-only consumers, self-correcting at the
 next marker append), and a failed child write stays silent (fail-open is the
 #480 contract — surfacing would need stdout, i.e. context injection).
+The #502 entry rows extend that residual class: ANY command containing the
+literal "git commit " / "git checkout -b " text — an echo, a grep, a heredoc
+body, not just a notes append — can stamp entry state. The commit row is
+monotonic-bounded; the checkout row is not, so a quoted needle can regress
+the pointer backward MID-RUN within the same issue (display-only consumers,
+session-scoped, self-corrects at the next marker). A compound input chaining
+a real commit with a later-step command (``git commit … && gh pr create``)
+loses the downstream stamp — classify-and-stop suppresses it, a CHOSEN
+trade-off (a lagging pointer beats a false non-monotonic jump from message
+prose; pinned by test). A conventional cross-issue branch-cut REBINDS the
+issue from the branch name (``feature/<n>-…`` / ``fix/<n>-…``); an
+unconventional branch name still reuses the existing record's issue.
 epic-run carve-out: its markers are not ``### WF<n>``-shaped and it has no
 signature table, so its skill prose KEEPS the mandatory manual write.
 """
@@ -57,17 +69,32 @@ _MARKER_LINE_CAP = 1024  # real markers are short single lines
 # no table (wf1/wf5/epic-run) is marker-only. The capabilities-derive row was
 # dropped: a true first entry has no prior state record to key off, so it could
 # only ever fire late and stomp a further-along position.
+# Row shape (#502): (needle, (step, title), entry_only). entry_only rows are
+# MONOTONIC entry stamps — they fire only when the record's current step parses
+# and sits BELOW the target ("git commit" is ambiguous across WF2 Steps 8/11/12;
+# the guard makes only the first, step-entering commit stamp). The branch-cut
+# rows stay non-monotonic: a new issue's checkout -b in the same session must be
+# able to move the pointer down from a prior run's 16.
+# The "git commit " rows sit FIRST (8a wave, #502): a commit whose MESSAGE
+# text mentions another row's needle ("gh pr create") is still a commit — the
+# entry row must classify it before any non-monotonic row can fire, and a
+# guard-blocked entry match is DEFINITIVE (return None, never fall through).
+# Trailing space excludes the distinct "git commit-graph" subcommand.
 _SIGNATURES = {
     "wf2": (
-        ("security_scan.py scan", ("11.5", "Security Scan")),
-        ("gh pr create", ("12", "Create PR")),
-        ("gh pr merge", ("14", "Merge")),
-        ("work_summary.py summarize", ("16", "Completion Summary")),
+        ("git commit ", ("8", "Implementation"), True),
+        ("git checkout -b ", ("7", "Create Branch"), False),
+        ("security_scan.py scan", ("11.5", "Security Scan"), False),
+        ("gh pr create", ("12", "Create PR"), False),
+        ("gh pr merge", ("14", "Merge"), False),
+        ("work_summary.py summarize", ("16", "Completion Summary"), False),
     ),
     "wf3": (
-        ("gh pr create", ("10", "Create Pull Request")),
-        ("gh pr merge", ("12", "Merge and Deploy")),
-        ("work_summary.py summarize", ("14", "Completion Summary")),
+        ("git commit ", ("7", "TDD Bug Fix"), True),
+        ("git checkout -b ", ("6", "Create Fix Branch"), False),
+        ("gh pr create", ("10", "Create Pull Request"), False),
+        ("gh pr merge", ("12", "Merge and Deploy"), False),
+        ("work_summary.py summarize", ("14", "Completion Summary"), False),
     ),
 }
 
@@ -99,14 +126,49 @@ def detect_marker(command: str) -> "dict | None":
             "step_title": f"{title} ✓done", "issue": issue}
 
 
-def detect_signature(command: str, workflow) -> "tuple[str, str] | None":
+_BRANCH_ISSUE_RE = re.compile(r"git checkout -b (?:feature|fix)/(\d{1,9})\b")
+
+
+def _branch_issue(command) -> "int | None":
+    """Issue number from a conventional branch-cut (`feature/<n>-…` /
+    `fix/<n>-…`), else None. Lets the branch-cut stamp REBIND the issue for a
+    same-session follow-up run instead of carrying the prior issue forward
+    (Step-11 join, #502 adversarial F2). Runs only post-prefilter."""
+    if not isinstance(command, str):
+        return None
+    m = _BRANCH_ISSUE_RE.search(command)
+    return int(m.group(1)) if m else None
+
+
+def _step_num(step) -> "float | None":
+    """Leading-numeric parse for the monotonic compare: '8a' -> 8.0,
+    '11.5' -> 11.5, garbage/None -> None. Runs only after a needle matched
+    AND the state was read — never on the per-Bash-call hot path."""
+    if not isinstance(step, str):
+        return None
+    m = re.match(r"(\d+(?:\.\d+)?)", step)
+    return float(m.group(1)) if m else None
+
+
+def detect_signature(command: str, workflow, current_step=None) -> "tuple[str, str] | None":
     """Match a per-step command AGAINST THE WORKFLOW'S OWN table; None when the
-    workflow is unknown or carries no table (marker-only workflows)."""
+    workflow is unknown or carries no table (marker-only workflows). entry_only
+    rows (#502) additionally require a parseable current step strictly below
+    the row's target — no recorded position, no entry stamp (conservative)."""
     if not isinstance(command, str) or not isinstance(workflow, str):
         return None
-    for needle, hit in _SIGNATURES.get(workflow, ()):
-        if needle in command:
-            return hit
+    for needle, hit, entry_only in _SIGNATURES.get(workflow, ()):
+        if needle not in command:
+            continue
+        if entry_only:
+            cur, target = _step_num(current_step), _step_num(hit[0])
+            if cur is None or target is None or cur >= target:
+                # A matched entry needle CLASSIFIES the command (it IS a
+                # commit) — a blocked guard suppresses the stamp entirely
+                # rather than letting a later non-monotonic row fire off
+                # prose in the commit message (8a wave, #502).
+                return None
+        return hit
     return None
 
 
@@ -116,7 +178,7 @@ def _may_have_signature(command) -> bool:
     if not isinstance(command, str):
         return False
     return any(needle in command
-               for table in _SIGNATURES.values() for needle, _ in table)
+               for table in _SIGNATURES.values() for needle, _, _ in table)
 
 
 def _find_workspace_root(cwd: str) -> "str | None":
@@ -189,12 +251,14 @@ def main() -> int:
     state = _read_state(root, project)
     if not state or state.get("session_id") != session_id:
         return 0  # never stamp over a foreign or unknown context
-    signature = detect_signature(command, state.get("workflow"))
+    signature = detect_signature(command, state.get("workflow"), state.get("step"))
     if signature is None:
         return 0
     step, title = signature
-    _write(root, project, state["workflow"], step, title,
-           state.get("issue"), session_id)
+    issue = _branch_issue(command)
+    if issue is None:
+        issue = state.get("issue")
+    _write(root, project, state["workflow"], step, title, issue, session_id)
     return 0
 
 

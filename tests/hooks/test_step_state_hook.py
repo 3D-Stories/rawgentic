@@ -97,6 +97,77 @@ class TestDetectSignature:
     def test_no_signature_is_none(self):
         assert ssp.detect_signature("ls -la && git log", "wf2") is None
 
+    # --- #502: entry signatures (branch-cut + monotonic commit) ---
+
+    def test_wf2_branch_cut_row(self):
+        assert ssp.detect_signature(
+            "git checkout -b feature/502-x origin/main", "wf2") == ("7", "Create Branch")
+
+    def test_wf3_branch_cut_row(self):
+        assert ssp.detect_signature(
+            "git checkout -b fix/77-y origin/main", "wf3") == ("6", "Create Fix Branch")
+
+    def test_wf2_commit_is_monotonic_entry_stamp(self):
+        cmd = "git add f && git commit -m 'feat: x (#502)'"
+        assert ssp.detect_signature(cmd, "wf2", current_step="7") == ("8", "Implementation")
+        assert ssp.detect_signature(cmd, "wf2", current_step="5") == ("8", "Implementation")
+        assert ssp.detect_signature(cmd, "wf2", current_step="8") is None
+        assert ssp.detect_signature(cmd, "wf2", current_step="8a") is None
+        assert ssp.detect_signature(cmd, "wf2", current_step="11") is None
+        assert ssp.detect_signature(cmd, "wf2", current_step="11.5") is None
+
+    def test_wf3_commit_is_monotonic_entry_stamp(self):
+        cmd = "git commit -F /tmp/msg"
+        assert ssp.detect_signature(cmd, "wf3", current_step="5") == ("7", "TDD Bug Fix")
+        assert ssp.detect_signature(cmd, "wf3", current_step="10") is None
+
+    def test_entry_rows_skip_without_parseable_current_step(self):
+        # Conservative: a monotonic row never fires blind — no recorded step,
+        # no stamp (the checkout rows, non-monotonic by design, are unaffected).
+        cmd = "git commit -m x"
+        assert ssp.detect_signature(cmd, "wf2") is None
+        assert ssp.detect_signature(cmd, "wf2", current_step=None) is None
+        assert ssp.detect_signature(cmd, "wf2", current_step="garbage") is None
+
+    def test_prefilter_covers_entry_needles(self):
+        assert ssp._may_have_signature("git add x && git commit -m y")
+        assert ssp._may_have_signature("git checkout -b feature/z origin/main")
+
+    def test_commit_graph_is_not_a_commit(self):
+        # 8a wave (#502): "git commit-graph write" is a distinct maintenance
+        # subcommand — the trailing-space needle must not stamp it.
+        assert ssp.detect_signature(
+            "git commit-graph write --reachable", "wf2", current_step="5") is None
+
+    def test_commit_classification_beats_later_rows(self):
+        # 8a wave (#502): a commit whose MESSAGE mentions another row's needle
+        # is still a commit — it must take the monotonic entry stamp (below
+        # target) or nothing (at/after target), never the other row's
+        # non-monotonic jump.
+        cmd = 'git commit -m "docs: explain gh pr create flag"'
+        assert ssp.detect_signature(cmd, "wf2", current_step="5") == ("8", "Implementation")
+        assert ssp.detect_signature(cmd, "wf2", current_step="11") is None
+
+    def test_compound_commit_suppresses_downstream_stamp_pinned(self):
+        # Step-11 join (#502): CHOSEN trade-off, pinned so the suite is green
+        # because this is decided, not because it is untested. A compound
+        # input chaining a real commit with a later-step command loses the
+        # downstream stamp (classify-and-stop) — a lagging pointer that
+        # self-corrects at the next marker is preferred over the alternative
+        # (message prose firing a false non-monotonic jump). Documented in
+        # the module docstring's residual paragraph.
+        cmd = 'git commit -m "fixes" && gh pr create --repo x -t t'
+        assert ssp.detect_signature(cmd, "wf2", current_step="11") is None
+
+    def test_branch_issue_parsed_from_branch_name(self):
+        # Step-11 join (#502, adversarial F2 adopted): the branch-cut stamp
+        # rebinds the issue from the conventional branch name instead of
+        # carrying the prior issue forward.
+        assert ssp._branch_issue("git checkout -b feature/502-entry-sigs origin/main") == 502
+        assert ssp._branch_issue("git checkout -b fix/77-null-deref origin/main") == 77
+        assert ssp._branch_issue("git checkout -b spike/unconventional") is None
+        assert ssp._branch_issue("ls -la") is None
+
 
 def _mk_workspace(tmp_path, session_id="sess-1", project="rawgentic"):
     (tmp_path / ".rawgentic_workspace.json").write_text('{"version": 1, "projects": []}')
@@ -175,6 +246,68 @@ class TestHookFlow:
         rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
         assert rec["step"] == "11" and rec["session_id"] == "sess-1", (
             "a signature hit must not stamp over another session's context")
+
+    # --- #502: entry-signature flow (branch-cut + monotonic commit) ---
+
+    _STEP5_MARKER = ("cat >> claude_docs/session_notes.md <<'EOF'\n"
+                     "### WF2 Step 5: Implementation Plan — DONE (#502: 3 tasks)\nEOF")
+
+    def test_branch_cut_signature_stamps_entry(self, tmp_path):
+        ws = _mk_workspace(tmp_path)
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": self._STEP5_MARKER}})
+        r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                           "tool_input": {"command": "git checkout -b feature/502-x origin/main"}})
+        assert r.returncode == 0 and r.stdout == ""
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["step"] == "7" and rec["issue"] == 502
+
+    def test_commit_advances_from_early_step(self, tmp_path):
+        ws = _mk_workspace(tmp_path)
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": self._STEP5_MARKER}})
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": "git add f && git commit -m 'feat (#502)'"}})
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["step"] == "8" and rec["issue"] == 502
+
+    def test_commit_does_not_regress_pointer(self, tmp_path):
+        ws = _mk_workspace(tmp_path)
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": MARKER_CMD}})  # stamps wf2 step 11
+        r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                           "tool_input": {"command": "git add f && git commit -m 'fix (#492)'"}})
+        assert r.returncode == 0
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["step"] == "11", "a commit at recorded step 11 must not move the pointer"
+
+    def test_branch_cut_never_stamps_foreign_session(self, tmp_path):
+        ws = _mk_workspace(tmp_path)
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": MARKER_CMD}})
+        (ws / "claude_docs" / "session_registry.jsonl").write_text(
+            json.dumps({"session_id": "sess-2", "project": "rawgentic",
+                        "project_path": "./projects/rawgentic",
+                        "started": "2026-07-19T01:00:00Z", "cwd": str(ws)}) + "\n")
+        r = _run_hook(ws, {"session_id": "sess-2", "tool_name": "Bash",
+                           "tool_input": {"command": "git checkout -b feature/9-z origin/main"}})
+        assert r.returncode == 0
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["session_id"] == "sess-1" and rec["step"] == "11"
+
+    def test_branch_cut_rebinds_issue_from_branch_name(self, tmp_path):
+        # Step-11 join (#502, adversarial F2 adopted): a same-session
+        # follow-up issue's branch-cut stamps the NEW issue parsed from the
+        # branch name, not the prior run's stale issue.
+        ws = _mk_workspace(tmp_path)
+        _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                       "tool_input": {"command": MARKER_CMD}})  # issue 492, step 11
+        r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                           "tool_input": {"command": "git checkout -b feature/502-entry origin/main"}})
+        assert r.returncode == 0
+        rec = json.loads((ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["step"] == "7" and rec["issue"] == 502, (
+            "the branch-cut stamp must rebind to the branch name's issue")
 
     def test_garbage_stdin_fails_open(self, tmp_path):
         ws = _mk_workspace(tmp_path)
