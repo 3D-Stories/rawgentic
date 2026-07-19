@@ -113,7 +113,13 @@ class Capture:
 def create_capture(root: os.PathLike | str, *parts: Any) -> Capture:
     """Create a fresh capture dir ``root/<sanitized parts...>``, refusing to reuse an existing
     one (``exist_ok=False``), and write the ``.incomplete`` marker first. Raises ValueError if
-    the resolved path would escape ``root``."""
+    the resolved path would escape ``root``.
+
+    Every dir this call CREATES is chmod 0700 (#513): captures hold the raw
+    transport envelope (provider session_id) — same posture as the supervisor's
+    specs/registry dirs. mkdir's mode= is umask-masked, chmod is not (the
+    supervisor.py pattern). Pre-existing intermediates and the caller-owned
+    root keep their mode — posture is set at creation time."""
     root_p = Path(root).resolve()
     safe = [sanitize_component(p) for p in parts]
     target = root_p.joinpath(*safe)
@@ -121,6 +127,13 @@ def create_capture(root: os.PathLike | str, *parts: Any) -> Capture:
     resolved = target.resolve()
     if resolved != root_p and root_p not in resolved.parents:
         raise ValueError(f"capture path escapes root: {target}")
+    created = []
+    probe = target
+    while not probe.exists() and probe != root_p:
+        created.append(probe)
+        probe = probe.parent
     target.mkdir(parents=True, exist_ok=False)
+    for d in created:
+        os.chmod(d, 0o700)
     atomic_write_text(target / INCOMPLETE, "engine invocation has not completed\n")
     return Capture(target)

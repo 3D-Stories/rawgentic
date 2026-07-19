@@ -78,3 +78,34 @@ def test_hash_text_deterministic_and_prefixed():
 def test_hash_context_orders_and_empties():
     assert hash_context(None) == []
     assert hash_context(["a", "b"]) == [hash_text("a"), hash_text("b")]
+
+
+def test_create_capture_dirs_are_0700(tmp_path):
+    """#513: capture dirs hold transport.stdout.txt — the raw provider envelope
+    including the session_id — so every dir create_capture creates gets 0700
+    regardless of umask, matching the supervisor's specs/registry posture.
+    The caller-owned root is deliberately untouched."""
+    old = os.umask(0o022)
+    try:
+        cap = create_capture(tmp_path, "run1", "review", "att1")
+    finally:
+        os.umask(old)
+    for d in (cap.path, cap.path.parent, cap.path.parent.parent):
+        assert (d.stat().st_mode & 0o777) == 0o700, f"{d} not 0700"
+
+
+def test_create_capture_preexisting_dirs_not_rechmodded(tmp_path):
+    """#513: only dirs this call CREATES get the chmod — a pre-existing
+    intermediate (reuse across attempts) keeps its mode; posture is set at
+    creation time."""
+    run_dir = tmp_path / "run1"
+    run_dir.mkdir()
+    os.chmod(run_dir, 0o755)
+    old = os.umask(0o022)
+    try:
+        cap = create_capture(tmp_path, "run1", "review", "att1")
+    finally:
+        os.umask(old)
+    assert (cap.path.stat().st_mode & 0o777) == 0o700
+    assert (cap.path.parent.stat().st_mode & 0o777) == 0o700  # review/ was created
+    assert (run_dir.stat().st_mode & 0o777) == 0o755          # pre-existing untouched
