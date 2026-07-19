@@ -2358,3 +2358,59 @@ class TestValidateTiming:
         rec["timing"] = _valid_timing()
         out = render_summary(rec)
         assert "Timing:" in out and "design" in out
+
+
+# --- #392: find — last record for an issue -----------------------------------
+
+class TestFindSubcommand:
+    """#392 AC1: WF14 batch mode resolves each issue's run-record from the
+    store by issue number — an explicit lookup that sidesteps the `latest`
+    wrong-store trap (#346). Last matching record wins; a miss is rc 1 (loud,
+    routes to the caller's per-issue degraded section, never silent)."""
+
+    def _store(self, tmp_path, records):
+        p = tmp_path / "store.jsonl"
+        with open(p, "w") as f:
+            for r in records:
+                if isinstance(r, dict):
+                    # mimic persisted records: load_store's fail-closed reader
+                    # requires a valid generated_at (the writer stamps it)
+                    r = dict(r, generated_at="2026-07-19T10:00:00Z",
+                             schema_version=1)
+                f.write((r if isinstance(r, str) else json.dumps(r)) + "\n")
+        return p
+
+    def test_find_prints_last_match(self, tmp_path, capsys):
+        from work_summary import main
+        r1, r2 = _valid_record(), _valid_record()
+        r1["workflow_version"], r2["workflow_version"] = "1.0.0", "2.0.0"
+        store = self._store(tmp_path, [r1, r2])
+        rc = main(["find", "--issue", "91", "--store", str(store)])
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert json.loads(out)["workflow_version"] == "2.0.0"
+
+    def test_find_no_match_rc1(self, tmp_path, capsys):
+        from work_summary import main
+        store = self._store(tmp_path, [_valid_record()])
+        rc = main(["find", "--issue", "424242", "--store", str(store)])
+        assert rc == 1
+        assert capsys.readouterr().err  # loud miss
+
+    def test_find_skips_malformed_lines(self, tmp_path, capsys):
+        from work_summary import main
+        good = _valid_record()
+        store = self._store(tmp_path, ["{not json", good])
+        rc = main(["find", "--issue", "91", "--store", str(store)])
+        assert rc == 0
+        assert json.loads(capsys.readouterr().out)["issue"]["number"] == 91
+
+    def test_find_cli_subprocess(self, tmp_path):
+        import subprocess
+        store = self._store(tmp_path, [_valid_record()])
+        r = subprocess.run(
+            ["python3", str(SUMMARY_CLI), "find", "--issue", "91",
+             "--store", str(store)],
+            capture_output=True, text=True, timeout=15)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["issue"]["number"] == 91

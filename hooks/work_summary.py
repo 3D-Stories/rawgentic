@@ -1316,6 +1316,16 @@ def main(argv=None) -> int:
                         "loopback_counters.json relative to the cwd and checks "
                         "only if that file exists")
 
+    pf = sub.add_parser(
+        "find",
+        help="print the LAST store record for --issue (#392 WF14 batch lookup)")
+    pf.add_argument("--issue", required=True, type=int)
+    pf.add_argument("--store", default=None,
+                    help="store path; defaults via $%s then "
+                         "<project-root>/%s" % (STORE_ENV, "/".join(DEFAULT_STORE_RELPATH)))
+    pf.add_argument("--project-root", default=".",
+                    help="used only for the default store path")
+
     pa = sub.add_parser(
         "aggregate",
         help="roll a JSONL run-record store up into aggregate Tier-2 metrics")
@@ -1386,6 +1396,30 @@ def main(argv=None) -> int:
                 print(f"failed to persist run-record to {store}: {exc}",
                       file=sys.stderr)
                 return 1
+        return 0
+
+    if args.cmd == "find":
+        # #392: WF14 batch mode's per-issue record lookup. Last matching
+        # record wins (a re-run's newer record supersedes); a miss is rc 1 —
+        # loud, so the caller renders its per-issue degraded section instead
+        # of silently skipping. Malformed/invalid lines are excluded by
+        # load_store's fail-closed reader.
+        store = resolve_store_path(args.store, os.environ, args.project_root)
+        try:
+            records, _excluded = load_store(store)
+        except WorkSummaryError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        match = None
+        for rec in records:
+            issue = rec.get("issue")
+            if isinstance(issue, dict) and issue.get("number") == args.issue:
+                match = rec
+        if match is None:
+            print(f"find: no record for issue #{args.issue} in {store}",
+                  file=sys.stderr)
+            return 1
+        print(json.dumps(match, separators=(",", ":")))
         return 0
 
     if args.cmd == "aggregate":

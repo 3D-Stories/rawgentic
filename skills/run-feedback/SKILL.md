@@ -1,7 +1,7 @@
 ---
 name: rawgentic:run-feedback
 description: WF14 — assess the WORKFLOW MACHINERY of a just-completed rawgentic run (WF1/WF2/WF3/WF5/WF13/epic driver) and route feedback to rawgentic development. Use after any completed WFn run — the user says "assess the workflow run", "run feedback", "post-run assessment", "how did the workflow itself do", or an embedding workflow invokes it with explicit args. Do NOT use to review the deliverable the run shipped (that is WF5 / code review), to assess non-rawgentic workflows, or to fix any defect it finds (report-only).
-argument-hint: latest | --record <path> [--wf <n>] [--session-notes <path>]
+argument-hint: latest | --record <path> | --epic <n> | --issues <n,n,...> [--wf <n>] [--session-notes <path>]
 ---
 
 <role>
@@ -77,6 +77,45 @@ neither a resolvable record nor a session-notes path gets an `unscored` assessme
 with the gap stated — never a guessed one. WF2 Step 16 / WF3 Step 14 invocation wiring
 lives in those workflows' completion steps (#338) — opt-in via the `runFeedback` key,
 fail-open on assessment failure; this skill stays the invoked core, not the invoker.
+
+## Batch mode (#392)
+
+`--epic <n>` or `--issues <n,n,...>` assesses a whole run set in ONE invocation with
+ONE consolidated report. The single-record path above is byte-identical — batch is
+additive.
+
+1. **Derive the issue list.** `--epic <n>`: derive the issue list from the epic body's
+   task-list checkboxes — BOTH `- [ ] #N` and `- [x] #N` (a post-mortem assesses the
+   completed children too; this is the queue-derivation rule, NEVER dependency
+   parsing — the epic body's checkboxes are the list, deps come from nowhere here).
+   `--issues <n,n,...>`: the explicit list, in the given order.
+2. **Resolve each issue's record** via
+   `python3 hooks/work_summary.py find --issue <n> [--store <path>]` — the LAST store
+   record for that issue wins; `--store` overrides for a cross-project store (the
+   #346 `latest`-reads-wrong-store hazard does not apply to explicit lookups, but the
+   store still must be the ASSESSED project's). rc 1 (no record) routes that issue to
+   a visible per-issue degraded section (existing degraded-mode semantics: assess from
+   session notes alone, claims limited to `unverifiable`) — never a silent skip; the
+   batch continues (AC5).
+3. **Embed-compat detection (AC4).** BEFORE assessing an issue, check whether it was
+   already assessed: an existing report pair
+   `docs/reviews/run-feedback-wf<wf>-<n>-*.md` OR a session-note
+   `### WF14 run-feedback: DONE (WF<n> #<n>` marker. Already-assessed issues get a
+   linking section (existing report referenced, its verdict quoted one-line) — the
+   batch never double-assesses, never re-files their issues.
+4. **Assess each remaining issue** with the unchanged Steps 1–2b rubric flow
+   (per-issue evidence ledger, scores, classification, telemetry audit).
+5. **Render ONE consolidated pair** —
+   `docs/reviews/run-feedback-batch-<epic<n>|issues-<slug>>-<YYYY-MM-DD>.{md,html}`
+   via `render_artifact.py --style report` (same-day rerun suffixes apply): an
+   `## At a glance` batch verdict, one section per issue (assessed / linked / degraded),
+   then a `## Cross-run synthesis` section (patterns holding across ≥2 runs, score
+   trends, the batch's best catch and worst friction).
+6. **Route once for the whole batch.** the filing cap is shared across the WHOLE batch
+   (never per-run × N); a finding recurring across runs dedupes into ONE filed issue
+   citing all affected runs. Friction: still exactly ONE mempalace memory for the
+   whole batch. Close marker (single, batch form):
+   `### WF14 run-feedback: DONE (batch <epic #n|issues <slug>>, <k> runs assessed, <j> linked, <i> degraded, <m> filed)`
 
 ## Step 1: Gather run facts
 
