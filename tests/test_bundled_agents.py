@@ -119,6 +119,49 @@ def test_reviewer_prose_limits_bash_to_inspection():
     assert "never to mutate" in body.lower()
 
 
+# #510: a reviewer live-ran a fleet-mutating entry script (sentinel epic #45,
+# finding W-1) — the env-var self-check form missed the script's positional
+# guard and the live path executed. These anchors pin the read-only execution
+# clause on every surface; counts are >= (never ==) so new occurrences can't
+# break them. Matching is whitespace-normalized so hard-wrapped prose still
+# anchors (same pattern as test_wf3_clarity's normalized corpus checks).
+_READONLY_CLAUSE_ANCHOR = "never execute the target project's entry-point scripts"
+_INVOCATION_FORM_SENTENCE = (
+    "an entry script invoked in an unexpected form may fall through to a "
+    "live path — do not experiment with invocation forms"
+)
+
+
+def _normalized(text: str) -> str:
+    return " ".join(text.split()).lower()
+
+
+def test_reviewer_definition_carries_read_only_execution_clause():
+    """#510 AC1+AC2: the definition forbids executing project entry points,
+    names the sanctioned-executions boundary, covers the observed
+    unexpected-invocation-form failure mode, and tells the reviewer to report
+    (not run) a command whose read-only-ness is uncertain."""
+    body = _normalized(REVIEWER.read_text(encoding="utf-8"))
+    assert _READONLY_CLAUSE_ANCHOR in body
+    assert _INVOCATION_FORM_SENTENCE in body
+    assert "report the uncertainty" in body
+    assert "verification commands" in body
+
+
+def test_dispatch_briefs_restate_read_only_clause():
+    """#510 AC1: the WF2 Step 8a and Step 11 dispatch briefs and WF3's Step 9
+    review dispatch restate the clause at dispatch time — the definition alone
+    does not reach pr-review-toolkit slots or generic-tier fallbacks."""
+    wf2 = _normalized(skill_corpus("implement-feature"))
+    wf3 = _normalized(skill_corpus("fix-bug"))
+    assert wf2.count(_READONLY_CLAUSE_ANCHOR) >= 2, \
+        "WF2 must restate the clause at both the Step 8a and Step 11 briefs"
+    assert _INVOCATION_FORM_SENTENCE in wf2
+    assert wf3.count(_READONLY_CLAUSE_ANCHOR) >= 1, \
+        "WF3's Step 9 review dispatch must restate the clause"
+    assert _INVOCATION_FORM_SENTENCE in wf3
+
+
 def test_wf2_step8_reconciles_worktree_commit():
     """A worktree commit does not land on the feature branch by itself; Step 8
     must collect it and assert the branch advanced — otherwise the diff-scoped

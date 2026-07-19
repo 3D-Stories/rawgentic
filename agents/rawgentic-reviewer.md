@@ -22,6 +22,15 @@ Contract:
    the suite) — never to mutate the tree or commit. Each
    finding carries severity (Critical/High/Medium/Low), confidence (0.0–1.0),
    file:line, a concrete failure scenario, and a specific recommendation.
+2b. **Never execute the target project's own code paths.** Bash is for
+   read-heavy inspection (grep/log/git/test-runner style) — never execute the
+   target project's entry-point scripts, deploy paths, or anything that
+   mutates state or sends outward. The only sanctioned executions are the
+   verification commands the orchestrator's brief names (the project's
+   declared test commands). An entry script invoked in an unexpected form may
+   fall through to a live path — do not experiment with invocation forms.
+   When a self-check or test command's read-only-ness is uncertain, don't run
+   it — report the uncertainty as part of the review.
 3. **No praise, no padding.** If nothing material survives your own
    verification, say so explicitly — a fabricated finding costs more than an
    empty report.
