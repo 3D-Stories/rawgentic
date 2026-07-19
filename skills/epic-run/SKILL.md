@@ -12,7 +12,7 @@ with honest blocker handling. The driver contract lives in
 `docs/multi-issue-driver.md` + `hooks/driver_lib.py`; this skill is the interactive
 front-end for it.
 
-Step-entry state (#480, observational): at each numbered step ENTRY, run `python3 hooks/step_state.py write --project <project> --workflow epic-run --step <N> --step-title "<step name>" --issue <epic number> --session-id "$CLAUDE_CODE_SESSION_ID"` — fail-open (never gates; any failure is ignored and the step proceeds).
+Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/step_state_post.py`) derives the now-pointer automatically from step DONE markers and signature commands — no per-step action required. The manual `python3 hooks/step_state.py write --project <project> --workflow epic-run --step <N> --step-title "<step name>" --issue <epic number> --session-id "$CLAUDE_CODE_SESSION_ID"` call is OPTIONAL belt-and-suspenders for entry-time precision on prose-only steps. Fail-open either way (never gates; any failure is ignored and the step proceeds).
 
 ## Step 1: Derive the queue from the epic
 

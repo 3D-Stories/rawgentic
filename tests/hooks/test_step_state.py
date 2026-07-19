@@ -267,6 +267,9 @@ def test_step_entry_prose_pin_all_five_skills():
         assert "step_state.py write --project" in text, f"{skill}: entry-call line missing"
         assert token in text, f"{skill}: wrong workflow token"
         assert "fail-open" in text.lower(), f"{skill}: fail-open clause missing"
+        # #499: emission is hook-owned; the manual call is optional belt-and-suspenders.
+        assert "hook-emitted since #499" in text, f"{skill}: hook-emission clause missing"
+        assert "OPTIONAL" in text, f"{skill}: the manual call must be marked optional"
 
 
 # --- Step-11 join fixes (#480): reader honesty + import fail-open ------------------
