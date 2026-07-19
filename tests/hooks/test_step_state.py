@@ -225,13 +225,28 @@ def test_read_absent_prints_nothing(tmp_path):
     assert r.stdout.strip() == ""
 
 
-# --- drift guard: no gating hook reads this file (AC4) ----------------------
+# --- drift guard: no gating hook reads this file (AC4; #499 carve-out) ------
 
 def test_no_gating_hook_references_step_state():
-    for name in ("hooks.json", "wal-guard", "wal-bind-guard"):
+    # GATING hooks must never read the observational state (#480 AC4).
+    for name in ("wal-guard", "wal-bind-guard", "security-guard.py"):
         text = (HOOKS_DIR / name).read_text(encoding="utf-8")
         assert "step_state" not in text, f"{name} references step_state"
         assert "state.json" not in text, f"{name} references state.json"
+
+
+def test_hooks_json_step_state_is_posttooluse_only():
+    # #499: the ONE sanctioned hooks.json reference is the observational
+    # PostToolUse emitter — never a Pre* or Stop (gating-capable) event.
+    cfg = json.loads((HOOKS_DIR / "hooks.json").read_text(encoding="utf-8"))
+    for event, entries in cfg.get("hooks", {}).items():
+        blob = json.dumps(entries)
+        if event == "PostToolUse":
+            assert "step_state_post" in blob, (
+                "the #499 emitter must be registered on PostToolUse")
+        else:
+            assert "step_state" not in blob, (
+                f"step_state referenced on {event} — only PostToolUse is sanctioned")
 
 
 # --- per-workflow prose pins (AC6): the entry-call line exists in each skill --------------
