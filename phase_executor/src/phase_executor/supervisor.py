@@ -37,7 +37,8 @@ from . import contract, routing
 from .capture import atomic_write_text, hash_text
 from .engine import PROVIDER_ENGINE
 from .pane_runner import _descendants, expected_capture_dir, sidecar_path
-from .registry import JobRecord, JobRegistry, command_digest, session_name
+from .registry import (JobRecord, JobRegistry, ReapPlan, ReapPolicy, classify_recovery,
+                       command_digest, handle_from_record, reap_plan, session_name)
 from .worktree import WorktreeHandle, WorktreeIdentity, component_for
 
 TMUX_VERSION_FLOOR = (3, 0)  # verbs probed individually below; 3.4 is the spike-verified build
@@ -55,9 +56,33 @@ class PreflightResult:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class RecoveryAction:
+    """One recover() verdict: ``action`` ∈ {adopt, quarantine, relaunch, fail};
+    ``record`` is the post-action record (the NEW record for a relaunch)."""
+    identity: WorktreeIdentity
+    action: str
+    record: JobRecord
+
+
 def _default_run(cmd, *, env=None, cwd=None, timeout=30):
     return subprocess.run(list(cmd), capture_output=True, text=True, env=env, cwd=cwd,
                           timeout=timeout, check=False)
+
+
+def _self_and_ancestors() -> set:
+    """This process and its PPID chain — NEVER a kill target (defense-in-depth for the
+    _kill_job guards)."""
+    out = set()
+    pid = os.getpid()
+    while pid > 1 and pid not in out:
+        out.add(pid)
+        try:
+            with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as fh:
+                pid = int(fh.read().rsplit(")", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            break
+    return out
 
 
 def _pid_alive(pid: int) -> bool:
@@ -149,7 +174,7 @@ class TmuxSupervisor:
     def __init__(self, *, snapshot, quota, capture_root: str, registry_root: str,
                  registry: Optional[JobRegistry] = None, run=_default_run, clock=time.time,
                  runtime_dir: Optional[str] = None, state_dir: Optional[str] = None,
-                 pane_env: Optional[dict] = None):
+                 pane_env: Optional[dict] = None, worktree_manager=None):
         self._snapshot = snapshot
         self._quota = quota
         self._capture_root = capture_root
@@ -161,6 +186,9 @@ class TmuxSupervisor:
         self._state_dir = state_dir
         self._env = {**os.environ, **(pane_env or {})}
         self._permits: dict = {}  # session_name -> live acquire() context manager
+        # W3 disposition machinery (retain-if-dirty). Optional: when None, retain steps are
+        # recorded in the reap summary but not executed — the caller owns W3 wiring.
+        self._worktree_manager = worktree_manager
 
     # -- tmux plumbing -------------------------------------------------------
 
@@ -353,32 +381,56 @@ class TmuxSupervisor:
             return record.provider_pgid
 
     def _kill_job(self, record: JobRecord, *, grace_s: float = _KILL_GRACE_S) -> bool:
-        """The two-group + descendant-snapshot kill. Returns True iff verified dead."""
-        snapshot = _descendants(record.pane_pid) | {record.pane_pid}
+        """The two-group + descendant-snapshot kill. Returns True iff verified dead.
+
+        HARD GUARDS (a live incident 2026-07-19: a record carrying pane_pid=1 made
+        _descendants(1) the ENTIRE host tree and the SIGKILL loop swept the caller's own
+        process tree):
+        - a pid/pgid <= 1 is NEVER killed or snapshotted (init / \"every group\");
+        - a pane_pid whose /proc start-time no longer matches the record is a REUSED pid —
+          a foreign process; it is treated as already dead and never snapshotted;
+        - the caller's own pid and ancestor chain are excluded from any kill set."""
+        pane_identity_ok = (record.pane_pid > 1
+                            and _pid_alive(record.pane_pid)
+                            and _proc_start_time(record.pane_pid) == record.pane_start_time)
+        protected = _self_and_ancestors()
+        snapshot = set()
+        if pane_identity_ok:
+            snapshot = (_descendants(record.pane_pid) | {record.pane_pid}) - protected
         provider_pgid = self._surfaced_provider_pgid(record)
-        try:
-            os.killpg(record.pane_pgid, signal.SIGTERM)  # graceful: pane_runner kills its tree
-        except OSError:
-            pass
-        deadline = time.monotonic() + grace_s
-        while time.monotonic() < deadline:
-            if not any(_pid_alive(p) for p in snapshot):
-                break
-            time.sleep(0.1)
-        else:
-            pass
-        if any(_pid_alive(p) for p in snapshot) or (
-                provider_pgid and _group_pids(provider_pgid)):
+        if provider_pgid is not None and provider_pgid <= 1:
+            provider_pgid = None
+        if pane_identity_ok and record.pane_pgid > 1:
             try:
-                os.killpg(record.pane_pgid, signal.SIGKILL)
+                os.killpg(record.pane_pgid, signal.SIGTERM)  # graceful: pane_runner kills its tree
             except OSError:
                 pass
+        deadline = time.monotonic() + grace_s
+        while time.monotonic() < deadline and any(_pid_alive(p) for p in snapshot):
+            time.sleep(0.1)
+
+        def _pane_group() -> set:
+            if not pane_identity_ok or record.pane_pgid <= 1:
+                return set()
+            return _group_pids(record.pane_pgid) - protected
+
+        def _provider_group() -> set:
+            if provider_pgid is None:
+                return set()
+            return _group_pids(provider_pgid) - protected
+
+        if any(_pid_alive(p) for p in snapshot) or _provider_group():
+            if pane_identity_ok and record.pane_pgid > 1:
+                try:
+                    os.killpg(record.pane_pgid, signal.SIGKILL)
+                except OSError:
+                    pass
             for pid in snapshot:
                 try:
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
                     pass
-            if provider_pgid:
+            if provider_pgid is not None:
                 try:
                     os.killpg(provider_pgid, signal.SIGKILL)
                 except OSError:
@@ -387,13 +439,10 @@ class TmuxSupervisor:
         # provider group is the reaper backstop — no hard-guarantee claim here)
         deadline = time.monotonic() + grace_s
         while time.monotonic() < deadline:
-            residue = any(_pid_alive(p) for p in snapshot) or _group_pids(record.pane_pgid) or (
-                provider_pgid and _group_pids(provider_pgid))
-            if not residue:
+            if not (any(_pid_alive(p) for p in snapshot) or _pane_group() or _provider_group()):
                 break
             time.sleep(0.1)
-        residue = any(_pid_alive(p) for p in snapshot) or _group_pids(record.pane_pgid) or (
-            provider_pgid and _group_pids(provider_pgid))
+        residue = any(_pid_alive(p) for p in snapshot) or _pane_group() or _provider_group()
         if not residue:
             self._tmux(record.run_socket, "kill-session", "-t", record.session_name)
             return True
@@ -420,16 +469,29 @@ class TmuxSupervisor:
     # -- await (AC-E3/E4, CF-9/CF-12) ------------------------------------------
 
     def await_job(self, record: JobRecord, *, poll_s: float = 1.0,
-                  timeout_s: float = 3600.0) -> Tuple[str, Optional[dict]]:
+                  timeout_s: float = 3600.0,
+                  expect_session_id: Optional[str] = None) -> Tuple[str, Optional[dict]]:
         """Poll for the validated sentinel; on valid → collect ⇒ kill (kill-fail →
         completed_with_residue). On deadline → the CF-17 kill, THEN re-check and prefer a
         valid child obs (the writer was in the killed pane group — race-free); else emit the
         supervisor's synthetic timeout observation. Ambiguous dead-no-sentinel →
-        exited_no_sentinel (no auto-resume)."""
+        exited_no_sentinel (no auto-resume).
+
+        ``expect_session_id`` (CF-10, resume-identity assert): on collect, the transport's
+        ``session_id`` MUST equal it — a resumed launch that landed in the wrong session
+        (wrong cwd, spike #455's LOUD failure shape) is registered ``failed`` and raised."""
         deadline = time.monotonic() + timeout_s
         while True:
             obs = self._sentinel(record)
             if obs is not None:
+                if expect_session_id is not None:
+                    got = self._transport_session_id(record)
+                    if got != expect_session_id:
+                        self._kill_job(record)
+                        self._finish(record, "failed")
+                        raise SupervisorError(
+                            f"resume identity mismatch: transport session_id {got!r} != "
+                            f"persisted {expect_session_id!r} (wrong-cwd resume shape)")
                 clean = self._kill_job(record)
                 state = "completed" if clean else "completed_with_residue"
                 self._finish(record, state, provider_exit_code=_exit_code_of(obs))
@@ -482,7 +544,177 @@ class TmuxSupervisor:
         """Tear down the whole private server for ``run_id`` (test/run cleanup)."""
         self._tmux(self.resolve_socket(run_id), "kill-server")
 
+    # -- recover (OQ-8, CF-6/CF-7/CF-10) ----------------------------------------
+
+    def _identity_matches(self, record: JobRecord) -> bool:
+        """FULL identity match for adoption: recomputed command digest, pane start-time
+        (PID-reuse guard, live jobs), and the worktree still on disk. ANY mismatch is a
+        quarantine — never a silent adopt (CF-7)."""
+        spec_path = Path(self._registry_root) / "specs" / f"{record.session_name}.json"
+        argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path)]
+        if command_digest(argv) != record.command_digest:
+            return False
+        spec = self._read_spec(record)
+        if not spec.get("request"):
+            return False  # unreadable/tampered spec: the digest above covers argv, not content
+        if not os.path.isdir(record.worktree_path):
+            return False
+        if _pid_alive(record.pane_pid):
+            if _proc_start_time(record.pane_pid) != record.pane_start_time:
+                return False  # PID reused by a foreign process
+        return True
+
+    def recover(self, run_id: str) -> list:
+        """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
+        quarantine (kill both groups + W3 retain — the untrusted writer never survives) /
+        relaunch (``--resume`` from the seat's worktree cwd, capped at MAX_RESUME) / fail.
+        Returns [RecoveryAction], one per record considered."""
+        actions = []
+        for record in self._registry.by_run(run_id):
+            if record.state in ("completed", "completed_with_residue", "failed", "quarantined"):
+                continue
+            live = self._live(record)
+            matches = self._identity_matches(record)
+            # spec content must also still parse for a live adopt (tamper evidence)
+            sentinel_valid = self._sentinel(record) is not None
+            verdict = classify_recovery(record, live=live, identity_matches=matches,
+                                        sentinel_valid=sentinel_valid)
+            if verdict == "adopt":
+                actions.append(RecoveryAction(record.identity, "adopt", record))
+            elif verdict == "quarantine":
+                self._kill_job(record)
+                reason = ("identity mismatch" if not matches else "no valid sentinel")
+                done = self._finish(record, "quarantined", quarantine_reason=reason)
+                self._retain(done)
+                actions.append(RecoveryAction(record.identity, "quarantine", done))
+            elif verdict == "relaunch":
+                new = self._relaunch(record)
+                actions.append(RecoveryAction(record.identity, "relaunch", new))
+            else:  # fail: resume cap reached
+                done = self._finish(record, "failed")
+                actions.append(RecoveryAction(record.identity, "fail", done))
+        return actions
+
+    def _relaunch(self, record: JobRecord) -> JobRecord:
+        """Relaunch a quota_paused job: same identity/worktree, a resume-policy profile, the
+        persisted provider session id (claude ``--resume``), resume_attempts + 1. The
+        resume-identity assert runs at collect time (await_job ``expect_session_id``)."""
+        spec = self._read_spec(record)
+        req = spec.get("request") or {}
+        if not req:
+            raise SupervisorError(f"relaunch {record.session_name}: spec unreadable")
+        prof_d = dict(req.get("profile") or {})
+        prof_d["session_policy"] = "resume"
+        profile = contract.LaunchProfile(
+            session_policy="resume", mutating=bool(prof_d.get("mutating")),
+            worktree=prof_d.get("worktree"), tool_grants=tuple(prof_d.get("tool_grants") or ()),
+            max_budget_usd=prof_d.get("max_budget_usd"))
+        object.__setattr__(profile, "effective_grants",
+                           tuple(prof_d.get("effective_grants") or ()))
+        handle = handle_from_record(record)
+        return self.launch(
+            record.identity.seat, req.get("prompt", ""), identity=record.identity,
+            handle=handle, profile=profile, effort=req.get("effort"),
+            timeout=float(req.get("timeout", 300.0)),
+            resume_session_id=record.provider_session_id,
+            resume_attempts=record.resume_attempts + 1)
+
+    def _retain(self, record: JobRecord) -> None:
+        """W3 disposition on a failure-shaped exit: retain-if-dirty, owner-visible evidence.
+        No manager wired → the caller owns W3 (the reap summary still lists the record)."""
+        if self._worktree_manager is None:
+            return
+        try:
+            self._worktree_manager.finalize(handle_from_record(record), "failed")
+        except Exception:  # noqa: BLE001 — retention is evidence-preservation, never a crash path
+            pass
+
+    # -- reap (AC-E6, CF-8/CF-11/CF-19) ------------------------------------------
+
+    def _default_dead_fn(self, record: JobRecord) -> bool:
+        """CONFIRMED dead: pane pid gone-or-reused AND both groups empty (Z = dead).
+        A pid/pgid <= 1 is out-of-domain (init / \"every group\") — never treated as OUR
+        live process (the 2026-07-19 pane_pid=1 incident class)."""
+        if record.pane_pid > 1 and _pid_alive(record.pane_pid) and (
+                _proc_start_time(record.pane_pid) == record.pane_start_time):
+            return False
+        if record.pane_pgid > 1 and record.pane_pid > 1 and _pid_alive(record.pane_pid) \
+                and _group_pids(record.pane_pgid):
+            return False
+        provider_pgid = self._surfaced_provider_pgid(record)
+        if provider_pgid and provider_pgid > 1 and _group_pids(provider_pgid):
+            return False
+        return True
+
+    def _default_clean_fn(self, record: JobRecord) -> bool:
+        """Worktree-clean probe (runs ONLY after confirmed death — CF-8). A missing worktree
+        has nothing to retain and counts clean."""
+        if not os.path.isdir(record.worktree_path):
+            return True
+        res = self._run(["git", "-C", record.worktree_path, "status", "--porcelain"])
+        return res.returncode == 0 and not (res.stdout or "").strip()
+
+    def reap(self, run_id: str, *, policy: Optional[ReapPolicy] = None,
+             fresh_s: float = 900.0, clean_fn=None) -> ReapPlan:
+        """One sweep: derived liveness (``has-session`` + freshest capture mtime — never a
+        written heartbeat, AC-I4), ``reap_plan``'s three tiers with every kill gated on
+        confirmed BOTH-group death BEFORE the clean probe, W3 retention on dirty worktrees,
+        orphaned-permit release (CF-19). Unknown sessions (live on the socket, not in the
+        registry) are REPORTED in ``quarantine``, never killed blind — they have no record
+        to age. Returns the executed plan."""
+        policy = policy or ReapPolicy()
+        records = self._registry.by_run(run_id)
+        now = self._clock()
+        live_names = set()
+        if records:
+            res = self._tmux(records[0].run_socket, "list-sessions", "-F", "#{session_name}")
+            if res.returncode == 0:
+                live_names = {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
+
+        def _fresh(record: JobRecord) -> bool:
+            # an INFANT job (younger than fresh_s) is fresh by age — a just-launched pane
+            # has written no capture yet and must never hit the wedge tier for that
+            if (now - record.created_at) < fresh_s:
+                return True
+            try:
+                mtimes = [p.stat().st_mtime for p in Path(record.capture_dir).glob("*")]
+                return bool(mtimes) and (time.time() - max(mtimes)) < fresh_s
+            except OSError:
+                return False
+
+        live_fresh = {r.session_name for r in records
+                      if r.session_name in live_names and _fresh(r)}
+        plan = reap_plan(records, live_fresh=live_fresh, now=now, policy=policy,
+                         dead_fn=self._default_dead_fn, clean_fn=clean_fn or self._default_clean_fn)
+        # execute: wedged live trees first (kill, verify, retain), then session removals
+        for record in plan.kill_tree:
+            self._kill_job(record)
+            self._finish(record, "quarantined", quarantine_reason="wedged: killed by reaper")
+            self._retain(record)
+        for record in plan.kill_session:
+            self._tmux(record.run_socket, "kill-session", "-t", record.session_name)
+            self._release_permit(record)
+        for record in plan.retain_worktree:
+            self._retain(record)
+            self._release_permit(record)
+        # CF-11 exact-segment scope: sessions live on this run's socket but unknown to the
+        # registry — owner-visible, never blind-killed (no record, no age to reason over)
+        known = {r.session_name for r in records}
+        plan.quarantine.extend(sorted(live_names - known))
+        return plan
+
     # -- helpers ----------------------------------------------------------------
+
+    def _transport_session_id(self, record: JobRecord) -> Optional[str]:
+        """The provider session id from the transport capture (claude envelope's
+        ``session_id``) — the machine signal the resume-identity assert compares."""
+        try:
+            with open(Path(record.capture_dir) / "transport.stdout.txt", encoding="utf-8") as fh:
+                env = json.load(fh)
+            sid = env.get("session_id")
+            return sid if isinstance(sid, str) else None
+        except (OSError, ValueError):
+            return None
 
     def _read_spec(self, record: JobRecord) -> dict:
         try:

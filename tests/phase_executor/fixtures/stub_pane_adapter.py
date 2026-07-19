@@ -8,6 +8,8 @@ integration tests over a REAL tmux private socket. Behavior via RAWGENTIC_STUB_M
 - malformed      — write a NON-schema observation.json, finalize
 - provider_sleep — spawn a start_new_session 'provider' that sleeps, then sleep
                    (two-group kill / verify-dead paths)
+- resume_ok      — like ok, plus a transport.stdout.txt carrying a claude-shaped
+                   {"session_id": $RAWGENTIC_STUB_SESSION_ID} (resume-identity assert)
 """
 from __future__ import annotations
 
@@ -47,6 +49,11 @@ def run(req, *, run_id, attempt_id, capture_root, routing_config_digest,
         time.sleep(300)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
+    if mode == "resume_ok":
+        import json as _json
+        cap.write_transport(_json.dumps(
+            {"session_id": os.environ.get("RAWGENTIC_STUB_SESSION_ID", "sess-1"),
+             "result": "stub"}))
     if mode == "malformed":
         cap.write_observation({"not": "an observation"})
     else:
