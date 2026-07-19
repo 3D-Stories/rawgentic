@@ -123,6 +123,143 @@ def _state_path(state_dir: str, project: str) -> str:
     return os.path.join(state_dir, f"{project}.state.json")
 
 
+def _history_path(state_dir: str, project: str, issue: int) -> str:
+    """Per-run history file (#506): keyed project+issue (NOT session) so a
+    multi-session run — pause/resume, a fresh continuation session — keeps
+    accumulating ONE history; events carry session_id for interleave
+    visibility."""
+    return os.path.join(state_dir, "history",
+                        f"{project}-issue-{issue}.history.jsonl")
+
+
+def _append_history(state_dir: str, project: str, issue, record: dict) -> None:
+    """Append the step-entry event to the per-run history (#506 AC1).
+
+    Only when `issue` is an int — a null-issue write has no run to key.
+    Append-only sibling of the overwrite pointer; single short line via
+    O_APPEND (well under PIPE_BUF — atomic enough for telemetry). Same
+    fail-open contract as the pointer: any OSError is a stderr note, never
+    a gate. Raises nothing."""
+    if not isinstance(issue, int):
+        return
+    path = _history_path(state_dir, project, issue)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError as exc:
+        print(f"step_state write: could not append history {path}: {exc} "
+              "(fail-open)", file=sys.stderr)
+
+
+# --- #506: timing computation -------------------------------------------------
+
+DEFAULT_IDLE_THRESHOLD_S = 1800
+
+# Phase buckets per workflow: (upper-exclusive step number, phase name), tried
+# in order. Verified against the skills' real step headers (WF2
+# implement-feature, WF3 fix-bug) at design time — WF3: 1/1b/2 receive+analyze,
+# 3 RCA, 4 reflect gate (design); 5 fix plan (plan); 6 branch + 7 TDD fix
+# (implement); 8 verification + 9 review (review); 10 PR, 11 CI, 12 merge,
+# 13 post-deploy (pr_ci); 14 summary (wrap).
+_PHASE_BUCKETS = {
+    "wf2": ((5, "design"), (7, "plan"), (9, "implement"), (12, "review"),
+            (15, "pr_ci"), (None, "wrap")),
+    "wf3": ((5, "design"), (6, "plan"), (8, "implement"), (10, "review"),
+            (14, "pr_ci"), (None, "wrap")),
+}
+_TERMINAL_STEP = {"wf2": 16.0, "wf3": 14.0}
+_PHASE_NAMES = ("design", "plan", "implement", "review", "pr_ci", "wrap", "idle")
+
+
+def _step_num(step) -> "float | None":
+    """Leading-numeric parse: '8a' -> 8.0, '11.5' -> 11.5, garbage -> None.
+    (Conceptual port of step_state_post.py's helper — that hook reads this
+    module's CLI, not the reverse, so no shared import.)"""
+    if not isinstance(step, str):
+        return None
+    m = re.match(r"(\d+(?:\.\d+)?)", step)
+    return float(m.group(1)) if m else None
+
+
+def _phase_of(workflow, step) -> str:
+    num = _step_num(step)
+    buckets = _PHASE_BUCKETS.get(workflow)
+    if buckets is None or num is None:
+        return "other"
+    for upper, name in buckets:
+        if upper is None or num < upper:
+            return name
+    return "other"
+
+
+def compute_timing(events: list, idle_threshold_s: int = DEFAULT_IDLE_THRESHOLD_S) -> dict:
+    """Pure #506 duration computation over parsed history events.
+
+    Entry-interval model: duration(event_i) = entered_at(i+1) - entered_at(i);
+    the last event is open-ended (duration null — NEVER fabricated, AC4).
+    Events are sorted by entered_at first (multi-session interleave can land
+    out of file order). An interval above `idle_threshold_s` keeps the
+    threshold on its step and books the excess to phases.idle with
+    `idle_gap: true` (AC3 — a stall is never silently attributed to the step
+    it interrupted). The sort makes every interval >= 0 by construction, so
+    no negative duration can be emitted. Status: absent (no events) / complete (first event
+    step <= 2 AND a workflow-terminal event present) / partial (anything
+    else)."""
+    parsed = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        at = _parse_entered_at(ev.get("entered_at"))
+        if at is None:
+            continue
+        parsed.append((at, ev))
+    parsed.sort(key=lambda pair: pair[0])
+    phases = {name: 0 for name in _PHASE_NAMES}
+    steps_out = []
+    total = 0
+    for i, (at, ev) in enumerate(parsed):
+        entry = {"step": ev.get("step"), "title": ev.get("step_title"),
+                 "entered_at": ev.get("entered_at"), "duration_s": None,
+                 "idle_gap": False}
+        if i + 1 < len(parsed):
+            # sorted order: dur >= 0 by construction (no clamp branch needed)
+            dur = int((parsed[i + 1][0] - at).total_seconds())
+            if dur > idle_threshold_s:
+                entry["duration_s"] = idle_threshold_s
+                entry["idle_gap"] = True
+                phases["idle"] += dur - idle_threshold_s
+            else:
+                entry["duration_s"] = dur
+            phase = _phase_of(ev.get("workflow"), ev.get("step"))
+            if phase not in phases:
+                phases[phase] = 0
+            phases[phase] += entry["duration_s"]
+            total += dur
+        steps_out.append(entry)
+    if not parsed:
+        status = "absent"
+    else:
+        workflow = parsed[0][1].get("workflow")
+        terminal = _TERMINAL_STEP.get(workflow)
+        first_num = _step_num(parsed[0][1].get("step"))
+        last_nums = [n for n in (_step_num(ev.get("step")) for _, ev in parsed)
+                     if n is not None]
+        has_terminal = (terminal is not None and last_nums
+                        and max(last_nums) >= terminal)
+        status = ("complete" if first_num is not None and first_num <= 2
+                  and has_terminal else "partial")
+    # drop a zero "other" bucket (only meaningful when an unknown workflow
+    # or unparseable step actually accrued time)
+    if phases.get("other") == 0:
+        phases.pop("other", None)
+    return {"status": status,
+            "idle_gap_threshold_s": idle_threshold_s,
+            "steps": steps_out,
+            "phases": phases,
+            "total_s": total if len(parsed) >= 2 else None}
+
+
 # --- CLI ---------------------------------------------------------------------
 
 def cmd_write(args) -> int:
@@ -162,6 +299,7 @@ def cmd_write(args) -> int:
     except OSError as exc:
         print(f"step_state write: could not write {path}: {exc} "
               "(fail-open)", file=sys.stderr)
+    _append_history(state_dir, project, issue, record)
     return 0
 
 
@@ -217,6 +355,52 @@ def cmd_read(args) -> int:
     return 0
 
 
+def cmd_timing(args) -> int:
+    """Print the #506 timing object computed from the per-run history file.
+    Always returns 0 (fail-open telemetry): no/unreadable history prints the
+    honest absent object, never an error. Malformed history lines are skipped
+    and counted in `skipped_lines`."""
+    absent = {"status": "absent",
+              "idle_gap_threshold_s": args.idle_threshold_s,
+              "steps": [], "phases": {name: 0 for name in _PHASE_NAMES},
+              "total_s": None, "skipped_lines": 0}
+    project = sanitize_project(args.project)
+    if project is None:
+        print(json.dumps(absent))
+        return 0
+    try:
+        issue = int(args.issue)
+    except (TypeError, ValueError):
+        print(json.dumps(absent))
+        return 0
+    state_dir = args.state_dir if args.state_dir else find_state_dir(os.getcwd())
+    if not state_dir:
+        print(json.dumps(absent))
+        return 0
+    events, skipped = [], 0
+    try:
+        with open(_history_path(state_dir, project, issue), encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    skipped += 1
+                    continue
+                if isinstance(ev, dict):
+                    events.append(ev)
+                else:
+                    skipped += 1
+    except OSError:
+        print(json.dumps(absent))
+        return 0
+    timing = compute_timing(events, idle_threshold_s=args.idle_threshold_s)
+    timing["skipped_lines"] = skipped
+    print(json.dumps(timing))
+    return 0
+
+
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
         prog="step_state",
@@ -242,6 +426,15 @@ def main(argv: "list[str] | None" = None) -> int:
     p_read.add_argument("--max-age-min", type=int, default=DEFAULT_MAX_AGE_MIN,
                         dest="max_age_min")
     p_read.set_defaults(fn=cmd_read)
+
+    p_timing = sub.add_parser(
+        "timing", help="print the #506 per-run timing object from the history")
+    p_timing.add_argument("--project", required=True)
+    p_timing.add_argument("--issue", required=True)
+    p_timing.add_argument("--state-dir", default=None, dest="state_dir")
+    p_timing.add_argument("--idle-threshold-s", type=int,
+                          default=DEFAULT_IDLE_THRESHOLD_S, dest="idle_threshold_s")
+    p_timing.set_defaults(fn=cmd_timing)
 
     args = parser.parse_args(argv)  # argparse errors: exit(2) — the one exception
     try:

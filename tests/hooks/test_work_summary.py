@@ -2288,3 +2288,73 @@ class TestLoopbackCountersCrossCheck:
         rc, store = self._run(tmp_path, rec, cwd=tmp_path, monkeypatch=monkeypatch)
         assert rc == 0
         assert store.exists()
+
+
+# --- #506: timing key — validated-optional -----------------------------------
+
+def _valid_timing() -> dict:
+    return {
+        "status": "complete",
+        "idle_gap_threshold_s": 1800,
+        "steps": [{"step": "1", "title": "Receive Issue",
+                   "entered_at": "2026-07-19T10:00:00Z",
+                   "duration_s": 300, "idle_gap": False},
+                  {"step": "16", "title": "Completion Summary",
+                   "entered_at": "2026-07-19T11:00:00Z",
+                   "duration_s": None, "idle_gap": False}],
+        "phases": {"design": 300, "plan": 0, "implement": 0, "review": 0,
+                   "pr_ci": 0, "wrap": 0, "idle": 0},
+        "total_s": 300,
+        "skipped_lines": 0,
+    }
+
+
+class TestValidateTiming:
+    """#506 AC2/AC4: `timing` is validated-optional (usage pattern) — absent
+    fine, present strict; status is a closed vocabulary; durations are
+    non-negative-int-or-null (null = open-ended, never fabricated)."""
+
+    def test_valid_timing_passes(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["timing"] = _valid_timing()
+        assert validate_record(rec, strict=True) == []
+
+    def test_absent_timing_stays_valid(self):
+        from work_summary import validate_record
+        assert validate_record(_valid_record(), strict=True) == []
+
+    def test_bad_status_vocab_fails(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["timing"] = _valid_timing()
+        rec["timing"]["status"] = "COMPLETE"
+        assert any("timing.status" in e for e in validate_record(rec, strict=True))
+
+    def test_step_entry_missing_key_fails(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["timing"] = _valid_timing()
+        del rec["timing"]["steps"][0]["idle_gap"]
+        assert any("timing.steps" in e for e in validate_record(rec, strict=True))
+
+    def test_bool_duration_rejected(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["timing"] = _valid_timing()
+        rec["timing"]["steps"][0]["duration_s"] = True
+        assert any("duration_s" in e for e in validate_record(rec, strict=True))
+
+    def test_negative_phase_fails(self):
+        from work_summary import validate_record
+        rec = _valid_record()
+        rec["timing"] = _valid_timing()
+        rec["timing"]["phases"]["idle"] = -5
+        assert any("timing.phases" in e for e in validate_record(rec, strict=True))
+
+    def test_render_includes_timing_line(self, capsys):
+        from work_summary import render_summary
+        rec = _valid_record()
+        rec["timing"] = _valid_timing()
+        out = render_summary(rec)
+        assert "Timing:" in out and "design" in out
