@@ -140,8 +140,8 @@ def _append_history(state_dir: str, project: str, issue, record: dict) -> None:
     O_APPEND (well under PIPE_BUF — atomic enough for telemetry). Same
     fail-open contract as the pointer: any OSError is a stderr note, never
     a gate. Raises nothing."""
-    if not isinstance(issue, int):
-        return
+    if not isinstance(issue, int) or isinstance(issue, bool):
+        return  # bool is an int subclass — never key a file "issue-True"
     path = _history_path(state_dir, project, issue)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -168,7 +168,12 @@ _PHASE_BUCKETS = {
     "wf3": ((5, "design"), (6, "plan"), (8, "implement"), (10, "review"),
             (14, "pr_ci"), (None, "wrap")),
 }
-_TERMINAL_STEP = {"wf2": 16.0, "wf3": 14.0}
+# "complete" terminal = the PR-creation step (wf2 12 / wf3 10) — the last step
+# EVERY path (headless included, which terminates at the PR) reaches before the
+# completion step runs this CLI. Gating on the completion step's own number
+# (16/14) made "complete" unreachable on a live-assembled record: that step's
+# event only lands AFTER timing is embedded (#506 review F1).
+_TERMINAL_STEP = {"wf2": 12.0, "wf3": 10.0}
 _PHASE_NAMES = ("design", "plan", "implement", "review", "pr_ci", "wrap", "idle")
 
 

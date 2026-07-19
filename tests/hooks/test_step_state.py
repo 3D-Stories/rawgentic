@@ -505,3 +505,18 @@ class TestTimingCLI:
         obj = json.loads(r.stdout)
         assert obj["skipped_lines"] == 1
         assert len(obj["steps"]) == 2
+
+
+def test_status_complete_reachable_at_live_assembly():
+    """#506 review F1: the terminal for "complete" is the PR-creation step
+    (wf2 12 / wf3 10) — the last step every path (headless included)
+    reaches BEFORE the completion step runs the timing CLI. Gating on the
+    completion step's own number (16/14) made "complete" unreachable on a
+    live-assembled record: that event only lands after timing is embedded."""
+    events = [_ev("1", "2026-07-19T10:00:00Z"),
+              _ev("8", "2026-07-19T10:30:00Z"),
+              _ev("12", "2026-07-19T11:00:00Z")]
+    assert ss.compute_timing(events, idle_threshold_s=1800)["status"] == "complete"
+    wf3 = [_ev("1", "2026-07-19T10:00:00Z", workflow="wf3"),
+           _ev("10", "2026-07-19T10:30:00Z", workflow="wf3")]
+    assert ss.compute_timing(wf3, idle_threshold_s=1800)["status"] == "complete"
