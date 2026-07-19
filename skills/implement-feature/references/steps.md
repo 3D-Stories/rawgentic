@@ -712,6 +712,7 @@ The self-review produces findings in the shape the gate consumes:
    - **Gate-close persistence (#393):** at this gate's close, append each Critical/High finding's TERMINAL disposition (adopted | declined | dissolved) to the issue's `dispositions.jsonl` via `plan_lib.append_disposition` (identity fields + one-line reason + `decided_by`). Deferrals are NOT dispositions — an unresolved High stays in `deferrals.json` (the Step-11 re-presentation pipeline) and gets its ledger entry only at the gate close where it terminally resolves.
    - **Codex failure is non-blocking (the review is additive — the self-review gate already ran).** On ANY non-success from the review (not installed, unauthenticated, timeout, error, parse error — including in headless mode), do NOT trigger the ERROR protocol and do NOT block the workflow: skip the adversarial layer, log the failure loudly in session notes (and, in headless mode, post a STATUS comment noting the review was skipped), and continue with the self-review result. **Because item 6 deferred the breaker when this sub-step is enabled, on any non-success you MUST still run the single ambiguity circuit breaker exactly once over the self-review-only findings before continuing — skipping the adversarial layer must not skip the breaker** (otherwise the breaker would run zero times). Never treat a failed external review as "passed", and never let its absence halt WF2. (Only the standalone `/rawgentic:adversarial-review` skill ERRORs on an unmet Codex prerequisite, because there the review is the entire task.)
    - **Concurrency tradeoff (accepted):** because the review now overlaps the self-review instead of waiting for it, a design that the self-review sends back to Step 3 may have spent one cross-model review call before the loop-back. That is a bounded, accepted cost (at most one such call per loop-back) in exchange for removing the serial wait on every gated run. Do NOT try to "save" the call by serializing — the latency win on the common (no-loopback) path is worth more than the occasional wasted call.
+   - **Pipeline while the wave runs:** per `<review-pipelining>` (SKILL.md), draft the Step 5 implementation plan (non-committing) while this wave and the self-review are in flight; the gate verdict still waits for the join barrier, and a loop-back or breaker outcome revises or discards the draft.
    - Log a marker: `### WF2 Step 4 — Adversarial Review (#<issue>, invoked|skipped): <report path or skip reason>`.
 
 **Breaker decision — run the ambiguity circuit breaker EXACTLY ONCE (items 4–7, summarized).**
@@ -1066,6 +1067,8 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (`rawgentic:rawgentic-reviewer` + a role brief in the prompt, same pattern as Step 11):
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
+
+   While the two reviewers run, pipeline per `<review-pipelining>` (SKILL.md): draft the next task's tests (non-committing); triage (item 4) still waits for both returns.
 3. **Filter findings using the `SEVERITY_BANDED_CONFIDENCE` thresholds** (values in `<constants>`; canonical in `plan_lib.SEVERITY_BANDED_CONFIDENCE`). Count dropped findings.
 4. **Triage:**
    - **Critical:** must fix before next task (block).
@@ -1249,6 +1252,8 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
 Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
 
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that agent once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
+
+   While the three agents run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body and the version/changelog edits (non-committing); the confidence filter (item 3), fixes, and the exit gate still wait for the wave.
 
    **Agent 1: Style & Convention Compliance**
    - Code style rules from project conventions and config.formatting

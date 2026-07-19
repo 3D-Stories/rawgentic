@@ -1222,3 +1222,37 @@ class TestDispositionLedger:
         assert ".rawgentic-dispositions-" in s11, (
             "the dispositions temp-copy glob must be in the Step 11 1a stale "
             "sweep list")
+
+
+# --- #488: review-wave pipelining (never idle-wait) ---
+
+class TestReviewPipelining:
+    """Drift guards for the #488 pipeline directive: after dispatching a review
+    wave the orchestrator drafts the next non-committing artifact instead of
+    idle-waiting; gates, commits, and verdicts still wait for the wave."""
+
+    def _pipeline_block(self) -> str:
+        return " ".join(_block(_text(), "review-pipelining").split())
+
+    def test_canonical_pipeline_directive_sentence(self):
+        # AC1's contract, single-sourced in the <review-pipelining> block.
+        assert (
+            "after dispatching any review wave (Step 4 design critique, "
+            "Step 8a per-task, Step 11 pre-PR), immediately draft the next "
+            "phase's non-committing artifact instead of idle-waiting, then "
+            "reconcile the wave's findings on return"
+        ) in self._pipeline_block()
+
+    def test_gate_semantics_unchanged_sentence(self):
+        # AC2: only the idle time is reclaimed — never the gate.
+        block = self._pipeline_block()
+        assert "reclaims only the idle time around a gate, never the gate itself" in block
+        assert "no gate is skipped and no verdict is pre-empted" in block
+
+    def test_wave_sites_point_at_canonical_block(self):
+        # All three wave sites (Step 4/8a/11) point at the canonical block —
+        # multi-site presence is the point, so >=, never ==.
+        steps = (REFERENCES / "steps.md").read_text()
+        assert steps.count("<review-pipelining>") >= 3, (
+            "Step 4 item 7, Step 8a item 2, and Step 11 item 2 must each point "
+            "at the canonical <review-pipelining> block in SKILL.md")
