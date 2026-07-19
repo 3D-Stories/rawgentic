@@ -120,6 +120,20 @@ one-wave `estimate_agents`, shared-block examples corrected, mirror guards recom
   adversarial diff review (fires on high-risk task) — results in the PR.
 - PR / merge SHA: filled by the next slot's pass.
 
+## Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0
+
+Born live: the statusline froze twice during the #493 run (manual #480 step-entry writes
+skipped under batching). New PostToolUse hook `step_state_post.py` — marker detector
+(session-notes DONE markers parsed from the append command's heredoc body) + signature
+detector (derive/scan/pr-create/pr-merge/summarize), both writing through the existing
+`step_state.py write` CLI; conservative context rules (registry session match; foreign
+records never stamped); fail-open, empty stdout. Manual per-step calls now OPTIONAL in
+all five skills; the no-gating-hook guard recut + PostToolUse-only registration pin.
+
+- **Lane run:** small-standard; Task 2 (hook+registration) high → single 8a wave
+  (sonnet mechanical / opus security). 14 hook tests + 1 registration guard.
+- PR / merge SHA: filled by the next slot's pass.
+
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
 
 **Status: IN PROGRESS** — 4 children merged (#464 #480 #445 #446), #465 (W2) building, #466–#474 pending. (The roadmap chip aggregates the merged sub-sections below; the epic itself is open until #474 closes it.)

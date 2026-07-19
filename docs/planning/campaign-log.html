@@ -62,7 +62,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 23:36 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-19 00:13 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -144,6 +144,14 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li><strong>Reviews:</strong> single 8a wave (sonnet mechanical / opus security) + lane Step-11 +</li>
 </ul>
 <p>  adversarial diff review (fires on high-risk task) — results in the PR.</p>
+<ul>
+<li>PR / merge SHA: filled by the next slot&#x27;s pass.</li>
+</ul></section>
+<section class="mstone"><h3>Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0 <span class="chip c-conf">DONE</span></h3><p>Born live: the statusline froze twice during the #493 run (manual #480 step-entry writes skipped under batching). New PostToolUse hook <code>step_state_post.py</code> — marker detector (session-notes DONE markers parsed from the append command&#x27;s heredoc body) + signature detector (derive/scan/pr-create/pr-merge/summarize), both writing through the existing <code>step_state.py write</code> CLI; conservative context rules (registry session match; foreign records never stamped); fail-open, empty stdout. Manual per-step calls now OPTIONAL in all five skills; the no-gating-hook guard recut + PostToolUse-only registration pin.</p>
+<ul>
+<li><strong>Lane run:</strong> small-standard; Task 2 (hook+registration) high → single 8a wave</li>
+</ul>
+<p>  (sonnet mechanical / opus security). 14 hook tests + 1 registration guard.</p>
 <ul>
 <li>PR / merge SHA: filled by the next slot&#x27;s pass.</li>
 </ul></section>
@@ -530,9 +538,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
 <p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#492 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>3 added · 3669/3679 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#499 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>21 added · 3690/3700 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: none</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-18 23:36 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-19 00:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

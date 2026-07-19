@@ -105,7 +105,7 @@ This skill transmits the artifact's TEXT to the selected backend's provider for 
 At the end of each step, log a marker in `claude_docs/session_notes.md`:
 `### WF5 Step X: <Name> — DONE (<key detail>)`
 This enables workflow resumption if context is lost.
-Step-entry state (#480, observational): at each numbered step ENTRY, run `python3 hooks/step_state.py write --project <project> --workflow wf5 --step <N> --step-title "<step name>" --session-id "$CLAUDE_CODE_SESSION_ID"` — fail-open (never gates; any failure is ignored and the step proceeds).
+Step-entry state (#480, hook-emitted since #499): the PostToolUse hook (`hooks/step_state_post.py`) derives the now-pointer automatically from step DONE markers and signature commands — no per-step action required. The manual `python3 hooks/step_state.py write --project <project> --workflow wf5 --step <N> --step-title "<step name>" --session-id "$CLAUDE_CODE_SESSION_ID"` call is OPTIONAL belt-and-suspenders for entry-time precision on prose-only steps. Fail-open either way (never gates; any failure is ignored and the step proceeds).
 </step-tracking>
 
 ---
