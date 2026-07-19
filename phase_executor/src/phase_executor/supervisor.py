@@ -36,7 +36,7 @@ from typing import Optional, Tuple
 from jsonschema import ValidationError as _SchemaError
 
 from . import contract, routing
-from .capture import atomic_write_text, hash_text
+from .capture import atomic_write_text, ensure_private_dir, hash_text
 from .engine import PROVIDER_ENGINE
 from .pane_runner import _descendants, expected_capture_dir, sidecar_path
 from .quota import QuotaTimeout
@@ -603,8 +603,9 @@ class TmuxSupervisor:
                     parse_status=contract.TIMEOUT,
                     reason=f"supervisor timeout after {timeout_s}s",
                     routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"))
-                cap = Path(record.capture_dir)
-                cap.mkdir(parents=True, exist_ok=True)
+                # #513: the child may have died before create_capture ran, so this
+                # mkdir can be the tree's CREATION site — same 0700 posture applies.
+                cap = ensure_private_dir(Path(record.capture_dir))
                 atomic_write_text(cap / "observation.json",
                                   json.dumps(obs, indent=2, sort_keys=True))
                 # an unverified kill leaves residue the reaper must see — never silent,
