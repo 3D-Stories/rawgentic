@@ -33,6 +33,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
+from jsonschema import ValidationError as _SchemaError
+
 from . import contract, routing
 from .capture import atomic_write_text, hash_text
 from .engine import PROVIDER_ENGINE
@@ -293,6 +295,9 @@ class TmuxSupervisor:
             atomic_write_text(spec_path, json.dumps(spec, indent=2, sort_keys=True))
 
             argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path)]
+            # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
+            # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
+            digest = command_digest(argv[1:])
             res = self._tmux(sock, "new-session", "-d", "-s", name, "-c", handle.path, "--", *argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
@@ -312,7 +317,7 @@ class TmuxSupervisor:
                 worktree_path=handle.path, worktree_base_sha=handle.base_sha,
                 worktree_root=handle.root, worktree_gitdir=handle.gitdir,
                 worktree_repo=handle.repo, capture_dir=str(cap_dir), attempt_id=attempt_id,
-                permit_ref=permit_ref, command_digest=command_digest(argv),
+                permit_ref=permit_ref, command_digest=digest,
                 provider_session_id=None, provider_exit_code=None,
                 resume_attempts=resume_attempts, state="running",
                 created_at=self._clock(), quarantine_reason=None)
@@ -336,7 +341,10 @@ class TmuxSupervisor:
             with open(path, encoding="utf-8") as fh:
                 obs = json.load(fh)
             contract.validate_observation(obs)
-        except (OSError, ValueError, Exception):  # noqa: B014 — jsonschema error subclasses vary
+        except (OSError, ValueError, _SchemaError):
+            # absent/unreadable/malformed/schema-invalid = no sentinel. Anything else
+            # (a bug in validation itself) raises — masking it as "no sentinel" would
+            # silently reroute completed jobs to exited_no_sentinel (8a R2 finding).
             return None
         if (obs.get("run_id") == record.identity.run_id
                 and obs.get("seat") == record.identity.seat
@@ -369,16 +377,41 @@ class TmuxSupervisor:
             raise SupervisorError(f"unknown job {identity}")
         record = replace(record, state="quota_paused", provider_session_id=provider_session_id)
         self._registry.upsert(record)
+        # the provider exited (usage-limit exit-1) — free the pool slot NOW, else the
+        # relaunch under the same session_name strands the old permit context manager
+        # and deadlocks a concurrency-1 pool on the job's own permit (8a R2 finding)
+        self._release_permit(record)
         return record
 
     # -- kill (AC-E4, CF-17) ---------------------------------------------------
 
-    def _surfaced_provider_pgid(self, record: JobRecord) -> Optional[int]:
+    def _provider_target(self, record: JobRecord) -> Optional[int]:
+        """The provider pgid as a VERIFIED kill target, or None. PGIDs recycle like PIDs
+        (8a R2 finding — the incident class on the pgid axis), so a group is a killpg
+        target ONLY when the sidecar's persisted leader start-time still matches /proc and
+        the group is not the caller's own or an ancestor's. Unverifiable → None: the
+        descendant snapshot and the reaper backstop still cover our own pids."""
         try:
-            raw = sidecar_path(Path(record.capture_dir)).read_text(encoding="ascii").strip()
-            return int(raw)
-        except (OSError, ValueError):
-            return record.provider_pgid
+            raw = sidecar_path(Path(record.capture_dir)).read_text(encoding="ascii").split()
+        except OSError:
+            return None
+        try:
+            pgid = int(raw[0])
+        except (IndexError, ValueError):
+            return None
+        if pgid <= 1 or len(raw) < 2:
+            return None
+        if _proc_start_time(pgid) != raw[1]:
+            return None  # leader gone or pgid recycled — never a group-wide target
+        protected_groups = {os.getpgid(0)}
+        for p in _self_and_ancestors():
+            try:
+                protected_groups.add(os.getpgid(p))
+            except OSError:
+                pass
+        if pgid in protected_groups:
+            return None
+        return pgid
 
     def _kill_job(self, record: JobRecord, *, grace_s: float = _KILL_GRACE_S) -> bool:
         """The two-group + descendant-snapshot kill. Returns True iff verified dead.
@@ -394,13 +427,19 @@ class TmuxSupervisor:
                             and _pid_alive(record.pane_pid)
                             and _proc_start_time(record.pane_pid) == record.pane_start_time)
         protected = _self_and_ancestors()
+        protected_groups = {os.getpgid(0)}
+        for p in protected:
+            try:
+                protected_groups.add(os.getpgid(p))
+            except OSError:
+                pass
         snapshot = set()
         if pane_identity_ok:
             snapshot = (_descendants(record.pane_pid) | {record.pane_pid}) - protected
-        provider_pgid = self._surfaced_provider_pgid(record)
-        if provider_pgid is not None and provider_pgid <= 1:
-            provider_pgid = None
-        if pane_identity_ok and record.pane_pgid > 1:
+        provider_pgid = self._provider_target(record)
+        pane_group_ok = (pane_identity_ok and record.pane_pgid > 1
+                         and record.pane_pgid not in protected_groups)
+        if pane_group_ok:
             try:
                 os.killpg(record.pane_pgid, signal.SIGTERM)  # graceful: pane_runner kills its tree
             except OSError:
@@ -410,7 +449,7 @@ class TmuxSupervisor:
             time.sleep(0.1)
 
         def _pane_group() -> set:
-            if not pane_identity_ok or record.pane_pgid <= 1:
+            if not pane_group_ok:
                 return set()
             return _group_pids(record.pane_pgid) - protected
 
@@ -420,7 +459,7 @@ class TmuxSupervisor:
             return _group_pids(provider_pgid) - protected
 
         if any(_pid_alive(p) for p in snapshot) or _provider_group():
-            if pane_identity_ok and record.pane_pgid > 1:
+            if pane_group_ok:
                 try:
                     os.killpg(record.pane_pgid, signal.SIGKILL)
                 except OSError:
@@ -503,11 +542,12 @@ class TmuxSupervisor:
                 self._finish(record, "exited_no_sentinel")
                 return "exited_no_sentinel", None
             if time.monotonic() >= deadline:
-                self._kill_job(record)
+                kill_clean = self._kill_job(record)
                 obs = self._sentinel(record)
                 if obs is not None:  # CF-12: the child's validated result wins
-                    self._finish(record, "completed", provider_exit_code=_exit_code_of(obs))
-                    return "completed", obs
+                    state = "completed" if kill_clean else "completed_with_residue"
+                    self._finish(record, state, provider_exit_code=_exit_code_of(obs))
+                    return state, obs
                 spec = self._read_spec(record)
                 obs = synthetic_observation(
                     run_id=record.identity.run_id, seat=record.identity.seat,
@@ -521,7 +561,9 @@ class TmuxSupervisor:
                 cap.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(cap / "observation.json",
                                   json.dumps(obs, indent=2, sort_keys=True))
-                self._finish(record, "timed_out")
+                # an unverified kill leaves residue the reaper must see — never silent
+                self._finish(record, "timed_out", quarantine_reason=(
+                    None if kill_clean else "timeout kill unverified: residue"))
                 return "timed_out", obs
             time.sleep(poll_s)
 
@@ -551,8 +593,8 @@ class TmuxSupervisor:
         (PID-reuse guard, live jobs), and the worktree still on disk. ANY mismatch is a
         quarantine — never a silent adopt (CF-7)."""
         spec_path = Path(self._registry_root) / "specs" / f"{record.session_name}.json"
-        argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path)]
-        if command_digest(argv) != record.command_digest:
+        # interpreter-independent digest — must mirror launch()'s argv[1:] computation
+        if command_digest(["-m", "phase_executor.pane_runner", str(spec_path)]) != record.command_digest:
             return False
         spec = self._read_spec(record)
         if not spec.get("request"):
@@ -588,8 +630,14 @@ class TmuxSupervisor:
                 self._retain(done)
                 actions.append(RecoveryAction(record.identity, "quarantine", done))
             elif verdict == "relaunch":
-                new = self._relaunch(record)
-                actions.append(RecoveryAction(record.identity, "relaunch", new))
+                try:
+                    new = self._relaunch(record)
+                    actions.append(RecoveryAction(record.identity, "relaunch", new))
+                except SupervisorError:
+                    # e.g. non-claude engine (resume is claude-only) — fail THIS record
+                    # without burning a resume slot; recovery of other records continues
+                    done = self._finish(record, "failed")
+                    actions.append(RecoveryAction(record.identity, "fail", done))
             else:  # fail: resume cap reached
                 done = self._finish(record, "failed")
                 actions.append(RecoveryAction(record.identity, "fail", done))
@@ -603,6 +651,12 @@ class TmuxSupervisor:
         req = spec.get("request") or {}
         if not req:
             raise SupervisorError(f"relaunch {record.session_name}: spec unreadable")
+        if spec.get("engine") != "claude":
+            # resume is claude-only (adapters refuse); re-resolving routing could land a
+            # different engine and burn a resume slot on a guaranteed compose failure
+            raise SupervisorError(
+                f"relaunch {record.session_name}: resume is claude-only, "
+                f"spec engine {spec.get('engine')!r}")
         prof_d = dict(req.get("profile") or {})
         prof_d["session_policy"] = "resume"
         profile = contract.LaunchProfile(
@@ -634,15 +688,17 @@ class TmuxSupervisor:
     def _default_dead_fn(self, record: JobRecord) -> bool:
         """CONFIRMED dead: pane pid gone-or-reused AND both groups empty (Z = dead).
         A pid/pgid <= 1 is out-of-domain (init / \"every group\") — never treated as OUR
-        live process (the 2026-07-19 pane_pid=1 incident class)."""
+        live process (the 2026-07-19 pane_pid=1 incident class). The provider group counts
+        only when its identity VERIFIES (start-time-matched leader) — a recycled pgid must
+        not wedge the reaper reporting a foreign group as \"not dead\" forever."""
         if record.pane_pid > 1 and _pid_alive(record.pane_pid) and (
                 _proc_start_time(record.pane_pid) == record.pane_start_time):
             return False
         if record.pane_pgid > 1 and record.pane_pid > 1 and _pid_alive(record.pane_pid) \
                 and _group_pids(record.pane_pgid):
             return False
-        provider_pgid = self._surfaced_provider_pgid(record)
-        if provider_pgid and provider_pgid > 1 and _group_pids(provider_pgid):
+        provider_pgid = self._provider_target(record)
+        if provider_pgid and _group_pids(provider_pgid):
             return False
         return True
 
@@ -678,7 +734,7 @@ class TmuxSupervisor:
                 return True
             try:
                 mtimes = [p.stat().st_mtime for p in Path(record.capture_dir).glob("*")]
-                return bool(mtimes) and (time.time() - max(mtimes)) < fresh_s
+                return bool(mtimes) and (now - max(mtimes)) < fresh_s  # one clock source
             except OSError:
                 return False
 
@@ -695,7 +751,12 @@ class TmuxSupervisor:
             self._tmux(record.run_socket, "kill-session", "-t", record.session_name)
             self._release_permit(record)
         for record in plan.retain_worktree:
-            self._retain(record)
+            # repeat-safety stamp: without it every future sweep re-invokes W3 finalize on
+            # the same dead-dirty record (8a R1 finding — no prune path exists by design)
+            if not (record.quarantine_reason or "").startswith("reaped:"):
+                self._retain(record)
+                self._registry.upsert(replace(
+                    record, quarantine_reason="reaped: dirty worktree retained"))
             self._release_permit(record)
         # CF-11 exact-segment scope: sessions live on this run's socket but unknown to the
         # registry — owner-visible, never blind-killed (no record, no age to reason over)

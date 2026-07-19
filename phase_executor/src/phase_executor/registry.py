@@ -24,6 +24,10 @@ from .worktree import WorktreeIdentity, WorktreeHandle, component_for
 
 MAX_RESUME = 2  # CF-6: hard cap on --resume relaunches before a job is failed (bounds the loop)
 
+
+class RegistryCorrupt(RuntimeError):
+    """jobs.json exists but cannot be read/parsed — fail-loud, never an empty view."""
+
 # OQ-8 job states. `completed`/`completed_with_residue` = a valid sentinel collected; the rest are
 # the abnormal/in-flight states the reaper + recover reason over.
 JOB_STATES = frozenset({
@@ -209,11 +213,18 @@ class JobRegistry:
         return os.path.join(self._root, "jobs.json")
 
     def _read(self) -> dict:
+        """Missing file = empty registry (first run). A PRESENT-but-unreadable/corrupt file
+        raises RegistryCorrupt: this store is what the kill/reap paths trust post-compaction,
+        and silently returning {} would let the next upsert's read-modify-write PERSIST the
+        empty view — orphaning every live pane/provider and leaking their permits (fail-open
+        in a fail-closed-critical store; 8a R2 finding)."""
         try:
             with open(self._file(), encoding="utf-8") as fh:
                 return json.load(fh)
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return {}
+        except (OSError, ValueError) as exc:
+            raise RegistryCorrupt(f"jobs.json unreadable/corrupt at {self._file()}: {exc}") from exc
 
     def _write(self, data: dict) -> None:
         capture.atomic_write_text(Path(self._file()), json.dumps(data, indent=2, sort_keys=True))

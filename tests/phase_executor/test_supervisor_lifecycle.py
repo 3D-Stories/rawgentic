@@ -130,7 +130,7 @@ def test_cancel_kills_provider_in_own_group_graceful(env_factory):
     env = env_factory(mode="provider_sleep")
     rec = env.launch()
     assert _wait(lambda: _sidecar(rec).exists(), 20), "provider pgid never surfaced"
-    provider_pgid = int(_sidecar(rec).read_text().strip())
+    provider_pgid = int(_sidecar(rec).read_text().split()[0])
     assert provider_pgid != rec.pane_pgid  # the spike's finding: distinct groups
     state = env.sup.cancel(rec)
     assert state == "failed"  # verified-dead cancel
@@ -146,7 +146,7 @@ def test_kill_reaches_provider_when_pane_runner_sigkilled(env_factory):
     env = env_factory(mode="provider_sleep")
     rec = env.launch()
     assert _wait(lambda: _sidecar(rec).exists(), 20)
-    provider_pgid = int(_sidecar(rec).read_text().strip())
+    provider_pgid = int(_sidecar(rec).read_text().split()[0])
     os.kill(rec.pane_pid, signal.SIGKILL)
     _wait(lambda: not supervisor._pid_alive(rec.pane_pid), 10)
     assert supervisor._group_pids(provider_pgid), "provider should have survived the pane SIGKILL"
@@ -295,6 +295,48 @@ def test_kill_job_refuses_reused_pid(tmp_path, recording_signals):
         bystander.wait(timeout=10)
 
 
+def test_provider_target_requires_verified_starttime(tmp_path, recording_signals):
+    """A sidecar pgid WITHOUT a matching leader start-time is never a killpg target —
+    PGIDs recycle like PIDs (the incident class on the pgid axis)."""
+    bystander = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+                             registry_root=str(tmp_path / "reg"),
+                             run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+        rec = _make_record(WorktreeIdentity(run_id="r1", seat="build", attempt=1), tmp_path,
+                           capture_dir=str(tmp_path / "cd"))
+        side = Path(tmp_path / "cd")
+        side = side.with_name(side.name + ".provider_pgid")
+        pgid = os.getpgid(bystander.pid)
+        # bare pgid (no start-time) → unverifiable → not a target
+        side.parent.mkdir(parents=True, exist_ok=True)
+        side.write_text(f"{pgid}\n", encoding="ascii")
+        assert sup._provider_target(rec) is None
+        # wrong start-time → recycled/foreign → not a target
+        side.write_text(f"{pgid} 999999999\n", encoding="ascii")
+        assert sup._provider_target(rec) is None
+        sup._kill_job(rec, grace_s=0.2)
+        touched = [s for s in recording_signals if s[1] == pgid]
+        assert touched == [], f"unverified provider group was signalled: {touched}"
+    finally:
+        subprocess.run(["kill", "-9", str(bystander.pid)], check=False)
+        bystander.wait(timeout=10)
+
+
+def test_registry_corrupt_fails_loud(tmp_path):
+    """A present-but-corrupt jobs.json raises — never a silent empty view that the next
+    upsert would persist (orphaned providers, leaked permits)."""
+    from phase_executor.registry import RegistryCorrupt
+    reg = JobRegistry(str(tmp_path / "reg"))
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_make_record(identity, tmp_path))
+    (Path(tmp_path) / "reg" / "jobs.json").write_text("{not json", encoding="utf-8")
+    with pytest.raises(RegistryCorrupt):
+        reg.all()
+    with pytest.raises(RegistryCorrupt):
+        reg.upsert(_make_record(identity, tmp_path))
+
+
 def test_recover_fail_at_resume_cap(tmp_path):
     # pure: a quota_paused record at MAX_RESUME fails, never relaunches
     reg = JobRegistry(str(tmp_path / "reg"))
@@ -370,3 +412,8 @@ def test_reap_retains_dirty_dead_worktree(env_factory):
     summary = env.sup.reap(env.identity.run_id, clean_fn=dirty_clean_fn)
     assert any(r.identity == env.identity for r in summary.retain_worktree)
     assert env.manager.finalized  # W3 retain invoked, evidence preserved
+    # repeat-safety: a second sweep must NOT re-invoke W3 finalize on the same record
+    n_finalized = len(env.manager.finalized)
+    env.sup.reap(env.identity.run_id, clean_fn=dirty_clean_fn)
+    assert len(env.manager.finalized) == n_finalized
+    assert env.registry.get(env.identity).quarantine_reason.startswith("reaped:")

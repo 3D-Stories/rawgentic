@@ -220,7 +220,10 @@ def test_sidecar_provider_pgid_written(tmp_path, monkeypatch):
             while time.time() < deadline and not sidecar.exists():
                 time.sleep(0.05)
             assert sidecar.exists(), "sidecar not written while provider alive"
-            assert int(sidecar.read_text().strip()) == os.getpgid(provider.pid)
+            parts = sidecar.read_text().split()
+            assert int(parts[0]) == os.getpgid(provider.pid)
+            # leader start-time rides along — the supervisor's PGID-reuse guard
+            assert len(parts) == 2 and parts[1].isdigit()
         finally:
             provider.kill()
             provider.wait(timeout=10)

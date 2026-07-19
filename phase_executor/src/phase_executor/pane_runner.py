@@ -124,8 +124,19 @@ def _request_from_spec(spec: dict):
     )
 
 
+def _starttime(pid: int) -> Optional[str]:
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
 def _pgid_scanner(sidecar: Path, stop: threading.Event) -> None:
-    """Best-effort: surface the first direct child whose pgid differs from ours."""
+    """Best-effort: scan our descendant tree (full BFS, not just direct children — a deep
+    grandchild that re-groups is also surfaced) for a pgid different from ours and write it
+    to the sidecar as ``<pgid> <leader-starttime>`` — the starttime is the group leader's
+    /proc stat field 22, the PGID-reuse guard the supervisor verifies before any killpg."""
     own_pgid = os.getpgid(0)
     seen: Optional[int] = None
     while not stop.is_set():
@@ -135,8 +146,9 @@ def _pgid_scanner(sidecar: Path, stop: threading.Event) -> None:
             except OSError:
                 continue
             if pgid != own_pgid and pgid != seen:
+                started = _starttime(pgid)  # leader pid == pgid for a new session/group
                 try:
-                    atomic_write_text(sidecar, f"{pgid}\n")
+                    atomic_write_text(sidecar, f"{pgid} {started}\n" if started else f"{pgid}\n")
                     seen = pgid
                 except OSError:
                     pass
