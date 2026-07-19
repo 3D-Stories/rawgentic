@@ -16,7 +16,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #493 — WF2 speed levers (manual drive)
 
-**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 merged (PR #498, f01e6bc, v3.61.0); #492 in PR; #494 pending.
+**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 merged (PR #498, f01e6bc, v3.61.0); #492 merged (PR #500, 88f01c0, v3.62.0); #494 in PR (v3.64.0).
 Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
 
@@ -119,6 +119,25 @@ one-wave `estimate_agents`, shared-block examples corrected, mirror guards recom
 - **Reviews:** single 8a wave (sonnet mechanical / opus security) + lane Step-11 +
   adversarial diff review (fires on high-risk task) — results in the PR.
 - PR / merge SHA: filled by the next slot's pass.
+
+### #494 — early smoke-install after first runnable commit (deploy-bearing) · v3.64.0
+
+New canonical `<early-smoke-install>` block in implement-feature's SKILL.md: on a deploy-bearing
+project (`capabilities.has_deploy`), after the first runnable commit boots something, run a cheap
+live smoke-install/boot check (install / start / health) before continuing implementation —
+crash-on-boot and environment/port clashes surface as 2-minute fixes instead of hours-later
+cutover surprises (the 3dstories-fleet timing post-mortem's move #2: a Config crash + a mempalace
+port clash). Capability-gated: code-only projects (`has_deploy == false`, rawgentic itself)
+unaffected — the directive never runs there. Step 8 gains the first-runnable-commit site (incl.
+whole-issue-delegation collect-time timing); Step 15 gains a never-substitutes note — the
+mandatory post-deploy smoketest is not weakened or replaced. Guards: `TestEarlySmokeInstall`
+(canonical sentence, gating sentence, Step-15 distinct + ≥2 pointer sites).
+
+- **Lane run:** small-standard (standard_feature, 4 impl files); 0 high-risk tasks → no 8a
+  (mirrors #488–#490). TDD red (f8cf18f) → green (5c9f199); suite 3692+10skip → 3695+10skip.
+- **Reviews:** lane Step-11 reviewer (opus, security seat) + adversarial diff review per the
+  opt-in — results in the PR.
+- PR / merge SHA: filled at epic wrap.
 
 ## Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0
 
