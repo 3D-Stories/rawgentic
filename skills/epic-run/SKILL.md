@@ -64,10 +64,34 @@ it is session-level). The condition must contain, explicitly:
 - **A decision log**: forks and substitutions go to
   `claude_docs/session_notes/epic-<N>-autorun-log.md` (append-only).
 
+## Step 3b: Put up the run task list (#517)
+
+The operator gets an on-screen checklist of the whole run — filed from live
+field evidence (epic #509, 2026-07-19: the owner had to interrupt mid-run to
+put a list up by hand).
+
+- Check `TaskList` first: if a relevant list for this epic already exists (a
+  resumed run — including one created by a PRIOR session of the same run),
+  refresh it instead of creating a second list (mark merged children
+  completed, delete stale entries).
+- Otherwise create one task per queued child via `TaskCreate` — subject
+  `#<n> — <short title>`, an `activeForm` for the spinner, and a sequential
+  `blockedBy` chain matching the topo order — plus a final close-epic task
+  ("Close epic #<N> — summary + run-records") blocked by the last child.
+- Fail-open: when the Task tools are unavailable (deferred and not loadable
+  via ToolSearch), skip with the one-line session-note marker
+  `### epic-run task list: skipped (tools unavailable)` — the task list is
+  bookkeeping and never blocks the run.
+
 ## Step 4: Drive the run
 
 - One child at a time, WF2 fresh per child, terminating at its Step 16 — the driver
   never reaches into a WF2 step.
+- Keep the Step 3b task list honest as state changes: mark the active child
+  `in_progress` (at most one), flip it `completed` only when its PR is merged
+  AND the epic box is ticked, and leave a blocked child visible with a note
+  (mirroring the ERROR-comment-and-continue protocol). An owner-added
+  mid-run child gets a task inserted at its queue position.
 - Between children (auto-merge mode): merge, verify the merge SHA on main and the issue
   auto-closed, `git fetch origin`, branch the next child from the new main. Use the
   `merge-watch` skill's lane doctrine for CI triage (hard vs advisory lanes; OAuth
@@ -87,6 +111,8 @@ it is session-level). The condition must contain, explicitly:
   keeps telemetry in-repo).
 - Final report: what merged (with versions), what was blocked and why, decisions made
   under the run's authority, and the one claim most worth re-checking.
+- Complete the close-epic task on the Step 3b list when the epic closes (and
+  complete/annotate any child tasks the run could not finish, honestly).
 
 ## Common mistakes
 
