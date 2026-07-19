@@ -34,6 +34,10 @@ class AdapterRequest:
     # pre-profile caller byte-identical (fresh/read-only; no containment needed read-only).
     profile: "contract.LaunchProfile" = field(default_factory=lambda: contract.LaunchProfile())
     containment_root: Optional[str] = None
+    # #467 W4: a quota_paused relaunch resumes the persisted provider session (spike #455).
+    # claude composes `--resume <id>` (requires profile.session_policy == "resume");
+    # codex/zhipuai refuse fail-loud. Default None keeps every existing caller byte-identical.
+    resume_session_id: Optional[str] = None
 
 
 @dataclass

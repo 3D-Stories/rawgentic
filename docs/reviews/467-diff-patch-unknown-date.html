@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Adversarial diff review #467 (codex)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-19 10:43 MDT</div>
+<h1>Adversarial diff review #467 (codex)</h1>
+
+</header>
+<main>
+<h1>Adversarial Review — 467-diff.patch</h1>
+<ul>
+<li>Date: unknown-date</li>
+<li>Artifact type: diff</li>
+<li>Reviewer: Codex (model config-default, reasoning effort high)</li>
+<li>Findings: 8 (Critical 1, High 7, Medium 0, Low 0)</li>
+</ul>
+<h2>Summary</h2>
+<p>The change adds a tmux-backed supervisor, durable registry, quota handling, recovery, and process reaping. Several recovery and lifecycle paths fail open, allowing identity mismatches to relaunch, live processes to be classified as dead, and quota permits to be released before confirmed termination.</p>
+<h2>Findings</h2>
+<h3>1. [Critical] security · high confidence — registry.py — classify_recovery</h3>
+<blockquote>+    if record.state == &quot;quota_paused&quot; and not live:</blockquote>
+<blockquote>+        return &quot;relaunch&quot; if record.resume_attempts &lt; MAX_RESUME else &quot;fail&quot;</blockquote>
+<blockquote>+    if live:</blockquote>
+<blockquote>+        return &quot;adopt&quot; if identity_matches else &quot;quarantine&quot;</blockquote>
+<p>The quota-paused branch relaunches before consulting <code>identity_matches</code> or <code>sentinel_valid</code>. A dead record whose digest, worktree, capture identity, or spec is known to mismatch is therefore relaunched instead of quarantined, executing an untrusted or corrupted recovery specification across the stated recovery trust boundary.</p>
+<p><strong>Recommendation:</strong> Change <code>classify_recovery</code> ordering to: <code>if not identity_matches: return &quot;quarantine&quot;</code>; <code>if sentinel_valid: return &quot;adopt&quot;</code>; then evaluate the dead <code>quota_paused</code> relaunch/cap branch. Add a test for <code>quota_paused + dead + identity_matches=False</code> requiring quarantine.</p>
+<h3>2. [High] correctness · high confidence — supervisor.py — _default_dead_fn</h3>
+<blockquote>+        if record.pane_pgid &gt; 1 and record.pane_pid &gt; 1 and _pid_alive(record.pane_pid) \</blockquote>
+<blockquote>+                and _group_pids(record.pane_pgid):</blockquote>
+<blockquote>+            return False</blockquote>
+<p>The pane group is inspected only while the original pane PID remains alive. If the group leader exits while another member survives, this condition is skipped and <code>_default_dead_fn</code> can report confirmed death, allowing worktree probing, session removal, and permit release while a descendant is still running.</p>
+<p><strong>Recommendation:</strong> Change <code>_default_dead_fn</code> so a dead or unverifiable pane leader does not make the pane group vacuously dead. Persist sufficient process identities to verify surviving group members safely; return not-dead/unknown until both groups are positively verified empty, and do not clean or release permits in the unknown state.</p>
+<h3>3. [High] correctness · high confidence — supervisor.py — TmuxSupervisor._finish</h3>
+<blockquote>+    def _finish(self, record: JobRecord, state: str, **updates) -&gt; JobRecord:</blockquote>
+<blockquote>+        record = replace(record, state=state, **updates)</blockquote>
+<blockquote>+        self._registry.upsert(record)</blockquote>
+<blockquote>+        self._release_permit(record)</blockquote>
+<blockquote>+        return record</blockquote>
+<p>Every finish state releases the quota permit, including <code>completed_with_residue</code>, kill-unverified timeouts, and quarantine paths where processes may still be alive. A new provider can consequently acquire the slot before the prior provider&#x27;s death is confirmed, violating the stated launch-to-confirmed-death concurrency ceiling.</p>
+<p><strong>Recommendation:</strong> Add an explicit <code>release_permit</code> argument to <code>_finish</code>, defaulting to false. Pass true only after <code>_kill_job</code> or <code>_default_dead_fn</code> positively confirms death; residue states must retain the permit until the reaper records confirmed death.</p>
+<h3>4. [High] security · high confidence — supervisor.py — _identity_matches</h3>
+<blockquote>+        # interpreter-independent digest — must mirror launch()&#x27;s argv[1:] computation</blockquote>
+<blockquote>+        if command_digest([&quot;-m&quot;, &quot;phase_executor.pane_runner&quot;, str(spec_path)]) != record.command_digest:</blockquote>
+<blockquote>+            return False</blockquote>
+<blockquote>+        spec = self._read_spec(record)</blockquote>
+<blockquote>+        if not spec.get(&quot;request&quot;):</blockquote>
+<blockquote>+            return False  # unreadable/tampered spec: the digest above covers argv, not content</blockquote>
+<p>The purported full identity check hashes only the fixed argv and spec pathname, not the spec contents. Replacing the prompt, engine, capture root, profile grants, session policy, or resume ID while leaving any truthy <code>request</code> makes <code>_identity_matches</code> return true, so a tampered live job can be adopted.</p>
+<p><strong>Recommendation:</strong> Add a canonical <code>spec_digest</code> to <code>JobRecord</code>, compute it from the complete serialized fixed spec before launch, and compare it during <code>_identity_matches</code>. Also explicitly compare the spec&#x27;s run, seat, attempt, capture path, worktree/containment, engine, target, and resume identity with the record.</p>
+<h3>5. [High] security · high confidence — supervisor.py — TmuxSupervisor.launch exception handler</h3>
+<blockquote>+            self._registry.upsert(record)</blockquote>
+<blockquote>+            self._permits[name] = cm</blockquote>
+<blockquote>+            return record</blockquote>
+<blockquote>+        except BaseException:</blockquote>
+<blockquote>+            cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)</blockquote>
+<blockquote>+            raise</blockquote>
+<p>A registry write failure occurs after tmux has successfully started the job. The exception handler releases the quota permit but does not terminate or durably record the session, leaving an untracked pane/provider running outside the concurrency ceiling—the exact corrupt-registry orphan path the registry is meant to prevent.</p>
+<p><strong>Recommendation:</strong> Change <code>launch</code> to persist a launch-intent record before spawning and update it after obtaining process identities. For every post-spawn exception, retain the permit, kill and verify the spawned process tree, then release the permit; if verification fails, persist an emergency residue record and raise.</p>
+<h3>6. [High] security · high confidence — supervisor.py — TmuxSupervisor.recover quarantine branch</h3>
+<blockquote>+            elif verdict == &quot;quarantine&quot;:</blockquote>
+<blockquote>+                self._kill_job(record)</blockquote>
+<blockquote>+                reason = (&quot;identity mismatch&quot; if not matches else &quot;no valid sentinel&quot;)</blockquote>
+<blockquote>+                done = self._finish(record, &quot;quarantined&quot;, quarantine_reason=reason)</blockquote>
+<blockquote>+                self._retain(done)</blockquote>
+<p>Recovery ignores <code>_kill_job</code>&#x27;s verification result and records the job as quarantined regardless. If termination fails, the identity-mismatched writer remains live while recovery claims quarantine and proceeds with retention, violating the stated guarantee that a mismatch never leaves a live writer.</p>
+<p><strong>Recommendation:</strong> Capture the <code>_kill_job</code> result in <code>recover</code>. Only enter ordinary <code>quarantined</code> after verified death; on false, store a distinct <code>quarantined_with_residue</code>/<code>kill_unverified</code> state, retain the evidence, keep the permit, and schedule mandatory reaper retries.</p>
+<h3>7. [High] security · high confidence — supervisor.py — TmuxSupervisor.mark_quota_paused</h3>
+<blockquote>+        record = replace(record, state=&quot;quota_paused&quot;, provider_session_id=provider_session_id)</blockquote>
+<blockquote>+        self._registry.upsert(record)</blockquote>
+<blockquote>+        # the provider exited (usage-limit exit-1) — free the pool slot NOW, else the</blockquote>
+<blockquote>+        # relaunch under the same session_name strands the old permit context manager</blockquote>
+<blockquote>+        # and deadlocks a concurrency-1 pool on the job&#x27;s own permit (8a R2 finding)</blockquote>
+<blockquote>+        self._release_permit(record)</blockquote>
+<p><code>mark_quota_paused</code> performs no state, liveness, sentinel, or session-ID validation before releasing the permit. It can reclassify a live or already-completed job, admit concurrent work while the provider is still running, or relaunch a completed mutating operation and duplicate its side effects; the included lifecycle test explicitly transitions a completed job this way.</p>
+<p><strong>Recommendation:</strong> Restrict <code>mark_quota_paused</code> to a dead <code>exited_no_sentinel</code> record with no valid sentinel, a nonempty validated provider session ID, and injected usage-limit evidence tied to that attempt. Reject live, completed, timed-out, failed, or already-paused records without changing state or releasing the permit.</p>
+<h3>8. [High] security · high confidence — supervisor.py — TmuxSupervisor.launch JobRecord construction and await_job resume check</h3>
+<blockquote>+                provider_session_id=None, provider_exit_code=None,</blockquote>
+<p><code>launch</code> clears <code>provider_session_id</code> even for <code>_relaunch</code>, which supplies the persisted resume ID. The new durable record therefore loses the expected session identity, while <code>await_job</code> checks identity only when a caller separately supplies its optional <code>expect_session_id</code>; a fresh or wrong resumed session can be accepted as completed through the normal recovered-record flow.</p>
+<p><strong>Recommendation:</strong> Set the launched record&#x27;s <code>provider_session_id</code> to <code>resume_session_id</code>. For every record with <code>resume_attempts &gt; 0</code>, make <code>await_job</code> automatically require that stored value, reject a missing value before launch, and compare it with the transport session ID without relying on a caller-provided optional argument.</p>
+<p>--- _Report-only: this review does not edit the artifact. Findings are advisory; incorporate them at your discretion._</p>
+
+</main>
+<footer>Last updated: 2026-07-19 10:43 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
