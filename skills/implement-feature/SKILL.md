@@ -268,6 +268,21 @@ Active at ALL quality gates (Steps 4, 6, 9, 11, 15). Triggers when:
 When triggered: STOP the workflow at the current step. Present ALL problematic findings to the user. Wait for resolution. Do NOT auto-apply unambiguous findings separately -- the full set is applied together after resolution. **[Headless: QUESTION — post comment with all ambiguous/conflicting findings and resolution options, suspend.]**
 </ambiguity-circuit-breaker>
 
+<review-pipelining>
+Review waves overlap the orchestrator's next drafting work — never an idle wait (#488;
+epic #475 profiling put review-wait at ~20% of per-child wall-clock, much of it the
+orchestrator idle-blocked). The canonical directive: after dispatching any review wave
+(Step 4 design critique, Step 8a per-task, Step 11 pre-PR), immediately draft the next
+phase's non-committing artifact instead of idle-waiting, then reconcile the wave's
+findings on return. Non-committing artifacts: the implementation plan, the next task's
+tests, the PR body, version/changelog edits — working-tree drafts that stay out of git
+history until the gate verdict lands. The boundary is hard: committing, branching,
+pushing, and every gate verdict still WAIT for the wave to return — the pipeline
+reclaims only the idle time around a gate, never the gate itself — no gate is skipped
+and no verdict is pre-empted. If the wave's findings invalidate a drafted artifact,
+revise or discard the draft: a gate finding always wins over a stale draft.
+</review-pipelining>
+
 <step-tracking>
 Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
 trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's
