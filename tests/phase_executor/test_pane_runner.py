@@ -80,6 +80,7 @@ def _spec_dict(tmp_path, **over):
         "attempt_id": "a1",
         "capture_root": str(tmp_path / "cap"),
         "routing_config_digest": "sha256:deadbeef",
+        "allow_adapter_override": True,
         "request": {
             "seat": "build",
             "requested_model": "claude-sonnet-5",

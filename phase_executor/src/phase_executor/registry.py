@@ -61,6 +61,8 @@ class JobRecord:
     state: str
     created_at: float
     quarantine_reason: Optional[str]
+    spec_digest: Optional[str] = None  # sha256 of the FULL serialized pane spec (adoption trust,
+    #                                    Step-11 codex #4 — argv digest alone misses spec content)
 
 
 @dataclass(frozen=True)
@@ -109,11 +111,16 @@ def classify_recovery(record: JobRecord, *, live: bool, identity_matches: bool,
     is the caller's AND of those); `relaunch` iff quota_paused + not live + under MAX_RESUME, else
     `fail`; a completed-with-valid-sentinel dead job re-adopts its result; anything else quarantines
     (CF-6/CF-7 — a mismatch is never silently adopted; the caller kills+retains it)."""
+    # identity FIRST across the whole trust boundary (Step-11 codex Critical): a known
+    # mismatch is NEVER relaunched or adopted — a tampered/corrupted recovery spec must
+    # quarantine even on the quota_paused path.
+    if not identity_matches:
+        return "quarantine"
     if record.state == "quota_paused" and not live:
         return "relaunch" if record.resume_attempts < MAX_RESUME else "fail"
     if live:
-        return "adopt" if identity_matches else "quarantine"
-    if sentinel_valid and identity_matches:
+        return "adopt"
+    if sentinel_valid:
         return "adopt"
     return "quarantine"
 
@@ -173,6 +180,7 @@ def _record_to_dict(r: JobRecord) -> dict:
         "worktree_root": r.worktree_root, "worktree_gitdir": r.worktree_gitdir,
         "worktree_repo": r.worktree_repo, "capture_dir": r.capture_dir, "attempt_id": r.attempt_id,
         "permit_ref": r.permit_ref, "command_digest": r.command_digest,
+        "spec_digest": r.spec_digest,
         "provider_session_id": r.provider_session_id, "provider_exit_code": r.provider_exit_code,
         "resume_attempts": r.resume_attempts, "state": r.state, "created_at": r.created_at,
         "quarantine_reason": r.quarantine_reason,
@@ -189,7 +197,8 @@ def _record_from_dict(d: dict) -> JobRecord:
         worktree_base_sha=d["worktree_base_sha"], worktree_root=d["worktree_root"],
         worktree_gitdir=d["worktree_gitdir"], worktree_repo=d["worktree_repo"],
         capture_dir=d["capture_dir"], attempt_id=d["attempt_id"], permit_ref=d["permit_ref"],
-        command_digest=d["command_digest"], provider_session_id=d.get("provider_session_id"),
+        command_digest=d["command_digest"], spec_digest=d.get("spec_digest"),
+        provider_session_id=d.get("provider_session_id"),
         provider_exit_code=d.get("provider_exit_code"), resume_attempts=d["resume_attempts"],
         state=d["state"], created_at=d["created_at"], quarantine_reason=d.get("quarantine_reason"))
 

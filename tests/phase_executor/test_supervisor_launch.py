@@ -181,7 +181,8 @@ class Env:
             runtime_dir=str(sock_scratch / "run"), state_dir=str(sock_scratch / "state"),
             pane_env={"PYTHONPATH": f"{PKG_SRC}:{FIXTURES}",
                       "RAWGENTIC_PANE_ADAPTER": "stub_pane_adapter",
-                      "RAWGENTIC_STUB_MODE": mode})
+                      "RAWGENTIC_STUB_MODE": mode},
+            allow_adapter_override=True)
 
     def launch(self, **kw):
         return self.sup.launch("build", "hello", identity=self.identity, handle=self.handle, **kw)
@@ -355,22 +356,30 @@ def test_run_seat_tmux_round_trip(env_factory):
 
 
 def test_status_quota_paused_only_injected(tmp_path):
-    # mark_quota_paused is the ONE entry into quota_paused (W9 owns the discriminator)
+    # mark_quota_paused is the ONE entry into quota_paused (W9 owns the discriminator),
+    # and it is fail-closed: dead + no sentinel + non-terminal + non-empty session id
     reg = JobRegistry(str(tmp_path / "reg"))
     identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+
+    def dead_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="no session")
+
     sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
-                         registry_root=str(tmp_path / "reg"), registry=reg,
-                         run=_fail_runner("nothing"))
+                         registry_root=str(tmp_path / "reg"), registry=reg, run=dead_run)
     from phase_executor.registry import JobRecord
     rec = JobRecord(identity=identity, session_name=session_name(identity), run_socket="s",
                     pane_pid=1, pane_pgid=1, provider_pgid=None, pane_start_time="0",
                     worktree_path="w", worktree_base_sha="b", worktree_root="r",
                     worktree_gitdir="g", worktree_repo="rp", capture_dir=str(tmp_path / "cd"),
-                    attempt_id="a", permit_ref="p", command_digest="sha256:x",
+                    attempt_id="a", permit_ref="unbounded", command_digest="sha256:x",
                     provider_session_id=None, provider_exit_code=None, resume_attempts=0,
                     state="exited_no_sentinel", created_at=0.0, quarantine_reason=None)
     reg.upsert(rec)
+    with pytest.raises(SupervisorError):  # empty session id refused
+        sup.mark_quota_paused(identity, provider_session_id=None)
     got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
     assert got.state == "quota_paused"
     assert got.provider_session_id == "sess-1"
     assert reg.get(identity).state == "quota_paused"
+    with pytest.raises(SupervisorError):  # already terminal-for-recover — refused
+        sup.mark_quota_paused(identity, provider_session_id="sess-2")

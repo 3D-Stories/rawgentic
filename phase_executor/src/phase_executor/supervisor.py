@@ -39,6 +39,7 @@ from . import contract, routing
 from .capture import atomic_write_text, hash_text
 from .engine import PROVIDER_ENGINE
 from .pane_runner import _descendants, expected_capture_dir, sidecar_path
+from .quota import QuotaTimeout
 from .registry import (JobRecord, JobRegistry, ReapPlan, ReapPolicy, classify_recovery,
                        command_digest, handle_from_record, reap_plan, session_name)
 from .worktree import WorktreeHandle, WorktreeIdentity, component_for
@@ -176,7 +177,8 @@ class TmuxSupervisor:
     def __init__(self, *, snapshot, quota, capture_root: str, registry_root: str,
                  registry: Optional[JobRegistry] = None, run=_default_run, clock=time.time,
                  runtime_dir: Optional[str] = None, state_dir: Optional[str] = None,
-                 pane_env: Optional[dict] = None, worktree_manager=None):
+                 pane_env: Optional[dict] = None, worktree_manager=None,
+                 allow_adapter_override: bool = False):
         self._snapshot = snapshot
         self._quota = quota
         self._capture_root = capture_root
@@ -191,6 +193,8 @@ class TmuxSupervisor:
         # W3 disposition machinery (retain-if-dirty). Optional: when None, retain steps are
         # recorded in the reap summary but not executed — the caller owns W3 wiring.
         self._worktree_manager = worktree_manager
+        # test harnesses only: lets the pane honor RAWGENTIC_PANE_ADAPTER (spec-gated)
+        self._allow_adapter_override = allow_adapter_override
 
     # -- tmux plumbing -------------------------------------------------------
 
@@ -266,6 +270,7 @@ class TmuxSupervisor:
         cm = self._quota.acquire(lane["pool"], account=acct, timeout=quota_timeout)
         token = cm.__enter__()
         permit_ref = str(token) if token is not None else "unbounded"
+        spawned = False
         try:
             spec = {
                 "engine": engine,
@@ -274,6 +279,7 @@ class TmuxSupervisor:
                 "capture_root": self._capture_root,
                 "routing_config_digest": self._snapshot.config_digest,
                 "resume_session_id": resume_session_id,
+                "allow_adapter_override": self._allow_adapter_override,
                 "request": {
                     "seat": seat, "requested_model": target["model"], "prompt": prompt,
                     "transport": lane["transport"], "context": [], "correlation_id": None,
@@ -292,7 +298,11 @@ class TmuxSupervisor:
             specs_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(specs_dir, 0o700)
             spec_path = specs_dir / f"{name}.json"
-            atomic_write_text(spec_path, json.dumps(spec, indent=2, sort_keys=True))
+            spec_text = json.dumps(spec, indent=2, sort_keys=True)
+            atomic_write_text(spec_path, spec_text)
+            # FULL-content digest (Step-11 codex #4): adoption re-verifies the spec bytes,
+            # not just the fixed argv — a swapped prompt/engine/grants file can't adopt.
+            spec_digest = hash_text(spec_text)
 
             argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path)]
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
@@ -301,9 +311,9 @@ class TmuxSupervisor:
             res = self._tmux(sock, "new-session", "-d", "-s", name, "-c", handle.path, "--", *argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
+            spawned = True
             shown = self._tmux(sock, "display-message", "-p", "-t", name, "#{pane_pid}")
             if shown.returncode != 0 or not (shown.stdout or "").strip().isdigit():
-                self._tmux(sock, "kill-session", "-t", name)
                 raise SupervisorError(f"pane_pid unreadable: {(shown.stderr or '').strip()}")
             pane_pid = int(shown.stdout.strip())
             try:
@@ -317,14 +327,22 @@ class TmuxSupervisor:
                 worktree_path=handle.path, worktree_base_sha=handle.base_sha,
                 worktree_root=handle.root, worktree_gitdir=handle.gitdir,
                 worktree_repo=handle.repo, capture_dir=str(cap_dir), attempt_id=attempt_id,
-                permit_ref=permit_ref, command_digest=digest,
-                provider_session_id=None, provider_exit_code=None,
+                permit_ref=permit_ref, command_digest=digest, spec_digest=spec_digest,
+                provider_session_id=resume_session_id, provider_exit_code=None,
                 resume_attempts=resume_attempts, state="running",
                 created_at=self._clock(), quarantine_reason=None)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
         except BaseException:
+            # a post-spawn failure (unreadable pane_pid, registry write error) must not
+            # leak a LIVE unregistered pane outside the ceiling (Step-11 R1/codex #5):
+            # kill the session first, then release the permit
+            if spawned:
+                try:
+                    self._tmux(sock, "kill-session", "-t", name)
+                except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
+                    pass
             cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
             raise
 
@@ -371,10 +389,27 @@ class TmuxSupervisor:
     def mark_quota_paused(self, identity: WorktreeIdentity,
                           provider_session_id: Optional[str]) -> JobRecord:
         """The INJECTED quota classification (owner Q6/W9 owns the discriminator): records
-        quota_paused + the provider session id the relaunch will ``--resume``."""
+        quota_paused + the provider session id the relaunch will ``--resume``.
+
+        Fail-closed preconditions (Step-11 codex #7 — a mislabelled pause could relaunch a
+        COMPLETED mutating job and duplicate its side effects, or admit concurrent work
+        while a live provider still runs): the job must be DEAD, have NO valid sentinel,
+        not already be terminal, and carry a non-empty session id."""
         record = self._registry.get(identity)
         if record is None:
             raise SupervisorError(f"unknown job {identity}")
+        if not provider_session_id:
+            raise SupervisorError("mark_quota_paused: a non-empty provider_session_id is required")
+        if record.state not in ("launched", "running", "exited_no_sentinel"):
+            raise SupervisorError(
+                f"mark_quota_paused: record is {record.state!r} — only a non-terminal dead "
+                f"job can be quota-paused")
+        if self._live(record):
+            raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
+        if self._sentinel(record) is not None:
+            raise SupervisorError(
+                "mark_quota_paused: a valid sentinel exists — the job COMPLETED; resuming "
+                "would duplicate its effects")
         record = replace(record, state="quota_paused", provider_session_id=provider_session_id)
         self._registry.upsert(record)
         # the provider exited (usage-limit exit-1) — free the pool slot NOW, else the
@@ -499,10 +534,16 @@ class TmuxSupervisor:
             except OSError:
                 pass
 
-    def _finish(self, record: JobRecord, state: str, **updates) -> JobRecord:
+    def _finish(self, record: JobRecord, state: str, *, release_permit: bool = True,
+                **updates) -> JobRecord:
+        """Terminal-state stamp. ``release_permit=False`` on any path where process death
+        was NOT verified (residue states) — the slot stays held until the reaper confirms
+        death, else a new provider over-admits past the ceiling (Step-11 codex #3).
+        QuotaCoordinator's stale-reap (dead holder pid) remains the leak backstop."""
         record = replace(record, state=state, **updates)
         self._registry.upsert(record)
-        self._release_permit(record)
+        if release_permit:
+            self._release_permit(record)
         return record
 
     # -- await (AC-E3/E4, CF-9/CF-12) ------------------------------------------
@@ -523,17 +564,22 @@ class TmuxSupervisor:
         while True:
             obs = self._sentinel(record)
             if obs is not None:
+                # a RESUMED job asserts identity AUTOMATICALLY against its persisted
+                # session id (Step-11 codex #8) — the caller param only overrides/adds
+                if expect_session_id is None and record.resume_attempts > 0:
+                    expect_session_id = record.provider_session_id or "<missing>"
                 if expect_session_id is not None:
                     got = self._transport_session_id(record)
                     if got != expect_session_id:
-                        self._kill_job(record)
-                        self._finish(record, "failed")
+                        killed = self._kill_job(record)
+                        self._finish(record, "failed", release_permit=killed)
                         raise SupervisorError(
                             f"resume identity mismatch: transport session_id {got!r} != "
                             f"persisted {expect_session_id!r} (wrong-cwd resume shape)")
                 clean = self._kill_job(record)
                 state = "completed" if clean else "completed_with_residue"
-                self._finish(record, state, provider_exit_code=_exit_code_of(obs))
+                self._finish(record, state, release_permit=clean,
+                             provider_exit_code=_exit_code_of(obs))
                 return state, obs
             if not self._live(record):
                 obs = self._sentinel(record)  # one post-exit re-check (write vs exit race)
@@ -561,9 +607,11 @@ class TmuxSupervisor:
                 cap.mkdir(parents=True, exist_ok=True)
                 atomic_write_text(cap / "observation.json",
                                   json.dumps(obs, indent=2, sort_keys=True))
-                # an unverified kill leaves residue the reaper must see — never silent
-                self._finish(record, "timed_out", quarantine_reason=(
-                    None if kill_clean else "timeout kill unverified: residue"))
+                # an unverified kill leaves residue the reaper must see — never silent,
+                # and the permit stays held until death is confirmed
+                self._finish(record, "timed_out", release_permit=kill_clean,
+                             quarantine_reason=(
+                                 None if kill_clean else "timeout kill unverified: residue"))
                 return "timed_out", obs
             time.sleep(poll_s)
 
@@ -572,7 +620,7 @@ class TmuxSupervisor:
         W3 ``finalize`` — the supervisor never deletes a worktree here."""
         clean = self._kill_job(record)
         state = "failed" if clean else "completed_with_residue"
-        self._finish(record, state)
+        self._finish(record, state, release_permit=clean)
         return state
 
     def run_seat_tmux(self, seat: str, prompt: str, *, identity: WorktreeIdentity,
@@ -596,9 +644,23 @@ class TmuxSupervisor:
         # interpreter-independent digest — must mirror launch()'s argv[1:] computation
         if command_digest(["-m", "phase_executor.pane_runner", str(spec_path)]) != record.command_digest:
             return False
+        # FULL spec-content digest (Step-11 codex #4): the bytes on disk must be the bytes
+        # launch() wrote — a swapped prompt/engine/grants/capture-root can never adopt
+        try:
+            spec_text = spec_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if record.spec_digest is None or hash_text(spec_text) != record.spec_digest:
+            return False
         spec = self._read_spec(record)
-        if not spec.get("request"):
-            return False  # unreadable/tampered spec: the digest above covers argv, not content
+        req = spec.get("request") or {}
+        if not req:
+            return False
+        # identity fields must agree between spec and record (belt over the digest)
+        if (spec.get("run_id") != record.identity.run_id
+                or req.get("seat") != record.identity.seat
+                or spec.get("attempt_id") != record.attempt_id):
+            return False
         if not os.path.isdir(record.worktree_path):
             return False
         if _pid_alive(record.pane_pid):
@@ -624,18 +686,24 @@ class TmuxSupervisor:
             if verdict == "adopt":
                 actions.append(RecoveryAction(record.identity, "adopt", record))
             elif verdict == "quarantine":
-                self._kill_job(record)
+                killed = self._kill_job(record)
                 reason = ("identity mismatch" if not matches else "no valid sentinel")
-                done = self._finish(record, "quarantined", quarantine_reason=reason)
+                if not killed:
+                    # the untrusted writer may STILL be live — say so, keep the permit,
+                    # the reaper retries (Step-11 codex #6: never claim a clean quarantine)
+                    reason += "; kill unverified: residue"
+                done = self._finish(record, "quarantined", release_permit=killed,
+                                    quarantine_reason=reason)
                 self._retain(done)
                 actions.append(RecoveryAction(record.identity, "quarantine", done))
             elif verdict == "relaunch":
                 try:
                     new = self._relaunch(record)
                     actions.append(RecoveryAction(record.identity, "relaunch", new))
-                except SupervisorError:
-                    # e.g. non-claude engine (resume is claude-only) — fail THIS record
-                    # without burning a resume slot; recovery of other records continues
+                except (SupervisorError, routing.RoutingError, QuotaTimeout):
+                    # non-claude engine / routing gone / pool full — fail THIS record
+                    # without burning a resume slot; recovery of OTHER records continues
+                    # (Step-11 R1 High: an uncaught raise here aborted the whole sweep)
                     done = self._finish(record, "failed")
                     actions.append(RecoveryAction(record.identity, "fail", done))
             else:  # fail: resume cap reached
@@ -719,7 +787,10 @@ class TmuxSupervisor:
         registry) are REPORTED in ``quarantine``, never killed blind — they have no record
         to age. Returns the executed plan."""
         policy = policy or ReapPolicy()
-        records = self._registry.by_run(run_id)
+        # quota_paused records belong to recover() (a pending --resume needs its worktree
+        # and cwd intact) — reap never retains/kills what recover is about to relaunch
+        # (Step-11 R2 finding; masked today by worktree_manager=None, real once W3-wired)
+        records = [r for r in self._registry.by_run(run_id) if r.state != "quota_paused"]
         now = self._clock()
         live_names = set()
         if records:
@@ -744,8 +815,10 @@ class TmuxSupervisor:
                          dead_fn=self._default_dead_fn, clean_fn=clean_fn or self._default_clean_fn)
         # execute: wedged live trees first (kill, verify, retain), then session removals
         for record in plan.kill_tree:
-            self._kill_job(record)
-            self._finish(record, "quarantined", quarantine_reason="wedged: killed by reaper")
+            killed = self._kill_job(record)
+            self._finish(record, "quarantined", release_permit=killed,
+                         quarantine_reason="wedged: killed by reaper"
+                         + ("" if killed else "; kill unverified: residue"))
             self._retain(record)
         for record in plan.kill_session:
             self._tmux(record.run_socket, "kill-session", "-t", record.session_name)

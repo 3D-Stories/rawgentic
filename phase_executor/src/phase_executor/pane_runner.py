@@ -156,9 +156,12 @@ def _pgid_scanner(sidecar: Path, stop: threading.Event) -> None:
         stop.wait(_SCAN_INTERVAL_S)
 
 
-def _resolve_adapter(engine: str):
+def _resolve_adapter(engine: str, spec: dict):
+    """The env override is honored ONLY when the supervisor-written spec explicitly opted
+    in (``allow_adapter_override``, set by test harnesses) — a leftover export in a
+    production shell must never silently reroute panes to a stub module (Step-11 R2)."""
     override = os.environ.get("RAWGENTIC_PANE_ADAPTER")
-    if override:
+    if override and spec.get("allow_adapter_override") is True:
         return importlib.import_module(override)
     if engine not in ADAPTERS:
         raise KeyError(f"unknown engine {engine!r} (known: {sorted(ADAPTERS)})")
@@ -176,7 +179,7 @@ def main(argv=None) -> int:
                     "routing_config_digest", "request"):
             if key not in spec:
                 raise KeyError(f"spec missing required field {key!r}")
-        mod = _resolve_adapter(spec["engine"])
+        mod = _resolve_adapter(spec["engine"], spec)
         req = _request_from_spec(spec)
         cap_dir = expected_capture_dir(
             spec["capture_root"], spec["run_id"], req.seat, spec["attempt_id"])

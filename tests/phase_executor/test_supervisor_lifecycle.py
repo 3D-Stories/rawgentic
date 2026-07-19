@@ -67,6 +67,7 @@ class Env:
         self.handle = WorktreeHandle(path=str(wt), identity=self.identity, base_sha="deadbeef",
                                      root=str(tmp_path), gitdir=str(tmp_path / "g"), repo=str(tmp_path))
         self.manager = FakeWorktreeManager()
+        self._sock_scratch = sock_scratch
         env = {"PYTHONPATH": f"{PKG_SRC}:{FIXTURES}",
                "RAWGENTIC_PANE_ADAPTER": "stub_pane_adapter",
                "RAWGENTIC_STUB_MODE": mode}
@@ -76,10 +77,24 @@ class Env:
             capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"),
             registry=self.registry,
             runtime_dir=str(sock_scratch / "run"), state_dir=str(sock_scratch / "state"),
-            pane_env=env, worktree_manager=self.manager)
+            pane_env=env, worktree_manager=self.manager, allow_adapter_override=True)
 
     def launch(self, **kw):
         return self.sup.launch("build", "hello", identity=self.identity, handle=self.handle, **kw)
+
+    def sup_with_mode(self, mode, extra_env=None):
+        """A second supervisor over the SAME durable state (registry/quota/sockets) — the
+        post-compaction recovery shape — with a different stub mode for the relaunch."""
+        env = {"PYTHONPATH": f"{PKG_SRC}:{FIXTURES}",
+               "RAWGENTIC_PANE_ADAPTER": "stub_pane_adapter",
+               "RAWGENTIC_STUB_MODE": mode}
+        env.update(extra_env or {})
+        return TmuxSupervisor(
+            snapshot=_snapshot(), quota=self.quota,
+            capture_root=str(self.tmp / "cap"), registry_root=str(self.tmp / "reg"),
+            registry=self.registry,
+            runtime_dir=str(self._sock_scratch / "run"), state_dir=str(self._sock_scratch / "state"),
+            pane_env=env, worktree_manager=self.manager, allow_adapter_override=True)
 
     def cleanup(self):
         try:
@@ -193,24 +208,54 @@ def test_recover_quarantines_digest_mismatch_kills_and_retains(env_factory):
 
 @tmux_required
 def test_recover_relaunches_quota_paused_under_cap(env_factory):
-    env = env_factory(mode="resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-42"})
+    # a REAL quota-pause shape: provider exits 1 with no sentinel -> injected classification
+    env = env_factory(mode="exit_nonzero")
     rec = env.launch()
     state, _ = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
-    assert state == "completed"
+    assert state == "exited_no_sentinel"
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
-    actions = env.sup.recover(env.identity.run_id)
+    # recovery happens in a SECOND supervisor over the same durable state (post-compaction)
+    sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-42"})
+    actions = sup2.recover(env.identity.run_id)
     assert actions[0].action == "relaunch"
     new = actions[0].record
     assert new.resume_attempts == rec.resume_attempts + 1
     assert new.state == "running"
+    assert new.provider_session_id == "sess-42"  # persisted onto the relaunched record
     # the relaunched pane's spec carries the persisted session id for --resume
     spec = json.loads((Path(env.tmp / "reg" / "specs" / f"{new.session_name}.json")).read_text())
     assert spec["resume_session_id"] == "sess-42"
     assert spec["request"]["profile"]["session_policy"] == "resume"
-    # resume-identity assert (machine-signal): the resumed transport's session_id matches
-    state, obs = env.sup.await_job(new, poll_s=0.2, timeout_s=30, expect_session_id="sess-42")
+    # resume-identity assert fires AUTOMATICALLY (resume_attempts > 0), no caller param
+    state, obs = sup2.await_job(new, poll_s=0.2, timeout_s=30)
     assert state == "completed"
     assert obs is not None
+
+
+@tmux_required
+def test_relaunched_job_auto_asserts_resume_identity(env_factory):
+    env = env_factory(mode="exit_nonzero")
+    rec = env.launch()
+    state, _ = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
+    assert state == "exited_no_sentinel"
+    env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
+    sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-WRONG"})
+    actions = sup2.recover(env.identity.run_id)
+    assert actions[0].action == "relaunch"
+    with pytest.raises(SupervisorError):  # no expect_session_id passed — the auto-assert fires
+        sup2.await_job(actions[0].record, poll_s=0.2, timeout_s=30)
+    assert env.registry.get(env.identity).state == "failed"
+
+
+@tmux_required
+def test_mark_quota_paused_rejects_completed_job(env_factory):
+    env = env_factory(mode="ok")
+    rec = env.launch()
+    state, _ = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
+    assert state == "completed"
+    with pytest.raises(SupervisorError):  # resuming a completed job would duplicate effects
+        env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
+    assert env.registry.get(env.identity).state == "completed"
 
 
 @tmux_required
@@ -358,6 +403,7 @@ def test_recover_fail_at_resume_cap(tmp_path):
     sup = TmuxSupervisor(snapshot=_snapshot(), quota=QuotaCoordinator(str(tmp_path / "q"), {}),
                          capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"),
                          registry=reg, run=dead_run)
+    sup._identity_matches = lambda r: True  # isolate the CAP rule from spec-file plumbing
     actions = sup.recover("r1")
     assert actions[0].action == "fail"
     assert reg.get(identity).state == "failed"

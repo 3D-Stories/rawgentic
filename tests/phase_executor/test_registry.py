@@ -158,3 +158,13 @@ def test_registry_upsert_updates_in_place(tmp_path):
     r.upsert(_rec(session_name="rg-1", state="completed"))
     assert r.get(_idn()).state == "completed"
     assert len(r.all()) == 1
+
+
+def test_classify_quota_paused_identity_mismatch_quarantines():
+    """Step-11 codex Critical: identity wins over the quota_paused relaunch branch — a
+    tampered/mismatched recovery spec is NEVER relaunched, even under the resume cap."""
+    r = _rec(state="quota_paused")
+    assert reg.classify_recovery(r, live=False, identity_matches=False,
+                                 sentinel_valid=False) == "quarantine"
+    assert reg.classify_recovery(r, live=False, identity_matches=False,
+                                 sentinel_valid=True) == "quarantine"
