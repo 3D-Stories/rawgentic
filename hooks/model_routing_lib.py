@@ -187,8 +187,10 @@ def select_impl_model(ceiling: str, risk_level: str, complexity: str) -> tuple[s
     return actual, reason
 
 
-REVIEW_LENSES = {"security", "mechanical", "ac_completeness", "test_coverage", "bug_logic"}
-_LENS_DEFAULT = "sonnet"
+REVIEW_LENSES: Final[frozenset[str]] = frozenset(
+    {"security", "mechanical", "ac_completeness", "test_coverage", "bug_logic"}
+)
+_LENS_DEFAULT: Final[str] = "sonnet"
 
 
 def select_review_lens_model(
@@ -196,7 +198,8 @@ def select_review_lens_model(
 ) -> tuple[str, str]:
     """Pick a review model per LENS under the resolved review-role model (#491).
 
-    Pure, never raises, fail-open. The security lens is PINNED to the resolved
+    Never raises; fail-open (warns to stderr on malformed config, like
+    ``resolve``). The security lens is PINNED to the resolved
     review model — a ``reviewLenses.security`` override is ignored with a warning,
     so config can never downgrade the security lens. An unknown lens fails safe to
     the review model (strong). Non-security lenses take a valid configured
@@ -206,6 +209,13 @@ def select_review_lens_model(
     inherit); non-security lenses still default to sonnet.
     """
     overrides = lens_overrides if isinstance(lens_overrides, dict) else {}
+    if review_model == "haiku":
+        # Boundary floor (8a R2, #491): resolve() pre-floors the CLI path, but a
+        # direct library caller passing raw config must never get haiku back on
+        # the security-pin or unknown-lens paths either.
+        _warn("review model 'haiku' passed to select_review_lens_model — "
+              "never-Haiku; flooring to 'sonnet'")
+        review_model = "sonnet"
     if lens == "security":
         if "security" in overrides:
             _warn("reviewLenses.security override ignored — the security lens is "

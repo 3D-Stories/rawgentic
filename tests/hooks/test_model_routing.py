@@ -410,3 +410,17 @@ class TestResolveLensCLI:
                             "modelRouting": {"review": "opus",
                                              "reviewLenses": {"security": "sonnet"}}})
         assert self._run(ws, "security") == (0, "opus")
+
+
+class TestReviewLensNeverHaikuBoundary:
+    """#491 8a R2 finding: the never-Haiku floor must hold at the FUNCTION
+    boundary, not only via resolve()'s pre-floor — a future direct caller
+    passing raw config must never get haiku back on any path."""
+
+    def test_security_lens_haiku_review_model_floors(self):
+        model, _ = mr.select_review_lens_model("haiku", "security")
+        assert model == "sonnet"
+
+    def test_unknown_lens_haiku_review_model_floors(self):
+        model, _ = mr.select_review_lens_model("haiku", "vibes")
+        assert model == "sonnet"
