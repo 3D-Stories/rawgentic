@@ -14,6 +14,38 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #493 — WF2 speed levers (manual drive)
+
+**Status: IN PROGRESS** — #488 in PR; #489 · #490 · #491 · #492 (depends on #491) · #494 pending.
+Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
+@ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
+
+Per-child WF2 wall-clock levers derived from the epic #475 run-timing profile (~1h52m/child;
+review-wait ~20% of wall-clock, much of it orchestrator idle-blocking). All children run the
+small-standard lane; the levers are applied MANUALLY while building them (scoped pytest during
+iteration, probe-before-design, pipelined reviews). AUTO MODE merge grant (owner, 2026-07-18,
+scoped to this run).
+
+### #488 — review-wave pipelining: never idle-wait · v3.58.0
+
+New canonical `<review-pipelining>` block in implement-feature's SKILL.md: after dispatching any
+review wave (Step 4 design critique, Step 8a per-task, Step 11 pre-PR), immediately draft the
+next phase's non-committing artifact (plan, next task's tests, PR body, version/changelog edits)
+and reconcile findings on the wave's return. Hard boundary pinned in the same block: committing,
+branching, pushing, and every gate verdict still WAIT — only idle time is reclaimed, no gate
+skipped, no verdict pre-empted; a gate finding always wins over a stale draft. Three wave-site
+pointers in references/steps.md (§4 item 7 · §8a item 2 · §11 item 2), single-source per the
+drift-guard doctrine; guards: `TestReviewPipelining` (canonical sentence, gate-semantics
+sentence, ≥3 pointer sites).
+
+- **Lane run:** small-standard (standard_feature, 4 impl files ≤ 7; laneImplExtensions
+  markdown-is-product). TDD red (1e6eba0) → green (91f8127); suite 3634+10skip → 3637+10skip.
+- **Dogfood note:** the run itself pipelined its own Step 11 — PR body + this section drafted
+  while the lane reviewer ran.
+- **Reviews:** 1 lane reviewer (opus) + adversarial diff review skipped (no security surface).
+  No workflow-spine change → no diagram REV.
+- PR / merge SHA: filled by the next slot's pass.
+
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
 
 **Status: IN PROGRESS** — 4 children merged (#464 #480 #445 #446), #465 (W2) building, #466–#474 pending. (The roadmap chip aggregates the merged sub-sections below; the epic itself is open until #474 closes it.)

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Rawgentic Campaign Log</title>
+<title>Rawgentic modernization — campaign log</title>
 <style>
 :root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
 --line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
@@ -62,8 +62,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 13:33 MDT</div>
-<h1>Rawgentic Campaign Log</h1>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 21:45 MDT</div>
+<h1>Rawgentic modernization — campaign log</h1>
 
 </header>
 <main>
@@ -71,6 +71,25 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
+<section class="mstone"><h3>Epic #493 — WF2 speed levers (manual drive) <span class="chip c-plan">—</span></h3><p><strong>Status: IN PROGRESS</strong> — #488 in PR; #489 · #490 · #491 · #492 (depends on #491) · #494 pending. Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.</p>
+<p>Per-child WF2 wall-clock levers derived from the epic #475 run-timing profile (~1h52m/child; review-wait ~20% of wall-clock, much of it orchestrator idle-blocking). All children run the small-standard lane; the levers are applied MANUALLY while building them (scoped pytest during iteration, probe-before-design, pipelined reviews). AUTO MODE merge grant (owner, 2026-07-18, scoped to this run).</p>
+<h3>#488 — review-wave pipelining: never idle-wait · v3.58.0</h3>
+<p>New canonical <code>&lt;review-pipelining&gt;</code> block in implement-feature&#x27;s SKILL.md: after dispatching any review wave (Step 4 design critique, Step 8a per-task, Step 11 pre-PR), immediately draft the next phase&#x27;s non-committing artifact (plan, next task&#x27;s tests, PR body, version/changelog edits) and reconcile findings on the wave&#x27;s return. Hard boundary pinned in the same block: committing, branching, pushing, and every gate verdict still WAIT — only idle time is reclaimed, no gate skipped, no verdict pre-empted; a gate finding always wins over a stale draft. Three wave-site pointers in references/steps.md (§4 item 7 · §8a item 2 · §11 item 2), single-source per the drift-guard doctrine; guards: <code>TestReviewPipelining</code> (canonical sentence, gate-semantics sentence, ≥3 pointer sites).</p>
+<ul>
+<li><strong>Lane run:</strong> small-standard (standard_feature, 4 impl files ≤ 7; laneImplExtensions</li>
+</ul>
+<p>  markdown-is-product). TDD red (1e6eba0) → green (91f8127); suite 3634+10skip → 3637+10skip.</p>
+<ul>
+<li><strong>Dogfood note:</strong> the run itself pipelined its own Step 11 — PR body + this section drafted</li>
+</ul>
+<p>  while the lane reviewer ran.</p>
+<ul>
+<li><strong>Reviews:</strong> 1 lane reviewer (opus) + adversarial diff review skipped (no security surface).</li>
+</ul>
+<p>  No workflow-spine change → no diagram REV.</p>
+<ul>
+<li>PR / merge SHA: filled by the next slot&#x27;s pass.</li>
+</ul></section>
 <section class="mstone"><h3>Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run) <span class="chip c-conf">MERGED</span></h3><p><strong>Status: IN PROGRESS</strong> — 4 children merged (#464 #480 #445 #446), #465 (W2) building, #466–#474 pending. (The roadmap chip aggregates the merged sub-sections below; the epic itself is open until #474 closes it.)</p>
 <p>Wire WF2/WF3 to the <code>phase_executor</code> engine per the ratified architecture (the real #417). Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code>. Queue (topo, D-1 pins + D-2 insertion): #464 (W1) ✓ · #480 ✓ · #445 ✓ · #446 ✓ · <strong>#465 (W2)</strong> ← IN PROGRESS · #466 (W3) · #467 (W4) · #468 (W5) · #469 (W6) · #470 (W7) · #447 · #471 (W8) · #472 (W9) · #449 (W10) · #473 (W11) · #474 (W12, closes epic). AUTO MODE campaign (owner grant 2026-07-18, session-scoped); overnight D-3 autonomous posture from ~03:00.</p>
 <h3>#464 — capability manifest + WIRED_SEATS full set + attested build-audit path (W1) · v3.52.0</h3>
@@ -454,9 +473,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
 <p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
-
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#488 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>3 added · 3637/3647 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>2</td><td>2</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-18 13:33 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-18 21:45 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
