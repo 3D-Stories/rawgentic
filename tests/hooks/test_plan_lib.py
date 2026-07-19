@@ -872,11 +872,11 @@ class TestEstimateAgents:
     """#224: pure path-cost estimator surfaced at Step 2."""
 
     def test_full_spine_baseline(self):
-        # Step 4 (1) + 8a (2×0) + Step 11 full (3) = 4 agents.
+        # Step 4 (1) + 8a (0, no high-risk) + Step 11 full (2, #492) = 3 agents.
         # Stages: 1 (Step 4) + 0 (no high-risk) + 1 (Step 11) = 2 → 10 min @5.
         mod = _reload_plan_lib()
         est = mod.estimate_agents(0, lane=False)
-        assert est == {"agents": 4, "minutes": 10}
+        assert est == {"agents": 3, "minutes": 10}
 
     def test_lane_baseline(self):
         # Step 4 (1) + 8a (0) + Step 11 lane (1) = 2 agents; stages 2 → 10 min.
@@ -886,18 +886,21 @@ class TestEstimateAgents:
 
     def test_step11_term_is_lane_keyed(self):
         mod = _reload_plan_lib()
-        assert mod.STEP11_REVIEW_AGENT_COUNT_FULL == 3
+        assert mod.STEP11_REVIEW_AGENT_COUNT_FULL == 2  # #492: 3→2
         assert mod.STEP11_REVIEW_AGENT_COUNT_LANE == 1
         diff = (mod.estimate_agents(0, lane=False)["agents"]
                 - mod.estimate_agents(0, lane=True)["agents"])
-        assert diff == 2  # the 3-vs-1 Step-11 saving, nothing else
+        assert diff == 1  # the 2-vs-1 Step-11 saving, nothing else
 
-    def test_high_risk_tasks_multiply_by_two(self):
-        # Each high-risk task adds PER_TASK_REVIEW_AGENT_COUNT (2) agents
-        # and one stage: high=2 full → 1+4+3=8 agents, 4 stages → 20 min.
+    def test_high_risk_tasks_one_wave(self):
+        # #492: 8a is ONE accumulated wave — PER_TASK_REVIEW_AGENT_COUNT (2)
+        # agents and one stage whenever ANY high-risk task exists, regardless
+        # of count: high=2 full → 1+2+2=5 agents, 3 stages → 15 min.
         mod = _reload_plan_lib()
         est = mod.estimate_agents(2, lane=False)
-        assert est == {"agents": 8, "minutes": 20}
+        assert est == {"agents": 5, "minutes": 15}
+        assert est == mod.estimate_agents(5, lane=False), \
+            "one wave: the 8a term must not scale with the task count"
 
     def test_optins_add_agents_not_stages(self):
         # adversarial + peer_consult + diff_review are concurrent within
@@ -905,7 +908,7 @@ class TestEstimateAgents:
         mod = _reload_plan_lib()
         est = mod.estimate_agents(0, lane=False, adversarial=True,
                                   peer_consult=True, diff_review=True)
-        assert est == {"agents": 7, "minutes": 10}
+        assert est == {"agents": 6, "minutes": 10}
 
     def test_lane_forces_design_ceremony_off(self):
         # The lane drops adversarial-on-design + peer consult; diff_review
