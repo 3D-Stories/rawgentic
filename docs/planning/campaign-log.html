@@ -62,7 +62,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 23:02 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-18 23:36 MDT</div>
 <h1>Rawgentic modernization — campaign log</h1>
 
 </header>
@@ -71,7 +71,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>Rolling design-artifact log for the autonomous workflow-modernization campaign (dogfood: rawgentic builds rawgentic). One section per implemented slot, updated in that slot&#x27;s PR (shared-doc mode). The hand-curated program dashboard lives separately at <code>docs/planning/2026-07-04-workflow-modernization-review.html</code>; this log is the per-slot artifact the WF2 Step-12 lifecycle renders with embedded run-record telemetry.</p>
 <p>Milestones: <strong>M1</strong> instrument+guard (done) · <strong>M2</strong> enable+restructure (done) · <strong>M3</strong> multi-issue autonomy + v3.0.0 (done) · <strong>M4</strong> headless (done — pilot shipped; live run owner-gated). M1–M4 <strong>COMPLETE</strong>; the <strong>epic #188 fast-follow</strong> (WF2 hardening + epic-native workflows + OAuth Action reviews) is now in progress.</p>
 <p>---</p>
-<section class="mstone"><h3>Epic #493 — WF2 speed levers (manual drive) <span class="chip c-conf">SHIPPED</span></h3><p><strong>Status: IN PROGRESS</strong> — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 in PR; #492 (depends on #491) · #494 pending. Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.</p>
+<section class="mstone"><h3>Epic #493 — WF2 speed levers (manual drive) <span class="chip c-conf">SHIPPED</span></h3><p><strong>Status: IN PROGRESS</strong> — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 merged (PR #498, f01e6bc, v3.61.0); #492 in PR; #494 pending. Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.</p>
 <p>Per-child WF2 wall-clock levers derived from the epic #475 run-timing profile (~1h52m/child; review-wait ~20% of wall-clock, much of it orchestrator idle-blocking). All children run the small-standard lane; the levers are applied MANUALLY while building them (scoped pytest during iteration, probe-before-design, pipelined reviews). AUTO MODE merge grant (owner, 2026-07-18, scoped to this run).</p>
 <h3>#488 — review-wave pipelining: never idle-wait · v3.58.0</h3>
 <p>New canonical <code>&lt;review-pipelining&gt;</code> block in implement-feature&#x27;s SKILL.md: after dispatching any review wave (Step 4 design critique, Step 8a per-task, Step 11 pre-PR), immediately draft the next phase&#x27;s non-committing artifact (plan, next task&#x27;s tests, PR body, version/changelog edits) and reconcile findings on the wave&#x27;s return. Hard boundary pinned in the same block: committing, branching, pushing, and every gate verdict still WAIT — only idle time is reclaimed, no gate skipped, no verdict pre-empted; a gate finding always wins over a stale draft. Three wave-site pointers in references/steps.md (§4 item 7 · §8a item 2 · §11 item 2), single-source per the drift-guard doctrine; guards: <code>TestReviewPipelining</code> (canonical sentence, gate-semantics sentence, ≥3 pointer sites).</p>
@@ -128,9 +128,22 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </ul>
 <p>  dogfooding its own lens map (R1 sonnet mechanical / R2 opus security). 6 findings:   3 fixed dd48127 (boundary haiku floor — R2&#x27;s catch; docstring purity; Final[frozenset]),   3 band-dropped. Suite 3643+10skip → 3663+10skip (+20).</p>
 <ul>
-<li><strong>Reviews:</strong> 1 lane reviewer (opus, security lens) + adversarial diff review FIRED</li>
+<li><strong>Reviews:</strong> 1 lane reviewer (opus, security lens) NO FINDINGS + adversarial diff review</li>
 </ul>
-<p>  (high-risk task in plan, gpt backend) — results in the PR.</p>
+<p>  FIRED (high-risk task, gpt): 3 findings — 2 Medium adopted (5f0f33c: <code>--lens</code>   review-role-only; malformed <code>reviewLenses</code> warns), 1 High refuted with evidence   (inherit = documented dispatch-site-guard contract; ledger d-491-11-1-adv1).</p>
+<ul>
+<li>PR #498, squash-merged f01e6bc (2026-07-19), all 4 CI lanes green.</li>
+</ul>
+<h3>#492 — fewer/tighter review waves: one 8a wave, Step 11 to 2 · v3.62.0</h3>
+<p>Step 8a → ONE accumulated 2-reviewer wave over every high-risk commit (after the last plan task, before Step 9; per-task coverage preserved via one log entry per task — <code>assert_review_coverage</code> unchanged; blocking point moves to fix-before-Step-9, the named trade). Step 11 → 2 reviewers (R1 mechanical+bug/logic fast tier; R2 architecture+security strong — the security lens is never the one dropped). <code>STEP11_REVIEW_AGENT_COUNT_FULL</code> 3→2, one-wave <code>estimate_agents</code>, shared-block examples corrected, mirror guards recomputed.</p>
+<ul>
+<li><strong>Lane run:</strong> small-standard; Task 3 (gate-flow prose) riskLevel high → 8a fired as ONE</li>
+</ul>
+<p>  wave, dogfooding the rule it ships. Suite 3666+10skip → 3669+10skip (+3 guards).</p>
+<ul>
+<li><strong>Reviews:</strong> single 8a wave (sonnet mechanical / opus security) + lane Step-11 +</li>
+</ul>
+<p>  adversarial diff review (fires on high-risk task) — results in the PR.</p>
 <ul>
 <li>PR / merge SHA: filled by the next slot&#x27;s pass.</li>
 </ul></section>
@@ -517,9 +530,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  live state file is *durably persisted to disk* (the resumption substrate); the   git-tracked contract (schema + examples) lives in <code>docs/driver-state/</code>.</p>
 <p><strong>Reviews.</strong> Per-task 8a (2 reviewers) hardened <code>parse_depends_on</code> + fail-closed number guards. Step-11 Codex diff review (owner-directed) applied 4 findings (sentence-boundary parse, serial-active invariant, <code>validate_campaign_start</code>, persist-topo-order-in-doc); concurrent Claude review reworded the overstated &quot;prompt-injection-safe&quot; claim to an honest best-effort filter. Security scan clean.</p>
 <p><strong>Status.</strong> PR + CI + merge SHA filled by the next slot&#x27;s pass (established convention). Telemetry for this slot is embedded below.</p></section>
-<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#491 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>23 added · 3666/3676 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>6</td><td>6</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>3</td><td>3</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
+<section class='telemetry-section'><h2>Run telemetry</h2><table class='telemetry'><tbody><tr><th>Issue</th><td>#492 (feature, standard)</td></tr><tr><th>Lane</th><td>small-standard</td></tr><tr><th>Tests</th><td>3 added · 3669/3679 passing</td></tr><tr><th>Security scan</th><td>0 blocking resolved · 0 advisory · skipped: iac</td></tr><tr><th>Outcome</th><td>PR None · merged: None · CI: skipped</td></tr><tr><th>Usage</th><td>in None / out None tokens</td></tr></tbody></table><h2>Quality gates</h2><table class='gates'><thead><tr><th>Step</th><th>Gate</th><th>Findings</th><th>Resolved</th><th>Status</th></tr></thead><tbody><tr><td>4</td><td>Design Critique</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>6</td><td>Plan Drift</td><td>0</td><td>0</td><td>skipped</td></tr><tr><td>8a</td><td>Per-task Review</td><td>4</td><td>4</td><td>pass</td></tr><tr><td>9</td><td>Implementation Drift</td><td>0</td><td>0</td><td>pass</td></tr><tr><td>11</td><td>Code Review</td><td>5</td><td>5</td><td>pass</td></tr><tr><td>15</td><td>Post-Deploy</td><td>0</td><td>0</td><td>skipped</td></tr></tbody></table></section>
 </main>
-<footer>Last updated: 2026-07-18 23:02 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-18 23:36 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
