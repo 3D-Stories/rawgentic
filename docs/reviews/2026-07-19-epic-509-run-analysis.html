@@ -1,158 +1,233 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Epic #509 run analysis</title>
+<title>Epic #509 run — nine children, where the clock went</title>
 <style>
-:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
---line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
-@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
---ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
-:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
---ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
-:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
---ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
-.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
-header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
-.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
-h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
-h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
-h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
-p,li{color:var(--ink-2)}
-code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
-pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
-pre code{background:none;padding:0}
-blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
-table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
-th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
-.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
-footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
-
-:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
-@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
-:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
-:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
-.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
-.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
-.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
-.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
-.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
-.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
-.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
-.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
-.req-may{color:var(--ink-3);background:var(--code)}
-
-.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
-.tpl-report tbody tr:nth-child(even){background:var(--code)}
+  :root {
+    --paper:#f4f5f2;--panel:#fbfbf9;--ink:#1b2029;--ink-soft:#4a5262;--ink-mute:#79818f;
+    --line:#e2e3dd;--line-soft:#ecece7;--bar:#5b7aa8;--flag:#c17d2b;--flag-soft:#e7cfa6;
+    --good:#3c8a68;--good-soft:#bfe0cf;--crit:#b4472f;--plan:#8b7fc0;--wrap:#9aa1ad;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --paper:#12151b;--panel:#191d25;--ink:#e9ebef;--ink-soft:#b3bac6;--ink-mute:#7c8494;
+    --line:#262b34;--line-soft:#20242c;--bar:#7a9ccb;--flag:#d99a4a;--flag-soft:#4d3d24;
+    --good:#56b189;--good-soft:#24402f;--crit:#d8664a;--plan:#a396d6;--wrap:#6b7280;}}
+  :root[data-theme="light"]{--paper:#f4f5f2;--panel:#fbfbf9;--ink:#1b2029;--ink-soft:#4a5262;
+    --ink-mute:#79818f;--line:#e2e3dd;--line-soft:#ecece7;--bar:#5b7aa8;--flag:#c17d2b;
+    --flag-soft:#e7cfa6;--good:#3c8a68;--good-soft:#bfe0cf;--crit:#b4472f;--plan:#8b7fc0;--wrap:#9aa1ad;}
+  :root[data-theme="dark"]{--paper:#12151b;--panel:#191d25;--ink:#e9ebef;--ink-soft:#b3bac6;
+    --ink-mute:#7c8494;--line:#262b34;--line-soft:#20242c;--bar:#7a9ccb;--flag:#d99a4a;
+    --flag-soft:#4d3d24;--good:#56b189;--good-soft:#24402f;--crit:#d8664a;--plan:#a396d6;--wrap:#6b7280;}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:880px;margin:0 auto;padding:4rem 1.5rem 5rem;}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--ink-mute);margin:0 0 1rem;}
+  h1{font-size:clamp(1.9rem,4.5vw,2.9rem);line-height:1.08;margin:0 0 .6rem;letter-spacing:-.02em;
+    text-wrap:balance;font-weight:640;}
+  .lede{font-size:1.08rem;color:var(--ink-soft);margin:0;max-width:62ch;}
+  .rule{height:1px;background:var(--line);border:0;margin:2.6rem 0;}
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+  .kpi{background:var(--panel);padding:1.1rem 1.15rem;}
+  .kpi .n{font-family:var(--mono);font-size:1.75rem;font-weight:600;letter-spacing:-.01em;
+    font-variant-numeric:tabular-nums;}
+  .kpi .n.flag{color:var(--flag);}.kpi .n.good{color:var(--good);}
+  .kpi .l{font-size:.82rem;color:var(--ink-mute);margin-top:.15rem;}
+  h2{font-size:1.25rem;letter-spacing:-.01em;margin:0 0 .3rem;font-weight:620;}
+  .sub{color:var(--ink-mute);font-size:.9rem;margin:0 0 1.4rem;}
+  .chart{display:flex;flex-direction:column;gap:.5rem;}
+  .row{display:grid;grid-template-columns:190px 1fr 58px;gap:.8rem;align-items:center;}
+  .row .name{font-size:.86rem;color:var(--ink-soft);text-align:right;display:flex;
+    flex-direction:column;align-items:flex-end;gap:1px;}
+  .row .name b{color:var(--ink);font-weight:580;}
+  .row .name span{font-family:var(--mono);font-size:.68rem;color:var(--ink-mute);letter-spacing:.02em;}
+  .row .tot{font-family:var(--mono);font-size:.78rem;color:var(--ink-soft);
+    font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .row .tot em{font-style:normal;color:var(--flag);}
+  .track{position:relative;height:30px;background:var(--line-soft);border-radius:5px;overflow:hidden;
+    display:flex;}
+  .seg{height:100%;}
+  .seg.p0{background:var(--plan);}.seg.p1{background:var(--bar);}.seg.p2{background:var(--flag);}
+  .seg.p3{background:var(--good);}.seg.p4{background:var(--wrap);}
+  .fillrow .track{display:block;}
+  .fill{position:absolute;left:0;top:0;bottom:0;background:var(--bar);border-radius:5px;
+    display:flex;align-items:center;}
+  .fill.flag{background:var(--flag);}
+  .fill .v{font-family:var(--mono);font-size:.74rem;font-variant-numeric:tabular-nums;
+    font-weight:600;padding:0 .5rem;white-space:nowrap;color:#fff;}
+  .fill.tiny .v{color:var(--ink);padding-left:calc(100% + .45rem);}
+  :root[data-theme="dark"] .fill:not(.tiny) .v{color:#0d1015;}
+  :root[data-theme="light"] .fill:not(.tiny) .v{color:#fff;}
+  @media (prefers-color-scheme:dark){.fill:not(.tiny) .v{color:#0d1015;}}
+  .legend{display:flex;gap:1.15rem;margin:1.2rem 0 0;font-size:.8rem;color:var(--ink-mute);flex-wrap:wrap;}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:.4rem;vertical-align:-1px;}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:1rem;}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1.2rem 1.3rem;}
+  .card h3{margin:0 0 .2rem;font-size:1rem;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;}
+  .card .tag{font-family:var(--mono);font-size:.68rem;padding:.12rem .45rem;border-radius:20px;letter-spacing:.04em;}
+  .tag.gate{background:var(--flag-soft);color:var(--flag);}
+  .tag.emp{background:var(--good-soft);color:var(--good);}
+  .card p{margin:.5rem 0 0;font-size:.88rem;color:var(--ink-soft);}
+  .card ul{margin:.6rem 0 0;padding-left:1.05rem;font-size:.86rem;color:var(--ink-soft);}
+  .card li{margin:.28rem 0;}.card li b{color:var(--ink);font-weight:580;}
+  .card em{font-style:italic;color:var(--ink-mute);}
+  .card code{font-family:var(--mono);font-size:.8em;}
+  .bug{color:var(--crit);font-weight:600;}
+  .recs{display:flex;flex-direction:column;gap:.8rem;}
+  .rec{display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:center;background:var(--panel);
+    border:1px solid var(--line);border-left:3px solid var(--good);border-radius:9px;padding:1.05rem 1.25rem;}
+  .rec h4{margin:0 0 .3rem;font-size:.98rem;}
+  .rec h4 em{font-style:italic;color:var(--flag);}
+  .rec p{margin:0;font-size:.86rem;color:var(--ink-soft);}
+  .rec code{font-family:var(--mono);font-size:.8em;}
+  .save{font-family:var(--mono);font-size:1.15rem;font-weight:600;color:var(--good);white-space:nowrap;
+    font-variant-numeric:tabular-nums;text-align:right;}
+  .save span{display:block;font-size:.62rem;color:var(--ink-mute);letter-spacing:.06em;
+    text-transform:uppercase;font-weight:500;}
+  .note{font-size:.78rem;color:var(--ink-mute);margin-top:2.6rem;padding-top:1.2rem;
+    border-top:1px solid var(--line);line-height:1.7;}
+  .note code{font-family:var(--mono);font-size:.74rem;background:var(--line-soft);padding:.05rem .3rem;border-radius:3px;}
+  @media (max-width:640px){.kpis{grid-template-columns:1fr;}.split{grid-template-columns:1fr;}
+    .row{grid-template-columns:96px 1fr 48px;}.row .name{font-size:.76rem;}
+    .rec{grid-template-columns:1fr;}.save{text-align:left;}}
 </style>
-</head>
-<body class="tpl-report">
 <div class="wrap">
-<header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-19 17:38 MDT</div>
-<h1>Epic #509 run analysis</h1>
-
-</header>
-<main>
-<h1>Epic #509 run analysis</h1>
-<p><strong>Run:</strong> 2026-07-19, session be2d9fd9 (+ resumed continuation), interactive AUTO MODE with scoped auto-merge. <strong>Outcome:</strong> 9/9 children merged (PRs #514–#523, v3.66.1→3.71.0) + telemetry PR #524; suite 3782→3857 (+75), 0 regressions, 0 loop-backs, 0 blockers. Epic CLOSED. <strong>Method note:</strong> phase splits below are <strong>reconstructed from session-transcript timestamps</strong> (anchor commands: <code>git checkout -b</code>, review dispatch, <code>gh pr create</code>, <code>gh pr merge</code>, <code>work_summary.py summarize</code>) — the last hand-reconstruction this epic should ever need: #506&#x27;s <code>timing</code> telemetry shipped <strong>inside</strong> this run, so this run&#x27;s own records still carry <code>timing: absent</code> honestly. Totals cross-checked against PR createdAt/mergedAt. Every number below is <strong>estimated (transcript-anchored)</strong> unless marked confirmed.</p>
-<h2>At a glance</h2>
-<ul>
-<li><strong>Wall clock:</strong> 18:17–23:28 UTC ≈ <strong>311 min</strong>, of which <strong>56.3 min stalled</strong> (one owner-away gap 20:54→21:50, mid-#506 review — confirmed, the only &gt;10-min gap in the whole run) and ~15 min owner pause/interactions around #513. <strong>Active ≈ 240 min for 9 children ≈ 26.5 min/child.</strong></li>
-<li><strong>Average active phase split per child:</strong> design+plan <strong>1.5</strong> · implement <strong>10.1</strong> · review <strong>9.9</strong> · PR+CI+merge <strong>3.1</strong> · wrap <strong>0.7</strong> (min).</li>
-<li><strong>Biggest lever:</strong> the single owner-away stall (18% of total wall) — attended runs need a review-verdict push notification or the armed resume launcher.</li>
-<li><strong>Session cost (cumulative capture):</strong> $140.01 total; per-child deltas $7.35–$23.02.</li>
-</ul>
-<h2>Per-child phase table (minutes, transcript-anchored)</h2>
-<table>
-<thead><tr><th>Child</th><th>design+plan</th><th>implement</th><th>review</th><th>PR+CI+merge</th><th>wrap</th><th>notes</th></tr></thead>
-<tbody>
-<tr><td>#510</td><td>~1.5ᵉ</td><td>7.9</td><td>10.2</td><td>7.0</td><td>1.3</td><td>first child; PR+CI includes advisory-lane wait experiment</td></tr>
-<tr><td>#511</td><td>~1.5ᵉ</td><td>8.1</td><td>5.8</td><td>2.5</td><td>0.7</td><td></td></tr>
-<tr><td>#512</td><td>1.6</td><td>9.6</td><td>8.5</td><td>2.4</td><td>0.7</td><td></td></tr>
-<tr><td>#513</td><td>1.7</td><td>8.7</td><td>12.4</td><td>2.5</td><td>0.7</td><td>review incl. shared-helper fix wave</td></tr>
-<tr><td>#517</td><td>~1.5ᵉ</td><td>7.1</td><td>4.9</td><td>2.8</td><td>0.6</td><td>owner-added mid-run</td></tr>
-<tr><td>#506</td><td>2.0</td><td>13.5</td><td><strong>15.0</strong> (+56.3 stalled)</td><td>2.9</td><td>0.8</td><td>stall = owner away, bucketed separately</td></tr>
-<tr><td>#392</td><td>1.3</td><td>10.4</td><td>9.0</td><td>2.7</td><td>0.7</td><td></td></tr>
-<tr><td>#507</td><td>0.6</td><td>6.6</td><td>10.9</td><td>2.5</td><td>0.5</td><td>review incl. HIGH fix + wiring-pin updates</td></tr>
-<tr><td>#508</td><td>2.0</td><td>18.6</td><td>12.4</td><td>2.8</td><td>0.7</td><td>new-skill registration inflates implement</td></tr>
-</tbody>
-</table>
-<p>ᵉ fetch anchor not captured for 3 children (different command form); value estimated from the measured six (range 0.6–2.0). Boundaries: design+plan = issue fetch→branch cut; implement = branch→review dispatch (includes baseline full suite + TDD); review = dispatch→PR create (includes reviewer wave, fix reconcile, 11.5 scan, pre-PR full suite); PR+CI+merge = PR create→merge; wrap = merge→record persisted.</p>
-<h2>Average phase split (active time)</h2>
-<pre><code>design+plan  █▌            1.5 min   6%
-implement    ██████████   10.1 min  40%
-review       █████████▉    9.9 min  39%
-PR+CI+merge  ███           3.1 min  12%
-wrap         ▊             0.7 min   3%</code></pre>
-<h2>Cost / tokens per child</h2>
-<p>Capture caveat (finding C1 below): <code>usage</code> in each run-record is <strong>session-cumulative</strong> — per-child figures here are successive-capture <strong>deltas</strong> (confirmed arithmetic over the capture files; #510&#x27;s delta includes epic setup, #513&#x27;s includes the pause/tasklist/launcher work).</p>
-<table>
-<thead><tr><th>Child</th><th>Δcost (USD)</th><th>Δoutput tokens</th></tr></thead>
-<tbody>
-<tr><td>#510</td><td>18.97*</td><td>142,108*</td></tr>
-<tr><td>#511</td><td>9.80</td><td>53,496</td></tr>
-<tr><td>#512</td><td>7.35</td><td>48,616</td></tr>
-<tr><td>#513</td><td>23.02*</td><td>71,661*</td></tr>
-<tr><td>#517</td><td>9.46</td><td>26,715</td></tr>
-<tr><td>#506</td><td>21.97</td><td>84,168</td></tr>
-<tr><td>#392</td><td>15.32</td><td>41,196</td></tr>
-<tr><td>#507</td><td>13.19</td><td>31,760</td></tr>
-<tr><td>#508</td><td>20.93</td><td>54,889</td></tr>
-</tbody>
-</table>
-<p>\* inflated by non-child work in the same capture window. Total session $140.01 (rate-card estimate; subscription-billed).</p>
-<h2>Gate findings per step (from run-records — confirmed)</h2>
-<table>
-<thead><tr><th>Child</th><th>Step 4</th><th>Step 11</th><th>11.5</th><th>Loop-backs</th></tr></thead>
-<tbody>
-<tr><td>#510</td><td>1/1</td><td>2/2 (1 Med applied, 1 Low band-dropped)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#511</td><td>1/1</td><td>3/2 (3 Low: 2 dropped, 1 noted)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#512</td><td>1/1</td><td>2/2 (1 Low applied, 1 dropped)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#513</td><td>1/1</td><td>3/3 (1 Med + 1 Low applied, 1 reworded)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#517</td><td>1/1</td><td>0/0 (clean)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#506</td><td>2/2</td><td>3/2 (1 Med self-verified+applied, 1 Low applied, 1 noted)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#392</td><td>1/1</td><td>2/1 (1 Low applied, 1 noted)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#507</td><td>1/1</td><td>3/3 (<strong>1 HIGH</strong> + 1 Med applied)</td><td>PASS</td><td>0</td></tr>
-<tr><td>#508</td><td>1/1</td><td>2/2 (1 Med + 1 Low applied)</td><td>PASS</td><td>0</td></tr>
-</tbody>
-</table>
-<p>Review yield: 21 findings across 9 waves; 12 applied pre-PR, incl. one HIGH (#507 <code>--record</code> overload would have skipped the new approval gate) and two design-grade Mediums (#506 unreachable &quot;complete&quot; status; #508 WF16/#359 numbering collision). Every wave cost ~5–8.5 min of reviewer wall — and paid for itself at least four times.</p>
-<h2>Optimization levers (grounded)</h2>
-<p>1. <strong>Kill the attended-run stall (single biggest wall item).</strong> The one owner-away gap was 56.3 min = 18% of total wall — more than any phase&#x27;s average. Change: push a notification at review-verdict-ready (<code>notify-owner</code> skill) and/or arm the resume launcher (<code>epic509-resume.sh</code> pattern) at run start even for attended runs. Saving: up to ~56 min per comparable evening run. Risk: none (additive). 2. <strong>Trim the review-phase serial tail (39% of active).</strong> Reviewer agent wall averaged ~6 min/wave (confirmed from dispatch durations 267–509 s), but the review PHASE averaged 9.9 min: the difference is the serialized reconcile → 11.5 scan → pre-PR full-suite re-run tail. 5/9 children re-ran the full suite (~2.4 min) because a review fix landed post-Step-9. Change: scope the pre-PR re-run when the review fix touched only guard-pinned prose/tests (steps.md §12 exception wording already allows consuming Step-9 evidence — tighten the &quot;touched a test-pinned surface&quot; trigger to the affected guard subset + registration file). Saving: ~2–2.5 min on every review-fix child (~11 min/epic). Risk: weaker final gate — needs the exception spelled out, not improvised. 3. <strong>Registration children carry a fixed ~5-min surcharge.</strong> #508&#x27;s implement was 18.6 min vs the 8.9-min median — the delta is the multi-surface registration walk (whitelist, symlink, sync, canary, count strings ×6, second hand-pin discovered only by the full suite). Change: fold the <code>test_interview_skill.py</code> hand-pin (and any future ones) into the add-skill checklist, and script the count-string walk (<code>scripts/</code> helper that prints every surface needing a bump). Saving: ~3–4 min per new-skill child + one full-suite round-trip. Risk: none (tooling).</p>
-<p>Non-levers, for the record: CI itself is tight (test lane ~2.1 min, hard lanes green 9/9); design+plan at 1.5 min shows the lane collapse working as intended; wrap at 0.7 min is already minimal.</p>
-<h2>Divergences and bugs (all 9 children, inline)</h2>
-<p>Cross-child synthesis (each finding: severity × children affected × status):</p>
-<table>
-<thead><tr><th>#</th><th>Finding</th><th>Sev</th><th>Children</th><th>Status</th></tr></thead>
-<tbody>
-<tr><td>C1</td><td><strong><code>usage</code> capture is session-cumulative, not per-run</strong> — every record&#x27;s input/output/cost includes all prior session work; two same-session children overlap 100%. Confirmed: successive records&#x27; token counts are monotone-increasing supersets (capture files diffed). <code>capture_status: &quot;captured&quot;</code> validates clean while the number answers &quot;session so far&quot;, not &quot;this run&quot;. Corrupts exactly the cost-per-child analysis #508&#x27;s skill automates (this report had to use deltas).</td><td>Med</td><td>all 9</td><td>candidate — relates to #363</td></tr>
-<tr><td>C2</td><td><strong>designArtifact sharedDoc unusable under concurrent sessions</strong> — <code>docs/planning/campaign-log.md</code> was foreign-dirty the whole run; all 9 children recorded <code>design artifact (skipped)</code> with reason. The sharedDoc convention has no answer for a dirty shared file (git can&#x27;t split it).</td><td>Med (friction)</td><td>all 9</td><td>candidate</td></tr>
-<tr><td>C3</td><td><strong>Step 1b deferral condition doesn&#x27;t cover interactive epic goals</strong> — prose defers only on <code>RAWGENTIC_EPIC_GOAL</code> (headless driver); this interactive run had a session <code>/goal</code> and deferral was applied by judgment. Right outcome, outside the letter.</td><td>Low</td><td>all 9</td><td>candidate</td></tr>
-<tr><td>C4</td><td><strong>epic-run step-state writes stopped at Step 4</strong> — the skill mandates a manual write at each numbered step ENTRY (1–5); steps 1–4 were written, Step 5 (wrap) never. Fail-open, display-only impact.</td><td>Low</td><td>run-level</td><td>candidate</td></tr>
-<tr><td>C5</td><td>Below-band review findings applied via self-verification (4×: #506 F1 0.72, #392 L1 0.8, #512 F1 0.85, #507 Med 0.5) — each independently verified before applying, but the banded-confidence prose has no explicit &quot;orchestrator self-verify converts a below-band finding&quot; path; today it&#x27;s judgment.</td><td>Low</td><td>4 children</td><td>note</td></tr>
-<tr><td>C6</td><td>Advisory <code>code-review</code> lane pending at 7/9 merges — doctrine-compliant (advisory never gates), but those merges shipped without the lane&#x27;s review ever landing. Observation for lane-timing, not a defect.</td><td>Note</td><td>7 of 9</td><td>note</td></tr>
-<tr><td>C7</td><td><code>wall_clock_s</code> hand-set from orchestrator arithmetic (prose-sanctioned) — coarse (#506&#x27;s 5436s included the 56-min stall). #506&#x27;s <code>timing</code> key supersedes this going forward.</td><td>Note</td><td>all 9</td><td>superseded by #506</td></tr>
-</tbody>
-</table>
-<p>Prose-divergence sweep against the loaded cache (3.66.0 for most of the run): mandatory steps 1–5, 7–9, 11, 11.5, 12, 16 have DONE markers for all 9 children (confirmed, session notes); Step 6 skipped per lane (sanctioned); Step 8a never fired (no high-risk tasks — path-allowlist confirmed per child); no hook errors observed; no schema rejections (9/9 <code>work_summary.py summarize</code> rc=0, confirmed).</p>
-<p><strong>Filing discipline:</strong> C1–C4 are candidates presented for owner approval — nothing filed by this analysis. C1 dup-check must reconcile with #363 (usage attribution) before any filing.</p>
-<h2>Not checked</h2>
-<ul>
-<li>Subagent-side transcripts (reviewer agents&#x27; internal time breakdown) — only their total durations were captured.</li>
-<li>The 3 missing fetch anchors (different command shape) — design+plan for #510/#511/#517 is estimated, not measured.</li>
-<li>WF14 batch machinery assessment — deliberately not run here (this stopgap is WF14-decoupled by owner decision; the new WF19 skill wires it for future epics).</li>
-</ul>
-<h2>Sources</h2>
-<p>Confirmed: <code>docs/measurements/run_records.jsonl</code> (9 records, PR #524), session transcripts <code>be2d9fd9…jsonl</code> + <code>4bed8604…jsonl</code> (89 anchor events), capture files (cost deltas), PR metadata. Estimated: phase boundaries as defined above.</p>
-
-</main>
-<footer>Last updated: 2026-07-19 17:38 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+  <p class="eyebrow">rawgentic &middot; epic #509 &middot; run post-mortem &middot; 2026-07-19</p>
+  <h1>Nine children in one evening &mdash; where the epic run's clock actually went</h1>
+  <p class="lede">9/9 merged (v3.66.1&rarr;3.71.0), suite 3782&rarr;3857 with zero regressions and zero loop-backs. Active work averaged 26&frac12; minutes per child; the single biggest time item wasn't a phase at all &mdash; it was one 56-minute owner-away stall. Review waves cost ~6 minutes each and caught one HIGH and three design-grade defects before any PR opened.</p>
+  <hr class="rule">
+  <div class="kpis">
+    <div class="kpi"><div class="n">26.5m</div><div class="l">active per child, average (9 children, ~4h active)</div></div>
+    <div class="kpi"><div class="n flag">56.3m</div><div class="l">one owner-away stall &mdash; 18% of total wall, bigger than any phase</div></div>
+    <div class="kpi"><div class="n good">~70m</div><div class="l">recoverable per comparable run &mdash; by notification + re-scoping, not weaker gates</div></div>
+  </div>
+  <hr class="rule">
+  <h2>Per-child phase stack</h2>
+  <p class="sub">Minutes of active work, transcript-anchored (branch cut, review dispatch, PR create, merge, record persist). #506's 56-minute stall is excluded from its bar and flagged beside it.</p>
+  <div class="chart" id="stack"></div>
+  <div class="legend">
+    <span><i style="background:var(--plan)"></i>design + plan</span>
+    <span><i style="background:var(--bar)"></i>implement</span>
+    <span><i style="background:var(--flag)"></i>review</span>
+    <span><i style="background:var(--good)"></i>PR + CI + merge</span>
+    <span><i style="background:var(--wrap)"></i>wrap</span>
+  </div>
+  <hr class="rule">
+  <h2>Average phase split</h2>
+  <p class="sub">Implement and review split 80% of active time almost evenly; the lane keeps design ceremony at 6%.</p>
+  <div class="chart" id="avg"></div>
+  <hr class="rule">
+  <h2>The review waves paid rent</h2>
+  <p class="sub">21 findings across 9 single-reviewer waves (~6 min reviewer wall each); 12 applied before any PR opened.</p>
+  <div class="split">
+    <div class="card">
+      <h3>What the waves caught <span class="tag gate">4 load-bearing</span></h3>
+      <ul>
+        <li><span class="bug">HIGH</span> &mdash; <code>--record</code> doubled as the embed autonomy signal: a standalone human re-assessment would have <b>skipped the brand-new approval gate</b> <em>(#507)</em></li>
+        <li><span class="bug">Design</span> &mdash; &ldquo;complete&rdquo; timing status was unreachable on every live record <em>(#506)</em></li>
+        <li><span class="bug">Design</span> &mdash; WF16 number already reserved by open #359 &rarr; shipped as WF19 <em>(#508)</em></li>
+        <li><span class="bug">Gap</span> &mdash; supervisor timeout path recreated capture dirs at default umask <em>(#513)</em></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Cost per child <span class="tag emp">$140 session total</span></h3>
+      <p>Successive-capture deltas (the records themselves are session-cumulative &mdash; finding C1):</p>
+      <ul>
+        <li>Median child &asymp; <b>$15</b>; range $7.35 (#512) &ndash; $23.02 (#513*)</li>
+        <li>Heaviest: #513* ($23.02, incl. pause/launcher work) &middot; #506 ($21.97) &middot; #508 ($20.93)</li>
+        <li><em>* capture window includes non-child work</em></li>
+      </ul>
+    </div>
+  </div>
+  <hr class="rule">
+  <h2>Where to cut it &mdash; three moves</h2>
+  <p class="sub">All recover time without weakening the gates that caught the real defects.</p>
+  <div class="recs">
+    <div class="rec">
+      <div>
+        <h4>1 &middot; Page the owner at review-verdict-ready <em>(or arm the resume launcher)</em></h4>
+        <p>The one 56-minute gap sat between a reviewer verdict landing and the owner's &ldquo;resume&rdquo; &mdash; 18% of total wall, more than any phase average. A <code>notify-owner</code> push at verdict-ready (or the <code>epic509-resume.sh</code> launcher armed at run start) removes it entirely.</p>
+      </div>
+      <div class="save">&minus;56m<span>per attended run</span></div>
+    </div>
+    <div class="rec">
+      <div>
+        <h4>2 &middot; Scope the pre-PR re-run after prose-only review fixes</h4>
+        <p>5 of 9 children re-ran the full suite (~2.4&nbsp;min each) because a review fix landed after Step&nbsp;9 &mdash; usually a guard-pinned prose tweak. Tightening &sect;12's re-run trigger to the affected guard subset keeps the gate and drops the ceremony.</p>
+      </div>
+      <div class="save">&minus;11m<span>per epic</span></div>
+    </div>
+    <div class="rec">
+      <div>
+        <h4>3 &middot; Script the new-skill count-surface walk</h4>
+        <p>#508's implement ran 18.6&nbsp;min vs the 8.9-min median &mdash; the delta is the registration walk across whitelist, symlink, sync, canary, and six count strings, plus a full-suite round-trip to find the <b>second</b> hand-pinned count in <code>test_interview_skill.py</code>. A helper that prints every stale surface makes this mechanical.</p>
+      </div>
+      <div class="save">&minus;4m<span>per new skill</span></div>
+    </div>
+  </div>
+  <p class="note">
+    <b>Method &amp; honesty.</b> Phase splits are <b>transcript-anchored estimates</b> (89 anchor events across two session files), not instrumented telemetry &mdash; fittingly, the telemetry that retires this method (#506 per-step timing) shipped <em>inside</em> this run, so these records still carry <code>timing: absent</code>. Boundaries: design+plan = issue fetch&rarr;branch; implement = branch&rarr;review dispatch (includes the baseline full suite); review = dispatch&rarr;PR create (includes fix reconcile, 11.5 scan, pre-PR suite); PR+CI = create&rarr;merge. Fetch anchors for #510/#511/#517 were not captured &mdash; their design+plan (~1.5m) is extrapolated from the six measured children, and it is the number most likely to be wrong. Costs are rate-card estimates from session-cumulative captures, differenced. Full evidence tables: <code>docs/reviews/2026-07-19-epic-509-run-analysis.md</code> (PR #525). Divergence findings C1&ndash;C4 presented to the owner, deliberately unfiled.
+  </p>
 </div>
-</body>
-</html>
+<script>
+  // DOM-builder only (repo security contract) — no innerHTML.
+  var PHASES = ["design + plan","implement","review","PR + CI + merge","wrap"];
+  var kids = [
+    ["#510","reviewer read-only clause",[1.5,7.9,10.2,7.0,1.3],false,true],
+    ["#511","run-record path",[1.5,8.1,5.8,2.5,0.7],false,true],
+    ["#512","source-of-truth fields",[1.6,9.6,8.5,2.4,0.7],false,false],
+    ["#513","capture dirs 0700",[1.7,8.7,12.4,2.5,0.7],false,false],
+    ["#517","epic-run task list",[1.5,7.1,4.9,2.8,0.6],false,true],
+    ["#506","per-step timing",[2.0,13.5,15.0,2.9,0.8],true,false],
+    ["#392","WF14 batch mode",[1.3,10.4,9.0,2.7,0.7],false,false],
+    ["#507","suggest-only filing",[0.6,6.6,10.9,2.5,0.5],false,false],
+    ["#508","post-mortem skill",[2.0,18.6,12.4,2.8,0.7],false,false]
+  ];
+  function el(tag, cls, text){ var e=document.createElement(tag); if(cls)e.className=cls;
+    if(text!==undefined)e.textContent=text; return e; }
+  var maxTot = 0;
+  kids.forEach(function(k){ var t=k[2].reduce(function(a,b){return a+b;},0); if(t>maxTot)maxTot=t; });
+  var stack = document.getElementById("stack");
+  kids.forEach(function(k){
+    var tot = k[2].reduce(function(a,b){return a+b;},0);
+    var row = el("div","row");
+    var name = el("div","name"); var b=el("b",null,k[0]); var s=el("span",null,k[1]);
+    name.appendChild(b); name.appendChild(s); row.appendChild(name);
+    var track = el("div","track");
+    k[2].forEach(function(v,i){
+      var seg = el("div","seg p"+i);
+      seg.style.width = (v/maxTot*100).toFixed(1)+"%";
+      seg.title = PHASES[i]+" — "+v+"m";
+      track.appendChild(seg);
+    });
+    row.appendChild(track);
+    var tt = el("div","tot", tot.toFixed(1)+"m");
+    if(k[3]){ tt.textContent=""; tt.appendChild(document.createTextNode(tot.toFixed(1)+"m "));
+      var em=el("em",null,"+56m stall"); tt.appendChild(em); }
+    if(k[4]){ tt.appendChild(document.createTextNode(" ᵉ")); tt.title="design+plan extrapolated (fetch anchor not captured)"; }
+    row.appendChild(tt);
+    stack.appendChild(row);
+  });
+  var avgs = [["design + plan","lane-collapsed Steps 1–5",1.5,"p0"],
+              ["implement","Steps 7–8 · TDD + baseline",10.1,"p1"],
+              ["review","dispatch → PR-ready · incl. 11.5 + pre-PR suite",9.9,"p2"],
+              ["PR + CI + merge","Steps 12–14 · test lane ~2.1m",3.1,"p3"],
+              ["wrap","Step 16 · record persist",0.7,"p4"]];
+  var maxA = Math.max.apply(null, avgs.map(function(a){return a[2];}));
+  var avg = document.getElementById("avg");
+  avgs.forEach(function(a){
+    var row = el("div","row fillrow");
+    var name = el("div","name"); name.appendChild(el("b",null,a[0])); name.appendChild(el("span",null,a[1]));
+    row.appendChild(name);
+    var track = el("div","track");
+    var pct = a[2]/maxA*100, tiny = pct < 26;
+    var fill = el("div","fill"+(a[3]==="p2"?" flag":"")+(tiny?" tiny":""));
+    fill.style.width = pct.toFixed(1)+"%";
+    if(a[3]!=="p2") fill.style.background = "var(--"+({p0:"plan",p1:"bar",p3:"good",p4:"wrap"})[a[3]]+")";
+    var v = el("span","v", a[2]+"m ("+Math.round(a[2]/25.3*100)+"%)");
+    fill.appendChild(v); track.appendChild(fill); row.appendChild(track);
+    row.appendChild(el("div","tot",""));
+    avg.appendChild(row);
+  });
+</script>
