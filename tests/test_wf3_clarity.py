@@ -419,7 +419,7 @@ class TestRunFeedbackWiringWF3:
     WIRING = (
         "When enabled, invoke the run-feedback core path non-interactively "
         "with explicit `--record /tmp/wf3-run-record-<issue>-<session-id>.json --wf 3 "
-        "--session-notes <notes-path>`; an assessment failure never blocks "
+        "--file-issues --session-notes <notes-path>`; an assessment failure never blocks "
         "workflow completion — log and continue."
     )
 

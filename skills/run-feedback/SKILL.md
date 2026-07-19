@@ -113,7 +113,10 @@ additive.
    `## At a glance` batch verdict, one section per issue (assessed / linked / degraded),
    then a `## Cross-run synthesis` section (patterns holding across ≥2 runs, score
    trends, the batch's best catch and worst friction).
-6. **Route once for the whole batch.** the filing cap is shared across the WHOLE batch
+6. **Route once for the whole batch — through the Step 4 filing-mode fork (#507)**:
+   an interactive batch run is suggest-first, and the cross-run dedupe operates only
+   over APPROVED candidates (a declined candidate is never resurrected into a filed
+   issue by the dedupe). the filing cap is shared across the WHOLE batch
    (never per-run × N); a finding recurring across runs dedupes into ONE filed issue
    citing all affected runs. Friction: still exactly ONE mempalace memory for the
    whole batch. Close marker (single, batch form):
@@ -247,17 +250,19 @@ PR picks them up (WF5 convention).
 to **suggest-first**: present every candidate fully drafted — conventional title,
 complete body, labels, dup-check verdict — and file only the approved ones, exactly
 as drafted (same cap, same dup-check, same labels). AUTONOMOUS filing — the
-pre-#507 behavior — applies when ANY of: `RAWGENTIC_HEADLESS=1`; the invocation is
-embedded (a WF2 Step 16 / WF3 Step 14 caller passing explicit `--record`, the
-embed signal); or the explicit `--file-issues` flag. That path keeps today's
-autonomous filing byte-for-byte — the #337 embed contract's zero interactive
+pre-#507 behavior — applies ONLY when `RAWGENTIC_HEADLESS=1` or the explicit
+`--file-issues` flag is present; embedded WF2 Step 16 / WF3 Step 14 callers pass
+`--file-issues` (see those steps' wiring sentence) — `--record` alone is NOT an
+autonomy signal, because it is also a first-class human invocation (a standalone
+`--record` re-assessment stays suggest-first). That autonomous path keeps today's
+filing byte-for-byte — the #337 embed contract's zero interactive
 dependency is preserved, and this fork must never re-introduce one there.
 Declined candidates are preserved in the report with `routing: not-filed-declined`
 (extending the `not-filed-cap` vocabulary) — a decline never erases the finding.
-Cap semantics are unchanged and coordinate with #392's batch-shared pool: the cap
-counts FILED issues, not suggested candidates (approval applies per candidate).
-The routing section states the filed vs suggested-declined counts explicitly
-(the visible-skip convention).
+Cap semantics keep the #392 batch-shared pool with the counting basis clarified:
+the cap counts FILED issues, not suggested candidates (approval applies per
+candidate). The routing section states the filed vs suggested-declined counts
+explicitly (the visible-skip convention).
 
 1. **Plugin defects** (reproducible, evidence-cited, confirmed present on current
    main): dup-check FIRST —

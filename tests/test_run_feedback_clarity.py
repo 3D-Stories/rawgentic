@@ -391,9 +391,12 @@ class TestSuggestOnlyFiling:
 
     def test_headless_and_embed_stay_autonomous(self):
         s = self._step4()
-        assert "keeps today's autonomous filing byte-for-byte" in s, (
+        assert "keeps today's filing byte-for-byte" in s, (
             "headless/embedded path must not gain an interactive gate (#507 AC2)")
         assert "`--file-issues`" in s
+        # #507 review HIGH: --record is also a first-class human invocation —
+        # it must never double as the autonomy signal.
+        assert "`--record` alone is NOT an autonomy signal" in s
 
     def test_declined_candidates_preserved(self):
         s = self._step4()
