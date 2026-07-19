@@ -455,6 +455,8 @@ Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contrac
     ```
     Prints `worktree` or `serial-only` (the probe is non-mutating — it creates and force-removes a throwaway worktree under the system temp dir — and never fails the run). Carry it as `capabilities.parallelism` and log one session-note line. Step 8 consults it. **Gotcha to encode for parallel-build orchestrators:** `secret-scan --since` full-scans a *linked* worktree — push from the MAIN checkout (existing documented behavior).
 
+**Baseline record (per `<test-run-discipline>`, SKILL.md):** when `capabilities.has_tests`, run the FULL suite once now and record the baseline from the runner's final output (pass/fail/skip counts + failing test names) in session notes. This is the first of the exactly-two full-suite runs; Step 9's final gate diffs against it. If the current checkout is not the branch base that Step 7 will cut (e.g. a prior issue's feature branch), re-record after Step 7 — a baseline measured on foreign content is invalid. A baseline already recorded on content whose git tree hash equals the branch base carries as-is.
+
 ### Output
 Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3. User-visible surfaces: the item-8 lane suggestion (waits for input), the item-8 path estimate line (print-and-continue), and the item-9 trivial-work suggestion (waits for input).
 
@@ -932,9 +934,9 @@ Execute the implementation plan task by task.
 **For each task in the plan:**
 
 1. **If TDD mode** (`capabilities.has_tests == true`):
-   - RED: Write failing test(s). Run test command from `capabilities.test_commands` to confirm failure.
-   - GREEN: Write minimum code to pass. Run tests to confirm all pass.
-   - REFACTOR: Clean up. Re-run tests.
+   - RED: Write failing test(s). Run the SCOPED test command for the area under change (per `<test-run-discipline>`, SKILL.md — never the full suite here) to confirm failure.
+   - GREEN: Write minimum code to pass. Run the scoped suite to confirm all pass.
+   - REFACTOR: Clean up. Re-run the scoped suite.
    - **Test-output projection (#314, see `### Delegated reads`):** consume the runner's
      own final summary (pass/fail counts + failing test ids + first assertion lines — a
      bounded tail), never `cat` a full run log into context. Verdicts come from exit
@@ -972,7 +974,7 @@ Execute the implementation plan task by task.
    **Log per task** in session notes: `impl task <id>: model <model> (<reason>), effort <effort|none>` — makes over/under-routing auditable.
 1. **Before dispatch:** record the pre-task state — current `HEAD` and `git status --porcelain` (the tree must already be clean from the previous task's commit).
 2. **Dispatch one `rawgentic:rawgentic-implementer` task-agent** (serial — one at a time; each task builds on the previous commit) with the per-task `model` from item 0 and the brief: the design doc, this plan task, the TDD requirement, project conventions, and the current test baseline. The definition carries the test-first/stage-only-your-files/report-honestly contract; the agent implements the task test-first and commits it. Its `isolation: worktree` frontmatter keeps the mutation off the shared tree (fallback per `<model-routing-resolve>` when worktrees are unavailable).
-3. **After it returns — collect, then verify:** when the dispatch ran worktree-isolated, the agent's commit lives in the shared object store but NOT on the feature branch — collect it first (cherry-pick or fast-forward the reported SHA onto the feature branch) and **assert the branch actually advanced** (`git rev-parse HEAD` differs from the recorded pre-task HEAD); a task whose SHA never lands is NOT done, and skipping this check would let the later diff-scoped gates (Step 8a, Step 11, secret scan) run over an empty diff and pass vacuously. The serial chain depends on it too: the next task's worktree is cut only after this commit is on the branch. Apply the staging backstop to the COLLECTED commit (`git show --name-only <sha>` ⊆ the task's declared `files`), not the main tree's staging area. Then re-run the test suite and diff against the recorded baseline. On success (tests green, only expected paths changed, commit landed on the branch) → proceed to the next task.
+3. **After it returns — collect, then verify:** when the dispatch ran worktree-isolated, the agent's commit lives in the shared object store but NOT on the feature branch — collect it first (cherry-pick or fast-forward the reported SHA onto the feature branch) and **assert the branch actually advanced** (`git rev-parse HEAD` differs from the recorded pre-task HEAD); a task whose SHA never lands is NOT done, and skipping this check would let the later diff-scoped gates (Step 8a, Step 11, secret scan) run over an empty diff and pass vacuously. The serial chain depends on it too: the next task's worktree is cut only after this commit is on the branch. Apply the staging backstop to the COLLECTED commit (`git show --name-only <sha>` ⊆ the task's declared `files`), not the main tree's staging area. Then re-run the SCOPED suite for the task's area (per `<test-run-discipline>`, SKILL.md — the recorded-baseline diff belongs to Step 9's full-suite gate, which still runs in the orchestrator). On success (scoped tests green, only expected paths changed, commit landed on the branch) → proceed to the next task.
 4. **On failure or vacuous return:** **restore** the pre-task state first — `git reset --hard <recorded HEAD>` and `git clean -fd` to discard the agent's partial edits — then **retry that task once at the CEILING model** (escalate: a down-routed task that struggled gets the configured maximum, dispatched the same clean-state way, or inline if the ceiling is `inherit`). Log the escalation. Because the restore runs first, the retry never operates on a half-mutated tree.
 5. Delegation can never block Step 8: a second failure falls through to the normal Step 8 failure handling.
 
@@ -981,7 +983,7 @@ When the `implementation` role is `inherit` (default), Step 8 runs inline exactl
 When the resolved `implementation` model equals the session/orchestrator model, inline execution is an expected, acceptable outcome — delegation exists for isolation and parallelism, not obligation. The #328 subagent-dispatch audit (`docs/reviews/subagent-dispatch-audit-2026-07-09.md`, PR #328) measured 6/6 genuine runs implementing inline even with `implementation: opus` configured, and judged that scope-by-design rather than a bug. This documents current intended behavior only — it deliberately does NOT settle the delegation policy; the audit's unrun falsification experiment (route `implementation` to `sonnet` and re-measure) remains open.
 
 <!-- whole-issue-delegation: #133 -->
-**Optional WHOLE-ISSUE delegated build sub-mode (`wholeIssueDelegation`, default-off).** Per-task delegation above still runs the full per-task ceremony (dispatch, suite re-run, diff) in the orchestrator's own loop, so an orchestrator working a backlog bloats fast. When opted in, Step 8 instead hands ONE build-subagent the whole branch and validates a structured **receipt** — the *typing* is delegated, the *gating* is not. **Trust boundary:** the builder never self-certifies; every gate re-runs in the orchestrator against the real tree, and a receipt claim is a hypothesis until confirmed. Read `references/whole-issue-delegation.md` in full before using this mode — it holds the build-subagent brief template, the receipt schema, and the validation/fallback contract; the block below is only the spine.
+**Optional WHOLE-ISSUE delegated build sub-mode (`wholeIssueDelegation`, default-off).** Per-task delegation above still runs the full per-task ceremony (dispatch, scoped-suite re-run, diff) in the orchestrator's own loop, so an orchestrator working a backlog bloats fast. When opted in, Step 8 instead hands ONE build-subagent the whole branch and validates a structured **receipt** — the *typing* is delegated, the *gating* is not. **Trust boundary:** the builder never self-certifies; every gate re-runs in the orchestrator against the real tree, and a receipt claim is a hypothesis until confirmed. Read `references/whole-issue-delegation.md` in full before using this mode — it holds the build-subagent brief template, the receipt schema, and the validation/fallback contract; the block below is only the spine.
 
 1. **Gate.** Only when enabled for this skill:
    ```bash
@@ -1142,7 +1144,7 @@ fail: the gates that DID run (Step 11, Step 11.5, Step 8a) are still valid and l
 **Part B: Evidence enforcement:**
 
 If `capabilities.has_tests`:
-- Run full test suite using `capabilities.test_commands` — consume it as a projection
+- Run full test suite using `capabilities.test_commands` — the second of the exactly-two full-suite runs (per `<test-run-discipline>`, SKILL.md) — consume it as a projection
   (#314): the runner's final-summary tail + delta vs the recorded baseline; exit code is
   the verdict; never a full log dump into context (empty projection on failure ⇒ inline)
 - Verify new tests actually test new behavior
@@ -1446,7 +1448,7 @@ recorded for the PR body and session notes.
    ```
 
 4. **Pre-PR test gate** (conditional):
-   - If `capabilities.has_tests`: run full suite, block PR if tests fail
+   - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
 
 4a. **P15 review-state gate:** read via `plan_lib.read_review_state(repo_root, branch)`. If the returned state is `None` (missing or branch mismatch) OR `state["last_review_log_status"] != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.

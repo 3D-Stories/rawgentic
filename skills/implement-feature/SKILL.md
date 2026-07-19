@@ -283,6 +283,24 @@ and no verdict is pre-empted. If the wave's findings invalidate a drafted artifa
 revise or discard the draft: a gate finding always wins over a stale draft.
 </review-pipelining>
 
+<test-run-discipline>
+Full-suite runs are the expensive gate, not the iteration loop (#489; the epic #475
+profile measured ~5-6 full runs per child where 2 carry all the evidence). The canonical
+directive: the FULL suite runs exactly twice per run — once at Step 2 to record the
+baseline, once at Step 9 as the final regression gate; during task iteration (Step 8
+red→green→refactor) run the SCOPED suite for the area under change. The "no regressions"
+claim stays gated on the Step 9 full-suite run diffed against the recorded baseline —
+a scoped run never substitutes for the final full-suite gate. Scoped-path convention:
+mirror the changed area into the test tree — `hooks/foo.py` → `tests/hooks/`,
+`phase_executor/src/...` → `tests/phase_executor/`, skill/doc prose → the guard file
+that pins it (e.g. `tests/test_wf2_clarity.py`); when no mirror exists, the nearest
+enclosing test directory is the scope. Exactly-twice admits only evidence-driven
+exceptions, never habitual re-runs: (a) Step 12's pre-PR gate re-runs the full suite
+ONLY when a commit landed after the Step 9 run touching code or a test-pinned surface —
+otherwise it consumes the Step 9 result as its evidence; (b) a baseline discovered
+invalid (wrong base, foreign checkout content) is re-recorded with a fresh full run.
+</test-run-discipline>
+
 <step-tracking>
 Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
 trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's

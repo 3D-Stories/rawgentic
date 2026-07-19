@@ -1256,3 +1256,35 @@ class TestReviewPipelining:
         assert steps.count("<review-pipelining>") >= 3, (
             "Step 4 item 7, Step 8a item 2, and Step 11 item 2 must each point "
             "at the canonical <review-pipelining> block in SKILL.md")
+
+
+# --- #489: scoped tests during iteration, full suite only at baseline + final ---
+
+class TestTestRunDiscipline:
+    """Drift guards for the #489 test-run discipline: the FULL suite runs
+    exactly twice (Step 2 baseline, Step 9 final gate); iteration runs the
+    SCOPED suite; a scoped run never substitutes for the full-suite gate."""
+
+    def _discipline_block(self) -> str:
+        return " ".join(_block(_text(), "test-run-discipline").split())
+
+    def test_canonical_exactly_twice_sentence(self):
+        # AC1's contract, single-sourced in the <test-run-discipline> block.
+        assert (
+            "the FULL suite runs exactly twice per run — once at Step 2 to "
+            "record the baseline, once at Step 9 as the final regression gate"
+        ) in self._discipline_block()
+
+    def test_scoped_never_substitutes_sentence(self):
+        # AC2: the no-regressions claim stays on the full suite vs baseline.
+        block = self._discipline_block()
+        assert "a scoped run never substitutes for the final full-suite gate" in block
+        assert "recorded baseline" in block
+
+    def test_step_sites_point_at_canonical_block(self):
+        # Step 2 baseline, Step 8 iteration, Step 9 final, Step 12 evidence
+        # consumption — multi-site presence is the point, so >=, never ==.
+        steps = (REFERENCES / "steps.md").read_text()
+        assert steps.count("<test-run-discipline>") >= 3, (
+            "the Step 2/8/9 (and 12) sites must point at the canonical "
+            "<test-run-discipline> block in SKILL.md")
