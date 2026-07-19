@@ -311,7 +311,7 @@ This example validates cleanly against `hooks/work_summary.py`'s
 
 ```bash
 python3 hooks/work_summary.py summarize \
-  --record-file /tmp/wf2-run-record.json \
+  --record-file /tmp/wf2-run-record-<issue>-<session-id>.json \
   --project-root <activeProject.path> \
   [--store <path>] [--json] [--no-persist]
 ```
@@ -400,8 +400,8 @@ corrupt-lines-excluded), `2` usage error.
 
 ## How the workflows wire it in
 
-Each completion step (WF2 Step 16 → `/tmp/wf2-run-record.json`; WF3 Step 14 →
-`/tmp/wf3-run-record.json`) assembles the run-record from the data gathered across
+Each completion step (WF2 Step 16 → `/tmp/wf2-run-record-<issue>-<session-id>.json`; WF3 Step 14 →
+`/tmp/wf3-run-record-<issue>-<session-id>.json`) assembles the run-record from the data gathered across
 the workflow and shells out to the CLI. The tool's stdout **is** the completion
 summary, so the skill presents it as-is rather than re-typing it. A drift-guard
 test (`tests/hooks/test_work_summary.py::TestWorkSummarySkillWiring`,

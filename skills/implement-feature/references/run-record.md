@@ -2,7 +2,7 @@
 
 Assembled at WF2 Step 16 and validated + persisted by `hooks/work_summary.py`. The tool is
 the source of truth for the shape: on `rc == 1` it prints to stderr exactly which fields
-are wrong (fix `/tmp/wf2-run-record.json` and re-run).
+are wrong (fix `/tmp/wf2-run-record-<issue>-<session-id>.json` and re-run).
 
 Every key below must be **present**; "nullable" means `null` is an allowed value, NOT that
 the key may be omitted (a dropped field is a telemetry gap, not a null). Counts are

@@ -1085,7 +1085,7 @@ class TestRunFeedbackWiring:
 
     WIRING = (
         "When enabled, invoke the run-feedback core path non-interactively "
-        "with explicit `--record /tmp/wf2-run-record.json --wf 2 "
+        "with explicit `--record /tmp/wf2-run-record-<issue>-<session-id>.json --wf 2 "
         "--session-notes <notes-path>`; an assessment failure never blocks "
         "workflow completion — log and continue."
     )
@@ -1429,3 +1429,36 @@ class TestEarlySmokeInstall:
         assert steps.count("<early-smoke-install>") >= 2, (
             "the Step 8 first-runnable-commit site and the Step 15 note must "
             "point at the canonical <early-smoke-install> block")
+
+
+class TestSessionUniqueRunRecordPath:
+    """#511: the fixed shared `/tmp/wf2-run-record.json` was clobbered by
+    concurrent sessions (observed live 2026-07-19, sentinel epic #45 vs the
+    #467 run — finding T-2). The convention is now session-unique:
+    `/tmp/wf2-run-record-<issue>-<session-id>.json` on BOTH surfaces (the §12
+    2b `--telemetry` invocation and the §16 assembly), so they cannot drift."""
+
+    PLACEHOLDER = "/tmp/wf2-run-record-<issue>-<session-id>.json"
+
+    def test_no_fixed_shared_literal_remains(self):
+        # The count IS the contract (zero): a fixed shared path is a standing
+        # race in a multi-session workspace. The placeholder form does not
+        # contain the old literal, so this cannot false-positive on it.
+        assert "/tmp/wf2-run-record.json" not in _text(), (
+            "fixed shared run-record literal must not reappear in the WF2 "
+            "corpus (#511)")
+
+    def test_step12_telemetry_uses_session_unique_path(self):
+        steps = (REFERENCES / "steps.md").read_text()
+        sec = _section(steps, "## Step 12: Create PR and Push",
+                       "## Step 13: CI Verification")
+        assert self.PLACEHOLDER in sec, (
+            "§12 2b --telemetry must use the session-unique record path")
+
+    def test_step16_assembly_uses_session_unique_path(self):
+        steps = (REFERENCES / "steps.md").read_text()
+        sec = steps[steps.index("## Step 16: Workflow Completion Summary"):]
+        assert self.PLACEHOLDER in sec, (
+            "§16 assembly must use the session-unique record path")
+        assert self.PLACEHOLDER in SKILL.read_text(), (
+            "the SKILL.md Step 16 stub must use the session-unique record path")
