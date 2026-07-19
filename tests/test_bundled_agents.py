@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.corpus import skill_corpus
+from tests.corpus import SKILLS_DIR, skill_corpus
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AGENTS_DIR = REPO_ROOT / "agents"
@@ -148,18 +148,37 @@ def test_reviewer_definition_carries_read_only_execution_clause():
     assert "verification commands" in body
 
 
+def _steps_section(path: Path, header: str) -> str:
+    """The section from `header` to the next `## ` heading, normalized.
+
+    Section-scoped (not corpus-wide count) so one surface losing the clause
+    can never be masked by a stray match elsewhere — the Step 11 brief is the
+    exact surface the sentinel W-1 incident fired on."""
+    text = path.read_text(encoding="utf-8")
+    start = text.index(header)
+    end = text.find("\n## ", start + len(header))
+    return _normalized(text[start:end if end != -1 else len(text)])
+
+
 def test_dispatch_briefs_restate_read_only_clause():
     """#510 AC1: the WF2 Step 8a and Step 11 dispatch briefs and WF3's Step 9
-    review dispatch restate the clause at dispatch time — the definition alone
-    does not reach pr-review-toolkit slots or generic-tier fallbacks."""
-    wf2 = _normalized(skill_corpus("implement-feature"))
-    wf3 = _normalized(skill_corpus("fix-bug"))
-    assert wf2.count(_READONLY_CLAUSE_ANCHOR) >= 2, \
-        "WF2 must restate the clause at both the Step 8a and Step 11 briefs"
-    assert _INVOCATION_FORM_SENTENCE in wf2
-    assert wf3.count(_READONLY_CLAUSE_ANCHOR) >= 1, \
-        "WF3's Step 9 review dispatch must restate the clause"
-    assert _INVOCATION_FORM_SENTENCE in wf3
+    review dispatch each restate the clause at dispatch time — the definition
+    alone does not reach pr-review-toolkit slots or generic-tier fallbacks,
+    and each surface is asserted separately (a match in one section must not
+    satisfy the pin for another)."""
+    wf2_steps = SKILLS_DIR / "implement-feature" / "references" / "steps.md"
+    wf3_steps = SKILLS_DIR / "fix-bug" / "references" / "steps.md"
+    surfaces = [
+        (wf2_steps, "### Step 8a sub-step: Per-task Review"),
+        (wf2_steps, "## Step 11: Pre-PR Code Review"),
+        (wf3_steps, "## Step 9: Code Review"),
+    ]
+    for path, header in surfaces:
+        section = _steps_section(path, header)
+        assert _READONLY_CLAUSE_ANCHOR in section, \
+            f"{path.name} section {header!r} must restate the read-only clause"
+        assert _INVOCATION_FORM_SENTENCE in section, \
+            f"{path.name} section {header!r} must carry the invocation-form sentence"
 
 
 def test_wf2_step8_reconciles_worktree_commit():
