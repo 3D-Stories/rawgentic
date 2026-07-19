@@ -325,3 +325,47 @@ def test_cap_sharing_rule_pinned():
             "be filed via WF1 and then SHARE the MAX_FEEDBACK_ISSUES_PER_RUN "
             "pool; below threshold they stay in the WF17 report/queue — a "
             "candidate never crowds out a defect") in _norm(_corpus())
+
+
+class TestBatchMode:
+    """#392: batch input mode — whole epic/issue-list, one consolidated report,
+    shared filing cap, embed-compat dedupe, per-issue degraded visibility.
+    Section-sliced on the '## Batch mode' header."""
+
+    def _batch(self) -> str:
+        text = _skill()
+        start = text.index("## Batch mode")
+        end = text.index("\n## ", start + 5)
+        return " ".join(text[start:end].split())
+
+    def test_batch_derives_from_epic_checkboxes_including_checked(self):
+        s = self._batch()
+        assert ("derive the issue list from the epic body's task-list "
+                "checkboxes — BOTH `- [ ] #N` and `- [x] #N`") in s, (
+            "batch must assess completed (checked) children too (#392 AC1)")
+
+    def test_batch_resolves_records_via_find(self):
+        assert "work_summary.py find --issue" in self._batch(), (
+            "per-issue record resolution goes through the find subcommand (#392 AC1)")
+
+    def test_batch_shared_filing_cap(self):
+        s = self._batch()
+        assert ("the filing cap is shared across the WHOLE batch" in s
+                and "ONE filed issue citing all affected runs" in s), (
+            "cap must not multiply by N; recurring findings dedupe (#392 AC3)")
+
+    def test_batch_never_double_assesses(self):
+        s = self._batch()
+        assert "never double-assesses, never re-files" in s, (
+            "embed-compat detection must skip already-assessed runs (#392 AC4)")
+
+    def test_batch_degraded_is_visible_per_issue(self):
+        s = self._batch()
+        assert ("a visible per-issue degraded section" in s
+                and "never a silent skip" in s), (
+            "a missing/invalid record degrades visibly; the batch continues (#392 AC5)")
+
+    def test_batch_consolidated_report_pair(self):
+        s = self._batch()
+        assert "run-feedback-batch-" in s and "--style report" in s, (
+            "one consolidated md+html pair via render_artifact (#392 AC2)")
