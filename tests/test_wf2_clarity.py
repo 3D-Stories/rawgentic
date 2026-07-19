@@ -1384,3 +1384,48 @@ class TestTighterReviewWaves:
             "the mandatory-steps Step 11 row must state the SAME reviewer count "
             "as plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL")
         assert f"Dispatch {n}-agent parallel review" in (REFERENCES / "steps.md").read_text()
+
+
+# --- #494: early smoke-install after the first runnable commit (deploy-bearing) ---
+
+class TestEarlySmokeInstall:
+    """Drift guards for the #494 early-smoke directive: on a deploy-bearing
+    project (capabilities.has_deploy) the first runnable commit gets a cheap
+    live smoke-install/boot check during Step 8 — capability-gated so code-only
+    projects are unaffected, and never a substitute for Step 15."""
+
+    def _smoke_block(self) -> str:
+        return " ".join(_block(_text(), "early-smoke-install").split())
+
+    def test_canonical_early_smoke_directive_sentence(self):
+        # AC1's contract, single-sourced in the <early-smoke-install> block.
+        assert (
+            "after the first runnable commit boots something, run a cheap "
+            "live smoke-install/boot check (install / start / health) before "
+            "continuing implementation"
+        ) in self._smoke_block()
+
+    def test_has_deploy_gated_sentence(self):
+        # AC2: the gate lives inside the block itself — code-only projects
+        # are structurally unaffected.
+        block = self._smoke_block()
+        assert "capability-gated" in block
+        assert (
+            "code-only projects (`has_deploy == false`, e.g. rawgentic "
+            "itself) are unaffected — the directive never runs there"
+        ) in block
+
+    def test_step15_not_weakened_and_sites_point_at_block(self):
+        # AC3: distinct from and additional to Step 15, never a replacement;
+        # the Step 8 site and the Step 15 note both point at the canonical
+        # block — multi-site presence is the point, so >=, never ==.
+        block = self._smoke_block()
+        assert (
+            "distinct from and additional to the mandatory Step-15 "
+            "post-deploy smoketest"
+        ) in block
+        assert "never weakened or replaced" in block
+        steps = (REFERENCES / "steps.md").read_text()
+        assert steps.count("<early-smoke-install>") >= 2, (
+            "the Step 8 first-runnable-commit site and the Step 15 note must "
+            "point at the canonical <early-smoke-install> block")
