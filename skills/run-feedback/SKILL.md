@@ -1,7 +1,7 @@
 ---
 name: rawgentic:run-feedback
 description: WF14 — assess the WORKFLOW MACHINERY of a just-completed rawgentic run (WF1/WF2/WF3/WF5/WF13/epic driver) and route feedback to rawgentic development. Use after any completed WFn run — the user says "assess the workflow run", "run feedback", "post-run assessment", "how did the workflow itself do", or an embedding workflow invokes it with explicit args. Do NOT use to review the deliverable the run shipped (that is WF5 / code review), to assess non-rawgentic workflows, or to fix any defect it finds (report-only).
-argument-hint: latest | --record <path> | --epic <n> | --issues <n,n,...> [--wf <n>] [--session-notes <path>]
+argument-hint: latest | --record <path> | --epic <n> | --issues <n,n,...> [--wf <n>] [--session-notes <path>] [--file-issues]
 ---
 
 <role>
@@ -242,6 +242,22 @@ Print the report path. Report-only: the files are uncommitted artifacts until a 
 PR picks them up (WF5 convention).
 
 ## Step 4: Route
+
+**Filing-mode fork (#507) — decide BEFORE item 1.** INTERACTIVE invocations default
+to **suggest-first**: present every candidate fully drafted — conventional title,
+complete body, labels, dup-check verdict — and file only the approved ones, exactly
+as drafted (same cap, same dup-check, same labels). AUTONOMOUS filing — the
+pre-#507 behavior — applies when ANY of: `RAWGENTIC_HEADLESS=1`; the invocation is
+embedded (a WF2 Step 16 / WF3 Step 14 caller passing explicit `--record`, the
+embed signal); or the explicit `--file-issues` flag. That path keeps today's
+autonomous filing byte-for-byte — the #337 embed contract's zero interactive
+dependency is preserved, and this fork must never re-introduce one there.
+Declined candidates are preserved in the report with `routing: not-filed-declined`
+(extending the `not-filed-cap` vocabulary) — a decline never erases the finding.
+Cap semantics are unchanged and coordinate with #392's batch-shared pool: the cap
+counts FILED issues, not suggested candidates (approval applies per candidate).
+The routing section states the filed vs suggested-declined counts explicitly
+(the visible-skip convention).
 
 1. **Plugin defects** (reproducible, evidence-cited, confirmed present on current
    main): dup-check FIRST —
