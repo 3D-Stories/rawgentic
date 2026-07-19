@@ -166,6 +166,53 @@ def canonical_gate_name(workflow, step):
     return CANONICAL_GATE_NAMES.get(workflow, {}).get(str(step))
 
 
+# --- #512: loop_backs cross-check against the persisted counters file ------
+
+LOOPBACK_STATE_RELPATH = ("claude_docs", ".wf2-state")
+
+
+def check_loopback_counters(record, counters) -> list:
+    """Cross-check record loop_backs.used against the persisted counters state.
+
+    `counters` is the parsed loopback_counters.json dict (source of truth,
+    written by plan_lib.consume_loopback — it survives sessions; the record
+    value is assembled from in-context memory, which is structurally wrong on
+    any resumed/multi-session run, #512/WF2 #467). None => nothing to check.
+    Fail-loud on divergence or an unreadable total: this validator exists
+    precisely because a schema-valid record can be semantically wrong."""
+    if counters is None:
+        return []
+    if not isinstance(counters, dict) or not isinstance(counters.get("total"), int):
+        return ["loop_backs counters file is malformed (no integer 'total') — "
+                "cannot cross-check; fix the counters file or drop the flag"]
+    used = record.get("loop_backs", {}).get("used") if isinstance(
+        record.get("loop_backs"), dict) else None
+    total = counters["total"]
+    if used != total:
+        return [f"loop_backs.used ({used!r}) diverges from the persisted "
+                f"counters file total ({total}) — the counters file is the "
+                f"source of truth (#512); re-read it, never in-context memory"]
+    return []
+
+
+def load_loopback_counters(path, *, explicit) -> "dict | None":
+    """Load the counters state for the cross-check (#512).
+
+    explicit=True (--loopback-counters passed): a MISSING file means
+    consume_loopback never ran => zero loop-backs => return a zero state so
+    the check still validates; a present-but-malformed file returns a
+    sentinel malformed dict (fail-loud downstream).
+    explicit=False (cwd auto-discovery): a missing file returns None (skip —
+    the cwd may not be the workspace root, so absence is ambiguous there)."""
+    p = Path(path)
+    if not p.exists():
+        return {"total": 0} if explicit else None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"malformed": True}
+
+
 # --- validate_record (pure) ------------------------------------------------
 
 def validate_record(record, *, strict=False) -> list:
@@ -1202,6 +1249,13 @@ def main(argv=None) -> int:
                    help="emit the normalized record as JSON instead of human text")
     p.add_argument("--no-persist", action="store_true",
                    help="render only; do not append the record to the store")
+    p.add_argument("--loopback-counters", default=None,
+                   help="path to the run's loopback_counters.json (#512); the "
+                        "record's loop_backs.used is cross-checked against its "
+                        "'total' (missing file = zero loop-backs). When omitted, "
+                        "auto-discovers claude_docs/.wf2-state/<issue>/"
+                        "loopback_counters.json relative to the cwd and checks "
+                        "only if that file exists")
 
     pa = sub.add_parser(
         "aggregate",
@@ -1233,6 +1287,19 @@ def main(argv=None) -> int:
         workers = _resolve_worker_models(args.project_root)
 
         errors = validate_record(raw, strict=True)  # #116: new writes must use the controlled vocab
+        # #512: cross-check loop_backs against the persisted counters state —
+        # a schema-valid record hand-populated from in-context memory can be
+        # semantically wrong; the counters file is the source of truth.
+        if args.loopback_counters is not None:
+            counters = load_loopback_counters(args.loopback_counters, explicit=True)
+        else:
+            issue_no = raw.get("issue", {}).get("number") if isinstance(
+                raw.get("issue"), dict) else None
+            auto = Path(*LOOPBACK_STATE_RELPATH, str(issue_no),
+                        "loopback_counters.json") if issue_no is not None else None
+            counters = (load_loopback_counters(auto, explicit=False)
+                        if auto is not None else None)
+        errors.extend(check_loopback_counters(raw, counters))
         if errors:
             # Best-effort render so the user keeps Step 16 output, but never
             # persist an invalid record. Exit 1 so the skill surfaces the gap.

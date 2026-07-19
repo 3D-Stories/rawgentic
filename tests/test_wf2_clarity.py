@@ -1462,3 +1462,39 @@ class TestSessionUniqueRunRecordPath:
             "§16 assembly must use the session-unique record path")
         assert self.PLACEHOLDER in SKILL.read_text(), (
             "the SKILL.md Step 16 stub must use the session-unique record path")
+
+
+class TestSourceOfTruthTelemetryFields:
+    """#512: loop_backs.used and reviewer_kind were assembled from in-context
+    memory and silently diverged from persisted state (WF2 #467: used 0 vs
+    counters total 2; reviewer_kind "codex" vs the gate-defining in-house
+    wave). The assembly prose now directs both reads at their sources of
+    truth, and summarize cross-checks the counters via --loopback-counters."""
+
+    def _step16(self) -> str:
+        steps = (REFERENCES / "steps.md").read_text()
+        return " ".join(steps[steps.index("## Step 16: Workflow Completion Summary"):].split())
+
+    def test_step16_directs_counters_file_read(self):
+        s = self._step16()
+        assert ("`loop_backs.used` comes from "
+                "`claude_docs/.wf2-state/<issue>/loopback_counters.json`") in s, (
+            "§16 assembly must direct loop_backs.used at the counters file (#512)")
+
+    def test_step16_reviewer_kind_from_gate_defining_mechanism(self):
+        s = self._step16()
+        assert ("`reviewer_kind` is re-derived at assembly time from the "
+                "gate-defining mechanism") in s, (
+            "§16 assembly must re-derive reviewer_kind per the #340 enumeration")
+        assert "the additive adversarial layer NEVER changes it" in s
+
+    def test_step16_summarize_carries_counters_flag(self):
+        assert "--loopback-counters claude_docs/.wf2-state/<issue>/loopback_counters.json" \
+            in self._step16(), (
+            "§16 render+persist invocation must pass --loopback-counters (#512)")
+
+    def test_run_record_doc_pins_counters_contract(self):
+        doc = " ".join((REFERENCES / "run-record.md").read_text().split())
+        assert ("`loop_backs.used` MUST be read at assembly time from "
+                "`claude_docs/.wf2-state/<issue>/loopback_counters.json`") in doc, (
+            "run-record.md must pin the counters-file read contract (#512)")
