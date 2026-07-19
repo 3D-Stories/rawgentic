@@ -133,6 +133,21 @@ class TestDetectSignature:
         assert ssp._may_have_signature("git add x && git commit -m y")
         assert ssp._may_have_signature("git checkout -b feature/z origin/main")
 
+    def test_commit_graph_is_not_a_commit(self):
+        # 8a wave (#502): "git commit-graph write" is a distinct maintenance
+        # subcommand — the trailing-space needle must not stamp it.
+        assert ssp.detect_signature(
+            "git commit-graph write --reachable", "wf2", current_step="5") is None
+
+    def test_commit_classification_beats_later_rows(self):
+        # 8a wave (#502): a commit whose MESSAGE mentions another row's needle
+        # is still a commit — it must take the monotonic entry stamp (below
+        # target) or nothing (at/after target), never the other row's
+        # non-monotonic jump.
+        cmd = 'git commit -m "docs: explain gh pr create flag"'
+        assert ssp.detect_signature(cmd, "wf2", current_step="5") == ("8", "Implementation")
+        assert ssp.detect_signature(cmd, "wf2", current_step="11") is None
+
 
 def _mk_workspace(tmp_path, session_id="sess-1", project="rawgentic"):
     (tmp_path / ".rawgentic_workspace.json").write_text('{"version": 1, "projects": []}')

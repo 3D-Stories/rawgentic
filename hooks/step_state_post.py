@@ -24,13 +24,15 @@ quoted inside an echo/grep still stamps entry-time state (bounded to the
 session's own workflow/issue, display-only consumers, self-correcting at the
 next marker append), and a failed child write stays silent (fail-open is the
 #480 contract — surfacing would need stdout, i.e. context injection).
-The #502 entry rows extend that residual class: quoted "git commit" /
-"git checkout -b " text in a NON-marker notes append can stamp entry state
-(the commit row is monotonic-bounded; both are session-scoped and
-self-correct at the next marker), and a cross-issue branch-cut fired before
-the new issue's first marker stamps the PRIOR issue number (same
-self-correcting class — the signature path reuses the existing record's
-issue by design).
+The #502 entry rows extend that residual class: ANY command containing the
+literal "git commit " / "git checkout -b " text — an echo, a grep, a heredoc
+body, not just a notes append — can stamp entry state. The commit row is
+monotonic-bounded; the checkout row is not, so a quoted needle can regress
+the pointer backward MID-RUN within the same issue (display-only consumers,
+session-scoped, self-corrects at the next marker). A cross-issue branch-cut
+fired before the new issue's first marker stamps the PRIOR issue number
+(same self-correcting class — the signature path reuses the existing
+record's issue by design).
 epic-run carve-out: its markers are not ``### WF<n>``-shaped and it has no
 signature table, so its skill prose KEEPS the mandatory manual write.
 """
@@ -70,21 +72,26 @@ _MARKER_LINE_CAP = 1024  # real markers are short single lines
 # the guard makes only the first, step-entering commit stamp). The branch-cut
 # rows stay non-monotonic: a new issue's checkout -b in the same session must be
 # able to move the pointer down from a prior run's 16.
+# The "git commit " rows sit FIRST (8a wave, #502): a commit whose MESSAGE
+# text mentions another row's needle ("gh pr create") is still a commit — the
+# entry row must classify it before any non-monotonic row can fire, and a
+# guard-blocked entry match is DEFINITIVE (return None, never fall through).
+# Trailing space excludes the distinct "git commit-graph" subcommand.
 _SIGNATURES = {
     "wf2": (
+        ("git commit ", ("8", "Implementation"), True),
+        ("git checkout -b ", ("7", "Create Branch"), False),
         ("security_scan.py scan", ("11.5", "Security Scan"), False),
         ("gh pr create", ("12", "Create PR"), False),
         ("gh pr merge", ("14", "Merge"), False),
         ("work_summary.py summarize", ("16", "Completion Summary"), False),
-        ("git checkout -b ", ("7", "Create Branch"), False),
-        ("git commit", ("8", "Implementation"), True),
     ),
     "wf3": (
+        ("git commit ", ("7", "TDD Bug Fix"), True),
+        ("git checkout -b ", ("6", "Create Fix Branch"), False),
         ("gh pr create", ("10", "Create Pull Request"), False),
         ("gh pr merge", ("12", "Merge and Deploy"), False),
         ("work_summary.py summarize", ("14", "Completion Summary"), False),
-        ("git checkout -b ", ("6", "Create Fix Branch"), False),
-        ("git commit", ("7", "TDD Bug Fix"), True),
     ),
 }
 
@@ -139,7 +146,11 @@ def detect_signature(command: str, workflow, current_step=None) -> "tuple[str, s
         if entry_only:
             cur, target = _step_num(current_step), _step_num(hit[0])
             if cur is None or target is None or cur >= target:
-                continue
+                # A matched entry needle CLASSIFIES the command (it IS a
+                # commit) — a blocked guard suppresses the stamp entirely
+                # rather than letting a later non-monotonic row fire off
+                # prose in the commit message (8a wave, #502).
+                return None
         return hit
     return None
 
