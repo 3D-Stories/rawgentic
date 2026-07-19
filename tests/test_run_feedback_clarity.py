@@ -369,3 +369,45 @@ class TestBatchMode:
         s = self._batch()
         assert "run-feedback-batch-" in s and "--style report" in s, (
             "one consolidated md+html pair via render_artifact (#392 AC2)")
+
+
+class TestSuggestOnlyFiling:
+    """#507: interactive invocations present fully-drafted candidates before
+    any gh issue create; headless/embedded/--file-issues keeps autonomous
+    filing byte-for-byte (#337 zero-interactive-dependency contract); declines
+    are preserved, never erased; the cap counts filed, not suggested."""
+
+    def _step4(self) -> str:
+        text = _skill()
+        start = text.index("## Step 4: Route")
+        end = text.index("\n## Step 5:", start)
+        return " ".join(text[start:end].split())
+
+    def test_interactive_default_is_suggest_first(self):
+        s = self._step4()
+        assert ("present every candidate fully drafted" in s
+                and "file only the approved ones, exactly as drafted" in s), (
+            "interactive default must be suggest-first (#507 AC1)")
+
+    def test_headless_and_embed_stay_autonomous(self):
+        s = self._step4()
+        assert "keeps today's filing byte-for-byte" in s, (
+            "headless/embedded path must not gain an interactive gate (#507 AC2)")
+        assert "`--file-issues`" in s
+        # #507 review HIGH: --record is also a first-class human invocation —
+        # it must never double as the autonomy signal.
+        assert "`--record` alone is NOT an autonomy signal" in s
+
+    def test_declined_candidates_preserved(self):
+        s = self._step4()
+        assert "`routing: not-filed-declined`" in s, (
+            "declines extend the not-filed-cap vocabulary (#507 AC3)")
+        assert "a decline never erases the finding" in s
+
+    def test_cap_counts_filed_not_suggested(self):
+        assert "the cap counts FILED issues, not suggested candidates" in self._step4(), (
+            "#507 AC4 — approval per candidate, cap on actual filings")
+
+    def test_routing_section_states_both_counts(self):
+        assert "filed vs suggested-declined counts" in self._step4(), (
+            "#507 AC5 — visible-skip convention")

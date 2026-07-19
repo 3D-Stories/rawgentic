@@ -1787,7 +1787,7 @@ measurable signal — not just a sentence the user reads once.
    the peerConsult opt-in pattern, no marker noise. Exit 0 → invoke the
    `/rawgentic:run-feedback` core path (the #337 embed contract — zero interactive
    dependency). When enabled, invoke the run-feedback core path non-interactively
-   with explicit `--record /tmp/wf2-run-record-<issue>-<session-id>.json --wf 2 --session-notes
+   with explicit `--record /tmp/wf2-run-record-<issue>-<session-id>.json --wf 2 --file-issues --session-notes
    <notes-path>`; an assessment failure never blocks workflow completion — log and
    continue. Run it regardless of item 4's rc — the record FILE exists on rc 1 too,
    and WF14 routes a schema-invalid record to degraded mode (an assessed degraded
