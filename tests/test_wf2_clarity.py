@@ -1321,3 +1321,37 @@ class TestProbeBeforeDesign:
         assert steps.count("<probe-before-design>") >= 2, (
             "the Step 3 platform_apis rules and the Step 4 feasibility bullet "
             "must point at the canonical <probe-before-design> block")
+
+
+# --- #491: review-lens routing (sonnet mechanical, strong security) ---
+
+class TestReviewLensRouting:
+    """Drift guards for the #491 per-lens review-model routing: security-critical
+    lenses stay on the strong review model; mechanical/AC/test-coverage/bug-logic
+    lenses ride the fast tier; never-Haiku preserved."""
+
+    def _lens_block(self) -> str:
+        return " ".join(_block(_text(), "review-lens-routing").split())
+
+    def test_canonical_lens_routing_sentence(self):
+        # AC1's contract, single-sourced in the <review-lens-routing> block.
+        assert (
+            "select the model per LENS via `select_review_lens_model`: the "
+            "security lens is pinned to the resolved review model, and the "
+            "mechanical, ac_completeness, test_coverage, and bug_logic lenses "
+            "ride the fast tier"
+        ) in self._lens_block()
+
+    def test_security_never_downgraded_sentence(self):
+        # AC2: config can never downgrade the security lens; never-Haiku holds.
+        block = self._lens_block()
+        assert "a `reviewLenses` override can never downgrade the security lens" in block
+        assert "never-Haiku" in block
+
+    def test_dispatch_sites_point_at_canonical_block(self):
+        # Step 4 dispatch, Step 8a item 2, Step 11 item 2 — multi-site presence,
+        # so >=, never ==.
+        steps = (REFERENCES / "steps.md").read_text()
+        assert steps.count("<review-lens-routing>") >= 3, (
+            "the Step 4/8a/11 dispatch sites must point at the canonical "
+            "<review-lens-routing> block in SKILL.md")
