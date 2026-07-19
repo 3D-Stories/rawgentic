@@ -20,11 +20,11 @@ MARKER_CMD = """cat >> /w/claude_docs/session_notes.md <<'EOF'
 EOF
 echo ok"""
 
-MARKER_8A_CMD = """cat >> notes.md <<'EOF'
+MARKER_8A_CMD = """cat >> claude_docs/session_notes.md <<'EOF'
 ### WF2 Step 8a [task 3, sha 3c418ad]: DONE (#492: 4 findings)
 EOF"""
 
-TWO_MARKERS_CMD = """cat >> notes.md <<'EOF'
+TWO_MARKERS_CMD = """cat >> claude_docs/session_notes.md <<'EOF'
 ### WF3 Step 4: Root Cause — DONE (#77: found)
 ### WF2 Step 12: Create PR — DONE (#492: PR #500)
 EOF"""
@@ -65,7 +65,7 @@ class TestDetectMarker:
             "lines beyond the cap are skipped — real markers are short")
 
     def test_unkeyed_legacy_marker_still_detects_without_issue(self):
-        cmd = "cat >> n.md <<'EOF'\n### WF2 Step 7: Create Branch — DONE (feature/x cut)\nEOF"
+        cmd = "cat >> claude_docs/session_notes.md <<'EOF'\n### WF2 Step 7: Create Branch — DONE (feature/x cut)\nEOF"
         hit = ssp.detect_marker(cmd)
         assert hit is not None and hit["issue"] is None and hit["step"] == "7"
 
@@ -151,7 +151,7 @@ class TestHookFlow:
 
     def test_wf3_session_gets_wf3_numbering(self, tmp_path):
         ws = _mk_workspace(tmp_path)
-        wf3_marker = "cat >> n.md <<'EOF'\n### WF3 Step 9: Code Review — DONE (#77: clean)\nEOF"
+        wf3_marker = "cat >> claude_docs/session_notes.md <<'EOF'\n### WF3 Step 9: Code Review — DONE (#77: clean)\nEOF"
         _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
                        "tool_input": {"command": wf3_marker}})
         r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
@@ -188,3 +188,17 @@ class TestHookFlow:
         r = subprocess.run([sys.executable, CLI], input="",
                            capture_output=True, text=True, cwd=str(ws), timeout=30)
         assert r.returncode == 0
+
+
+class TestMarkerRequiresNotesAppend:
+    """#499 Step-11 adversarial F3: a command merely DISPLAYING marker text
+    (echo/grep/cat of some other file) is not a step completion — the marker
+    path requires the command to name the session-notes file."""
+
+    def test_echoed_marker_without_notes_path_ignored(self):
+        assert ssp.detect_marker(
+            'echo "### WF2 Step 14: Merge — DONE (#999: fake)"') is None
+
+    def test_grep_of_marker_text_ignored(self):
+        assert ssp.detect_marker(
+            "grep '### WF2 Step 11' /some/other/file.md") is None

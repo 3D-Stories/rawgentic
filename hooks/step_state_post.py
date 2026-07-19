@@ -18,6 +18,14 @@ Both write through the existing ``step_state.py write`` CLI (one helper, one
 home — no second write path). Fail-OPEN everywhere: this is observational
 telemetry, so any failure exits 0 with no stdout (PostToolUse stdout would
 inject context into the conversation).
+
+Accepted residual (Step-11 adversarial review, #499): a signature needle
+quoted inside an echo/grep still stamps entry-time state (bounded to the
+session's own workflow/issue, display-only consumers, self-correcting at the
+next marker append), and a failed child write stays silent (fail-open is the
+#480 contract — surfacing would need stdout, i.e. context injection).
+epic-run carve-out: its markers are not ``### WF<n>``-shaped and it has no
+signature table, so its skill prose KEEPS the mandatory manual write.
 """
 import json
 import os
@@ -68,8 +76,13 @@ def detect_marker(command: str) -> "dict | None":
     """Parse the LAST step-DONE marker out of a Bash command string.
 
     Per-line matching with a length cap: structurally immune to the
-    whitespace-run backtracking the one-shot MULTILINE scan allowed."""
+    whitespace-run backtracking the one-shot MULTILINE scan allowed.
+    Only session-notes APPENDS qualify (the command must name the notes
+    file) — a command merely displaying/grepping/copying marker text is
+    not a step completion (Step-11 adversarial F3, #499)."""
     if not isinstance(command, str) or "### WF" not in command:
+        return None
+    if "session_notes" not in command:
         return None
     m = None
     for line in command.splitlines():
