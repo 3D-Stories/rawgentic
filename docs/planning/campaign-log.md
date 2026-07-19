@@ -16,7 +16,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #493 — WF2 speed levers (manual drive)
 
-**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 in PR; #491 · #492 (depends on #491) · #494 pending.
+**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 in PR; #492 (depends on #491) · #494 pending.
 Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
 
@@ -83,6 +83,24 @@ as blocking; #226 precedent rule untouched. Guards: `TestProbeBeforeDesign` (3).
   3640+10skip → 3643+10skip.
 - **Reviews:** 1 lane reviewer (opus) + adversarial diff review skipped (no security surface).
   No workflow-spine change → no diagram REV.
+- PR #497, squash-merged 031e01c (2026-07-19), hard lanes green (advisory code-review still
+  running at merge — owner grant gates on test+lint; follow-up noted).
+
+### #491 — model-tier reviewers: sonnet mechanical, strong security · v3.61.0
+
+New `select_review_lens_model` (`hooks/model_routing_lib.py` + CLI `--lens`): WF2 review
+dispatches pick the model per lens — `security` PINNED to the resolved review model (config
+override ignored with a warning), `mechanical`/`ac_completeness`/`test_coverage`/`bug_logic`
+default sonnet via optional `modelRouting.reviewLenses`. Never-Haiku on every path (8a
+hardened: entry-point floor). WF2-local `<review-lens-routing>` block carries the lens map;
+shared `model-routing-resolve` untouched (WF3 out of scope). 17 routing tests + 3 guards.
+
+- **Lane run:** small-standard; Task 2 riskLevel high (module boundary) → 8a fired,
+  dogfooding its own lens map (R1 sonnet mechanical / R2 opus security). 6 findings:
+  3 fixed dd48127 (boundary haiku floor — R2's catch; docstring purity; Final[frozenset]),
+  3 band-dropped. Suite 3643+10skip → 3663+10skip (+20).
+- **Reviews:** 1 lane reviewer (opus, security lens) + adversarial diff review FIRED
+  (high-risk task in plan, gpt backend) — results in the PR.
 - PR / merge SHA: filled by the next slot's pass.
 
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
