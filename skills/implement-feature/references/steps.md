@@ -455,6 +455,8 @@ Dispatch every Step 2 fan-out subagent per the `<model-routing-resolve>` contrac
     ```
     Prints `worktree` or `serial-only` (the probe is non-mutating — it creates and force-removes a throwaway worktree under the system temp dir — and never fails the run). Carry it as `capabilities.parallelism` and log one session-note line. Step 8 consults it. **Gotcha to encode for parallel-build orchestrators:** `secret-scan --since` full-scans a *linked* worktree — push from the MAIN checkout (existing documented behavior).
 
+**Baseline record (per `<test-run-discipline>`, SKILL.md):** when `capabilities.has_tests`, run the FULL suite once now and record the baseline from the runner's final output (pass/fail/skip counts + failing test names) in session notes. This is the first of the exactly-two full-suite runs; Step 9's final gate diffs against it. If the current checkout is not the branch base that Step 7 will cut (e.g. a prior issue's feature branch), re-record after Step 7 — a baseline measured on foreign content is invalid. A baseline already recorded on content whose git tree hash equals the branch base carries as-is.
+
 ### Output
 Codebase analysis with complexity classification, small-standard lane eligibility (`small_standard_lane_eligible`), the `parallelism` capability (`worktree`/`serial-only`), and (for infrastructure projects) live environment probe results. Do NOT present to user — feeds into Step 3. User-visible surfaces: the item-8 lane suggestion (waits for input), the item-8 path estimate line (print-and-continue), and the item-9 trivial-work suggestion (waits for input).
 
@@ -932,9 +934,9 @@ Execute the implementation plan task by task.
 **For each task in the plan:**
 
 1. **If TDD mode** (`capabilities.has_tests == true`):
-   - RED: Write failing test(s). Run test command from `capabilities.test_commands` to confirm failure.
-   - GREEN: Write minimum code to pass. Run tests to confirm all pass.
-   - REFACTOR: Clean up. Re-run tests.
+   - RED: Write failing test(s). Run the SCOPED test command for the area under change (per `<test-run-discipline>`, SKILL.md — never the full suite here) to confirm failure.
+   - GREEN: Write minimum code to pass. Run the scoped suite to confirm all pass.
+   - REFACTOR: Clean up. Re-run the scoped suite.
    - **Test-output projection (#314, see `### Delegated reads`):** consume the runner's
      own final summary (pass/fail counts + failing test ids + first assertion lines — a
      bounded tail), never `cat` a full run log into context. Verdicts come from exit
@@ -1142,7 +1144,7 @@ fail: the gates that DID run (Step 11, Step 11.5, Step 8a) are still valid and l
 **Part B: Evidence enforcement:**
 
 If `capabilities.has_tests`:
-- Run full test suite using `capabilities.test_commands` — consume it as a projection
+- Run full test suite using `capabilities.test_commands` — the second of the exactly-two full-suite runs (per `<test-run-discipline>`, SKILL.md) — consume it as a projection
   (#314): the runner's final-summary tail + delta vs the recorded baseline; exit code is
   the verdict; never a full log dump into context (empty projection on failure ⇒ inline)
 - Verify new tests actually test new behavior
@@ -1446,7 +1448,7 @@ recorded for the PR body and session notes.
    ```
 
 4. **Pre-PR test gate** (conditional):
-   - If `capabilities.has_tests`: run full suite, block PR if tests fail
+   - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
 
 4a. **P15 review-state gate:** read via `plan_lib.read_review_state(repo_root, branch)`. If the returned state is `None` (missing or branch mismatch) OR `state["last_review_log_status"] != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.
