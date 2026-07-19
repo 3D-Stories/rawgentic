@@ -16,7 +16,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #493 — WF2 speed levers (manual drive)
 
-**Status: IN PROGRESS** — #488 in PR; #489 · #490 · #491 · #492 (depends on #491) · #494 pending.
+**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 in PR; #490 · #491 · #492 (depends on #491) · #494 pending.
 Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
 
@@ -44,6 +44,29 @@ sentence, ≥3 pointer sites).
   while the lane reviewer ran.
 - **Reviews:** 1 lane reviewer (opus) + adversarial diff review skipped (no security surface).
   No workflow-spine change → no diagram REV.
+- PR #495, squash-merged 46ae9b0 (2026-07-19), all 4 CI lanes green.
+
+### #489 — scoped tests during iteration: full suite exactly twice · v3.59.0
+
+New canonical `<test-run-discipline>` block in implement-feature's SKILL.md: FULL suite exactly
+twice per run (Step 2 baseline, Step 9 final regression gate); Step 8 iteration runs the SCOPED
+suite for the area under change; a scoped run never substitutes for the final full-suite gate.
+Documented scoped-path convention (mirror the changed area into the test tree; prose → its
+pinning guard file) + two evidence-driven exceptions (Step 12 re-run only on post-Step-9
+code/test-pinned commits; invalid baseline re-records). Four steps.md sites amended (§2 baseline
+record incl. tree-hash carry rule · §8 item 1 · §9 Part B · §12 item 4); guards:
+`TestTestRunDiscipline` (exactly-twice sentence, never-substitutes sentence, ≥3 pointer sites).
+
+- **Lane run:** small-standard (4 impl files). TDD red (b69f3f5) → green (efd504b); suite
+  3637+10skip → 3640+10skip.
+- **Dogfood note:** baseline carried from #488's final gate by tree-hash identity
+  (46ae9b0^{tree} == f452ad7^{tree}) — this child ran the full suite exactly once locally.
+- **Reviews:** 1 lane reviewer (opus): 1 Medium fixed-in-gate — the per-task delegation paths
+  (steps.md item 3 + 2 restatements) still mandated per-task full-suite runs, contradicting
+  exactly-twice; fixed 78d403e. 1 Low band-dropped (0.60 < 0.90). Adversarial diff review
+  skipped (no security surface). The fix touched a test-pinned surface post-Step-9, so the new
+  Step-12 rule itself mandated the full re-run (3640/10 unchanged) — the exception fired
+  correctly on its own shipping PR. No workflow-spine change → no diagram REV.
 - PR / merge SHA: filled by the next slot's pass.
 
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
