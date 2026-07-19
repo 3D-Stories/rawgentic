@@ -16,7 +16,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #493 — WF2 speed levers (manual drive)
 
-**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 in PR; #490 · #491 · #492 (depends on #491) · #494 pending.
+**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 in PR; #491 · #492 (depends on #491) · #494 pending.
 Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
 
@@ -67,6 +67,22 @@ record incl. tree-hash carry rule · §8 item 1 · §9 Part B · §12 item 4); g
   skipped (no security surface). The fix touched a test-pinned surface post-Step-9, so the new
   Step-12 rule itself mandated the full re-run (3640/10 unchanged) — the exception fired
   correctly on its own shipping PR. No workflow-spine change → no diagram REV.
+- PR #496, squash-merged a59096f (2026-07-19), all 4 CI lanes green.
+
+### #490 — probe the real platform API before the design · v3.60.0
+
+New canonical `<probe-before-design>` block in implement-feature's SKILL.md: before a design
+commits to any load-bearing platform/API behavior, run a SHORT live probe of the EXACT
+invocation the design will ship — never a proxy composition — and cite the real result in
+`platform_apis:`; a `verified via spike` claim must reference the actual shipped invocation
+(#467 post-mortem: two ~25-min design loop-backs traced to proxy-composition spikes). Step 3
+platform_apis rules gain probe-before-claim; Step 4 feasibility judgment treats a proxy spike
+as blocking; #226 precedent rule untouched. Guards: `TestProbeBeforeDesign` (3).
+
+- **Lane run:** small-standard (4 impl files). TDD red (f973061) → green (8107779); suite
+  3640+10skip → 3643+10skip.
+- **Reviews:** 1 lane reviewer (opus) + adversarial diff review skipped (no security surface).
+  No workflow-spine change → no diagram REV.
 - PR / merge SHA: filled by the next slot's pass.
 
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)

@@ -550,6 +550,9 @@ Exit 0 → enabled; non-zero → skip silently (default; no temp file, no subpro
        say `setSize` exists; the capability file denies it). `assert_feasibility_declared`
        rejects `verified via docs`; cite the capabilities/manifest file, an exact call site, or
        a spike instead.
+     - **Probe-before-claim (#490):** per `<probe-before-design>` (SKILL.md), a `spike` cited
+       here must have exercised the EXACT invocation the design will ship, live, and the block
+       cites that probe's real result — a proxy composition is not evidence.
      - **Silent-failure gate (AC4):** classify each external call `fail-loud` vs `fail-silent`
        on the target. A `fail-silent` call (denied/failed with the error only in a console CI
        never sees) MUST carry a `surface:` assertion/log that makes build #1 reveal the
@@ -620,7 +623,9 @@ dual-path, always logged). The quality-bar self-review is a single-pass, same-mo
   `surface:`. Beyond the mechanical check, judge credibility the parser cannot: does the cited
   evidence actually prove the API works under THIS project's real config (does the named
   capability/manifest file truly grant it; is the call site the exact API on the exact object
-  kind; did the spike exercise the real surface)? And — the parser cannot see this — does the
+  kind; did the spike exercise the real surface)? Probe-before-claim (`<probe-before-design>`,
+  SKILL.md): a spike that exercised a proxy composition rather than the exact shipped
+  invocation is itself a blocking finding. And — the parser cannot see this — does the
   design **use** a platform API it failed to declare (a `platform_apis: none` that is actually
   false)? A used-but-undeclared API is itself the finding.
 - For WF1-validated issues: does the design align with the WF1-critiqued spec?

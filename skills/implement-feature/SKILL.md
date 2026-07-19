@@ -301,6 +301,19 @@ otherwise it consumes the Step 9 result as its evidence; (b) a baseline discover
 invalid (wrong base, foreign checkout content) is re-recorded with a fresh full run.
 </test-run-discipline>
 
+<probe-before-design>
+Design loop-backs are the fattest variable cost in a WF2 run, and the #467 post-mortem
+traced two of them to spike claims that tested a PROXY composition instead of the real
+spawn path (#490). The canonical directive: before the design commits to any load-bearing
+platform/API behavior (a spawn model, a syscall, a CLI flag, a git plumbing verb), run a
+SHORT live probe of the EXACT invocation the design will ship — never a proxy composition —
+and cite the probe's real result in the `platform_apis:` feasibility block; a
+`verified via spike` claim must reference the actual shipped invocation. A five-minute
+probe at Step 3 is cheaper than the ~25-minute design loop-back it prevents. The #226
+precedent rule is untouched: an already-precedented exact call site still needs no block —
+this directive binds only where a spike is the evidence.
+</probe-before-design>
+
 <step-tracking>
 Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
 trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's
@@ -369,7 +382,7 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 1 — Receive issue & detect capabilities.** Load config per `<config-loading>`, fetch/validate the issue, surface capabilities + the `/goal` guard, probe branch protection. (read references/steps.md §1 before executing)
 - **Step 1b — AC-derived goal guard (`/goal`).** Build the goal text via `plan_lib.build_goal_text` and fold it into Step 1's confirmation; optional, never blocks. (read references/steps.md §1b before executing)
 - **Step 2 — Analyze codebase & classify complexity.** Map-first then parallel gather then synthesize; set the authoritative complexity, small-standard-lane eligibility, trivial-work check, and the parallelism probe. (read references/steps.md §2 before executing)
-- **Step 3 — Design solution architecture.** Produce the design doc incl. the mandatory `platform_apis:` feasibility declaration (#226); optional cross-model peer consult, blind both ways; collapses to a brief note in the lane. (read references/steps.md §3 before executing)
+- **Step 3 — Design solution architecture.** Produce the design doc incl. the mandatory `platform_apis:` feasibility declaration (#226), probing load-bearing platform APIs live first per `<probe-before-design>` (#490); optional cross-model peer consult, blind both ways; collapses to a brief note in the lane. (read references/steps.md §3 before executing)
 - **Step 4 — Quality gate: design critique.** the in-repo quality-bar rubric for all lanes (#190 retired the 3-judge panel; #205 replaced the reflexion dependency) + the mechanical platform-feasibility gate (`plan_lib.assert_feasibility_declared`, #226) + opt-in adversarial-on-design on the full spine; the breaker runs EXACTLY once. (read references/steps.md §4 before executing)
 - **Step 5 — Create implementation plan.** Decompose into risk-tagged tasks (`riskLevel`), parallel-group/files validation, verification strategy; checklist form in the lane. (read references/steps.md §5 before executing)
 - **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
