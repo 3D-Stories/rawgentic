@@ -1288,3 +1288,36 @@ class TestTestRunDiscipline:
         assert steps.count("<test-run-discipline>") >= 3, (
             "the Step 2/8/9 (and 12) sites must point at the canonical "
             "<test-run-discipline> block in SKILL.md")
+
+
+# --- #490: probe the real platform API before writing the design ---
+
+class TestProbeBeforeDesign:
+    """Drift guards for the #490 probe-first directive: a load-bearing
+    platform/API dependency is probed live (the EXACT shipped invocation,
+    never a proxy composition) before the design commits to it."""
+
+    def _probe_block(self) -> str:
+        return " ".join(_block(_text(), "probe-before-design").split())
+
+    def test_canonical_probe_directive_sentence(self):
+        # AC1's contract, single-sourced in the <probe-before-design> block.
+        assert (
+            "run a SHORT live probe of the EXACT invocation the design will "
+            "ship — never a proxy composition — and cite the probe's real "
+            "result in the `platform_apis:` feasibility block"
+        ) in self._probe_block()
+
+    def test_spike_references_actual_invocation_sentence(self):
+        # AC1's spike rule: the claim names the shipped invocation, not a proxy.
+        block = self._probe_block()
+        assert ("a `verified via spike` claim must reference the actual "
+                "shipped invocation") in block
+
+    def test_feasibility_sites_point_at_canonical_block(self):
+        # AC2: the Step 3 platform_apis rules and the Step 4 feasibility gate
+        # cross-reference the block — multi-site presence, so >=, never ==.
+        steps = (REFERENCES / "steps.md").read_text()
+        assert steps.count("<probe-before-design>") >= 2, (
+            "the Step 3 platform_apis rules and the Step 4 feasibility bullet "
+            "must point at the canonical <probe-before-design> block")
