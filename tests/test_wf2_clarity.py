@@ -563,21 +563,21 @@ class TestStep2PathEstimate:
 
     def test_step11_axis_reconciled_in_skill_base(self):
         # The stale complexity-keyed row contradicted steps.md's unconditional
-        # 3-agent dispatch; the mandatory table is lane-keyed now.
+        # dispatch; the mandatory table is lane-keyed now (#492: count 3→2).
         base = SKILL.read_text()
         assert "Full 3-agent review for complex_feature. Minimum 1-agent for simple/standard." not in base
-        assert "Full 3-agent review; ≥1 in the small-standard lane." in base
+        assert "Full 2-agent review (#492 — the security lens is never the one dropped); ≥1 in the small-standard lane." in base
 
     def test_constants_mirror_step11_counts(self):
         import sys
         sys.path.insert(0, str(REPO_ROOT / "hooks"))
         import plan_lib
-        assert plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL == 3
+        assert plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL == 2  # #492: 3→2
         assert plan_lib.STEP11_REVIEW_AGENT_COUNT_LANE == 1
-        # steps.md §11 still documents the 3-agent dispatch the constant mirrors.
+        # steps.md §11 still documents the dispatch count the constant mirrors.
         text = _text()
         s11 = _step11()
-        assert "3-agent parallel review" in s11
+        assert "2-agent parallel review" in s11
 
 
 # --- #225: lane secondary signal + operator override ---
@@ -1355,3 +1355,32 @@ class TestReviewLensRouting:
         assert steps.count("<review-lens-routing>") >= 3, (
             "the Step 4/8a/11 dispatch sites must point at the canonical "
             "<review-lens-routing> block in SKILL.md")
+
+
+# --- #492: fewer/tighter review waves — one 8a wave, Step-11 to 2 ---
+
+class TestTighterReviewWaves:
+    """Drift guards for the #492 wave collapse: Step 8a runs as ONE accumulated
+    wave over every high-risk commit; Step 11 runs 2 reviewers with the
+    security lens never the one dropped; the Step-11 count prose mirrors
+    plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL."""
+
+    def test_one_accumulated_wave_sentence(self):
+        text = _text()
+        s8a = text[text.index("### Step 8a sub-step"):text.index("### Step 8 Failure Modes")]
+        assert "ONE review wave over the accumulated high-risk commits" in " ".join(s8a.split())
+
+    def test_security_lens_never_dropped_sentence(self):
+        text = " ".join(_text().split())
+        assert "the security lens is never the one dropped" in text
+
+    def test_step11_count_prose_mirrors_plan_lib(self):
+        import sys as _sys
+        _sys.path.insert(0, str(REPO_ROOT / "hooks"))
+        import plan_lib as _pl
+        n = _pl.STEP11_REVIEW_AGENT_COUNT_FULL
+        skill = SKILL.read_text()
+        assert f"Full {n}-agent review" in skill, (
+            "the mandatory-steps Step 11 row must state the SAME reviewer count "
+            "as plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL")
+        assert f"Dispatch {n}-agent parallel review" in (REFERENCES / "steps.md").read_text()

@@ -48,7 +48,7 @@ CI_POLL_INTERVAL_SECONDS = 30
 CI_MAX_WAIT_MINUTES = 10
 REVIEW_CONFIDENCE_THRESHOLD = 0.80                    # Flat fallback (legacy, retained)
 # P15 — Risk-stratified Review (tiered code review):
-PER_TASK_REVIEW_AGENT_COUNT = 2                        # Step 8a uses 2 inline reviewer roles
+PER_TASK_REVIEW_AGENT_COUNT = 2                        # Step 8a's single accumulated wave uses 2 reviewer roles (#492)
 # Severity-banded confidence applied to Step 8a AND Step 11 reviewer findings.
 # Critical and High get a lower bar because hiding them is more dangerous than
 # flagging false-positives. These values mirror plan_lib.SEVERITY_BANDED_CONFIDENCE
@@ -77,14 +77,14 @@ The following steps are MANDATORY and must NEVER be skipped, abbreviated, or com
 | 7 | Create Branch | Git isolation is non-negotiable |
 | 8 | Implementation | The actual work |
 | 9 | Quality Gate (Drift) | Verifies implementation matches design and all ACs covered |
-| 11 | Code Review | **NON-NEGOTIABLE.** Full 3-agent review; ≥1 in the small-standard lane. This step found 2 Critical security issues (HTML injection + path traversal) when the orchestrator attempted to skip it. |
+| 11 | Code Review | **NON-NEGOTIABLE.** Full 2-agent review (#492 — the security lens is never the one dropped); ≥1 in the small-standard lane. This step found 2 Critical security issues (HTML injection + path traversal) when the orchestrator attempted to skip it. |
 | 11.5 | Security Scan | Tool-based pre-PR gate (secrets / dependency-CVE / SAST / IaC) via `hooks/security_scan.py`. Catches concrete known-pattern problems the LLM review misses; fail-closed on a real finding. The step always runs — absent scanners are a recorded *visible skip*, never a silent pass. |
 | 12 | Create PR | Deliverable — no PR means no review trail |
 | 16 | Completion Summary + run-record | WF2 terminates here. The run-record (`hooks/work_summary.py`) is the Tier-2 telemetry substrate — a dropped field is a measurement gap, so the step is not optional even when nothing deployed. |
 
 Conditional steps (skip ONLY when their condition is not met):
 - Step 6 (Plan Drift): lightweight, fast — run it unless time-critical **or in the small-standard lane** (`<small-standard-lane>`)
-- **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as a sub-step of Step 8 after each high-risk task's commit. Marker: `### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <N findings>)` in session notes.
+- **Step 8a (Per-task Review, P15):** mandatory when ANY task has `riskLevel: high`. Dispatched as ONE accumulated wave after the last plan task's commit, covering every high-risk commit (#492 — was per-task-batch). Marker (one per covered task): `### WF2 Step 8a [task <id>, sha <abc>]: DONE (#<issue>: <N findings>)` in session notes.
 - Step 10 (Memorize): background, never blocks
 - Step 13 (CI): skip only if has_ci == false
 - Step 14 (Merge/Deploy): skip only if user does not request merge — **always skipped in headless mode** (`additionalContext` has "HEADLESS MODE active"): PR creation is the terminal deliverable, so a headless run never merges or deploys (`references/headless.md`).
@@ -164,7 +164,7 @@ Canonical regex (assembly's scoped grep + validator):
 ^DISPATCH issue=(\d+) role=(review|implementation|analysis|other) type=([A-Za-z0-9_.:/-]+) model=(null|[A-Za-z0-9_.:/-]+) effort=(null|[A-Za-z0-9_.:/-]+) outcome=(ok|error|retried|dead) resolution=(primary|fallback|generic)$
 ```
 Emission rules:
-- One line per SUBAGENT INVOCATION dispatched (not per attempt) — a multi-reviewer gate emits one line per reviewer (WF2 Step 8a's two reviewers = two lines; Step 11's three agents = three lines).
+- One line per SUBAGENT INVOCATION dispatched (not per attempt) — a multi-reviewer gate emits one line per reviewer (WF2 Step 8a's single accumulated wave of two reviewers = two lines; Step 11's two agents = two lines, #492).
 - Write each line flush-left at column 0 as its own physical line — never inside a list item, blockquote, or fenced code block (the assembler greps `^DISPATCH` anchored to line start; an indented or bulleted line is rescued only into the MALFORMED count, never into `dispatches[]`).
 - Retry semantics: a single retry of the SAME task/invocation is ONE line — retried-then-succeeded → `outcome=retried`; retried-and-still-failed → `outcome=error` — regardless of any model escalation on the retry. Two lines are written only when the workflow abandons one dispatch PATH for a different one (e.g. delegation abandoned for inline work): the abandoned path's terminal line plus the new path's line.
 - A hung/vacuous dispatch abandoned by the orchestrator → `outcome=dead`. A dispatch that errors into a failure handler or a suspend still gets its canonical line (`outcome=error` or `dead`) BEFORE the handler/suspend proceeds — the failed dispatch is exactly the entry the audit most needs.
@@ -183,7 +183,7 @@ Resolution decision table (maps the dispatch ladder to #329's vocab):
 
 **Seat fallback chains + circuit breaker (#417).** Each seat's model is a config-declared chain (the routing table's `primary` + `chain[]`, e.g. the interim `review` chain fable → sol → sonnet, #426), tried in order on an AVAILABILITY failure; the skip is **chain-aware** — it drops any entry that would violate the artifact's cross-model invariant, never blindly the literal next entry. **A chain that exhausts its eligible entries is a handled hard failure, never a silent downgrade** — the run surfaces it (the ERROR protocol), it does not quietly proceed on an unrouted model.
 
-**Concurrency ceiling (#417).** Keep **≤ 3 concurrent Claude subagents** (the standing cap); when the driver itself is dispatching Claude work alongside them, reserve one slot for the driver → an **effective working ceiling of 2**. This is a PROSE rule — no programmatic clamp exists — so honor it when fanning out (Step 8a's two reviewers and, while the driver is idle-waiting, Step 11's three agents sit within the cap; a cross-engine candidate on the codex/zhipu pool consumes no Claude slot). `queued_ms` on an Observation records any queue wait so a stall is diagnosable.
+**Concurrency ceiling (#417).** Keep **≤ 3 concurrent Claude subagents** (the standing cap); when the driver itself is dispatching Claude work alongside them, reserve one slot for the driver → an **effective working ceiling of 2**. This is a PROSE rule — no programmatic clamp exists — so honor it when fanning out (Step 8a's two reviewers and Step 11's two agents (#492) sit within the cap; a cross-engine candidate on the codex/zhipu pool consumes no Claude slot). `queued_ms` on an Observation records any queue wait so a stall is diagnosable.
 
 **Driver seat — guidance, not enforcement (#417).** opus-4-8 is the recommended session/orchestrator model: the strong-model-on-top reliability floor (weak-model-on-top collapses; the role is unbenchmarked until the driver-bench, #430, reports). This is GUIDANCE only — the harness owns the session model; this block cannot set it, and nothing here fails a run whose session model differs.
 </model-routing-resolve>
@@ -327,8 +327,8 @@ function ignores it with a warning), and never-Haiku holds on every path — hai
 to sonnet inside the function, and an `inherit` resolution on a Haiku session dispatches
 `model: sonnet` at the site (the Step 8 delegation guard's rule). Lens map: Step 4
 self-review dispatch → security; Step 8a Reviewer 1 → mechanical, Reviewer 2
-(silent-failure hunt) → security; Step 11 Agent 1 → mechanical, Agent 2 → bug_logic,
-Agent 3 → security.
+(silent-failure hunt) → security; Step 11 Reviewer 1 → mechanical + bug_logic (fast
+tier), Reviewer 2 → architecture + security (strong; #492).
 </review-lens-routing>
 
 <step-tracking>
@@ -405,10 +405,10 @@ ordered spine is in `<happy-path>`; MANDATORY vs conditional is in
 - **Step 6 — Quality gate: plan drift (conditional).** The quality-bar rubric + opt-in adversarial-on-plan; skipped when time-critical or in the lane. (read references/steps.md §6 before executing)
 - **Step 7 — Create feature branch.** Branch from a freshly-fetched `origin/<default>` and assert the base; never pull into the current checkout. (read references/steps.md §7 before executing)
 - **Step 8 — Implementation.** Execute the plan task-by-task (TDD/implement-verify), commit per task; optional per-task or whole-issue delegation, mid-flight risk promotion + a mid-flight platform-feasibility check for gate-bypassing changes (#226). (read references/steps.md §8 before executing)
-- **Step 8a — Per-task review (conditional).** Fires for any `riskLevel: high` task: 2 reviewers over that commit's diff, deferrals persisted, review log + review-state pointer (local, git-excluded) updated. (read references/steps.md §8a before executing)
+- **Step 8a — Per-task review (conditional).** Fires when any `riskLevel: high` task exists: ONE accumulated wave of 2 reviewers over the set of high-risk commits (#492), deferrals persisted, review log (one entry per covered task) + review-state pointer (local, git-excluded) updated. (read references/steps.md §8a before executing)
 - **Step 9 — Quality gate: implementation drift.** Alignment self-review (Part A) + evidence (Part B); P15 review-coverage assertion; runtime-surface feasibility — spike OR a deferred-to-target naming the likeliest-wrong claim (#226); lane runs evidence-only + the lane cross-check. (read references/steps.md §9 before executing)
 - **Step 10 — Conditional memorization (background).** Runs in parallel with Step 11; never blocks. (read references/steps.md §10 before executing)
-- **Step 11 — Pre-PR code review.** 3-agent review (≥1 in the lane) + opt-in adversarial diff review; severity-banded confidence, deferred-resolution exit gate. NON-NEGOTIABLE. (read references/steps.md §11 before executing)
+- **Step 11 — Pre-PR code review.** 2-agent review (≥1 in the lane; #492) + opt-in adversarial diff review; severity-banded confidence, deferred-resolution exit gate. NON-NEGOTIABLE. (read references/steps.md §11 before executing)
 - **Step 11.5 — Tool-based security scan (pre-PR gate).** `hooks/security_scan.py` for secrets/SCA/SAST/IaC; fail-closed on real findings; visible skips, never a silent pass. (read references/steps.md §11.5 before executing)
 - **Step 12 — Create PR & push.** Join Steps 10+11, update README/docs, review-state gate, open the PR with the templated body. (read references/steps.md §12 before executing)
 - **Step 13 — CI verification (conditional).** Monitor/fix CI when `has_ci`; quarantine handled as a visible non-gate with a trust guard. (read references/steps.md §13 before executing)

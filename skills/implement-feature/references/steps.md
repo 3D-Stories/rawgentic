@@ -111,15 +111,15 @@ annotation, to keep the per-skill headless-annotation count stable.)
 | 4 Design critique | **quality-bar rubric** + peer consult + opt-in adversarial-on-design | **quality-bar rubric only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
 | 5 Plan | full task decomposition + drift-ready fields | **checklist plan**: ordered tasks, each with `riskLevel` + a verification line; parallel_group/files optional | keeps TDD + risk tagging; drops ceremony |
 | 6 Plan drift | self-review + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
-| 8 / 8a | TDD; 8a per high-risk task | **UNCHANGED** — TDD kept; **8a still fires for any `riskLevel: high` task** | security surface never loses per-task review |
+| 8 / 8a | TDD; 8a for high-risk tasks | TDD kept; **8a still fires for any `riskLevel: high` task** — as the ONE accumulated wave (#492), timing changed, coverage not | security surface never loses review coverage |
 | 9 Impl drift | self-review (Part A) + evidence (Part B) | **evidence-only**: run the suite, record the delta, verify each AC has a covering test; skip the alignment self-review | evidence is the real gate |
-| 11 Code review | 3-agent (complex) | **≥1 reviewer** (existing minimum for simple/standard) + the opt-in diff adversarial sub-step (#131) still applies | **NON-NEGOTIABLE — this is where the value is** |
+| 11 Code review | 2-agent (#492) | **≥1 reviewer** — the single lane reviewer takes the security/strong seat (the security lens is never the one dropped, #492) + the opt-in diff adversarial sub-step (#131) still applies | **NON-NEGOTIABLE — this is where the value is** |
 | 11.5 Security scan | full | **UNCHANGED** | tool gate never skipped |
 | 12/13/14 PR/CI/merge | full | **UNCHANGED** | |
 | 16 run-record | full | **UNCHANGED shape**, `complexity` reflects lane; add `lane: "small-standard"` marker | lane runs stay measurable vs full |
 
 **Exact retained vs. removed gates** (no vague "every safety gate"):
-- **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).
+- **RETAINED (unchanged):** TDD red-green (Step 8), Step 8a per-task review for any `riskLevel: high` task, Step 11 code review (≥1 reviewer, the single lane reviewer on the security/strong seat) + the #131 opt-in diff adversarial sub-step, Step 11.5 security scan, CI (Step 13), PR + merge (Steps 12/14), run-record (Step 16).
 - **COLLAPSED:** Step 3 (brief note, no multi-approach brainstorm), Step 4 (quality-bar rubric only — no peer consult, no adversarial-on-design; WF2's Step 4 uses the same rubric on the full spine too, so the lane differs only by dropping the opt-in cross-model layers), Step 5 (checklist plan, keeps riskLevel + verification), Step 9 (Part B evidence only — Part A alignment self-review removed).
 - **REMOVED entirely:** Step 6 (plan drift).
 
@@ -157,7 +157,7 @@ Wait for the choice.
   baseline hygiene only — branch off the default branch, add a targeted test if one is
   warranted, run the suite, bump the version + update docs per the project's pre-PR
   checklist, open a PR — but SKIP the design critique (Step 4), plan + drift gates
-  (Steps 5–6, 9), per-task + 3-agent reviews (Steps 8a, 11), and the run-record
+  (Steps 5–6, 9), per-task + multi-agent reviews (Steps 8a, 11), and the run-record
   ceremony (Step 16). If you do emit a run-record, set `complexity: "trivial"`.
 - **(b) Continue:** proceed to Step 3 as normal (valid when the user wants the full
   audit trail regardless of size).
@@ -1008,7 +1008,7 @@ When the resolved `implementation` model equals the session/orchestrator model, 
    ```
    **Reject (ok=False)** → **restore then fall back** (delegation can never block Step 8): `git reset --hard <branch_base_sha>` (tracked) then remove ONLY the untracked paths the receipt declared (`union(files_per_task)` filtered to still-untracked); on an unparseable/partial receipt, reset only and WARN that builder untracked files may remain — **never** blanket `git clean -fd` against the operator's checkout. Log the fallback loudly, then run the normal per-task Step 8.
 6. **On a valid receipt, run the gates in the orchestrator against the real tree** (not the receipt's word for them):
-   - **Step 8a** for every high-risk task (tagged in Step 5 **OR** in `norm["promoted_task_ids"]`) on that task's receipt sha; coverage asserted via `plan_lib.assert_review_coverage(<log>, tasks, receipt["task_shas"])`. **8a is NOT delegated** — the orchestrator owns it.
+   - **Step 8a** as the ONE accumulated wave (#492) covering every high-risk task's receipt sha (tagged in Step 5 **OR** in `norm["promoted_task_ids"]`); coverage asserted via `plan_lib.assert_review_coverage(<log>, tasks, receipt["task_shas"])`. **8a is NOT delegated** — the orchestrator owns it.
    - **Step 9** re-run the full suite from the orchestrator (the receipt baseline is a claim; the orchestrator's own run is the gate).
    - **Steps 11 / 11.5** unchanged (full diff review + scan).
 7. **Marker** (session notes): `### WF2 Step 8 whole-issue-delegation (#<issue>): <APPLIED receipt-valid | FALLBACK per-task (<reason>) | SKIPPED not-enabled>`.
@@ -1022,9 +1022,9 @@ Interplay with `<small-standard-lane>`: whole-issue delegation is still allowed 
 1. **Mechanical** — call `plan_lib.should_promote(task_id, file_paths, loc_delta)`. It returns `(True, reason)` if any file path matches the high-risk regex allowlist OR `loc_delta >= 200`.
 2. **Agent-flagged** — if your implementation work surfaced subjective criteria (e.g., the new error path is non-trivial in a way the path-allowlist couldn't catch), emit a `PROMOTE: <task_id> <reason>` directive in session notes.
 
-Either trigger fires Step 8a on the just-committed commit AND triggers a **retroactive scan** of all prior commits in this branch via `plan_lib.scan_prior_commits_for_trigger(repo, since_sha=<branch_base>, exclude_sha=<current_sha>)`. Any prior SHAs returned by the scan must also receive a Step 8a review **before Step 9**. Log the promotion using `plan_lib.format_promotion_note(task_id, criterion, rationale, issue=<issue>)`.
+Either trigger ADDS the just-committed commit to the accumulated Step-8a set (#492) AND triggers a **retroactive scan** of all prior commits in this branch via `plan_lib.scan_prior_commits_for_trigger(repo, since_sha=<branch_base>, exclude_sha=<current_sha>)`. Any prior SHAs returned by the scan join the accumulated set; the single Step-8a wave reviews the whole set **before Step 9**. Log the promotion using `plan_lib.format_promotion_note(task_id, criterion, rationale, issue=<issue>)`.
 
-Promotion at the last task still triggers Step 8a (and any retroactive scan) before Step 9.
+Promotion at the last task still lands in the accumulated set — the wave (and any retroactive scan) completes before Step 9.
 
 **Mid-flight feasibility check (#226 AC6).** If, while implementing (or iterating on a fix during
 UAT), you introduce a **new** platform/framework/external API that the Step-3 `platform_apis:`
@@ -1063,29 +1063,35 @@ write the heavy `<headless-checkpoint>` (format in `references/headless.md`) aft
 
 ### Step 8a sub-step: Per-task Review (P15)
 
-**Fires when:** the just-completed task has `riskLevel: high` (either as tagged in Step 5 OR promoted mid-flight in Step 8).
+**Fires when:** any plan task has `riskLevel: high` (tagged in Step 5 OR promoted mid-flight in Step 8). Since #492 the review runs as ONE review wave over the accumulated high-risk commits — never a wave per task-batch: high-risk commits accumulate as tasks complete, and after the LAST plan task's commit (including any mid-flight promotions and retroactive-scan hits), BEFORE Step 9, dispatch a single 2-reviewer wave over the whole set. Coverage stays per task — every high-risk commit is in the reviewed range and the log records one entry per task — so `plan_lib.assert_review_coverage` is unchanged. Blocking point: Critical/High findings are fixed BEFORE Step 9 (was: before the next task) — the deferred barrier is the #492 trade, bought back by the wave seeing cross-task interactions the per-task waves never saw.
 
-1. **Capture the commit's diff:**
+1. **Capture each accumulated commit's diff** (concatenated, one section per high-risk sha):
    ```bash
-   git show --no-color --format= <sha>
+   git show --no-color --format= <sha>   # per accumulated high-risk sha
    ```
+   A section shows the change as committed, which later low-risk commits may have since
+   modified — reviewers judge each hunk against the CURRENT tree (HEAD is checked out in
+   the repo they read), and Step 11's full `origin/<default>..HEAD` diff reviews the final
+   state of everything regardless.
 <!-- model-routing: role=review -->
 Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
 
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (`rawgentic:rawgentic-reviewer` + a role brief in the prompt, same pattern as Step 11). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 dispatches on the `mechanical` lens (fast tier), Reviewer 2 on the `security` lens (strong) — resolve each via `resolve --role review --lens <lens>`:
-   - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
-   - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
+   - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: every accumulated high-risk section in the concatenated diff.
+   - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: every accumulated high-risk section in the concatenated diff.
 
-   While the two reviewers run, pipeline per `<review-pipelining>` (SKILL.md): draft the next task's tests (non-committing); triage (item 4) still waits for both returns.
+   Each reviewer's return MUST carry a per-sha acknowledgment line — `reviewed <sha>: <one-line verdict>` for every accumulated sha — inclusion in the wave's input never counts as review by itself (#492).
+
+   While the two reviewers run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body or version/changelog edits (non-committing — the accumulated wave runs after the LAST task, so there is no next task's tests to draft, #492); triage (item 4) still waits for both returns.
 3. **Filter findings using the `SEVERITY_BANDED_CONFIDENCE` thresholds** (values in `<constants>`; canonical in `plan_lib.SEVERITY_BANDED_CONFIDENCE`). Count dropped findings.
 4. **Triage:**
-   - **Critical:** must fix before next task (block).
-   - **High:** fix before next task unless deferred-with-rationale. Persist the deferral via `plan_lib.append_deferral(<deferrals_path>, finding)` (the `finding` needs at least `finding_id`, `severity`, `originator_reviewer_slot`) — it **must be re-presented to Step 11** for resolution.
+   - **Critical:** must fix before Step 9 (block).
+   - **High:** fix before Step 9 unless deferred-with-rationale. Persist the deferral via `plan_lib.append_deferral(<deferrals_path>, finding)` (the `finding` needs at least `finding_id`, `severity`, `originator_reviewer_slot`) — it **must be re-presented to Step 11** for resolution.
    - **Medium/Low:** advisory; log to review log only.
 5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
 6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
 7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
-8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` where entry is:
+8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` — ONE entry per high-risk task the wave covered, written ONLY when both reviewers acknowledged that task's sha (item 2); an unacknowledged sha is UNCOVERED and re-dispatches to the wave's reviewers before Step 9 (same wave, same reviewers; this is what keeps `assert_review_coverage` honest under #492). Each entry is:
    ```json
    {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
     "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
@@ -1099,7 +1105,7 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
 For each high-risk task: an applied|deferred review log entry, review-state pointer updated (local, git-excluded — never staged into the PR), optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
 
 ### Step 8a Failure Modes
-- Reviewer cost spike on a plan with many high-risk tasks: confirmed expected behavior (P15 trades cost for early signal).
+- Flat 2-reviewer cost regardless of high-risk-task count (#492's single wave); the blocking signal is deferred to before Step 9 — the accepted trade, bought back by cross-task-interaction visibility. A very large accumulated set may warrant splitting the wave (orchestrator judgment; the per-sha acknowledgment in item 2 catches an under-inspected tail).
 - A Step 8a-deferred High finding is never re-presented at Step 11: this is what `plan_lib.assert_no_unresolved_high_deferrals` defends against in Step 11's exit check.
 
 ---
@@ -1229,8 +1235,8 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
    - "Already reviewed at task boundary: <SHA list>. Focus on **cross-cutting concerns**; re-litigate individual files only on **material** findings (the bar is 'this is materially worse than what Step 8a saw,' not 'I might find a smaller issue')."
    - "Previously flagged & deferred: <verbatim finding list>. **RE-EVALUATE each.** A deferred High must end the review as either `applied` or with an independent concurrence from a reviewer slot different from the originator." Record each resolution via `plan_lib.resolve_deferral(<deferrals_path>, <finding_id>, status='applied'` / `add_concurrence=<other_slot>` / `user_ack=True)` — do not edit the deferrals JSON by hand.
 
-1a. **Adversarial diff review sub-step (opt-in, cross-model — runs concurrently with the 3 review agents; issue #131).**
-   Mirrors the Step 4 item 7 join-barrier pattern, but over the *diff* instead of the design doc. Report-only; additive to the 3-agent review, never a replacement.
+1a. **Adversarial diff review sub-step (opt-in, cross-model — runs concurrently with the 2 review agents; issue #131).**
+   Mirrors the Step 4 item 7 join-barrier pattern, but over the *diff* instead of the design doc. Report-only; additive to the 2-agent review, never a replacement.
 
    - **Stale sweep (first thing):** delete any leftover `.rawgentic-diff-review-*.patch`, `.rawgentic-diff-findings-*.json` (including `-glm` siblings), and `.rawgentic-dispositions-*.jsonl` (#393) under the project root before doing anything else. This is crash recovery — a finally-style cleanup-on-exit cannot cover a SIGKILL, so a prior run's stale temp files may still be on disk.
    - **Gate:** enablement via the SAME probe as Step 4 item 7 —
@@ -1239,7 +1245,7 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
        --workspace .rawgentic_workspace.json --project <name> --skill implement-feature
      ```
      exit `0` = enabled, non-zero = skip. Compute `changed_paths` from `git diff --name-only origin/${capabilities.default_branch}..HEAD` — the SAME base ref as the patch below. **If that git command exits non-zero:** log the marker `failed (base ref unavailable: <reason>)`, skip dispatch, and continue (the `failed` marker satisfies the completion gate). Set `has_high_risk_task` = any plan task tagged `riskLevel: high`. Decide via `plan_lib.should_run_diff_review(enabled, changed_paths, has_high_risk_task)` (pure, tested; it raises on str/None inputs, so pass a real list). It returns `(False, <reason>)` → log marker `skipped (<reason>)` and stop; `(True, <reason>)` → dispatch.
-   - **Dispatch (concurrent with the 3 review agents):** build the diff **high-risk-first** so that if the artifact is truncated, only the low-risk tail is cut. `any_high_risk_path` returns only the *first* matching path, so do NOT pass it a whole list here — instead **partition** `changed_paths`: `high = [p for p in changed_paths if plan_lib.any_high_risk_path([p])]`, `low = [p for p in changed_paths if p not in high]`. Then `git diff origin/<default>..HEAD -- <high...>` first, then `git diff origin/<default>..HEAD -- <low...>`, concatenated. **Fallback:** if `high` is empty (dispatch was reached via `has_high_risk_task` alone), build the plain full `git diff origin/<default>..HEAD` **once** — do not emit an empty-pathspec diff (which would double the patch). Write the result to `.rawgentic-diff-review-<issue>-<token>.patch` (unique token, mode `0600`) under the project root, with sidecar path `.rawgentic-diff-findings-<issue>-<token>.json`. **Resolve the review backend first (#403):** `python3 hooks/adversarial_review_lib.py backend --workspace .rawgentic_workspace.json --project <name> --key adversarialReview` — exit 0 → stdout is the backend; **exit 2 (invalid config value) → abort this diff-review layer loudly (marker `failed (invalid backend config)`), never default to gpt.** Run in the background:
+   - **Dispatch (concurrent with the 2 review agents):** build the diff **high-risk-first** so that if the artifact is truncated, only the low-risk tail is cut. `any_high_risk_path` returns only the *first* matching path, so do NOT pass it a whole list here — instead **partition** `changed_paths`: `high = [p for p in changed_paths if plan_lib.any_high_risk_path([p])]`, `low = [p for p in changed_paths if p not in high]`. Then `git diff origin/<default>..HEAD -- <high...>` first, then `git diff origin/<default>..HEAD -- <low...>`, concatenated. **Fallback:** if `high` is empty (dispatch was reached via `has_high_risk_task` alone), build the plain full `git diff origin/<default>..HEAD` **once** — do not emit an empty-pathspec diff (which would double the patch). Write the result to `.rawgentic-diff-review-<issue>-<token>.patch` (unique token, mode `0600`) under the project root, with sidecar path `.rawgentic-diff-findings-<issue>-<token>.json`. **Resolve the review backend first (#403):** `python3 hooks/adversarial_review_lib.py backend --workspace .rawgentic_workspace.json --project <name> --key adversarialReview` — exit 0 → stdout is the backend; **exit 2 (invalid config value) → abort this diff-review layer loudly (marker `failed (invalid backend config)`), never default to gpt.** Run in the background:
      ```bash
      python3 hooks/adversarial_review_lib.py review \
        --artifact <patch> --type diff --project-root <root> --date <date> \
@@ -1257,28 +1263,23 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
      `### WF2 Step 11 — Adversarial Diff Review: #<issue> findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
 
 <!-- model-routing: role=review -->
-Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged). Per `<review-lens-routing>` (SKILL.md): Agent 1 → `mechanical`, Agent 2 → `bug_logic` (fast tier), Agent 3 → `security` (strong); resolve each via `resolve --role review --lens <lens>`; an `inherit` resolution on a Haiku session dispatches `model: sonnet` (never-Haiku).
+Dispatch the 2 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 → `mechanical` (the bug_logic brief folded in, fast tier), Reviewer 2 → `security` (strong); resolve each via `resolve --role review --lens <lens>`; an `inherit` resolution on a Haiku session dispatches `model: sonnet` (never-Haiku).
 
-2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that agent once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
+2. **Dispatch 2-agent parallel review** (#492 trimmed 3→2 — the mechanical and bug/logic briefs share the fast-tier seat). If any returns 429, retry that agent after 30s. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that agent once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
 
-   While the three agents run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body and the version/changelog edits (non-committing); the confidence filter (item 3), fixes, and the exit gate still wait for the wave.
+   While the two agents run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body and the version/changelog edits (non-committing); the confidence filter (item 3), fixes, and the exit gate still wait for the wave.
 
-   **Agent 1: Style & Convention Compliance**
-   - Code style rules from project conventions and config.formatting
-   - Naming conventions
-   - Import ordering
+   **Reviewer 1: Mechanical + Bug & Logic** (the old Agents 1+2, merged by #492)
+   - Code style rules from project conventions and config.formatting; naming; import ordering
    - No hardcoded credentials or secrets
-
-   **Agent 2: Bug & Logic Detection**
    - Logic errors, edge cases, race conditions
-   - Silent failures in catch blocks
-   - Null/undefined handling
+   - Silent failures in catch blocks; null/undefined handling
    - Off-by-one errors, boundary conditions
 
-   **Agent 3: Architecture & History Analysis**
+   **Reviewer 2: Architecture, History & Security** (the strong seat — the security lens is never the one dropped, #492)
    - Does this change break patterns established by prior commits?
    - Are there related files that should also change?
-   - Are there security implications?
+   - Are there security implications? (this lens caught the ReDoS + FIFO-DoS on #466)
    - Is the change backward-compatible?
 
 3. **Filter by confidence:** Apply the severity-banded thresholds from `SEVERITY_BANDED_CONFIDENCE` (values in `<constants>`; canonical in `plan_lib.SEVERITY_BANDED_CONFIDENCE`). The flat 0.80 in `REVIEW_CONFIDENCE_THRESHOLD` is a legacy fallback; the banded values are authoritative. Log dropped-finding counts.

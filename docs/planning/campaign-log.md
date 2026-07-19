@@ -16,7 +16,7 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ## Epic #493 — WF2 speed levers (manual drive)
 
-**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 in PR; #492 (depends on #491) · #494 pending.
+**Status: IN PROGRESS** — #488 merged (PR #495, 46ae9b0, v3.58.0); #489 merged (PR #496, a59096f, v3.59.0); #490 merged (PR #497, 031e01c, v3.60.0); #491 merged (PR #498, f01e6bc, v3.61.0); #492 in PR; #494 pending.
 Owner D-5/D-6 (2026-07-18): built BEFORE #475 resumes — #475 (and #467 W4, paused at Task 1
 @ 5c1c880) stay paused until this epic merges AND the owner reinstalls the plugin + fresh session.
 
@@ -99,8 +99,25 @@ shared `model-routing-resolve` untouched (WF3 out of scope). 17 routing tests + 
   dogfooding its own lens map (R1 sonnet mechanical / R2 opus security). 6 findings:
   3 fixed dd48127 (boundary haiku floor — R2's catch; docstring purity; Final[frozenset]),
   3 band-dropped. Suite 3643+10skip → 3663+10skip (+20).
-- **Reviews:** 1 lane reviewer (opus, security lens) + adversarial diff review FIRED
-  (high-risk task in plan, gpt backend) — results in the PR.
+- **Reviews:** 1 lane reviewer (opus, security lens) NO FINDINGS + adversarial diff review
+  FIRED (high-risk task, gpt): 3 findings — 2 Medium adopted (5f0f33c: `--lens`
+  review-role-only; malformed `reviewLenses` warns), 1 High refuted with evidence
+  (inherit = documented dispatch-site-guard contract; ledger d-491-11-1-adv1).
+- PR #498, squash-merged f01e6bc (2026-07-19), all 4 CI lanes green.
+
+### #492 — fewer/tighter review waves: one 8a wave, Step 11 to 2 · v3.62.0
+
+Step 8a → ONE accumulated 2-reviewer wave over every high-risk commit (after the last plan
+task, before Step 9; per-task coverage preserved via one log entry per task —
+`assert_review_coverage` unchanged; blocking point moves to fix-before-Step-9, the named
+trade). Step 11 → 2 reviewers (R1 mechanical+bug/logic fast tier; R2 architecture+security
+strong — the security lens is never the one dropped). `STEP11_REVIEW_AGENT_COUNT_FULL` 3→2,
+one-wave `estimate_agents`, shared-block examples corrected, mirror guards recomputed.
+
+- **Lane run:** small-standard; Task 3 (gate-flow prose) riskLevel high → 8a fired as ONE
+  wave, dogfooding the rule it ships. Suite 3666+10skip → 3669+10skip (+3 guards).
+- **Reviews:** single 8a wave (sonnet mechanical / opus security) + lane Step-11 +
+  adversarial diff review (fires on high-risk task) — results in the PR.
 - PR / merge SHA: filled by the next slot's pass.
 
 ## Epic #475 — orchestrator/executor wiring: WF2/WF3 on the executor path (auto-run)
