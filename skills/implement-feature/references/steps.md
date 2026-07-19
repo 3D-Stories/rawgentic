@@ -1670,6 +1670,13 @@ measurable signal — not just a sentence the user reads once.
    concurrent sessions (sentinel epic #45 vs the #467 run, finding T-2); never substitute
    a shared path. The full schema, the field-presence rules, and the per-gate `status`
    conventions live in **`references/run-record.md`** — read it before assembling.
+   Two fields are read from source-of-truth state, never from in-context memory (#512):
+   `loop_backs.used` comes from `claude_docs/.wf2-state/<issue>/loopback_counters.json`
+   (its `total`; the file survives sessions, so an in-context count is structurally
+   wrong on any resumed/multi-session run — a missing file means zero), and each gate's
+   `reviewer_kind` is re-derived at assembly time from the gate-defining mechanism per
+   run-record.md's merged-gate precedence enumeration (#340) — the additive adversarial
+   layer NEVER changes it; read the gate's own session-note markers, not memory.
    In short: every documented key must be **present** (a dropped field is a
    telemetry gap, not a `null`), counts are non-negative integers, `resolved` ≤
    `findings`, and `workflow` is `"implement-feature"`. **Canonical names (#116):** use
@@ -1737,9 +1744,15 @@ measurable signal — not just a sentence the user reads once.
    ```bash
    python3 hooks/work_summary.py summarize \
      --record-file /tmp/wf2-run-record-<issue>-<session-id>.json \
-     --project-root <activeProject.path>
+     --project-root <activeProject.path> \
+     --loopback-counters claude_docs/.wf2-state/<issue>/loopback_counters.json
    rc=$?
    ```
+   The `--loopback-counters` flag (#512) makes the tool cross-check the record's
+   `loop_backs.used` against the persisted counters file and fail rc 1 on
+   divergence — a missing file means zero loop-backs were consumed and still
+   validates. Resolve the path relative to the workspace root (where
+   `claude_docs/` lives), the same place the counters were written.
    The tool's stdout **is** the completion summary — present it to the user as-is
    (do not re-type it). It also appends the record to
    `<activeProject.path>/docs/measurements/run_records.jsonl` (override with

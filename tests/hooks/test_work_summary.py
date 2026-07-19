@@ -2205,3 +2205,86 @@ class TestDispatchRoutingTelemetryNegatives:
     def test_zero_queued_ms_ok(self):
         from work_summary import validate_record
         assert validate_record(self._rec({"queued_ms": 0, "concurrency": 0})) == []
+
+
+# --- #512: loop_backs cross-checked against the counters file ---------------
+
+class TestLoopbackCountersCrossCheck:
+    """#512: loop_backs.used was hand-populated from in-context memory and
+    diverged from the persisted counters file (WF2 #467: recorded 0, counters
+    {"design":2,"total":2}) while validating clean. The summarize path now
+    cross-checks against claude_docs/.wf2-state/<issue>/loopback_counters.json.
+
+    Semantics (both directions unit-tested — the asymmetry is the contract):
+    - explicit --loopback-counters + file MISSING => counters were never
+      created => expected total 0 (still validates);
+    - flag absent => auto-discover cwd-relative; file absent => skip silently
+      (cwd may not be the workspace root — absence is ambiguous there)."""
+
+    def _counters(self, tmp_path, issue=91, total=2, design=2, name=None):
+        d = tmp_path / "claude_docs" / ".wf2-state" / str(issue)
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / "loopback_counters.json"
+        f.write_text(json.dumps({"design": design, "spec_tighten": 0, "tdd": 0,
+                                 "review": 0, "review_design": 0, "total": total}))
+        return f
+
+    def _run(self, tmp_path, record, extra_args=(), cwd=None, monkeypatch=None):
+        from work_summary import main
+        store = tmp_path / "store.jsonl"
+        if monkeypatch is not None and cwd is not None:
+            monkeypatch.chdir(cwd)
+        rc = main(["summarize", "--record-file", _write_record(tmp_path, record),
+                   "--project-root", str(tmp_path), "--store", str(store),
+                   *extra_args])
+        return rc, store
+
+    def test_explicit_flag_divergence_exits_1_not_persisted(self, tmp_path, capsys):
+        f = self._counters(tmp_path, total=2)
+        rec = _valid_record()
+        rec["loop_backs"]["used"] = 0
+        rc, store = self._run(tmp_path, rec, ("--loopback-counters", str(f)))
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert not store.exists()
+        assert "loop_backs" in err and "counters" in err
+
+    def test_explicit_flag_match_exits_0(self, tmp_path, capsys):
+        f = self._counters(tmp_path, total=1, design=1)
+        rec = _valid_record()          # used: 1
+        rc, store = self._run(tmp_path, rec, ("--loopback-counters", str(f)))
+        assert rc == 0, capsys.readouterr().err
+        assert store.exists()
+
+    def test_explicit_flag_missing_file_means_zero(self, tmp_path, capsys):
+        missing = tmp_path / "claude_docs" / ".wf2-state" / "91" / "loopback_counters.json"
+        rec = _valid_record()          # used: 1 => divergence vs implicit 0
+        rc, store = self._run(tmp_path, rec, ("--loopback-counters", str(missing)))
+        assert rc == 1
+        assert not store.exists()
+        rec2 = _valid_record()
+        rec2["loop_backs"]["used"] = 0
+        rc2, _ = self._run(tmp_path, rec2, ("--loopback-counters", str(missing)))
+        assert rc2 == 0
+
+    def test_explicit_flag_malformed_counters_exits_1(self, tmp_path, capsys):
+        f = self._counters(tmp_path)
+        f.write_text("{not json")
+        rc, store = self._run(tmp_path, _valid_record(),
+                              ("--loopback-counters", str(f)))
+        assert rc == 1
+        assert not store.exists()
+
+    def test_auto_discovery_from_cwd_catches_divergence(self, tmp_path, capsys, monkeypatch):
+        self._counters(tmp_path, total=2)
+        rec = _valid_record()
+        rec["loop_backs"]["used"] = 0
+        rc, store = self._run(tmp_path, rec, cwd=tmp_path, monkeypatch=monkeypatch)
+        assert rc == 1
+        assert not store.exists()
+
+    def test_auto_discovery_absent_file_skips_silently(self, tmp_path, capsys, monkeypatch):
+        rec = _valid_record()          # used: 1, no counters anywhere
+        rc, store = self._run(tmp_path, rec, cwd=tmp_path, monkeypatch=monkeypatch)
+        assert rc == 0
+        assert store.exists()

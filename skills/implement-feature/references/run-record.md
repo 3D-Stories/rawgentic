@@ -28,7 +28,7 @@ non-negative integers and `resolved` may not exceed `findings`:
   ],
   "security_scan": {"ran": true|false, "blocking_resolved": N, "advisory": N,
                     "skipped": ["<kind>", ...]},
-  "loop_backs": {"used": N, "budget": 3},
+  "loop_backs": {"used": N, "budget": 3},   // used = counters-file total, never memory (#512)
   "outcome": {"pr_number": N|null, "pr_url": "<url>"|null, "merged": true|false|null,
               "ci": "passed|failed|not_configured|skipped",
               "deploy": "success|manual|failed|not_applicable"},
@@ -210,6 +210,20 @@ omit-not-null. The cross-model layer's per-gate
 visibility is the existing session-note markers — Step 11's 4-state diff-review marker and the
 Step 4/6 `(invoked|skipped|discarded)` parens markers — NOT a `dispatches[]` entry today;
 prescribing a DISPATCH line for adversarial-review invocations is a named follow-up.
+
+**`loop_backs` is read from the counters file, never assembled from memory (#512).**
+`loop_backs.used` MUST be read at assembly time from
+`claude_docs/.wf2-state/<issue>/loopback_counters.json` (`total`) — the documented
+source of truth `plan_lib.consume_loopback` maintains, which survives context
+compaction and multi-session runs; an in-context count is structurally wrong on any
+resumed run (WF2 #467 recorded 0 against a persisted total of 2). A missing counters
+file means zero loop-backs were consumed. `work_summary.py summarize` cross-checks
+this via `--loopback-counters` (divergence or a malformed counters file fails rc 1,
+not persisted); with the flag omitted it auto-discovers the cwd-relative path and
+checks only when the file exists. `reviewer_kind` is likewise re-derived at assembly
+time from the gate-defining mechanism per the merged-gate precedence enumeration
+(#340) above — the additive adversarial layer never changes it; read the gate's
+session-note markers, not memory.
 
 **`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
 pattern as `usage` — absent ⇒ old records stay valid, no schema version bump; present ⇒ strict
