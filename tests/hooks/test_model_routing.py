@@ -424,3 +424,32 @@ class TestReviewLensNeverHaikuBoundary:
     def test_unknown_lens_haiku_review_model_floors(self):
         model, _ = mr.select_review_lens_model("haiku", "vibes")
         assert model == "sonnet"
+
+
+class TestReviewLensAdversarialFixes:
+    """#491 Step 11 adversarial findings: --lens is review-role-only at the CLI,
+    and a present-but-malformed reviewLenses block warns instead of silently
+    becoming an empty config."""
+
+    def test_nondict_lens_overrides_warns(self, capsys):
+        model, _ = mr.select_review_lens_model("opus", "mechanical", "bogus")
+        assert model == "sonnet"
+        assert "reviewLenses" in capsys.readouterr().err
+
+    def test_none_lens_overrides_does_not_warn(self, capsys):
+        mr.select_review_lens_model("opus", "mechanical", None)
+        assert capsys.readouterr().err == ""
+
+    def test_cli_lens_ignored_for_nonreview_role(self, tmp_path):
+        import subprocess
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"implementation": "opus",
+                                             "reviewLenses": {"mechanical": "sonnet"}}})
+        cli = str(HOOKS / "model_routing_lib.py")
+        r = subprocess.run(
+            [sys.executable, cli, "resolve", "--workspace", ws,
+             "--project", "app", "--role", "implementation", "--lens", "mechanical"],
+            capture_output=True, text=True)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "opus", "lens must not rewrite a non-review role"
+        assert "review" in r.stderr, "ignoring --lens for a non-review role must warn"

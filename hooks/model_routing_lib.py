@@ -208,7 +208,12 @@ def select_review_lens_model(
     passes through for security/unknown (the dispatch-site Haiku guard covers
     inherit); non-security lenses still default to sonnet.
     """
-    overrides = lens_overrides if isinstance(lens_overrides, dict) else {}
+    if lens_overrides is None or isinstance(lens_overrides, dict):
+        overrides = lens_overrides or {}
+    else:
+        _warn(f"reviewLenses is not an object ({type(lens_overrides).__name__}); "
+              f"ignoring it and using lens defaults")
+        overrides = {}
     if review_model == "haiku":
         # Boundary floor (8a R2, #491): resolve() pre-floors the CLI path, but a
         # direct library caller passing raw config must never get haiku back on
@@ -258,9 +263,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "resolve":
         model, effort = resolve(args.workspace, args.project, args.role)
         if args.lens is not None:
-            block = _load_block(args.workspace, args.project)
-            overrides = block.get("reviewLenses") if isinstance(block, dict) else None
-            model, _ = select_review_lens_model(model, args.lens, overrides)
+            if args.role != "review":
+                _warn(f"--lens only applies to --role review; ignoring lens "
+                      f"{args.lens!r} for role {args.role!r}")
+            else:
+                block = _load_block(args.workspace, args.project)
+                overrides = block.get("reviewLenses") if isinstance(block, dict) else None
+                model, _ = select_review_lens_model(model, args.lens, overrides)
         if args.effort:
             print(effort if effort is not None else "none")
         else:
