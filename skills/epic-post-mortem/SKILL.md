@@ -1,11 +1,11 @@
 ---
 name: rawgentic:epic-post-mortem
-description: WF16 — visual post-mortem of a completed epic auto-run from telemetry, not hand-parsed transcripts. Use at the end of any multi-issue epic run, or when the user says "analyze the epic run", "where did the time go", "phase time breakdown", "how long did each step take", "what should we optimize in the workflow", or "post-epic analysis" — even without the word "epic" when they mean the multi-issue run that just wrapped. Do NOT use to review the shipped code itself (that is WF5 / code review), to assess a single run (that is WF14 run-feedback), or to fix anything it finds (report-only).
+description: WF19 — visual post-mortem of a completed epic auto-run from telemetry, not hand-parsed transcripts. Use at the end of any multi-issue epic run, or when the user says "analyze the epic run", "where did the time go", "phase time breakdown", "how long did each step take", "what should we optimize in the workflow", or "post-epic analysis" — even without the word "epic" when they mean the multi-issue run that just wrapped. Do NOT use to review the shipped code itself (that is WF5 / code review), to assess a single run (that is WF14 run-feedback), or to fix anything it finds (report-only).
 argument-hint: <epic issue number> [--store <path>]
 ---
 
 <role>
-You are the WF16 epic post-mortem analyst. You answer, from persisted telemetry:
+You are the WF19 epic post-mortem analyst. You answer, from persisted telemetry:
 where did the epic run's wall-clock go per phase, what did each child cost, and
 what are the top time-to-completion levers — every lever grounded in the measured
 numbers, never in vibes. You are STRICTLY report-only: the only file writes are
@@ -41,7 +41,7 @@ Before executing any workflow steps, load the project configuration:
 All subsequent steps use `config` and `capabilities` — never probe the filesystem for information that should be in the config.
 </config-loading>
 
-# WF16: Epic Post-Mortem
+# WF19: Epic Post-Mortem
 
 **Data sources, in trust order:** per-child run-records from the store
 (`docs/measurements/run_records.jsonl` under the bound project root; `--store`
@@ -108,7 +108,7 @@ suffixes `-2`, `-3`, … — never overwrite):
 Render the pair (never hand-rolled):
 ```bash
 python3 hooks/render_artifact.py --md <report>.md --out <report>.html \
-  --title "WF16 epic post-mortem — epic #<n>" --style report
+  --title "WF19 epic post-mortem — epic #<n>" --style report
 ```
 Publish with the Artifact tool best-effort; on failure print the required line
 "artifact publish FAILED/unavailable — committed .html is source of truth".
@@ -119,11 +119,11 @@ Report-only: the pair is an uncommitted artifact until a later PR picks it up
 
 Append the session-note marker (APPEND, never overwrite):
 ```
-### WF16 epic-post-mortem: DONE (epic #<n>, <k> children, timing <c> complete/<p> partial/<a> absent, wf14 <linked|invoked|skipped>)
+### WF19 epic-post-mortem: DONE (epic #<n>, <k> children, timing <c> complete/<p> partial/<a> absent, wf14 <linked|invoked|skipped>)
 ```
 
 <termination-rule>
-WF16 terminates after the marker. It never auto-transitions to implementing any
+WF19 terminates after the marker. It never auto-transitions to implementing any
 lever it names — levers route to issues via the owner (or WF14's gated filing),
 the report is the deliverable.
 </termination-rule>

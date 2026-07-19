@@ -1,4 +1,4 @@
-"""Drift guards for the WF16 epic post-mortem skill (#508, epic #509).
+"""Drift guards for the WF19 epic post-mortem skill (#508, epic #509).
 
 Pins the honesty contract: timing consumed from #506's telemetry when usable,
 visible degradation (never fabricated splits), idle bucketed separately, the
