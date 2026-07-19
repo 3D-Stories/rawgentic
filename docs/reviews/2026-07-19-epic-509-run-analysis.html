@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #509 run analysis</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-19 17:38 MDT</div>
+<h1>Epic #509 run analysis</h1>
+
+</header>
+<main>
+<h1>Epic #509 run analysis</h1>
+<p><strong>Run:</strong> 2026-07-19, session be2d9fd9 (+ resumed continuation), interactive AUTO MODE with scoped auto-merge. <strong>Outcome:</strong> 9/9 children merged (PRs #514–#523, v3.66.1→3.71.0) + telemetry PR #524; suite 3782→3857 (+75), 0 regressions, 0 loop-backs, 0 blockers. Epic CLOSED. <strong>Method note:</strong> phase splits below are <strong>reconstructed from session-transcript timestamps</strong> (anchor commands: <code>git checkout -b</code>, review dispatch, <code>gh pr create</code>, <code>gh pr merge</code>, <code>work_summary.py summarize</code>) — the last hand-reconstruction this epic should ever need: #506&#x27;s <code>timing</code> telemetry shipped <strong>inside</strong> this run, so this run&#x27;s own records still carry <code>timing: absent</code> honestly. Totals cross-checked against PR createdAt/mergedAt. Every number below is <strong>estimated (transcript-anchored)</strong> unless marked confirmed.</p>
+<h2>At a glance</h2>
+<ul>
+<li><strong>Wall clock:</strong> 18:17–23:28 UTC ≈ <strong>311 min</strong>, of which <strong>56.3 min stalled</strong> (one owner-away gap 20:54→21:50, mid-#506 review — confirmed, the only &gt;10-min gap in the whole run) and ~15 min owner pause/interactions around #513. <strong>Active ≈ 240 min for 9 children ≈ 26.5 min/child.</strong></li>
+<li><strong>Average active phase split per child:</strong> design+plan <strong>1.5</strong> · implement <strong>10.1</strong> · review <strong>9.9</strong> · PR+CI+merge <strong>3.1</strong> · wrap <strong>0.7</strong> (min).</li>
+<li><strong>Biggest lever:</strong> the single owner-away stall (18% of total wall) — attended runs need a review-verdict push notification or the armed resume launcher.</li>
+<li><strong>Session cost (cumulative capture):</strong> $140.01 total; per-child deltas $7.35–$23.02.</li>
+</ul>
+<h2>Per-child phase table (minutes, transcript-anchored)</h2>
+<table>
+<thead><tr><th>Child</th><th>design+plan</th><th>implement</th><th>review</th><th>PR+CI+merge</th><th>wrap</th><th>notes</th></tr></thead>
+<tbody>
+<tr><td>#510</td><td>~1.5ᵉ</td><td>7.9</td><td>10.2</td><td>7.0</td><td>1.3</td><td>first child; PR+CI includes advisory-lane wait experiment</td></tr>
+<tr><td>#511</td><td>~1.5ᵉ</td><td>8.1</td><td>5.8</td><td>2.5</td><td>0.7</td><td></td></tr>
+<tr><td>#512</td><td>1.6</td><td>9.6</td><td>8.5</td><td>2.4</td><td>0.7</td><td></td></tr>
+<tr><td>#513</td><td>1.7</td><td>8.7</td><td>12.4</td><td>2.5</td><td>0.7</td><td>review incl. shared-helper fix wave</td></tr>
+<tr><td>#517</td><td>~1.5ᵉ</td><td>7.1</td><td>4.9</td><td>2.8</td><td>0.6</td><td>owner-added mid-run</td></tr>
+<tr><td>#506</td><td>2.0</td><td>13.5</td><td><strong>15.0</strong> (+56.3 stalled)</td><td>2.9</td><td>0.8</td><td>stall = owner away, bucketed separately</td></tr>
+<tr><td>#392</td><td>1.3</td><td>10.4</td><td>9.0</td><td>2.7</td><td>0.7</td><td></td></tr>
+<tr><td>#507</td><td>0.6</td><td>6.6</td><td>10.9</td><td>2.5</td><td>0.5</td><td>review incl. HIGH fix + wiring-pin updates</td></tr>
+<tr><td>#508</td><td>2.0</td><td>18.6</td><td>12.4</td><td>2.8</td><td>0.7</td><td>new-skill registration inflates implement</td></tr>
+</tbody>
+</table>
+<p>ᵉ fetch anchor not captured for 3 children (different command form); value estimated from the measured six (range 0.6–2.0). Boundaries: design+plan = issue fetch→branch cut; implement = branch→review dispatch (includes baseline full suite + TDD); review = dispatch→PR create (includes reviewer wave, fix reconcile, 11.5 scan, pre-PR full suite); PR+CI+merge = PR create→merge; wrap = merge→record persisted.</p>
+<h2>Average phase split (active time)</h2>
+<pre><code>design+plan  █▌            1.5 min   6%
+implement    ██████████   10.1 min  40%
+review       █████████▉    9.9 min  39%
+PR+CI+merge  ███           3.1 min  12%
+wrap         ▊             0.7 min   3%</code></pre>
+<h2>Cost / tokens per child</h2>
+<p>Capture caveat (finding C1 below): <code>usage</code> in each run-record is <strong>session-cumulative</strong> — per-child figures here are successive-capture <strong>deltas</strong> (confirmed arithmetic over the capture files; #510&#x27;s delta includes epic setup, #513&#x27;s includes the pause/tasklist/launcher work).</p>
+<table>
+<thead><tr><th>Child</th><th>Δcost (USD)</th><th>Δoutput tokens</th></tr></thead>
+<tbody>
+<tr><td>#510</td><td>18.97*</td><td>142,108*</td></tr>
+<tr><td>#511</td><td>9.80</td><td>53,496</td></tr>
+<tr><td>#512</td><td>7.35</td><td>48,616</td></tr>
+<tr><td>#513</td><td>23.02*</td><td>71,661*</td></tr>
+<tr><td>#517</td><td>9.46</td><td>26,715</td></tr>
+<tr><td>#506</td><td>21.97</td><td>84,168</td></tr>
+<tr><td>#392</td><td>15.32</td><td>41,196</td></tr>
+<tr><td>#507</td><td>13.19</td><td>31,760</td></tr>
+<tr><td>#508</td><td>20.93</td><td>54,889</td></tr>
+</tbody>
+</table>
+<p>\* inflated by non-child work in the same capture window. Total session $140.01 (rate-card estimate; subscription-billed).</p>
+<h2>Gate findings per step (from run-records — confirmed)</h2>
+<table>
+<thead><tr><th>Child</th><th>Step 4</th><th>Step 11</th><th>11.5</th><th>Loop-backs</th></tr></thead>
+<tbody>
+<tr><td>#510</td><td>1/1</td><td>2/2 (1 Med applied, 1 Low band-dropped)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#511</td><td>1/1</td><td>3/2 (3 Low: 2 dropped, 1 noted)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#512</td><td>1/1</td><td>2/2 (1 Low applied, 1 dropped)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#513</td><td>1/1</td><td>3/3 (1 Med + 1 Low applied, 1 reworded)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#517</td><td>1/1</td><td>0/0 (clean)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#506</td><td>2/2</td><td>3/2 (1 Med self-verified+applied, 1 Low applied, 1 noted)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#392</td><td>1/1</td><td>2/1 (1 Low applied, 1 noted)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#507</td><td>1/1</td><td>3/3 (<strong>1 HIGH</strong> + 1 Med applied)</td><td>PASS</td><td>0</td></tr>
+<tr><td>#508</td><td>1/1</td><td>2/2 (1 Med + 1 Low applied)</td><td>PASS</td><td>0</td></tr>
+</tbody>
+</table>
+<p>Review yield: 21 findings across 9 waves; 12 applied pre-PR, incl. one HIGH (#507 <code>--record</code> overload would have skipped the new approval gate) and two design-grade Mediums (#506 unreachable &quot;complete&quot; status; #508 WF16/#359 numbering collision). Every wave cost ~5–8.5 min of reviewer wall — and paid for itself at least four times.</p>
+<h2>Optimization levers (grounded)</h2>
+<p>1. <strong>Kill the attended-run stall (single biggest wall item).</strong> The one owner-away gap was 56.3 min = 18% of total wall — more than any phase&#x27;s average. Change: push a notification at review-verdict-ready (<code>notify-owner</code> skill) and/or arm the resume launcher (<code>epic509-resume.sh</code> pattern) at run start even for attended runs. Saving: up to ~56 min per comparable evening run. Risk: none (additive). 2. <strong>Trim the review-phase serial tail (39% of active).</strong> Reviewer agent wall averaged ~6 min/wave (confirmed from dispatch durations 267–509 s), but the review PHASE averaged 9.9 min: the difference is the serialized reconcile → 11.5 scan → pre-PR full-suite re-run tail. 5/9 children re-ran the full suite (~2.4 min) because a review fix landed post-Step-9. Change: scope the pre-PR re-run when the review fix touched only guard-pinned prose/tests (steps.md §12 exception wording already allows consuming Step-9 evidence — tighten the &quot;touched a test-pinned surface&quot; trigger to the affected guard subset + registration file). Saving: ~2–2.5 min on every review-fix child (~11 min/epic). Risk: weaker final gate — needs the exception spelled out, not improvised. 3. <strong>Registration children carry a fixed ~5-min surcharge.</strong> #508&#x27;s implement was 18.6 min vs the 8.9-min median — the delta is the multi-surface registration walk (whitelist, symlink, sync, canary, count strings ×6, second hand-pin discovered only by the full suite). Change: fold the <code>test_interview_skill.py</code> hand-pin (and any future ones) into the add-skill checklist, and script the count-string walk (<code>scripts/</code> helper that prints every surface needing a bump). Saving: ~3–4 min per new-skill child + one full-suite round-trip. Risk: none (tooling).</p>
+<p>Non-levers, for the record: CI itself is tight (test lane ~2.1 min, hard lanes green 9/9); design+plan at 1.5 min shows the lane collapse working as intended; wrap at 0.7 min is already minimal.</p>
+<h2>Divergences and bugs (all 9 children, inline)</h2>
+<p>Cross-child synthesis (each finding: severity × children affected × status):</p>
+<table>
+<thead><tr><th>#</th><th>Finding</th><th>Sev</th><th>Children</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>C1</td><td><strong><code>usage</code> capture is session-cumulative, not per-run</strong> — every record&#x27;s input/output/cost includes all prior session work; two same-session children overlap 100%. Confirmed: successive records&#x27; token counts are monotone-increasing supersets (capture files diffed). <code>capture_status: &quot;captured&quot;</code> validates clean while the number answers &quot;session so far&quot;, not &quot;this run&quot;. Corrupts exactly the cost-per-child analysis #508&#x27;s skill automates (this report had to use deltas).</td><td>Med</td><td>all 9</td><td>candidate — relates to #363</td></tr>
+<tr><td>C2</td><td><strong>designArtifact sharedDoc unusable under concurrent sessions</strong> — <code>docs/planning/campaign-log.md</code> was foreign-dirty the whole run; all 9 children recorded <code>design artifact (skipped)</code> with reason. The sharedDoc convention has no answer for a dirty shared file (git can&#x27;t split it).</td><td>Med (friction)</td><td>all 9</td><td>candidate</td></tr>
+<tr><td>C3</td><td><strong>Step 1b deferral condition doesn&#x27;t cover interactive epic goals</strong> — prose defers only on <code>RAWGENTIC_EPIC_GOAL</code> (headless driver); this interactive run had a session <code>/goal</code> and deferral was applied by judgment. Right outcome, outside the letter.</td><td>Low</td><td>all 9</td><td>candidate</td></tr>
+<tr><td>C4</td><td><strong>epic-run step-state writes stopped at Step 4</strong> — the skill mandates a manual write at each numbered step ENTRY (1–5); steps 1–4 were written, Step 5 (wrap) never. Fail-open, display-only impact.</td><td>Low</td><td>run-level</td><td>candidate</td></tr>
+<tr><td>C5</td><td>Below-band review findings applied via self-verification (4×: #506 F1 0.72, #392 L1 0.8, #512 F1 0.85, #507 Med 0.5) — each independently verified before applying, but the banded-confidence prose has no explicit &quot;orchestrator self-verify converts a below-band finding&quot; path; today it&#x27;s judgment.</td><td>Low</td><td>4 children</td><td>note</td></tr>
+<tr><td>C6</td><td>Advisory <code>code-review</code> lane pending at 7/9 merges — doctrine-compliant (advisory never gates), but those merges shipped without the lane&#x27;s review ever landing. Observation for lane-timing, not a defect.</td><td>Note</td><td>7 of 9</td><td>note</td></tr>
+<tr><td>C7</td><td><code>wall_clock_s</code> hand-set from orchestrator arithmetic (prose-sanctioned) — coarse (#506&#x27;s 5436s included the 56-min stall). #506&#x27;s <code>timing</code> key supersedes this going forward.</td><td>Note</td><td>all 9</td><td>superseded by #506</td></tr>
+</tbody>
+</table>
+<p>Prose-divergence sweep against the loaded cache (3.66.0 for most of the run): mandatory steps 1–5, 7–9, 11, 11.5, 12, 16 have DONE markers for all 9 children (confirmed, session notes); Step 6 skipped per lane (sanctioned); Step 8a never fired (no high-risk tasks — path-allowlist confirmed per child); no hook errors observed; no schema rejections (9/9 <code>work_summary.py summarize</code> rc=0, confirmed).</p>
+<p><strong>Filing discipline:</strong> C1–C4 are candidates presented for owner approval — nothing filed by this analysis. C1 dup-check must reconcile with #363 (usage attribution) before any filing.</p>
+<h2>Not checked</h2>
+<ul>
+<li>Subagent-side transcripts (reviewer agents&#x27; internal time breakdown) — only their total durations were captured.</li>
+<li>The 3 missing fetch anchors (different command shape) — design+plan for #510/#511/#517 is estimated, not measured.</li>
+<li>WF14 batch machinery assessment — deliberately not run here (this stopgap is WF14-decoupled by owner decision; the new WF19 skill wires it for future epics).</li>
+</ul>
+<h2>Sources</h2>
+<p>Confirmed: <code>docs/measurements/run_records.jsonl</code> (9 records, PR #524), session transcripts <code>be2d9fd9…jsonl</code> + <code>4bed8604…jsonl</code> (89 anchor events), capture files (cost deltas), PR metadata. Estimated: phase boundaries as defined above.</p>
+
+</main>
+<footer>Last updated: 2026-07-19 17:38 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
