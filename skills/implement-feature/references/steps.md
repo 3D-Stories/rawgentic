@@ -111,7 +111,7 @@ annotation, to keep the per-skill headless-annotation count stable.)
 | 4 Design critique | **quality-bar rubric** + peer consult + opt-in adversarial-on-design | **quality-bar rubric only** — NO peer consult, NO adversarial-on-design | #190 retired the same-model multi-judge design panel from WF2; cross-model scrutiny is the opt-in adversarial-on-design (full spine) |
 | 5 Plan | full task decomposition + drift-ready fields | **checklist plan**: ordered tasks, each with `riskLevel` + a verification line; parallel_group/files optional | keeps TDD + risk tagging; drops ceremony |
 | 6 Plan drift | self-review + optional adversarial-on-plan | **SKIP** (folded — the checklist is small enough to eyeball; Step 9 still verifies AC coverage) | a 3-task checklist has no drift surface |
-| 8 / 8a | TDD; 8a per high-risk task | **UNCHANGED** — TDD kept; **8a still fires for any `riskLevel: high` task** | security surface never loses per-task review |
+| 8 / 8a | TDD; 8a for high-risk tasks | TDD kept; **8a still fires for any `riskLevel: high` task** — as the ONE accumulated wave (#492), timing changed, coverage not | security surface never loses review coverage |
 | 9 Impl drift | self-review (Part A) + evidence (Part B) | **evidence-only**: run the suite, record the delta, verify each AC has a covering test; skip the alignment self-review | evidence is the real gate |
 | 11 Code review | 2-agent (#492) | **≥1 reviewer** — the single lane reviewer takes the security/strong seat (the security lens is never the one dropped, #492) + the opt-in diff adversarial sub-step (#131) still applies | **NON-NEGOTIABLE — this is where the value is** |
 | 11.5 Security scan | full | **UNCHANGED** | tool gate never skipped |
@@ -1069,12 +1069,18 @@ write the heavy `<headless-checkpoint>` (format in `references/headless.md`) aft
    ```bash
    git show --no-color --format= <sha>   # per accumulated high-risk sha
    ```
+   A section shows the change as committed, which later low-risk commits may have since
+   modified — reviewers judge each hunk against the CURRENT tree (HEAD is checked out in
+   the repo they read), and Step 11's full `origin/<default>..HEAD` diff reviews the final
+   state of everything regardless.
 <!-- model-routing: role=review -->
 Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
 
 2. **Dispatch 2 reviewers in parallel** via the Agent tool (`rawgentic:rawgentic-reviewer` + a role brief in the prompt, same pattern as Step 11). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 dispatches on the `mechanical` lens (fast tier), Reviewer 2 on the `security` lens (strong) — resolve each via `resolve --role review --lens <lens>`:
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: every accumulated high-risk section in the concatenated diff.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: every accumulated high-risk section in the concatenated diff.
+
+   Each reviewer's return MUST carry a per-sha acknowledgment line — `reviewed <sha>: <one-line verdict>` for every accumulated sha — inclusion in the wave's input never counts as review by itself (#492).
 
    While the two reviewers run, pipeline per `<review-pipelining>` (SKILL.md): draft the PR body or version/changelog edits (non-committing — the accumulated wave runs after the LAST task, so there is no next task's tests to draft, #492); triage (item 4) still waits for both returns.
 3. **Filter findings using the `SEVERITY_BANDED_CONFIDENCE` thresholds** (values in `<constants>`; canonical in `plan_lib.SEVERITY_BANDED_CONFIDENCE`). Count dropped findings.
@@ -1085,7 +1091,7 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
 5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
 6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
 7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
-8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` — ONE entry per high-risk task the wave covered (same wave, same reviewers; this is what keeps `assert_review_coverage` unchanged under #492), where each entry is:
+8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` — ONE entry per high-risk task the wave covered, written ONLY when both reviewers acknowledged that task's sha (item 2); an unacknowledged sha is UNCOVERED and re-dispatches to the wave's reviewers before Step 9 (same wave, same reviewers; this is what keeps `assert_review_coverage` honest under #492). Each entry is:
    ```json
    {"task_id": "<id>", "sha": "<commit_sha>", "reviewers": ["R1","R2"],
     "verdict": "applied|deferred|REVIEW_DISPATCH_FAILED",
@@ -1099,7 +1105,7 @@ Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<mode
 For each high-risk task: an applied|deferred review log entry, review-state pointer updated (local, git-excluded — never staged into the PR), optional fix commits, session-note marker. The branch is not "ready" until the last `last_review_log_status` is `"applied"`.
 
 ### Step 8a Failure Modes
-- Reviewer cost spike on a plan with many high-risk tasks: confirmed expected behavior (P15 trades cost for early signal).
+- Flat 2-reviewer cost regardless of high-risk-task count (#492's single wave); the blocking signal is deferred to before Step 9 — the accepted trade, bought back by cross-task-interaction visibility. A very large accumulated set may warrant splitting the wave (orchestrator judgment; the per-sha acknowledgment in item 2 catches an under-inspected tail).
 - A Step 8a-deferred High finding is never re-presented at Step 11: this is what `plan_lib.assert_no_unresolved_high_deferrals` defends against in Step 11's exit check.
 
 ---
