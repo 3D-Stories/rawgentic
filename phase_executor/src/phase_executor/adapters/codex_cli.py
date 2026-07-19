@@ -146,6 +146,10 @@ def parse_codex(stdout_jsonl: str, *, requested_model: str, transport: str = "na
 
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None, cwd: Optional[str] = None) -> contract.Observation:
+    if req.resume_session_id is not None:
+        # #467 W4: session resume is a claude-only wiring (spike #455) — refuse fail-loud
+        # rather than silently launch a fresh codex session under a resume identity.
+        raise contract.CompositionError("codex launch: resume_session_id is not supported")
     import os  # noqa: PLC0415
     work = cwd or os.getcwd()
     # #465 S1: the None policy is registry-sourced — ONE constant feeds both the engine's

@@ -82,6 +82,9 @@ def _invoke_worker(payload: str, timeout: float) -> ProcOutcome:
 
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
+    if req.resume_session_id is not None:
+        # #467 W4: session resume is a claude-only wiring (spike #455) — refuse fail-loud.
+        raise contract.CompositionError("zhipuai launch: resume_session_id is not supported")
     payload = json.dumps({"model": req.requested_model, "prompt": req.prompt, "max_tokens": 1024})
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)

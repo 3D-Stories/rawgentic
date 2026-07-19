@@ -29,7 +29,8 @@ _GRANT_TOOLS = {"read": ("Read", "Grep", "Glob"), "edit": ("Edit", "Write"),
 
 
 def build_command(model: str, *, effort: Optional[str] = None,
-                  profile: "Optional[contract.LaunchProfile]" = None) -> list:
+                  profile: "Optional[contract.LaunchProfile]" = None,
+                  resume_session_id: Optional[str] = None) -> list:
     """Compose the claude -p argv. No profile = today's exact command (byte-identical).
 
     #465 three-way session branch AT COMPOSE TIME (profiles are publicly constructible, so
@@ -38,10 +39,16 @@ def build_command(model: str, *, effort: Optional[str] = None,
     unreachable); ANY other value -> CompositionError. Pre-spawn invariant: mutating must
     equal edit-or-bash in effective_grants (an injected inconsistent profile refuses)."""
     cmd = ["claude", "--print", "--model", model, "--output-format", "json"]
+    if resume_session_id is not None and (profile is None or profile.session_policy != "resume"):
+        # #467 W4: resuming under a fresh-pinned launch is unreachable (spike #455) — refuse
+        # at compose time rather than ship a --resume the pin silently defeats.
+        raise contract.CompositionError(
+            "claude launch: resume_session_id requires profile.session_policy == 'resume'")
     if profile is None or profile.session_policy == "fresh":
         cmd.append("--no-session-persistence")
     elif profile.session_policy == "resume":
-        pass  # persistence stays on: session_id lands in the envelope (resume wiring = W3/W4)
+        if resume_session_id is not None:
+            cmd += ["--resume", resume_session_id]  # #467 W4 quota_paused relaunch (spike #455)
     else:
         raise contract.CompositionError(
             f"claude launch: session_policy {profile.session_policy!r} is not a validated "
@@ -116,7 +123,8 @@ def _claude_env(credential_ref: Optional[str]) -> Optional[dict]:
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
     """Live seat call. Writes a capture dir and returns an Observation."""
-    cmd = build_command(req.requested_model, effort=req.effort, profile=req.profile)
+    cmd = build_command(req.requested_model, effort=req.effort, profile=req.profile,
+                        resume_session_id=req.resume_session_id)
     # #465 P3-1: a mutating claude launch pins cwd to the canonicalized worktree — claude
     # has no OS sandbox here, so an ambient cwd must never receive Edit/Write/Bash effects.
     cwd = None
