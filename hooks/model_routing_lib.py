@@ -187,6 +187,61 @@ def select_impl_model(ceiling: str, risk_level: str, complexity: str) -> tuple[s
     return actual, reason
 
 
+REVIEW_LENSES: Final[frozenset[str]] = frozenset(
+    {"security", "mechanical", "ac_completeness", "test_coverage", "bug_logic"}
+)
+_LENS_DEFAULT: Final[str] = "sonnet"
+
+
+def select_review_lens_model(
+    review_model: str, lens: str, lens_overrides: dict | None = None
+) -> tuple[str, str]:
+    """Pick a review model per LENS under the resolved review-role model (#491).
+
+    Never raises; fail-open (warns to stderr on malformed config, like
+    ``resolve``). The security lens is PINNED to the resolved
+    review model — a ``reviewLenses.security`` override is ignored with a warning,
+    so config can never downgrade the security lens. An unknown lens fails safe to
+    the review model (strong). Non-security lenses take a valid configured
+    override, else default to sonnet. ``haiku`` floors to sonnet everywhere —
+    rawgentic never routes review work to Haiku. A review_model of ``inherit``
+    passes through for security/unknown (the dispatch-site Haiku guard covers
+    inherit); non-security lenses still default to sonnet.
+    """
+    if lens_overrides is None or isinstance(lens_overrides, dict):
+        overrides = lens_overrides or {}
+    else:
+        _warn(f"reviewLenses is not an object ({type(lens_overrides).__name__}); "
+              f"ignoring it and using lens defaults")
+        overrides = {}
+    if review_model == "haiku":
+        # Boundary floor (8a R2, #491): resolve() pre-floors the CLI path, but a
+        # direct library caller passing raw config must never get haiku back on
+        # the security-pin or unknown-lens paths either.
+        _warn("review model 'haiku' passed to select_review_lens_model — "
+              "never-Haiku; flooring to 'sonnet'")
+        review_model = "sonnet"
+    if lens == "security":
+        if "security" in overrides:
+            _warn("reviewLenses.security override ignored — the security lens is "
+                  "pinned to the resolved review model (#491)")
+        return review_model, f"security lens pinned to review model {review_model!r}"
+    if lens not in REVIEW_LENSES:
+        return review_model, (
+            f"unknown lens {lens!r} — fail-safe to review model {review_model!r}")
+    value = overrides.get(lens)
+    if isinstance(value, str) and value in VALID_MODELS:
+        if value == "haiku":
+            _warn(f"reviewLenses.{lens} configured to 'haiku' — never-Haiku; "
+                  f"using 'sonnet' instead")
+            return "sonnet", f"lens {lens!r} haiku override floored to sonnet"
+        return value, f"lens {lens!r} override → {value}"
+    if value is not None:
+        _warn(f"invalid reviewLenses.{lens} value {value!r} "
+              f"(valid: {sorted(VALID_MODELS)}); using the {_LENS_DEFAULT} default")
+    return _LENS_DEFAULT, f"lens {lens!r} default → {_LENS_DEFAULT}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="model_routing_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -198,9 +253,23 @@ def main(argv: list[str] | None = None) -> int:
         "--effort", action="store_true",
         help="print the resolved effort instead of the model (back-compat: default omits it)",
     )
+    p_res.add_argument(
+        "--lens", default=None,
+        help="review lens (#491): apply per-lens selection over the resolved role model "
+             "(security pinned strong; mechanical/ac_completeness/test_coverage/bug_logic "
+             "default sonnet; overridable via modelRouting.reviewLenses)",
+    )
     args = parser.parse_args(argv)
     if args.cmd == "resolve":
         model, effort = resolve(args.workspace, args.project, args.role)
+        if args.lens is not None:
+            if args.role != "review":
+                _warn(f"--lens only applies to --role review; ignoring lens "
+                      f"{args.lens!r} for role {args.role!r}")
+            else:
+                block = _load_block(args.workspace, args.project)
+                overrides = block.get("reviewLenses") if isinstance(block, dict) else None
+                model, _ = select_review_lens_model(model, args.lens, overrides)
         if args.effort:
             print(effort if effort is not None else "none")
         else:

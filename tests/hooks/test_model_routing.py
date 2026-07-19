@@ -318,3 +318,138 @@ class TestLoadBlockKeyAndMissing:
         ws = self._ws(tmp_path, {"name": "x", "modelRouting": None})
         assert mr.resolve(ws, "x", "review") == ("inherit", None)
         assert "not an object" not in capsys.readouterr().err
+
+
+class TestSelectReviewLensModel:
+    """#491: per-lens review-model selection. Pure, fail-open, never raises.
+    Security lens is pinned to the resolved review model (config can never
+    downgrade it); non-security lenses default to sonnet; haiku floors to
+    sonnet everywhere (never-Haiku)."""
+
+    def test_security_lens_pinned_to_review_model(self):
+        model, reason = mr.select_review_lens_model("opus", "security")
+        assert model == "opus"
+        assert "pinned" in reason
+
+    def test_security_override_ignored(self):
+        model, _ = mr.select_review_lens_model(
+            "opus", "security", {"security": "sonnet"})
+        assert model == "opus"
+
+    def test_mechanical_defaults_to_sonnet(self):
+        model, reason = mr.select_review_lens_model("opus", "mechanical")
+        assert model == "sonnet"
+        assert "default" in reason
+
+    def test_all_nonsecurity_lenses_default_sonnet(self):
+        for lens in ("mechanical", "ac_completeness", "test_coverage", "bug_logic"):
+            assert mr.select_review_lens_model("opus", lens)[0] == "sonnet"
+
+    def test_override_respected(self):
+        model, reason = mr.select_review_lens_model(
+            "opus", "bug_logic", {"bug_logic": "opus"})
+        assert model == "opus"
+        assert "override" in reason
+
+    def test_haiku_override_floors_to_sonnet(self):
+        model, _ = mr.select_review_lens_model(
+            "opus", "mechanical", {"mechanical": "haiku"})
+        assert model == "sonnet"
+
+    def test_invalid_override_falls_back_to_default(self):
+        model, _ = mr.select_review_lens_model(
+            "opus", "mechanical", {"mechanical": "gpt9"})
+        assert model == "sonnet"
+
+    def test_unknown_lens_fails_safe_to_review_model(self):
+        model, reason = mr.select_review_lens_model("opus", "vibes")
+        assert model == "opus"
+        assert "unknown" in reason
+
+    def test_inherit_review_model_security_inherits(self):
+        assert mr.select_review_lens_model("inherit", "security")[0] == "inherit"
+
+    def test_inherit_review_model_mechanical_still_sonnet(self):
+        assert mr.select_review_lens_model("inherit", "mechanical")[0] == "sonnet"
+
+    def test_lens_vocab_constant(self):
+        assert mr.REVIEW_LENSES == {
+            "security", "mechanical", "ac_completeness", "test_coverage", "bug_logic"}
+
+
+class TestResolveLensCLI:
+    """#491: `resolve --role review --lens <lens>` round-trip through the CLI."""
+
+    def _run(self, ws, lens):
+        import subprocess
+        cli = str(HOOKS / "model_routing_lib.py")
+        r = subprocess.run(
+            [sys.executable, cli, "resolve", "--workspace", ws,
+             "--project", "app", "--role", "review", "--lens", lens],
+            capture_output=True, text=True)
+        return r.returncode, r.stdout.strip()
+
+    def test_cli_security_lens_prints_review_model(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": "opus"}})
+        assert self._run(ws, "security") == (0, "opus")
+
+    def test_cli_mechanical_default_sonnet(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": "opus"}})
+        assert self._run(ws, "mechanical") == (0, "sonnet")
+
+    def test_cli_reviewlenses_override_roundtrip(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": "opus",
+                                             "reviewLenses": {"bug_logic": "opus"}}})
+        assert self._run(ws, "bug_logic") == (0, "opus")
+
+    def test_cli_reviewlenses_security_downgrade_ignored(self, tmp_path):
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"review": "opus",
+                                             "reviewLenses": {"security": "sonnet"}}})
+        assert self._run(ws, "security") == (0, "opus")
+
+
+class TestReviewLensNeverHaikuBoundary:
+    """#491 8a R2 finding: the never-Haiku floor must hold at the FUNCTION
+    boundary, not only via resolve()'s pre-floor — a future direct caller
+    passing raw config must never get haiku back on any path."""
+
+    def test_security_lens_haiku_review_model_floors(self):
+        model, _ = mr.select_review_lens_model("haiku", "security")
+        assert model == "sonnet"
+
+    def test_unknown_lens_haiku_review_model_floors(self):
+        model, _ = mr.select_review_lens_model("haiku", "vibes")
+        assert model == "sonnet"
+
+
+class TestReviewLensAdversarialFixes:
+    """#491 Step 11 adversarial findings: --lens is review-role-only at the CLI,
+    and a present-but-malformed reviewLenses block warns instead of silently
+    becoming an empty config."""
+
+    def test_nondict_lens_overrides_warns(self, capsys):
+        model, _ = mr.select_review_lens_model("opus", "mechanical", "bogus")
+        assert model == "sonnet"
+        assert "reviewLenses" in capsys.readouterr().err
+
+    def test_none_lens_overrides_does_not_warn(self, capsys):
+        mr.select_review_lens_model("opus", "mechanical", None)
+        assert capsys.readouterr().err == ""
+
+    def test_cli_lens_ignored_for_nonreview_role(self, tmp_path):
+        import subprocess
+        ws = _ws(tmp_path, {"name": "app", "path": "./p",
+                            "modelRouting": {"implementation": "opus",
+                                             "reviewLenses": {"mechanical": "sonnet"}}})
+        cli = str(HOOKS / "model_routing_lib.py")
+        r = subprocess.run(
+            [sys.executable, cli, "resolve", "--workspace", ws,
+             "--project", "app", "--role", "implementation", "--lens", "mechanical"],
+            capture_output=True, text=True)
+        assert r.returncode == 0
+        assert r.stdout.strip() == "opus", "lens must not rewrite a non-review role"
+        assert "review" in r.stderr, "ignoring --lens for a non-review role must warn"
