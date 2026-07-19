@@ -34,7 +34,8 @@ MANIFEST = {
         "config-loading.md": [
             # WF4/7/8/9/10/12 removed 2026-07-04 (#160): deprecation stubs carry
             # no config-loading block; removal at v3.0.0 (#161).
-            "admit-to-org-runners", "adversarial-review", "incident",
+            "admit-to-org-runners", "adversarial-review", "epic-post-mortem",
+            "incident",
             "implement-feature", "fix-bug", "peer-consult", "run-feedback", "scan",
         ],
     },
