@@ -473,6 +473,26 @@ a missing workspace file, malformed JSON, a non-dict `modelRouting` block, or an
 unknown/invalid model or effort value all resolve to `inherit` / `null` with a stderr
 warning; the CLI always exits 0 and never blocks the calling workflow.
 
+**Per-lens review tiering — `modelRouting.reviewLenses` (#491, optional).** Review
+dispatches at WF2 Steps 4/8a/11 select a model per LENS via
+`resolve --role review --lens <lens>` / `select_review_lens_model`. Lens vocabulary:
+`security`, `mechanical`, `ac_completeness`, `test_coverage`, `bug_logic`. Defaults:
+the `security` lens is **pinned** to the resolved `review` model (a
+`reviewLenses.security` override is ignored with a warning — config can never
+downgrade the security lens); every other lens defaults to `sonnet`. Example:
+
+```json
+"modelRouting": {
+  "review": "opus",
+  "reviewLenses": { "bug_logic": "opus" }
+}
+```
+
+Same fail-open contract as the rest of the block: an invalid lens value warns and
+falls back to the `sonnet` default; `haiku` anywhere floors to `sonnet` (never-Haiku,
+enforced inside `select_review_lens_model`); an unknown lens name fails safe to the
+strong review model.
+
 **Soft opus floor (review only):** an explicit `sonnet` for the `review` role still
 applies (routing is honored, not overridden) but emits an advisory stderr warning
 that review quality may drop below the recommended `opus` floor. An explicit `haiku`

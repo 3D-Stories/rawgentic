@@ -314,6 +314,23 @@ precedent rule is untouched: an already-precedented exact call site still needs 
 this directive binds only where a spike is the evidence.
 </probe-before-design>
 
+<review-lens-routing>
+Review waves are model-tiered per lens (#491; the epic #475 profile measured ~9 opus
+reviewers per child where the mechanical lenses never needed the strong model). When
+dispatching review-role subagents at Step 4, Step 8a, and Step 11, select the model per
+LENS via `select_review_lens_model`: the security lens is pinned to the resolved
+review model, and the mechanical, ac_completeness, test_coverage, and bug_logic lenses
+ride the fast tier (default sonnet; per-project tunable via `modelRouting.reviewLenses`;
+the function lives in `hooks/model_routing_lib.py`, CLI `resolve --role review --lens <lens>`).
+The pins are hard: a `reviewLenses` override can never downgrade the security lens (the
+function ignores it with a warning), and never-Haiku holds on every path — haiku floors
+to sonnet inside the function, and an `inherit` resolution on a Haiku session dispatches
+`model: sonnet` at the site (the Step 8 delegation guard's rule). Lens map: Step 4
+self-review dispatch → security; Step 8a Reviewer 1 → mechanical, Reviewer 2
+(silent-failure hunt) → security; Step 11 Agent 1 → mechanical, Agent 2 → bug_logic,
+Agent 3 → security.
+</review-lens-routing>
+
 <step-tracking>
 Session notes (`claude_docs/session_notes.md`) are an **append-only, cumulative audit
 trail**: every write is an **APPEND** (`>>`), NEVER an overwrite — an earlier step's

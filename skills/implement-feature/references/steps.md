@@ -609,7 +609,8 @@ the `fast_path_eligible` alias):
 <!-- model-routing: role=review -->
 When run as a subagent, dispatch it as a `rawgentic:rawgentic-reviewer` per the
 `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort
-dual-path, always logged). The quality-bar self-review is a single-pass, same-model check over the design:
+dual-path, always logged) on the `security` lens per `<review-lens-routing>` (SKILL.md) — the
+design gate is a strong-model surface. The quality-bar self-review is a single-pass, same-model check over the design:
 - Does the design respect existing patterns and project conventions, with appropriate
   dependencies (prefer existing libraries)?
 - Are all acceptance criteria addressed, edge cases and failure modes identified, and the
@@ -1071,7 +1072,7 @@ write the heavy `<headless-checkpoint>` (format in `references/headless.md`) aft
 <!-- model-routing: role=review -->
 Dispatch these reviewers as `rawgentic:rawgentic-reviewer` agents per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
 
-2. **Dispatch 2 reviewers in parallel** via the Agent tool (`rawgentic:rawgentic-reviewer` + a role brief in the prompt, same pattern as Step 11):
+2. **Dispatch 2 reviewers in parallel** via the Agent tool (`rawgentic:rawgentic-reviewer` + a role brief in the prompt, same pattern as Step 11). Per `<review-lens-routing>` (SKILL.md): Reviewer 1 dispatches on the `mechanical` lens (fast tier), Reviewer 2 on the `security` lens (strong) — resolve each via `resolve --role review --lens <lens>`:
    - **Reviewer 1: Code-level (style + bug/logic)** — naming, imports, hardcoded credentials, off-by-one errors, null/undefined handling, race conditions, type errors. Scope: this commit's diff only.
    - **Reviewer 2: Silent-failure hunt** — catch-block swallows, missing error returns, unchecked async paths, ignored exceptions, fallthrough cases, missing `else` branches that should reject. Scope: this commit's diff only.
 
@@ -1256,7 +1257,7 @@ Insight stored to mempalace and/or an updated CLAUDE.md (if insights memorized),
      `### WF2 Step 11 — Adversarial Diff Review: #<issue> findings_present <N>|no_findings|failed (<reason>)|skipped (<reason>) — <report path if any>`
 
 <!-- model-routing: role=review -->
-Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged).
+Dispatch the 3 review agents as `rawgentic:rawgentic-reviewer` per the `<model-routing-resolve>` bundled-agent contract (`model: <review>` unless `inherit`; effort dual-path, always logged). Per `<review-lens-routing>` (SKILL.md): Agent 1 → `mechanical`, Agent 2 → `bug_logic` (fast tier), Agent 3 → `security` (strong); resolve each via `resolve --role review --lens <lens>`; an `inherit` resolution on a Haiku session dispatches `model: sonnet` (never-Haiku).
 
 2. **Dispatch 3-agent parallel review.** If any returns 429, retry that agent after 30s. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that agent once; on a second death treat that slot as a dispatch failure (retry-once-then-REVIEW_DISPATCH_FAILED per Step 8a item 7's pattern) rather than counting it as a clean review.
 
