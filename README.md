@@ -70,9 +70,29 @@ the update recipe.*
 
 ### 1. Install
 
+#### Claude Code
+
 ```bash
 claude plugin install rawgentic@rawgentic
 ```
+
+#### Private Codex marketplace
+
+Phase 1 exposes rawgentic's existing skills in Codex through a private repo-local marketplace. From the rawgentic repository root, add the marketplace and restart Codex:
+
+```bash
+codex plugin marketplace add .
+```
+
+Then open `/plugins`, choose **Rawgentic Private**, install **Rawgentic**, and start a new Codex thread. Invoke skills through Codex's skill picker or by naming the skill directly, for example:
+
+```text
+$rawgentic:create-issue Add user authentication
+$rawgentic:implement-feature 1
+$rawgentic:fix-bug 2
+```
+
+Codex hook support is planned for Phase 2. Until then, the Codex package provides the workflow skills only; Claude Code remains the hook-supported runtime for WAL, session binding, and security guards. The Codex manifest and private marketplace are structured for eventual public marketplace publication.
 
 ### 2. Set up your workspace
 
@@ -706,6 +726,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.71.1 (2026-07-19)
+- **WF19 artifact is a designed timing page, not a generic report render (#509 follow-up).** Owner verdict on the first epic-#509 analysis artifact ("just gross"): the `render_artifact.py --style report` output was rejected for this deliverable; the owner-supplied "Epic #475 run profiler — where the time goes" page is the visual bar, vendored verbatim as `skills/epic-post-mortem/references/artifact-template.html`. Step 4 now builds the html on its exact structure: 4-KPI grid, filed banner, average-child profile bar (flex segments, semantic phase colors) with a minutes-annotated legend, per-child fill rows (a stall is flagged beside its row, never drawn inside a phase segment), a ranked leverage÷risk lever table with risk pills and issue links, the "honest part" note card, and a sourced mono footer naming the number most likely wrong. The template is pure static HTML/CSS — inline `flex-basis` percentages, no script; if one is ever needed it is DOM-builder only, no `innerHTML` (the repo security-hook contract) — and its light/dark theming stays intact. The exception is scoped: the vendored template supersedes the house renderer for THIS skill's html only; every other doc surface keeps `render_artifact.py`. Guards updated (template-vendored + shipped, DOM-builder pin, stall-honesty pin; the unicode-bar-floor pin retired with the floor). No workflow-spine change → no diagram REV. Suite 3857+10skip→3858+10skip.
 ### v3.71.0 (2026-07-19)
 - **WF19 epic post-mortem — where the epic run's wall-clock went, from telemetry (#508, epic #509 capstone).** New `skills/epic-post-mortem/SKILL.md`: takes an epic issue number, derives children from the task-list checkboxes (both states — queue derivation, never dependency parsing), resolves each child's run-record via `work_summary.py find`, and consumes #506's `timing` phase splits when usable — `phases.idle` bucketed separately so stalled time never inflates a phase bar; records without usable timing degrade VISIBLY to `usage.wall_clock_s` totals, never fabricated splits; an absent record is a visible degraded row. The machinery assessment is delegated to WF14 batch mode (#392, `--epic <n>`) and linked — never a duplicated rubric. Output: one `epic-postmortem-<n>-<date>` md+html pair (`render_artifact.py --style report`) with stacked per-child phase bars + average phase split (unicode-block bars — the named presentation floor, inline SVG the upgrade path), cost/tokens per child, a gate-findings-per-step table, and top-3 time-to-completion levers each citing the measured numbers it derives from. Retires the workspace stopgap `epic-run-analysis` (superseded note appended there; final removal is the owner's call). Registration: whitelist (alphabetical), codex symlink, `<config-loading>` MANIFEST+sync with canary 9→10, count strings 20→21 (9 SDLC), evals fraction 9/21 + have-none membership, plugin/marketplace/codex descriptions mirrored. 7 red-first clarity guards. No workflow-spine change (WF19 is a new report-only workflow, not a WF2/WF3 station edit) → no diagram REV. Suite 3850+10skip→3857+10skip.
 ### v3.70.0 (2026-07-19)

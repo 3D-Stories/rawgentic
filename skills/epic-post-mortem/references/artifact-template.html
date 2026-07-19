@@ -1,0 +1,225 @@
+<title>Epic #475 run profiler — where the time goes</title>
+<style>
+  :root {
+    --ink: #16181d; --paper: #f5f6f8; --panel: #ffffff; --line: #dfe3e9;
+    --muted: #667085; --text: #23272f; --faint: #8a92a0;
+    /* semantic: the villain is idle review-wait */
+    --wait: #e0603a;      /* review-wait — the hot bar */
+    --design: #7a5cc7;    /* design + gate */
+    --impl: #2f8f9d;      /* implementation */
+    --fix: #d99a2b;       /* fix application */
+    --suite: #5b6472;     /* full-suite reruns */
+    --ship: #4a9e6d;      /* ship */
+    --accent: #e0603a;
+    --good: #4a9e6d; --warn: #d99a2b; --crit: #e0603a;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e7e9ee; --paper: #0e1014; --panel: #171a20; --line: #262b34;
+      --muted: #8b93a2; --text: #d6dae1; --faint: #6b7280;
+      --wait: #f2764f; --design: #a488e6; --impl: #45b3c2; --fix: #eab54a; --suite: #7a828f; --ship: #5cc084;
+      --accent: #f2764f;
+    }
+  }
+  :root[data-theme="light"] {
+    --ink: #16181d; --paper: #f5f6f8; --panel: #ffffff; --line: #dfe3e9;
+    --muted: #667085; --text: #23272f; --faint: #8a92a0;
+    --wait: #e0603a; --design: #7a5cc7; --impl: #2f8f9d; --fix: #d99a2b; --suite: #5b6472; --ship: #4a9e6d; --accent: #e0603a;
+  }
+  :root[data-theme="dark"] {
+    --ink: #e7e9ee; --paper: #0e1014; --panel: #171a20; --line: #262b34;
+    --muted: #8b93a2; --text: #d6dae1; --faint: #6b7280;
+    --wait: #f2764f; --design: #a488e6; --impl: #45b3c2; --fix: #eab54a; --suite: #7a828f; --ship: #5cc084; --accent: #f2764f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--text); font-family: var(--sans);
+    line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 40px 24px 72px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 30px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: clamp(26px, 4vw, 38px); line-height: 1.08; margin: 0 0 12px; letter-spacing: -.02em;
+    text-wrap: balance; color: var(--ink); }
+  .sub { color: var(--muted); font-size: 15px; max-width: 64ch; margin: 0; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 26px 0 6px; }
+  @media (max-width: 640px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi .n { font-family: var(--mono); font-size: 26px; font-weight: 600; color: var(--ink);
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .kpi .l { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .kpi .n small { font-size: 14px; color: var(--faint); font-weight: 500; }
+  section { margin-top: 40px; }
+  h2 { font-size: 13px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin: 0 0 4px; }
+  .lead { color: var(--muted); font-size: 14px; margin: 0 0 18px; max-width: 66ch; }
+
+  /* the profile bar */
+  .profile { display: flex; width: 100%; height: 66px; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--line); }
+  .seg { position: relative; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-family: var(--mono); font-weight: 600; font-size: 13px; min-width: 0; }
+  .seg span { padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 16px; }
+  .lg { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; transform: translateY(1px); }
+  .lg b { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .lg .pct { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+
+  /* per-child mini bars */
+  .children { display: grid; gap: 10px; }
+  .crow { display: grid; grid-template-columns: 130px 1fr 62px; align-items: center; gap: 12px; }
+  .crow .id { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+  .crow .id b { color: var(--ink); }
+  .track { height: 12px; background: color-mix(in srgb, var(--line) 60%, transparent); border-radius: 6px; overflow: hidden; }
+  .fill { height: 100%; background: linear-gradient(90deg, var(--impl), var(--design)); border-radius: 6px; }
+  .crow .t { font-family: var(--mono); font-size: 13px; text-align: right; color: var(--ink);
+    font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); font-weight: 600; }
+  td .lever { font-weight: 600; color: var(--ink); }
+  td .how { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .save { font-family: var(--mono); font-weight: 600; color: var(--good); white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    letter-spacing: .02em; }
+  .risk-none { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+  .risk-low  { background: color-mix(in srgb, var(--impl) 18%, transparent); color: var(--impl); }
+  .risk-med  { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  .rank { font-family: var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  .note { margin-top: 40px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 18px 20px; }
+  .note h3 { margin: 0 0 8px; font-size: 15px; color: var(--ink); }
+  .note p { margin: 0; color: var(--muted); font-size: 14px; }
+  .note code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--line) 55%, transparent);
+    padding: 1px 5px; border-radius: 4px; color: var(--text); }
+  .filed-banner { margin-top: 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: color-mix(in srgb, var(--design) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--design) 34%, var(--line));
+    border-radius: 10px; padding: 12px 16px; }
+  .filed-banner .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--design); }
+  .filed-banner a { color: var(--ink); font-weight: 600; text-decoration: none; border-bottom: 1.5px solid var(--design); }
+  .filed-banner a:hover { background: color-mix(in srgb, var(--design) 16%, transparent); }
+  .filed-banner .kids { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+  a.issue { font-family: var(--mono); font-size: 12px; color: var(--design); text-decoration: none; white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--design) 40%, var(--line)); border-radius: 999px; padding: 1px 8px; }
+  a.issue:hover { background: color-mix(in srgb, var(--design) 14%, transparent); }
+  a:focus-visible, .filed-banner a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  .dep { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  footer { margin-top: 42px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--faint);
+    font-size: 12px; font-family: var(--mono); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Epic #475 · executor-wiring · run profiler</p>
+    <h1>Where the time actually goes per child</h1>
+    <p class="sub">Measured from 6 merged children (this session: #445, #446, #465, #466) — commit timestamps, run-record markers, and the real opus-reviewer <code style="font-family:var(--mono)">duration_ms</code> from every wave. The bottleneck isn't the review depth. It's idle-wait around it, and re-running the full suite five times.</p>
+    <div class="kpis">
+      <div class="kpi"><div class="n">~1h 52m</div><div class="l">avg wall-clock / child</div></div>
+      <div class="kpi"><div class="n">9</div><div class="l">opus reviewers / child</div></div>
+      <div class="kpi"><div class="n">~7 min</div><div class="l">avg per reviewer</div></div>
+      <div class="kpi"><div class="n">~31%</div><div class="l">recoverable w/ low risk</div></div>
+    </div>
+    <div class="filed-banner">
+      <span class="tag">Now tracked as</span>
+      <a href="https://github.com/3D-Stories/rawgentic/issues/493">epic #493 · epic:wf2-speed</a>
+      <span class="kids">→ 5 issues, #488–#492</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>The average child, by phase</h2>
+    <p class="lead">One bar = one child (~110 min of active orchestration). Segments sized by measured share. The hot segment — idle-wait on review waves — is time I spend blocked, not working.</p>
+    <div class="profile" role="img" aria-label="Phase breakdown of an average child">
+      <div class="seg" style="flex-basis:27%; background:var(--design)"><span>Design + gate 27%</span></div>
+      <div class="seg" style="flex-basis:22%; background:var(--impl)"><span>Implement 22%</span></div>
+      <div class="seg" style="flex-basis:20%; background:var(--wait)"><span>Review-wait 20%</span></div>
+      <div class="seg" style="flex-basis:13%; background:var(--fix)"><span>Fix 13%</span></div>
+      <div class="seg" style="flex-basis:11%; background:var(--suite)"><span>Suite 11%</span></div>
+      <div class="seg" style="flex-basis:7%; background:var(--ship)"><span>Ship 7%</span></div>
+    </div>
+    <div class="legend">
+      <div class="lg"><span class="sw" style="background:var(--design)"></span><span>Design + Step-4 gate</span> <b>~30m</b> <span class="pct">write + 1–2 review waves + any loop-back rewrite</span></div>
+      <div class="lg"><span class="sw" style="background:var(--impl)"></span><span>Implementation</span> <b>~24m</b> <span class="pct">TDD, 4 tasks, my writing</span></div>
+      <div class="lg"><span class="sw" style="background:var(--wait)"></span><span>Review-wait (8a + Step-11)</span> <b>~22m</b> <span class="pct">idle, blocked on opus</span></div>
+      <div class="lg"><span class="sw" style="background:var(--fix)"></span><span>Fix application</span> <b>~14m</b> <span class="pct">reconcile findings</span></div>
+      <div class="lg"><span class="sw" style="background:var(--suite)"></span><span>Full-suite reruns ×5</span> <b>~12m</b> <span class="pct">142s each, mostly redundant</span></div>
+      <div class="lg"><span class="sw" style="background:var(--ship)"></span><span>Version + README + PR + CI + merge</span> <b>~8m</b></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Per-child wall-clock — remarkably flat</h2>
+    <p class="lead">The consistent children land at ~1h45m–2h. Flatness means the cost is structural (the WF2 spine), not one-off — so a structural fix compounds across the 10 remaining children.</p>
+    <div class="children">
+      <div class="crow"><div class="id"><b>#446</b> setup seed/tweak</div><div class="track"><div class="fill" style="width:85%"></div></div><div class="t">1h 42m</div></div>
+      <div class="crow"><div class="id"><b>#465</b> adapter profiles</div><div class="track"><div class="fill" style="width:100%"></div></div><div class="t">2h 00m</div></div>
+      <div class="crow"><div class="id"><b>#466</b> worktree lifecycle</div><div class="track"><div class="fill" style="width:95%"></div></div><div class="t">1h 54m</div></div>
+    </div>
+    <p class="lead" style="margin-top:14px">#465 &amp; #466 each spent <b>3 and 2 loop-backs</b> respectively — a single design loop-back adds a full rewrite + another ~10-min review wave. #467 is already mid-flight on its <b>2nd</b> design pass (pass-1 found 16 issues; pass-2 found 2 more Highs). Loop-backs are the fattest variable cost.</p>
+  </section>
+
+  <section>
+    <h2>Where to cut — ranked by leverage ÷ risk</h2>
+    <table>
+      <thead><tr><th>#</th><th>Lever</th><th>Est. saving</th><th>Risk</th><th>Issue</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="rank">1</td>
+          <td><div class="lever">Never idle-wait — pipeline review with the next artifact</div>
+            <div class="how">Dispatch reviewers, then immediately draft the next phase (plan, task-1 tests, PR body) while they run; reconcile on return. Already done partially; make it the rule.</div></td>
+          <td class="save">~12 min</td>
+          <td><span class="pill risk-none">none</span></td>
+          <td><a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/488">#488</a></td>
+        </tr>
+        <tr>
+          <td class="rank">2</td>
+          <td><div class="lever">Scoped tests during iteration; full suite only at baseline + final</div>
+            <div class="how"><code>pytest tests/phase_executor/</code> is ~3s vs the full ~142s. Run full 2× not 5–6×; scoped covers new code, baseline+final catches drift.</div></td>
+          <td class="save">~8 min</td>
+          <td><span class="pill risk-low">low</span></td>
+          <td><a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/489">#489</a></td>
+        </tr>
+        <tr>
+          <td class="rank">3</td>
+          <td><div class="lever">Probe the real API before writing the design</div>
+            <div class="how">The broken <code>setsid</code> pane cmd and the pass-2 pgid finding both came from not verifying the actual spawn path first. A 5-min probe prevents a ~25-min loop-back.</div></td>
+          <td class="save">~15 min*</td>
+          <td><span class="pill risk-low">low</span></td>
+          <td><a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/490">#490</a></td>
+        </tr>
+        <tr>
+          <td class="rank">4</td>
+          <td><div class="lever">Model-tier the reviewers</div>
+            <div class="how">Sonnet for the mechanical / AC-completeness lenses (~2–3× faster); keep opus for the security-critical lens (redaction, CAS, kill-model) only. Big token savings too.</div></td>
+          <td class="save">~6 min</td>
+          <td><span class="pill risk-med">medium</span></td>
+          <td><a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/491">#491</a></td>
+        </tr>
+        <tr>
+          <td class="rank">5</td>
+          <td><div class="lever">One 8a wave over the whole diff; Step-11 to 2 reviewers</div>
+            <div class="how">9 reviewers/child has diminishing returns. Collapse per-task-batch 8a into one wave; trim the lowest-yield Step-11 lens. Keep the security lens — it caught the ReDoS + FIFO-DoS.</div></td>
+          <td class="save">~8 min</td>
+          <td><span class="pill risk-med">medium</span></td>
+          <td><a class="issue" href="https://github.com/3D-Stories/rawgentic/issues/492">#492</a> <span class="dep">← #491</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="lead" style="margin-top:12px">*Loop-back-prevention saving is per <em>affected</em> child, not every child. Low-risk levers 1+2 alone ≈ <b>20 min/child</b> → ~<b>3.3 hrs</b> across the 10 remaining, with zero quality trade-off.</p>
+  </section>
+
+  <div class="note">
+    <h3>The honest part: the review depth is not the waste.</h3>
+    <p>Those 9 reviewers per child caught a <b>~93-minute ReDoS</b>, a <b>child-FIFO teardown DoS</b>, a <b>silent CAS revert</b>, and an <b>empirically-broken <code>setsid</code></b> pane command — real Critical/High defects that would have shipped. Cutting review means shipping those. The win is <b>not idling while it runs</b>, <b>not re-running the full suite five times</b>, and <b>using the right model tier</b> — not reviewing less. Speed from process, not from lowering the bar.</p>
+  </div>
+
+  <footer>Source: git commit timestamps + run_records.jsonl + observed reviewer duration_ms · 2026-07-18 · estimates, not instrumented traces</footer>
+</div>
+

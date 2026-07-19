@@ -92,10 +92,7 @@ suffixes `-2`, `-3`, … — never overwrite):
 1. **At a glance:** epic, children count (merged / blocked / absent-telemetry),
    total wall-clock, the one biggest lever.
 2. **Stacked per-child phase bars** and the **average phase split** across the
-   epic — rendered as monospace tables whose bars are unicode block runs
-   (`█▓░`) sized proportionally: unicode-block bars are the deliberate
-   presentation floor (honest, renderer-free); inline SVG is the named upgrade
-   path if the owner wants richer charts.
+   epic.
 3. **Cost/tokens per child** from `usage` (input/output tokens,
    `cost_estimate_usd` as the secondary rate-card figure, wall-clock).
 4. **Gate findings per step** — a table over `gates[]` (findings/resolved per
@@ -105,15 +102,33 @@ suffixes `-2`, `-3`, … — never overwrite):
    children = M% of wall"); a lever without a number does not ship.
 6. **Link** to the WF14 consolidated machinery report (Step 3).
 
-Render the pair (never hand-rolled):
-```bash
-python3 hooks/render_artifact.py --md <report>.md --out <report>.html \
-  --title "WF19 epic post-mortem — epic #<n>" --style report
-```
-Publish with the Artifact tool best-effort; on failure print the required line
-"artifact publish FAILED/unavailable — committed .html is source of truth".
-Report-only: the pair is an uncommitted artifact until a later PR picks it up
-(WF5 convention).
+The `.md` carries the full evidence tables. The `.html` is a **designed timing
+page built on the vendored template** — `references/artifact-template.html`
+(owner decision 2026-07-19, epic #509: the generic `render_artifact.py --style
+report` render was rejected for this deliverable; the owner-supplied "Epic #475
+run profiler — where the time goes" page is the visual bar, vendored verbatim).
+Reuse the template's CSS and section structure wholesale, replacing its data:
+eyebrow (`epic · program · run profiler`) · narrative `h1` (a finding, not a
+label) · sub paragraph naming the sources · a **4-KPI grid** (avg per child /
+the flagged anomaly / findings→applied / cost) · a **filed banner** linking the
+epic and the evidence `.md` · the **average-child profile bar** (one flex-
+segment bar, `flex-basis:<pct>%`, semantic phase colors, inline % labels) with
+its minutes-annotated legend · **per-child rows** (mono id · fill track · time;
+flag a stall beside its row, never inside a phase segment) · a **ranked lever
+table** (`leverage ÷ risk`: lever + how, `~Nm` saving, a `risk-none/low/med`
+pill, an issue link when filed) · the **"honest part" note card** (what the
+gates caught — why the win is process, not a lower bar) · a mono **footer**
+naming every source and the number most likely wrong. The template is pure
+static HTML/CSS — prefer inline `flex-basis`/`width` percentages over any
+script; if a script is ever needed it is DOM-builder only, **no `innerHTML`**
+(the repo security-hook contract). Keep the template's light/dark theming
+intact. This vendored template supersedes `render_artifact.py` for THIS
+skill's html only — every other doc surface keeps the house renderer.
+
+Publish the html with the Artifact tool best-effort; on failure print the
+required line "artifact publish FAILED/unavailable — committed .html is source
+of truth". Report-only: the pair is an uncommitted artifact until a later PR
+picks it up (WF5 convention).
 
 ## Step 5: Close
 
