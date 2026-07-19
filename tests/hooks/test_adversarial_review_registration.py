@@ -39,7 +39,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.70.0"
+    assert plugin["version"] == "3.71.0"
 
 
 def test_descriptions_consistent_count():
@@ -48,14 +48,14 @@ def test_descriptions_consistent_count():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
     mp = json.loads((REPO_ROOT / ".claude-plugin" / "marketplace.json").read_text())
     for desc in (plugin["description"], mp["plugins"][0]["description"]):
-        assert "8 SDLC workflow skills" in desc
+        assert "9 SDLC workflow skills" in desc
         assert "deprecated stub" not in desc.lower()   # stubs removed at v3.0.0 (#161)
         assert "12 SDLC workflow skills" not in desc
 
 
 def test_readme_count_strings_updated():
     readme = (REPO_ROOT / "README.md").read_text()
-    assert "8 SDLC workflow skills" in readme
+    assert "9 SDLC workflow skills" in readme
     assert "12 SDLC workflow skills" not in readme
     n_skills = len(list((REPO_ROOT / "skills").glob("*/SKILL.md")))
     assert f"provides {n_skills} skills" in readme

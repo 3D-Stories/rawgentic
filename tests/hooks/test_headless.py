@@ -1303,7 +1303,7 @@ class TestSkillCountCanary:
     """Canary: assert the number of SKILL.md files with <config-loading> matches expected."""
 
     SKILLS_DIR = Path(__file__).resolve().parent.parent.parent / "skills"
-    EXPECTED_CONFIG_LOADING_COUNT = 9  # -6 deprecated stubs (#160: WF4/7/8/9/10/12), +scan (#160), +run-feedback (#337), +admit-to-org-runners (#397); was 12
+    EXPECTED_CONFIG_LOADING_COUNT = 10  # +epic-post-mortem (#508); -6 deprecated stubs (#160: WF4/7/8/9/10/12), +scan (#160), +run-feedback (#337), +admit-to-org-runners (#397); was 12
 
     def test_config_loading_skill_count(self):
         """If a new workflow skill is added, this test reminds you to wire in the config-loading preamble."""

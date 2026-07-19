@@ -1,6 +1,6 @@
 # rawgentic
 
-**8 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
+**9 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple)](https://docs.anthropic.com/en/docs/claude-code)
@@ -11,10 +11,10 @@
 
 Claude Code is powerful but unstructured. Complex tasks — building features, fixing bugs, running security audits — need consistent quality gates, test-driven development, and deployment verification. Without guardrails, it's easy to skip code review, forget to run CI, or merge without testing.
 
-**Rawgentic** provides 20 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
+**Rawgentic** provides 21 skills organized in four layers (six little-used workflows were deprecated at v2.60.0 — #160 — and removed at v3.0.0; see `docs/upgrade-3.0.md`):
 
 - **Workspace management** (7 skills) — Project registration, configuration, session binding, guard exception management, opt-in operating-charter installation, session-registry housekeeping, and full-text session-history recall
-- **SDLC workflows** (8 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14) and human-gated session-history mining (WF17)
+- **SDLC workflows** (9 skills) — Multi-step guided processes with quality gates, code review, CI verification, and deployment, plus a post-run `run-feedback` self-assessment (WF14), a telemetry-driven epic post-mortem (WF19), and human-gated session-history mining (WF17)
 - **Planning** (1 skill) — A lightweight `interview` skill for pre-build requirements discovery
 - **Security & infrastructure** (2 skills + hooks) — Whole-tree security scanning, security pattern syncing, dangerous pattern blocking, per-project WAL logging, session binding enforcement, and cross-project file guards
 
@@ -655,7 +655,7 @@ pytest tests/hooks/test_wal_guard.py -v
 
 **Impact measurement:** `scripts/wf2_impact_metrics.py` computes deterministic Tier-1 impact metrics (test growth, fail-closed coverage, dedup, diff volume) for a skill-extraction effort over a `--baseline`/`--head` git range. See [docs/measurements/2026-06-15-wf2-extraction-impact.md](docs/measurements/2026-06-15-wf2-extraction-impact.md) for the WF2 extraction analysis.
 
-Skills are tested via the `/skill-creator` eval pipeline (9/20 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `admit-to-org-runners`, `epic-run`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
+Skills are tested via the `/skill-creator` eval pipeline (9/21 skills have evals.json files, in `skills/<skill>-workspace/evals/` or the skill's own `evals/` directory; the lightweight `add-exception`, `admit-to-org-runners`, `epic-post-mortem`, `epic-run`, `housekeeping`, `install-operating-charter`, `interview`, `run-feedback`, `scan`, `session-mining`, and `session-recall` skills have none, and `peer-consult` ships an empty stub — `skills/peer-consult/evals.json` — pending eval authoring). The fraction and the have-none list are computed from disk by a drift guard.
 
 **Workspace directories:** Some skills have a corresponding `*-workspace/` directory (e.g., `skills/setup-workspace/`) used for internal skill iteration and evaluation. These contain `evals/`, `iteration-N/`, and `skill-snapshot/` subdirectories. They are **excluded from marketplace installs** via the `skills` whitelist in `marketplace.json`. If you add a new workspace directory, never name a file `SKILL.md` inside it — the marketplace validator scans for that filename recursively and will reject duplicates.
 
@@ -706,6 +706,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.71.0 (2026-07-19)
+- **WF19 epic post-mortem — where the epic run's wall-clock went, from telemetry (#508, epic #509 capstone).** New `skills/epic-post-mortem/SKILL.md`: takes an epic issue number, derives children from the task-list checkboxes (both states — queue derivation, never dependency parsing), resolves each child's run-record via `work_summary.py find`, and consumes #506's `timing` phase splits when usable — `phases.idle` bucketed separately so stalled time never inflates a phase bar; records without usable timing degrade VISIBLY to `usage.wall_clock_s` totals, never fabricated splits; an absent record is a visible degraded row. The machinery assessment is delegated to WF14 batch mode (#392, `--epic <n>`) and linked — never a duplicated rubric. Output: one `epic-postmortem-<n>-<date>` md+html pair (`render_artifact.py --style report`) with stacked per-child phase bars + average phase split (unicode-block bars — the named presentation floor, inline SVG the upgrade path), cost/tokens per child, a gate-findings-per-step table, and top-3 time-to-completion levers each citing the measured numbers it derives from. Retires the workspace stopgap `epic-run-analysis` (superseded note appended there; final removal is the owner's call). Registration: whitelist (alphabetical), codex symlink, `<config-loading>` MANIFEST+sync with canary 9→10, count strings 20→21 (9 SDLC), evals fraction 9/21 + have-none membership, plugin/marketplace/codex descriptions mirrored. 7 red-first clarity guards. No workflow-spine change (WF19 is a new report-only workflow, not a WF2/WF3 station edit) → no diagram REV. Suite 3850+10skip→3857+10skip.
 ### v3.70.0 (2026-07-19)
 - **WF14 suggest-only filing — interactive candidates need owner approval before landing in the tracker (#507, epic #509).** WF14 Step 4 auto-filed plugin-defect/telemetry issues with no confirmation in every mode; interactively, the first sight of a finding could be the issue appearing. New filing-mode fork ahead of Step 4 item 1: INTERACTIVE invocations default to suggest-first — every candidate presented fully drafted (conventional title, complete body, labels, dup-check verdict), filed only on approval, exactly as drafted; `RAWGENTIC_HEADLESS=1`, embedded WF2-Step-16/WF3-Step-14 callers (explicit `--record` is the embed signal), or the new `--file-issues` flag keep today's autonomous filing byte-for-byte — the #337 embed contract's zero interactive dependency is preserved. Declined candidates carry `routing: not-filed-declined` (extending `not-filed-cap`) and are never erased; the cap counts FILED issues, not suggested candidates (approval per candidate — coordinates with #392's batch-shared pool by construction, landing after it as the epic ordered); the routing section states filed vs suggested-declined counts. 5 section-sliced guards. No workflow-spine change → no diagram REV. Suite 3845+10skip→3850+10skip.
 ### v3.69.0 (2026-07-19)
