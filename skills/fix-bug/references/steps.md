@@ -618,7 +618,12 @@ read once.
    contract (#511)**: `<issue>` is this run's issue number and `<session-id>` is
    `$CLAUDE_CODE_SESSION_ID` (a bash block may write `"${CLAUDE_CODE_SESSION_ID}"`
    directly) — a fixed shared literal is a standing race in a multi-session
-   workspace; never substitute a shared path. Every key below must be
+   workspace; never substitute a shared path. **Per-step timing (#506):** compute
+   the run's timing object and embed its stdout verbatim as the record's `timing`
+   key: `python3 hooks/step_state.py timing --project <project> --issue <issue>`
+   (from the workspace root; an absent-status result embedded as-is or the key
+   omitted — either is honest). Never hand-estimate durations into `timing` — the
+   object comes only from the CLI over the persisted step-state history. Every key below must be
    **present**; "nullable" means `null` is an allowed value, NOT that the key may
    be omitted (a dropped field is a telemetry gap). Counts are non-negative
    integers and `resolved` may not exceed `findings`:

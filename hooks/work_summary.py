@@ -94,6 +94,7 @@ GOAL_GUARD_VALUES = {"set", "skipped", "fired", "deferred"}
 # `unrecoverable` = a historical row with no session-id correlator; `unavailable`
 # = capture was attempted for this run but failed (file missing / no usage).
 CAPTURE_STATUS_VALUES = {"captured", "unrecoverable", "unavailable"}
+TIMING_STATUS_VALUES = {"complete", "partial", "absent"}  # #506
 
 # `dispatches[]` (#329) — per-subagent dispatch telemetry. Controlled
 # vocabularies, same present-is-strict philosophy as GOAL_GUARD_VALUES /
@@ -489,6 +490,58 @@ def validate_record(record, *, strict=False) -> list:
                         errs.append("usage.capture_status 'captured' requires "
                                     "non-null input_tokens > 0 and output_tokens >= 0")
 
+    # `timing` (#506) — OPTIONAL top-level per-step timing telemetry from the
+    # step-state history: absent → old records stay valid (no schema bump);
+    # present → strict. duration_s is non-negative-int-or-null (null = an
+    # open-ended last event — an honest gap, never a fabricated duration).
+    if "timing" in record:
+        timing = record["timing"]
+        if not isinstance(timing, dict):
+            errs.append("timing must be an object")
+        else:
+            _require_present(timing, "timing",
+                              ("status", "idle_gap_threshold_s", "steps",
+                               "phases", "total_s"), errs)
+            st = timing.get("status")
+            if not _is_str(st) or st not in TIMING_STATUS_VALUES:
+                errs.append(f"timing.status must be one of {sorted(TIMING_STATUS_VALUES)}")
+            th = timing.get("idle_gap_threshold_s")
+            if not _is_int(th) or th <= 0:
+                errs.append("timing.idle_gap_threshold_s must be a positive integer")
+            steps = timing.get("steps")
+            if not isinstance(steps, list):
+                errs.append("timing.steps must be a list")
+            else:
+                for i, entry in enumerate(steps):
+                    if not isinstance(entry, dict):
+                        errs.append(f"timing.steps[{i}] must be an object")
+                        continue
+                    _require_present(entry, f"timing.steps[{i}]",
+                                      ("step", "title", "entered_at",
+                                       "duration_s", "idle_gap"), errs)
+                    d = entry.get("duration_s")
+                    if d is not None and (not _is_int(d) or d < 0):
+                        errs.append(f"timing.steps[{i}].duration_s must be a "
+                                    "non-negative integer or null")
+                    if not isinstance(entry.get("idle_gap"), bool):
+                        errs.append(f"timing.steps[{i}].idle_gap must be a bool")
+            phases = timing.get("phases")
+            if not isinstance(phases, dict):
+                errs.append("timing.phases must be an object")
+            else:
+                for name, val in phases.items():
+                    if not (_is_str(name) and name.strip()) or not _is_num(val) or val < 0:
+                        errs.append("timing.phases entries must map non-empty "
+                                    "strings to non-negative numbers")
+                        break
+            tot = timing.get("total_s")
+            if tot is not None and (not _is_num(tot) or tot < 0):
+                errs.append("timing.total_s must be a non-negative number or null")
+            if "skipped_lines" in timing:
+                sk = timing.get("skipped_lines")
+                if not _is_int(sk) or sk < 0:
+                    errs.append("timing.skipped_lines must be a non-negative integer")
+
     # `goal_guard` (#156, AC6) — OPTIONAL top-level field, same validated-optional
     # pattern as `reviewer_kind`: absent → old records stay valid (forward-
     # compatible addition, no schema version bump); present → strict membership
@@ -722,6 +775,12 @@ def render_summary(record, worker_models=None) -> str:
     usage = _as_dict(r.get("usage"))
     if usage:
         lines.append(_render_usage_line(usage, worker_models))
+    timing = _as_dict(r.get("timing"))
+    if timing:
+        phases = _as_dict(timing.get("phases"))
+        phase_bits = ", ".join(f"{k} {int(v)}s" for k, v in phases.items() if v)
+        lines.append(f"- Timing: {timing.get('status', '?')}"
+                     + (f" — {phase_bits}" if phase_bits else ""))
     deferred = r.get("verification_deferred")
     if isinstance(deferred, list) and deferred:
         lines.append("- Verification deferred (must be checked on target):")

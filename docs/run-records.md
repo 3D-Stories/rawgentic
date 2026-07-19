@@ -168,6 +168,25 @@ When derivable, `summarize` also injects `usage.worker_token_share` (rounded to
 `lane`: `validate_record`'s required keys are unchanged and records without it
 remain valid (no schema version bump).
 
+## timing (#506)
+
+`timing` is optional per-step wall-clock telemetry computed from the step-state
+history — the append-only sibling of the #480 now-pointer that every
+`step_state.py write` carrying an int issue also feeds
+(`claude_docs/wal/history/<project>-issue-<n>.history.jsonl`, keyed
+project+issue so a multi-session run accumulates one history). At assembly time
+the completion step runs `python3 hooks/step_state.py timing --project <p>
+--issue <n>` and embeds the stdout verbatim: per-step entry-interval durations
+(the last event is open-ended, `duration_s: null` — never fabricated),
+per-workflow phase buckets (design / plan / implement / review / pr_ci / wrap),
+an `idle` bucket holding the excess of any interval above the idle threshold
+(default 1800s — a quota pause is never silently attributed to the step it
+interrupted), and an honest `status` of `complete` / `partial` / `absent`.
+`validate_record` checks the key strictly when present (the `usage` pattern);
+absent stays valid. This replaces hand-parsing session transcripts for step
+markers — the reconstruction the epic #493 timing profile did by hand, measured
+~2× off against real wall-clocks.
+
 ## dispatches (#329)
 
 `dispatches` is optional structured telemetry for individual subagent dispatches

@@ -338,3 +338,185 @@ def test_read_negative_max_age_prints_nothing(tmp_path):
     r = _run(["read", "--project", "p", "--state-dir", str(tmp_path),
               "--max-age-min", "-5"])
     assert r.returncode == 0 and r.stdout.strip() == ""
+
+
+# --- #506: per-run history append -------------------------------------------
+
+class TestHistoryAppend:
+    """#506 AC1: every write with an int issue ALSO appends the record to the
+    per-run history file history/<project>-issue-<n>.history.jsonl (append-only,
+    keyed project+issue so a multi-session run accumulates ONE history). The
+    pointer's overwrite semantics are untouched. Same fail-open contract."""
+
+    def test_write_appends_history_line(self, tmp_path):
+        r = _run(["write", "--project", "rawgentic", "--workflow", "wf2",
+                  "--step", "3", "--step-title", "Design",
+                  "--session-id", "s1", "--issue", "506",
+                  "--state-dir", str(tmp_path)])
+        assert r.returncode == 0, r.stderr
+        h = tmp_path / "history" / "rawgentic-issue-506.history.jsonl"
+        assert h.is_file()
+        lines = h.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        rec = json.loads(lines[0])
+        assert rec["step"] == "3" and rec["issue"] == 506
+
+    def test_second_write_appends_not_overwrites(self, tmp_path):
+        for step, title in (("3", "Design"), ("5", "Plan")):
+            _run(["write", "--project", "p", "--workflow", "wf2",
+                  "--step", step, "--step-title", title,
+                  "--session-id", "s1", "--issue", "9",
+                  "--state-dir", str(tmp_path)])
+        lines = (tmp_path / "history" / "p-issue-9.history.jsonl").read_text().splitlines()
+        assert [json.loads(l)["step"] for l in lines] == ["3", "5"]
+        # pointer still overwrite-in-place: one state file, newest content
+        rec = json.loads((tmp_path / "p.state.json").read_text())
+        assert rec["step"] == "5"
+
+    def test_null_issue_skips_history(self, tmp_path):
+        r = _run(["write", "--project", "p", "--workflow", "wf2",
+                  "--step", "1", "--step-title", "Receive",
+                  "--session-id", "s1", "--state-dir", str(tmp_path)])
+        assert r.returncode == 0
+        assert not (tmp_path / "history").exists()
+        assert (tmp_path / "p.state.json").is_file()
+
+    def test_unwritable_history_fails_open_pointer_still_written(self, tmp_path):
+        blocker = tmp_path / "history"
+        blocker.write_text("a file where the dir must go")
+        r = _run(["write", "--project", "p", "--workflow", "wf2",
+                  "--step", "2", "--step-title", "Analyze",
+                  "--session-id", "s1", "--issue", "9",
+                  "--state-dir", str(tmp_path)])
+        assert r.returncode == 0
+        assert "fail-open" in r.stderr
+        assert json.loads((tmp_path / "p.state.json").read_text())["step"] == "2"
+
+
+# --- #506: timing computation ------------------------------------------------
+
+def _ev(step, t, workflow="wf2", title=None, session="s1", issue=9):
+    return {"schema_version": 1, "project": "p", "workflow": workflow,
+            "step": step, "step_title": title or f"Step {step}",
+            "issue": issue, "session_id": session,
+            "entered_at": t}
+
+
+class TestComputeTiming:
+    """#506 AC2-AC4: durations from real event pairs only, idle split above
+    threshold, per-workflow phase buckets, honest status vocabulary."""
+
+    def test_two_events_duration_and_open_end(self):
+        t = ss.compute_timing([_ev("1", "2026-07-19T10:00:00Z"),
+                               _ev("2", "2026-07-19T10:05:00Z")],
+                              idle_threshold_s=1800)
+        assert t["steps"][0]["duration_s"] == 300
+        assert t["steps"][1]["duration_s"] is None  # open-ended, never fabricated
+        assert t["total_s"] == 300
+
+    def test_reentered_step_sums_into_phase(self):
+        t = ss.compute_timing([_ev("3", "2026-07-19T10:00:00Z"),
+                               _ev("4", "2026-07-19T10:10:00Z"),
+                               _ev("3", "2026-07-19T10:15:00Z"),
+                               _ev("5", "2026-07-19T10:20:00Z")],
+                              idle_threshold_s=1800)
+        # both step-3 intervals (600 + 300) and the step-4 interval (300) are design
+        assert t["phases"]["design"] == 1200
+        assert t["phases"]["plan"] == 0
+
+    def test_idle_excess_bucketed_separately(self):
+        t = ss.compute_timing([_ev("8", "2026-07-19T10:00:00Z"),
+                               _ev("9", "2026-07-19T14:00:00Z")],  # 4h gap
+                              idle_threshold_s=1800)
+        step8 = t["steps"][0]
+        assert step8["duration_s"] == 1800          # capped at threshold
+        assert step8["idle_gap"] is True
+        assert t["phases"]["idle"] == 4 * 3600 - 1800
+        assert t["phases"]["implement"] == 1800     # never silently attributed
+
+    def test_out_of_order_appends_cannot_go_negative(self):
+        """Cross-session interleave lands out of file order; the sort makes
+        every interval >= 0 by construction — no clamp branch needed, and no
+        negative duration can ever be emitted."""
+        t = ss.compute_timing([_ev("2", "2026-07-19T10:00:00Z", session="s1"),
+                               _ev("3", "2026-07-19T09:59:00Z", session="s2")],
+                              idle_threshold_s=1800)
+        assert [s["step"] for s in t["steps"]] == ["3", "2"]
+        assert all((s["duration_s"] or 0) >= 0 for s in t["steps"])
+        assert t["steps"][0]["duration_s"] == 60
+
+    def test_status_complete_partial_absent(self):
+        assert ss.compute_timing([], idle_threshold_s=1800)["status"] == "absent"
+        partial = ss.compute_timing([_ev("5", "2026-07-19T10:00:00Z"),
+                                     _ev("8", "2026-07-19T10:30:00Z")],
+                                    idle_threshold_s=1800)
+        assert partial["status"] == "partial"       # starts at 5, no terminal
+        complete = ss.compute_timing([_ev("1", "2026-07-19T10:00:00Z"),
+                                      _ev("8", "2026-07-19T10:30:00Z"),
+                                      _ev("16", "2026-07-19T11:00:00Z")],
+                                     idle_threshold_s=1800)
+        assert complete["status"] == "complete"
+
+    def test_wf3_terminal_is_14_and_buckets_differ(self):
+        t = ss.compute_timing([_ev("1", "2026-07-19T10:00:00Z", workflow="wf3"),
+                               _ev("7", "2026-07-19T10:10:00Z", workflow="wf3"),
+                               _ev("14", "2026-07-19T10:40:00Z", workflow="wf3")],
+                              idle_threshold_s=1800)
+        assert t["status"] == "complete"
+        assert t["phases"]["design"] == 600         # step 1 interval
+        assert t["phases"]["implement"] == 1800     # step 7 interval
+
+    def test_events_sorted_by_entered_at(self):
+        # multi-session interleave can land out of order in the file
+        t = ss.compute_timing([_ev("5", "2026-07-19T10:10:00Z"),
+                               _ev("3", "2026-07-19T10:00:00Z")],
+                              idle_threshold_s=1800)
+        assert [s["step"] for s in t["steps"]] == ["3", "5"]
+        assert t["steps"][0]["duration_s"] == 600
+
+
+class TestTimingCLI:
+    def test_timing_reads_history_and_prints_object(self, tmp_path):
+        for step, t in (("1", "10:00:00"), ("2", "10:05:00")):
+            h = tmp_path / "history"; h.mkdir(exist_ok=True)
+            with open(h / "p-issue-9.history.jsonl", "a") as f:
+                f.write(json.dumps(_ev(step, f"2026-07-19T{t}Z")) + "\n")
+        r = _run(["timing", "--project", "p", "--issue", "9",
+                  "--state-dir", str(tmp_path)])
+        assert r.returncode == 0, r.stderr
+        obj = json.loads(r.stdout)
+        assert obj["status"] in ("partial", "complete")
+        assert obj["steps"][0]["duration_s"] == 300
+
+    def test_timing_absent_history_prints_absent(self, tmp_path):
+        r = _run(["timing", "--project", "p", "--issue", "9",
+                  "--state-dir", str(tmp_path)])
+        assert r.returncode == 0
+        assert json.loads(r.stdout)["status"] == "absent"
+
+    def test_timing_skips_malformed_lines_and_counts(self, tmp_path):
+        h = tmp_path / "history"; h.mkdir()
+        with open(h / "p-issue-9.history.jsonl", "w") as f:
+            f.write(json.dumps(_ev("1", "2026-07-19T10:00:00Z")) + "\n")
+            f.write("{not json\n")
+            f.write(json.dumps(_ev("2", "2026-07-19T10:05:00Z")) + "\n")
+        r = _run(["timing", "--project", "p", "--issue", "9",
+                  "--state-dir", str(tmp_path)])
+        obj = json.loads(r.stdout)
+        assert obj["skipped_lines"] == 1
+        assert len(obj["steps"]) == 2
+
+
+def test_status_complete_reachable_at_live_assembly():
+    """#506 review F1: the terminal for "complete" is the PR-creation step
+    (wf2 12 / wf3 10) — the last step every path (headless included)
+    reaches BEFORE the completion step runs the timing CLI. Gating on the
+    completion step's own number (16/14) made "complete" unreachable on a
+    live-assembled record: that event only lands after timing is embedded."""
+    events = [_ev("1", "2026-07-19T10:00:00Z"),
+              _ev("8", "2026-07-19T10:30:00Z"),
+              _ev("12", "2026-07-19T11:00:00Z")]
+    assert ss.compute_timing(events, idle_threshold_s=1800)["status"] == "complete"
+    wf3 = [_ev("1", "2026-07-19T10:00:00Z", workflow="wf3"),
+           _ev("10", "2026-07-19T10:30:00Z", workflow="wf3")]
+    assert ss.compute_timing(wf3, idle_threshold_s=1800)["status"] == "complete"

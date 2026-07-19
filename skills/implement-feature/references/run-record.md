@@ -225,6 +225,31 @@ time from the gate-defining mechanism per the merged-gate precedence enumeration
 (#340) above — the additive adversarial layer never changes it; read the gate's
 session-note markers, not memory.
 
+**`timing` (OPTIONAL, #506):** per-step wall-clock telemetry computed from the
+step-state history (`claude_docs/wal/history/<project>-issue-<n>.history.jsonl`,
+appended by every `step_state.py write` carrying an int issue). Validated-optional
+(usage pattern): absent → old records valid; present → strict. Shape:
+```json
+"timing": {"status": "complete|partial|absent", "idle_gap_threshold_s": 1800,
+           "steps": [{"step": "1", "title": "...", "entered_at": "...",
+                      "duration_s": N|null, "idle_gap": false}, ...],
+           "phases": {"design": N, "plan": N, "implement": N, "review": N,
+                      "pr_ci": N, "wrap": N, "idle": N},
+           "total_s": N|null, "skipped_lines": 0}
+```
+Durations come from entry-interval pairs in the history — the last event is
+open-ended (`duration_s: null`, never fabricated). An interval above the idle
+threshold keeps the threshold on its step and books the excess to `phases.idle`
+with `idle_gap: true` (a quota pause or owner-away stall is never silently
+attributed to the step it interrupted). `status` distinguishes complete
+(first event at step ≤ 2 AND an event at/after the PR-creation step — wf2 12 /
+wf3 10, the last step every path incl. headless reaches BEFORE assembly runs
+the CLI; the completion step's own event lands only after timing is embedded,
+#506 review F1) / partial / absent —
+missing history degrades visibly, never into invented numbers. Populate via
+`python3 hooks/step_state.py timing --project <p> --issue <n>` at assembly time
+and embed the stdout verbatim.
+
 **`goal_guard` (OPTIONAL, #156):** a top-level, **validated-optional** field following the same
 pattern as `usage` — absent ⇒ old records stay valid, no schema version bump; present ⇒ strict
 membership in `{"set", "skipped", "fired", "deferred"}`, fail-closed on anything else (including
