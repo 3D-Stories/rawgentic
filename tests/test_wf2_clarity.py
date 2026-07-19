@@ -563,21 +563,21 @@ class TestStep2PathEstimate:
 
     def test_step11_axis_reconciled_in_skill_base(self):
         # The stale complexity-keyed row contradicted steps.md's unconditional
-        # 3-agent dispatch; the mandatory table is lane-keyed now.
+        # dispatch; the mandatory table is lane-keyed now (#492: count 3→2).
         base = SKILL.read_text()
         assert "Full 3-agent review for complex_feature. Minimum 1-agent for simple/standard." not in base
-        assert "Full 3-agent review; ≥1 in the small-standard lane." in base
+        assert "Full 2-agent review (#492 — the security lens is never the one dropped); ≥1 in the small-standard lane." in base
 
     def test_constants_mirror_step11_counts(self):
         import sys
         sys.path.insert(0, str(REPO_ROOT / "hooks"))
         import plan_lib
-        assert plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL == 3
+        assert plan_lib.STEP11_REVIEW_AGENT_COUNT_FULL == 2  # #492: 3→2
         assert plan_lib.STEP11_REVIEW_AGENT_COUNT_LANE == 1
-        # steps.md §11 still documents the 3-agent dispatch the constant mirrors.
+        # steps.md §11 still documents the dispatch count the constant mirrors.
         text = _text()
         s11 = _step11()
-        assert "3-agent parallel review" in s11
+        assert "2-agent parallel review" in s11
 
 
 # --- #225: lane secondary signal + operator override ---
