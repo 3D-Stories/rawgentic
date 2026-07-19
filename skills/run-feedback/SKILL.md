@@ -100,7 +100,9 @@ additive.
 3. **Embed-compat detection (AC4).** BEFORE assessing an issue, check whether it was
    already assessed: an existing report pair
    `docs/reviews/run-feedback-wf<wf>-<n>-*.md` OR a session-note
-   `### WF14 run-feedback: DONE (WF<n> #<n>` marker. Already-assessed issues get a
+   `### WF14 run-feedback: DONE (WF<n> #<n>` marker — and, batch-vs-batch (#392
+   review L1), a prior `run-feedback-batch-*` report whose per-issue section covers
+   this issue counts as already-assessed too. Already-assessed issues get a
    linking section (existing report referenced, its verdict quoted one-line) — the
    batch never double-assesses, never re-files their issues.
 4. **Assess each remaining issue** with the unchanged Steps 1–2b rubric flow
