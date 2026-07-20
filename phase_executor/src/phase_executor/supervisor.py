@@ -721,6 +721,23 @@ class TmuxSupervisor:
                 return False  # PID reused by a foreign process
         return True
 
+    def _reestablish_adopt_permit(self, record: JobRecord) -> None:
+        """#467 D-12: on recover-ADOPT, re-key the adopted job's quota permit under THIS
+        orchestrator's pid so the pool ceiling keeps counting the still-live job (the launcher
+        that acquired it has exited — its pid is dead, so QuotaCoordinator would stale-reap the
+        slot and the pool would over-admit). Re-resolves the seat's pool from the routing
+        snapshot (the same source launch() acquired against). Fail-closed: a QuotaTimeout (the
+        slot is gone and re-taking it would over-admit) or a routing error propagates so
+        recover() refuses the adoption rather than over-admit."""
+        if record.permit_ref == "unbounded":
+            return
+        targets = routing.eligible_targets(record.identity.seat, self._snapshot)
+        if not targets:
+            raise routing.RoutingError(
+                f"adopt {record.session_name}: seat {record.identity.seat!r} has no eligible "
+                f"target — cannot re-establish its permit")
+        self._quota.reestablish_permit(targets[0]["lane"]["pool"], record.permit_ref)
+
     def recover(self, run_id: str) -> list:
         """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
         quarantine (kill both groups + W3 retain — the untrusted writer never survives) /
@@ -737,7 +754,22 @@ class TmuxSupervisor:
             verdict = classify_recovery(record, live=live, identity_matches=matches,
                                         sentinel_valid=sentinel_valid)
             if verdict == "adopt":
-                actions.append(RecoveryAction(record.identity, "adopt", record))
+                try:
+                    self._reestablish_adopt_permit(record)
+                except (QuotaTimeout, routing.RoutingError) as exc:
+                    # D-12 fail-closed: the permit could not be re-established under THIS
+                    # orchestrator's pid within the ceiling — refuse the adoption (kill +
+                    # retain) rather than leave a live job over-admitting past the ceiling.
+                    killed = self._kill_job(record)
+                    reason = f"adopt refused: {exc}"
+                    if not killed:
+                        reason += "; kill unverified: residue"
+                    done = self._finish(record, "quarantined", release_permit=killed,
+                                        quarantine_reason=reason)
+                    self._retain(done)
+                    actions.append(RecoveryAction(record.identity, "quarantine", done))
+                else:
+                    actions.append(RecoveryAction(record.identity, "adopt", record))
             elif verdict == "quarantine":
                 killed = self._kill_job(record)
                 reason = ("identity mismatch" if not matches else "no valid sentinel")
