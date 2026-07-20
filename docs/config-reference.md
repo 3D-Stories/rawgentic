@@ -297,6 +297,10 @@ Distinct from two neighbors: [`modelRouting`](#modelrouting) routes *prose subag
 routes through the executor at all — `phaseExecutorTable` decides *which table* the executor
 routes on. Capability surface: [`phase_executor_table`](#config-loading-protocol).
 
+The official workflow diagram (`docs/workflow-diagram.html`) renders this resolved table
+per WF2 phase — seat, default model, fallback chain, routing-mode classification — generated
+from `resolve_table` by `hooks/diagram_seat_data.py` (#447), never hand-hardcoded.
+
 ## Workspace-File Fields
 
 Beyond each project's committed [`.rawgentic.json`](#core-sections), a few settings live in
