@@ -37,13 +37,26 @@ class TestEpicPostMortemContract:
         assert "--epic" in s and "never duplicates the rubric" in s, (
             "the machinery assessment is WF14 batch's job — link it (#508 AC4)")
 
-    def test_render_via_render_artifact_report_style(self):
+    def test_html_built_on_vendored_template(self):
+        """Owner decision 2026-07-19 (epic #509): the generic report render was
+        rejected — the html is a designed timing page on the vendored template,
+        and the template ships with the skill."""
         s = _text()
-        assert "render_artifact.py" in s and "--style report" in s
+        assert "designed timing page built on the vendored template" in s
+        assert "references/artifact-template.html" in s
+        assert (SKILL.parent / "references" / "artifact-template.html").is_file(), (
+            "the vendored template must ship with the skill")
+        assert "supersedes `render_artifact.py` for THIS skill's html only" in s, (
+            "the house-renderer exception is scoped to this skill, never general")
 
-    def test_unicode_bar_floor_named(self):
-        assert ("unicode-block bars are the deliberate presentation floor" in
-                _text()), "the chart form is a named choice with an upgrade path"
+    def test_page_script_is_dom_builder_only(self):
+        s = _text()
+        assert "no `innerHTML`" in s, (
+            "the repo security-hook contract applies to the designed page")
+
+    def test_stall_flagged_beside_row_not_inside_segment(self):
+        assert "flag a stall beside its row, never inside a phase segment" in _text(), (
+            "idle honesty extends to the visual: a stall is never drawn as phase time")
 
     def test_records_resolved_via_find(self):
         assert "work_summary.py find --issue" in _text(), (
