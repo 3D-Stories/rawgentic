@@ -95,6 +95,37 @@ accounts to *evade* limits can violate Anthropic's consumer terms; legitimately-
 are a different matter and the owner's call. The sanctioned no-window alternative is
 `ANTHROPIC_API_KEY` (API billing, real dollars).
 
+## Observation telemetry aggregation (I1–I3) — join semantics (#469, W6)
+
+The Observation is the **I1** per-dispatch record. Aggregation up the tiers keys off a small set
+of stable JOIN/REFERENCE fields already on the Observation — documented here so #473's cross-run
+aggregation can rely on them; **#469 adds no aggregation code or sidecar file** (see the scope
+note below).
+
+- **Join keys (per-dispatch identity):**
+  - `run_id` — the run the dispatch belongs to.
+  - `seat` — the seat role within the run.
+  - `model` — the seat's model, recorded as `requested_model` + the provider-attested
+    `actual_model` (the only provider-attested identity; compare via `canonicalize_model_id`).
+  - `issue` — the tracked work item, carried through `correlation_id` (the WF2 step/task id) and
+    resolved against the run's own context; the Observation itself stays issue-agnostic.
+- **Work-product references:** `work_product.{worktree_path, base_sha, head_sha, content_tree_sha,
+  changed_paths, documents, tests[].report_ref, promotion_status}` — the executor-derived evidence
+  a cross-run report links to (never the agent's self-reported claim, which stays in
+  `parsed_payload`).
+- **Tiers:** **I2** (per-run) is the orchestrator run-record (`hooks/work_summary.py` /
+  `docs/measurements/run_records.jsonl`), which already carries gates, timing, usage, and PR/CI;
+  it links to Observations by the join keys above + the `work_product` refs. **I3** (cross-run) is
+  a `seat-outcomes.jsonl` sidecar with baselines/alerts.
+- **Redaction / retention:** host-specific fields (`work_product.worktree_path`, `tmux_session`,
+  and denial *events* — `hook_denials` is only a count here) are redacted/retained on the
+  CONSUMING surface (the run-record / the #473 sidecar), NOT on the per-dispatch Observation.
+- **Scope boundary (adversarial H3):** the `seat-outcomes.jsonl` sidecar — its row schema,
+  aggregation, retention, and alerting — is DEFERRED WHOLESALE to **#473** (stable join keys +
+  idempotent aggregation must be defined before rows are written). #469 introduces NO
+  seat-outcomes schema, file, row validator, or append helper; it ships only these documented
+  semantics.
+
 ## Tests
 
 Run from the rawgentic repo root: `pytest tests/phase_executor/`. The pure parsers are
