@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rawgentic.dev/schemas/phase_executor/observation-2.json",
+  "$id": "https://rawgentic.dev/schemas/phase_executor/observation-1.json",
   "title": "phase_executor Observation",
-  "description": "CURRENT schema_version 2 of the Observation contract. Normative, language-neutral record of one model seat invocation. contract.py is one producer; a Rust producer (kukakuka) emits the same documents. actual_model + usage are mandatory evidence when parse_status == 'ok' (absent identity/usage on a successful call is a failure, not an unknown success), and MAY be null only for a non-success parse_status so a pre-envelope timeout is still recordable. v2 adds the optional-additive work_product object (executor-derived git evidence) + the AC-I1 telemetry fields (session_policy, worktree_id, tmux_session, budget, hook_denials). Versioning policy: a field whose addition breaks an older vendored copy (any change under additionalProperties:false) bumps schema_version. Each version ships as its own FROZEN observation-<n>.schema.json and is never edited after release. A document is validated against the schema of its DECLARED schema_version (unknown version = fail-closed). New producers emit the current version; prior-version documents are never retro-mutated.",
+  "description": "FROZEN schema_version 1 of the Observation contract (never edited after release). Normative, language-neutral record of one model seat invocation. contract.py is one producer; a Rust producer (kukakuka) emits the same documents. actual_model + usage are mandatory evidence when parse_status == 'ok' (absent identity/usage on a successful call is a failure, not an unknown success), and MAY be null only for a non-success parse_status so a pre-envelope timeout is still recordable. Versioning policy: a field whose addition breaks an older vendored copy (any change under additionalProperties:false) bumps schema_version. Each version ships as its own FROZEN observation-<n>.schema.json and is never edited after release. A document is validated against the schema of its DECLARED schema_version (unknown version = fail-closed). New producers emit the current version; prior-version documents are never retro-mutated.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -29,8 +29,8 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "2",
-      "description": "Observation schema version. Bump on any change that breaks an older vendored copy (any addition under additionalProperties:false). A document is validated against the schema of this DECLARED version; unknown version = fail-closed."
+      "const": "1",
+      "description": "Observation schema version. Bump on any breaking field change."
     },
     "run_id": {
       "type": "string",
@@ -329,163 +329,6 @@
           "maxItems": 0
         }
       }
-    },
-    "work_product": {
-      "type": "object",
-      "description": "#469 W6 (OQ-4): what an agentic seat PRODUCED, EXECUTOR-DERIVED (never the agent's self-report). All git evidence (base/head/content-tree SHA, changed_paths) is derived by the executor from the trusted worktree gitdir via contract.derive_work_product; a provider's self-reported claim stays only in parsed_payload and never feeds this object. content_tree_sha is the anti-tamper CONTENT commitment: the git tree object id of the FULL worktree state (committed + dirty + untracked) under one snapshot boundary, so a dirty/untracked byte change is caught even when head_sha + changed_path names are unchanged. OPTIONAL/additive (absent on legacy/read-only records) — emitted only when set. Population of the dispatch-time fields is wired by #470.",
-      "additionalProperties": false,
-      "required": [
-        "kind",
-        "worktree_path",
-        "base_sha",
-        "head_sha",
-        "content_tree_sha",
-        "changed_paths",
-        "documents",
-        "tests",
-        "promotion_status"
-      ],
-      "properties": {
-        "kind": {
-          "description": "Governed work-product category (the deliverable class the seat produced), distinct from the open-string top-level `seat`. A new category is a breaking add for an old vendored copy — it bumps schema_version.",
-          "enum": [
-            "code",
-            "review",
-            "design",
-            "docs"
-          ]
-        },
-        "worktree_path": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Absolute path of the engine-managed worktree the product was derived from (host-specific; redaction/retention is defined on the consuming run-record / #473 sidecar, not here)."
-        },
-        "base_sha": {
-          "type": "string",
-          "minLength": 1,
-          "description": "The commit the worktree was cut at (handle.base_sha) — executor-derived."
-        },
-        "head_sha": {
-          "type": "string",
-          "minLength": 1,
-          "description": "The worktree HEAD commit (rev-parse via the trusted gitdir) — executor-derived. NOT a content commitment on its own (a dirty/untracked file's bytes can change while head_sha holds); content_tree_sha is the content commitment."
-        },
-        "content_tree_sha": {
-          "type": "string",
-          "minLength": 1,
-          "description": "git tree object id of the FULL worktree state (committed + dirty + untracked, .gitignore-respecting) written under one executor-controlled snapshot boundary — the anti-tamper CONTENT commitment; changed_paths is derived from this SAME tree."
-        },
-        "changed_paths": {
-          "type": "array",
-          "description": "Worktree-relative paths differing from base under the content_tree_sha snapshot (sorted, unique). Empty for a no-change seat. Executor-derived from the same candidate tree as content_tree_sha — never an agent-reported path list.",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "documents": {
-          "type": "array",
-          "description": "Executor-VERIFIED produced documents — restricted to entries within changed_paths (an out-of-worktree report uses a test entry's report_ref, not a git-evidence claim). Empty when none.",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "tests": {
-          "type": "array",
-          "description": "Executor-observed test runs (never parsed from the agent payload). Empty when none ran.",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "command_digest",
-              "status",
-              "exit_code",
-              "report_ref"
-            ],
-            "properties": {
-              "command_digest": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Digest of the executor-observed test command."
-              },
-              "status": {
-                "description": "Governed test-outcome vocabulary.",
-                "enum": [
-                  "passed",
-                  "failed",
-                  "skipped",
-                  "errored"
-                ]
-              },
-              "exit_code": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "description": "Process exit code, or null when the command never produced one (pre-launch/timeout)."
-              },
-              "report_ref": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Reference to the test report artifact (a path or opaque ref scheme; used for out-of-worktree reports)."
-              }
-            }
-          }
-        },
-        "promotion_status": {
-          "description": "Whether/how promotion ran for this product. A work_product exists for failed/rejected/never-promoted seats too (not_attempted). A supplied PromotionResult is reconciled against the derived evidence, never copied.",
-          "enum": [
-            "not_attempted",
-            "promoted",
-            "not_promoted",
-            "failed"
-          ]
-        }
-      }
-    },
-    "session_policy": {
-      "description": "#469 W6 (AC-I1): the D-8 session policy actually used for this dispatch. OPTIONAL/additive (absent on legacy/read-only records) — POPULATION is wired by #470.",
-      "enum": [
-        "fresh",
-        "resume"
-      ]
-    },
-    "worktree_id": {
-      "type": "string",
-      "minLength": 1,
-      "description": "#469 W6 (AC-I1): the WorktreeIdentity of the engine-managed worktree for this dispatch. OPTIONAL/additive — POPULATION is wired by #470."
-    },
-    "tmux_session": {
-      "type": "string",
-      "minLength": 1,
-      "description": "#469 W6 (AC-I1): the supervisor tmux session name (registry.session_name) for this dispatch. Host-specific; redaction/retention is defined on the consuming run-record / #473 sidecar, not here. OPTIONAL/additive — POPULATION is wired by #470."
-    },
-    "budget": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "reserved_usd",
-        "spent_usd"
-      ],
-      "description": "#469 W6 (AC-I1): the cost envelope for this dispatch. Unit is US dollars; values carry cent precision (a value is USD, e.g. 0.25 = 25 cents). OPTIONAL/additive — POPULATION is wired by #470.",
-      "properties": {
-        "reserved_usd": {
-          "type": "number",
-          "minimum": 0,
-          "description": "USD reserved/atomically-held before launch (>= 0)."
-        },
-        "spent_usd": {
-          "type": "number",
-          "minimum": 0,
-          "description": "USD actually spent by this dispatch (>= 0)."
-        }
-      }
-    },
-    "hook_denials": {
-      "type": "integer",
-      "minimum": 0,
-      "description": "#469 W6 (AC-I1): count of PreToolUse hook denials the seat received during this dispatch (a nonnegative COUNT — detailed denial EVENTS go to the run-record, not every Observation, avoiding duplicated/sensitive payloads per-dispatch). OPTIONAL/additive — POPULATION is wired by #470."
     }
   },
   "allOf": [

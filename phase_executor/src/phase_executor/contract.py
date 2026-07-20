@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Optional
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # The seat roles the engine actually has ``check_pre`` evaluators for. The loader semantic pass
 # (``routing._assert_referential_integrity``) rejects any ``policy.enforced_roles`` entry outside
@@ -69,8 +69,27 @@ def _load_schema(name: str) -> dict:
     return json.loads((_SCHEMA_DIR / name).read_text(encoding="utf-8"))
 
 
-def observation_schema() -> dict:
-    return _load_schema("observation.schema.json")
+# #469 (#434 option b): each schema_version ships as its OWN frozen file; a document is validated
+# against the schema of its DECLARED version, never retro-mutated. observation.schema.json is the
+# CURRENT version (kept as the canonical filename to minimise churn for the ~dozen loaders);
+# observation-<n>.schema.json is a FROZEN prior version. Unknown version = fail-closed (see below).
+_OBSERVATION_SCHEMA_FILES = {
+    "1": "observation-1.schema.json",
+    "2": "observation.schema.json",
+}
+
+
+def observation_schema(version: str = SCHEMA_VERSION) -> dict:
+    """Return the FROZEN JSON Schema for ``version`` (default = the current SCHEMA_VERSION, so a
+    no-arg call keeps yielding the latest schema for callers that inspect its shape). Fail-closed:
+    a version with no frozen schema raises ValueError. lru-cached per version via ``_load_schema``
+    (keyed by the per-version filename)."""
+    name = _OBSERVATION_SCHEMA_FILES.get(version)
+    if name is None:
+        raise ValueError(
+            f"observation_schema: no frozen schema for schema_version {version!r} "
+            f"(known: {sorted(_OBSERVATION_SCHEMA_FILES)}) — fail-closed")
+    return _load_schema(name)
 
 
 def routing_table_schema() -> dict:
@@ -139,6 +158,19 @@ class Observation:
     # pass_summary() emits. Optional-additive (absent on legacy/non-canary records; the
     # dispatched_lane/effort precedent) — emitted only when set, no schema version bump.
     canary_result: Optional[dict] = None
+    # #469 W6 (OQ-4): what the seat PRODUCED — executor-derived git evidence + typed test/doc
+    # records, built by ``derive_work_product`` (never an agent self-report). Optional-additive
+    # (absent on legacy/read-only records; the canary_result precedent) — emitted only when set,
+    # a schema_version "2" field.
+    work_product: Optional[dict] = None
+    # #469 W6 (AC-I1): dispatch telemetry — the TYPED optional fields are added now; POPULATION is
+    # deferred to #470 (mirroring the #468 canary_result field -> #470 wiring split). Emitted only
+    # when set; every existing producer passes None -> byte-identical legacy Observation.
+    session_policy: Optional[str] = None      # "fresh" | "resume" (the D-8 policy used)
+    worktree_id: Optional[str] = None          # WorktreeIdentity
+    tmux_session: Optional[str] = None         # registry.session_name
+    budget: Optional[dict] = None              # {reserved_usd, spent_usd} in USD (cent precision)
+    hook_denials: Optional[int] = None         # nonnegative COUNT (events -> run-record, not here)
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -178,6 +210,20 @@ class Observation:
         # canary; refusal data travels on CanaryRefused, never the Observation).
         if self.canary_result is not None:
             out["canary_result"] = dict(self.canary_result)
+        # work_product (#469): the executor-derived produced-artifact record, emitted only when set.
+        if self.work_product is not None:
+            out["work_product"] = dict(self.work_product)
+        # #469 AC-I1 dispatch telemetry: each emitted only when set (population deferred to #470).
+        if self.session_policy is not None:
+            out["session_policy"] = self.session_policy
+        if self.worktree_id is not None:
+            out["worktree_id"] = self.worktree_id
+        if self.tmux_session is not None:
+            out["tmux_session"] = self.tmux_session
+        if self.budget is not None:
+            out["budget"] = dict(self.budget)
+        if self.hook_denials is not None:
+            out["hook_denials"] = self.hook_denials
         return out
 
 
@@ -356,10 +402,17 @@ def resolve_effort(model: str, requested: Optional[str], *, engine: str) -> "Eff
 
 
 def validate_observation(obs: dict) -> None:
-    """Raise jsonschema.ValidationError if ``obs`` does not conform. Fail-loud."""
+    """Validate ``obs`` against the schema of its DECLARED ``schema_version`` (#469 / #434 b).
+    Fail-loud AND fail-closed: an unknown or missing ``schema_version`` binds to no frozen schema
+    and raises (via ``observation_schema``) rather than silently validating against the current
+    version; a conforming-shape violation raises ``jsonschema.ValidationError``. This is the ONLY
+    general validation entry point — direct ``observation_schema()``/schema loads bypass dispatch
+    (a v1 doc would be rejected against the v2 const) and are reserved for explicitly-v2 checks."""
     import jsonschema  # noqa: PLC0415 (deferred: keep import cost off the hot path / off consumers that only build)
 
-    jsonschema.validate(obs, observation_schema())
+    version = obs.get("schema_version") if isinstance(obs, dict) else None
+    schema = observation_schema(version)  # fail-closed on unknown/missing version
+    jsonschema.validate(obs, schema)
 
 
 def validate_routing_table(table: dict) -> None:
@@ -367,3 +420,70 @@ def validate_routing_table(table: dict) -> None:
     import jsonschema  # noqa: PLC0415
 
     jsonschema.validate(table, routing_table_schema())
+
+
+def _reconcile_promotion(promotion, evidence: dict) -> str:
+    """Reconcile a supplied ``worktree.PromotionResult`` against the independently executor-derived
+    ``evidence`` and return the ``promotion_status`` (#469 OQ-4). NOT a copy: a mismatched base/head
+    SHA or a mismatched changed-path SET is a LOUD refuse (the derived evidence is authoritative).
+    ``None`` -> ``not_attempted``; else ``promoted``/``not_promoted`` by ``promotion.promoted``
+    (``failed`` is reserved for a caller that catches a promotion EXCEPTION — a PromotionResult
+    object never represents it). Duck-typed (no ``worktree`` import -> no import cycle)."""
+    if promotion is None:
+        return "not_attempted"
+    for attr in ("base_sha", "head_sha"):
+        claimed = getattr(promotion, attr, None)
+        if claimed is not None and claimed != evidence[attr]:
+            raise ValueError(
+                f"derive_work_product: promotion.{attr} {claimed!r} does not reconcile with the "
+                f"executor-derived {attr} {evidence[attr]!r} — refusing (derived evidence is "
+                f"authoritative, a PromotionResult is never copied wholesale)")
+    claimed_paths = getattr(promotion, "changed_paths", None)
+    if claimed_paths is not None and set(claimed_paths) != set(evidence["changed_paths"]):
+        raise ValueError(
+            f"derive_work_product: promotion.changed_paths {sorted(set(claimed_paths))} do not "
+            f"reconcile with executor-derived changed_paths {evidence['changed_paths']} — refusing")
+    return "promoted" if getattr(promotion, "promoted", False) else "not_promoted"
+
+
+def derive_work_product(manager, handle, *, kind, documents=(), tests=(), promotion=None) -> dict:
+    """Build the EXECUTOR-DERIVED ``work_product`` object for a seat's worktree (#469 W6, OQ-4).
+
+    The recorded git evidence (base/head/content-tree SHA + changed_paths) is ALWAYS derived by the
+    executor from the trusted worktree gitdir via ``manager.content_evidence(handle)`` — one snapshot
+    boundary, ``content_tree_sha`` binding the FULL worktree state (committed + dirty + untracked).
+    This API takes NO agent-reported SHAs or paths, so a lying provider ``parsed_payload`` can never
+    alter the record (OQ-4). ``documents`` are restricted to executor-verified changed paths (a
+    document outside ``changed_paths`` is an unverified claim -> loud refuse; an out-of-worktree
+    report belongs in a ``tests[].report_ref``). ``tests`` are executor-observed run records passed
+    through verbatim. ``promotion`` (a ``worktree.PromotionResult`` or ``None``) is RECONCILED
+    against the derived evidence (mismatch is a loud refuse), never copied, and maps to
+    ``promotion_status``. ``kind`` / test ``status`` / ``promotion_status`` enum membership is
+    enforced by the schema when the object rides an Observation through ``validate_observation`` (the
+    single vocabulary source — not duplicated here).
+
+    ``manager`` supplies the injected git runner (a ``WorktreeHandle`` carries none); the design's
+    ``derive_work_product(handle, …)`` signature is completed with this ``manager`` param because the
+    derivation MUST run git and the runner is injectable (its own tests run against a tmp repo).
+    Fail-closed throughout."""
+    evidence = manager.content_evidence(handle)
+    changed = evidence["changed_paths"]
+    docs = sorted(set(documents))
+    changed_set = set(changed)
+    stray = [d for d in docs if d not in changed_set]
+    if stray:
+        raise ValueError(
+            f"derive_work_product: documents {stray} are not executor-verified changed paths (a "
+            f"document must be within changed_paths; an out-of-worktree report uses "
+            f"tests[].report_ref) — refusing")
+    return {
+        "kind": kind,
+        "worktree_path": handle.path,
+        "base_sha": evidence["base_sha"],
+        "head_sha": evidence["head_sha"],
+        "content_tree_sha": evidence["content_tree_sha"],
+        "changed_paths": list(changed),
+        "documents": docs,
+        "tests": [dict(t) for t in tests],
+        "promotion_status": _reconcile_promotion(promotion, evidence),
+    }

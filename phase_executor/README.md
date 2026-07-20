@@ -15,6 +15,16 @@ bake-offs E5, complexity gate E6, driver-bench E7, multi-account lanes E8) consu
   An `Observation`'s `actual_model` + `usage` are mandatory evidence when `parse_status == "ok"`
   (absent identity on a successful call is a failure, not an unknown success), and may be null only
   on a non-success status — so a pre-envelope timeout is still recordable.
+- **Observation schema versioning policy (normative, #434 option b).** A field whose addition
+  breaks an older vendored copy (any change under `additionalProperties:false`) bumps
+  `schema_version`. Each version ships as its own FROZEN `observation-<n>.schema.json` and is never
+  edited after release; the canonical `observation.schema.json` filename always holds the CURRENT
+  version. A document is validated against the schema of its DECLARED `schema_version` — always via
+  `contract.validate_observation(obs)`, which dispatches by version (an unknown/missing version is
+  fail-closed). New producers emit the current version (`contract.SCHEMA_VERSION`, now `"2"`);
+  prior-version documents are never retro-mutated, and a direct schema load is reserved for
+  explicitly current-version checks. v2 (W6, #469) adds the optional-additive `work_product` object
+  + AC-I1 telemetry fields; a v1 (kukakuka-parity) document keeps validating against frozen v1.
 - **Adapters** (`adapters/`): `claude_cli`, `codex_cli`, `zhipuai_sdk`. Each is a pure `parse_*`
   (fixture-tested, no I/O) + a live `run`. The adapter owns the model flag; the prompt goes on
   stdin (no argv injection).
@@ -84,6 +94,37 @@ per invocation. **ToS note (owner-acknowledged):** per-account usage limits are 
 accounts to *evade* limits can violate Anthropic's consumer terms; legitimately-owned separate seats
 are a different matter and the owner's call. The sanctioned no-window alternative is
 `ANTHROPIC_API_KEY` (API billing, real dollars).
+
+## Observation telemetry aggregation (I1–I3) — join semantics (#469, W6)
+
+The Observation is the **I1** per-dispatch record. Aggregation up the tiers keys off a small set
+of stable JOIN/REFERENCE fields already on the Observation — documented here so #473's cross-run
+aggregation can rely on them; **#469 adds no aggregation code or sidecar file** (see the scope
+note below).
+
+- **Join keys (per-dispatch identity):**
+  - `run_id` — the run the dispatch belongs to.
+  - `seat` — the seat role within the run.
+  - `model` — the seat's model, recorded as `requested_model` + the provider-attested
+    `actual_model` (the only provider-attested identity; compare via `canonicalize_model_id`).
+  - `issue` — the tracked work item, carried through `correlation_id` (the WF2 step/task id) and
+    resolved against the run's own context; the Observation itself stays issue-agnostic.
+- **Work-product references:** `work_product.{worktree_path, base_sha, head_sha, content_tree_sha,
+  changed_paths, documents, tests[].report_ref, promotion_status}` — the executor-derived evidence
+  a cross-run report links to (never the agent's self-reported claim, which stays in
+  `parsed_payload`).
+- **Tiers:** **I2** (per-run) is the orchestrator run-record (`hooks/work_summary.py` /
+  `docs/measurements/run_records.jsonl`), which already carries gates, timing, usage, and PR/CI;
+  it links to Observations by the join keys above + the `work_product` refs. **I3** (cross-run) is
+  a `seat-outcomes.jsonl` sidecar with baselines/alerts.
+- **Redaction / retention:** host-specific fields (`work_product.worktree_path`, `tmux_session`,
+  and denial *events* — `hook_denials` is only a count here) are redacted/retained on the
+  CONSUMING surface (the run-record / the #473 sidecar), NOT on the per-dispatch Observation.
+- **Scope boundary (adversarial H3):** the `seat-outcomes.jsonl` sidecar — its row schema,
+  aggregation, retention, and alerting — is DEFERRED WHOLESALE to **#473** (stable join keys +
+  idempotent aggregation must be defined before rows are written). #469 introduces NO
+  seat-outcomes schema, file, row validator, or append helper; it ships only these documented
+  semantics.
 
 ## Tests
 

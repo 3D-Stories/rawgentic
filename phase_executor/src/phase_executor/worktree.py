@@ -511,6 +511,27 @@ class WorktreeManager:
             raise WorktreeError(f"candidate diff failed: {err.strip()}")
         return [p for p in out.split("\x00") if p]
 
+    def content_evidence(self, handle: WorktreeHandle) -> dict:
+        """#469 W6 (OQ-4): the executor-derived, read-only git commitment for a seat's work product,
+        built under ONE snapshot boundary. Returns
+        ``{base_sha, head_sha, content_tree_sha, changed_paths}`` where ``content_tree_sha`` is the
+        FULL-worktree candidate tree (committed + dirty + untracked, .gitignore-respecting) and
+        ``changed_paths`` (sorted, unique, worktree-relative) is diffed from that SAME tree — never a
+        second independent write-tree, so the SHA and the path list share one boundary. Uses the
+        TRUSTED admin gitdir throughout (never ``git -C <worktree>``). ``strict=True``: an unreadable
+        path REFUSES rather than silently under-reporting the produced content (the work-product
+        equivalent of promote's no-silent-partial rule). ``contract.derive_work_product`` consumes
+        this; ``head_sha`` alone is NOT a content commitment — ``content_tree_sha`` is."""
+        tree = self._candidate_tree(handle, strict=True)
+        changed = self._candidate_changed(handle, tree)
+        head = self._worktree_head(handle)
+        return {
+            "base_sha": handle.base_sha,
+            "head_sha": head,
+            "content_tree_sha": tree,
+            "changed_paths": sorted(set(changed)),
+        }
+
     # -- populate (write-ahead, CF-7) ------------------------------------
 
     def populate(self, handle: WorktreeHandle, source_root: str, allowlist) -> None:
