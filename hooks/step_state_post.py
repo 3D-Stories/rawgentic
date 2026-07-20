@@ -40,6 +40,14 @@ issue from the branch name (``feature/<n>-…`` / ``fix/<n>-…``); an
 unconventional branch name still reuses the existing record's issue.
 epic-run carve-out: its markers are not ``### WF<n>``-shaped and it has no
 signature table, so its skill prose KEEPS the mandatory manual write.
+The #533 inline-append recognition adds two residuals of the same display-only,
+self-correcting class: (a) ``grep '<marker>' foo >> …session_notes`` stamps even
+if ``foo`` lacks the marker (grep's stdout, not the marker, is what appends) — the
+quote-aware tie cannot see ``foo``'s contents; real hit rate ~0 (markers are
+written via echo/heredoc, never grepped into notes); (b) a marker whose line ends
+in a backslash continuation with ``>> …notes`` on the NEXT physical line is
+dropped — the redirect is on a different line with no heredoc — a pre-#533 gap
+left as-is.
 """
 import json
 import os
@@ -66,14 +74,16 @@ _MARKER_RE = re.compile(
 _MARKER_LINE_CAP = 1024  # real markers are short single lines
 
 # #533: a marker is a step completion only when it is APPENDED to a session_notes
-# file, and that append must be TIED to the marker (same command segment, or a
-# heredoc body). An anchored line-start match silently dropped every inline
+# file, and that append must be TIED to the marker (same command, or a heredoc
+# body). An anchored line-start match silently dropped every inline
 # `echo`/`printf` append; a bare command-wide `>>` check reopened the #499
 # read-vs-append hole (a read of marker text chained with an unrelated notes
-# append — adversarial F1). Both regexes run only after a `### WF` marker line is
-# found, on a `_MARKER_LINE_CAP`-bounded slice — never on the per-Bash-call hot path.
+# append — adversarial F1). The tie is decided QUOTE-AWARE (`_tied_notes_append`
+# below), so shell metacharacters (`;`/`|`/`&`) and a `>>` that sit INSIDE the
+# quoted marker string are data, not command structure. Runs only after a
+# `### WF` marker line is found, on a `_MARKER_LINE_CAP`-bounded slice — never on
+# the per-Bash-call hot path.
 _NOTES_APPEND_RE = re.compile(r">>[ \t]*\S*session_notes")
-_CMD_SEP_RE = re.compile(r"[;&|\n]")  # shell command separators / pipes
 
 # Ordered, KEYED BY WORKFLOW (8a R1 #499: the same commands land on different
 # step numbers per workflow — WF3's PR/merge/summary are Steps 10/12/14, and it
@@ -111,6 +121,45 @@ _SIGNATURES = {
 }
 
 
+def _tied_notes_append(line: str, start: int) -> bool:
+    """Quote-aware: from offset ``start`` (just past a marker match), is the FIRST
+    UNQUOTED structural token a ``>>`` redirect into a session_notes path?
+
+    The scan starts at the line head so the quote state at ``start`` is known — the
+    marker text itself sits inside the ``echo``/``printf`` quotes. Inside those
+    quotes, ``;``/``|``/``&`` and a ``>>`` are DATA (part of the marker detail), so
+    they are ignored; the marker's command ends at the first UNQUOTED separator. A
+    ``>>…session_notes`` before any such separator ties the append to the marker
+    (#533 review: closes the metachar-detail false-negative AND the
+    quoted-redirect-in-text false-positive, while still rejecting adversarial F1's
+    real unquoted ``;`` between a quoted marker and an unrelated append)."""
+    quote = None  # None | "'" | '"'
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+        elif quote == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                quote = None
+        elif c in ("'", '"'):
+            quote = c
+        elif c == "\\":
+            i += 2
+            continue
+        elif i >= start:
+            if c in ";|&\n":
+                return False  # marker's command ended without a notes redirect
+            if c == ">" and line.startswith(">>", i):
+                return bool(_NOTES_APPEND_RE.match(line, i))
+        i += 1
+    return False
+
+
 def detect_marker(command: str) -> "dict | None":
     """Parse the LAST step-DONE marker out of a Bash command string.
 
@@ -140,10 +189,9 @@ def detect_marker(command: str) -> "dict | None":
         if not hit:
             continue
         own_line = line[:idx].strip() == ""  # marker starts this line (heredoc body)
-        # Tie the marker to a redirect: its own command segment (up to the first
-        # shell separator) redirects into notes, or it is a heredoc body line.
-        segment = _CMD_SEP_RE.split(line[hit.end():], 1)[0]
-        if _NOTES_APPEND_RE.search(segment) or (own_line and heredoc):
+        # Tie the marker to a redirect: the marker's own command redirects (`>>`)
+        # into notes (quote-aware), or it is a heredoc body line.
+        if _tied_notes_append(line, hit.end()) or (own_line and heredoc):
             m = hit  # last matching line wins (append-only notes: newest last)
     if m is None:
         return None

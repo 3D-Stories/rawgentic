@@ -391,6 +391,23 @@ class TestInlineMarkerAppend:
                "echo done >> claude_docs/session_notes.md")
         assert ssp.detect_marker(cmd) is None
 
+    def test_inline_echo_append_with_metachars_in_detail_parsed(self):
+        # #533 review (High): shell metacharacters (; | &) inside the QUOTED marker
+        # detail are data, not command structure — the append must still be seen.
+        for detail in ("lint & test green", "1675p/5f | +18 tests",
+                       "open; labels bug/safety"):
+            cmd = ("echo '### WF2 Step 11: Review — DONE (#492: " + detail + ")' "
+                   ">> claude_docs/session_notes.md")
+            hit = ssp.detect_marker(cmd)
+            assert hit is not None and hit["step"] == "11" and hit["issue"] == 492, \
+                f"metachar detail silently dropped: {detail!r}"
+
+    def test_quoted_redirect_inside_marker_text_is_not_an_append(self):
+        # #533 review (Low): a `>>…session_notes` INSIDE the echoed marker string is
+        # data printed to stdout, not a real append — it must not stamp.
+        assert ssp.detect_marker(
+            "echo '### WF2 Step 11: X — DONE (#5) >> claude_docs/session_notes.md'") is None
+
     def test_overlong_inline_marker_with_append_skipped(self):
         # AC3: the per-line cap still guards catastrophic backtracking on the new
         # inline-append path.
