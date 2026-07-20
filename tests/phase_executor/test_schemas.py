@@ -311,8 +311,13 @@ def test_v1_document_validates_through_each_consumer():
     inner = next(r["observation"] for r in audit if r.get("kind") == "observation")
     assert inner["schema_version"] == "1"
     contract.validate_observation(inner)  # dispatch -> frozen v1
-    # a "1"-declared doc validated by dispatch must still meet the frozen-v1 const
-    bad_version = dict(inner); bad_version["schema_version"] = "2"
-    # (declares "2" but carries no v2-only field -> still valid under v2; the real freeze proof is
-    # the v2-only-field rejection covered in the work_product / I1 tests.)
-    contract.validate_observation(bad_version)
+    # a doc DECLARING "1" but carrying a v2-only field (work_product) is REJECTED: dispatch sends it
+    # to frozen v1, whose additionalProperties:false has no such property (the freeze is enforced,
+    # not just declared).
+    v1_with_v2_field = dict(inner); v1_with_v2_field["work_product"] = {"kind": "code"}
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(v1_with_v2_field)
+    # an unknown schema_version binds to no frozen schema -> fail-closed (raises, never silent-v2).
+    unknown = dict(inner); unknown["schema_version"] = "99"
+    with pytest.raises(ValueError):
+        contract.validate_observation(unknown)
