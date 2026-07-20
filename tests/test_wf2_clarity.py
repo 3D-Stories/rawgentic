@@ -1292,6 +1292,8 @@ class TestTestRunDiscipline:
         assert "tests/hooks/test_adversarial_review_registration.py" in block
         assert "consumes the Step 9 full-suite result as the regression evidence" in block
         assert "any code-bearing commit keeps the full re-run" in block
+        # #527 review tighten: shared test infra is explicitly outside the predicate.
+        assert "no shared test infrastructure" in block
 
     def test_step_sites_point_at_canonical_block(self):
         # Step 2 baseline, Step 8 iteration, Step 9 final, Step 12 evidence

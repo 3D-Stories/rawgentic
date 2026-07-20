@@ -300,7 +300,8 @@ ONLY when a commit landed after the Step 9 run touching code or a test-pinned su
 otherwise it consumes the Step 9 result as its evidence. Prose-only tightening (#527):
 when EVERY post-Step-9 commit touches ONLY prose/doc files (`*.md`, `docs/`) plus their
 own guard test files under `tests/` (no `hooks/`, no `phase_executor/`, no `scripts/`,
-no shared behavior code), the pre-PR gate instead runs the affected guard test files
+no shared behavior code, and no shared test infrastructure — `conftest.py`,
+`tests/corpus.py`, cross-file test helpers), the pre-PR gate instead runs the affected guard test files
 plus `tests/hooks/test_adversarial_review_registration.py` (the version pin) SCOPED and
 consumes the Step 9 full-suite result as the regression evidence — with a session-note
 marker naming the scoped set; any code-bearing commit keeps the full re-run (measured
