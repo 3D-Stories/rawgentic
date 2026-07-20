@@ -1,0 +1,209 @@
+<title>Epic #509 run profiler — where the time goes</title>
+<style>
+  :root {
+    --ink: #16181d; --paper: #f5f6f8; --panel: #ffffff; --line: #dfe3e9;
+    --muted: #667085; --text: #23272f; --faint: #8a92a0;
+    /* semantic: the villain is idle review-wait */
+    --wait: #e0603a;      /* review-wait — the hot bar */
+    --design: #7a5cc7;    /* design + gate */
+    --impl: #2f8f9d;      /* implementation */
+    --fix: #d99a2b;       /* fix application */
+    --suite: #5b6472;     /* full-suite reruns */
+    --ship: #4a9e6d;      /* ship */
+    --accent: #e0603a;
+    --good: #4a9e6d; --warn: #d99a2b; --crit: #e0603a;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #e7e9ee; --paper: #0e1014; --panel: #171a20; --line: #262b34;
+      --muted: #8b93a2; --text: #d6dae1; --faint: #6b7280;
+      --wait: #f2764f; --design: #a488e6; --impl: #45b3c2; --fix: #eab54a; --suite: #7a828f; --ship: #5cc084;
+      --accent: #f2764f;
+    }
+  }
+  :root[data-theme="light"] {
+    --ink: #16181d; --paper: #f5f6f8; --panel: #ffffff; --line: #dfe3e9;
+    --muted: #667085; --text: #23272f; --faint: #8a92a0;
+    --wait: #e0603a; --design: #7a5cc7; --impl: #2f8f9d; --fix: #d99a2b; --suite: #5b6472; --ship: #4a9e6d; --accent: #e0603a;
+  }
+  :root[data-theme="dark"] {
+    --ink: #e7e9ee; --paper: #0e1014; --panel: #171a20; --line: #262b34;
+    --muted: #8b93a2; --text: #d6dae1; --faint: #6b7280;
+    --wait: #f2764f; --design: #a488e6; --impl: #45b3c2; --fix: #eab54a; --suite: #7a828f; --ship: #5cc084; --accent: #f2764f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--text); font-family: var(--sans);
+    line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 40px 24px 72px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 22px; margin-bottom: 30px; }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 10px; }
+  h1 { font-size: clamp(26px, 4vw, 38px); line-height: 1.08; margin: 0 0 12px; letter-spacing: -.02em;
+    text-wrap: balance; color: var(--ink); }
+  .sub { color: var(--muted); font-size: 15px; max-width: 64ch; margin: 0; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 26px 0 6px; }
+  @media (max-width: 640px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+  .kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .kpi .n { font-family: var(--mono); font-size: 26px; font-weight: 600; color: var(--ink);
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .kpi .l { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .kpi .n small { font-size: 14px; color: var(--faint); font-weight: 500; }
+  section { margin-top: 40px; }
+  h2 { font-size: 13px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin: 0 0 4px; }
+  .lead { color: var(--muted); font-size: 14px; margin: 0 0 18px; max-width: 66ch; }
+
+  /* the profile bar */
+  .profile { display: flex; width: 100%; height: 66px; border-radius: 8px; overflow: hidden;
+    border: 1px solid var(--line); }
+  .seg { position: relative; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-family: var(--mono); font-weight: 600; font-size: 13px; min-width: 0; }
+  .seg span { padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-top: 16px; }
+  .lg { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+  .sw { width: 11px; height: 11px; border-radius: 3px; flex: none; transform: translateY(1px); }
+  .lg b { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+  .lg .pct { color: var(--faint); font-family: var(--mono); font-size: 12px; }
+
+  /* per-child mini bars */
+  .children { display: grid; gap: 10px; }
+  .crow { display: grid; grid-template-columns: 130px 1fr 62px; align-items: center; gap: 12px; }
+  .crow .id { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+  .crow .id b { color: var(--ink); }
+  .track { height: 12px; background: color-mix(in srgb, var(--line) 60%, transparent); border-radius: 6px; overflow: hidden; }
+  .fill { height: 100%; background: linear-gradient(90deg, var(--impl), var(--design)); border-radius: 6px; }
+  .crow .t { font-family: var(--mono); font-size: 13px; text-align: right; color: var(--ink);
+    font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); font-weight: 600; }
+  td .lever { font-weight: 600; color: var(--ink); }
+  td .how { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .save { font-family: var(--mono); font-weight: 600; color: var(--good); white-space: nowrap;
+    font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px;
+    letter-spacing: .02em; }
+  .risk-none { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+  .risk-low  { background: color-mix(in srgb, var(--impl) 18%, transparent); color: var(--impl); }
+  .risk-med  { background: color-mix(in srgb, var(--warn) 20%, transparent); color: var(--warn); }
+  .rank { font-family: var(--mono); color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  .note { margin-top: 40px; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 18px 20px; }
+  .note h3 { margin: 0 0 8px; font-size: 15px; color: var(--ink); }
+  .note p { margin: 0; color: var(--muted); font-size: 14px; }
+  .note code { font-family: var(--mono); font-size: 12.5px; background: color-mix(in srgb, var(--line) 55%, transparent);
+    padding: 1px 5px; border-radius: 4px; color: var(--text); }
+  .filed-banner { margin-top: 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: color-mix(in srgb, var(--design) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--design) 34%, var(--line));
+    border-radius: 10px; padding: 12px 16px; }
+  .filed-banner .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--design); }
+  .filed-banner a { color: var(--ink); font-weight: 600; text-decoration: none; border-bottom: 1.5px solid var(--design); }
+  .filed-banner a:hover { background: color-mix(in srgb, var(--design) 16%, transparent); }
+  .filed-banner .kids { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+  a.issue { font-family: var(--mono); font-size: 12px; color: var(--design); text-decoration: none; white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--design) 40%, var(--line)); border-radius: 999px; padding: 1px 8px; }
+  a.issue:hover { background: color-mix(in srgb, var(--design) 14%, transparent); }
+  a:focus-visible, .filed-banner a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+  .dep { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  footer { margin-top: 42px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--faint);
+    font-size: 12px; font-family: var(--mono); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Epic #509 · post-mortem program · run profiler</p>
+    <h1>Nine children in one evening — where the clock went</h1>
+    <p class="sub">Measured from all 9 merged children (#510–#513, #517, #506, #392, #507, #508 — PRs #514–#523, v3.66.1→3.71.0): transcript anchor events, run records, and PR timestamps. Suite 3782→3857, zero regressions, zero loop-backs. The biggest single item wasn't a phase — it was one 56-minute owner-away stall.</p>
+    <div class="kpis">
+      <div class="kpi"><div class="n">26.5<small>m</small></div><div class="l">avg active / child (9 children, ~4h active)</div></div>
+      <div class="kpi"><div class="n">56.3<small>m</small></div><div class="l">one owner-away stall — 18% of wall</div></div>
+      <div class="kpi"><div class="n">21→12</div><div class="l">review findings → applied pre-PR (1 HIGH)</div></div>
+      <div class="kpi"><div class="n">~$15</div><div class="l">median cost / child ($140 session)</div></div>
+    </div>
+    <div class="filed-banner">
+      <span class="tag">Closed as</span>
+      <a href="https://github.com/3D-Stories/rawgentic/issues/509">epic #509 · 9/9 merged</a>
+      <span class="kids">→ full evidence: docs/reviews/2026-07-19-epic-509-run-analysis.md (PR #525)</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>The average child, by phase</h2>
+    <p class="lead">One bar = one child (~25.3 min active). The lane keeps design ceremony at 6%; implement and review split 80% almost evenly. Review here includes the fix reconcile, the 11.5 scan, and the pre-PR suite re-run — the reviewer wave itself averaged ~6 min.</p>
+    <div class="profile" role="img" aria-label="Phase breakdown of an average child">
+      <div class="seg" style="flex-basis:6%; background:var(--design)"><span>6%</span></div>
+      <div class="seg" style="flex-basis:40%; background:var(--impl)"><span>Implement 40%</span></div>
+      <div class="seg" style="flex-basis:39%; background:var(--wait)"><span>Review 39%</span></div>
+      <div class="seg" style="flex-basis:12%; background:var(--ship)"><span>Ship 12%</span></div>
+      <div class="seg" style="flex-basis:3%; background:var(--suite)"><span>3%</span></div>
+    </div>
+    <div class="legend">
+      <div class="lg"><span class="sw" style="background:var(--design)"></span><span>Design + plan (lane)</span> <b>~1.5m</b> <span class="pct">Steps 1–5 collapsed</span></div>
+      <div class="lg"><span class="sw" style="background:var(--impl)"></span><span>Implementation</span> <b>~10.1m</b> <span class="pct">TDD + baseline full suite</span></div>
+      <div class="lg"><span class="sw" style="background:var(--wait)"></span><span>Review → PR-ready</span> <b>~9.9m</b> <span class="pct">wave ~6m + reconcile + 11.5 + pre-PR suite</span></div>
+      <div class="lg"><span class="sw" style="background:var(--ship)"></span><span>PR + CI + merge</span> <b>~3.1m</b> <span class="pct">test lane ~2.1m</span></div>
+      <div class="lg"><span class="sw" style="background:var(--suite)"></span><span>Wrap (record persist)</span> <b>~0.7m</b></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Per-child active wall-clock</h2>
+    <p class="lead">Fix-tier children land 21–25 min; the two structural children (#506 telemetry foundation, #508 new-skill registration) run heavier. #506's bar excludes its 56-minute stall — idle is never drawn as phase time.</p>
+    <div class="children">
+      <div class="crow"><div class="id"><b>#510</b> read-only clause</div><div class="track"><div class="fill" style="width:75%"></div></div><div class="t">27.9m</div></div>
+      <div class="crow"><div class="id"><b>#511</b> record path</div><div class="track"><div class="fill" style="width:50%"></div></div><div class="t">18.6m</div></div>
+      <div class="crow"><div class="id"><b>#512</b> truth fields</div><div class="track"><div class="fill" style="width:61%"></div></div><div class="t">22.8m</div></div>
+      <div class="crow"><div class="id"><b>#513</b> dirs 0700</div><div class="track"><div class="fill" style="width:70%"></div></div><div class="t">26.0m</div></div>
+      <div class="crow"><div class="id"><b>#517</b> run task list</div><div class="track"><div class="fill" style="width:46%"></div></div><div class="t">16.9m</div></div>
+      <div class="crow"><div class="id"><b>#506</b> step timing</div><div class="track"><div class="fill" style="width:92%"></div></div><div class="t">34.2m <span style="color:var(--crit)">+56m stall</span></div></div>
+      <div class="crow"><div class="id"><b>#392</b> WF14 batch</div><div class="track"><div class="fill" style="width:65%"></div></div><div class="t">24.1m</div></div>
+      <div class="crow"><div class="id"><b>#507</b> suggest-only</div><div class="track"><div class="fill" style="width:57%"></div></div><div class="t">21.1m</div></div>
+      <div class="crow"><div class="id"><b>#508</b> WF19 skill</div><div class="track"><div class="fill" style="width:100%"></div></div><div class="t">36.5m</div></div>
+    </div>
+    <p class="lead" style="margin-top:14px">#508's implement ran <b>18.6m vs the 8.9m median</b> — the delta is the multi-surface skill registration walk, including a second hand-pinned count string only the full suite caught. #506's implement (13.5m) carried the epic's only real code substrate.</p>
+  </section>
+
+  <section>
+    <h2>Where to cut — ranked by leverage ÷ risk</h2>
+    <table>
+      <thead><tr><th>#</th><th>Lever</th><th>Est. saving</th><th>Risk</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="rank">1</td>
+          <td><div class="lever">Page the owner at review-verdict-ready (or arm the resume launcher)</div>
+            <div class="how">The one 56-minute gap sat between a reviewer verdict landing and the owner's "resume" — 18% of total wall, more than any phase average. A <code>notify-owner</code> push at verdict-ready, or <code>epic509-resume.sh</code> armed at run start, removes it entirely.</div></td>
+          <td class="save">~56 min*</td>
+          <td><span class="pill risk-none">none</span></td>
+        </tr>
+        <tr>
+          <td class="rank">2</td>
+          <td><div class="lever">Scope the pre-PR re-run after prose-only review fixes</div>
+            <div class="how">5 of 9 children re-ran the full suite (~2.4 min each) because a review fix landed after Step 9 — usually a guard-pinned prose tweak. Tighten §12's re-run trigger to the affected guard subset + registration file.</div></td>
+          <td class="save">~11 min / epic</td>
+          <td><span class="pill risk-low">low</span></td>
+        </tr>
+        <tr>
+          <td class="rank">3</td>
+          <td><div class="lever">Script the new-skill count-surface walk</div>
+            <div class="how">#508 paid ~5 min walking whitelist, symlink, sync, canary, and six count strings — plus one full-suite round-trip to find the second hand-pin in <code>test_interview_skill.py</code>. A helper that prints every stale surface makes it mechanical.</div></td>
+          <td class="save">~4 min / skill</td>
+          <td><span class="pill risk-none">none</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="lead" style="margin-top:12px">*Per attended run with a stall; the launcher also covers unattended quota pauses. Non-levers, for the record: CI is tight (2.1m test lane), design+plan at 6% shows the lane collapse working, wrap is already minimal.</p>
+  </section>
+
+  <div class="note">
+    <h3>The honest part: the review waves paid rent.</h3>
+    <p>Nine single-reviewer waves (~6 min each) caught a <b>HIGH</b> — <code>--record</code> doubling as the embed autonomy signal would have silently skipped #507's brand-new approval gate — plus three design-grade defects: #506's "complete" status unreachable on every live record, #508's WF16 number colliding with reserved #359 (shipped as WF19), and #513's supervisor timeout path recreating capture dirs at default umask. Cutting review means shipping those. The win is not stalling around the verdict and not re-running the full suite for prose tweaks — not reviewing less.</p>
+  </div>
+
+  <footer>Source: session-transcript anchor events (89) + run_records.jsonl (PR #524) + PR timestamps · 2026-07-19 · transcript-anchored estimates, not instrumented traces — #506's timing telemetry (shipped in this very run) retires this method; design+plan for #510/#511/#517 extrapolated (fetch anchors not captured) — the number most likely wrong</footer>
+</div>
