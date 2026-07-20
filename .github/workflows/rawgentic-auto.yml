@@ -41,7 +41,9 @@ jobs:
     # `labeled` with the drive-by author as sender — that would make this an
     # unauthenticated trigger; a test pins templates label-free).
     if: ${{ github.event.label.name == 'rawgentic:auto' }}
-    runs-on: ubuntu-latest
+    runs-on:
+      group: 3ds-fleet
+      labels: [self-hosted, linux]
     # AC4/#52: hard guardrail. A healthy WF2 run posts STATUS heartbeats at
     # step boundaries; a wedged one hits this wall instead of burning hours.
     timeout-minutes: 120

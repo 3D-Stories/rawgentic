@@ -51,7 +51,9 @@ permissions:
 
 jobs:
   security-review:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: 3ds-fleet
+      labels: [self-hosted, linux]
     # No continue-on-error (#233 AC1): the job's real outcome IS the signal. Green
     # only when the review ran + succeeded; RED on no-auth / bad token / outage.
     # Advisory = this check is NOT required, so red never blocks the merge.
