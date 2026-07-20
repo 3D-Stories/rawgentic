@@ -100,3 +100,24 @@ To make a lane *block* merges (turn advisory-red into a hard gate), mark it a
 **required status check** in branch protection — recommended only after ~10 clean
 (`executed=true`) PRs, per the lanes' own promotion note. A required red then blocks,
 exactly as intended.
+
+## Runner routing (hosted-first, fleet fallback)
+
+All lanes route via a repo variable: `runs-on: ${{ fromJSON(vars.RAWGENTIC_RUNS_ON || '"ubuntu-latest"') }}`.
+Default (variable unset) is GitHub-hosted `ubuntu-latest` (parallel lanes). During a
+hosted-runner outage, flip every new run to the org self-hosted fleet with one command:
+
+```bash
+gh variable set RAWGENTIC_RUNS_ON --repo 3D-Stories/rawgentic \
+  --body '{"group":"3ds-fleet","labels":["self-hosted","linux"]}'
+```
+
+and back with `gh variable delete RAWGENTIC_RUNS_ON --repo 3D-Stories/rawgentic`.
+Caveats: the fleet's single linux runner runs lanes SERIALLY (~10 min/PR vs ~4 hosted),
+and re-runs of already-created workflow runs keep their original routing — flip, then
+re-kick queued runs. The repo is a member of runner group `3ds-fleet`
+(`allows_public_repositories: true`, fork-PR approval `all_external_contributors` — the
+approval gate is what makes a public repo on self-hosted runners acceptable; do not
+loosen it). An agent driver detecting a stall (ci-wait `TIMEOUT`) may auto-flip,
+notify the owner, and flip back once GitHub Actions reports operational (owner grant
+2026-07-20, epic #529 run D-8).
