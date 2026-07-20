@@ -582,6 +582,15 @@ class TestProjectConfigSource:
         gaps, state = self._gaps(tmp_path, ws, entry)
         assert all(k != "phaseExecutorTable" for k, _ in gaps)
 
+    def test_no_gap_when_sentinel_present(self, tmp_path):
+        # #531: the answered-defaults sentinel counts as answered — presence (any
+        # value) already satisfies the gap check; this pins the sentinel shape.
+        cfg = dict(BASE_CFG, phaseExecutorTable={"version": 1, "file": None})
+        ws, entry = _ws_with_project(tmp_path, config=cfg)
+        gaps, state = self._gaps(tmp_path, ws, entry)
+        assert state == "ok"
+        assert all(k != "phaseExecutorTable" for k, _ in gaps)
+
     def test_enoent_config_silent_no_gap(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=None)
         gaps, state = self._gaps(tmp_path, ws, entry)
@@ -624,6 +633,20 @@ class TestProjectConfigSource:
                            capture_output=True, text=True)
         assert r.returncode == 0
         assert "phase-executor seat table" in r.stdout
+
+    def test_staleness_cli_silent_on_sentinel(self, tmp_path):
+        # #531 end-to-end: sentinel config -> zero stdout (the workspace entry in
+        # _ws_with_project answers the four workspace-sourced needs-question
+        # features, so phaseExecutorTable is the only gap candidate).
+        import subprocess, sys as _sys
+        cfg = dict(BASE_CFG, phaseExecutorTable={"version": 1, "file": None})
+        ws, entry = _ws_with_project(tmp_path, config=cfg)
+        r = subprocess.run([_sys.executable, str(HOOKS_DIR / "post_update_reconcile.py"),
+                            "--staleness-project", "p1", "--workspace", str(ws),
+                            "--state-dir", str(tmp_path)],
+                           capture_output=True, text=True)
+        assert r.returncode == 0
+        assert r.stdout.strip() == ""
 
     def test_reconcile_projects_skips_project_config_entries(self, tmp_path):
         ws, entry = _ws_with_project(tmp_path, config=BASE_CFG)

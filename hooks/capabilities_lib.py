@@ -243,8 +243,10 @@ def derive_capabilities(config) -> dict:
 
     # --- phaseExecutorTable -> phase_executor_table (#445) ---
     # Versioned descriptor naming the project-owned seat-table FILE (a complete replacement
-    # for the phase_executor package default, never a merge overlay). None ONLY when the
-    # section is ABSENT; a present-but-invalid section raises (fail-closed) — resolution must
+    # for the phase_executor package default, never a merge overlay). None when the section
+    # is ABSENT or carries the #531 answered-defaults sentinel ("file": null, staged by
+    # setup Step 2i on decline/keep-defaults so the answer is recordable — see below);
+    # any other present-but-invalid section raises (fail-closed) — resolution must
     # never silently fall back to the package default on a malformed override (the
     # false-cutover class executor_routing_lib.parse_executor_routing refuses). Shape-only
     # here: existence/content validation is load-time (executor_routing_lib.resolve_table).
@@ -258,21 +260,30 @@ def derive_capabilities(config) -> dict:
             raise CapabilitiesError(
                 f"config.phaseExecutorTable.version must be 1 "
                 f"(got {None if version is _MISSING else version!r}). Run /rawgentic:setup.")
-        file_val = _require_nonempty_str(
-            pet.get("file", _MISSING), "config.phaseExecutorTable.file")
-        p = PurePosixPath(file_val)
-        if p.is_absolute() or ".." in p.parts:
-            raise CapabilitiesError(
-                f"config.phaseExecutorTable.file must be a project-relative path with no "
-                f"'..' traversal (got {file_val!r}). Run /rawgentic:setup.")
-        if any(ord(c) < 0x20 for c in file_val) or "\\" in file_val:
-            # NUL/control chars make pathlib/os raise ValueError downstream (escaping the
-            # uniform exit-2 mapping); backslashes are path separators on no supported
-            # platform here and only invite confusion. Same class as _UNSAFE_COMPONENT.
-            raise CapabilitiesError(
-                f"config.phaseExecutorTable.file contains control or backslash characters "
-                f"(got {file_val!r}). Run /rawgentic:setup.")
-        caps["phase_executor_table"] = file_val
+        file_raw = pet.get("file", _MISSING)
+        if file_raw is None:
+            # #531 answered-defaults sentinel: an EXPLICIT "file": null records that
+            # setup asked and the user kept the package defaults (key presence stops
+            # the post_update_reconcile staleness nudge). Derivation is identical to
+            # an absent section; a MISSING file key still raises (the sentinel must
+            # be explicit — {"version": 1} alone stays fail-closed).
+            caps["phase_executor_table"] = None
+        else:
+            file_val = _require_nonempty_str(
+                file_raw, "config.phaseExecutorTable.file")
+            p = PurePosixPath(file_val)
+            if p.is_absolute() or ".." in p.parts:
+                raise CapabilitiesError(
+                    f"config.phaseExecutorTable.file must be a project-relative path with no "
+                    f"'..' traversal (got {file_val!r}). Run /rawgentic:setup.")
+            if any(ord(c) < 0x20 for c in file_val) or "\\" in file_val:
+                # NUL/control chars make pathlib/os raise ValueError downstream (escaping the
+                # uniform exit-2 mapping); backslashes are path separators on no supported
+                # platform here and only invite confusion. Same class as _UNSAFE_COMPONENT.
+                raise CapabilitiesError(
+                    f"config.phaseExecutorTable.file contains control or backslash characters "
+                    f"(got {file_val!r}). Run /rawgentic:setup.")
+            caps["phase_executor_table"] = file_val
 
     # --- infrastructure.docker -> has_docker (must null-guard the docker object:
     #     infrastructure can legitimately exist with only `hosts` and no docker) ---
