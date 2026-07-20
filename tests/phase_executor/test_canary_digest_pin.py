@@ -29,3 +29,18 @@ def test_plugin_version_pin_matches_manifest():
     assert canary.EXPECTED_PLUGIN_VERSION == manifest["version"], (
         f"EXPECTED_PLUGIN_VERSION ({canary.EXPECTED_PLUGIN_VERSION}) != live plugin.json "
         f"({manifest['version']}) — re-pin both to the version this PR ships")
+
+
+def test_pretooluse_guard_set_is_classified():
+    """Security-review M1: positive_deny coverage is bounded by the CURATED _GUARD_DENY_MARKERS,
+    not auto-derived from the matcher set. This guard fails if hooks.json gains a PreToolUse guard
+    absent from BOTH _GUARD_DENY_MARKERS and _KNOWN_NONENFORCING_PRETOOL_GUARDS — forcing a
+    conscious classify so a NEW enforcing-deny guard can never be silently left un-probed."""
+    hooks_obj = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    live = canary.pretooluse_guard_basenames(hooks_obj)
+    classified = set(canary._GUARD_DENY_MARKERS) | set(canary._KNOWN_NONENFORCING_PRETOOL_GUARDS)
+    unclassified = live - classified
+    assert not unclassified, (
+        f"unclassified PreToolUse guard(s) {sorted(unclassified)} — add each to "
+        "canary._GUARD_DENY_MARKERS (if it enforces a deny for the un-granted-mutating-tool "
+        "threat) or canary._KNOWN_NONENFORCING_PRETOOL_GUARDS (if genuinely non-enforcing)")

@@ -16,7 +16,8 @@ Fail-closed EVERYWHERE: a check that cannot evaluate its input REFUSES with a st
 a silent pass; an internal exception becomes ``canary_check_error:<id>``. Omission of evidence
 never means success.
 
-#468 ships the evaluator + the 5 fail-closed checks + the ``canary_result`` Observation field;
+#468 ships the evaluator + the fail-closed checks (5 for the claude_mutating policy +
+``codex_containment`` for codex_mutating) + the ``canary_result`` Observation field;
 #470 (W7) wires ``require_canary``/``build_observation`` into the production dispatch choke-point
 (stage-and-bind an immutable snapshot, populate the trusted evidence, call ``require_canary``
 exactly once immediately before spawn).
@@ -47,6 +48,13 @@ _GUARD_DENY_MARKERS = {
     "wal-guard": "BLOCKED:",                 # hooks/wal-guard deny() reason (spike #454; unique to wal-guard)
     "security-guard.py": "SECURITY BLOCK:",  # hooks/security_guard_lib.py:format_deny (unique to security-guard)
 }
+# PreToolUse guards that are NOT deny-enforcers for the un-granted-mutating-tool threat (spike
+# #454): wal-bind-guard (cross-project bind) + wal-pre (WAL staging log). Coverage is the CURATED
+# _GUARD_DENY_MARKERS set — NOT every PreToolUse matcher. `test_pretooluse_guard_set_is_classified`
+# fails if hooks.json gains a PreToolUse guard absent from BOTH sets, forcing a conscious
+# classify (add an enforcer to _GUARD_DENY_MARKERS, or here if genuinely non-enforcing) so a new
+# enforcing guard can never be silently left un-probed.
+_KNOWN_NONENFORCING_PRETOOL_GUARDS = frozenset({"wal-bind-guard", "wal-pre"})
 
 # Explicit policy matrix keyed by provider/profile. An unknown provider/policy/profile refuses
 # (canary_policy_unknown); every required check returns pass or refuse (inapplicability of a
@@ -115,6 +123,7 @@ class CanaryEvidence:
     # codex_containment
     codex_argv: Optional[list] = None
     codex_worktree: Optional[str] = None
+    codex_containment_root: Optional[str] = None  # approved root — the canary RE-VERIFIES containment (not just roots==wt)
     # bare_absent
     final_argv: Optional[list] = None
 
@@ -218,7 +227,11 @@ def compute_registration_digest(root) -> str:
                 cmd = str(hook.get("command", ""))
                 if _PLUGIN_ROOT_VAR in cmd:
                     rel = cmd.replace(_PLUGIN_ROOT_VAR, "").lstrip("/")
-                    _add_record(records, root_p, rel)
+                    # A bare ${CLAUDE_PLUGIN_ROOT} (or trailing whitespace) yields an empty/"."
+                    # rel that would read_bytes() the root DIR — skip it (references no script),
+                    # rather than crash uncontrolled.
+                    if rel and os.path.normpath(rel) != ".":
+                        _add_record(records, root_p, rel)
     hasher = hashlib.sha256()
     for rel_path in sorted(records):
         content = records[rel_path]
@@ -230,10 +243,23 @@ def compute_registration_digest(root) -> str:
     return "sha256:" + hasher.hexdigest()
 
 
+def pretooluse_guard_basenames(hooks_obj: dict) -> set:
+    """Every PreToolUse guard basename in a hooks.json object (enforcing or not). The drift-guard
+    asserts this set is fully classified across _GUARD_DENY_MARKERS ∪ _KNOWN_NONENFORCING_PRETOOL_GUARDS."""
+    out = set()
+    for entry in hooks_obj["hooks"]["PreToolUse"]:
+        for hook in entry.get("hooks", []):
+            out.add(str(hook.get("command", "")).rsplit("/", 1)[-1])
+    return out
+
+
 def mutating_guard_classes(hooks_obj: dict) -> dict:
-    """Map each mutating matcher CLASS -> its enforcing guard basename, derived from a hooks.json
-    object's PreToolUse entries (a new mutating matcher auto-extends coverage). Fail-closed: a
-    non-conforming object raises (the caller wraps it to canary_check_error)."""
+    """Map each PreToolUse matcher CLASS -> its enforcing-deny guard basename, for the guards in
+    the CURATED ``_GUARD_DENY_MARKERS`` set (the deny-enforcers for the un-granted-mutating-tool
+    threat, spike #454). Coverage is bounded by that curated set — NOT by the full PreToolUse
+    matcher set — so a NEW enforcing guard is NOT auto-covered; ``test_pretooluse_guard_set_is_classified``
+    forces it to be consciously classified. Fail-closed: a non-conforming object raises (the caller
+    wraps it to canary_check_error)."""
     pre = hooks_obj["hooks"]["PreToolUse"]
     out = {}
     for entry in pre:
@@ -315,10 +341,14 @@ def _check_positive_deny(ev: CanaryEvidence) -> CheckResult:
 def _check_codex_containment(ev: CanaryEvidence) -> CheckResult:
     argv = ev.codex_argv
     wt = ev.codex_worktree
-    if not argv or not isinstance(argv, list) or not wt:
+    root = ev.codex_containment_root
+    if not argv or not isinstance(argv, list) or not wt or not root:
         return CheckResult("codex_containment", REFUSE, "codex_containment")
     from .adapters import codex_cli  # noqa: PLC0415 (local: keep canary import-light; reuse the compose-time predicate)
     try:
+        # RE-VERIFY the worktree is actually contained under the approved root (not just that
+        # the argv's writable_roots == wt) — the canary's independent containment proof.
+        contract.canonical_contained_worktree(wt, root)
         codex_cli.validate_mutating_composition(argv, wt)
     except contract.CompositionError:
         return CheckResult("codex_containment", REFUSE, "codex_containment")
@@ -370,8 +400,11 @@ def evaluate_canary(policy_id, evidence) -> CanaryResult:
             # null tag (that would let a refuse vanish from the trail). Fail-closed.
             violations.append(result.violation or f"unspecified_refuse:{check_id}")
     # Verdict is keyed off the CHECK VERDICTS, not the accumulated violation strings: a REFUSE
-    # with an empty tag must still refuse (a latent aggregation fail-open otherwise).
-    verdict = PASS if all(c.verdict == PASS for c in checks) else REFUSE
+    # with an empty tag must still refuse (a latent aggregation fail-open otherwise). An EMPTY
+    # checks list refuses too (all([]) is True → would fail open on an empty required-checks policy).
+    verdict = PASS if (checks and all(c.verdict == PASS for c in checks)) else REFUSE
+    if not checks:
+        violations = list(violations) + ["canary_no_checks"]
     return CanaryResult(POLICY_REVISION, policy_id, provider, profile, verdict,
                         tuple(required), tuple(checks), tuple(violations))
 
@@ -404,9 +437,13 @@ def require_canary(composition, evidence) -> CanaryResult:
         raise CanaryRefused(_meta_refuse("unknown", provider or "unknown", profile_label, "canary_policy_unknown"))
     if getattr(evidence, "provider", None) != provider:
         raise CanaryRefused(_meta_refuse(policy_id, provider, profile_label, "canary_provider_mismatch"))
-    if (not evidence.snapshot_digest or not evidence.dispatch_nonce
-            or evidence.snapshot_digest != getattr(composition, "snapshot_digest", None)
-            or evidence.dispatch_nonce != getattr(composition, "dispatch_nonce", None)):
+    # getattr-with-default on EVERY external read (incl. evidence) — malformed evidence must
+    # produce a structured CanaryRefused, never a raw AttributeError (the module's contract).
+    ev_digest = getattr(evidence, "snapshot_digest", None)
+    ev_nonce = getattr(evidence, "dispatch_nonce", None)
+    if (not ev_digest or not ev_nonce
+            or ev_digest != getattr(composition, "snapshot_digest", None)
+            or ev_nonce != getattr(composition, "dispatch_nonce", None)):
         raise CanaryRefused(_meta_refuse(policy_id, provider, profile_label, "evidence_binding_mismatch"))
     result = evaluate_canary(policy_id, evidence)
     if result.verdict != PASS:

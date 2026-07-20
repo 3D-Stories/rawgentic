@@ -59,7 +59,7 @@ def _codex_evidence(tmp_path, **over):
     cmd = codex_cli.build_mutating_command("gpt-5.6-terra", str(wt), effort="low",
                                            containment_root=str(root))
     base = dict(provider="codex", profile="mutating", dispatch_nonce="N1", snapshot_digest="S1",
-                codex_argv=cmd, codex_worktree=canon, final_argv=cmd)
+                codex_argv=cmd, codex_worktree=canon, codex_containment_root=str(root), final_argv=cmd)
     base.update(over)
     return canary.CanaryEvidence(**base)
 
@@ -400,3 +400,24 @@ def test_refuse_with_null_violation_is_not_dropped(monkeypatch):
     assert r.verdict == canary.REFUSE, "a REFUSE check with a null violation was silently dropped (fail-open)"
     assert r.violations, "a refusing check must contribute a legible violation"
     assert any("bare_absent" in v for v in r.violations)
+
+
+def test_require_canary_malformed_evidence_refuses_not_crashes():
+    """Mechanical-review Medium: malformed evidence (a bare object missing the binding fields)
+    whose provider matches must yield a structured CanaryRefused, never a raw AttributeError."""
+    import types
+    comp = _claude_comp()
+    garbage = types.SimpleNamespace(provider="claude")  # no snapshot_digest / dispatch_nonce
+    with pytest.raises(canary.CanaryRefused) as ei:
+        canary.require_canary(comp, garbage)
+    assert "evidence_binding_mismatch" in str(ei.value)
+
+
+def test_require_canary_codex_full_pass(tmp_path):
+    """Mechanical-review Low: the production entry point derives codex_mutating from a codex
+    composition and passes end-to-end (composition-derivation + binding proven for codex too)."""
+    prof = contract.LaunchProfile(session_policy="fresh", mutating=True)
+    comp = canary.LaunchComposition(provider="codex", profile=prof, dispatch_nonce="N1", snapshot_digest="S1")
+    result = canary.require_canary(comp, _codex_evidence(tmp_path))
+    assert result.verdict == canary.PASS
+    assert result.policy_id == "codex_mutating"
