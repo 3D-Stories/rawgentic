@@ -394,6 +394,13 @@ def test_cli_usage_error_exit_2():
     assert rc == 2
 
 
+def test_measured_basis_cited():
+    """AC3: the module cites its measured basis (epic #509 lever 3)."""
+    doc = src.__doc__
+    assert "epic #509" in doc and "lever 3" in doc
+    assert "full-suite round-trip" in doc
+
+
 # --- the real repo ------------------------------------------------------------
 
 def test_real_repo_is_clean():
