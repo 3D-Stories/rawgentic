@@ -111,6 +111,15 @@ def _json_safe(value):
     return value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
 
 
+def plan_content_digest(content: str) -> str:
+    """sha256 over the plan-file TEXT a #470 build gate is bound to (design §2b). The gate records
+    this at mint (`needs_bakeoff(..., plan_content=...)`); the executor recomputes it over the LIVE
+    plan at dispatch and refuses on mismatch, so a revised plan mechanically forces re-running the
+    complexity gate. Same `sha256:`-prefixed shape as ``_policy_digest``; takes a ``str`` so callers
+    normalize bytes→text (utf-8) exactly once, and byte-identical text ⇒ identical digest."""
+    return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def _policy_digest(snapshot: dict) -> str:
     # default=str is belt-and-suspenders: _json_safe already scrubs the stored values, but a total
     # serializer guarantees the digest can never raise regardless of what the snapshot holds.
@@ -227,12 +236,20 @@ def verified_decision(gate_decision, expected_context=None) -> bool:
     return decision_from_snapshot(snapshot)
 
 
-def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:
+def needs_bakeoff(task, issue, plan_est, cfg=None, plan_content=None) -> GateDecision:
     """Deterministic bake-off gate (plan §3.2). See the module docstring. Pure; fail-closed.
 
     Builds the ``input_snapshot`` from the raw inputs, then derives ``reason_codes``/``decision`` from
     the snapshot via ``reasons_from_snapshot`` (single source, so the admission-time recompute cannot
-    drift from the plan-time verdict)."""
+    drift from the plan-time verdict).
+
+    #470 §2b — enforced plan-digest freshness: when ``plan_content`` (the live implementation-plan
+    text this decision is minted against) is given, record its ``plan_content_digest`` in the snapshot
+    as ``plan_digest`` so the executor can refuse a gate whose plan has since been revised
+    (``gate_stale_for_plan``). The field is ADDITIVE — an absent ``plan_content`` leaves the key off
+    entirely (a pre-#470 record has none, and the executor fail-closes on that absence rather than
+    silently passing). It rides ``input_snapshot`` so ``policy_digest`` binds it and it does not
+    perturb the trigger logic (``reasons_from_snapshot`` reads only the named gate keys)."""
     cfg = cfg or {}
     snap: dict = {}
     invalid_thresholds: list[str] = []
@@ -268,6 +285,9 @@ def needs_bakeoff(task, issue, plan_est, cfg=None) -> GateDecision:
     snap["lines"] = _int_or_none(_field(plan_est, "lines"))
     snap["file_count"] = _int_or_none(_field(plan_est, "file_count", "fileCount"))
     snap["thresholds"] = {"BAKEOFF_DIFF_LINES": diff_lines_thr, "BAKEOFF_FILE_COUNT": file_count_thr}
+
+    if plan_content is not None:  # #470 §2b: bind the plan file this gate was minted against
+        snap["plan_digest"] = plan_content_digest(plan_content)
 
     reasons = reasons_from_snapshot(snap)
     return GateDecision(

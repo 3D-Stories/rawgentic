@@ -110,6 +110,35 @@ Exit is always 0; stdout is a model name or `inherit`. If `hooks/model_routing_l
 
 Also resolve the `review` role's effort tier with a second invocation appending `--effort`, printing the effort string or `none`; carry both the model and the effort as literals. When the resolved effort is `none`, dispatch exactly as today. When it is non-`none`: the Agent tool has no per-invocation effort parameter, so effort is carried dual-path — (a) pass it where the dispatch layer supports effort (the Workflow tool's `agent(prompt, {effort: <value>})` option, or a Codex dispatch's reasoning-effort flag), and (b) always record it in the dispatch's session-note/audit line (e.g. `dispatch review: model <model>, effort <effort>`) so the resolved tier stays observable even where delivery is definition-level only (bundled agent-definition files are an M3 follow-up, out of scope here).
 
+**Executor-dispatch contract (#470) — the PRIMARY tier.** Every `review`-seat model call dispatches through ONE skill-facing entry point — the executor `dispatch` CLI (one single entry point; no second entry point is ever named in prose, because the sync-vs-supervised split is an internal routing decision keyed on the staged launch profile):
+```bash
+python3 hooks/executor_routing_lib.py dispatch \
+  --seat <review|review_fast> --prompt-file <brief-file> --run-id wf3-<issue>-<session> \
+  --correlation-id <issue>-<step>-<slug> [--effort <tier>] [--timeout <s>] \
+  [--context-file <path> ...] \
+  --workspace <workspace-file> --project <name>
+```
+WF3 dispatches ONLY review seats — it has no build seat, so no `--gate-file`/`--plan-file` material ever crosses this boundary (those flags are WF2 build-seat-only; a review dispatch never carries them, and the review seats are non-mutating so the mutating-engine canary does not apply).
+
+**Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE):** `0` ok · `2` malformed input · `3` availability (chain exhausted / quota timeout) · `4` enforcement denial · `5` internal · `6` refused (`EXIT_REFUSED` — canary refusal; NEW, no renumber of the shipped #427/#464 codes). Exit → DISPATCH `outcome` mapping (normative):
+
+| dispatch exit | DISPATCH `outcome` | condition |
+|---|---|---|
+| 0 | `ok` (or `retried` when a fallback attempt succeeded) | — |
+| 2 malformed | `error` | terminal caller error |
+| 3 availability | `error` after the orchestrator stops retrying; `dead` ONLY when it abandons a hung/vacuous supervised job (reap/quarantine) | retry policy is the orchestrator's |
+| 4 enforcement | `error` | terminal denial |
+| 5 internal | `error` | terminal internal fault |
+| 6 refused (canary) | `error` | terminal refusal |
+
+**Per-attempt emission rule:** every executor ATTEMPT emits exactly one DISPATCH line once its terminal result is known — refusals and failures included (their line carries `outcome=error`/`dead` per the table). The producer is the executor result dict (`type=executor:review`, `model=<actual_model>`, `resolution=primary`) on the primary tier, or the fallback (legacy) Agent-tool dispatch (`resolution=fallback`) as today.
+
+**Tier selection is per-RUN, at run start, never mixed.** The run probes the executor tier once at run start (import + routing-table resolve); it declares its tier in session notes (`executor tier: primary` / `fallback (reason)`) and keeps it for the whole run. A MID-RUN executor failure is a handled hard failure surfaced via the ERROR protocol — never an automatic, silent per-dispatch downgrade to the Agent tool. An owner-approved tier-switch TERMINATES the current run — its run_id is finalized with its completed work — and starts a NEW run_id on the other tier, linked to the failed run in session notes; there is no same-run mixed-tier state, so audit and resume stay unambiguous. This extends the #417 no-silent-downgrade rule from chain entries to tiers.
+
+**An executor seat is never a gate bypass — every mandatory gate (Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever tier dispatches its model calls, and every EXECUTOR-tier build-seat dispatch requires the authenticated gate decision plus the internally minted plan context.** WF2/WF3 prose runs the complexity-gate step before any fallback-tier build dispatch.
+
+**Bundled agent dispatch (#164) — the FALLBACK (legacy) tier.** The Agent-tool path is the declared fallback tier: it dispatches review seats with `rawgentic:rawgentic-reviewer` and carries `resolution=fallback` on the DISPATCH line. Until the W12 flip (#474) this tier remains a working, declared fallback — never the primary; do not retire it.
+
 **Canonical DISPATCH audit line (#330).** The lowercase start-time line above stays as-is (observability only, never parsed). At the point each `review` dispatch decision COMPLETES — or the orchestrator declares it dead/abandoned — ALSO append one uppercase canonical line carrying the issue number and all six schema fields, fixed key order, single-space-separated, one line. WF3 dispatches only the `review` role, so `role` is always `review`:
 ```
 DISPATCH issue=<n> role=review type=<subagent_type> model=<model|null> effort=<effort|null> outcome=<ok|error|retried|dead> resolution=<primary|fallback|generic>

@@ -71,14 +71,22 @@ set -euo pipefail
 #   In headless mode WF2 is PR-terminal: a ready-to-merge PR resumes at Step 16
 #   (no merge/deploy) and a merged PR resumes at Step 16 (no post-deploy); `open`
 #   still resumes at Step 13 so the bot can push CI fixes (a local op).
+# REGISTRY_STATE = absent|none-live|live-jobs  (executor JobRegistry state for this
+#   run_id; see "Executor JobRegistry recovery" below). ADVISORY only — it NEVER
+#   changes the resume step. absent = no registry dir for the run (pre-#470,
+#   byte-identical output); none-live = registry present, no live jobs; live-jobs =
+#   live jobs to recover-adopt before re-dispatch. The recover-adopt advisory prints
+#   to STDERR so `$STEP` captures only the step.
 STEP=$(python3 hooks/resume_lib.py detect-step \
   --pr-state PR_STATE --branch-state BRANCH_STATE --notes-state NOTES_STATE \
   --markers-complete MARKERS_COMPLETE --completion-gate-printed GATE_PRINTED \
-  --headless HEADLESS)
+  --headless HEADLESS --registry-state REGISTRY_STATE)
 echo "Resuming at: $STEP"
 ```
 
 Pass the marker booleans (and `--headless`) on every call (don't leave the completion-gate or headless rules to prose) — `detect-step` prints either a step number (1, 2, 5, 8, 9, 11, 13, 14, 15, 16) or `completion-gate` (all markers present but the gate was never printed — run the completion gate, then terminate). Resume at the printed step. An unrecognized `--*-state` or non-`true`/`false` flag value exits non-zero rather than defaulting to Step 1, so a mistyped fact fails loudly instead of restarting in-flight work.
+
+**Executor JobRegistry recovery (after the notes-cascade, #470).** Once the resume step is known and BEFORE re-dispatching any executor seat, query the executor `JobRegistry` for live jobs keyed by this run's `run_id` and set `REGISTRY_STATE` (`absent` = no registry dir for the run, the pre-#470 case; `none-live` = registry present but no live job; `live-jobs` = live jobs exist). When `live-jobs`, run `supervisor.recover(run_id)` before any re-dispatch: **tmux session identity is the adoption key** — identity-matched live jobs are ADOPTED per `classify_recovery` (their D-12 quota permit re-established under the adopting orchestrator pid, so the pool ceiling holds across the recovery boundary), while identity mismatches are QUARANTINED (surfaced to the user, never adopted). This registry state is advisory: `detect-step` writes the recover-adopt line to stderr and the resume step it prints on stdout is unchanged — recovering live jobs is a side action the resume performs, not a new cascade branch.
 
 Before context compacts, APPEND to session notes:
 - Current step number and sub-step

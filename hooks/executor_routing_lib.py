@@ -35,15 +35,18 @@ import hashlib
 import os
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import types
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Final, Optional
 
 # Sibling hook imports (hooks/*.py import each other via PYTHONPATH=hooks / sys.path.insert).
 import capabilities_lib  # #445 sanctioned .rawgentic.json reader for the seat-table pointer
 import complexity_gate  # #429 gate authentication for the build-dispatch path (#464 §E)
+import plan_lib  # #470 §2b: parse the live plan file to mint risk_level + file_count
 from model_routing_lib import _ABSENT, _load_block, _load_project_entry
 
 # --- constants ---------------------------------------------------------------------------------
@@ -63,6 +66,36 @@ EXIT_MALFORMED: Final[int] = 2      # bad input / config / invalid seat or mode 
 EXIT_AVAILABILITY: Final[int] = 3   # chain exhaustion / quota / timeout / availability (retryable)
 EXIT_ENFORCEMENT: Final[int] = 4    # pre-check denial or requested!=actual identity breach (non-retryable)
 EXIT_INTERNAL: Final[int] = 5       # audit/capture/internal/import failure (non-retryable)
+EXIT_REFUSED: Final[int] = 6        # #470 §2a: canary refusal (either phase) — ADDITIVE, no renumber
+
+# Providers whose MUTATING path is OS-confined (contract.py "SECURITY-LAYER ASYMMETRY"): codex runs
+# under Landlock workspace-write pinned to the worktree; claude has no FS sandbox, so it is absent
+# until a bwrap/landlock child ships (owner decision 2026-07-20, #470). supervised_dispatch STEP 0
+# refuses any mutating engine not listed here — module constant, never caller-selectable.
+MUTATING_FS_SANDBOXED: Final[frozenset] = frozenset({"codex"})
+
+# #470 §2a phase-1: the canary checks evaluable from LOCAL (staged/composed) evidence ALONE —
+# run BEFORE the probe session spawns, so a bad staged config refuses before any process exists.
+# Per-engine local set = that engine's policy ∩ LOCAL_EVALUABLE (8a F1/F3 — the old fixed
+# claude-subset tuple previewed checks the codex policy never required and previewed none it did).
+# Checks OUTSIDE this set (lane_provisioned, positive_deny) need the phase-2 probe stream; an
+# engine whose whole policy is local (codex) skips the probe session entirely — require_canary
+# still runs the full policy exactly once.
+LOCAL_EVALUABLE_CANARY_CHECKS: Final[frozenset] = frozenset(
+    {"hooks_digest", "plugin_version", "bare_absent", "codex_containment"})
+
+
+def local_canary_checks(engine: str, canary_mod) -> tuple:
+    """The phase-1 subset for ``engine``'s mutating policy (empty tuple for an unknown policy —
+    require_canary refuses unknown policies authoritatively at STEP 5)."""
+    policy = canary_mod.POLICIES.get(f"{engine}_mutating", ())
+    return tuple(c for c in policy if c in LOCAL_EVALUABLE_CANARY_CHECKS)
+
+
+def probe_needed(engine: str, canary_mod) -> bool:
+    """True iff the engine's mutating policy has checks that need the phase-2 probe stream."""
+    policy = canary_mod.POLICIES.get(f"{engine}_mutating", ())
+    return any(c not in LOCAL_EVALUABLE_CANARY_CHECKS for c in policy)
 
 _UNSAFE_COMPONENT: Final[re.Pattern] = re.compile(r"[/\\]|\.\.|[\x00-\x1f]")
 
@@ -574,11 +607,14 @@ def dispatch_seat(
     once on the final Observation to drive the exit code.
 
     #464 §E — build gate: a seat whose TABLE role == ``"build"`` REQUIRES both an authenticated #429
-    ``gate_decision`` and an independently-sourced ``plan_context``. The gate is authenticated ONCE
-    here (pre-loop, pre-receipt) via ``complexity_gate.verified_decision`` so a missing/tampered/stale
-    gate fails closed BEFORE any receipt is minted; the launch-bound ``GateAttestation`` is minted
-    PER-ATTEMPT (its ``input_digest`` binds to the exact target, which differs across fallbacks) and
-    passed into ``check_pre``. Non-build seats pass ``attestation=None`` — byte-identical to #427.
+    ``gate_decision`` and a ``plan_context``. #470 §2b: the CLI mints ``plan_context`` INTERNALLY from
+    the live plan file (``mint_plan_context``) — no caller-assembled context crosses the CLI boundary;
+    ``dispatch_seat`` still accepts the minted dict (and the bench/tests pass one directly). The gate
+    is authenticated ONCE here (pre-loop, pre-receipt) via ``complexity_gate.verified_decision`` so a
+    missing/tampered/stale gate fails closed BEFORE any receipt is minted; the launch-bound
+    ``GateAttestation`` is minted PER-ATTEMPT (its ``input_digest`` binds to the exact target, which
+    differs across fallbacks) and passed into ``check_pre``. Non-build seats pass ``attestation=None``
+    — byte-identical to #427.
     """
     # #464 §B: a competitive-only seat (design) can never be single-dispatched — the bake-off owns
     # its dispatch. Refuse BEFORE table load / provider call (exit 2, malformed-input class).
@@ -607,8 +643,9 @@ def dispatch_seat(
                         retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
         if not isinstance(plan_context, dict) or not plan_context:
             return _err(EXIT_MALFORMED, "plan_context_required",
-                        f"build seat {seat!r} requires a non-empty plan context (--plan-context); an "
-                        f"empty context can never silently disable the stale-decision defense",
+                        f"build seat {seat!r} requires a non-empty plan context (minted internally "
+                        f"from --plan-file); an empty context can never silently disable the "
+                        f"stale-decision defense",
                         retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
         # Step-11 diff review (reopens step6-H1): exact key-set equality — a PARTIAL context
         # (any canonical key omitted) or a smuggled extra key silently narrows the cross-check,
@@ -702,6 +739,243 @@ def dispatch_seat(
     }
 
 
+def build_probe_plan(hooks_registration, *, canary, mk_correlation_id) -> dict:
+    """#470 §2a — script ONE probe per mutating matcher class DERIVED from the staged hooks.json
+    (never invented): ``{matcher_class: {issued_tool, issued_correlation_id}}`` — exactly the seam
+    ``canary_evidence.complete_evidence`` correlates against. ``issued_tool`` is the class's first
+    tool; ``issued_correlation_id`` is a fresh nonce per class (the live collector bridges it to
+    claude's own tool_use id by tool NAME — Task-3 delta). An empty map (no mutating classes in the
+    staged snapshot) yields an empty plan → ``require_canary`` refuses ``positive_deny`` (fail-closed,
+    never a false pass)."""
+    plan = {}
+    for matcher in sorted(canary.mutating_guard_classes(hooks_registration)):
+        plan[matcher] = {"issued_tool": matcher.split("|")[0],
+                         "issued_correlation_id": mk_correlation_id(matcher)}
+    return plan
+
+
+def _audit_canary_refusal(capture_root: str, run_id: str, payload: dict) -> None:
+    """Append a durable canary-refusal record to a DEDICATED refusals log next to the routing audit
+    (never the routing-audit.jsonl itself — that log fail-closed-validates only receipt/observation/
+    epoch line variants, so an unknown line would break ``RoutingAuditLog.records``). Best-effort:
+    an audit-write failure never masks the refusal (the structured exit-6 result IS the primary
+    audit surface); it only loses the durable copy."""
+    try:
+        safe_run = _safe_component(run_id, "run_id")
+        target = Path(capture_root) / safe_run
+        target.mkdir(parents=True, exist_ok=True)
+        with open(target / "canary-refusals.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def supervised_dispatch(
+    *,
+    seat: str,
+    prompt: str,
+    run_id: str,
+    correlation_id: Optional[str],
+    effort: Optional[str],
+    timeout: float,
+    engine: str,
+    profile,
+    final_argv,
+    snapshot_dir: str,
+    capture_root: str,
+    audit,
+    canary,
+    canary_evidence,
+    supervisor,
+    probe_session: Callable,
+    provision: Callable,
+    gate_decision,
+    plan_context,
+    mk_nonce: Callable,
+    mk_probe_cid: Callable,
+    target: dict,
+    snapshot,
+    enforce,
+    await_timeout_s: float = 3600.0,
+    containment_root: Optional[str] = None,
+    author_provider: Optional[str] = None,
+) -> dict:
+    """#470 §1/§2a — the SUPERVISED internal branch for a MUTATING seat. Runs the fail-closed
+    guardrail canary strictly BEFORE the task pane exists, in this EXACT order (all in the trusted
+    orchestrator-side process), then launches. ``containment_root`` is the approved root the seat
+    worktree is provisioned under — codex_containment evidence (8a F1); absent for a codex engine
+    ⇒ that check refuses (fail-closed):
+
+      1. gate authentication (re-verify the #429 decision the mint already froze — fail-closed);
+      2. stage-and-bind: fresh ``dispatch_nonce`` + the staged snapshot's registration digest bind
+         one immutable ``LaunchComposition``;
+      3. phase-1 canary — LOCAL evidence (``LOCAL_CANARY_CHECKS``); refuse before any process exists;
+      4. trusted pre-spawn probe session — its OWN short-lived permit (owned inside ``probe_session``),
+         probe_plan scripted from the staged hooks.json; a probe FAILURE is a refusal, never a skip;
+      5. ``require_canary`` — full policy, EXACTLY ONCE, strictly before the spawn;
+      6. provision the seat worktree, then ``supervisor.launch`` (identity captured in JobRegistry);
+      7. ONE dispatch result — emitted only after identity capture + the phase-2 pass.
+
+    A CanaryRefused at phase 1 OR phase 2 → ``EXIT_REFUSED`` (6) with the violations, audited, and
+    NOTHING created (no task permit, no JobRecord, no worktree — ``provision`` and ``supervisor.launch``
+    are never reached). TOCTOU freeze: between the require_canary pass and launch, no route
+    resolution / mutable read / command rewrite occurs. Provider-touching seams (``probe_session``,
+    ``supervisor``, ``provision``) are injected — CI drives stubs; the live spawn is the RUN_LIVE
+    cell / #472."""
+    ce = correlation_id
+    audit_path = str(audit.path)
+
+    # STEP 0 — FS-sandbox constraint (contract.py "SECURITY-LAYER ASYMMETRY", owner decision
+    # 2026-07-20): only providers whose mutating path is OS-confined may dispatch a mutating
+    # profile. claude has NO FS sandbox (codex is Landlock-confined), so mutating-claude refuses
+    # fail-closed until a sandbox child ships and adds it to MUTATING_FS_SANDBOXED. The canary
+    # verifies the hook layer is intact — it does not confine the filesystem, so it is not a
+    # substitute. Distinct violation tag so the future sandbox child can lift exactly this check.
+    if engine not in MUTATING_FS_SANDBOXED:
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "constraint",
+                               "violations": [f"mutating_{engine}_requires_fs_sandbox"],
+                               "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", f"mutating_{engine}_requires_fs_sandbox",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+
+    # STEP 1 — gate authentication. A mutating seat is always the build seat and always carries a
+    # gate; a missing one is a malformed-input refusal before anything is staged.
+    if gate_decision is None or not (isinstance(plan_context, dict) and plan_context):
+        return _err(EXIT_MALFORMED, "gate_file_required",
+                    f"mutating seat {seat!r} requires an authenticated #429 gate decision + minted "
+                    f"plan context (--gate-file/--plan-file)",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    try:
+        bakeoff = complexity_gate.verified_decision(gate_decision, expected_context=plan_context)
+    except complexity_gate.GateTamperError as e:
+        return _err(EXIT_ENFORCEMENT, "gate_tampered", str(e), retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+    gate_outcome = "bakeoff" if bakeoff else "single"
+
+    # STEP 2 — stage-and-bind: one immutable composition (fresh nonce + staged-snapshot digest).
+    dispatch_nonce = mk_nonce()
+    try:
+        snapshot_digest = canary.compute_registration_digest(snapshot_dir)
+    except Exception as e:  # noqa: BLE001 — an unreadable staged snapshot is a fail-closed refusal
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "stage", "violations": ["snapshot_unreadable"],
+                               "detail": f"{type(e).__name__}: {e}", "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", f"snapshot_unreadable: {e}", retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+    composition = canary.LaunchComposition(
+        provider=engine, profile=profile,
+        dispatch_nonce=dispatch_nonce, snapshot_digest=snapshot_digest)
+
+    # STEP 3 — phase-1 canary: LOCAL evidence; refuse before any process exists. The subset is
+    # derived from THIS engine's policy (8a F1/F3): codex previews codex_containment+bare_absent,
+    # claude previews hooks_digest+plugin_version+bare_absent.
+    evidence = canary_evidence.build_local_evidence(
+        snapshot_dir=snapshot_dir, composition=composition, final_argv=list(final_argv),
+        containment_root=containment_root)
+    local_violations = []
+    for check_id in local_canary_checks(engine, canary):
+        result = canary._CHECKS[check_id](evidence)  # pylint: disable=protected-access
+        if result.verdict != canary.PASS:
+            local_violations.append(result.violation or f"unspecified_refuse:{check_id}")
+    if local_violations:
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "local", "violations": local_violations, "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", "; ".join(local_violations), retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+
+    # STEP 4 — trusted pre-spawn probe session (own permit inside probe_session). Failure = refusal.
+    # Skipped when the engine's WHOLE policy is locally evaluable (codex — 8a F1): no runtime
+    # evidence is required, so spawning a probe would only add a refusal path the policy never
+    # consults. require_canary still runs the full policy exactly once either way.
+    if probe_needed(engine, canary):
+        probe_plan = build_probe_plan(evidence.hooks_registration, canary=canary,
+                                      mk_correlation_id=mk_probe_cid)
+        try:
+            stream = probe_session(composition=composition, probe_plan=probe_plan,
+                                   snapshot_dir=snapshot_dir)
+        except Exception as e:  # noqa: BLE001 — probe-session failure is fail-closed (refuse, never skip)
+            _audit_canary_refusal(capture_root, run_id,
+                                  {"phase": "probe", "violations": ["probe_session_failed"],
+                                   "detail": f"{type(e).__name__}: {e}", "correlation_id": ce})
+            return _err(EXIT_REFUSED, "canary_refused", f"probe_session_failed: {e}", retryable=False,
+                        correlation_id=ce, audit_path=audit_path)
+        evidence = canary_evidence.complete_evidence(
+            evidence=evidence, stream=stream, probe_plan=probe_plan)
+
+    # STEP 5 — require_canary: full policy, EXACTLY ONCE, strictly before the spawn.
+    try:
+        canary_result = canary.require_canary(composition, evidence)
+    except canary.CanaryRefused as refused:
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "probe", "policy_id": refused.result.policy_id,
+                               "violations": list(refused.result.violations), "correlation_id": ce})
+        out = _err(EXIT_REFUSED, "canary_refused", "; ".join(refused.result.violations),
+                   retryable=False, correlation_id=ce, audit_path=audit_path)
+        out["canary"] = refused.result.pass_summary()
+        return out
+    # -- TOCTOU FREEZE: no route resolution / mutable read / command rewrite past this line --
+
+    # STEP 5.5 — per-attempt enforcement receipt (Step-11 C1+C2): the SAME check_pre the sync path
+    # runs, minted against the exact canary-bound target. The attestation carries the AUTHENTIC
+    # gate outcome — check_pre's existing logic refuses a "bakeoff" outcome on a single dispatch
+    # (the bake-off owns that dispatch), so a gate that mandated a bake-off can never proceed here.
+    # Recorded BEFORE launch; a fail verdict never launches.
+    # Step-11 re-review RH3: the trio (target/snapshot/enforce) is REQUIRED — no launch-capable
+    # call can skip the receipt, and only an EXPLICIT "pass" verdict launches (positive gate).
+    attestation = enforce.GateAttestation(
+        gate_outcome=gate_outcome,
+        policy_digest=gate_decision.policy_digest,
+        input_digest=enforce.launch_input_digest(seat, target, ce))
+    receipt = enforce.check_pre(
+        seat, target, snapshot, correlation_id=ce, attempt_id="0-supervised",
+        author_provider=author_provider, attestation=attestation)
+    audit.append_receipt(receipt)
+    if receipt.verdict != "pass":
+        return _err(EXIT_ENFORCEMENT, "pre_check_denied", "; ".join(receipt.violations)
+                    or f"non-pass verdict {receipt.verdict!r}",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+
+    # STEP 6 — provision the seat worktree, then launch (identity captured in JobRegistry).
+    identity, handle = provision()
+    record = supervisor.launch(
+        seat, prompt, identity=identity, handle=handle, profile=profile,
+        effort=effort, timeout=timeout, target=target, author_provider=author_provider,
+        receipt_nonce=receipt.nonce,
+        snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
+    state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
+
+    # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.
+    if state != "completed":
+        retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
+        code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
+        return _err(code, f"supervised_{state}",
+                    f"supervised seat {seat!r} ended in state {state!r}", retryable=retryable,
+                    correlation_id=ce, audit_path=audit_path)
+    # verify_post on the final observation (Step-11 C2) — same breach semantics as the sync path:
+    # an envelope with a wrong/missing identity is a NON-retryable enforcement failure; an
+    # availability-shaped obs is exit 3.
+    pc = enforce.verify_post(obs or {})
+    if not pc.ok:
+        return _err(EXIT_ENFORCEMENT, pc.reason,
+                    f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
+                    correlation_id=ce, audit_path=audit_path)
+    if not pc.verified:
+        return _err(EXIT_AVAILABILITY, "supervised_unverified",
+                    f"supervised seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                    retryable=True, correlation_id=ce, audit_path=audit_path)
+    return {
+        "ok": True, "exit": EXIT_OK, "action": "executor_supervised", "seat": seat,
+        "state": state, "correlation_id": ce, "audit_path": audit_path,
+        "canary": canary_result.pass_summary(),
+        "requested_model": (obs or {}).get("requested_model"),
+        "actual_model": (obs or {}).get("actual_model"),
+        "dispatched_lane": dict(target["lane"]) if target else None,
+        "resolution": "primary",
+        "observation": obs,
+    }
+
+
 def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlation_id=None, audit_path=None) -> dict:
     err = {"code": code, "message": message, "retryable": retryable}
     if correlation_id is not None:
@@ -729,12 +1003,21 @@ def _import_phase_executor():
     _ensure_pe_importable()
     import phase_executor.routing as routing  # noqa: PLC0415
     import phase_executor.enforce as enforce  # noqa: PLC0415
+    import phase_executor.canary as canary  # noqa: PLC0415 — #470 §2a supervised branch
+    import phase_executor.canary_evidence as canary_evidence  # noqa: PLC0415
+    import phase_executor.contract as contract  # noqa: PLC0415
     from phase_executor import run_seat  # noqa: PLC0415
-    from phase_executor.engine import _dispatch_real  # noqa: PLC0415
+    from phase_executor.engine import _dispatch_real, PROVIDER_ENGINE  # noqa: PLC0415
     from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
+    from phase_executor.supervisor import TmuxSupervisor  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeIdentity, WorktreeManager  # noqa: PLC0415
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415
     return types.SimpleNamespace(
         routing=routing, enforce=enforce, run_seat=run_seat,
         dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator, QuotaTimeout=QuotaTimeout,
+        canary=canary, canary_evidence=canary_evidence, contract=contract,
+        PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
+        WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
     )
 
 
@@ -835,6 +1118,51 @@ def _do_show(args) -> int:
     return EXIT_OK
 
 
+def mint_gate(plan_content: str, issue_complexity: str, plan_est_lines,
+              cfg=None) -> dict:
+    """#470 Step-11 H2/H3 — the gate.json PRODUCER. Derives the plan-side facts EXACTLY the way
+    ``mint_plan_context`` later re-derives them (aggregate risk_level = high-if-any-task-high;
+    file_count = DISTINCT files across tasks), so ``verified_decision``'s key-for-key cross-check
+    passes on a fresh plan by construction. Records the plan digest (freshness binding). Returns
+    the JSON-safe dict ``_load_gate_decision`` round-trips. Raises PlanFormatError/ValueError on
+    malformed input (caller maps to exit 2).
+
+    TRUST BOUNDARY (Step-11 re-review RH4): ``issue_complexity`` and ``plan_est_lines`` are
+    ORCHESTRATOR-authoritative inputs — the WF2 Step-2 complexity classification and the plan
+    estimate — under the same in-process trust model ``verified_decision`` documents (defends
+    against authoring errors and stale reuse, not a hostile in-process caller). argparse pins
+    the complexity vocabulary; lines are validated non-negative at the CLI."""
+    tasks = plan_lib.parse_tasks(plan_content)
+    if not tasks:
+        raise plan_lib.PlanFormatError("mint-gate: plan parses to zero tasks (check heading form)")
+    risk_level = "high" if any(t.risk_level == "high" for t in tasks) else "standard"
+    files = sorted({f for t in tasks for f in (t.files or ())})
+    gd = complexity_gate.needs_bakeoff(
+        {"risk_level": risk_level},
+        {"complexity": issue_complexity},
+        {"lines": plan_est_lines, "file_count": len(files), "files": files},
+        cfg=cfg, plan_content=plan_content)
+    return {"decision": gd.decision, "reason_codes": list(gd.reason_codes),
+            "input_snapshot": gd.input_snapshot, "policy_digest": gd.policy_digest}
+
+
+def _do_mint_gate(args) -> int:
+    try:
+        plan_content = Path(args.plan_file).read_text(encoding="utf-8")
+    except OSError as e:
+        return _emit(_err(EXIT_MALFORMED, "plan_file_unreadable", str(e), retryable=False))
+    if args.plan_est_lines < 0:
+        return _emit(_err(EXIT_MALFORMED, "mint_gate_invalid_input",
+                          "plan-est-lines must be non-negative", retryable=False))
+    try:
+        obj = mint_gate(plan_content, args.issue_complexity, args.plan_est_lines)
+    except (plan_lib.PlanFormatError, ValueError) as e:
+        return _emit(_err(EXIT_MALFORMED, "mint_gate_invalid_input", str(e), retryable=False))
+    Path(args.out).write_text(json.dumps(obj, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return _emit({"ok": True, "exit": EXIT_OK, "action": "mint-gate", "out": args.out,
+                  "decision": obj["decision"], "reason_codes": obj["reason_codes"]})
+
+
 def _load_gate_decision(path):
     """Rebuild a #429 ``complexity_gate.GateDecision`` from the JSON the bake-off writes (fields:
     decision, reason_codes, input_snapshot, policy_digest). ``verified_decision`` recomputes the
@@ -852,6 +1180,173 @@ def _load_gate_decision(path):
         input_snapshot=obj["input_snapshot"],
         policy_digest=obj["policy_digest"],
     )
+
+
+class PlanStale(Exception):
+    """#470 §2b enforcement refusal: a build gate no longer matches its live plan file. Carries a
+    structured ``code`` — ``gate_stale_for_plan`` (the live plan's digest differs from the digest the
+    gate recorded at mint — the plan was revised, so the gate must be re-run) or
+    ``gate_missing_plan_digest`` (a pre-#470 gate that recorded no plan digest — a security control
+    never silently passes on absent evidence). The CLI maps both to ``EXIT_ENFORCEMENT`` (4)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def mint_plan_context(gate_decision, plan_content: str, *, run_id=None, correlation_id=None):
+    """#470 §2b — mint the canonical plan context INTERNALLY (no caller-assembled context object
+    crosses the dispatch boundary) and ENFORCE gate-freshness against the live plan.
+
+    Sources, per key (design §2b — the plan file alone cannot mint all four): ``risk_level`` +
+    ``file_count`` from the live ``plan_content`` via ``plan_lib.parse_tasks`` — ``risk_level`` is the
+    aggregate (``high`` if ANY task is high, else ``standard``) and ``file_count`` is the count of
+    DISTINCT files declared across all tasks; ``complexity`` + ``lines`` are copied from the gate
+    decision's OWN authenticated snapshot (the gate already authenticated them — one source of truth,
+    no re-fetch). The sibling gate-minting step supplies ``plan_est`` facts that agree with the parsed
+    plan, so ``verified_decision``'s later cross-check of the two plan-derived facts holds on a fresh
+    plan.
+
+    Freshness (R4′, fail-closed): recompute the live plan's ``plan_content_digest`` and compare it to
+    the digest the gate RECORDED at mint. An ABSENT recorded digest (a pre-#470 gate) raises
+    ``PlanStale('gate_missing_plan_digest')``; a MISMATCH raises ``PlanStale('gate_stale_for_plan')``.
+    A byte-identical plan is the "nothing changed" case — the old gate IS current — and passes.
+
+    Returns ``(plan_context, freshness_record)``. ``plan_context`` is exactly the canonical
+    ``REQUIRED_PLAN_CONTEXT_KEYS`` mapping (dispatch re-authenticates it via ``verified_decision``);
+    ``freshness_record`` is the audit tuple (gate ``policy_digest``, live plan digest, run_id,
+    correlation_id) dispatch records alongside the receipt. Raises ``plan_lib.PlanFormatError`` on an
+    unparseable plan — the CLI maps it to the malformed-input class (exit 2)."""
+    snapshot = gate_decision.input_snapshot
+    recorded = snapshot.get("plan_digest")
+    if not recorded:  # None or "" — a pre-#470 gate recorded no plan digest: fail closed, distinctly
+        raise PlanStale(
+            "gate_missing_plan_digest",
+            "gate decision recorded no plan digest (pre-#470 gate) — re-run the complexity gate so "
+            "it binds the live plan before dispatching a build seat")
+    live_digest = complexity_gate.plan_content_digest(plan_content)
+    if live_digest != recorded:
+        raise PlanStale(
+            "gate_stale_for_plan",
+            "live plan digest differs from the gate's recorded digest — the plan was revised; "
+            "re-run the complexity gate to authorize this build dispatch")
+    tasks = plan_lib.parse_tasks(plan_content)  # PlanFormatError bubbles → CLI exit 2 (malformed)
+    risk_level = "high" if any(t.risk_level == "high" for t in tasks) else "standard"
+    file_count = len({f for t in tasks for f in t.files})
+    plan_context = {
+        "risk_level": risk_level,
+        "complexity": snapshot.get("complexity"),
+        "lines": snapshot.get("lines"),
+        "file_count": file_count,
+    }
+    freshness = {
+        "gate_policy_digest": gate_decision.policy_digest,
+        "plan_digest": live_digest,
+        "run_id": run_id,
+        "correlation_id": correlation_id,
+    }
+    return plan_context, freshness
+
+
+def _git_runner(cmd, env=None):
+    """WorktreeManager's injected git runner: ``(rc, out, err)``. Live/#472 path only."""
+    proc = subprocess.run(list(cmd), capture_output=True, text=True, env=env, check=False)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
+                    prompt, gate_decision, plan_context) -> dict:
+    """#470 §1 provisioning — construct the ``Supervisor`` (quota coordinator, registry/capture
+    roots, tmux socket from the same config the CLI already resolved) + the seat's git worktree via
+    ``WorktreeManager``, then run ``supervised_dispatch``. The provider-touching steps (probe-session
+    spawn, ``supervisor.launch``) are the RUN_LIVE cell / #472 proving ground; the CANARY ORDERING
+    and refusal semantics they wrap are unit-tested against ``supervised_dispatch`` directly. Any
+    provisioning failure fails CLOSED to a structured exit 5 (never a bare traceback, never a silent
+    inherit)."""
+    ce = args.correlation_id
+    try:
+        from phase_executor.worktree import planned_path  # noqa: PLC0415
+        targets = pe.routing.eligible_targets(args.seat, snap, author_provider=args.author_provider)
+        # Step-11 H1 — mutating-eligibility filter (the chain-aware-skip idiom applied to the
+        # FS-sandbox constraint): a mutating seat may only launch on a sandboxed provider, so
+        # non-sandboxed chain entries are SKIPPED here (the shipped table's build primary is
+        # claude — without this filter every primary-tier build refuses at STEP 0 and the codex
+        # chain entry sits unused). Exhaustion is a handled hard failure, never a silent pass.
+        sandboxed = [t for t in targets
+                     if pe.PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                     in MUTATING_FS_SANDBOXED]
+        if not sandboxed:
+            return _err(EXIT_AVAILABILITY, "no_sandboxed_mutating_lane",
+                        f"mutating seat {args.seat!r}: no FS-sandboxed provider in its chain "
+                        f"(allowlist: {sorted(MUTATING_FS_SANDBOXED)}) — declare a codex lane or "
+                        f"ship the FS-sandbox child", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        target = sandboxed[0]
+        lane = target["lane"]
+        engine = pe.PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
+        eff = pe.contract.resolve_effort(target["model"], args.effort, engine=engine)
+
+        base = Path(repo_root)
+        registry_root = base / ".rawgentic" / "runtime" / "registry"
+        wt_root = base / ".rawgentic" / "runtime" / "worktrees"
+        registry_root.mkdir(parents=True, exist_ok=True)
+        wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+
+        # attempt token for the seat's worktree identity (distinct from launch()'s capture attempt).
+        attempt = f"0-{uuid.uuid4().hex[:8]}"
+        identity = pe.WorktreeIdentity(run_id=args.run_id, seat=args.seat, attempt=attempt)
+        planned_wt = planned_path(str(wt_root), identity)
+        profile = pe.contract.profile_from_manifest(manifest, engine=engine, worktree=planned_wt)
+        final_argv = pe.ADAPTERS[engine].build_command(
+            target["model"], effort=eff.native, profile=profile)
+
+        rc, out, _err_txt = _git_runner(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+        if rc != 0:
+            return _err(EXIT_INTERNAL, "supervised_provision_failed",
+                        "cannot resolve base_sha (git rev-parse HEAD)", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        base_sha = out.strip()
+
+        supervisor = pe.TmuxSupervisor(
+            snapshot=snap, quota=quota, capture_root=paths["capture_root"],
+            registry_root=str(registry_root), worktree_manager=wm,
+            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+
+        pool = lane["pool"]
+        account = lane.get("credential_ref") or "default"
+
+        def probe_session(*, composition, probe_plan, snapshot_dir):
+            return supervisor.probe_session(
+                composition, probe_plan, snapshot_dir=snapshot_dir,
+                quota=quota, pool=pool, account=account)
+
+        def provision():
+            # fresh provision; a resumed run re-derives the handle from the registry by run_id+seat
+            # (design §2 — the resume protocol wiring is §4's task; fresh is the W7 path).
+            handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
+            return identity, handle
+
+        # snapshot_dir: the plugin registration root (its hooks.json digest is the pinned
+        # EXPECTED_REGISTRATION_DIGEST). A frozen read-only STAGING copy is the #472 hardening.
+        return supervised_dispatch(
+            seat=args.seat, prompt=prompt, run_id=args.run_id, correlation_id=ce,
+            effort=args.effort, timeout=args.timeout, engine=engine, profile=profile,
+            final_argv=final_argv, snapshot_dir=str(repo_root),
+            capture_root=paths["capture_root"], audit=audit,
+            canary=pe.canary, canary_evidence=pe.canary_evidence, supervisor=supervisor,
+            probe_session=probe_session, provision=provision,
+            gate_decision=gate_decision, plan_context=plan_context,
+            mk_nonce=lambda: uuid.uuid4().hex,
+            mk_probe_cid=lambda cls: f"probe-{uuid.uuid4().hex[:8]}",
+            containment_root=str(wt_root),
+            target=target, snapshot=snap, enforce=pe.enforce,
+            author_provider=args.author_provider)
+    except pe.routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=str(audit.path))
+    except (ValueError, OSError) as e:
+        return _err(EXIT_INTERNAL, "supervised_provision_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce, audit_path=str(audit.path))
 
 
 def _do_dispatch(args) -> int:
@@ -894,24 +1389,73 @@ def _do_dispatch(args) -> int:
     except OSError as e:
         return _emit(_err(EXIT_MALFORMED, "prompt_or_context_unreadable", str(e), retryable=False,
                           correlation_id=args.correlation_id))
-    # #464 §E: optional build-gate evidence. A build-role seat REQUIRES both (validated inside
-    # dispatch_seat, which reads the seat's role from the table); a non-build seat ignores them. An
-    # unreadable/malformed gate file or plan context is bad input (exit 2).
-    gate_decision = plan_context = None
+    # #464 §E / #470 §2b: build-gate evidence. A build-role seat REQUIRES an authenticated gate file
+    # (--gate-file) AND the live implementation plan (--plan-file). An unreadable/malformed gate file
+    # is bad input (exit 2). The plan context is minted INTERNALLY below — no caller-assembled context
+    # object crosses this boundary.
+    gate_decision = None
     try:
         if args.gate_file:
             gate_decision = _load_gate_decision(args.gate_file)
-        if args.plan_context:
-            plan_context = json.loads(Path(args.plan_context).read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, TypeError) as e:
         return _emit(_err(EXIT_MALFORMED, "gate_input_unreadable", f"{type(e).__name__}: {e}",
                           retryable=False, correlation_id=args.correlation_id))
+    # The live plan file is a trust-boundary input: a missing/unreadable one is bad input (exit 2).
+    plan_content = None
+    if args.plan_file:
+        try:
+            plan_content = Path(args.plan_file).read_text(encoding="utf-8")
+        except OSError as e:
+            return _emit(_err(EXIT_MALFORMED, "plan_file_unreadable", str(e), retryable=False,
+                              correlation_id=args.correlation_id))
+    # Role governs whether the plan context is minted. snapshot.seat raises RoutingError on a
+    # stale/wrong-project table — map it into the taxonomy rather than leaking a traceback.
+    try:
+        role = snap.seat(args.seat).get("role")
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    # #470 §2b: mint the canonical plan context internally + enforce plan-digest freshness. A build
+    # seat requires the plan file; with the gate present, the mint recomputes the live plan's digest
+    # and REFUSES a stale gate (gate_stale_for_plan) or a pre-#470 gate with no recorded digest
+    # (gate_missing_plan_digest) — enforcement class, exit 4 — before any provider launch. A build
+    # seat with no gate falls through to dispatch_seat's gate_file_required refusal (exit 2).
+    plan_context = plan_freshness = None
+    if role == "build":
+        if plan_content is None:
+            return _emit(_err(EXIT_MALFORMED, "plan_file_required",
+                              f"build seat {args.seat!r} requires the live implementation plan (--plan-file)",
+                              retryable=False, correlation_id=args.correlation_id))
+        if gate_decision is not None:
+            try:
+                plan_context, plan_freshness = mint_plan_context(
+                    gate_decision, plan_content,
+                    run_id=args.run_id, correlation_id=args.correlation_id)
+            except PlanStale as e:
+                return _emit(_err(EXIT_ENFORCEMENT, e.code, str(e), retryable=False,
+                                  correlation_id=args.correlation_id))
+            except plan_lib.PlanFormatError as e:
+                return _emit(_err(EXIT_MALFORMED, "plan_file_malformed", str(e), retryable=False,
+                                  correlation_id=args.correlation_id))
     try:
         quota = pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency())
         audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
     except (OSError, ValueError) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #470 §1 internal routing: inspect the resolved target's staged LaunchProfile. A MUTATING
+    # profile routes to the supervised branch (gate-auth → stage-and-bind → phase-1 canary → probe
+    # session → require_canary → launch, in-process) INSIDE this same CLI call — there is no second
+    # entry point, so neither control can be skipped by "calling the other path". A NON-mutating
+    # profile runs the existing synchronous path BYTE-IDENTICAL below.
+    manifest = snap.seat(args.seat).get("manifest") or {}
+    mutating = bool({"edit", "bash"} & set(manifest.get("tool_grants") or ()))
+    if mutating:
+        result = _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
+                                 prompt, gate_decision, plan_context)
+        if plan_freshness is not None and isinstance(result, dict):
+            result["plan_freshness"] = plan_freshness
+        return _emit(result)
     result = dispatch_seat(
         seat=args.seat, prompt=prompt, run_id=args.run_id,
         correlation_id=args.correlation_id, author_provider=args.author_provider,
@@ -921,6 +1465,11 @@ def _do_dispatch(args) -> int:
         gate_decision=gate_decision, plan_context=plan_context,
         quota_timeout=pe.QuotaTimeout,
     )
+    # #470 §2b audit trail: record the plan-freshness binding (gate policy_digest, live plan digest,
+    # run_id, correlation_id) alongside the dispatch result. Attached to the emitted structured
+    # output — the dispatch CLI's own audit surface — on every build attempt that got past the mint.
+    if plan_freshness is not None and isinstance(result, dict):
+        result["plan_freshness"] = plan_freshness
     return _emit(result)
 
 
@@ -940,7 +1489,7 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--run-id", required=True, dest="run_id")
     d.add_argument("--context-file", action="append", dest="context_file")
     d.add_argument("--gate-file", dest="gate_file")          # #464 §E: #429 GateDecision JSON (build seat)
-    d.add_argument("--plan-context", dest="plan_context")    # #464 §E: independently-sourced plan facts
+    d.add_argument("--plan-file", dest="plan_file")          # #470 §2b: live impl-plan.md; context minted internally
     d.add_argument("--correlation-id", dest="correlation_id")
     d.add_argument("--author-provider", dest="author_provider")
     d.add_argument("--effort")
@@ -948,6 +1497,13 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--workspace", required=True)
     d.add_argument("--project", required=True)
     d.set_defaults(fn=_do_dispatch)
+
+    mg = sub.add_parser("mint-gate", help="#470: mint gate.json from the live plan (producer side)")
+    mg.add_argument("--plan-file", required=True)
+    mg.add_argument("--issue-complexity", required=True, choices=["trivial", "standard", "complex"])
+    mg.add_argument("--plan-est-lines", required=True, type=int)
+    mg.add_argument("--out", required=True)
+    mg.set_defaults(fn=_do_mint_gate)
 
     st = sub.add_parser("show-table", help="#446: display the resolved seat table (setup Step 2i)")
     st.add_argument("--workspace", required=True)

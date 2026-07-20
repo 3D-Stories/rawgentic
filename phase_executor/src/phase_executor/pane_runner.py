@@ -35,9 +35,9 @@ import traceback
 from pathlib import Path
 from typing import Optional
 
-from . import contract
+from . import canary, contract
 from .adapters import ADAPTERS
-from .capture import atomic_write_text, sanitize_component
+from .capture import atomic_write_text, hash_text, sanitize_component
 
 _SIGTERM_EXIT = 143  # 128 + SIGTERM
 _SCAN_INTERVAL_S = 0.2
@@ -168,17 +168,45 @@ def _resolve_adapter(engine: str, spec: dict):
     return ADAPTERS[engine]
 
 
+def _verify_digests(spec_text: str, spec: dict, expected_spec_digest: Optional[str]) -> None:
+    """#470 Task-3 TOCTOU re-verification (NEW code — today only the supervisor's recovery path
+    verifies identity). BOTH checks run before the pane executes anything:
+
+    1. pane-spec digest: the spec file's bytes must hash to the digest the supervisor bound at
+       launch (delivered out-of-band as argv[1], never embeddable in the spec itself), so a spec
+       swapped between the atomic write and this exec refuses.
+    2. staged-snapshot digest: for a supervised mutating launch the spec carries ``snapshot_dir``
+       + ``expected_snapshot_digest``; recompute the registration digest over the snapshot the
+       pane is about to run from and refuse a mismatch — binding a digest into an unchanged spec
+       does NOT prove the snapshot's current CONTENTS (design §2a pass-3 amendment)."""
+    if expected_spec_digest is not None and hash_text(spec_text) != expected_spec_digest:
+        raise ValueError("pane-spec digest mismatch: spec file changed since launch (TOCTOU)")
+    snap_dir = spec.get("snapshot_dir")
+    expected_snap = spec.get("expected_snapshot_digest")
+    if snap_dir is not None or expected_snap is not None:
+        if not snap_dir or not expected_snap:
+            raise ValueError("staged-snapshot binding incomplete: snapshot_dir and "
+                             "expected_snapshot_digest must be present together")
+        if canary.compute_registration_digest(snap_dir) != expected_snap:
+            raise ValueError("staged-snapshot digest mismatch: snapshot contents changed since "
+                             "the canary passed (TOCTOU)")
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
-        if len(argv) != 1:
-            raise ValueError("usage: python -m phase_executor.pane_runner <spec.json>")
+        if len(argv) not in (1, 2):
+            raise ValueError(
+                "usage: python -m phase_executor.pane_runner <spec.json> [expected_spec_digest]")
+        expected_spec_digest = argv[1] if len(argv) == 2 else None
         with open(argv[0], encoding="utf-8") as fh:
-            spec = json.load(fh)
+            spec_text = fh.read()
+        spec = json.loads(spec_text)
         for key in ("engine", "run_id", "attempt_id", "capture_root",
                     "routing_config_digest", "request"):
             if key not in spec:
                 raise KeyError(f"spec missing required field {key!r}")
+        _verify_digests(spec_text, spec, expected_spec_digest)
         mod = _resolve_adapter(spec["engine"], spec)
         req = _request_from_spec(spec)
         cap_dir = expected_capture_dir(

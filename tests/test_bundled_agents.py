@@ -103,12 +103,16 @@ def test_wf2_references_both_agent_types():
     """AC2: WF2 dispatch prose references the shipped types (namespaced form).
 
     Counts, not mere presence: the <model-routing-resolve> inventory alone must
-    not satisfy this — the per-step dispatch sites must reference the types too
-    (reviewer: inventory + Step 4 judges + Step 8a + Step 11 = >= 4;
-    implementer: inventory + Step 8 delegation + whole-issue build = >= 3)."""
+    not satisfy this — the per-step dispatch sites must reference the types too.
+    #470 rewired the primary tier to executor seats and demoted the Agent-tool
+    types to the FALLBACK tier, but each per-step dispatch annotation still names
+    its fallback-tier agent type, so the multi-site count actually GREW (the
+    contract's `<model-routing-resolve>` fallback lead + inventory + Step 2/4/8/8a/11
+    fallback annotations). Thresholds retuned to the produced fallback-tier
+    occurrence count; the agent-definition pins are unchanged."""
     corpus = skill_corpus("implement-feature")
-    assert corpus.count("rawgentic:rawgentic-implementer") >= 3
-    assert corpus.count("rawgentic:rawgentic-reviewer") >= 4
+    assert corpus.count("rawgentic:rawgentic-implementer") >= 8
+    assert corpus.count("rawgentic:rawgentic-reviewer") >= 8
 
 
 def test_reviewer_prose_limits_bash_to_inspection():

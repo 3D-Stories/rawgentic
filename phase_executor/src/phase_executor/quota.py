@@ -120,6 +120,51 @@ class QuotaCoordinator:
             self._reap_stale(pool_dir)
             return len(list(pool_dir.glob("permit-*")))
 
+    def reestablish_permit(self, pool: str, permit_ref: str) -> bool:
+        """#467 D-12: re-key a recover-ADOPTED permit to THIS live process's pid so the pool
+        ceiling keeps counting the adopted job across the recovery boundary. After the launching
+        orchestrator exits, its permit token names a DEAD pid, so ``_reap_stale`` frees the slot
+        and the pool over-admits past the ceiling for the still-live adopted job. The new
+        orchestrator that adopts the job calls this to re-establish ownership.
+
+        Serialized by the SAME pool flock ``acquire``/``_reap_stale`` hold, so two orchestrators
+        adopting the same job race for the one token: whoever takes the lock while the owner pid
+        is dead rewrites it to its own pid and wins; the other then sees a LIVE owner that is not
+        itself and stands down. Neither creates a second token — the ceiling holds (no
+        double-admit).
+
+        Returns True iff this process owns the permit afterwards; False iff a live process already
+        re-established it (the loser stands down — the job is permitted, no double-admit). Raises
+        ``QuotaTimeout`` (fail-closed) if the token was already reaped and reclaiming a slot would
+        exceed the ceiling — refuse the adoption rather than over-admit."""
+        if permit_ref == "unbounded" or self.limits.get(pool) is None:
+            return True  # unbounded pool: nothing to count
+        token = Path(permit_ref)
+        pool_dir = token.parent  # the token's own pool dir is authoritative for the flock/count
+        mypid = os.getpid()
+        with _flock(pool_dir / ".lock"):
+            if token.exists():
+                try:
+                    cur = int(token.read_text(encoding="utf-8").splitlines()[0].strip())
+                except (OSError, ValueError, IndexError):
+                    cur = -1
+                if cur == mypid:
+                    return True  # idempotent re-adopt
+                if cur > 0 and _pid_alive(cur):
+                    return False  # a live owner already re-established it — stand down
+                # owner dead (the launcher exited — D-12) or unparseable: re-key in place
+                token.write_text(f"{mypid}\n{self._wall()}\n", encoding="utf-8")
+                return True
+            # token already reaped: reclaim a slot ONLY if under the ceiling (else refuse)
+            pool_dir.mkdir(parents=True, exist_ok=True)
+            self._reap_stale(pool_dir)
+            if len(list(pool_dir.glob("permit-*"))) < self.limits[pool]:
+                token.write_text(f"{mypid}\n{self._wall()}\n", encoding="utf-8")
+                return True
+            raise QuotaTimeout(
+                f"pool {pool!r} full — cannot re-establish adopted permit {permit_ref!r} "
+                f"without exceeding the ceiling (#467 D-12 fail-closed)")
+
     @contextlib.contextmanager
     def acquire(
         self,

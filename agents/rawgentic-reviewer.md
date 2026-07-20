@@ -5,6 +5,11 @@ model: inherit
 tools: Read, Grep, Glob, Bash
 ---
 
+> **Legacy fallback tier (OQ-6, #470):** since the executor rewire, the PRIMARY dispatch
+> path for review-role work is the executor tier (`hooks/executor_routing_lib.py dispatch`);
+> this Agent-tool definition is the declared FALLBACK tier, retained working until the W12
+> flip (#474) retires it.
+
 You are a rawgentic review agent for one quality-gate pass inside a WF2
 (implement-feature) or WF3 (fix-bug) run. The orchestrator's brief names your
 reviewer role (style/convention, bug & logic, silent-failure hunt,

@@ -20,7 +20,8 @@ er._ensure_pe_importable()  # put phase_executor/src on sys.path for this test m
 # positive — the 39 tests below exercise these imports. Scoped disable, not a blanket one.
 # pylint: disable=no-name-in-module
 from phase_executor import contract, enforce, routing  # noqa: E402
-from phase_executor.engine import run_seat  # noqa: E402
+from phase_executor.adapters import codex_cli  # noqa: E402
+from phase_executor.engine import run_seat, PROVIDER_ENGINE as _PROVIDER_ENGINE  # noqa: E402
 from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: E402
 # pylint: enable=no-name-in-module
 import jsonschema  # noqa: E402
@@ -417,7 +418,7 @@ def test_do_dispatch_missing_routing_table_structured(tmp_path, monkeypatch):
     class A:
         seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
         correlation_id = None; author_provider = None; effort = None; timeout = 5.0
-        workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
+        workspace = ws; project = "rawgentic"; gate_file = None; plan_file = None
     rc = er._do_dispatch(A())
     # EXACT exit 5 (Step-11 R1): a missing PACKAGE-DEFAULT table is the internal-fault class —
     # exit 2 is reserved for declared-override config errors (the 8a-A1 documented asymmetry).
@@ -551,6 +552,81 @@ def test_dispatch_design_refused_exit2(tmp_path):
     assert res["error"]["code"] == "competitive_only_seat"
 
 
+# --- #470 §2b: internal plan-context mint + enforced plan-digest freshness ------------------------
+_PLAN_STD = ("### Task 1: build the thing (#470)\n"
+             "- riskLevel: standard\n"
+             "- files: hooks/foo.py, hooks/bar.py\n")
+
+
+def _gate470(plan_content=_PLAN_STD, *, risk="standard", complexity="standard", lines=7, file_count=2):
+    """A #470 build gate that RECORDS the plan-file digest it was minted against. The snapshot facts
+    are set to MATCH what the mint derives from ``plan_content`` (aggregate risk, distinct-file count)
+    so verified_decision's cross-check passes on a fresh plan — mirroring the sibling gate-minting
+    step whose plan_est agrees with the parsed plan."""
+    return cg.needs_bakeoff({"risk_level": risk}, {"complexity": complexity},
+                            {"files": [], "lines": lines, "file_count": file_count},
+                            plan_content=plan_content)
+
+
+def test_mint_plan_context_happy_derives_four_keys():
+    gd = _gate470()
+    ctx, fresh = er.mint_plan_context(gd, _PLAN_STD, run_id="r1", correlation_id="c1")
+    # risk_level + file_count from the LIVE plan; complexity + lines from the gate's own record.
+    assert ctx == {"risk_level": "standard", "complexity": "standard", "lines": 7, "file_count": 2}
+    # exactly the canonical key set, and it authenticates against the gate (dispatch re-checks it).
+    assert frozenset(ctx) == cg.REQUIRED_PLAN_CONTEXT_KEYS
+    assert cg.verified_decision(gd, expected_context=ctx) is False
+    # audit tuple: gate policy_digest + live plan digest + run/correlation ids.
+    assert fresh == {"gate_policy_digest": gd.policy_digest,
+                     "plan_digest": cg.plan_content_digest(_PLAN_STD),
+                     "run_id": "r1", "correlation_id": "c1"}
+
+
+def test_mint_plan_context_high_risk_aggregate():
+    plan = ("### Task 1: a\n- riskLevel: standard\n- files: a.py\n\n"
+            "### Task 2: b\n- riskLevel: high (security surface)\n- files: b.py\n")
+    gd = _gate470(plan, risk="high", file_count=2)
+    ctx, _ = er.mint_plan_context(gd, plan)
+    # ANY high task ⇒ aggregate high; file_count = count of DISTINCT declared files.
+    assert ctx["risk_level"] == "high" and ctx["file_count"] == 2
+
+
+def test_mint_plan_context_byte_identical_plan_passes():
+    # design §2b: a byte-identical plan is the "nothing changed" case — the old gate IS current.
+    gd = _gate470()
+    ctx, fresh = er.mint_plan_context(gd, _PLAN_STD)
+    assert fresh["plan_digest"] == gd.input_snapshot["plan_digest"]
+    assert ctx["risk_level"] == "standard"
+
+
+def test_mint_plan_context_stale_plan_raises_gate_stale():
+    gd = _gate470()
+    revised = _PLAN_STD + "- files: hooks/extra.py\n"  # plan edited after the gate was minted
+    with pytest.raises(er.PlanStale) as ei:
+        er.mint_plan_context(gd, revised)
+    assert ei.value.code == "gate_stale_for_plan"
+
+
+def test_mint_plan_context_missing_recorded_digest_raises():
+    # pre-#470 gate (no plan_content at mint) ⇒ no recorded plan_digest ⇒ fail-closed, distinct code.
+    gd = cg.needs_bakeoff({"risk_level": "standard"}, {"complexity": "standard"},
+                          {"files": [], "lines": 7, "file_count": 2})
+    assert "plan_digest" not in gd.input_snapshot
+    with pytest.raises(er.PlanStale) as ei:
+        er.mint_plan_context(gd, _PLAN_STD)
+    assert ei.value.code == "gate_missing_plan_digest"
+
+
+def test_mint_plan_context_malformed_plan_bubbles_format_error():
+    import plan_lib  # noqa: PLC0415
+    # a partial plan (a task heading with no riskLevel line) is a fail-closed parse — bubbled so the
+    # CLI maps it to the malformed-input class (exit 2). Fresh digest so the parse is actually reached.
+    bad = "### Task 1: a\n- riskLevel: standard\n\n### Task 2: b\n- files: x.py\n"
+    gd = _gate470(bad, file_count=1)
+    with pytest.raises(plan_lib.PlanFormatError):
+        er.mint_plan_context(gd, bad)
+
+
 # --- #464 §E: build-dispatch gate (attested, launch-bound, context-cross-checked) -----------------
 def test_build_missing_gate_file_exit2_no_receipt(tmp_path):
     res, audit = _dispatch_build(tmp_path, None, {"risk_level": "standard"})
@@ -624,32 +700,76 @@ def test_build_gate_bakeoff_denied_receipt_only_exit4(tmp_path):
     assert not any(r["kind"] == "observation" for r in recs)
 
 
-def test_cli_build_stale_gate_exit4(tmp_path):
-    # Integration through the CLI --gate-file / --plan-context wiring on the shipped table: a stale
-    # (context-mismatched) gate is rejected pre-launch (exit 4), so no provider call is made.
-    # #445 migration (S1/P2-G1): the fake project declares a phaseExecutorTable override pointing
-    # at a copied table via a COMPLETE valid .rawgentic.json (derive hard-requires repo+project) —
-    # exercising the new override resolution end-to-end on the way to the gate check.
+def _cli_build_env(tmp_path, gate_obj, *, plan_text=_PLAN_STD, write_plan=True):
+    """A real CLI dispatch environment for the build seat (#470 §2b): a project declaring a
+    phaseExecutorTable override → a copied shipped table, a workspace binding build=executor, the
+    gate file, and (optionally) the live plan file. Returns an args-namespace instance for
+    er._do_dispatch. #445 migration (S1/P2-G1): the override resolution is exercised end-to-end on
+    the way to the gate/freshness check."""
     repo = tmp_path / "projects" / "rawgentic"
     table_dst = repo / "claude_docs" / "routing" / "phase-executor-table.json"
     table_dst.parent.mkdir(parents=True)
     table_dst.write_bytes(routing.default_table_path().read_bytes())
     _cfg(repo, pointer="claude_docs/routing/phase-executor-table.json")
     ws = _ws(tmp_path, {"version": 1, "seats": {"build": "executor"}}, path="./projects/rawgentic")
-    gd, ctx = _gate()  # snapshot risk_level == "standard"
     gf = tmp_path / "gate.json"
-    gf.write_text(json.dumps({"decision": gd.decision, "reason_codes": list(gd.reason_codes),
-                              "input_snapshot": gd.input_snapshot, "policy_digest": gd.policy_digest}),
-                  encoding="utf-8")
-    cf = tmp_path / "ctx.json"
-    cf.write_text(json.dumps(dict(ctx, risk_level="high")), encoding="utf-8")  # mismatched fact
+    gf.write_text(json.dumps({"decision": gate_obj.decision, "reason_codes": list(gate_obj.reason_codes),
+                              "input_snapshot": gate_obj.input_snapshot,
+                              "policy_digest": gate_obj.policy_digest}), encoding="utf-8")
     (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    plan_path = tmp_path / "impl-plan.md"
+    if write_plan:
+        plan_path.write_text(plan_text, encoding="utf-8")
 
     class A:
         seat = "build"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
         correlation_id = "wf2:build"; author_provider = None; effort = None; timeout = 5.0
-        workspace = ws; project = "rawgentic"; gate_file = str(gf); plan_context = str(cf)
-    assert er._do_dispatch(A()) == er.EXIT_ENFORCEMENT
+        workspace = ws; project = "rawgentic"; gate_file = str(gf)
+        plan_file = str(plan_path) if write_plan else None
+    return A()
+
+
+def test_cli_build_stale_plan_gate_stale_exit4(tmp_path, capsys):
+    # Integration through the CLI --gate-file / --plan-file wiring (#470 §2b): the gate was minted
+    # against _PLAN_STD; the live plan on disk was revised, so its digest no longer matches the
+    # gate's recorded digest -> gate_stale_for_plan (enforcement, exit 4), refused pre-launch.
+    gd = _gate470()
+    a = _cli_build_env(tmp_path, gd, plan_text=_PLAN_STD + "- files: hooks/extra.py\n")
+    assert er._do_dispatch(a) == er.EXIT_ENFORCEMENT
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "gate_stale_for_plan"
+
+
+def test_cli_build_missing_plan_digest_exit4(tmp_path, capsys):
+    # A pre-#470 gate (minted with no plan_content) carries no recorded plan digest -> fail-closed
+    # with the DISTINCT back-compat code (a security control never silently passes on absent evidence).
+    gd = cg.needs_bakeoff({"risk_level": "standard"}, {"complexity": "standard"},
+                          {"files": [], "lines": 7, "file_count": 2})
+    a = _cli_build_env(tmp_path, gd)
+    assert er._do_dispatch(a) == er.EXIT_ENFORCEMENT
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "gate_missing_plan_digest"
+
+
+def test_cli_build_missing_plan_file_exit2(tmp_path, capsys):
+    # a build seat now REQUIRES the live plan file (--plan-file replaces --plan-context).
+    gd = _gate470()
+    a = _cli_build_env(tmp_path, gd, write_plan=False)
+    assert er._do_dispatch(a) == er.EXIT_MALFORMED
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "plan_file_required"
+
+
+def test_cli_build_unreadable_plan_file_exit2(tmp_path, capsys):
+    gd = _gate470()
+    a = _cli_build_env(tmp_path, gd)
+    a.plan_file = str(tmp_path / "does-not-exist.md")
+    assert er._do_dispatch(a) == er.EXIT_MALFORMED
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "plan_file_unreadable"
+
+
+def test_cli_dispatch_parser_rejects_removed_plan_context_arg(tmp_path):
+    # #470 §2b: the caller-assembled --plan-context arg is FULLY REMOVED from the CLI surface.
+    with pytest.raises(SystemExit):
+        er.main(["dispatch", "--seat", "build", "--prompt-file", "x", "--run-id", "r",
+                 "--workspace", "w", "--project", "p", "--plan-context", "ctx.json"])
 
 
 def test_gate_file_nondict_snapshot_structured_exit2_464(tmp_path):
@@ -924,7 +1044,7 @@ class TestResolveSeatCliObservability:
         class A:
             seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "r1"; context_file = None
             correlation_id = "t"; author_provider = None; effort = None; timeout = 5.0
-            workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
+            workspace = ws; project = "rawgentic"; gate_file = None; plan_file = None
         assert er._do_dispatch(A()) == er.EXIT_MALFORMED
 
     def test_seed_refuses_dangling_symlink_dest(self, tmp_path):
@@ -1183,3 +1303,350 @@ class TestApplyTable:
                    dest="../outside.json", expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "outside the project root" in json.loads(r.stdout)["error"]["message"]
+
+
+# --- #470 §2a supervised branch: EXIT_REFUSED, probe plan, canary ordering -------------------
+# pylint: disable=no-name-in-module
+from phase_executor import canary as _canary  # noqa: E402
+from phase_executor import canary_evidence as _cev  # noqa: E402
+from phase_executor import contract as _contract  # noqa: E402
+# pylint: enable=no-name-in-module
+
+REPO_ROOT = HOOKS.parent  # the plugin registration root — its hooks.json digest is the pinned one
+
+
+def test_exit_refused_is_additive_six():
+    # ADDITIVE, no renumber of the shipped codes (#427/#464).
+    assert er.EXIT_REFUSED == 6
+    assert (er.EXIT_OK, er.EXIT_MALFORMED, er.EXIT_AVAILABILITY,
+            er.EXIT_ENFORCEMENT, er.EXIT_INTERNAL) == (0, 2, 3, 4, 5)
+
+
+def test_build_probe_plan_derives_classes_from_staged_hooks_json():
+    hooks_obj = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    n = [0]
+    plan = er.build_probe_plan(hooks_obj, canary=_canary,
+                               mk_correlation_id=lambda cls: f"cid-{n.__setitem__(0, n[0] + 1) or n[0]}")
+    # every class is a real mutating matcher from the staged hooks.json (never invented)
+    assert set(plan) == set(_canary.mutating_guard_classes(hooks_obj))
+    for cls, spec in plan.items():
+        assert spec["issued_tool"] == cls.split("|")[0]
+        assert spec["issued_correlation_id"]
+
+
+def test_build_probe_plan_empty_when_no_mutating_classes():
+    assert er.build_probe_plan({"hooks": {"PreToolUse": []}}, canary=_canary,
+                               mk_correlation_id=lambda c: "x") == {}
+
+
+# -- supervised_dispatch: in-process harness (real canary/collector; injected provider seams) --
+def _happy_probe_stream():
+    """init + a hook-origin deny per mutating class (Bash: BLOCKED:, Edit: SECURITY BLOCK:).
+    tool_use ids deliberately DO NOT match the plan's issued_correlation_id, so the collector's
+    live NAME-correlation is what binds them (Task-3 delta)."""
+    return [
+        {"type": "system", "subtype": "init", "plugins": [{"name": "rawgentic"}]},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "live-1", "name": "Bash", "input": {}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "live-1", "is_error": True,
+             "content": [{"type": "text", "text": "BLOCKED: ssh disabled"}]}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "live-2", "name": "Edit", "input": {}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "live-2", "is_error": True,
+             "content": [{"type": "text", "text": "SECURITY BLOCK: write denied"}]}]}},
+    ]
+
+
+class _StubSupervisor:
+    def __init__(self, state="completed"):
+        self.launched = []
+        self._state = state
+
+    def launch(self, seat, prompt, **kw):  # noqa: D401 — records the call
+        self.launched.append((seat, kw))
+        return {"seat": seat, "kw": kw}
+
+    def await_job(self, record, *, timeout_s=3600.0):
+        return self._state, {"requested_model": "claude-sonnet-5", "actual_model": "claude-sonnet-5"}
+
+
+def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
+                probe_raises=False, provision_calls=None, monkeypatch=None):
+    # The rich claude_mutating machinery (probes, init event) stays unit-tested even though
+    # production refuses mutating-claude (STEP 0, MUTATING_FS_SANDBOXED): tests widen the module
+    # constant — a monkeypatch of module state, NOT a caller input; production has no such knob.
+    # test_supervised_refuses_unsandboxed_mutating_engine pins the production value.
+    if monkeypatch is not None:
+        monkeypatch.setattr(er, "MUTATING_FS_SANDBOXED", frozenset({"codex", "claude"}))
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    sup = _StubSupervisor(state=state)
+    gd, ctx = _gate()
+    profile = _contract.LaunchProfile(session_policy="fresh", mutating=True)
+    calls = provision_calls if provision_calls is not None else []
+
+    def probe_session(*, composition, probe_plan, snapshot_dir):
+        if probe_raises:
+            raise RuntimeError("probe boom")
+        return _happy_probe_stream() if probe_stream is None else probe_stream
+
+    def provision():
+        calls.append(True)
+        return None, {"handle": True}  # stub supervisor ignores identity/handle content
+
+    snap = _snapshot()
+    tgt = routing.eligible_targets("build", snap)[0]
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build",
+        effort=None, timeout=5.0, engine="claude", profile=profile,
+        final_argv=final_argv or ["claude", "--print", "--model", "claude-sonnet-5",
+                                  "--output-format", "json"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=sup, probe_session=probe_session,
+        provision=provision, gate_decision=gd, plan_context=ctx,
+        target=tgt, snapshot=snap, enforce=enforce,
+        mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}")
+    return res, sup, qc, calls
+
+
+def test_supervised_happy_path_launches_after_canary(tmp_path, monkeypatch):
+    res, sup, _qc, calls = _supervised(tmp_path, monkeypatch=monkeypatch)
+    assert res["ok"] is True, res
+    assert res["exit"] == er.EXIT_OK
+    assert res["action"] == "executor_supervised"
+    # a launch happened AND it was after the canary passed (canary summary present) + provisioned
+    assert res["canary"]["verdict"] == "pass", res["canary"]
+    assert len(sup.launched) == 1 and calls == [True]
+    # the staged snapshot digest reached launch (TOCTOU binding)
+    assert sup.launched[0][1]["snapshot_digest"] == _canary.compute_registration_digest(str(REPO_ROOT))
+
+
+def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path, monkeypatch):
+    # a stream with NO Edit-class deny -> require_canary refuses positive_deny -> exit 6.
+    stream = [e for e in _happy_probe_stream()
+              if not (e.get("message", {}).get("content", [{}])[0].get("name") == "Edit"
+                      or e.get("message", {}).get("content", [{}])[0].get("tool_use_id") == "live-2")]
+    res, sup, qc, calls = _supervised(tmp_path, probe_stream=stream, monkeypatch=monkeypatch)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert any("positive_deny" in v for v in [res["error"]["message"]])
+    # NOTHING created: no launch, no worktree provisioned, no task permit held
+    assert sup.launched == [] and calls == []
+    assert qc.live_permits("claude") == 0
+
+
+def test_supervised_phase1_refusal_skips_probe_and_launch(tmp_path, monkeypatch):
+    # a --bare final_argv fails the LOCAL bare_absent check at phase 1 -> refuse BEFORE the probe.
+    calls = []
+    res, sup, qc, _ = _supervised(
+        tmp_path, final_argv=["claude", "--print", "--bare"], provision_calls=calls,
+        monkeypatch=monkeypatch)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "bare_detected" in res["error"]["message"]
+    assert sup.launched == [] and calls == []
+
+
+def test_supervised_probe_failure_is_refusal_not_skip(tmp_path, monkeypatch):
+    res, sup, _qc, calls = _supervised(tmp_path, probe_raises=True, monkeypatch=monkeypatch)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert "probe_session_failed" in res["error"]["message"]
+    assert sup.launched == [] and calls == []
+
+
+def test_supervised_missing_gate_refuses_malformed(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="c",
+        effort=None, timeout=5.0, engine="codex",
+        profile=_contract.LaunchProfile(mutating=True), final_argv=["codex", "exec"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=_StubSupervisor(),
+        probe_session=lambda **k: [], provision=lambda: (None, None),
+        gate_decision=None, plan_context=None,
+        target=routing.eligible_targets("build", _snapshot())[0], snapshot=_snapshot(),
+        enforce=enforce,
+        mk_nonce=lambda: "N", mk_probe_cid=lambda c: "p")
+    assert res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "gate_file_required"
+
+
+def test_supervised_non_completed_state_maps_to_availability(tmp_path, monkeypatch):
+    res, sup, _qc, _ = _supervised(tmp_path, state="timed_out", monkeypatch=monkeypatch)
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "supervised_timed_out"
+    assert len(sup.launched) == 1  # launch DID happen; the FAILURE was downstream
+
+
+def test_supervised_refuses_unsandboxed_mutating_engine(tmp_path):
+    """Production pin (contract.py SECURITY-LAYER ASYMMETRY, owner 2026-07-20): a mutating engine
+    outside MUTATING_FS_SANDBOXED refuses at STEP 0 — nothing staged, nothing launched. Also pins
+    the production allowlist value itself: codex only, until an FS-sandbox child ships."""
+    assert er.MUTATING_FS_SANDBOXED == frozenset({"codex"})
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    sup = _StubSupervisor()
+    gd, ctx = _gate()
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="c",
+        effort=None, timeout=5.0, engine="claude",
+        profile=_contract.LaunchProfile(session_policy="fresh", mutating=True),
+        final_argv=["claude", "--print"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=sup,
+        probe_session=lambda **k: [], provision=lambda: (None, None),
+        gate_decision=gd, plan_context=ctx,
+        target=routing.eligible_targets("build", _snapshot())[0], snapshot=_snapshot(),
+        enforce=enforce,
+        mk_nonce=lambda: "N", mk_probe_cid=lambda c: "p")
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert "mutating_claude_requires_fs_sandbox" in res["error"]["message"]
+    assert sup.launched == []
+
+
+def _codex_supervised_kw(tmp_path):
+    """Codex-engine supervised harness (8a F1): REAL canary + collector, containment evidence
+    from the composition — no probe session (codex policy is fully local; probe must NOT run)."""
+    root = tmp_path / "wtroot"
+    wt = root / "wt-codex"
+    wt.mkdir(parents=True)
+    argv = codex_cli.build_mutating_command("gpt-5.6-terra", str(wt), effort="low",
+                                            containment_root=str(root))
+    gd, ctx = _gate()
+    probe_calls = []
+
+    def probe_session(**kw):
+        probe_calls.append(kw)
+        return []
+
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    profile = _contract.LaunchProfile(session_policy="fresh", mutating=True, worktree=str(wt))
+    real_snap = routing.snapshot_from_file(routing.default_table_path())
+    codex_tgt = [t for t in routing.eligible_targets("build", real_snap)
+                 if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                 in er.MUTATING_FS_SANDBOXED][0]
+
+    class _MatchSup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", {"parse_status": "ok",
+                                 "requested_model": codex_tgt["model"],
+                                 "actual_model": codex_tgt["model"]}
+
+    return dict(
+        seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build:codex",
+        effort=None, timeout=5.0, engine="codex", profile=profile, final_argv=argv,
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=_MatchSup(),
+        probe_session=probe_session, provision=lambda: (None, {"handle": True}),
+        gate_decision=gd, plan_context=ctx,
+        target=codex_tgt, snapshot=real_snap, enforce=enforce,
+        mk_nonce=lambda: "N-codex", mk_probe_cid=lambda c: "p",
+        containment_root=str(root)), probe_calls
+
+
+def test_supervised_codex_passes_real_canary_no_probe(tmp_path):
+    """8a F1 regression: the ONLY production-admitted mutating engine must actually pass
+    require_canary end-to-end — containment evidence populated from the composition, probe
+    session never spawned (codex policy is fully locally evaluable)."""
+    kw, probe_calls = _codex_supervised_kw(tmp_path)
+    res = er.supervised_dispatch(**kw)
+    assert res["ok"] is True, res
+    assert res["exit"] == er.EXIT_OK
+    assert res["canary"]["verdict"] == "pass"
+    assert res["canary"]["policy_id"] == "codex_mutating"
+    assert probe_calls == []  # no probe session for a fully-local policy
+
+
+def test_supervised_codex_out_of_containment_refuses(tmp_path):
+    """Red-team cell: a worktree OUTSIDE the approved root refuses codex_containment (exit 6)."""
+    kw, _ = _codex_supervised_kw(tmp_path)
+    outside = tmp_path / "elsewhere" / "wt"
+    outside.mkdir(parents=True)
+    kw["profile"] = _contract.LaunchProfile(session_policy="fresh", mutating=True,
+                                            worktree=str(outside))
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "codex_containment" in res["error"]["message"]
+
+
+# ---------------------------------------------------------------- Step-11 remediation (#470)
+def test_supervised_check_pre_receipt_minted_before_launch(tmp_path):
+    """Step-11 C1+C2: a supervised launch mints the SAME check_pre enforcement receipt the sync
+    path mints (recorded to the audit log before launch), and verify_post runs on the final
+    observation. Driven with the real default table's sandboxed build-chain entry."""
+    kw, _ = _codex_supervised_kw(tmp_path)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    targets = routing.eligible_targets("build", snap)
+    codex_targets = [t for t in targets
+                     if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                     in er.MUTATING_FS_SANDBOXED]
+    assert codex_targets, "default table must declare a sandboxed lane in build's chain"
+    tgt = codex_targets[0]
+    # stub supervisor returns a completed obs whose identity matches THIS target's model
+    class _Sup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", {"parse_status": "ok",
+                                 "requested_model": tgt["model"], "actual_model": tgt["model"]}
+    kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=_Sup())
+    res = er.supervised_dispatch(**kw)
+    assert res["ok"] is True, res
+    audit_files = list((tmp_path / "runs").rglob("*.jsonl"))
+    assert any('"kind": "receipt"' in p.read_text() or '"kind":"receipt"' in p.read_text()
+               for p in audit_files), "no enforcement receipt recorded before launch"
+    assert res["resolution"] == "primary" and res["dispatched_lane"] is not None
+
+
+def test_supervised_bakeoff_gate_refuses_single_dispatch(tmp_path):
+    """Step-11 C1: a gate decision that mandates a bake-off must REFUSE the supervised single
+    dispatch (check_pre rejects the bakeoff attestation) — never proceed to a mutating launch."""
+    kw, _ = _codex_supervised_kw(tmp_path)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    targets = routing.eligible_targets("build", snap)
+    tgt = [t for t in targets
+           if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+           in er.MUTATING_FS_SANDBOXED][0]
+    gd, ctx = _gate(bakeoff=True)
+    sup = _StubSupervisor()
+    kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=sup,
+              gate_decision=gd, plan_context=ctx)
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_ENFORCEMENT, res
+    assert res["error"]["code"] == "pre_check_denied"
+    assert sup.launched == []  # never launched
+
+
+def test_supervised_verify_post_breach_refuses(tmp_path):
+    """Step-11 C2: a completed supervised job whose observation reports the WRONG model is an
+    enforcement breach (exit 4), not a success."""
+    kw, _ = _codex_supervised_kw(tmp_path)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    tgt = [t for t in routing.eligible_targets("build", snap)
+           if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+           in er.MUTATING_FS_SANDBOXED][0]
+    class _Sup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", {"parse_status": "ok",
+                                 "requested_model": tgt["model"], "actual_model": "wrong-model-9"}
+    kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=_Sup())
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "requested_actual_mismatch"
+
+
+def test_run_supervised_filters_to_sandboxed_lane_on_real_table():
+    """Step-11 H1: the default table's build seat (claude primary) must FILTER to its sandboxed
+    chain entry for the supervised branch — pure filter logic pinned against the real table."""
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    targets = routing.eligible_targets("build", snap)
+    primary_engine = _PROVIDER_ENGINE.get(targets[0]["lane"]["provider"],
+                                            targets[0]["lane"]["provider"])
+    assert primary_engine not in er.MUTATING_FS_SANDBOXED, \
+        "precondition drifted: build primary became sandboxed — update this pin"
+    sandboxed = [t for t in targets
+                 if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                 in er.MUTATING_FS_SANDBOXED]
+    assert sandboxed, "build chain lost its sandboxed entry — supervised builds all refuse"

@@ -312,9 +312,12 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
     the codex mutating path is OS-confined (Landlock workspace-write pinned to the
     worktree); the CLAUDE mutating path has NO OS sandbox here — only a cwd pin +
     path-containment refusal + a --max-budget-usd cap, so an absolute-path Edit/Write/Bash
-    is NOT filesystem-confined. W7 MUST NOT wire a mutating-CLAUDE dispatch until claude
-    gains a real FS sandbox (bwrap/landlock around run_subprocess) — a binding cross-child
-    constraint, fail-closed today because W2 dispatches no mutating profile. TRUST BOUNDARY
+    is NOT filesystem-confined. Mutating-CLAUDE dispatch stays REFUSED until claude
+    gains a real FS sandbox (bwrap/landlock around run_subprocess) — since #470 (W7, owner
+    decision 2026-07-20) the constraint is ENFORCED at supervised-dispatch STEP 0 via
+    executor_routing_lib.MUTATING_FS_SANDBOXED (codex-only allowlist; a mutating-claude
+    composition refuses exit 6, production value test-pinned): W2 now dispatches mutating
+    profiles through supervised_dispatch, codex path only. TRUST BOUNDARY
     (8a-B): the manifest carries no provider field — `engine` is CALLER-supplied and, on
     the wired path, comes from `_engine_for(lane)` (config-controlled, engine.py:52); the
     derivation trusts that caller, a manifest cannot self-attest its provider."""

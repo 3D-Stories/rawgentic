@@ -44,3 +44,62 @@ def test_wf3_fix_bug_carries_concurrency_and_fallback():
     norm = _norm((REPO / "skills" / "fix-bug" / "SKILL.md").read_text(encoding="utf-8"))
     assert "effective working ceiling of 2" in norm
     assert "handled hard failure, never a silent downgrade" in norm
+
+
+# --- #470: the executor-dispatch contract replaced the Agent-tool-only prose. ---
+# New canonical sentences in the single-source shared block. Anchored to the
+# shared source (single source of truth), whitespace-normalized per the repo
+# convention. The Agent-tool path survives, demoted to the FALLBACK (legacy) tier.
+
+
+def test_executor_dispatch_contract_present_in_shared_source():
+    norm = _norm(SHARED.read_text(encoding="utf-8"))
+    # single entry point, --plan-file (never --plan-context)
+    assert "Executor-dispatch contract (#470) — the PRIMARY tier." in norm
+    assert "python3 hooks/executor_routing_lib.py dispatch" in norm
+    assert "the input is `--plan-file`, NEVER `--plan-context`" in norm
+    # exit taxonomy: 6 additive (EXIT_REFUSED), 3 availability
+    assert "`6` refused (`EXIT_REFUSED`" in norm
+    assert "`3` availability (chain exhausted / quota timeout)" in norm
+
+
+def test_mutating_engine_allowlist_fact_in_shared_source():
+    norm = _norm(SHARED.read_text(encoding="utf-8"))
+    assert "Mutating dispatch is codex-only until an FS-sandbox child ships" in norm
+    assert "`MUTATING_FS_SANDBOXED` allowlist in `hooks/executor_routing_lib.py`" in norm
+    assert "a mutating-claude composition — is refused at the supervised STEP 0 with exit 6" in norm
+
+
+def test_per_run_tier_selection_in_shared_source():
+    norm = _norm(SHARED.read_text(encoding="utf-8"))
+    assert "Tier selection is per-RUN, at run start, never mixed." in norm
+    # tier-switch terminates the run and starts a new linked run_id — never a silent mid-run downgrade
+    assert "never an automatic, silent per-dispatch downgrade to the Agent tool" in norm
+    assert "TERMINATES the current run" in norm and "starts a NEW run_id on the other tier" in norm
+
+
+def test_fallback_legacy_tier_named_in_shared_source():
+    norm = _norm(SHARED.read_text(encoding="utf-8"))
+    assert "Bundled agent dispatch (#164) — the FALLBACK (legacy) tier." in norm
+    assert "carries `resolution=fallback` on the DISPATCH line" in norm
+    assert "Until the W12 flip (#474) this tier remains a working, declared fallback" in norm
+
+
+def test_gate_preservation_sentences_in_shared_source():
+    # These two sentences are ALSO pinned by the dedicated gate-preservation test
+    # (design §3); pinned here too so the shared block can never drop them silently.
+    norm = _norm(SHARED.read_text(encoding="utf-8"))
+    assert ("An executor seat is never a gate bypass — every mandatory gate "
+            "(Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever "
+            "tier dispatches its model calls, and every EXECUTOR-tier build-seat "
+            "dispatch requires the authenticated gate decision plus the internally "
+            "minted plan context.") in norm
+    assert ("WF2/WF3 prose runs the complexity-gate step before any fallback-tier "
+            "build dispatch.") in norm
+
+
+def test_executor_contract_shipped_into_wf2_corpus():
+    from corpus import skill_corpus
+    norm = _norm(skill_corpus("implement-feature"))
+    assert "Executor-dispatch contract (#470) — the PRIMARY tier." in norm
+    assert "An executor seat is never a gate bypass" in norm

@@ -63,6 +63,9 @@ class JobRecord:
     quarantine_reason: Optional[str]
     spec_digest: Optional[str] = None  # sha256 of the FULL serialized pane spec (adoption trust,
     #                                    Step-11 codex #4 — argv digest alone misses spec content)
+    receipt_nonce: Optional[str] = None  # Step-11 RH1 (#470): the check_pre enforcement receipt
+    #                                      this launch was authorized under — joins the JobRecord
+    #                                      to the RoutingAuditLog receipt (additive; None pre-#470)
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#470 Executor Dispatch Rewire — Design r5</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-20 12:58 MDT</div>
+<h1>#470 Executor Dispatch Rewire — Design r5</h1>
+
+</header>
+<main>
+<h1>#470 — WF2/WF3 skill rewiring to executor dispatch (W7, epic #475) — Design r5</h1>
+<p>Date: 2026-07-20 · Author: orchestrator session b2647105 · Status: r5 (post-Step-4 pass-3 spec-tightening, owner override of the mechanical design-fold; dispositions ledger 19 entries; budgets: design 2/2 EXHAUSTED, spec_tighten 1/2, global 3/3 EXHAUSTED) r5 amendments (pass-3): §1 provisioning source named (dispatch CLI provisions Supervisor + worktree via WorktreeManager; resumed runs re-derive from registry); error-handling exit labels corrected (3=availability, 5=internal, 6=canary refusal); TOCTOU freeze hardened (snapshot immutable after bind; pane_runner recomputes BOTH digests); phase-2 probes side-effect-free by construction (disposable credential-free workspace, harmless payloads); compensating-transitions corrected (refusal creates nothing — only spawn failure releases; probe session holds its own short-lived permit); <code>claude -p</code> init-event evidence expanded (#454 fixture citation). r4 deltas (R1′–R5′): controls UNIFIED on one path — the <code>dispatch</code> CLI is the single skill-facing entry for ALL seats; a mutating profile routes internally through gate-auth → context-mint → phase-1 canary → trusted pre-spawn probe session → <code>require_canary</code> → <code>supervisor.launch</code>. Phase-2 evidence comes from the probe session (pre-spawn, trusted process), never in-pane. Context minted from three named sources; gate decision digest-binds the plan and dispatch refuses on live-plan mismatch. EXIT_REFUSED=6 additive. One DISPATCH line per attempt. r3 deltas retained: executable black-box gate tests, Step 3 bake-off carve-out, version-pin enumeration, tier-selection-per-run. Peer consult: gpt/Codex, blind both ways (r1 on disk before proposal read). Peer contributions (provenance, adopted into r2): tier-selection-at-run-start (never auto-fallback mid-run), DISPATCH-after-identity-capture ordering + compensating transitions, canary→spawn TOCTOU freeze sentence, trusted-evidence-factory-only rule, D-12 CAS serialization. Peer&#x27;s REV number (3.76.0) was stale — 3.78.0 stands. Doc of record: <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code> (AC-F1/F2, D-2, OQ-6, U-3)</p>
+<h2>Problem</h2>
+<p>phase_executor (#464–#469) is built; WF2/WF3 skill prose still dispatches every phase via the Agent tool. #470 rewires the prose so per-step phase dispatch routes through the executor — including WF2 Step 2 utility fan-out (D-2) — while ALL mandatory gates keep identical semantics (AC-F2), and wires the two shipped-but-unwired safety pieces into the dispatch choke-point: <code>require_canary</code> (#468) and orchestrator-minted plan-context (#464 carry).</p>
+<h2>Approaches considered</h2>
+<p><strong>A. Prose-only rewire (defer canary + plan-context wiring to #472/#474).</strong> Pros: small, fast, pure-markdown + drift-guard updates. Cons: violates the written contract — <code>canary.py</code> docstring and #468&#x27;s changelog both assign the choke-point wiring to #470 (&quot;#470 wires require_canary/build_observation into the production dispatch choke-point&quot;); #472&#x27;s proving run would then prove an UN-guarded path. Rejected.</p>
+<p><strong>B. Full wire: prose rewire + dispatch choke-point hardening (canary + minted plan-context) + resume/registry prose + gate-preservation test.</strong> The issue&#x27;s actual scope. Chosen.</p>
+<p><strong>C. B plus retire Agent-tool prose entirely now.</strong> Rejected: OQ-6 resolution (AC doc §5b, line 220) keeps the Agent-tool path as the declared legacy/fallback tier until the W12 flip (#474). Deleting now strands a run on an executor failure with no sanctioned fallback and pre-empts #474&#x27;s flip semantics.</p>
+<h2>Chosen design (B)</h2>
+<h3>1. Skill-prose dispatch contract (AC-F1, D-2)</h3>
+<p><strong>Source of truth:</strong> rewrite <code>shared/blocks/model-routing-resolve.md</code> (synced only into implement-feature per MANIFEST) into an <strong>executor-dispatch contract</strong>; re-run <code>scripts/sync_shared_blocks.py</code>. WF3&#x27;s bespoke inline block in <code>skills/fix-bug/SKILL.md</code> (role=review-narrowed) is rewritten in the same shape independently.</p>
+<p>New contract shape (per phase-seat dispatch, replacing &quot;Agent tool + subagent_type + model:&quot;):</p>
+<pre><code>Primary (executor) tier — dispatch seat &lt;seat&gt; via the SINGLE entry point (all seats):
+  python3 hooks/executor_routing_lib.py dispatch \
+    --seat &lt;seat&gt; --prompt-file &lt;brief-file&gt; --run-id &lt;wf2-&lt;issue&gt;-&lt;session&gt;&gt; \
+    --correlation-id &lt;issue&gt;-&lt;step&gt;-&lt;slug&gt; [--effort &lt;tier&gt;] [--timeout &lt;s&gt;] \
+    [--context-file &lt;path&gt; ...] \
+    [--gate-file &lt;gate.json&gt; --plan-file &lt;impl-plan.md&gt;]   # build seats: BOTH mandatory
+    --workspace &lt;workspace-file&gt; --project &lt;name&gt;
+Exit taxonomy (shipped numbering preserved; 6 is ADDITIVE): 0 ok · 2 malformed input ·
+3 availability (chain exhausted / quota timeout) · 4 enforcement denial · 5 internal ·
+6 refused (canary refusal; NEW — EXIT_REFUSED, no renumber of #427/#464 codes;
+competitive-only stays exit 2 as shipped).
+Fallback (legacy) tier — Agent tool with rawgentic:rawgentic-implementer /
+rawgentic:rawgentic-reviewer: resolution=fallback on the DISPATCH line. Until the
+W12 flip (#474) this tier remains a working, declared fallback — never the primary.</code></pre>
+<p><strong>Internal routing (R1′ — both controls, one path):</strong> <code>dispatch</code> inspects the resolved target&#x27;s staged <code>LaunchProfile</code>. Non-mutating profiles run the existing synchronous path (<code>run_seat</code> / <code>dispatch_real</code>) unchanged. A MUTATING profile routes to the supervised branch INSIDE the same CLI call, in this exact order, all in the trusted orchestrator-side process: 1. gate authentication (<code>verified_decision</code>, incl. the R4′ plan-digest check), 2. internal plan-context mint (§2b), 3. stage-and-bind the immutable snapshot + pane spec (digest, dispatch_nonce), 4. phase-1 canary (local evidence) — refuse before any process exists, 5. trusted pre-spawn probe session (§2a phase 2) — completes runtime evidence, 6. <code>require_canary(composition, evidence)</code> — full policy, exactly once, 7. <code>supervisor.launch()</code> — pane spawn; identity captured in JobRegistry.</p>
+<p><strong>Provisioning (pass-3 amendment):</strong> the dispatch CLI itself provisions what <code>launch</code> requires — it constructs the <code>Supervisor</code> (quota coordinator, registry root, capture root, tmux socket — the same config surface the CLI already resolves) and provisions the seat&#x27;s git worktree via <code>WorktreeManager</code> (deriving <code>WorktreeIdentity</code> + <code>WorktreeHandle</code>); on a resumed run the handle is re-derived from the registry by run_id+seat instead of re-provisioned. These <code>WorktreeManager</code>/<code>Supervisor</code> dependencies ride the file-changes table&#x27;s <code>executor_routing_lib.py</code> row. No skill prose ever names a second entry point; the sync-vs-supervised split is an internal routing decision keyed on the staged profile, so neither control can be skipped by calling &quot;the other&quot; path — there is no other path.</p>
+<p><strong>Tier selection is per-RUN, at run start, never mixed (peer-adopted).</strong> Step 2 probes the executor tier once (import + routing-table resolve — the probe-parallelism idiom); the run declares its tier in session notes (<code>executor tier: primary</code> / <code>fallback (reason)</code>) and keeps it for the whole run. A MID-RUN executor failure is a handled hard failure surfaced via the ERROR protocol — never an automatic, silent per-dispatch downgrade to the Agent tool. <strong>Tier-switch semantics (R5′, pass-2 aM):</strong> an owner-approved switch TERMINATES the current run — its run_id is finalized with its completed work — and starts a NEW run_id on the other tier, linked to the failed run in session notes; there is no same-run mixed-tier state, so audit and resume stay unambiguous. This extends the #417 no-silent-downgrade rule from chain entries to tiers.</p>
+<ul>
+<li><strong>Seat mapping table</strong> (prose): Step 2 fan-out → <code>analysis</code> seat; Step 3 competitive design →</li>
+</ul>
+<p>  bake-off (competitive-only; never single-dispatch) — <strong>explicit AC1 carve-out (F5, owner R6):   Step 3&#x27;s prose DECLARES the bake-off contract in this PR, but its live competitive wiring +   audit-stream production is proven in #472 (the proving run); until then Step 3 design   generation stays on its current mechanism, named as the one deliberate AC1 carve-out</strong>;   Step 4/8a/11 review lenses → <code>review</code> / <code>review_fast</code> seats per #491 lens map; Step 8   implementation → <code>build</code> seat (gate authentication + internally minted plan context, §2b);   Step 16 stays local (no model call). Exact seat ids from the #445 routing table   (<code>executor_routing_lib.resolve_table</code>) — prose cites the table as authority, never restates   per-seat models (no second source of truth).</p>
+<ul>
+<li><strong>DISPATCH audit line (#330): format unchanged.</strong> Producer sentence rewrites: the line is</li>
+</ul>
+<p>  emitted when the executor dispatch completes (from the result dict: <code>type=executor:&lt;seat&gt;</code>,   <code>model=&lt;actual_model&gt;</code>, <code>resolution=primary</code>), or from the fallback tier as today   (<code>resolution=fallback</code>). <strong>Exit→outcome mapping table (aM5, normative):</strong></p>
+<table>
+<thead><tr><th>dispatch exit</th><th>DISPATCH <code>outcome</code></th><th>condition</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>ok</code> (or <code>retried</code> when a fallback attempt succeeded)</td><td>—</td></tr>
+<tr><td>2 malformed</td><td><code>error</code></td><td>terminal caller error</td></tr>
+<tr><td>3 availability (chain exhausted / quota timeout — shipped numbering)</td><td><code>error</code> after the orchestrator stops retrying; <code>dead</code> ONLY when the orchestrator abandons a hung/vacuous supervised job (reap/quarantine)</td><td>retry policy is the orchestrator&#x27;s</td></tr>
+<tr><td>4 enforcement (incl. <code>gate_stale_for_plan</code>)</td><td><code>error</code></td><td>terminal denial</td></tr>
+<tr><td>5 internal</td><td><code>error</code></td><td>terminal internal fault</td></tr>
+<tr><td>6 refused (canary, NEW additive code)</td><td><code>error</code></td><td>terminal refusal</td></tr>
+</tbody>
+</table>
+<p>  <strong>Emission rule (R5′, replaces the r3 ordering rule):</strong> every executor ATTEMPT emits exactly   one DISPATCH line once its terminal result is known — refusals and failures included (their   line carries <code>outcome=error</code>/<code>dead</code> per the table). A SUCCESSFUL tmux dispatch&#x27;s line waits   for JobRegistry identity capture + phase-2 pass before emission; a refused/failed attempt   emits immediately at refusal. No attempt ever disappears from the audit trail.</p>
+<ul>
+<li><strong>Step 2 fan-out (D-2):</strong> the fan-out prose swaps &quot;concurrent subagents (Agent tool)&quot; for</li>
+</ul>
+<p>  &quot;concurrent executor dispatches of the <code>analysis</code> seat&quot; (background Bash invocations of the   dispatch CLI, ≤3 concurrent preserved). Same briefs, same synthesis barrier.</p>
+<ul>
+<li><strong>Concurrency/driver prose</strong> (pinned sentences: &quot;≤ 3 concurrent Claude subagents&quot;,</li>
+</ul>
+<p>  &quot;effective working ceiling of 2&quot;, &quot;strong-model-on-top reliability floor&quot;, chain-exhaustion   hard-failure sentence) carry over verbatim into the new block — the pins keep holding.</p>
+<h3>2. Dispatch choke-point hardening (in <code>hooks/executor_routing_lib.py</code> + <code>phase_executor</code>)</h3>
+<p><strong>2a. <code>require_canary</code> wiring (#468 handoff) — REWRITTEN r4 (pass-2 breaker, owner R1′+R2′).</strong></p>
+<p><strong>Single-path controls (R1′):</strong> the mutating branch lives INSIDE <code>dispatch</code> (§1 internal routing). All canary work happens in the trusted orchestrator-side process, strictly BEFORE the task pane exists:</p>
+<ul>
+<li><strong>Phase 1 — local evidence:</strong> after stage-and-bind (immutable snapshot + pane spec, fresh</li>
+</ul>
+<p>  <code>dispatch_nonce</code>, spec/snapshot digest), evaluate the LOCAL checks (registration_digest over   the staged snapshot, plugin_version pin, hooks_registration parse, final_argv <code>--bare</code>   absence) via the trusted collector <code>canary_evidence.py</code>. Refusal → <code>CanaryRefused</code> before any   process exists.</p>
+<ul>
+<li><strong>Phase 2 — trusted pre-spawn probe session (R2′):</strong> the supervisor runs a SHORT-LIVED,</li>
+</ul>
+<p>  NON-mutating probe session against the SAME staged snapshot (same config root, same hooks,   same lane): a <code>claude -p</code>-class probe invocation whose stream yields the init event   (<code>init_plugins</code>) and whose scripted probe commands exercise each mutating matcher class to   observe hook-origin denials (<code>probes</code>). <strong>Side-effect-freedom by construction (pass-3   amendment, verifier-corrected):</strong> the probe session runs in a DISPOSABLE, credential-free   workspace (its own throwaway worktree; no repo write access, no secrets in env), and every   probe payload follows the shipped <code>ProbeOutcome</code> contract (canary.py:88-93): intrinsically   non-mutating via an OS-NON-WRITABLE target — the write can never succeed, so an OS denial   can never masquerade as a hook success. Guard-absence therefore surfaces via the   <code>positive_deny_unproven</code> branch (no hook-origin deny observed), and a hook-origin deny is   the only PASS signal; the workspace disposal is defense-in-depth, not the detection   mechanism. The probe&#x27;s evidence is collected by the trusted   process (the supervisor reads the probe stream directly — spike #454&#x27;s output contract),   stamped with the composition&#x27;s <code>dispatch_nonce</code> + <code>snapshot_digest</code>, and completes the   <code>CanaryEvidence</code>. Then <code>require_canary(composition, evidence)</code> runs — full policy, exactly   once, strictly before the task spawn. This closes the lane-empty hole (<code>plugins: []</code> ⇒ 0   hooks) and keeps <code>canary.py</code>&#x27;s &quot;immediately before spawn&quot; contract TRUE as written (no   docstring weakening needed).   <strong>Honest ceiling (named):</strong> the probe attests the staged lane/hook CONFIGURATION, not the   literal task process. What makes that sound is the snapshot binding: probe and task both run   from the SAME digest-frozen staged snapshot, and the TOCTOU freeze below forbids any change   between the canary pass and the task spawn. In-pane collection (the rejected alternative)   would have put the trusted collector inside the mutating pane process — evidence provenance   would be self-reported by the thing being guarded.</p>
+<ul>
+<li><strong>Refusal mapping:</strong> <code>CanaryRefused</code> (either phase) → <code>EXIT_REFUSED</code> (6, additive) with the</li>
+</ul>
+<p>  CanaryResult violations in the error payload; the refusal is audited and NEVER proceeds.   Non-mutating seats: canary not applicable (policy derivation returns None) — documented,   tested.</p>
+<p><strong>TOCTOU freeze:</strong> between the <code>require_canary</code> pass and <code>supervisor.launch()</code>, NO route resolution, mutable file read, or command rewriting may occur. The staged snapshot becomes IMMUTABLE at stage-and-bind (read-only tree; any post-bind modification is a refusal), and <code>pane_runner</code> re-verifies BOTH digests before executing — the pane-spec digest AND a recomputed digest of the staged snapshot it is about to run from (pass-3 amendment: binding a snapshot digest into an unchanged spec does not prove the snapshot&#x27;s current contents) — <strong>both pane_runner checks are NEW code in this PR</strong> (today only the supervisor&#x27;s recovery path verifies identity), stated per pass-2 F6. Evidence comes ONLY from the internal trusted collector — no caller-supplied evidence input exists at any CLI boundary. <strong>Compensating transitions (pass-3 corrected):</strong> at canary-refusal time (either phase) NO task permit or JobRecord exists yet — both are created inside <code>launch()</code> (step 7, after the canary) — so a refusal creates nothing and has nothing to release; the refusal is audited and the structured exit returned. Only a SPAWN failure (inside <code>launch</code>) releases the just-acquired permit and finalizes the just-created record. The probe session acquires its OWN short-lived quota permit (it is a real provider invocation and must respect the pool ceiling), released on probe completion — probe permit accounting is part of Task 3&#x27;s tests. Probe-session failure is a refusal (fail-closed), never a skip.</p>
+<p><strong>2b. Internally-minted plan-context (#464 carry) — REWRITTEN r4 (pass-2 F3/aH3, owner R3′+R4′).</strong> The dispatch CLI&#x27;s <code>--plan-context &lt;ctx.json&gt;</code> input is REPLACED by <code>--plan-file &lt;impl-plan.md&gt;</code>: <code>dispatch</code> derives the canonical REQUIRED_PLAN_CONTEXT_KEYS (<code>{risk_level, complexity, lines, file_count}</code>, <code>complexity_gate.py:46-47</code>) internally, after authenticating the gate — no caller-assembled context object crosses the boundary. <strong>Sources, named per key (R3′ — the plan file alone cannot mint all four):</strong> <code>risk_level</code> + <code>file_count</code> from the plan file via <code>plan_lib.parse_tasks</code>; <code>complexity</code> from the gate decision&#x27;s own recorded issue-complexity (the gate authenticated it — one source of truth, no re-fetch); <code>lines</code> from the gate decision&#x27;s recorded <code>plan_est</code> estimate. The mint is therefore: plan file (live) + gate decision (frozen, authenticated) — and the cross-check verifies the live plan still matches what the gate froze. <strong>Enforced freshness binding (R4′ — replaces the r3 &quot;run discipline&quot; honest-limit):</strong> the gate decision RECORDS the plan-file content digest it was minted against (<code>complexity_gate</code> extension, this PR); <code>dispatch</code> recomputes the live plan file&#x27;s digest and REFUSES on mismatch (<code>gate_stale_for_plan</code>, enforcement class) — a revised plan mechanically forces re-running the complexity gate. The stale-PAIR residue shrinks to: a stale gate + the byte-identical stale plan still on disk — i.e. nothing changed, which is exactly the case where the old gate IS current. Audit trail: dispatch records (gate <code>policy_digest</code>, plan digest, run_id, correlation_id) alongside the receipt.</p>
+<p><strong>2c. #467/D-12 quota-permit rider:</strong> <code>supervisor.recover()</code>-adoption re-establishes the quota permit under the adopting orchestrator pid, with compare-and-swap/serialized ownership-generation update (peer-adopted: an ownership race during recover-adopt must not over-admit). Contained change in <code>supervisor.py</code>/<code>quota.py</code> + regression test (adopted job&#x27;s permit no longer stale-reaped; pool ceiling holds across the recovery boundary, including the race).</p>
+<p><strong>2d. Bake-off / RoutingAuditLog reconciliation (#464 carry, first clause):</strong> DECLARE the two-stream reconciliation formally in <code>docs/run-records.md</code> + the audit doc rather than wiring the competitive path into RoutingAuditLog in this PR (the competitive path has no live consumer until #472; a doc-declared reconciliation satisfies the carry&#x27;s &quot;either&quot; arm). Recorded as an explicit decision in the PR body.</p>
+<h3>3. Gate-preservation invariant test (AC2, #450) — REWRITTEN r3 (breaker aH1/F3, owner R3+R5)</h3>
+<p>New <code>tests/test_gate_preservation.py</code>, two layers:</p>
+<ul>
+<li><strong>Prose layer:</strong> anchors ONE canonical sentence added to the new shared block: &quot;An executor</li>
+</ul>
+<p>  seat is never a gate bypass — every mandatory gate (Steps 4, 8a, 9, 11, 11.5) runs with   identical semantics whichever tier dispatches its model calls, and every EXECUTOR-tier   build-seat dispatch requires the authenticated gate decision plus the internally minted   plan context.&quot; (single-sentence anchor, section-sliced, whitespace-normalized — the second   clause is executor-scoped per F3: the fallback tier&#x27;s control is the tier-independent PROSE   gate — a separate anchored sentence asserts WF2/WF3 prose runs the complexity-gate step   before any fallback-tier build dispatch.) WF3 corpus carries the same sentences (bespoke block).</p>
+<ul>
+<li><strong>Mechanical layer — executable black-box (R3+R5′):</strong> subprocess invocations of the real CLIs</li>
+</ul>
+<p>  where the seam allows, in-process harness with injected collectors where it does not (named   explicitly per pass-2 F6):   1. build-seat dispatch WITHOUT a valid gate file → structured refusal BEFORE any provider      launch (stubbed dispatch_real never called) — subprocess;   2. build-seat dispatch with a tampered/stale gate → <code>gate_tampered</code>; with a live plan whose      digest differs from the gate&#x27;s recorded digest → <code>gate_stale_for_plan</code> — subprocess;   3. mutating-profile dispatch routes to the supervised branch and runs gate-auth + mint +      canary IN ORDER before launch (in-process harness, injected probe-session collector —      the probe seam is an injected reader exactly like <code>dispatch_real</code>);   4. phase-1 canary refusal → no process created; probe-session (phase-2) refusal → no task      pane created; both release the permit and finalize the registry record (in-process,      injected evidence);   5. SUPERVISED path: successful mutating stub asserts <code>check_pre</code> receipt exists before task      work, the receipt is attached to the job record, and <code>verify_post</code> runs on the final      Observation (pass-2 aH1 — the mutating path gets its own executable assertions);   6. sync path <code>check_pre</code>/<code>verify_post</code> — already covered by #427/#464 tests, cross-referenced      not duplicated.</p>
+<h3>4. Resume protocol (AC3)</h3>
+<ul>
+<li><strong>WF2:</strong> extend <code>references/state-and-resume.md</code>: on resume, after the notes-cascade, query the</li>
+</ul>
+<p>  executor <code>JobRegistry</code> for live jobs keyed by the run&#x27;s <code>run_id</code> (<code>supervisor.recover(run_id)</code>:   identity-matched live jobs are ADOPTED — with the D-12 permit re-establishment — mismatches   quarantined per <code>classify_recovery</code>); prose names tmux session identity as the adoption key.   <code>resume_lib.py</code> gains a <code>--registry-state</code> input (present/absent/live-jobs) with new cascade   cases + tests. Content pin in <code>test_resume_lib.py</code> updated.</p>
+<ul>
+<li><strong>WF3 (asymmetry, scope-honest):</strong> WF3 gets a minimal registry-aware resume note in its</li>
+</ul>
+<p>  steps.md branch-resume line (query registry for live jobs before re-dispatching a review seat),   NOT a new full cascade file — WF3&#x27;s resume surface today is one line; building a parallel   state-and-resume.md is #474-adjacent scope creep. Named as an explicit scope decision.</p>
+<h3>5. Diagram REV (AC4)</h3>
+<p>REV 3.78.0 on top of #447&#x27;s 3.75.0 seat-routing REV: WF2 stations for Steps 2, 3, 4, 8, 8a, 11 gain the executor-dispatch delta (<code>rev:{delta, refs:[470]}</code>, overrides form — steps:null), routing-mode panel notes flip from &quot;executor-wired (static classification)&quot; to &quot;executor-dispatched (primary tier)&quot;; provenance footer <code>@ plugin 3.78.0</code>; snapshots regenerated full-page light+dark 1440px; <code>test_diagram_newest_rev_matches_plugin_version</code> re-pinned. Per <code>rev-diagram</code> recipe.</p>
+<h3>6. Drift-guard updates (AC1 tail)</h3>
+<p>Every guard the rewire reddens is updated to pin the NEW canonical sentence (never deleted): <code>test_model_routing_resolve_prose.py</code> (new contract sentences incl. carried-verbatim pins), <code>test_wf2_parallelism.py</code> (Step-2 regex → executor-dispatch phrasing), <code>test_bundled_agents.py::test_wf2_references_both_agent_types</code> (thresholds retuned to the fallback-tier occurrence count; the agent-definition pins unchanged — files stay), <code>test_wf2_clarity.py</code>/<code>test_wf3_clarity.py</code> DISPATCH grammar (format unchanged — producer sentences re-anchored), <code>test_shared_block_drift.py</code> (green after sync re-run), <code>test_resume_lib.py</code> (new cascade cases + content pin), <code>test_workflow_diagram.py::test_diagram_newest_rev_matches_plugin_version</code> (REV 3.78.0 linkage, F6), <code>test_canary_digest_pin.py</code> (version + registration-digest re-pins).</p>
+<h2>File changes (summary)</h2>
+<table>
+<thead><tr><th>Area</th><th>Files</th></tr></thead>
+<tbody>
+<tr><td>Prose</td><td><code>shared/blocks/model-routing-resolve.md</code> (+sync into implement-feature SKILL.md), <code>skills/implement-feature/references/steps.md</code>, <code>references/run-record.md</code>, <code>references/state-and-resume.md</code>, <code>skills/fix-bug/SKILL.md</code> (bespoke block), <code>skills/fix-bug/references/steps.md</code>, <code>docs/run-records.md</code></td></tr>
+<tr><td>Code</td><td><code>hooks/executor_routing_lib.py</code> (supervised internal branch, EXIT_REFUSED=6, --plan-file mint, gate_stale_for_plan), <code>phase_executor/src/phase_executor/canary_evidence.py</code> (new: collector + probe-session reader), <code>phase_executor/src/phase_executor/pane_runner.py</code> (NEW spec-digest re-verify), <code>hooks/complexity_gate.py</code> (plan-digest recording), <code>supervisor.py</code>+<code>quota.py</code> (D-12 CAS), <code>hooks/resume_lib.py</code></td></tr>
+<tr><td>Agents</td><td><code>agents/rawgentic-implementer.md</code>, <code>agents/rawgentic-reviewer.md</code> — frontmatter/prose annotated &quot;legacy fallback tier (OQ-6, retires at W12)&quot;</td></tr>
+<tr><td>Tests</td><td><code>tests/test_gate_preservation.py</code> (new), the §6 guard updates, new unit tests for 2a/2b/2c</td></tr>
+<tr><td>Diagram</td><td><code>docs/workflow-diagram.html</code> REV 3.78.0 + <code>docs/assets/</code> snapshots</td></tr>
+<tr><td>Release</td><td>version → 3.78.0 (minor, feat) on the FOUR pinned surfaces (F6 enumeration): <code>.claude-plugin/plugin.json</code>, <code>plugins/rawgentic/.codex-plugin/plugin.json</code>, <code>tests/hooks/test_adversarial_review_registration.py::test_plugin_version_bumped</code>, <code>phase_executor/src/phase_executor/canary.py::EXPECTED_PLUGIN_VERSION</code> (guarded by <code>test_canary_digest_pin.py</code>; the canary REGISTRATION digest re-pins too if hooks.json/enforcer scripts change) — plus the diagram provenance footer <code>@ plugin 3.78.0</code> (fifth string, separately guarded by <code>test_diagram_newest_rev_matches_plugin_version</code>, listed in §6). README changelog, docs</td></tr>
+</tbody>
+</table>
+<p>Estimated diff: &gt;500 lines (prose-heavy). <strong>Single PR</strong> — the pieces are not independently shippable (prose that references unwired code, or wired code no prose invokes, both leave main misleading); size is acceptable for a prose-majority diff. Flagged per Step-3 rule.</p>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>Executor tier availability is decided at the RUN-START probe only (aH3 reconciliation):</li>
+</ul>
+<p>  ImportError or a missing routing table AT THE PROBE selects the fallback tier for the whole   run, recorded with its reason. After a tier is declared, exit 3 (availability /   chain-exhaustion), exit 5 (internal), and exit 6 (canary refusal) are handled hard failures   surfaced via the ERROR protocol — never an automatic mid-run tier switch.</p>
+<ul>
+<li><code>CanaryRefused</code> → exit 6 (EXIT_REFUSED) with violations; the run surfaces it via the ERROR</li>
+</ul>
+<p>  protocol (a refused mutating dispatch is a blocker, not a retry).</p>
+<ul>
+<li>Plan-context: internally minted per dispatch (§2b); stale-coherent-pair hole closed; honest</li>
+</ul>
+<p>  limit stated in §2b (gate freshness is run discipline, re-gate on plan revision).</p>
+<ul>
+<li>Recovery: adopted jobs re-permit under the adopting pid with CAS (D-12); quarantined jobs</li>
+</ul>
+<p>  never adopt.</p>
+<h2>Security implications</h2>
+<p>The canary IS the security control being wired: fail-closed hook-layer verification (registration digest, version pin, lane-provisioned, positive-deny, --bare absence) before every mutating spawn. Evidence binding (nonce+digest) rejects replay. <code>check_pre</code>/<code>verify_post</code> per-attempt enforcement unchanged. No new secrets, no new network surface; dispatch CLI paths canonicalized by existing <code>resolve_artifact_path</code>-class checks.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>claude -p</code> stream-json <code>init</code> event carrying <code>plugins[]</code> (evidence for lane_provisioned)</li>
+</ul>
+<p>  feasibility: verified via spike — #454&#x27;s provider CLI output contract: the stream&#x27;s FIRST   event is <code>{&quot;type&quot;:&quot;system&quot;,&quot;subtype&quot;:&quot;init&quot;,...,&quot;plugins&quot;:[...]}</code> (committed evidence:   tests/phase_executor/test_canary.py&#x27;s inline init fixtures pin the event shape and   <code>plugins[]</code> consumption; tests/phase_executor/live/test_canary_live.py RUN_LIVE probes   shipped by #468 exercise the live stream — <code>init_plugins</code> is that event&#x27;s <code>plugins[]</code>   verbatim, and <code>probes</code> outcomes are hook-origin deny strings per matcher class as pinned in   canary.py&#x27;s _GUARD_DENY_MARKERS; claude-envelope-*.json fixtures evidence RESULT-envelope   parsing, a different surface)   failure: fail-loud   note: absent field means the owning check refuses (CanaryRefused; fail-closed by design)</p>
+<ul>
+<li>api: <code>python3 hooks/executor_routing_lib.py dispatch</code> CLI (the invocation prose ships)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — CLI + <code>dispatch_seat</code> shipped #427/#464, black-box   subprocess tests (tests/hooks/test_executor_routing.py); arg surface confirmed at   hooks/executor_routing_lib.py:937-950 this session   failure: fail-loud   note: structured exit taxonomy, JSON error payload</p>
+<ul>
+<li>api: tmux command-as-pane-process launch (<code>supervisor.launch</code>)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — #467 shipped supervisor + registry with tests;   send-keys race class avoided by design (mempalace decision record)   failure: fail-loud   note: JobRegistry states; classify_recovery quarantines mismatches</p>
+<h2>What this PR does NOT do (scope cuts, named)</h2>
+<ul>
+<li>No live proving run (that is #472); live provider calls stay RUN_LIVE-gated.</li>
+<li>No Agent-tool retirement (that is #474/W12; OQ-6 keeps the fallback tier working).</li>
+<li>No RoutingAuditLog competitive-path wiring (declared reconciliation instead — 2d).</li>
+<li>No WF3 state-and-resume.md file (minimal registry-aware line only — §4).</li>
+<li>No autonomous routing changes, no live-viz (AC groups J/K — later children).</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-20 12:58 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

@@ -248,14 +248,26 @@ class TmuxSupervisor:
     def launch(self, seat: str, prompt: str, *, identity: WorktreeIdentity,
                handle: WorktreeHandle, profile: Optional[contract.LaunchProfile] = None,
                effort: Optional[str] = None, timeout: float = 300.0,
+               target: Optional[dict] = None, receipt_nonce: Optional[str] = None,
                author_provider: Optional[str] = None, resume_session_id: Optional[str] = None,
-               resume_attempts: int = 0, quota_timeout: float = 300.0) -> JobRecord:
+               resume_attempts: int = 0, quota_timeout: float = 300.0,
+               snapshot_dir: Optional[str] = None,
+               snapshot_digest: Optional[str] = None) -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
-        for the job's lifetime), write the FIXED pane spec, and spawn the pane."""
-        targets = routing.eligible_targets(seat, self._snapshot, author_provider=author_provider)
-        if not targets:
-            raise routing.ChainExhausted(f"seat {seat!r}: no eligible target")
-        target = targets[0]  # async tier launches the primary; chain fallback is the sync engine's
+        for the job's lifetime), write the FIXED pane spec, and spawn the pane.
+
+        #470 Task-3: ``snapshot_dir`` + ``snapshot_digest`` (a supervised mutating launch, staged
+        by the dispatch choke-point) are bound into the spec so ``pane_runner`` re-verifies the
+        staged snapshot's CONTENTS immediately before executing (TOCTOU freeze). The spec's own
+        content digest is delivered to ``pane_runner`` out-of-band (argv[2]) for the same reason —
+        neither is embeddable in the spec it protects."""
+        if target is None:  # Step-11 H7: a dispatcher that already resolved (and canary-bound) a
+            # target passes it in — launch must not re-resolve and risk diverging from the
+            # composition the canary attested. Standalone callers keep the self-resolve path.
+            targets = routing.eligible_targets(seat, self._snapshot, author_provider=author_provider)
+            if not targets:
+                raise routing.ChainExhausted(f"seat {seat!r}: no eligible target")
+            target = targets[0]  # async tier launches the primary; chain fallback is the sync engine's
         lane = target["lane"]
         engine = PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
         eff = contract.resolve_effort(target["model"], effort, engine=engine)
@@ -294,6 +306,10 @@ class TmuxSupervisor:
                     },
                 },
             }
+            # #470 Task-3: bind the staged snapshot (contents re-verified in the pane) when supplied.
+            if snapshot_dir is not None or snapshot_digest is not None:
+                spec["snapshot_dir"] = snapshot_dir
+                spec["expected_snapshot_digest"] = snapshot_digest
             specs_dir = Path(self._registry_root) / "specs"
             specs_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(specs_dir, 0o700)
@@ -304,7 +320,9 @@ class TmuxSupervisor:
             # not just the fixed argv — a swapped prompt/engine/grants file can't adopt.
             spec_digest = hash_text(spec_text)
 
-            argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path)]
+            # #470 Task-3: the expected spec digest rides argv[2] so pane_runner refuses a spec
+            # swapped after this atomic write (out-of-band — a spec cannot carry its own digest).
+            argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path), spec_digest]
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
@@ -330,7 +348,8 @@ class TmuxSupervisor:
                 permit_ref=permit_ref, command_digest=digest, spec_digest=spec_digest,
                 provider_session_id=resume_session_id, provider_exit_code=None,
                 resume_attempts=resume_attempts, state="running",
-                created_at=self._clock(), quarantine_reason=None)
+                created_at=self._clock(), quarantine_reason=None,
+                receipt_nonce=receipt_nonce)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
@@ -631,6 +650,42 @@ class TmuxSupervisor:
         record = self.launch(seat, prompt, identity=identity, handle=handle, **launch_kw)
         return self.await_job(record, poll_s=poll_s, timeout_s=timeout_s)
 
+    # -- pre-spawn canary probe session (#470 Task-3, design §2a phase 2) ------
+
+    def probe_session(self, composition, probe_plan, *, snapshot_dir, quota, pool: str,
+                      account: str = "default", timeout: float = 180.0,
+                      quota_timeout: float = 60.0, run=None) -> list:
+        """A trusted, SHORT-LIVED, NON-mutating probe run STRICTLY before the task pane exists.
+
+        It acquires its OWN quota permit (a real provider invocation must respect the pool ceiling)
+        released finally-equivalent on EVERY path (success, refusal, timeout, cancellation — the
+        ``acquire`` context manager guarantees it), then runs a credential-free ``claude -p
+        --output-format stream-json`` probe whose scripted commands exercise each mutating matcher
+        class against OS-NON-WRITABLE targets, and returns the parsed stream events. The caller
+        (``executor_routing_lib.supervised_dispatch``) feeds them to
+        ``canary_evidence.complete_evidence``; the canary evaluation happens THERE, so this method
+        never decides pass/refuse — a repeated refusal downstream therefore never shrinks the pool
+        (the probe permit is always released here). Probe-session FAILURE is a refusal downstream
+        (fail-closed), never a skip: a raise propagates. ``run`` overrides the provider runner for
+        tests (the live spawn is the ``#472`` proving ground / the RUN_LIVE cell)."""
+        runner = run if run is not None else self._probe_run
+        with quota.acquire(pool, account=account, timeout=quota_timeout):
+            return runner(composition=composition, probe_plan=probe_plan,
+                          snapshot_dir=snapshot_dir, timeout=timeout)
+
+    def _probe_run(self, *, composition, probe_plan, snapshot_dir, timeout) -> list:  # pragma: no cover
+        """Live probe runner (exercised by the RUN_LIVE cell / #472, never CI). A disposable,
+        credential-free cwd (own throwaway dir; no repo write access, no secrets threaded); the
+        prompt drives one probe per mutating matcher class against an OS-non-writable target."""
+        import tempfile  # noqa: PLC0415
+        prompt = probe_prompt(probe_plan)
+        cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
+        env = {**self._env, "RAWGENTIC_HEADLESS": "1"}
+        with tempfile.TemporaryDirectory(prefix="rg-probe-") as workdir:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  timeout=timeout, env=env, cwd=workdir, check=False)
+        return parse_stream_events(proc.stdout)
+
     def kill_server(self, run_id: str) -> None:
         """Tear down the whole private server for ``run_id`` (test/run cleanup)."""
         self._tmux(self.resolve_socket(run_id), "kill-server")
@@ -642,8 +697,10 @@ class TmuxSupervisor:
         (PID-reuse guard, live jobs), and the worktree still on disk. ANY mismatch is a
         quarantine — never a silent adopt (CF-7)."""
         spec_path = Path(self._registry_root) / "specs" / f"{record.session_name}.json"
-        # interpreter-independent digest — must mirror launch()'s argv[1:] computation
-        if command_digest(["-m", "phase_executor.pane_runner", str(spec_path)]) != record.command_digest:
+        # interpreter-independent digest — must mirror launch()'s argv[1:] computation, INCLUDING
+        # the argv[2] expected-spec-digest (#470 Task-3); record.spec_digest is that same value.
+        if command_digest(["-m", "phase_executor.pane_runner", str(spec_path),
+                           record.spec_digest]) != record.command_digest:
             return False
         # FULL spec-content digest (Step-11 codex #4): the bytes on disk must be the bytes
         # launch() wrote — a swapped prompt/engine/grants/capture-root can never adopt
@@ -669,6 +726,26 @@ class TmuxSupervisor:
                 return False  # PID reused by a foreign process
         return True
 
+    def _reestablish_adopt_permit(self, record: JobRecord) -> bool:
+        """#467 D-12: on recover-ADOPT, re-key the adopted job's quota permit under THIS
+        orchestrator's pid so the pool ceiling keeps counting the still-live job (the launcher
+        that acquired it has exited — its pid is dead, so QuotaCoordinator would stale-reap the
+        slot and the pool would over-admit). Re-resolves the seat's pool from the routing
+        snapshot (the same source launch() acquired against). Fail-closed: a QuotaTimeout (the
+        slot is gone and re-taking it would over-admit) or a routing error propagates so
+        recover() refuses the adoption rather than over-admit."""
+        if record.permit_ref == "unbounded":
+            return True
+        # Step-11 re-review RH2: the pool is derived from the permit token's OWN parent dir —
+        # the pool the launch actually acquired under. Re-resolving eligible_targets[0] here
+        # would name the PRIMARY lane's pool, which can differ from the launched lane's pool
+        # (the H1 mutating-eligibility filter launches build on its codex chain entry while the
+        # primary is claude) — a wrong pool name checks the wrong ceiling on reclaim.
+        pool = Path(record.permit_ref).parent.parent.name  # <root>/<POOL>/<account>/permit-*
+        # Step-11 H4: surface the CAS outcome — False = another live orchestrator won and OWNS
+        # the job (recover() yields it), True = this process owns the permit.
+        return self._quota.reestablish_permit(pool, record.permit_ref)
+
     def recover(self, run_id: str) -> list:
         """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
         quarantine (kill both groups + W3 retain — the untrusted writer never survives) /
@@ -685,7 +762,32 @@ class TmuxSupervisor:
             verdict = classify_recovery(record, live=live, identity_matches=matches,
                                         sentinel_valid=sentinel_valid)
             if verdict == "adopt":
-                actions.append(RecoveryAction(record.identity, "adopt", record))
+                try:
+                    owned = self._reestablish_adopt_permit(record)
+                except (QuotaTimeout, routing.RoutingError, OSError) as exc:
+                    # D-12 fail-closed: the permit could not be re-established under THIS
+                    # orchestrator's pid within the ceiling — refuse the adoption (kill +
+                    # retain) rather than leave a live job over-admitting past the ceiling.
+                    # OSError included (8a F4): a token/dir write failure quarantines THIS
+                    # record and the sweep continues — the relaunch arm's R1 contract; an
+                    # adopted-but-unpermitted job is exactly the over-admission hole.
+                    killed = self._kill_job(record)
+                    reason = f"adopt refused: {exc}"
+                    if not killed:
+                        reason += "; kill unverified: residue"
+                    done = self._finish(record, "quarantined", release_permit=killed,
+                                        quarantine_reason=reason)
+                    self._retain(done)
+                    actions.append(RecoveryAction(record.identity, "quarantine", done))
+                else:
+                    if owned is False:
+                        # Step-11 H4: the permit CAS was won by ANOTHER live orchestrator — that
+                        # process owns the job. Recording "adopt" here would leave two
+                        # orchestrators both managing it; yield instead (no kill — the job is
+                        # healthy and permitted, just not ours).
+                        actions.append(RecoveryAction(record.identity, "yielded", record))
+                    else:
+                        actions.append(RecoveryAction(record.identity, "adopt", record))
             elif verdict == "quarantine":
                 killed = self._kill_job(record)
                 reason = ("identity mismatch" if not matches else "no valid sentinel")
@@ -873,3 +975,46 @@ def _exit_code_of(obs: dict) -> Optional[int]:
     proc = obs.get("process") or {}
     code = proc.get("exit_code")
     return code if isinstance(code, int) else None
+
+
+# -- #470 Task-3 pre-spawn probe helpers (pure; the live spawn is _probe_run) ----------
+_PROBE_PAYLOADS = {
+    # class-tool -> a scripted, INTRINSICALLY non-mutating probe line (OS-non-writable target, so
+    # an OS denial can never masquerade as a hook success — the canary requires a hook-origin
+    # marker, and the payload's own OS-unwritability is defense-in-depth, not the detector).
+    "Bash": "run this exact bash command with the Bash tool: ssh example.invalid echo hi",
+    "Edit": "use the Write tool to write the text 'x' to the absolute path /proc/1/rg-probe-denied",
+    "Write": "use the Write tool to write the text 'x' to the absolute path /proc/1/rg-probe-denied",
+}
+
+
+def probe_prompt(probe_plan: dict) -> str:
+    """Build the probe-session prompt: one probe line per mutating matcher class in the plan,
+    keyed off the class's issued tool. Fail-closed on an empty plan (an empty prompt would yield
+    no probes -> the canary refuses positive_deny, never a false pass)."""
+    lines = []
+    for cls, spec in (probe_plan or {}).items():
+        tool = spec.get("issued_tool") if isinstance(spec, dict) else None
+        payload = _PROBE_PAYLOADS.get(tool) or f"use the {tool} tool once on a read-only target"
+        lines.append(f"- ({cls}) {payload}")
+    body = "\n".join(lines)
+    return ("You are a hook-layer probe. Perform EACH of the following actions EXACTLY ONCE, in "
+            "order, reporting the tool result verbatim. Do not use any skill. Do not ask "
+            f"questions.\n{body}\n")
+
+
+def parse_stream_events(stdout: str) -> list:
+    """Parse a ``claude -p --output-format stream-json`` stdout into a list of event dicts,
+    skipping unparseable lines (fail-closed: junk never raises, it is simply absent)."""
+    events = []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events
