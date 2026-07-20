@@ -1498,3 +1498,57 @@ def test_supervised_refuses_unsandboxed_mutating_engine(tmp_path):
     assert res["error"]["code"] == "canary_refused"
     assert "mutating_claude_requires_fs_sandbox" in res["error"]["message"]
     assert sup.launched == []
+
+
+def _codex_supervised_kw(tmp_path):
+    """Codex-engine supervised harness (8a F1): REAL canary + collector, containment evidence
+    from the composition — no probe session (codex policy is fully local; probe must NOT run)."""
+    root = tmp_path / "wtroot"
+    wt = root / "wt-codex"
+    wt.mkdir(parents=True)
+    from phase_executor.adapters import codex_cli
+    argv = codex_cli.build_mutating_command("gpt-5.6-terra", str(wt), effort="low",
+                                            containment_root=str(root))
+    gd, ctx = _gate()
+    probe_calls = []
+
+    def probe_session(**kw):
+        probe_calls.append(kw)
+        return []
+
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    profile = _contract.LaunchProfile(session_policy="fresh", mutating=True, worktree=str(wt))
+    return dict(
+        seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build:codex",
+        effort=None, timeout=5.0, engine="codex", profile=profile, final_argv=argv,
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=_StubSupervisor(),
+        probe_session=probe_session, provision=lambda: (None, {"handle": True}),
+        gate_decision=gd, plan_context=ctx,
+        mk_nonce=lambda: "N-codex", mk_probe_cid=lambda c: "p",
+        containment_root=str(root)), probe_calls
+
+
+def test_supervised_codex_passes_real_canary_no_probe(tmp_path):
+    """8a F1 regression: the ONLY production-admitted mutating engine must actually pass
+    require_canary end-to-end — containment evidence populated from the composition, probe
+    session never spawned (codex policy is fully locally evaluable)."""
+    kw, probe_calls = _codex_supervised_kw(tmp_path)
+    res = er.supervised_dispatch(**kw)
+    assert res["ok"] is True, res
+    assert res["exit"] == er.EXIT_OK
+    assert res["canary"]["verdict"] == "pass"
+    assert res["canary"]["policy_id"] == "codex_mutating"
+    assert probe_calls == []  # no probe session for a fully-local policy
+
+
+def test_supervised_codex_out_of_containment_refuses(tmp_path):
+    """Red-team cell: a worktree OUTSIDE the approved root refuses codex_containment (exit 6)."""
+    kw, _ = _codex_supervised_kw(tmp_path)
+    outside = tmp_path / "elsewhere" / "wt"
+    outside.mkdir(parents=True)
+    kw["profile"] = _contract.LaunchProfile(session_policy="fresh", mutating=True,
+                                            worktree=str(outside))
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "codex_containment" in res["error"]["message"]

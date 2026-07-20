@@ -756,10 +756,13 @@ class TmuxSupervisor:
             if verdict == "adopt":
                 try:
                     self._reestablish_adopt_permit(record)
-                except (QuotaTimeout, routing.RoutingError) as exc:
+                except (QuotaTimeout, routing.RoutingError, OSError) as exc:
                     # D-12 fail-closed: the permit could not be re-established under THIS
                     # orchestrator's pid within the ceiling — refuse the adoption (kill +
                     # retain) rather than leave a live job over-admitting past the ceiling.
+                    # OSError included (8a F4): a token/dir write failure quarantines THIS
+                    # record and the sweep continues — the relaunch arm's R1 contract; an
+                    # adopted-but-unpermitted job is exactly the over-admission hole.
                     killed = self._kill_job(record)
                     reason = f"adopt refused: {exc}"
                     if not killed:

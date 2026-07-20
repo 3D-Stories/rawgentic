@@ -260,3 +260,18 @@ def test_recover_quarantine_never_repermits(env_factory):
     # released, not re-keyed: the permit is gone and the pool is empty (asymmetry vs adopt)
     assert not token.exists()
     assert env.quota.live_permits("claude") == 0
+
+
+def test_adopt_permit_oserror_quarantines_and_sweep_continues(env_factory, monkeypatch):
+    """8a F4: an OSError from permit re-establishment is handled like QuotaTimeout — the record
+    quarantines and recover() RETURNS (no propagation aborting the sweep; the relaunch arm's
+    R1 contract, now symmetric)."""
+    env = env_factory(mode="ok_then_sleep", concurrency=1)
+    rec = env.launch()
+    token = Path(rec.permit_ref)
+    token.write_text(f"{_dead_pid()}\n0\n", encoding="utf-8")  # launcher exited
+    sup2 = env.sup_with_mode("ok_then_sleep")
+    monkeypatch.setattr(sup2, "_reestablish_adopt_permit",
+                        lambda record: (_ for _ in ()).throw(OSError("disk full")))
+    actions = sup2.recover(env.identity.run_id)  # must NOT raise (pre-fix: OSError propagated)
+    assert [a.action for a in actions] == ["quarantine"]

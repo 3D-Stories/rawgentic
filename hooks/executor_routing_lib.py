@@ -74,11 +74,28 @@ EXIT_REFUSED: Final[int] = 6        # #470 §2a: canary refusal (either phase) �
 # refuses any mutating engine not listed here — module constant, never caller-selectable.
 MUTATING_FS_SANDBOXED: Final[frozenset] = frozenset({"codex"})
 
-# #470 §2a phase-1: the canary checks evaluable from LOCAL (staged-snapshot) evidence ALONE — the
-# subset run BEFORE the probe session spawns, so a bad staged config refuses before any process
-# exists. lane_provisioned + positive_deny need the phase-2 probe stream and are left to
-# require_canary (the full policy, run exactly once at phase 2). Kept in sync with canary.POLICIES.
-LOCAL_CANARY_CHECKS: Final[tuple] = ("hooks_digest", "plugin_version", "bare_absent")
+# #470 §2a phase-1: the canary checks evaluable from LOCAL (staged/composed) evidence ALONE —
+# run BEFORE the probe session spawns, so a bad staged config refuses before any process exists.
+# Per-engine local set = that engine's policy ∩ LOCAL_EVALUABLE (8a F1/F3 — the old fixed
+# claude-subset tuple previewed checks the codex policy never required and previewed none it did).
+# Checks OUTSIDE this set (lane_provisioned, positive_deny) need the phase-2 probe stream; an
+# engine whose whole policy is local (codex) skips the probe session entirely — require_canary
+# still runs the full policy exactly once.
+LOCAL_EVALUABLE_CANARY_CHECKS: Final[frozenset] = frozenset(
+    {"hooks_digest", "plugin_version", "bare_absent", "codex_containment"})
+
+
+def local_canary_checks(engine: str, canary_mod) -> tuple:
+    """The phase-1 subset for ``engine``'s mutating policy (empty tuple for an unknown policy —
+    require_canary refuses unknown policies authoritatively at STEP 5)."""
+    policy = canary_mod.POLICIES.get(f"{engine}_mutating", ())
+    return tuple(c for c in policy if c in LOCAL_EVALUABLE_CANARY_CHECKS)
+
+
+def probe_needed(engine: str, canary_mod) -> bool:
+    """True iff the engine's mutating policy has checks that need the phase-2 probe stream."""
+    policy = canary_mod.POLICIES.get(f"{engine}_mutating", ())
+    return any(c not in LOCAL_EVALUABLE_CANARY_CHECKS for c in policy)
 
 _UNSAFE_COMPONENT: Final[re.Pattern] = re.compile(r"[/\\]|\.\.|[\x00-\x1f]")
 
@@ -777,10 +794,13 @@ def supervised_dispatch(
     mk_nonce: Callable,
     mk_probe_cid: Callable,
     await_timeout_s: float = 3600.0,
+    containment_root: Optional[str] = None,
 ) -> dict:
     """#470 §1/§2a — the SUPERVISED internal branch for a MUTATING seat. Runs the fail-closed
     guardrail canary strictly BEFORE the task pane exists, in this EXACT order (all in the trusted
-    orchestrator-side process), then launches:
+    orchestrator-side process), then launches. ``containment_root`` is the approved root the seat
+    worktree is provisioned under — codex_containment evidence (8a F1); absent for a codex engine
+    ⇒ that check refuses (fail-closed):
 
       1. gate authentication (re-verify the #429 decision the mint already froze — fail-closed);
       2. stage-and-bind: fresh ``dispatch_nonce`` + the staged snapshot's registration digest bind
@@ -842,11 +862,14 @@ def supervised_dispatch(
         provider=engine, profile=profile,
         dispatch_nonce=dispatch_nonce, snapshot_digest=snapshot_digest)
 
-    # STEP 3 — phase-1 canary: LOCAL evidence; refuse before any process exists.
+    # STEP 3 — phase-1 canary: LOCAL evidence; refuse before any process exists. The subset is
+    # derived from THIS engine's policy (8a F1/F3): codex previews codex_containment+bare_absent,
+    # claude previews hooks_digest+plugin_version+bare_absent.
     evidence = canary_evidence.build_local_evidence(
-        snapshot_dir=snapshot_dir, composition=composition, final_argv=list(final_argv))
+        snapshot_dir=snapshot_dir, composition=composition, final_argv=list(final_argv),
+        containment_root=containment_root)
     local_violations = []
-    for check_id in LOCAL_CANARY_CHECKS:
+    for check_id in local_canary_checks(engine, canary):
         result = canary._CHECKS[check_id](evidence)  # pylint: disable=protected-access
         if result.verdict != canary.PASS:
             local_violations.append(result.violation or f"unspecified_refuse:{check_id}")
@@ -857,19 +880,23 @@ def supervised_dispatch(
                     correlation_id=ce, audit_path=audit_path)
 
     # STEP 4 — trusted pre-spawn probe session (own permit inside probe_session). Failure = refusal.
-    probe_plan = build_probe_plan(evidence.hooks_registration, canary=canary,
-                                  mk_correlation_id=mk_probe_cid)
-    try:
-        stream = probe_session(composition=composition, probe_plan=probe_plan,
-                               snapshot_dir=snapshot_dir)
-    except Exception as e:  # noqa: BLE001 — probe-session failure is fail-closed (refuse, never skip)
-        _audit_canary_refusal(capture_root, run_id,
-                              {"phase": "probe", "violations": ["probe_session_failed"],
-                               "detail": f"{type(e).__name__}: {e}", "correlation_id": ce})
-        return _err(EXIT_REFUSED, "canary_refused", f"probe_session_failed: {e}", retryable=False,
-                    correlation_id=ce, audit_path=audit_path)
-    evidence = canary_evidence.complete_evidence(
-        evidence=evidence, stream=stream, probe_plan=probe_plan)
+    # Skipped when the engine's WHOLE policy is locally evaluable (codex — 8a F1): no runtime
+    # evidence is required, so spawning a probe would only add a refusal path the policy never
+    # consults. require_canary still runs the full policy exactly once either way.
+    if probe_needed(engine, canary):
+        probe_plan = build_probe_plan(evidence.hooks_registration, canary=canary,
+                                      mk_correlation_id=mk_probe_cid)
+        try:
+            stream = probe_session(composition=composition, probe_plan=probe_plan,
+                                   snapshot_dir=snapshot_dir)
+        except Exception as e:  # noqa: BLE001 — probe-session failure is fail-closed (refuse, never skip)
+            _audit_canary_refusal(capture_root, run_id,
+                                  {"phase": "probe", "violations": ["probe_session_failed"],
+                                   "detail": f"{type(e).__name__}: {e}", "correlation_id": ce})
+            return _err(EXIT_REFUSED, "canary_refused", f"probe_session_failed: {e}", retryable=False,
+                        correlation_id=ce, audit_path=audit_path)
+        evidence = canary_evidence.complete_evidence(
+            evidence=evidence, stream=stream, probe_plan=probe_plan)
 
     # STEP 5 — require_canary: full policy, EXACTLY ONCE, strictly before the spawn.
     try:
@@ -1211,7 +1238,8 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             probe_session=probe_session, provision=provision,
             gate_decision=gate_decision, plan_context=plan_context,
             mk_nonce=lambda: uuid.uuid4().hex,
-            mk_probe_cid=lambda cls: f"probe-{uuid.uuid4().hex[:8]}")
+            mk_probe_cid=lambda cls: f"probe-{uuid.uuid4().hex[:8]}",
+            containment_root=str(wt_root))
     except pe.routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=ce, audit_path=str(audit.path))

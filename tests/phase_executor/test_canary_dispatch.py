@@ -183,3 +183,15 @@ def test_two_stage_probe_stream_parses_live(tmp_path):
         pytest.skip(f"no hook-origin Bash deny observed (outcome={outcome})")
     assert outcome.deny_reason and "BLOCKED:" in outcome.deny_reason, outcome
     assert outcome.observed_tool == "Bash"
+
+
+def test_supervisor_launch_always_passes_spec_digest_argv():
+    """8a inline-mechanical L-pin: pane_runner's spec-digest check SKIPS when the argv digest is
+    absent (legacy back-compat), so the guarantee lives in the supervisor always composing the
+    pane argv WITH the digest. Pin the composition line so a refactor can't silently drop it."""
+    import inspect
+    from phase_executor import supervisor as sup_mod
+    src = inspect.getsource(sup_mod.TmuxSupervisor.launch)
+    assert '"phase_executor.pane_runner", str(spec_path), spec_digest]' in src, (
+        "supervisor.launch no longer passes the spec digest as pane_runner argv — the "
+        "pane-side TOCTOU check silently degrades to skipped (see pane_runner._verify_digests)")

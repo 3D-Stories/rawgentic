@@ -64,11 +64,17 @@ def _safe_hooks_registration(root: Optional[Path]) -> Optional[dict]:
         return None
 
 
-def build_local_evidence(*, snapshot_dir, composition, final_argv) -> canary.CanaryEvidence:
+def build_local_evidence(*, snapshot_dir, composition, final_argv,
+                         containment_root=None) -> canary.CanaryEvidence:
     """Phase 1. Build the partially-populated evidence from the staged snapshot + the composition.
     ``composition`` is read getattr-with-default so a malformed one never raises — it simply yields
     absent binding fields that ``require_canary`` later refuses. ``final_argv`` is passed through
-    unchanged (the ``bare_absent`` check validates its shape)."""
+    unchanged (the ``bare_absent`` check validates its shape).
+
+    Codex provider (8a F1): the ``codex_containment`` check's evidence is populated HERE — the
+    argv IS the launch command the adapter composed, the worktree comes off the composition's
+    profile, and ``containment_root`` is the approved root the dispatcher provisioned under.
+    All three absent → the check refuses (fail-closed), which is exactly the pre-fix dead path."""
     provider = getattr(composition, "provider", None)
     profile_obj = getattr(composition, "profile", None)
     mutating = bool(getattr(profile_obj, "mutating", False))
@@ -76,6 +82,14 @@ def build_local_evidence(*, snapshot_dir, composition, final_argv) -> canary.Can
 
     root = Path(snapshot_dir) if snapshot_dir is not None else None
     registration_digest = _safe_registration_digest(root)
+
+    codex_kw = {}
+    if provider == "codex" and mutating:
+        codex_kw = dict(
+            codex_argv=list(final_argv) if final_argv else None,
+            codex_worktree=getattr(profile_obj, "worktree", None),
+            codex_containment_root=str(containment_root) if containment_root else None,
+        )
 
     return canary.CanaryEvidence(
         provider=provider,
@@ -87,6 +101,7 @@ def build_local_evidence(*, snapshot_dir, composition, final_argv) -> canary.Can
         plugin_version=_safe_plugin_version(root),
         hooks_registration=_safe_hooks_registration(root),
         final_argv=final_argv,
+        **codex_kw,
     )
 
 
