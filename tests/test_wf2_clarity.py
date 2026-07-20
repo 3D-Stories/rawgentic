@@ -1281,6 +1281,18 @@ class TestTestRunDiscipline:
         assert "a scoped run never substitutes for the final full-suite gate" in block
         assert "recorded baseline" in block
 
+    def test_prose_only_scoped_pre_pr_exception(self):
+        # #527 (epic #529, lever 2): prose-only post-Step-9 commits get a SCOPED
+        # pre-PR gate — a precise file-list predicate, never judgment; any
+        # code-bearing commit keeps the full re-run.
+        block = self._discipline_block()
+        assert ("when EVERY post-Step-9 commit touches ONLY prose/doc files "
+                "(`*.md`, `docs/`) plus their own guard test files under "
+                "`tests/`") in block
+        assert "tests/hooks/test_adversarial_review_registration.py" in block
+        assert "consumes the Step 9 full-suite result as the regression evidence" in block
+        assert "any code-bearing commit keeps the full re-run" in block
+
     def test_step_sites_point_at_canonical_block(self):
         # Step 2 baseline, Step 8 iteration, Step 9 final, Step 12 evidence
         # consumption — multi-site presence is the point, so >=, never ==.

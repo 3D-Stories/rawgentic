@@ -297,7 +297,14 @@ that pins it (e.g. `tests/test_wf2_clarity.py`); when no mirror exists, the near
 enclosing test directory is the scope. Exactly-twice admits only evidence-driven
 exceptions, never habitual re-runs: (a) Step 12's pre-PR gate re-runs the full suite
 ONLY when a commit landed after the Step 9 run touching code or a test-pinned surface —
-otherwise it consumes the Step 9 result as its evidence; (b) a baseline discovered
+otherwise it consumes the Step 9 result as its evidence. Prose-only tightening (#527):
+when EVERY post-Step-9 commit touches ONLY prose/doc files (`*.md`, `docs/`) plus their
+own guard test files under `tests/` (no `hooks/`, no `phase_executor/`, no `scripts/`,
+no shared behavior code), the pre-PR gate instead runs the affected guard test files
+plus `tests/hooks/test_adversarial_review_registration.py` (the version pin) SCOPED and
+consumes the Step 9 full-suite result as the regression evidence — with a session-note
+marker naming the scoped set; any code-bearing commit keeps the full re-run (measured
+basis: epic #509 lever 2, ~2.4 min × 5/9 children). (b) a baseline discovered
 invalid (wrong base, foreign checkout content) is re-recorded with a fresh full run.
 </test-run-discipline>
 
