@@ -629,6 +629,17 @@ attested gate path: `phase_executor.enforce.check_pre` requires a launch-bound `
 is competitive-only and refused from single-dispatch. Capture/permit dirs are derived under the
 project repo's git-ignored `.rawgentic/runs/` + `.rawgentic/runtime/`.
 
+**Live run status (#471, W8 — AC-J):** `status --workspace <ws> --project <name> --run <id>`
+prints one JSON doc of per-seat rows derived from the durable job registry + launch specs +
+capture dirs — derived `state` (valid sentinel → `completed`; live tmux session → `running`;
+dead+no-sentinel → `exited_no_sentinel`; terminal recorded states pass through) alongside
+`recorded_state` (so every OQ-8 state, including `launched`, stays distinguishable and stale
+entries are visible, never hidden), requested vs actual model/effort, elapsed times, an honest
+`"eta": "no estimate"` until AC-I3 history exists (#449), and the latest capture write + tail
+line. **Read-only invariant (AC-J3):** the verb reads registry/spec/capture and probes
+`tmux has-session` only — it never mutates run state (a corrupt `jobs.json` is a structured
+exit 5, `registry_corrupt`, never an empty view).
+
 ### Adversarial Review Data Handling
 
 When the adversarial review runs (standalone or embedded), the **text of the reviewed
