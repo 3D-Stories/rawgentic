@@ -35,8 +35,10 @@ import hashlib
 import os
 import json
 import re
+import shutil
 import subprocess
 import sys
+import time
 import tempfile
 import types
 import uuid
@@ -1010,6 +1012,9 @@ def _import_phase_executor():
     from phase_executor.engine import _dispatch_real, PROVIDER_ENGINE  # noqa: PLC0415
     from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
     from phase_executor.supervisor import TmuxSupervisor  # noqa: PLC0415
+    import phase_executor.supervisor as supervisor_mod  # noqa: PLC0415 — #471 status surface
+    from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
+    from phase_executor.registry import session_name as registry_session_name  # noqa: PLC0415
     from phase_executor.worktree import WorktreeIdentity, WorktreeManager  # noqa: PLC0415
     from phase_executor.adapters import ADAPTERS  # noqa: PLC0415
     return types.SimpleNamespace(
@@ -1017,6 +1022,8 @@ def _import_phase_executor():
         dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator, QuotaTimeout=QuotaTimeout,
         canary=canary, canary_evidence=canary_evidence, contract=contract,
         PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
+        supervisor=supervisor_mod, JobRegistry=JobRegistry, RegistryCorrupt=RegistryCorrupt,
+        registry_session_name=registry_session_name,
         WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
     )
 
@@ -1473,6 +1480,90 @@ def _do_dispatch(args) -> int:
     return _emit(result)
 
 
+def _status_tail(path: Path, limit: int = 200) -> str:
+    """Last non-empty line of ``path`` (≤ ``limit`` chars) — bounded read, never the whole file."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        size = fh.tell()
+        fh.seek(max(0, size - 1024))
+        text = fh.read().decode("utf-8", errors="replace")
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    return lines[-1][:limit] if lines else ""
+
+
+def _status_activity(record, *, clock=time.time) -> Optional[dict]:
+    """AC-J1f: the latest capture write (file, age, tail line). Read-only, best-effort —
+    a missing/racing capture dir is ``None``, never an error."""
+    try:
+        files = [p for p in Path(record.capture_dir).iterdir() if p.is_file()]
+        if not files:
+            return None
+        newest = max(files, key=lambda p: p.stat().st_mtime)
+        return {"file": newest.name,
+                "age_s": max(0, int(clock() - newest.stat().st_mtime)),
+                "tail": _status_tail(newest)}
+    except OSError:
+        return None
+
+
+def _do_status(args) -> int:
+    """#471 W8 (AC-J2): the read-only run-status verb — JSON derived from the job registry +
+    launch specs + capture dirs. AC-J3: reads only; never constructs a supervisor, never
+    upserts, kills, or touches permits. RegistryCorrupt is a structured exit 5 (fail-loud,
+    never an empty view — registry.py's own contract)."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    if not Path(repo_root).is_dir():
+        # declared-but-missing project dir: the dispatch path's exit-2 class
+        # (test_dispatch_path_declared_missing_exit2), kept consistent here.
+        return _emit(_err(EXIT_MALFORMED, "malformed_config",
+                          f"project {args.project!r} path {str(repo_root)!r} does not exist",
+                          retryable=False))
+    registry_root = Path(repo_root) / ".rawgentic" / "runtime" / "registry"
+    out = {"run_id": args.run, "generated_at": int(time.time()), "seats": [], "exit": EXIT_OK}
+    if not (registry_root / "jobs.json").exists():
+        # first run / no registry — empty view is honest here (missing-file semantics,
+        # registry.py); constructing JobRegistry would mkdir/chmod, which a read-only
+        # surface must not do.
+        return _emit(out)
+    try:
+        records = pe.JobRegistry(str(registry_root)).by_run(args.run)
+    except pe.RegistryCorrupt as e:
+        return _emit(_err(EXIT_INTERNAL, "registry_corrupt", str(e), retryable=False))
+
+    has_tmux = shutil.which("tmux") is not None
+
+    def live_fn(record) -> bool:
+        if not has_tmux:
+            return False
+        try:
+            res = subprocess.run(
+                ["tmux", "-S", record.run_socket, "has-session", "-t", record.session_name],
+                capture_output=True, text=True, timeout=10, check=False)
+            return res.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+
+    def spec_fn(record) -> Optional[dict]:
+        p = registry_root / "specs" / f"{pe.registry_session_name(record.identity)}.json"
+        try:
+            with open(p, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError):
+            return None
+
+    out["seats"] = pe.supervisor.run_status(
+        records, live_fn=live_fn, sentinel_fn=pe.supervisor.read_sentinel,
+        spec_fn=spec_fn, activity_fn=_status_activity, clock=time.time)
+    return _emit(out)
+
+
 def main(argv: Optional[list] = None) -> int:
     p = argparse.ArgumentParser(prog="executor_routing_lib")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1504,6 +1595,12 @@ def main(argv: Optional[list] = None) -> int:
     mg.add_argument("--plan-est-lines", required=True, type=int)
     mg.add_argument("--out", required=True)
     mg.set_defaults(fn=_do_mint_gate)
+
+    su = sub.add_parser("status", help="#471: read-only per-run seat status (registry + capture) as JSON")
+    su.add_argument("--workspace", required=True)
+    su.add_argument("--project", required=True)
+    su.add_argument("--run", required=True)
+    su.set_defaults(fn=_do_status)
 
     st = sub.add_parser("show-table", help="#446: display the resolved seat table (setup Step 2i)")
     st.add_argument("--workspace", required=True)
