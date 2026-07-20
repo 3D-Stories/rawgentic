@@ -35,8 +35,12 @@ def test_step2_fans_out_independent_analyses():
     assert re.search(r"concurrent|in parallel|fan.?out", step2, re.I), (
         "Step 2 must describe parallel/concurrent dispatch of its analyses"
     )
-    assert re.search(r"subagent|Agent tool", step2), (
-        "Step 2 must dispatch the independent analyses via subagents (Agent tool)"
+    # #470: the fan-out is now concurrent executor dispatches of the analysis
+    # seat (primary tier); the Agent-tool subagent path survives as the fallback
+    # tier. Either phrasing keeps the parallelism pin alive.
+    assert re.search(r"executor dispatch|subagent|Agent tool", step2, re.I), (
+        "Step 2 must dispatch the independent analyses via the analysis seat "
+        "(executor dispatch, primary tier) or Agent-tool subagents (fallback tier)"
     )
     assert re.search(r"synthesi", step2, re.I), (
         "Step 2 must run complexity classification as a synthesis step after the gather"
@@ -55,9 +59,10 @@ def test_step2_fans_out_independent_analyses():
         "Step 2 classification/fast-path must run after an explicit gather barrier"
     )
     # item 5 (test inventory) needs item 2's blast radius, so 2->5 is a chain
-    # inside the fan-out, not a fully-independent parallel leaf.
-    assert "sequential subagent" in step2, (
-        "Step 2 must run items 2 -> 5 as a sequential subagent (test inventory needs blast radius)"
+    # inside the fan-out, not a fully-independent parallel leaf. #470 renamed the
+    # fan-out unit "subagent" -> "executor dispatch" (analysis seat).
+    assert "sequential executor dispatch" in step2, (
+        "Step 2 must run items 2 -> 5 as a sequential executor dispatch (test inventory needs blast radius)"
     )
 
 

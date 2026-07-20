@@ -160,9 +160,11 @@ line in place — use `python3 hooks/usage_capture.py backfill --records docs/me
 pristine drift-guard test validates the whole committed store in CI, so a malformed hand-edit is
 caught the same way a bad writer output would be.
 
-**`dispatches` (OPTIONAL, #330):** a **structured list** of per-subagent-invocation dispatch
-telemetry, one entry per canonical `DISPATCH` audit line (`shared/blocks/model-routing-resolve.md`)
-emitted this run. It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
+**`dispatches` (OPTIONAL, #330):** a **structured list** of per-dispatch telemetry, one entry
+per canonical `DISPATCH` audit line (`shared/blocks/model-routing-resolve.md`)
+emitted this run. The producer of each line is the executor result dict on the primary tier
+(`resolution=primary`) or the fallback (legacy) Agent-tool subagent (`resolution=fallback`) — the
+line grammar and the six schema fields are unchanged either way (#470). It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
 (NOT the unvalidated-passthrough pattern of `lane`): **absent** is fine — old records stay valid, no
 schema version bump — but **present is strict**: each entry must carry all six fields
 (`role`, `subagent_type`, `model`, `effort`, `outcome`, `resolution`), and `role`/`outcome`/`resolution`
@@ -175,8 +177,8 @@ malformed lines, never dedup); zero well-formed lines for this issue means the k
 entirely**, never an empty array.
 
 **Routing telemetry on `dispatches[]` entries (OPTIONAL, #420):** each dispatch entry MAY carry
-additional per-dispatch routing-telemetry fields, populated once #417 wires the executor into the WF
-prose (the executor's Observation supplies them): `preferred_model` (str|null — the routed/requested
+additional per-dispatch routing-telemetry fields, populated once the executor is wired into the WF
+prose (#470; the executor's Observation supplies them on the primary tier): `preferred_model` (str|null — the routed/requested
 model), `actual_model` (str|null — the provider-reported id), `fallback_reason` (str|null),
 `queued_ms` (int|null — quota queue wait), `concurrency` (int|null — observed concurrent-permit
 count, for ≤3-ceiling visibility), and `selector` (object|null — `{risk_level, complexity, ceiling}`,

@@ -816,6 +816,22 @@ class TestDispatchGrammar:
             "the WF2 per-invocation DISPATCH emission rule must be present in "
             "the implement-feature corpus")
 
+    def test_wf2_producer_sentence_present(self):
+        """#470: the DISPATCH grammar is unchanged, but the PRODUCER changed —
+        the primary tier's executor result dict (resolution=primary) or the
+        fallback (legacy) Agent-tool dispatch (resolution=fallback) emits the
+        line. Pin the producer sentence so the rewire can't silently drift back
+        to an Agent-tool-only producer."""
+        corpus = " ".join(skill_corpus("implement-feature").split())
+        producer = (
+            "The producer is the executor result dict "
+            "(`type=executor:<seat>`, `model=<actual_model>`, `resolution=primary`) "
+            "on the primary tier, or the fallback (legacy) Agent-tool dispatch "
+            "(`resolution=fallback`) as today.")
+        assert producer in corpus, (
+            "the #470 DISPATCH producer sentence must be present in the "
+            "implement-feature corpus")
+
 
 # --- #330: dispatches[] assembly instruction at WF2 Step 16 ---
 
