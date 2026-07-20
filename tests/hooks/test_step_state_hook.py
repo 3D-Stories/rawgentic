@@ -335,3 +335,95 @@ class TestMarkerRequiresNotesAppend:
     def test_grep_of_marker_text_ignored(self):
         assert ssp.detect_marker(
             "grep '### WF2 Step 11' /some/other/file.md") is None
+
+
+class TestInlineMarkerAppend:
+    """#533: a single-line `>>` append of a marker (echo/printf) must advance the
+    now-pointer, not only heredoc own-line markers. The read-vs-append discriminator
+    is a `>>` redirection into a session_notes path TIED to the marker (same command
+    segment), never line-start position — which silently dropped every inline append.
+    The #499 read-vs-append false positive stays closed (AC2)."""
+
+    def test_inline_echo_append_parsed(self):
+        cmd = ("echo '### WF3 Step 7: TDD Bug Fix — DONE (#531: green)' "
+               ">> claude_docs/session_notes.md")
+        assert ssp.detect_marker(cmd) == {
+            "workflow": "wf3", "step": "7",
+            "step_title": "TDD Bug Fix ✓done", "issue": 531}
+
+    def test_inline_printf_append_parsed(self):
+        # `\n` here is the two-char literal a real `printf '%s\n'` command carries,
+        # so the whole printf stays a single line.
+        cmd = ("printf '%s\\n' '### WF3 Step 1: Receive Bug Report — DONE (#531: ok)' "
+               ">> claude_docs/session_notes.md")
+        assert ssp.detect_marker(cmd) == {
+            "workflow": "wf3", "step": "1",
+            "step_title": "Receive Bug Report ✓done", "issue": 531}
+
+    def test_inline_append_absolute_path_and_double_quotes(self):
+        cmd = ('echo "### WF2 Step 8a [task 3]: DONE (#492: 4 findings)" '
+               '>> /home/u/rawgentic/claude_docs/session_notes.md')
+        hit = ssp.detect_marker(cmd)
+        assert hit is not None
+        assert hit["workflow"] == "wf2" and hit["step"] == "8a" and hit["issue"] == 492
+
+    def test_heredoc_own_line_still_parsed(self):
+        # AC3: the pre-#533 own-line/heredoc path is unchanged.
+        assert ssp.detect_marker(MARKER_CMD) == {
+            "workflow": "wf2", "step": "11",
+            "step_title": "Pre-PR Code Review ✓done", "issue": 492}
+
+    def test_read_of_marker_naming_notes_ignored(self):
+        # AC2: a grep/read of marker text that NAMES the notes file but does not
+        # APPEND (`>>`) is not a completion — #499 stays closed.
+        assert ssp.detect_marker(
+            "grep '### WF3 Step 7: x — DONE (#5)' claude_docs/session_notes.md") is None
+
+    def test_cat_pipe_read_of_notes_ignored(self):
+        assert ssp.detect_marker(
+            "cat claude_docs/session_notes.md | grep '### WF3 Step 7 — DONE (#5)'") is None
+
+    def test_compound_read_marker_plus_unrelated_append_ignored(self):
+        # #533 adversarial F1 (High): a read containing a marker followed by a
+        # SEPARATE unrelated append into notes must NOT stamp — that marker was
+        # never appended. The marker must be tied to the `>>` redirect.
+        cmd = ("grep '### WF3 Step 7: x — DONE (#5)' other.md; "
+               "echo done >> claude_docs/session_notes.md")
+        assert ssp.detect_marker(cmd) is None
+
+    def test_inline_echo_append_with_metachars_in_detail_parsed(self):
+        # #533 review (High): shell metacharacters (; | &) inside the QUOTED marker
+        # detail are data, not command structure — the append must still be seen.
+        for detail in ("lint & test green", "1675p/5f | +18 tests",
+                       "open; labels bug/safety"):
+            cmd = ("echo '### WF2 Step 11: Review — DONE (#492: " + detail + ")' "
+                   ">> claude_docs/session_notes.md")
+            hit = ssp.detect_marker(cmd)
+            assert hit is not None and hit["step"] == "11" and hit["issue"] == 492, \
+                f"metachar detail silently dropped: {detail!r}"
+
+    def test_quoted_redirect_inside_marker_text_is_not_an_append(self):
+        # #533 review (Low): a `>>…session_notes` INSIDE the echoed marker string is
+        # data printed to stdout, not a real append — it must not stamp.
+        assert ssp.detect_marker(
+            "echo '### WF2 Step 11: X — DONE (#5) >> claude_docs/session_notes.md'") is None
+
+    def test_overlong_inline_marker_with_append_skipped(self):
+        # AC3: the per-line cap still guards catastrophic backtracking on the new
+        # inline-append path.
+        cmd = ("echo '### WF2 Step 11: " + "x" * 5000 +
+               " — DONE (#492: y)' >> claude_docs/session_notes.md")
+        assert ssp.detect_marker(cmd) is None
+
+    def test_inline_append_advances_pointer(self, tmp_path):
+        # #533 reported symptom, via the hook's real entry path: an inline echo
+        # append must advance the now-pointer, not only heredoc markers.
+        ws = _mk_workspace(tmp_path)
+        cmd = ("echo '### WF3 Step 7: TDD Bug Fix — DONE (#533: x)' "
+               ">> claude_docs/session_notes.md")
+        r = _run_hook(ws, {"session_id": "sess-1", "tool_name": "Bash",
+                           "tool_input": {"command": cmd}})
+        assert r.returncode == 0 and r.stdout == ""
+        rec = json.loads(
+            (ws / "claude_docs" / "wal" / "rawgentic.state.json").read_text())
+        assert rec["workflow"] == "wf3" and rec["step"] == "7" and rec["issue"] == 533
