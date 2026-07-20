@@ -41,7 +41,7 @@ truth (skills no longer hand-derive it in prose). The fields are:
 | `has_database` | `config.database.type` exists |
 | `has_docker` | `config.infrastructure.docker.composeFiles` is a non-empty array |
 | `migration_dir` | `config.database.migrationsDir` (else `null`) |
-| `phase_executor_table` | `config.phaseExecutorTable.file` when the versioned descriptor is present and valid (`version` must be 1; `file` a project-relative path, no `..`); `null` ONLY when the section is absent — a present-but-invalid section raises, never silently falls back (#445) |
+| `phase_executor_table` | `config.phaseExecutorTable.file` when the versioned descriptor is present and valid (`version` must be 1; `file` a project-relative path, no `..`); `null` when the section is absent OR carries the answered-defaults sentinel `"file": null` (#531) — any other present-but-invalid section raises, never silently falls back (#445) |
 
 **Parallelism probe (`probe-parallelism`, #136).** Separate from the config-derived
 capabilities above (it inspects git, not `.rawgentic.json`), a sibling subcommand
@@ -271,6 +271,13 @@ Optional versioned descriptor naming the project-owned **phase-executor seat tab
 `file` is a project-relative path to a full routing-table JSON (the phase_executor
 `routing-table.schema.json` shape) that **completely replaces** the package default — never a
 merge overlay. Seeded (and optionally per-seat tweaked) from the package table by `/rawgentic:setup` Step 2i (#446); an un-tweaked project resolves a digest-identical table to the shipped default.
+
+**Answered-defaults sentinel (#531):** `"phaseExecutorTable": { "version": 1, "file": null }`
+records that setup asked and the user kept the package defaults. It derives and resolves
+exactly like an absent section (package default, no table file), but the key's presence stops
+the `post_update_reconcile` staleness nudge from re-firing on every `/rawgentic:switch`.
+Staged automatically by setup Step 2i when the user declines/keeps defaults and no
+`phaseExecutorTable` key exists yet.
 
 Semantics (one shared resolution: `executor_routing_lib.resolve_table`, used by BOTH the
 executor CLI and the driver-bench):

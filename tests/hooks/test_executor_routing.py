@@ -730,6 +730,23 @@ class TestResolveTable:
         rt = er.resolve_table(repo, routing)
         assert rt.source == "package_default"
 
+    def test_sentinel_resolves_identical_to_absent_section(self, tmp_path):
+        # #531: the answered-defaults sentinel {"version": 1, "file": null} resolves
+        # EXACTLY like an absent section — same source, same path, same snapshot
+        # digest (the byte-identical-behavior claim, asserted on content not label).
+        repo_absent = tmp_path / "absent"
+        _cfg(repo_absent)
+        repo_sentinel = tmp_path / "sentinel"
+        cfg_path = _cfg(repo_sentinel)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["phaseExecutorTable"] = {"version": 1, "file": None}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        rt_a = er.resolve_table(repo_absent, routing)
+        rt_s = er.resolve_table(repo_sentinel, routing)
+        assert rt_s.source == rt_a.source == "package_default"
+        assert rt_s.path == rt_a.path
+        assert rt_s.snapshot.config_digest == rt_a.snapshot.config_digest
+
     def test_real_repo_resolves_digest_identical_to_shipped(self):
         # rawgentic's own .rawgentic.json declares no phaseExecutorTable -> byte/digest-identical
         # to the shipped package table (AC1 backward-compat).

@@ -39,7 +39,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.71.0"
+    assert plugin["version"] == "3.71.1"
 
 
 def test_descriptions_consistent_count():
@@ -377,8 +377,13 @@ def test_setup_has_step_2i():
     assert "Step 2i" in text
     assert "phaseExecutorTable" in text
     assert "show-table" in text and "apply-table" in text
-    # AC2 no-op boundary: declining stages/touches nothing.
-    assert "stages nothing and touches nothing" in text.lower().replace("**", "")
+    # #531: declining/keeping defaults stages the answered-defaults sentinel so the
+    # staleness nudge can record the answer (presence = answered); resolution stays
+    # package-default. The old "stages nothing" contract looped the nudge forever.
+    # Whitespace-normalized: the sentence wraps across lines in the skill prose.
+    flat = " ".join(text.lower().replace("**", "").split())
+    assert "stages the answered-defaults sentinel" in flat
+    assert '"file": null' in text
     # A2/Step-6 staging: the pointer is applied at the .rawgentic.json write (Step 6), not Step 8.
     assert "phaseExecutorTable" in _section(text, "## Step 6:", "## Step 7:")
 
