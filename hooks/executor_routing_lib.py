@@ -68,6 +68,12 @@ EXIT_ENFORCEMENT: Final[int] = 4    # pre-check denial or requested!=actual iden
 EXIT_INTERNAL: Final[int] = 5       # audit/capture/internal/import failure (non-retryable)
 EXIT_REFUSED: Final[int] = 6        # #470 §2a: canary refusal (either phase) — ADDITIVE, no renumber
 
+# Providers whose MUTATING path is OS-confined (contract.py "SECURITY-LAYER ASYMMETRY"): codex runs
+# under Landlock workspace-write pinned to the worktree; claude has no FS sandbox, so it is absent
+# until a bwrap/landlock child ships (owner decision 2026-07-20, #470). supervised_dispatch STEP 0
+# refuses any mutating engine not listed here — module constant, never caller-selectable.
+MUTATING_FS_SANDBOXED: Final[frozenset] = frozenset({"codex"})
+
 # #470 §2a phase-1: the canary checks evaluable from LOCAL (staged-snapshot) evidence ALONE — the
 # subset run BEFORE the probe session spawns, so a bad staged config refuses before any process
 # exists. lane_provisioned + positive_deny need the phase-2 probe stream and are left to
@@ -794,6 +800,20 @@ def supervised_dispatch(
     cell / #472."""
     ce = correlation_id
     audit_path = str(audit.path)
+
+    # STEP 0 — FS-sandbox constraint (contract.py "SECURITY-LAYER ASYMMETRY", owner decision
+    # 2026-07-20): only providers whose mutating path is OS-confined may dispatch a mutating
+    # profile. claude has NO FS sandbox (codex is Landlock-confined), so mutating-claude refuses
+    # fail-closed until a sandbox child ships and adds it to MUTATING_FS_SANDBOXED. The canary
+    # verifies the hook layer is intact — it does not confine the filesystem, so it is not a
+    # substitute. Distinct violation tag so the future sandbox child can lift exactly this check.
+    if engine not in MUTATING_FS_SANDBOXED:
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "constraint",
+                               "violations": [f"mutating_{engine}_requires_fs_sandbox"],
+                               "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", f"mutating_{engine}_requires_fs_sandbox",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
 
     # STEP 1 — gate authentication. A mutating seat is always the build seat and always carries a
     # gate; a missing one is a malformed-input refusal before anything is staged.

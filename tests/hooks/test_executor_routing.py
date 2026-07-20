@@ -1372,7 +1372,13 @@ class _StubSupervisor:
 
 
 def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
-                probe_raises=False, provision_calls=None):
+                probe_raises=False, provision_calls=None, monkeypatch=None):
+    # The rich claude_mutating machinery (probes, init event) stays unit-tested even though
+    # production refuses mutating-claude (STEP 0, MUTATING_FS_SANDBOXED): tests widen the module
+    # constant — a monkeypatch of module state, NOT a caller input; production has no such knob.
+    # test_supervised_refuses_unsandboxed_mutating_engine pins the production value.
+    if monkeypatch is not None:
+        monkeypatch.setattr(er, "MUTATING_FS_SANDBOXED", frozenset({"codex", "claude"}))
     qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
     sup = _StubSupervisor(state=state)
@@ -1401,8 +1407,8 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
     return res, sup, qc, calls
 
 
-def test_supervised_happy_path_launches_after_canary(tmp_path):
-    res, sup, _qc, calls = _supervised(tmp_path)
+def test_supervised_happy_path_launches_after_canary(tmp_path, monkeypatch):
+    res, sup, _qc, calls = _supervised(tmp_path, monkeypatch=monkeypatch)
     assert res["ok"] is True, res
     assert res["exit"] == er.EXIT_OK
     assert res["action"] == "executor_supervised"
@@ -1413,12 +1419,12 @@ def test_supervised_happy_path_launches_after_canary(tmp_path):
     assert sup.launched[0][1]["snapshot_digest"] == _canary.compute_registration_digest(str(REPO_ROOT))
 
 
-def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path):
+def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path, monkeypatch):
     # a stream with NO Edit-class deny -> require_canary refuses positive_deny -> exit 6.
     stream = [e for e in _happy_probe_stream()
               if not (e.get("message", {}).get("content", [{}])[0].get("name") == "Edit"
                       or e.get("message", {}).get("content", [{}])[0].get("tool_use_id") == "live-2")]
-    res, sup, qc, calls = _supervised(tmp_path, probe_stream=stream)
+    res, sup, qc, calls = _supervised(tmp_path, probe_stream=stream, monkeypatch=monkeypatch)
     assert res["exit"] == er.EXIT_REFUSED
     assert res["error"]["code"] == "canary_refused"
     assert any("positive_deny" in v for v in [res["error"]["message"]])
@@ -1427,18 +1433,19 @@ def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path):
     assert qc.live_permits("claude") == 0
 
 
-def test_supervised_phase1_refusal_skips_probe_and_launch(tmp_path):
+def test_supervised_phase1_refusal_skips_probe_and_launch(tmp_path, monkeypatch):
     # a --bare final_argv fails the LOCAL bare_absent check at phase 1 -> refuse BEFORE the probe.
     calls = []
     res, sup, qc, _ = _supervised(
-        tmp_path, final_argv=["claude", "--print", "--bare"], provision_calls=calls)
+        tmp_path, final_argv=["claude", "--print", "--bare"], provision_calls=calls,
+        monkeypatch=monkeypatch)
     assert res["exit"] == er.EXIT_REFUSED
     assert "bare_detected" in res["error"]["message"]
     assert sup.launched == [] and calls == []
 
 
-def test_supervised_probe_failure_is_refusal_not_skip(tmp_path):
-    res, sup, _qc, calls = _supervised(tmp_path, probe_raises=True)
+def test_supervised_probe_failure_is_refusal_not_skip(tmp_path, monkeypatch):
+    res, sup, _qc, calls = _supervised(tmp_path, probe_raises=True, monkeypatch=monkeypatch)
     assert res["exit"] == er.EXIT_REFUSED
     assert res["error"]["code"] == "canary_refused"
     assert "probe_session_failed" in res["error"]["message"]
@@ -1450,8 +1457,8 @@ def test_supervised_missing_gate_refuses_malformed(tmp_path):
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
     res = er.supervised_dispatch(
         seat="build", prompt="hi", run_id="run1", correlation_id="c",
-        effort=None, timeout=5.0, engine="claude",
-        profile=_contract.LaunchProfile(mutating=True), final_argv=["claude", "--print"],
+        effort=None, timeout=5.0, engine="codex",
+        profile=_contract.LaunchProfile(mutating=True), final_argv=["codex", "exec"],
         snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
         canary=_canary, canary_evidence=_cev, supervisor=_StubSupervisor(),
         probe_session=lambda **k: [], provision=lambda: (None, None),
@@ -1461,8 +1468,33 @@ def test_supervised_missing_gate_refuses_malformed(tmp_path):
     assert res["error"]["code"] == "gate_file_required"
 
 
-def test_supervised_non_completed_state_maps_to_availability(tmp_path):
-    res, sup, _qc, _ = _supervised(tmp_path, state="timed_out")
+def test_supervised_non_completed_state_maps_to_availability(tmp_path, monkeypatch):
+    res, sup, _qc, _ = _supervised(tmp_path, state="timed_out", monkeypatch=monkeypatch)
     assert res["exit"] == er.EXIT_AVAILABILITY
     assert res["error"]["code"] == "supervised_timed_out"
     assert len(sup.launched) == 1  # launch DID happen; the FAILURE was downstream
+
+
+def test_supervised_refuses_unsandboxed_mutating_engine(tmp_path):
+    """Production pin (contract.py SECURITY-LAYER ASYMMETRY, owner 2026-07-20): a mutating engine
+    outside MUTATING_FS_SANDBOXED refuses at STEP 0 — nothing staged, nothing launched. Also pins
+    the production allowlist value itself: codex only, until an FS-sandbox child ships."""
+    assert er.MUTATING_FS_SANDBOXED == frozenset({"codex"})
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    sup = _StubSupervisor()
+    gd, ctx = _gate()
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="c",
+        effort=None, timeout=5.0, engine="claude",
+        profile=_contract.LaunchProfile(session_policy="fresh", mutating=True),
+        final_argv=["claude", "--print"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=sup,
+        probe_session=lambda **k: [], provision=lambda: (None, None),
+        gate_decision=gd, plan_context=ctx,
+        mk_nonce=lambda: "N", mk_probe_cid=lambda c: "p")
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert "mutating_claude_requires_fs_sandbox" in res["error"]["message"]
+    assert sup.launched == []
