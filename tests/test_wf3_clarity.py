@@ -257,6 +257,73 @@ class TestDispatchGrammar:
             "values must be present (#331)")
 
 
+# --- #470: WF3 bespoke executor-dispatch contract (review-narrowed PRIMARY tier) ---
+
+class TestExecutorDispatchContractWF3:
+    """Drift guards for the #470 executor-dispatch contract in WF3's bespoke
+    model-routing block. WF3 is review-only, so the contract is narrowed to the
+    review seat (no build seat → no `--gate-file`/`--plan-file`). Companion to
+    test_wf2_clarity.py::TestDispatchGrammar::test_wf2_producer_sentence_present
+    and test_model_routing_resolve_prose.py (the WF2/shared-source guards). One
+    canonical sentence per assert, whitespace-normalized, corpus `in`."""
+
+    def test_executor_contract_header_present(self):
+        corpus = _norm(_text())
+        assert ("**Executor-dispatch contract (#470) — the PRIMARY tier.** Every "
+                "`review`-seat model call dispatches through ONE skill-facing entry "
+                "point — the executor `dispatch` CLI") in corpus, (
+            "the WF3 executor-dispatch contract header (PRIMARY tier) must be "
+            "present in the fix-bug corpus")
+
+    def test_review_only_no_build_seat_clause_present(self):
+        corpus = _norm(_text())
+        assert ("WF3 dispatches ONLY review seats — it has no build seat, so no "
+                "`--gate-file`/`--plan-file` material ever crosses this boundary") in corpus, (
+            "the WF3 review-only / no-build-seat clause must be present — WF3 "
+            "carries no `--gate-file`/`--plan-file` material (#470)")
+
+    def test_producer_sentence_present(self):
+        corpus = _norm(_text())
+        assert ("The producer is the executor result dict (`type=executor:review`, "
+                "`model=<actual_model>`, `resolution=primary`) on the primary tier, "
+                "or the fallback (legacy) Agent-tool dispatch (`resolution=fallback`) "
+                "as today.") in corpus, (
+            "the WF3 DISPATCH producer sentence (executor result dict vs fallback "
+            "Agent-tool) must be present (#470)")
+
+    def test_per_run_tier_selection_present(self):
+        corpus = _norm(_text())
+        assert "Tier selection is per-RUN, at run start, never mixed." in corpus
+        assert "never an automatic, silent per-dispatch downgrade to the Agent tool" in corpus
+        assert ("TERMINATES the current run" in corpus
+                and "starts a NEW run_id on the other tier" in corpus), (
+            "the WF3 tier-switch semantics (terminate + new linked run_id, never a "
+            "silent mid-run downgrade) must be present (#470)")
+
+    def test_fallback_legacy_tier_present(self):
+        corpus = _norm(_text())
+        assert "**Bundled agent dispatch (#164) — the FALLBACK (legacy) tier.**" in corpus
+        assert ("Until the W12 flip (#474) this tier remains a working, declared "
+                "fallback") in corpus, (
+            "the WF3 fallback (legacy) tier — Agent-tool rawgentic:rawgentic-reviewer, "
+            "resolution=fallback, retained until W12/#474 — must be present (#470)")
+
+    def test_gate_preservation_sentences_present(self):
+        # The two #470 gate-preservation sentences carried VERBATIM into the WF3
+        # corpus (design §3; also pinned by the dedicated test_gate_preservation.py).
+        corpus = _norm(_text())
+        assert ("An executor seat is never a gate bypass — every mandatory gate "
+                "(Steps 4, 8a, 9, 11, 11.5) runs with identical semantics whichever "
+                "tier dispatches its model calls, and every EXECUTOR-tier build-seat "
+                "dispatch requires the authenticated gate decision plus the internally "
+                "minted plan context.") in corpus, (
+            "WF3 corpus must carry the #470 gate-bypass invariant sentence verbatim")
+        assert ("WF2/WF3 prose runs the complexity-gate step before any fallback-tier "
+                "build dispatch.") in corpus, (
+            "WF3 corpus must carry the #470 complexity-gate-before-fallback-build "
+            "sentence verbatim")
+
+
 # --- #330: dispatches[] assembly instruction at WF3 Step 14 ---
 
 class TestDispatchesAssembly:

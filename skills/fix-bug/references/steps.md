@@ -314,7 +314,7 @@ Active fix branch with dependencies installed.
 ### Failure Modes
 
 - Working directory is dirty → stash changes first (`git stash`), create branch, then ask user if stash should be applied. **[Headless: AUTO-RESOLVE — always stash, post brief issue comment with stash ref.]**
-- Branch name already exists → ask user if they want to resume (checkout existing branch) or start fresh (delete and recreate). **[Headless: AUTO-RESOLVE — always resume existing branch.]**
+- Branch name already exists → ask user if they want to resume (checkout existing branch) or start fresh (delete and recreate). **[Headless: AUTO-RESOLVE — always resume existing branch.]** On a resumed run, before re-dispatching any review seat (Step 4 / Step 9), query the executor `JobRegistry` for live jobs keyed by this run's `run_id` (`supervisor.recover(run_id)`): identity-matched live jobs are ADOPTED rather than re-dispatched, mismatches are quarantined per `classify_recovery` — so a review already in flight from the prior session is not double-launched.
 - Push fails (network) → continue locally, push will be retried by P4 remote sync
 
 ---
@@ -389,7 +389,7 @@ Verification pass/fail.
 **Part A: Code Review**
 
 <!-- model-routing: role=review -->
-Dispatch these 2 review agents with `model: <review>` unless routing resolved `inherit`; when the resolved `review` effort is non-`none`, apply the dual-path effort rule from `<model-routing-resolve>` (pass it only where the dispatch layer supports effort; always log it). Every reviewer brief — whichever tier the slot resolves to — MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
+Dispatch these 2 review agents on the executor `review`/`review_fast` seats per the `<model-routing-resolve>` contract (primary tier); the fallback (legacy) tier dispatches them as `rawgentic:rawgentic-reviewer` agents via the Agent tool (`model: <review>` unless routing resolved `inherit`; effort dual-path per `<model-routing-resolve>` — pass it only where the dispatch layer supports effort, always logged; `resolution=fallback`). Every reviewer brief — whichever tier the slot resolves to — MUST restate the read-only execution clause (#510): Bash is for read-heavy inspection only — never execute the target project's entry-point scripts, deploy paths, or anything that mutates state or sends outward; the only sanctioned executions are the verification commands this brief names (from the project's `.rawgentic.json` testing config); an entry script invoked in an unexpected form may fall through to a live path — do not experiment with invocation forms; when a command's read-only-ness is uncertain, don't run it — report the uncertainty as part of the review.
 
 Launch a focused 2-agent code review in parallel using Agent tool calls (subagent_type per the PR review toolkit):
 
