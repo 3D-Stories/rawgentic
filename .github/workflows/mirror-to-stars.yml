@@ -7,7 +7,9 @@ on:
 jobs:
   mirror:
     if: github.repository == '3D-Stories/rawgentic'
-    runs-on: ubuntu-latest
+    runs-on:
+      group: 3ds-fleet
+      labels: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
         with:
