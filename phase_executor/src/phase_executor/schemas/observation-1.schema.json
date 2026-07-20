@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://rawgentic.dev/schemas/phase_executor/observation-2.json",
+  "$id": "https://rawgentic.dev/schemas/phase_executor/observation-1.json",
   "title": "phase_executor Observation",
-  "description": "CURRENT schema_version 2 of the Observation contract. Normative, language-neutral record of one model seat invocation. contract.py is one producer; a Rust producer (kukakuka) emits the same documents. actual_model + usage are mandatory evidence when parse_status == 'ok' (absent identity/usage on a successful call is a failure, not an unknown success), and MAY be null only for a non-success parse_status so a pre-envelope timeout is still recordable. v2 adds the optional-additive work_product object (executor-derived git evidence) + the AC-I1 telemetry fields (session_policy, worktree_id, tmux_session, budget, hook_denials). Versioning policy: a field whose addition breaks an older vendored copy (any change under additionalProperties:false) bumps schema_version. Each version ships as its own FROZEN observation-<n>.schema.json and is never edited after release. A document is validated against the schema of its DECLARED schema_version (unknown version = fail-closed). New producers emit the current version; prior-version documents are never retro-mutated.",
+  "description": "FROZEN schema_version 1 of the Observation contract (never edited after release). Normative, language-neutral record of one model seat invocation. contract.py is one producer; a Rust producer (kukakuka) emits the same documents. actual_model + usage are mandatory evidence when parse_status == 'ok' (absent identity/usage on a successful call is a failure, not an unknown success), and MAY be null only for a non-success parse_status so a pre-envelope timeout is still recordable. Versioning policy: a field whose addition breaks an older vendored copy (any change under additionalProperties:false) bumps schema_version. Each version ships as its own FROZEN observation-<n>.schema.json and is never edited after release. A document is validated against the schema of its DECLARED schema_version (unknown version = fail-closed). New producers emit the current version; prior-version documents are never retro-mutated.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -29,8 +29,8 @@
   "properties": {
     "schema_version": {
       "type": "string",
-      "const": "2",
-      "description": "Observation schema version. Bump on any change that breaks an older vendored copy (any addition under additionalProperties:false). A document is validated against the schema of this DECLARED version; unknown version = fail-closed."
+      "const": "1",
+      "description": "Observation schema version. Bump on any breaking field change."
     },
     "run_id": {
       "type": "string",

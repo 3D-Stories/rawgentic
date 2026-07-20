@@ -15,6 +15,16 @@ bake-offs E5, complexity gate E6, driver-bench E7, multi-account lanes E8) consu
   An `Observation`'s `actual_model` + `usage` are mandatory evidence when `parse_status == "ok"`
   (absent identity on a successful call is a failure, not an unknown success), and may be null only
   on a non-success status — so a pre-envelope timeout is still recordable.
+- **Observation schema versioning policy (normative, #434 option b).** A field whose addition
+  breaks an older vendored copy (any change under `additionalProperties:false`) bumps
+  `schema_version`. Each version ships as its own FROZEN `observation-<n>.schema.json` and is never
+  edited after release; the canonical `observation.schema.json` filename always holds the CURRENT
+  version. A document is validated against the schema of its DECLARED `schema_version` — always via
+  `contract.validate_observation(obs)`, which dispatches by version (an unknown/missing version is
+  fail-closed). New producers emit the current version (`contract.SCHEMA_VERSION`, now `"2"`);
+  prior-version documents are never retro-mutated, and a direct schema load is reserved for
+  explicitly current-version checks. v2 (W6, #469) adds the optional-additive `work_product` object
+  + AC-I1 telemetry fields; a v1 (kukakuka-parity) document keeps validating against frozen v1.
 - **Adapters** (`adapters/`): `claude_cli`, `codex_cli`, `zhipuai_sdk`. Each is a pure `parse_*`
   (fixture-tested, no I/O) + a live `run`. The adapter owns the model flag; the prompt goes on
   stdin (no argv injection).

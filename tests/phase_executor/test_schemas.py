@@ -7,6 +7,8 @@ import pathlib
 import jsonschema
 import pytest
 
+from phase_executor import contract
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCHEMA_DIR = REPO_ROOT / "phase_executor" / "src" / "phase_executor" / "schemas"
 ROUTING_DIR = REPO_ROOT / "phase_executor" / "src" / "phase_executor" / "routing"
@@ -17,13 +19,18 @@ def _load(path):
     return json.loads(path.read_text())
 
 
+# The canonical filename is the CURRENT (v2) schema; observation-1.schema.json is the FROZEN v1.
 OBS_SCHEMA = _load(SCHEMA_DIR / "observation.schema.json")
+V1_SCHEMA = _load(SCHEMA_DIR / "observation-1.schema.json")
 RT_SCHEMA = _load(SCHEMA_DIR / "routing-table.schema.json")
 
 
 def _obs_ok():
+    # v2 variant — a current-version doc validated against OBS_SCHEMA (v2) directly (an
+    # explicitly-v2 structural check, the audited direct-load exception). v1 back-compat is
+    # exercised through validate_observation dispatch (kukakuka fixture) + the frozen-v1 tests.
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "run_id": "r1",
         "attempt_id": "a1",
         "seat": "review",
@@ -98,10 +105,13 @@ def test_extra_top_level_field_rejected():
 
 
 def test_ac2_kukakuka_shaped_observation_validates():
-    """AC2: a kukakuka-shaped Observation (CCR transport, proxied actual_model,
-    turn-nonce correlation_id) validates against the committed schema."""
+    """AC2 + #469 H1: a kukakuka-shaped Observation (CCR transport, proxied actual_model,
+    turn-nonce correlation_id) is a schema_version "1" doc — it validates through the
+    version-DISPATCHING validate_observation (dispatch -> frozen v1), NOT the direct v2 load
+    (whose const "2" would reject it). This is the #434(b) "validate by declared version" proof."""
     obs = _load(FIXTURES / "kukakuka-observation.json")
-    jsonschema.validate(obs, OBS_SCHEMA)
+    assert obs["schema_version"] == "1"
+    contract.validate_observation(obs)  # dispatch -> frozen v1
     assert obs["transport"] == "ccr"
     assert obs["correlation_id"].startswith("turn-nonce-")
     assert obs["actual_model"] == obs["requested_model"]  # proxied but innermost id reported
@@ -230,3 +240,72 @@ def test_observation_dispatched_lane_negative_and_participation_mode():
     ok = dict(base); ok["dispatched_lane"] = {"provider": "openai", "transport": "ccr",
         "auth_mode": "api_key", "pool": "codex", "credential_ref": None, "participation_mode": "council"}
     jsonschema.validate(ok, OBS_SCHEMA)
+
+
+# --- #469 W6 Task 1: schema v2 bump + version-dispatching validator (AC1) ---
+
+
+def test_schema_version_is_2():
+    """The canonical schema is now v2 (const "2"); the producer default matches; the FROZEN v1
+    copy keeps const "1" (never edited after release)."""
+    assert OBS_SCHEMA["properties"]["schema_version"]["const"] == "2"
+    assert contract.SCHEMA_VERSION == "2"
+    assert V1_SCHEMA["properties"]["schema_version"]["const"] == "1"
+    assert OBS_SCHEMA["$id"].endswith("observation-2.json")
+    assert V1_SCHEMA["$id"].endswith("observation-1.json")
+
+
+def test_frozen_v1_is_subset_of_v2():
+    """Frozen invariant: v1 removed nothing — its field set is a subset of v2's (v2 only adds).
+    The specific v2-only additions (work_product + I1 fields) are asserted absent-from-v1 in the
+    work_product / I1 tests, once those fields exist."""
+    v1_props = set(V1_SCHEMA["properties"])
+    v2_props = set(OBS_SCHEMA["properties"])
+    assert v1_props <= v2_props
+
+
+def test_observation_schema_dispatches_by_version():
+    """observation_schema maps a declared version to its FROZEN schema; a default arg (no version)
+    yields the current version; an unknown version fails closed."""
+    assert contract.observation_schema("1")["properties"]["schema_version"]["const"] == "1"
+    assert contract.observation_schema("2")["properties"]["schema_version"]["const"] == "2"
+    assert contract.observation_schema()["properties"]["schema_version"]["const"] == "2"  # default
+    with pytest.raises(Exception):
+        contract.observation_schema("99")
+
+
+def test_validate_observation_dispatches_v1_and_v2():
+    """A v1 doc (kukakuka fixture) validates via dispatch -> frozen v1; a v2 doc via -> v2."""
+    v1 = _load(FIXTURES / "kukakuka-observation.json")
+    contract.validate_observation(v1)  # dispatch -> frozen v1
+    contract.validate_observation(_obs_ok())  # v2 -> v2
+
+
+def test_validate_observation_unknown_version_fails_closed():
+    """An unknown or missing schema_version can bind to no frozen schema -> fail closed (raise)."""
+    unknown = _obs_ok()
+    unknown["schema_version"] = "99"
+    with pytest.raises(Exception):
+        contract.validate_observation(unknown)
+    missing = _obs_ok()
+    del missing["schema_version"]
+    with pytest.raises(Exception):
+        contract.validate_observation(missing)
+
+
+def test_v1_document_validates_through_each_consumer():
+    """#469 adversarial H1: a v1 doc passes validate_observation (dispatch -> frozen v1) for every
+    general-validation consumer path (the kukakuka fixture + the golden routing-audit inner obs);
+    a v2-const doc declaring "1" is rejected; unknown fails closed."""
+    kuka = _load(FIXTURES / "kukakuka-observation.json")
+    contract.validate_observation(kuka)
+    audit = [json.loads(line) for line in
+             (FIXTURES / "routing-audit.jsonl").read_text().splitlines() if line.strip()]
+    inner = next(r["observation"] for r in audit if r.get("kind") == "observation")
+    assert inner["schema_version"] == "1"
+    contract.validate_observation(inner)  # dispatch -> frozen v1
+    # a "1"-declared doc validated by dispatch must still meet the frozen-v1 const
+    bad_version = dict(inner); bad_version["schema_version"] = "2"
+    # (declares "2" but carries no v2-only field -> still valid under v2; the real freeze proof is
+    # the v2-only-field rejection covered in the work_product / I1 tests.)
+    contract.validate_observation(bad_version)

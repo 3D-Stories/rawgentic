@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Final, Optional
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 
 # The seat roles the engine actually has ``check_pre`` evaluators for. The loader semantic pass
 # (``routing._assert_referential_integrity``) rejects any ``policy.enforced_roles`` entry outside
@@ -69,8 +69,27 @@ def _load_schema(name: str) -> dict:
     return json.loads((_SCHEMA_DIR / name).read_text(encoding="utf-8"))
 
 
-def observation_schema() -> dict:
-    return _load_schema("observation.schema.json")
+# #469 (#434 option b): each schema_version ships as its OWN frozen file; a document is validated
+# against the schema of its DECLARED version, never retro-mutated. observation.schema.json is the
+# CURRENT version (kept as the canonical filename to minimise churn for the ~dozen loaders);
+# observation-<n>.schema.json is a FROZEN prior version. Unknown version = fail-closed (see below).
+_OBSERVATION_SCHEMA_FILES = {
+    "1": "observation-1.schema.json",
+    "2": "observation.schema.json",
+}
+
+
+def observation_schema(version: str = SCHEMA_VERSION) -> dict:
+    """Return the FROZEN JSON Schema for ``version`` (default = the current SCHEMA_VERSION, so a
+    no-arg call keeps yielding the latest schema for callers that inspect its shape). Fail-closed:
+    a version with no frozen schema raises ValueError. lru-cached per version via ``_load_schema``
+    (keyed by the per-version filename)."""
+    name = _OBSERVATION_SCHEMA_FILES.get(version)
+    if name is None:
+        raise ValueError(
+            f"observation_schema: no frozen schema for schema_version {version!r} "
+            f"(known: {sorted(_OBSERVATION_SCHEMA_FILES)}) — fail-closed")
+    return _load_schema(name)
 
 
 def routing_table_schema() -> dict:
@@ -356,10 +375,17 @@ def resolve_effort(model: str, requested: Optional[str], *, engine: str) -> "Eff
 
 
 def validate_observation(obs: dict) -> None:
-    """Raise jsonschema.ValidationError if ``obs`` does not conform. Fail-loud."""
+    """Validate ``obs`` against the schema of its DECLARED ``schema_version`` (#469 / #434 b).
+    Fail-loud AND fail-closed: an unknown or missing ``schema_version`` binds to no frozen schema
+    and raises (via ``observation_schema``) rather than silently validating against the current
+    version; a conforming-shape violation raises ``jsonschema.ValidationError``. This is the ONLY
+    general validation entry point — direct ``observation_schema()``/schema loads bypass dispatch
+    (a v1 doc would be rejected against the v2 const) and are reserved for explicitly-v2 checks."""
     import jsonschema  # noqa: PLC0415 (deferred: keep import cost off the hot path / off consumers that only build)
 
-    jsonschema.validate(obs, observation_schema())
+    version = obs.get("schema_version") if isinstance(obs, dict) else None
+    schema = observation_schema(version)  # fail-closed on unknown/missing version
+    jsonschema.validate(obs, schema)
 
 
 def validate_routing_table(table: dict) -> None:
