@@ -249,9 +249,17 @@ class TmuxSupervisor:
                handle: WorktreeHandle, profile: Optional[contract.LaunchProfile] = None,
                effort: Optional[str] = None, timeout: float = 300.0,
                author_provider: Optional[str] = None, resume_session_id: Optional[str] = None,
-               resume_attempts: int = 0, quota_timeout: float = 300.0) -> JobRecord:
+               resume_attempts: int = 0, quota_timeout: float = 300.0,
+               snapshot_dir: Optional[str] = None,
+               snapshot_digest: Optional[str] = None) -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
-        for the job's lifetime), write the FIXED pane spec, and spawn the pane."""
+        for the job's lifetime), write the FIXED pane spec, and spawn the pane.
+
+        #470 Task-3: ``snapshot_dir`` + ``snapshot_digest`` (a supervised mutating launch, staged
+        by the dispatch choke-point) are bound into the spec so ``pane_runner`` re-verifies the
+        staged snapshot's CONTENTS immediately before executing (TOCTOU freeze). The spec's own
+        content digest is delivered to ``pane_runner`` out-of-band (argv[2]) for the same reason —
+        neither is embeddable in the spec it protects."""
         targets = routing.eligible_targets(seat, self._snapshot, author_provider=author_provider)
         if not targets:
             raise routing.ChainExhausted(f"seat {seat!r}: no eligible target")
@@ -294,6 +302,10 @@ class TmuxSupervisor:
                     },
                 },
             }
+            # #470 Task-3: bind the staged snapshot (contents re-verified in the pane) when supplied.
+            if snapshot_dir is not None or snapshot_digest is not None:
+                spec["snapshot_dir"] = snapshot_dir
+                spec["expected_snapshot_digest"] = snapshot_digest
             specs_dir = Path(self._registry_root) / "specs"
             specs_dir.mkdir(parents=True, exist_ok=True)
             os.chmod(specs_dir, 0o700)
@@ -304,7 +316,9 @@ class TmuxSupervisor:
             # not just the fixed argv — a swapped prompt/engine/grants file can't adopt.
             spec_digest = hash_text(spec_text)
 
-            argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path)]
+            # #470 Task-3: the expected spec digest rides argv[2] so pane_runner refuses a spec
+            # swapped after this atomic write (out-of-band — a spec cannot carry its own digest).
+            argv = [sys.executable, "-m", "phase_executor.pane_runner", str(spec_path), spec_digest]
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
@@ -631,6 +645,42 @@ class TmuxSupervisor:
         record = self.launch(seat, prompt, identity=identity, handle=handle, **launch_kw)
         return self.await_job(record, poll_s=poll_s, timeout_s=timeout_s)
 
+    # -- pre-spawn canary probe session (#470 Task-3, design §2a phase 2) ------
+
+    def probe_session(self, composition, probe_plan, *, snapshot_dir, quota, pool: str,
+                      account: str = "default", timeout: float = 180.0,
+                      quota_timeout: float = 60.0, run=None) -> list:
+        """A trusted, SHORT-LIVED, NON-mutating probe run STRICTLY before the task pane exists.
+
+        It acquires its OWN quota permit (a real provider invocation must respect the pool ceiling)
+        released finally-equivalent on EVERY path (success, refusal, timeout, cancellation — the
+        ``acquire`` context manager guarantees it), then runs a credential-free ``claude -p
+        --output-format stream-json`` probe whose scripted commands exercise each mutating matcher
+        class against OS-NON-WRITABLE targets, and returns the parsed stream events. The caller
+        (``executor_routing_lib.supervised_dispatch``) feeds them to
+        ``canary_evidence.complete_evidence``; the canary evaluation happens THERE, so this method
+        never decides pass/refuse — a repeated refusal downstream therefore never shrinks the pool
+        (the probe permit is always released here). Probe-session FAILURE is a refusal downstream
+        (fail-closed), never a skip: a raise propagates. ``run`` overrides the provider runner for
+        tests (the live spawn is the ``#472`` proving ground / the RUN_LIVE cell)."""
+        runner = run if run is not None else self._probe_run
+        with quota.acquire(pool, account=account, timeout=quota_timeout):
+            return runner(composition=composition, probe_plan=probe_plan,
+                          snapshot_dir=snapshot_dir, timeout=timeout)
+
+    def _probe_run(self, *, composition, probe_plan, snapshot_dir, timeout) -> list:  # pragma: no cover
+        """Live probe runner (exercised by the RUN_LIVE cell / #472, never CI). A disposable,
+        credential-free cwd (own throwaway dir; no repo write access, no secrets threaded); the
+        prompt drives one probe per mutating matcher class against an OS-non-writable target."""
+        import tempfile  # noqa: PLC0415
+        prompt = probe_prompt(probe_plan)
+        cmd = ["claude", "--print", "--output-format", "stream-json", "--verbose"]
+        env = {**self._env, "RAWGENTIC_HEADLESS": "1"}
+        with tempfile.TemporaryDirectory(prefix="rg-probe-") as workdir:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  timeout=timeout, env=env, cwd=workdir, check=False)
+        return parse_stream_events(proc.stdout)
+
     def kill_server(self, run_id: str) -> None:
         """Tear down the whole private server for ``run_id`` (test/run cleanup)."""
         self._tmux(self.resolve_socket(run_id), "kill-server")
@@ -642,8 +692,10 @@ class TmuxSupervisor:
         (PID-reuse guard, live jobs), and the worktree still on disk. ANY mismatch is a
         quarantine — never a silent adopt (CF-7)."""
         spec_path = Path(self._registry_root) / "specs" / f"{record.session_name}.json"
-        # interpreter-independent digest — must mirror launch()'s argv[1:] computation
-        if command_digest(["-m", "phase_executor.pane_runner", str(spec_path)]) != record.command_digest:
+        # interpreter-independent digest — must mirror launch()'s argv[1:] computation, INCLUDING
+        # the argv[2] expected-spec-digest (#470 Task-3); record.spec_digest is that same value.
+        if command_digest(["-m", "phase_executor.pane_runner", str(spec_path),
+                           record.spec_digest]) != record.command_digest:
             return False
         # FULL spec-content digest (Step-11 codex #4): the bytes on disk must be the bytes
         # launch() wrote — a swapped prompt/engine/grants/capture-root can never adopt
@@ -873,3 +925,46 @@ def _exit_code_of(obs: dict) -> Optional[int]:
     proc = obs.get("process") or {}
     code = proc.get("exit_code")
     return code if isinstance(code, int) else None
+
+
+# -- #470 Task-3 pre-spawn probe helpers (pure; the live spawn is _probe_run) ----------
+_PROBE_PAYLOADS = {
+    # class-tool -> a scripted, INTRINSICALLY non-mutating probe line (OS-non-writable target, so
+    # an OS denial can never masquerade as a hook success — the canary requires a hook-origin
+    # marker, and the payload's own OS-unwritability is defense-in-depth, not the detector).
+    "Bash": "run this exact bash command with the Bash tool: ssh example.invalid echo hi",
+    "Edit": "use the Write tool to write the text 'x' to the absolute path /proc/1/rg-probe-denied",
+    "Write": "use the Write tool to write the text 'x' to the absolute path /proc/1/rg-probe-denied",
+}
+
+
+def probe_prompt(probe_plan: dict) -> str:
+    """Build the probe-session prompt: one probe line per mutating matcher class in the plan,
+    keyed off the class's issued tool. Fail-closed on an empty plan (an empty prompt would yield
+    no probes -> the canary refuses positive_deny, never a false pass)."""
+    lines = []
+    for cls, spec in (probe_plan or {}).items():
+        tool = spec.get("issued_tool") if isinstance(spec, dict) else None
+        payload = _PROBE_PAYLOADS.get(tool) or f"use the {tool} tool once on a read-only target"
+        lines.append(f"- ({cls}) {payload}")
+    body = "\n".join(lines)
+    return ("You are a hook-layer probe. Perform EACH of the following actions EXACTLY ONCE, in "
+            "order, reporting the tool result verbatim. Do not use any skill. Do not ask "
+            f"questions.\n{body}\n")
+
+
+def parse_stream_events(stdout: str) -> list:
+    """Parse a ``claude -p --output-format stream-json`` stdout into a list of event dicts,
+    skipping unparseable lines (fail-closed: junk never raises, it is simply absent)."""
+    events = []
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events

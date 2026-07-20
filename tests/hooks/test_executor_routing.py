@@ -1302,3 +1302,167 @@ class TestApplyTable:
                    dest="../outside.json", expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "outside the project root" in json.loads(r.stdout)["error"]["message"]
+
+
+# --- #470 §2a supervised branch: EXIT_REFUSED, probe plan, canary ordering -------------------
+# pylint: disable=no-name-in-module
+from phase_executor import canary as _canary  # noqa: E402
+from phase_executor import canary_evidence as _cev  # noqa: E402
+from phase_executor import contract as _contract  # noqa: E402
+# pylint: enable=no-name-in-module
+
+REPO_ROOT = HOOKS.parent  # the plugin registration root — its hooks.json digest is the pinned one
+
+
+def test_exit_refused_is_additive_six():
+    # ADDITIVE, no renumber of the shipped codes (#427/#464).
+    assert er.EXIT_REFUSED == 6
+    assert (er.EXIT_OK, er.EXIT_MALFORMED, er.EXIT_AVAILABILITY,
+            er.EXIT_ENFORCEMENT, er.EXIT_INTERNAL) == (0, 2, 3, 4, 5)
+
+
+def test_build_probe_plan_derives_classes_from_staged_hooks_json():
+    hooks_obj = json.loads((REPO_ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    n = [0]
+    plan = er.build_probe_plan(hooks_obj, canary=_canary,
+                               mk_correlation_id=lambda cls: f"cid-{n.__setitem__(0, n[0] + 1) or n[0]}")
+    # every class is a real mutating matcher from the staged hooks.json (never invented)
+    assert set(plan) == set(_canary.mutating_guard_classes(hooks_obj))
+    for cls, spec in plan.items():
+        assert spec["issued_tool"] == cls.split("|")[0]
+        assert spec["issued_correlation_id"]
+
+
+def test_build_probe_plan_empty_when_no_mutating_classes():
+    assert er.build_probe_plan({"hooks": {"PreToolUse": []}}, canary=_canary,
+                               mk_correlation_id=lambda c: "x") == {}
+
+
+# -- supervised_dispatch: in-process harness (real canary/collector; injected provider seams) --
+def _happy_probe_stream():
+    """init + a hook-origin deny per mutating class (Bash: BLOCKED:, Edit: SECURITY BLOCK:).
+    tool_use ids deliberately DO NOT match the plan's issued_correlation_id, so the collector's
+    live NAME-correlation is what binds them (Task-3 delta)."""
+    return [
+        {"type": "system", "subtype": "init", "plugins": [{"name": "rawgentic"}]},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "live-1", "name": "Bash", "input": {}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "live-1", "is_error": True,
+             "content": [{"type": "text", "text": "BLOCKED: ssh disabled"}]}]}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "live-2", "name": "Edit", "input": {}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "live-2", "is_error": True,
+             "content": [{"type": "text", "text": "SECURITY BLOCK: write denied"}]}]}},
+    ]
+
+
+class _StubSupervisor:
+    def __init__(self, state="completed"):
+        self.launched = []
+        self._state = state
+
+    def launch(self, seat, prompt, **kw):  # noqa: D401 — records the call
+        self.launched.append((seat, kw))
+        return {"seat": seat, "kw": kw}
+
+    def await_job(self, record, *, timeout_s=3600.0):
+        return self._state, {"requested_model": "claude-sonnet-5", "actual_model": "claude-sonnet-5"}
+
+
+def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
+                probe_raises=False, provision_calls=None):
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2, "codex": 4, "zhipu": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    sup = _StubSupervisor(state=state)
+    gd, ctx = _gate()
+    profile = _contract.LaunchProfile(session_policy="fresh", mutating=True)
+    calls = provision_calls if provision_calls is not None else []
+
+    def probe_session(*, composition, probe_plan, snapshot_dir):
+        if probe_raises:
+            raise RuntimeError("probe boom")
+        return _happy_probe_stream() if probe_stream is None else probe_stream
+
+    def provision():
+        calls.append(True)
+        return None, {"handle": True}  # stub supervisor ignores identity/handle content
+
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build",
+        effort=None, timeout=5.0, engine="claude", profile=profile,
+        final_argv=final_argv or ["claude", "--print", "--model", "claude-sonnet-5",
+                                  "--output-format", "json"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=sup, probe_session=probe_session,
+        provision=provision, gate_decision=gd, plan_context=ctx,
+        mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}")
+    return res, sup, qc, calls
+
+
+def test_supervised_happy_path_launches_after_canary(tmp_path):
+    res, sup, _qc, calls = _supervised(tmp_path)
+    assert res["ok"] is True, res
+    assert res["exit"] == er.EXIT_OK
+    assert res["action"] == "executor_supervised"
+    # a launch happened AND it was after the canary passed (canary summary present) + provisioned
+    assert res["canary"]["verdict"] == "pass", res["canary"]
+    assert len(sup.launched) == 1 and calls == [True]
+    # the staged snapshot digest reached launch (TOCTOU binding)
+    assert sup.launched[0][1]["snapshot_digest"] == _canary.compute_registration_digest(str(REPO_ROOT))
+
+
+def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path):
+    # a stream with NO Edit-class deny -> require_canary refuses positive_deny -> exit 6.
+    stream = [e for e in _happy_probe_stream()
+              if not (e.get("message", {}).get("content", [{}])[0].get("name") == "Edit"
+                      or e.get("message", {}).get("content", [{}])[0].get("tool_use_id") == "live-2")]
+    res, sup, qc, calls = _supervised(tmp_path, probe_stream=stream)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert any("positive_deny" in v for v in [res["error"]["message"]])
+    # NOTHING created: no launch, no worktree provisioned, no task permit held
+    assert sup.launched == [] and calls == []
+    assert qc.live_permits("claude") == 0
+
+
+def test_supervised_phase1_refusal_skips_probe_and_launch(tmp_path):
+    # a --bare final_argv fails the LOCAL bare_absent check at phase 1 -> refuse BEFORE the probe.
+    calls = []
+    res, sup, qc, _ = _supervised(
+        tmp_path, final_argv=["claude", "--print", "--bare"], provision_calls=calls)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "bare_detected" in res["error"]["message"]
+    assert sup.launched == [] and calls == []
+
+
+def test_supervised_probe_failure_is_refusal_not_skip(tmp_path):
+    res, sup, _qc, calls = _supervised(tmp_path, probe_raises=True)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert "probe_session_failed" in res["error"]["message"]
+    assert sup.launched == [] and calls == []
+
+
+def test_supervised_missing_gate_refuses_malformed(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2})
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="c",
+        effort=None, timeout=5.0, engine="claude",
+        profile=_contract.LaunchProfile(mutating=True), final_argv=["claude", "--print"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=_StubSupervisor(),
+        probe_session=lambda **k: [], provision=lambda: (None, None),
+        gate_decision=None, plan_context=None,
+        mk_nonce=lambda: "N", mk_probe_cid=lambda c: "p")
+    assert res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "gate_file_required"
+
+
+def test_supervised_non_completed_state_maps_to_availability(tmp_path):
+    res, sup, _qc, _ = _supervised(tmp_path, state="timed_out")
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    assert res["error"]["code"] == "supervised_timed_out"
+    assert len(sup.launched) == 1  # launch DID happen; the FAILURE was downstream

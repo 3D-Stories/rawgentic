@@ -167,20 +167,35 @@ def _index_stream(events):
 def _probe_for(spec, tool_names, tool_results) -> canary.ProbeOutcome:
     issued_tool = spec.get("issued_tool") if isinstance(spec, dict) else None
     issued_cid = spec.get("issued_correlation_id") if isinstance(spec, dict) else None
-    observed_tool = tool_names.get(issued_cid) if isinstance(issued_cid, str) else None
-    result = tool_results.get(issued_cid) if isinstance(issued_cid, str) else None
+    # Correlation, two-tier (#470 Task-3 live delta): a PRE-SCRIPTED stub stream sets the
+    # tool_use ``id`` to the plan's ``issued_correlation_id`` (id-based path). A LIVE ``claude -p``
+    # stream assigns its OWN ``toolu_...`` ids we cannot predict at plan time (verified against
+    # claude 2.1.215: the SSH-probe Bash tool_use/tool_result echo ``toolu_01Sse...``, never our
+    # nonce), so we fall back to correlating by the issued tool NAME within this class's single
+    # controlled probe run — the observed tool_use id then serves as BOTH correlation ids so the
+    # canary's id-equality check (which never accepts a null/mismatched id) still binds. Ceiling:
+    # name-correlation assumes ONE tool_use of the issued name in the probe's own trusted stream
+    # (one probe per matcher class) — a multi-tool_use stream would bind the first.
+    observed_cid = issued_cid if isinstance(issued_cid, str) and issued_cid in tool_names else None
+    if observed_cid is None and isinstance(issued_tool, str):
+        for tid, name in tool_names.items():
+            if name == issued_tool:
+                observed_cid = tid
+                break
+    observed_tool = tool_names.get(observed_cid) if observed_cid is not None else None
+    result = tool_results.get(observed_cid) if observed_cid is not None else None
     if result is None:
         # No correlated result observed in the stream -> ambiguous -> unproven (fail-closed).
         return canary.ProbeOutcome(
-            issued_tool=issued_tool, issued_correlation_id=issued_cid,
+            issued_tool=issued_tool, issued_correlation_id=observed_cid or issued_cid,
             observed_tool=observed_tool, observed_correlation_id=None,
             transport_error="probe_result_absent")
     is_error, reason = result
     # is_error True  -> a hook returned a deny (denied); executed stays False.
     # is_error False -> the probe tool actually RAN (no deny) -> the guard is ABSENT.
     return canary.ProbeOutcome(
-        issued_tool=issued_tool, issued_correlation_id=issued_cid,
-        observed_tool=observed_tool, observed_correlation_id=issued_cid,
+        issued_tool=issued_tool, issued_correlation_id=observed_cid,
+        observed_tool=observed_tool, observed_correlation_id=observed_cid,
         denied=is_error, executed=not is_error, deny_reason=reason)
 
 

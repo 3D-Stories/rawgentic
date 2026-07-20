@@ -35,9 +35,11 @@ import hashlib
 import os
 import json
 import re
+import subprocess
 import sys
 import tempfile
 import types
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Final, Optional
 
@@ -64,6 +66,13 @@ EXIT_MALFORMED: Final[int] = 2      # bad input / config / invalid seat or mode 
 EXIT_AVAILABILITY: Final[int] = 3   # chain exhaustion / quota / timeout / availability (retryable)
 EXIT_ENFORCEMENT: Final[int] = 4    # pre-check denial or requested!=actual identity breach (non-retryable)
 EXIT_INTERNAL: Final[int] = 5       # audit/capture/internal/import failure (non-retryable)
+EXIT_REFUSED: Final[int] = 6        # #470 §2a: canary refusal (either phase) — ADDITIVE, no renumber
+
+# #470 §2a phase-1: the canary checks evaluable from LOCAL (staged-snapshot) evidence ALONE — the
+# subset run BEFORE the probe session spawns, so a bad staged config refuses before any process
+# exists. lane_provisioned + positive_deny need the phase-2 probe stream and are left to
+# require_canary (the full policy, run exactly once at phase 2). Kept in sync with canary.POLICIES.
+LOCAL_CANARY_CHECKS: Final[tuple] = ("hooks_digest", "plugin_version", "bare_absent")
 
 _UNSAFE_COMPONENT: Final[re.Pattern] = re.compile(r"[/\\]|\.\.|[\x00-\x1f]")
 
@@ -707,6 +716,179 @@ def dispatch_seat(
     }
 
 
+def build_probe_plan(hooks_registration, *, canary, mk_correlation_id) -> dict:
+    """#470 §2a — script ONE probe per mutating matcher class DERIVED from the staged hooks.json
+    (never invented): ``{matcher_class: {issued_tool, issued_correlation_id}}`` — exactly the seam
+    ``canary_evidence.complete_evidence`` correlates against. ``issued_tool`` is the class's first
+    tool; ``issued_correlation_id`` is a fresh nonce per class (the live collector bridges it to
+    claude's own tool_use id by tool NAME — Task-3 delta). An empty map (no mutating classes in the
+    staged snapshot) yields an empty plan → ``require_canary`` refuses ``positive_deny`` (fail-closed,
+    never a false pass)."""
+    plan = {}
+    for matcher in sorted(canary.mutating_guard_classes(hooks_registration)):
+        plan[matcher] = {"issued_tool": matcher.split("|")[0],
+                         "issued_correlation_id": mk_correlation_id(matcher)}
+    return plan
+
+
+def _audit_canary_refusal(capture_root: str, run_id: str, payload: dict) -> None:
+    """Append a durable canary-refusal record to a DEDICATED refusals log next to the routing audit
+    (never the routing-audit.jsonl itself — that log fail-closed-validates only receipt/observation/
+    epoch line variants, so an unknown line would break ``RoutingAuditLog.records``). Best-effort:
+    an audit-write failure never masks the refusal (the structured exit-6 result IS the primary
+    audit surface); it only loses the durable copy."""
+    try:
+        safe_run = _safe_component(run_id, "run_id")
+        target = Path(capture_root) / safe_run
+        target.mkdir(parents=True, exist_ok=True)
+        with open(target / "canary-refusals.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def supervised_dispatch(
+    *,
+    seat: str,
+    prompt: str,
+    run_id: str,
+    correlation_id: Optional[str],
+    effort: Optional[str],
+    timeout: float,
+    engine: str,
+    profile,
+    final_argv,
+    snapshot_dir: str,
+    capture_root: str,
+    audit,
+    canary,
+    canary_evidence,
+    supervisor,
+    probe_session: Callable,
+    provision: Callable,
+    gate_decision,
+    plan_context,
+    mk_nonce: Callable,
+    mk_probe_cid: Callable,
+    await_timeout_s: float = 3600.0,
+) -> dict:
+    """#470 §1/§2a — the SUPERVISED internal branch for a MUTATING seat. Runs the fail-closed
+    guardrail canary strictly BEFORE the task pane exists, in this EXACT order (all in the trusted
+    orchestrator-side process), then launches:
+
+      1. gate authentication (re-verify the #429 decision the mint already froze — fail-closed);
+      2. stage-and-bind: fresh ``dispatch_nonce`` + the staged snapshot's registration digest bind
+         one immutable ``LaunchComposition``;
+      3. phase-1 canary — LOCAL evidence (``LOCAL_CANARY_CHECKS``); refuse before any process exists;
+      4. trusted pre-spawn probe session — its OWN short-lived permit (owned inside ``probe_session``),
+         probe_plan scripted from the staged hooks.json; a probe FAILURE is a refusal, never a skip;
+      5. ``require_canary`` — full policy, EXACTLY ONCE, strictly before the spawn;
+      6. provision the seat worktree, then ``supervisor.launch`` (identity captured in JobRegistry);
+      7. ONE dispatch result — emitted only after identity capture + the phase-2 pass.
+
+    A CanaryRefused at phase 1 OR phase 2 → ``EXIT_REFUSED`` (6) with the violations, audited, and
+    NOTHING created (no task permit, no JobRecord, no worktree — ``provision`` and ``supervisor.launch``
+    are never reached). TOCTOU freeze: between the require_canary pass and launch, no route
+    resolution / mutable read / command rewrite occurs. Provider-touching seams (``probe_session``,
+    ``supervisor``, ``provision``) are injected — CI drives stubs; the live spawn is the RUN_LIVE
+    cell / #472."""
+    ce = correlation_id
+    audit_path = str(audit.path)
+
+    # STEP 1 — gate authentication. A mutating seat is always the build seat and always carries a
+    # gate; a missing one is a malformed-input refusal before anything is staged.
+    if gate_decision is None or not (isinstance(plan_context, dict) and plan_context):
+        return _err(EXIT_MALFORMED, "gate_file_required",
+                    f"mutating seat {seat!r} requires an authenticated #429 gate decision + minted "
+                    f"plan context (--gate-file/--plan-file)",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    try:
+        complexity_gate.verified_decision(gate_decision, expected_context=plan_context)
+    except complexity_gate.GateTamperError as e:
+        return _err(EXIT_ENFORCEMENT, "gate_tampered", str(e), retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+
+    # STEP 2 — stage-and-bind: one immutable composition (fresh nonce + staged-snapshot digest).
+    dispatch_nonce = mk_nonce()
+    try:
+        snapshot_digest = canary.compute_registration_digest(snapshot_dir)
+    except Exception as e:  # noqa: BLE001 — an unreadable staged snapshot is a fail-closed refusal
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "stage", "violations": ["snapshot_unreadable"],
+                               "detail": f"{type(e).__name__}: {e}", "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", f"snapshot_unreadable: {e}", retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+    composition = canary.LaunchComposition(
+        provider=engine, profile=profile,
+        dispatch_nonce=dispatch_nonce, snapshot_digest=snapshot_digest)
+
+    # STEP 3 — phase-1 canary: LOCAL evidence; refuse before any process exists.
+    evidence = canary_evidence.build_local_evidence(
+        snapshot_dir=snapshot_dir, composition=composition, final_argv=list(final_argv))
+    local_violations = []
+    for check_id in LOCAL_CANARY_CHECKS:
+        result = canary._CHECKS[check_id](evidence)  # pylint: disable=protected-access
+        if result.verdict != canary.PASS:
+            local_violations.append(result.violation or f"unspecified_refuse:{check_id}")
+    if local_violations:
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "local", "violations": local_violations, "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", "; ".join(local_violations), retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+
+    # STEP 4 — trusted pre-spawn probe session (own permit inside probe_session). Failure = refusal.
+    probe_plan = build_probe_plan(evidence.hooks_registration, canary=canary,
+                                  mk_correlation_id=mk_probe_cid)
+    try:
+        stream = probe_session(composition=composition, probe_plan=probe_plan,
+                               snapshot_dir=snapshot_dir)
+    except Exception as e:  # noqa: BLE001 — probe-session failure is fail-closed (refuse, never skip)
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "probe", "violations": ["probe_session_failed"],
+                               "detail": f"{type(e).__name__}: {e}", "correlation_id": ce})
+        return _err(EXIT_REFUSED, "canary_refused", f"probe_session_failed: {e}", retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+    evidence = canary_evidence.complete_evidence(
+        evidence=evidence, stream=stream, probe_plan=probe_plan)
+
+    # STEP 5 — require_canary: full policy, EXACTLY ONCE, strictly before the spawn.
+    try:
+        canary_result = canary.require_canary(composition, evidence)
+    except canary.CanaryRefused as refused:
+        _audit_canary_refusal(capture_root, run_id,
+                              {"phase": "probe", "policy_id": refused.result.policy_id,
+                               "violations": list(refused.result.violations), "correlation_id": ce})
+        out = _err(EXIT_REFUSED, "canary_refused", "; ".join(refused.result.violations),
+                   retryable=False, correlation_id=ce, audit_path=audit_path)
+        out["canary"] = refused.result.pass_summary()
+        return out
+    # -- TOCTOU FREEZE: no route resolution / mutable read / command rewrite past this line --
+
+    # STEP 6 — provision the seat worktree, then launch (identity captured in JobRegistry).
+    identity, handle = provision()
+    record = supervisor.launch(
+        seat, prompt, identity=identity, handle=handle, profile=profile,
+        effort=effort, timeout=timeout,
+        snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
+    state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
+
+    # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.
+    if state != "completed":
+        retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
+        code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
+        return _err(code, f"supervised_{state}",
+                    f"supervised seat {seat!r} ended in state {state!r}", retryable=retryable,
+                    correlation_id=ce, audit_path=audit_path)
+    return {
+        "ok": True, "exit": EXIT_OK, "action": "executor_supervised", "seat": seat,
+        "state": state, "correlation_id": ce, "audit_path": audit_path,
+        "canary": canary_result.pass_summary(),
+        "requested_model": (obs or {}).get("requested_model"),
+        "actual_model": (obs or {}).get("actual_model"),
+        "observation": obs,
+    }
+
+
 def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlation_id=None, audit_path=None) -> dict:
     err = {"code": code, "message": message, "retryable": retryable}
     if correlation_id is not None:
@@ -734,12 +916,21 @@ def _import_phase_executor():
     _ensure_pe_importable()
     import phase_executor.routing as routing  # noqa: PLC0415
     import phase_executor.enforce as enforce  # noqa: PLC0415
+    import phase_executor.canary as canary  # noqa: PLC0415 — #470 §2a supervised branch
+    import phase_executor.canary_evidence as canary_evidence  # noqa: PLC0415
+    import phase_executor.contract as contract  # noqa: PLC0415
     from phase_executor import run_seat  # noqa: PLC0415
-    from phase_executor.engine import _dispatch_real  # noqa: PLC0415
+    from phase_executor.engine import _dispatch_real, PROVIDER_ENGINE  # noqa: PLC0415
     from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
+    from phase_executor.supervisor import TmuxSupervisor  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeIdentity, WorktreeManager  # noqa: PLC0415
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415
     return types.SimpleNamespace(
         routing=routing, enforce=enforce, run_seat=run_seat,
         dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator, QuotaTimeout=QuotaTimeout,
+        canary=canary, canary_evidence=canary_evidence, contract=contract,
+        PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
+        WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
     )
 
 
@@ -925,6 +1116,90 @@ def mint_plan_context(gate_decision, plan_content: str, *, run_id=None, correlat
     return plan_context, freshness
 
 
+def _git_runner(cmd, env=None):
+    """WorktreeManager's injected git runner: ``(rc, out, err)``. Live/#472 path only."""
+    proc = subprocess.run(list(cmd), capture_output=True, text=True, env=env, check=False)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
+                    prompt, gate_decision, plan_context) -> dict:
+    """#470 §1 provisioning — construct the ``Supervisor`` (quota coordinator, registry/capture
+    roots, tmux socket from the same config the CLI already resolved) + the seat's git worktree via
+    ``WorktreeManager``, then run ``supervised_dispatch``. The provider-touching steps (probe-session
+    spawn, ``supervisor.launch``) are the RUN_LIVE cell / #472 proving ground; the CANARY ORDERING
+    and refusal semantics they wrap are unit-tested against ``supervised_dispatch`` directly. Any
+    provisioning failure fails CLOSED to a structured exit 5 (never a bare traceback, never a silent
+    inherit)."""
+    ce = args.correlation_id
+    try:
+        from phase_executor.worktree import planned_path  # noqa: PLC0415
+        targets = pe.routing.eligible_targets(args.seat, snap, author_provider=args.author_provider)
+        target = targets[0]
+        lane = target["lane"]
+        engine = pe.PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
+        eff = pe.contract.resolve_effort(target["model"], args.effort, engine=engine)
+
+        base = Path(repo_root)
+        registry_root = base / ".rawgentic" / "runtime" / "registry"
+        wt_root = base / ".rawgentic" / "runtime" / "worktrees"
+        registry_root.mkdir(parents=True, exist_ok=True)
+        wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+
+        # attempt token for the seat's worktree identity (distinct from launch()'s capture attempt).
+        attempt = f"0-{uuid.uuid4().hex[:8]}"
+        identity = pe.WorktreeIdentity(run_id=args.run_id, seat=args.seat, attempt=attempt)
+        planned_wt = planned_path(str(wt_root), identity)
+        profile = pe.contract.profile_from_manifest(manifest, engine=engine, worktree=planned_wt)
+        final_argv = pe.ADAPTERS[engine].build_command(
+            target["model"], effort=eff.native, profile=profile)
+
+        rc, out, _err_txt = _git_runner(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+        if rc != 0:
+            return _err(EXIT_INTERNAL, "supervised_provision_failed",
+                        "cannot resolve base_sha (git rev-parse HEAD)", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        base_sha = out.strip()
+
+        supervisor = pe.TmuxSupervisor(
+            snapshot=snap, quota=quota, capture_root=paths["capture_root"],
+            registry_root=str(registry_root), worktree_manager=wm,
+            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+
+        pool = lane["pool"]
+        account = lane.get("credential_ref") or "default"
+
+        def probe_session(*, composition, probe_plan, snapshot_dir):
+            return supervisor.probe_session(
+                composition, probe_plan, snapshot_dir=snapshot_dir,
+                quota=quota, pool=pool, account=account)
+
+        def provision():
+            # fresh provision; a resumed run re-derives the handle from the registry by run_id+seat
+            # (design §2 — the resume protocol wiring is §4's task; fresh is the W7 path).
+            handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
+            return identity, handle
+
+        # snapshot_dir: the plugin registration root (its hooks.json digest is the pinned
+        # EXPECTED_REGISTRATION_DIGEST). A frozen read-only STAGING copy is the #472 hardening.
+        return supervised_dispatch(
+            seat=args.seat, prompt=prompt, run_id=args.run_id, correlation_id=ce,
+            effort=args.effort, timeout=args.timeout, engine=engine, profile=profile,
+            final_argv=final_argv, snapshot_dir=str(repo_root),
+            capture_root=paths["capture_root"], audit=audit,
+            canary=pe.canary, canary_evidence=pe.canary_evidence, supervisor=supervisor,
+            probe_session=probe_session, provision=provision,
+            gate_decision=gate_decision, plan_context=plan_context,
+            mk_nonce=lambda: uuid.uuid4().hex,
+            mk_probe_cid=lambda cls: f"probe-{uuid.uuid4().hex[:8]}")
+    except pe.routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=str(audit.path))
+    except (ValueError, OSError) as e:
+        return _err(EXIT_INTERNAL, "supervised_provision_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce, audit_path=str(audit.path))
+
+
 def _do_dispatch(args) -> int:
     # Guarded import: a stale tree / missing dep fails CLOSED to exit 5 (never a silent inherit).
     try:
@@ -1019,6 +1294,19 @@ def _do_dispatch(args) -> int:
     except (OSError, ValueError) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #470 §1 internal routing: inspect the resolved target's staged LaunchProfile. A MUTATING
+    # profile routes to the supervised branch (gate-auth → stage-and-bind → phase-1 canary → probe
+    # session → require_canary → launch, in-process) INSIDE this same CLI call — there is no second
+    # entry point, so neither control can be skipped by "calling the other path". A NON-mutating
+    # profile runs the existing synchronous path BYTE-IDENTICAL below.
+    manifest = snap.seat(args.seat).get("manifest") or {}
+    mutating = bool({"edit", "bash"} & set(manifest.get("tool_grants") or ()))
+    if mutating:
+        result = _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
+                                 prompt, gate_decision, plan_context)
+        if plan_freshness is not None and isinstance(result, dict):
+            result["plan_freshness"] = plan_freshness
+        return _emit(result)
     result = dispatch_seat(
         seat=args.seat, prompt=prompt, run_id=args.run_id,
         correlation_id=args.correlation_id, author_provider=args.author_provider,
