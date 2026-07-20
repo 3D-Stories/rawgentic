@@ -127,6 +127,7 @@ def build_observation(
     parsed: ParsedResult, proc: ProcOutcome, timing_ms: int, queued_ms: int,
     raw_capture_path: Optional[str], routing_config_digest: str,
     fallback_reason: Optional[str] = None,
+    canary_result: Optional[dict] = None,  # a CanaryResult.pass_summary() dict, stamped when set
 ) -> contract.Observation:
     status = resolve_parse_status(
         parsed, req.requested_model,
@@ -152,6 +153,9 @@ def build_observation(
         raw_capture_path=raw_capture_path,
         fallback_reason=fallback_reason,
         routing_config_digest=routing_config_digest,
+        # #468 W5: stamp the canary PASS summary when the dispatch was canary-gated (#470 wires
+        # the caller; every existing caller passes None -> byte-identical legacy Observation).
+        canary_result=canary_result.pass_summary() if canary_result is not None else None,
     )
     # Fail-loud on the write path: the schema is the normative artifact (contract.py), so an
     # Observation that resolve_parse_status and the schema disagree about must never be emitted.
