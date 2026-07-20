@@ -329,6 +329,120 @@
           "maxItems": 0
         }
       }
+    },
+    "work_product": {
+      "type": "object",
+      "description": "#469 W6 (OQ-4): what an agentic seat PRODUCED, EXECUTOR-DERIVED (never the agent's self-report). All git evidence (base/head/content-tree SHA, changed_paths) is derived by the executor from the trusted worktree gitdir via contract.derive_work_product; a provider's self-reported claim stays only in parsed_payload and never feeds this object. content_tree_sha is the anti-tamper CONTENT commitment: the git tree object id of the FULL worktree state (committed + dirty + untracked) under one snapshot boundary, so a dirty/untracked byte change is caught even when head_sha + changed_path names are unchanged. OPTIONAL/additive (absent on legacy/read-only records) — emitted only when set. Population of the dispatch-time fields is wired by #470.",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "worktree_path",
+        "base_sha",
+        "head_sha",
+        "content_tree_sha",
+        "changed_paths",
+        "documents",
+        "tests",
+        "promotion_status"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Governed work-product category (the deliverable class the seat produced), distinct from the open-string top-level `seat`. A new category is a breaking add for an old vendored copy — it bumps schema_version.",
+          "enum": [
+            "code",
+            "review",
+            "design",
+            "docs"
+          ]
+        },
+        "worktree_path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Absolute path of the engine-managed worktree the product was derived from (host-specific; redaction/retention is defined on the consuming run-record / #473 sidecar, not here)."
+        },
+        "base_sha": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The commit the worktree was cut at (handle.base_sha) — executor-derived."
+        },
+        "head_sha": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The worktree HEAD commit (rev-parse via the trusted gitdir) — executor-derived. NOT a content commitment on its own (a dirty/untracked file's bytes can change while head_sha holds); content_tree_sha is the content commitment."
+        },
+        "content_tree_sha": {
+          "type": "string",
+          "minLength": 1,
+          "description": "git tree object id of the FULL worktree state (committed + dirty + untracked, .gitignore-respecting) written under one executor-controlled snapshot boundary — the anti-tamper CONTENT commitment; changed_paths is derived from this SAME tree."
+        },
+        "changed_paths": {
+          "type": "array",
+          "description": "Worktree-relative paths differing from base under the content_tree_sha snapshot (sorted, unique). Empty for a no-change seat. Executor-derived from the same candidate tree as content_tree_sha — never an agent-reported path list.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "documents": {
+          "type": "array",
+          "description": "Executor-VERIFIED produced documents — restricted to entries within changed_paths (an out-of-worktree report uses a test entry's report_ref, not a git-evidence claim). Empty when none.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "tests": {
+          "type": "array",
+          "description": "Executor-observed test runs (never parsed from the agent payload). Empty when none ran.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command_digest",
+              "status",
+              "exit_code",
+              "report_ref"
+            ],
+            "properties": {
+              "command_digest": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Digest of the executor-observed test command."
+              },
+              "status": {
+                "description": "Governed test-outcome vocabulary.",
+                "enum": [
+                  "passed",
+                  "failed",
+                  "skipped",
+                  "errored"
+                ]
+              },
+              "exit_code": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Process exit code, or null when the command never produced one (pre-launch/timeout)."
+              },
+              "report_ref": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Reference to the test report artifact (a path or opaque ref scheme; used for out-of-worktree reports)."
+              }
+            }
+          }
+        },
+        "promotion_status": {
+          "description": "Whether/how promotion ran for this product. A work_product exists for failed/rejected/never-promoted seats too (not_attempted). A supplied PromotionResult is reconciled against the derived evidence, never copied.",
+          "enum": [
+            "not_attempted",
+            "promoted",
+            "not_promoted",
+            "failed"
+          ]
+        }
+      }
     }
   },
   "allOf": [

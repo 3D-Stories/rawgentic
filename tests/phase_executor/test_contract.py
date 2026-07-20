@@ -102,6 +102,92 @@ def test_dispatched_lane_emitted_and_validates_when_set():
     contract.validate_observation(d)
 
 
+# --- #469 W6 Task 2: work_product typed field (schema shape; derivation lives in test_work_product) ---
+
+def _wp(**over):
+    wp = {
+        "kind": "code",
+        "worktree_path": "/wt/run/seat/att",
+        "base_sha": "a" * 40,
+        "head_sha": "a" * 40,
+        "content_tree_sha": "b" * 40,
+        "changed_paths": ["src/x.py"],
+        "documents": [],
+        "tests": [{"command_digest": "sha256:t", "status": "passed", "exit_code": 0,
+                   "report_ref": "runs/r/t.json"}],
+        "promotion_status": "not_attempted",
+    }
+    wp.update(over)
+    return wp
+
+
+def test_work_product_omitted_when_absent():
+    """Optional-additive: absent when unset (the canary_result/effort precedent)."""
+    d = _obs_ok().to_dict()
+    assert "work_product" not in d
+    contract.validate_observation(d)
+
+
+def test_work_product_emitted_and_validates_when_set():
+    d = _obs_ok(work_product=_wp()).to_dict()
+    assert d["work_product"] == _wp()
+    contract.validate_observation(d)
+
+
+def test_work_product_empty_arrays_valid_for_no_change_seat():
+    """A failed/no-change seat has empty changed_paths/documents/tests (peer: allow empty)."""
+    d = _obs_ok(work_product=_wp(changed_paths=[], documents=[], tests=[])).to_dict()
+    contract.validate_observation(d)
+
+
+def test_work_product_unknown_kind_rejected():
+    d = _obs_ok(work_product=_wp(kind="wombat")).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_work_product_bad_test_status_rejected():
+    d = _obs_ok(work_product=_wp(tests=[{"command_digest": "x", "status": "bogus",
+                                         "exit_code": 0, "report_ref": "r"}])).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_work_product_missing_test_key_rejected():
+    d = _obs_ok(work_product=_wp(tests=[{"command_digest": "x", "status": "passed",
+                                         "exit_code": 0}])).to_dict()  # no report_ref
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_work_product_test_exit_code_null_ok_but_string_rejected():
+    ok = _obs_ok(work_product=_wp(tests=[{"command_digest": "x", "status": "errored",
+                                          "exit_code": None, "report_ref": "r"}])).to_dict()
+    contract.validate_observation(ok)  # int-or-null: null accepted
+    bad = _obs_ok(work_product=_wp(tests=[{"command_digest": "x", "status": "errored",
+                                           "exit_code": "0", "report_ref": "r"}])).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(bad)
+
+
+def test_work_product_bad_promotion_status_rejected():
+    d = _obs_ok(work_product=_wp(promotion_status="maybe")).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_work_product_extra_key_rejected():
+    d = _obs_ok(work_product={**_wp(), "sneaky": 1}).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_work_product_empty_digest_string_rejected():
+    d = _obs_ok(work_product=_wp(base_sha="")).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
 # --- #465 T1: effort gate + stepdown + Observation.effort ---
 
 class TestResolveEffort:

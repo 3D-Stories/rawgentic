@@ -158,6 +158,11 @@ class Observation:
     # pass_summary() emits. Optional-additive (absent on legacy/non-canary records; the
     # dispatched_lane/effort precedent) — emitted only when set, no schema version bump.
     canary_result: Optional[dict] = None
+    # #469 W6 (OQ-4): what the seat PRODUCED — executor-derived git evidence + typed test/doc
+    # records, built by ``derive_work_product`` (never an agent self-report). Optional-additive
+    # (absent on legacy/read-only records; the canary_result precedent) — emitted only when set,
+    # a schema_version "2" field.
+    work_product: Optional[dict] = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -197,6 +202,9 @@ class Observation:
         # canary; refusal data travels on CanaryRefused, never the Observation).
         if self.canary_result is not None:
             out["canary_result"] = dict(self.canary_result)
+        # work_product (#469): the executor-derived produced-artifact record, emitted only when set.
+        if self.work_product is not None:
+            out["work_product"] = dict(self.work_product)
         return out
 
 
@@ -393,3 +401,70 @@ def validate_routing_table(table: dict) -> None:
     import jsonschema  # noqa: PLC0415
 
     jsonschema.validate(table, routing_table_schema())
+
+
+def _reconcile_promotion(promotion, evidence: dict) -> str:
+    """Reconcile a supplied ``worktree.PromotionResult`` against the independently executor-derived
+    ``evidence`` and return the ``promotion_status`` (#469 OQ-4). NOT a copy: a mismatched base/head
+    SHA or a mismatched changed-path SET is a LOUD refuse (the derived evidence is authoritative).
+    ``None`` -> ``not_attempted``; else ``promoted``/``not_promoted`` by ``promotion.promoted``
+    (``failed`` is reserved for a caller that catches a promotion EXCEPTION — a PromotionResult
+    object never represents it). Duck-typed (no ``worktree`` import -> no import cycle)."""
+    if promotion is None:
+        return "not_attempted"
+    for attr in ("base_sha", "head_sha"):
+        claimed = getattr(promotion, attr, None)
+        if claimed is not None and claimed != evidence[attr]:
+            raise ValueError(
+                f"derive_work_product: promotion.{attr} {claimed!r} does not reconcile with the "
+                f"executor-derived {attr} {evidence[attr]!r} — refusing (derived evidence is "
+                f"authoritative, a PromotionResult is never copied wholesale)")
+    claimed_paths = getattr(promotion, "changed_paths", None)
+    if claimed_paths is not None and set(claimed_paths) != set(evidence["changed_paths"]):
+        raise ValueError(
+            f"derive_work_product: promotion.changed_paths {sorted(set(claimed_paths))} do not "
+            f"reconcile with executor-derived changed_paths {evidence['changed_paths']} — refusing")
+    return "promoted" if getattr(promotion, "promoted", False) else "not_promoted"
+
+
+def derive_work_product(manager, handle, *, kind, documents=(), tests=(), promotion=None) -> dict:
+    """Build the EXECUTOR-DERIVED ``work_product`` object for a seat's worktree (#469 W6, OQ-4).
+
+    The recorded git evidence (base/head/content-tree SHA + changed_paths) is ALWAYS derived by the
+    executor from the trusted worktree gitdir via ``manager.content_evidence(handle)`` — one snapshot
+    boundary, ``content_tree_sha`` binding the FULL worktree state (committed + dirty + untracked).
+    This API takes NO agent-reported SHAs or paths, so a lying provider ``parsed_payload`` can never
+    alter the record (OQ-4). ``documents`` are restricted to executor-verified changed paths (a
+    document outside ``changed_paths`` is an unverified claim -> loud refuse; an out-of-worktree
+    report belongs in a ``tests[].report_ref``). ``tests`` are executor-observed run records passed
+    through verbatim. ``promotion`` (a ``worktree.PromotionResult`` or ``None``) is RECONCILED
+    against the derived evidence (mismatch is a loud refuse), never copied, and maps to
+    ``promotion_status``. ``kind`` / test ``status`` / ``promotion_status`` enum membership is
+    enforced by the schema when the object rides an Observation through ``validate_observation`` (the
+    single vocabulary source — not duplicated here).
+
+    ``manager`` supplies the injected git runner (a ``WorktreeHandle`` carries none); the design's
+    ``derive_work_product(handle, …)`` signature is completed with this ``manager`` param because the
+    derivation MUST run git and the runner is injectable (its own tests run against a tmp repo).
+    Fail-closed throughout."""
+    evidence = manager.content_evidence(handle)
+    changed = evidence["changed_paths"]
+    docs = sorted(set(documents))
+    changed_set = set(changed)
+    stray = [d for d in docs if d not in changed_set]
+    if stray:
+        raise ValueError(
+            f"derive_work_product: documents {stray} are not executor-verified changed paths (a "
+            f"document must be within changed_paths; an out-of-worktree report uses "
+            f"tests[].report_ref) — refusing")
+    return {
+        "kind": kind,
+        "worktree_path": handle.path,
+        "base_sha": evidence["base_sha"],
+        "head_sha": evidence["head_sha"],
+        "content_tree_sha": evidence["content_tree_sha"],
+        "changed_paths": list(changed),
+        "documents": docs,
+        "tests": [dict(t) for t in tests],
+        "promotion_status": _reconcile_promotion(promotion, evidence),
+    }
