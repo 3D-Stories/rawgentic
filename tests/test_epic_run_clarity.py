@@ -54,3 +54,26 @@ class TestEpicRunTaskList:
         s = _section(_text(), "## Step 5:", "## Common mistakes")
         assert "complete the close-epic task" in s.lower(), (
             "Step 5 must complete the close-epic task at wrap-up (#517)")
+
+
+class TestEpicRunOwnerNotification:
+    """Drift guards for #526 (epic #529): notify-at-block + launcher-at-start.
+
+    Field evidence: epic #509 lever 1 — one 56.3-min owner-away stall between a
+    Step-11 review verdict landing and the owner's resume (18% of run wall)."""
+
+    def test_step2_recommends_launcher_at_start(self):
+        s = _section(_text(), "## Step 2:", "## Step 3:")
+        assert "recommend arming the durable resume launcher" in s, (
+            "Step 2 must recommend the durable resume launcher at run start (#526)")
+        assert "RUN START" in s
+        assert "epic #509 lever 1" in s, (
+            "the launcher recommendation must cite its measured basis (#526)")
+
+    def test_step4_notifies_owner_at_human_blocked_points(self):
+        s = _section(_text(), "## Step 4:", "## Step 5:")
+        assert "Notify the owner at every point the run blocks on human input" in s, (
+            "Step 4 must direct owner notification at human-blocked points (#526)")
+        assert "skipped (notify-owner unavailable)" in s, (
+            "notify-at-block must fail open with a visible skip marker (#526)")
+        assert "never blocks the run" in s

@@ -14,6 +14,27 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Epic #529 — run-speed levers from the #509 profiler (auto-run)
+
+**Status: IN PROGRESS (started 2026-07-20, auto-merge scoped grant D-1).** Queue #526 →
+#527 → #528 (independent, benefit order). Ship the three time-to-completion levers the
+epic #509 run profiler measured (PR #525) — recover ~70 min per comparable epic run
+without weakening any gate.
+
+### #526 — epic-run: notify at human-blocked points + launcher at run start · v3.72.0
+
+Epic #509 lever 1: the single biggest wall item was a 56.3-min owner-away stall (18% of
+wall) between a Step-11 verdict landing and the owner's resume — the run had no signal it
+was blocked on a human. epic-run SKILL.md Step 4 now directs the driver to notify the
+owner at every human-blocked point via the workspace `notify-owner` skill when available
+(visible fail-open skip marker when not — the notification layer never blocks the run);
+Step 2 recommends arming the durable resume launcher (`long-run-resume` system-crontab
+pattern) at RUN START beside the merge-policy question — same stall class covers
+unattended quota pauses. Small-standard lane; suite 3874→3876, 0 regressions; guards
+`TestEpicRunOwnerNotification` red-before-green.
+
+- PR / merge SHA: filled at close-out.
+
 ## Epic #493 — WF2 speed levers (manual drive)
 
 **Status: COMPLETE (2026-07-19, 6/6 merged, epic closed)** — #488 (PR #495, 46ae9b0, v3.58.0); #489 (PR #496, a59096f, v3.59.0); #490 (PR #497, 031e01c, v3.60.0); #491 (PR #498, f01e6bc, v3.61.0); #492 (PR #500, 88f01c0, v3.62.0); #494 (PR #503, 72f1d04, v3.64.0). Suite 3634+10skip → 3695+10skip across the epic, zero regressions. Levers inert for live sessions until owner plugin reinstall + fresh session. Follow-up: #502.
@@ -158,7 +179,7 @@ review anticipated.
   classify-definitively ordering (d182273); Step-11 (opus lane + gpt adversarial, 4+2 findings
   identity-merged) adopted branch-name issue REBIND + the pinned compound-input trade-off +
   these count corrections — full dispositions in the PR.
-- PR / merge SHA: filled at close-out.
+- PR #504, squash-merged f48f0ac (2026-07-19), all 4 CI lanes green (owner-approved merge at CI-green).
 
 ## Standalone — #499: hook-level step-state emission (owner-ordered, mid-#493) · v3.63.0
 

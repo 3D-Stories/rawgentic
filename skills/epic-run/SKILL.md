@@ -39,6 +39,12 @@ Ask ONE question with the options:
 
 Never assume auto-merge from a past run — the grant does not carry over.
 
+Alongside the merge-policy question, recommend arming the durable resume launcher (the
+`long-run-resume` skill's system-crontab pattern) at RUN START — even attended runs hit
+the same stall class (owner-away review verdicts, unattended quota pauses; measured
+basis: epic #509 lever 1, one 56.3-min owner-away gap, ~56 min per comparable attended
+run). Declining is fine and never blocks the run.
+
 ## Step 3: Draft the /goal condition
 
 Hand the user a block they can paste into `/goal` (you cannot invoke /goal for them —
@@ -98,6 +104,12 @@ put a list up by hand).
   false-red signature).
 - Tick the epic checkbox after each merged child (state flows one-way: run → epic;
   never un-tick a human's edit).
+- Notify the owner at every point the run blocks on human input — a review verdict
+  ready with findings needing a call, a mid-run policy question, a pause request
+  honored — via the workspace `notify-owner` skill when available; when unavailable,
+  log the visible fail-open skip marker `### epic-run notify: skipped (notify-owner
+  unavailable)` and continue — the notification layer never blocks the run
+  (measured basis: epic #509 lever 1).
 - Mid-run environment changes (a CI outage, a denied permission) that force a policy
   deviation are the USER's call — ask once with options, log the decision (D-numbered)
   in the run log, apply it for the rest of the run.
