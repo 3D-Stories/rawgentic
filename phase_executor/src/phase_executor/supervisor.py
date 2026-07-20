@@ -248,6 +248,7 @@ class TmuxSupervisor:
     def launch(self, seat: str, prompt: str, *, identity: WorktreeIdentity,
                handle: WorktreeHandle, profile: Optional[contract.LaunchProfile] = None,
                effort: Optional[str] = None, timeout: float = 300.0,
+               target: Optional[dict] = None,
                author_provider: Optional[str] = None, resume_session_id: Optional[str] = None,
                resume_attempts: int = 0, quota_timeout: float = 300.0,
                snapshot_dir: Optional[str] = None,
@@ -260,10 +261,13 @@ class TmuxSupervisor:
         staged snapshot's CONTENTS immediately before executing (TOCTOU freeze). The spec's own
         content digest is delivered to ``pane_runner`` out-of-band (argv[2]) for the same reason —
         neither is embeddable in the spec it protects."""
-        targets = routing.eligible_targets(seat, self._snapshot, author_provider=author_provider)
-        if not targets:
-            raise routing.ChainExhausted(f"seat {seat!r}: no eligible target")
-        target = targets[0]  # async tier launches the primary; chain fallback is the sync engine's
+        if target is None:  # Step-11 H7: a dispatcher that already resolved (and canary-bound) a
+            # target passes it in — launch must not re-resolve and risk diverging from the
+            # composition the canary attested. Standalone callers keep the self-resolve path.
+            targets = routing.eligible_targets(seat, self._snapshot, author_provider=author_provider)
+            if not targets:
+                raise routing.ChainExhausted(f"seat {seat!r}: no eligible target")
+            target = targets[0]  # async tier launches the primary; chain fallback is the sync engine's
         lane = target["lane"]
         engine = PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
         eff = contract.resolve_effort(target["model"], effort, engine=engine)
@@ -721,7 +725,7 @@ class TmuxSupervisor:
                 return False  # PID reused by a foreign process
         return True
 
-    def _reestablish_adopt_permit(self, record: JobRecord) -> None:
+    def _reestablish_adopt_permit(self, record: JobRecord) -> bool:
         """#467 D-12: on recover-ADOPT, re-key the adopted job's quota permit under THIS
         orchestrator's pid so the pool ceiling keeps counting the still-live job (the launcher
         that acquired it has exited — its pid is dead, so QuotaCoordinator would stale-reap the
@@ -730,13 +734,15 @@ class TmuxSupervisor:
         slot is gone and re-taking it would over-admit) or a routing error propagates so
         recover() refuses the adoption rather than over-admit."""
         if record.permit_ref == "unbounded":
-            return
+            return True
         targets = routing.eligible_targets(record.identity.seat, self._snapshot)
         if not targets:
             raise routing.RoutingError(
                 f"adopt {record.session_name}: seat {record.identity.seat!r} has no eligible "
                 f"target — cannot re-establish its permit")
-        self._quota.reestablish_permit(targets[0]["lane"]["pool"], record.permit_ref)
+        # Step-11 H4: surface the CAS outcome — False = another live orchestrator won and OWNS
+        # the job (recover() yields it), True = this process owns the permit.
+        return self._quota.reestablish_permit(targets[0]["lane"]["pool"], record.permit_ref)
 
     def recover(self, run_id: str) -> list:
         """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
@@ -755,7 +761,7 @@ class TmuxSupervisor:
                                         sentinel_valid=sentinel_valid)
             if verdict == "adopt":
                 try:
-                    self._reestablish_adopt_permit(record)
+                    owned = self._reestablish_adopt_permit(record)
                 except (QuotaTimeout, routing.RoutingError, OSError) as exc:
                     # D-12 fail-closed: the permit could not be re-established under THIS
                     # orchestrator's pid within the ceiling — refuse the adoption (kill +
@@ -772,7 +778,14 @@ class TmuxSupervisor:
                     self._retain(done)
                     actions.append(RecoveryAction(record.identity, "quarantine", done))
                 else:
-                    actions.append(RecoveryAction(record.identity, "adopt", record))
+                    if owned is False:
+                        # Step-11 H4: the permit CAS was won by ANOTHER live orchestrator — that
+                        # process owns the job. Recording "adopt" here would leave two
+                        # orchestrators both managing it; yield instead (no kill — the job is
+                        # healthy and permitted, just not ours).
+                        actions.append(RecoveryAction(record.identity, "yielded", record))
+                    else:
+                        actions.append(RecoveryAction(record.identity, "adopt", record))
             elif verdict == "quarantine":
                 killed = self._kill_job(record)
                 reason = ("identity mismatch" if not matches else "no valid sentinel")

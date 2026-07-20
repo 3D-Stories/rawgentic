@@ -275,3 +275,16 @@ def test_adopt_permit_oserror_quarantines_and_sweep_continues(env_factory, monke
                         lambda record: (_ for _ in ()).throw(OSError("disk full")))
     actions = sup2.recover(env.identity.run_id)  # must NOT raise (pre-fix: OSError propagated)
     assert [a.action for a in actions] == ["quarantine"]
+
+
+def test_adopt_race_loser_yields_never_records_adopt(env_factory, monkeypatch):
+    """Step-11 H4: when the permit CAS reports another live orchestrator won, recover() records
+    'yielded' (no kill, no adopt) — two orchestrators must never both manage one job."""
+    env = env_factory(mode="ok_then_sleep", concurrency=1)
+    env.launch()
+    monkeypatch.setattr(env.sup.__class__, "_reestablish_adopt_permit",
+                        lambda self, record: False)
+    sup2 = env.sup_with_mode("ok_then_sleep")
+    actions = sup2.recover(env.identity.run_id)
+    assert [a.action for a in actions] == ["yielded"]
+    env.sup.cancel(env.registry.get(env.identity))

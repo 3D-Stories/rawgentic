@@ -1552,3 +1552,90 @@ def test_supervised_codex_out_of_containment_refuses(tmp_path):
     res = er.supervised_dispatch(**kw)
     assert res["exit"] == er.EXIT_REFUSED
     assert "codex_containment" in res["error"]["message"]
+
+
+# ---------------------------------------------------------------- Step-11 remediation (#470)
+from phase_executor.engine import PROVIDER_ENGINE as _PROVIDER_ENGINE  # noqa: E402
+def test_supervised_check_pre_receipt_minted_before_launch(tmp_path):
+    """Step-11 C1+C2: a supervised launch mints the SAME check_pre enforcement receipt the sync
+    path mints (recorded to the audit log before launch), and verify_post runs on the final
+    observation. Driven with the real default table's sandboxed build-chain entry."""
+    import phase_executor.routing as routing_mod
+    import phase_executor.enforce as enforce_mod
+    kw, _ = _codex_supervised_kw(tmp_path)
+    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
+    targets = routing_mod.eligible_targets("build", snap)
+    codex_targets = [t for t in targets
+                     if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                     in er.MUTATING_FS_SANDBOXED]
+    assert codex_targets, "default table must declare a sandboxed lane in build's chain"
+    tgt = codex_targets[0]
+    # stub supervisor returns a completed obs whose identity matches THIS target's model
+    class _Sup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", {"parse_status": "ok",
+                                 "requested_model": tgt["model"], "actual_model": tgt["model"]}
+    kw.update(target=tgt, snapshot=snap, enforce=enforce_mod, supervisor=_Sup())
+    res = er.supervised_dispatch(**kw)
+    assert res["ok"] is True, res
+    audit_files = list((tmp_path / "runs").rglob("*.jsonl"))
+    assert any('"kind": "receipt"' in p.read_text() or '"kind":"receipt"' in p.read_text()
+               for p in audit_files), "no enforcement receipt recorded before launch"
+    assert res["resolution"] == "primary" and res["dispatched_lane"] is not None
+
+
+def test_supervised_bakeoff_gate_refuses_single_dispatch(tmp_path):
+    """Step-11 C1: a gate decision that mandates a bake-off must REFUSE the supervised single
+    dispatch (check_pre rejects the bakeoff attestation) — never proceed to a mutating launch."""
+    import phase_executor.routing as routing_mod
+    import phase_executor.enforce as enforce_mod
+    kw, _ = _codex_supervised_kw(tmp_path)
+    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
+    targets = routing_mod.eligible_targets("build", snap)
+    tgt = [t for t in targets
+           if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+           in er.MUTATING_FS_SANDBOXED][0]
+    gd, ctx = _gate(bakeoff=True)
+    sup = _StubSupervisor()
+    kw.update(target=tgt, snapshot=snap, enforce=enforce_mod, supervisor=sup,
+              gate_decision=gd, plan_context=ctx)
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_ENFORCEMENT, res
+    assert res["error"]["code"] == "pre_check_denied"
+    assert sup.launched == []  # never launched
+
+
+def test_supervised_verify_post_breach_refuses(tmp_path):
+    """Step-11 C2: a completed supervised job whose observation reports the WRONG model is an
+    enforcement breach (exit 4), not a success."""
+    import phase_executor.routing as routing_mod
+    import phase_executor.enforce as enforce_mod
+    kw, _ = _codex_supervised_kw(tmp_path)
+    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
+    tgt = [t for t in routing_mod.eligible_targets("build", snap)
+           if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+           in er.MUTATING_FS_SANDBOXED][0]
+    class _Sup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", {"parse_status": "ok",
+                                 "requested_model": tgt["model"], "actual_model": "wrong-model-9"}
+    kw.update(target=tgt, snapshot=snap, enforce=enforce_mod, supervisor=_Sup())
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "requested_actual_mismatch"
+
+
+def test_run_supervised_filters_to_sandboxed_lane_on_real_table():
+    """Step-11 H1: the default table's build seat (claude primary) must FILTER to its sandboxed
+    chain entry for the supervised branch — pure filter logic pinned against the real table."""
+    import phase_executor.routing as routing_mod
+    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
+    targets = routing_mod.eligible_targets("build", snap)
+    primary_engine = _PROVIDER_ENGINE.get(targets[0]["lane"]["provider"],
+                                            targets[0]["lane"]["provider"])
+    assert primary_engine not in er.MUTATING_FS_SANDBOXED, \
+        "precondition drifted: build primary became sandboxed — update this pin"
+    sandboxed = [t for t in targets
+                 if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                 in er.MUTATING_FS_SANDBOXED]
+    assert sandboxed, "build chain lost its sandboxed entry — supervised builds all refuse"

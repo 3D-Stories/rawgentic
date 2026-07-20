@@ -259,8 +259,8 @@ New `tests/test_gate_preservation.py`, two layers:
      canary IN ORDER before launch (in-process harness, injected probe-session collector —
      the probe seam is an injected reader exactly like `dispatch_real`);
   4. phase-1 canary refusal → no process created; probe-session (phase-2) refusal → no task
-     pane created; both release the permit and finalize the registry record (in-process,
-     injected evidence);
+     pane created; NEITHER has a task permit or JobRecord to release (both are created inside
+     launch(), after the canary — pass-3 corrected contract; in-process, injected evidence);
   5. SUPERVISED path: successful mutating stub asserts `check_pre` receipt exists before task
      work, the receipt is attached to the job record, and `verify_post` runs on the final
      Observation (pass-2 aH1 — the mutating path gets its own executable assertions);

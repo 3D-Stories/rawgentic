@@ -795,6 +795,10 @@ def supervised_dispatch(
     mk_probe_cid: Callable,
     await_timeout_s: float = 3600.0,
     containment_root: Optional[str] = None,
+    target: Optional[dict] = None,
+    snapshot=None,
+    enforce=None,
+    author_provider: Optional[str] = None,
 ) -> dict:
     """#470 §1/§2a — the SUPERVISED internal branch for a MUTATING seat. Runs the fail-closed
     guardrail canary strictly BEFORE the task pane exists, in this EXACT order (all in the trusted
@@ -843,10 +847,11 @@ def supervised_dispatch(
                     f"plan context (--gate-file/--plan-file)",
                     retryable=False, correlation_id=ce, audit_path=audit_path)
     try:
-        complexity_gate.verified_decision(gate_decision, expected_context=plan_context)
+        bakeoff = complexity_gate.verified_decision(gate_decision, expected_context=plan_context)
     except complexity_gate.GateTamperError as e:
         return _err(EXIT_ENFORCEMENT, "gate_tampered", str(e), retryable=False,
                     correlation_id=ce, audit_path=audit_path)
+    gate_outcome = "bakeoff" if bakeoff else "single"
 
     # STEP 2 — stage-and-bind: one immutable composition (fresh nonce + staged-snapshot digest).
     dispatch_nonce = mk_nonce()
@@ -911,11 +916,34 @@ def supervised_dispatch(
         return out
     # -- TOCTOU FREEZE: no route resolution / mutable read / command rewrite past this line --
 
+    # STEP 5.5 — per-attempt enforcement receipt (Step-11 C1+C2): the SAME check_pre the sync path
+    # runs, minted against the exact canary-bound target. The attestation carries the AUTHENTIC
+    # gate outcome — check_pre's existing logic refuses a "bakeoff" outcome on a single dispatch
+    # (the bake-off owns that dispatch), so a gate that mandated a bake-off can never proceed here.
+    # Recorded BEFORE launch; a fail verdict never launches.
+    if enforce is not None and target is not None and snapshot is not None:
+        attestation = enforce.GateAttestation(
+            gate_outcome=gate_outcome,
+            policy_digest=gate_decision.policy_digest,
+            input_digest=enforce.launch_input_digest(seat, target, ce))
+        receipt = enforce.check_pre(
+            seat, target, snapshot, correlation_id=ce, attempt_id="0-supervised",
+            author_provider=author_provider, attestation=attestation)
+        audit.append_receipt(receipt)
+        if receipt.verdict == "fail":
+            return _err(EXIT_ENFORCEMENT, "pre_check_denied", "; ".join(receipt.violations),
+                        retryable=False, correlation_id=ce, audit_path=audit_path)
+    else:
+        # Injected-stub unit paths may omit the enforcement trio; production (_run_supervised)
+        # always passes all three — pinned by tests (a supervised launch without a receipt is
+        # exactly Step-11 C2).
+        receipt = None
+
     # STEP 6 — provision the seat worktree, then launch (identity captured in JobRegistry).
     identity, handle = provision()
     record = supervisor.launch(
         seat, prompt, identity=identity, handle=handle, profile=profile,
-        effort=effort, timeout=timeout,
+        effort=effort, timeout=timeout, target=target, author_provider=author_provider,
         snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
     state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
 
@@ -926,12 +954,27 @@ def supervised_dispatch(
         return _err(code, f"supervised_{state}",
                     f"supervised seat {seat!r} ended in state {state!r}", retryable=retryable,
                     correlation_id=ce, audit_path=audit_path)
+    # verify_post on the final observation (Step-11 C2) — same breach semantics as the sync path:
+    # an envelope with a wrong/missing identity is a NON-retryable enforcement failure; an
+    # availability-shaped obs is exit 3.
+    if enforce is not None:
+        pc = enforce.verify_post(obs or {})
+        if not pc.ok:
+            return _err(EXIT_ENFORCEMENT, pc.reason,
+                        f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
+                        correlation_id=ce, audit_path=audit_path)
+        if not pc.verified:
+            return _err(EXIT_AVAILABILITY, "supervised_unverified",
+                        f"supervised seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                        retryable=True, correlation_id=ce, audit_path=audit_path)
     return {
         "ok": True, "exit": EXIT_OK, "action": "executor_supervised", "seat": seat,
         "state": state, "correlation_id": ce, "audit_path": audit_path,
         "canary": canary_result.pass_summary(),
         "requested_model": (obs or {}).get("requested_model"),
         "actual_model": (obs or {}).get("actual_model"),
+        "dispatched_lane": dict(target["lane"]) if target else None,
+        "resolution": "primary",
         "observation": obs,
     }
 
@@ -1078,6 +1121,42 @@ def _do_show(args) -> int:
     return EXIT_OK
 
 
+def mint_gate(plan_content: str, issue_complexity: str, plan_est_lines,
+              cfg=None) -> dict:
+    """#470 Step-11 H2/H3 — the gate.json PRODUCER. Derives the plan-side facts EXACTLY the way
+    ``mint_plan_context`` later re-derives them (aggregate risk_level = high-if-any-task-high;
+    file_count = DISTINCT files across tasks), so ``verified_decision``'s key-for-key cross-check
+    passes on a fresh plan by construction. Records the plan digest (freshness binding). Returns
+    the JSON-safe dict ``_load_gate_decision`` round-trips. Raises PlanFormatError/ValueError on
+    malformed input (caller maps to exit 2)."""
+    tasks = plan_lib.parse_tasks(plan_content)
+    if not tasks:
+        raise plan_lib.PlanFormatError("mint-gate: plan parses to zero tasks (check heading form)")
+    risk_level = "high" if any(t.risk_level == "high" for t in tasks) else "standard"
+    files = sorted({f for t in tasks for f in (t.files or ())})
+    gd = complexity_gate.needs_bakeoff(
+        {"risk_level": risk_level},
+        {"complexity": issue_complexity},
+        {"lines": plan_est_lines, "file_count": len(files), "files": files},
+        cfg=cfg, plan_content=plan_content)
+    return {"decision": gd.decision, "reason_codes": list(gd.reason_codes),
+            "input_snapshot": gd.input_snapshot, "policy_digest": gd.policy_digest}
+
+
+def _do_mint_gate(args) -> int:
+    try:
+        plan_content = Path(args.plan_file).read_text(encoding="utf-8")
+    except OSError as e:
+        return _emit(_err(EXIT_MALFORMED, "plan_file_unreadable", str(e), retryable=False))
+    try:
+        obj = mint_gate(plan_content, args.issue_complexity, args.plan_est_lines)
+    except (plan_lib.PlanFormatError, ValueError) as e:
+        return _emit(_err(EXIT_MALFORMED, "mint_gate_invalid_input", str(e), retryable=False))
+    Path(args.out).write_text(json.dumps(obj, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+    return _emit({"ok": True, "exit": EXIT_OK, "action": "mint-gate", "out": args.out,
+                  "decision": obj["decision"], "reason_codes": obj["reason_codes"]})
+
+
 def _load_gate_decision(path):
     """Rebuild a #429 ``complexity_gate.GateDecision`` from the JSON the bake-off writes (fields:
     decision, reason_codes, input_snapshot, policy_digest). ``verified_decision`` recomputes the
@@ -1182,7 +1261,21 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
     try:
         from phase_executor.worktree import planned_path  # noqa: PLC0415
         targets = pe.routing.eligible_targets(args.seat, snap, author_provider=args.author_provider)
-        target = targets[0]
+        # Step-11 H1 — mutating-eligibility filter (the chain-aware-skip idiom applied to the
+        # FS-sandbox constraint): a mutating seat may only launch on a sandboxed provider, so
+        # non-sandboxed chain entries are SKIPPED here (the shipped table's build primary is
+        # claude — without this filter every primary-tier build refuses at STEP 0 and the codex
+        # chain entry sits unused). Exhaustion is a handled hard failure, never a silent pass.
+        sandboxed = [t for t in targets
+                     if pe.PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                     in MUTATING_FS_SANDBOXED]
+        if not sandboxed:
+            return _err(EXIT_AVAILABILITY, "no_sandboxed_mutating_lane",
+                        f"mutating seat {args.seat!r}: no FS-sandboxed provider in its chain "
+                        f"(allowlist: {sorted(MUTATING_FS_SANDBOXED)}) — declare a codex lane or "
+                        f"ship the FS-sandbox child", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        target = sandboxed[0]
         lane = target["lane"]
         engine = pe.PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
         eff = pe.contract.resolve_effort(target["model"], args.effort, engine=engine)
@@ -1239,7 +1332,9 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             gate_decision=gate_decision, plan_context=plan_context,
             mk_nonce=lambda: uuid.uuid4().hex,
             mk_probe_cid=lambda cls: f"probe-{uuid.uuid4().hex[:8]}",
-            containment_root=str(wt_root))
+            containment_root=str(wt_root),
+            target=target, snapshot=snap, enforce=pe.enforce,
+            author_provider=args.author_provider)
     except pe.routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=ce, audit_path=str(audit.path))
@@ -1396,6 +1491,13 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--workspace", required=True)
     d.add_argument("--project", required=True)
     d.set_defaults(fn=_do_dispatch)
+
+    mg = sub.add_parser("mint-gate", help="#470: mint gate.json from the live plan (producer side)")
+    mg.add_argument("--plan-file", required=True)
+    mg.add_argument("--issue-complexity", required=True, choices=["trivial", "standard", "complex"])
+    mg.add_argument("--plan-est-lines", required=True, type=int)
+    mg.add_argument("--out", required=True)
+    mg.set_defaults(fn=_do_mint_gate)
 
     st = sub.add_parser("show-table", help="#446: display the resolved seat table (setup Step 2i)")
     st.add_argument("--workspace", required=True)
