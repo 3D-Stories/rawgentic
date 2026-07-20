@@ -45,6 +45,7 @@ PIN_FAMILIES = {
     "pin:evals": re.compile(r"(\d+)/(\d+) skills have evals\.json"),
 }
 COMPUTED_FAMILIES = ("pin:provides", "pin:evals")
+NEGATIVE_PIN_TAIL_RE = re.compile(r"""["']?\s*not\s+in\b""")
 
 # Sweep scope: the CI-pinned surfaces plus the project's own config description.
 # docs/*.md are deliberately excluded (known-stale on counts by convention —
@@ -63,7 +64,7 @@ class Finding:
 
 def validate_skill_name(name: str) -> str:
     """Reject anything that could traverse outside skills/ when path-joined."""
-    if not SKILL_NAME_RE.match(name):
+    if not SKILL_NAME_RE.fullmatch(name):
         raise ValueError(f"invalid skill name: {name!r} (want ^[a-z0-9][a-z0-9-]*$)")
     return name
 
@@ -105,8 +106,12 @@ def _skills_with_config_loading(root: Path) -> list:
 
 def _manifest_members(root: Path) -> set:
     """Skills registered for the synced config-loading block."""
+    # Deliberate exec of repo-internal code: the script path is fixed (never
+    # attacker-influenced) and its module level is side-effect-free constants;
+    # a hostile checkout already owns the tree, so AST-parsing would add
+    # hardening theater, not safety.
     script = root / "scripts" / "sync_shared_blocks.py"
-    spec = importlib.util.spec_from_file_location("_sync_fixture", str(script))
+    spec = importlib.util.spec_from_file_location("_sync_shared_blocks_dynamic", str(script))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     members = set()
@@ -128,7 +133,10 @@ def check_skill(root: Path, name: str) -> list:
     skill_md = root / "skills" / name / "SKILL.md"
     if not skill_md.exists():
         return [Finding("frontmatter", False, f"{skill_md} does not exist")]
-    text = skill_md.read_text(encoding="utf-8")
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        return [Finding("frontmatter", False, f"{skill_md} unreadable: {exc}")]
     missing = []
     name_re = re.compile(rf"^name:\s*(rawgentic:)?{re.escape(name)}\s*$", re.M)
     if not name_re.search(text):
@@ -192,7 +200,7 @@ def check_skill(root: Path, name: str) -> list:
                                         "scripts/sync_shared_blocks.py MANIFEST (never hand-paste the block)"))
         else:
             findings.append(Finding("manifest", True, "no config-loading block — MANIFEST n/a"))
-    except (OSError, AttributeError, KeyError, SyntaxError) as exc:
+    except (OSError, ValueError, AttributeError, KeyError, SyntaxError) as exc:
         findings.append(Finding("manifest", False,
                                 f"sync_shared_blocks.py unreadable/malformed: {exc}"))
     return findings
@@ -204,13 +212,18 @@ def check_counts(root: Path) -> list:
     findings = []
     skills = _disk_skills(root)
     n = len(skills)
-    readme = _readme_body(root)
-
-    computed_canary = len(_skills_with_config_loading(root))
+    try:
+        readme = _readme_body(root)
+    except (OSError, ValueError) as exc:
+        return [Finding("readme-provides", False, f"README.md unreadable: {exc}")]
+    try:
+        computed_canary = len(_skills_with_config_loading(root))
+    except (OSError, ValueError) as exc:
+        return [Finding("canary", False, f"skill corpus unreadable: {exc}")]
     canary_file = root / "tests" / "hooks" / "test_headless.py"
     try:
         m = CANARY_PIN_RE.search(canary_file.read_text(encoding="utf-8"))
-    except OSError:
+    except (OSError, ValueError):
         m = None
     if not m:
         findings.append(Finding("canary", False,
@@ -273,10 +286,6 @@ def _sweep_lines(root: Path):
             if rel.name == "README.md":
                 text = _readme_body(root)
             for lineno, line in enumerate(text.splitlines(), 1):
-                # ponytail: negative-pin skip is a line heuristic — `not in`
-                # marks an absence assertion (test_v3_removals convention)
-                if "not in" in line:
-                    continue
                 yield str(rel), lineno, line
 
 
@@ -295,6 +304,12 @@ def sweep_hand_pins(root: Path) -> list:
             continue
         for family, rx in PIN_FAMILIES.items():
             for m in rx.finditer(line):
+                # Negative pin (test_v3_removals convention): `assert "<pin>"
+                # not in <surface>` — skip only when `not in` directly follows
+                # THIS occurrence's closing quote, so prose like "cannot
+                # install 3 SDLC workflow skills" still gets swept.
+                if NEGATIVE_PIN_TAIL_RE.match(line[m.end():]):
+                    continue
                 occurrences[family].append((rel, lineno, m.groups()))
     for family, occ in occurrences.items():
         if not occ:

@@ -318,6 +318,16 @@ def test_sweep_skips_negative_pins(tmp_path):
     assert not stale(src.sweep_hand_pins(root))
 
 
+def test_sweep_counts_prose_containing_not_in_words(tmp_path):
+    # R1-F1 (#528 review): "cannot install ..." must NOT be treated as a
+    # negative pin — only `not in` directly after the occurrence is skipped
+    root = make_repo(tmp_path)
+    (root / "tests" / "test_prose.py").write_text(
+        d('# cannot install 1_SDLC_workflow_skills tooling here\n'))
+    bad = stale(src.sweep_hand_pins(root))
+    assert any("test_prose.py" in f.detail for f in bad)
+
+
 def test_sweep_skips_readme_changelog(tmp_path):
     # README's Changelog section legitimately holds historical counts
     root = make_repo(tmp_path)
@@ -346,9 +356,20 @@ def test_sweep_consensus_names_both_locations(tmp_path):
     assert "test_straggler.py" in joined
 
 
+def test_bad_encoding_skill_md_fails_closed(tmp_path):
+    # R1-F2 (#528 review): a non-UTF-8 SKILL.md anywhere must yield STALE
+    # findings, never a traceback (UnicodeDecodeError is a ValueError)
+    root = make_repo(tmp_path)
+    (root / "skills" / "alpha" / "SKILL.md").write_bytes(b"\xff\xfe broken")
+    per_skill = src.check_skill(root, "alpha")
+    assert any(f.surface == "frontmatter" and not f.ok for f in per_skill)
+    counts = src.check_counts(root)
+    assert any(not f.ok for f in counts), "corpus-wide canary walk must fail closed"
+
+
 # --- skill-name hardening -----------------------------------------------------
 
-@pytest.mark.parametrize("name", ["../evil", "a/b", "UPPER", "", "a b"])
+@pytest.mark.parametrize("name", ["../evil", "a/b", "UPPER", "", "a b", "scan\n"])
 def test_invalid_skill_name_rejected(name):
     with pytest.raises(ValueError):
         src.validate_skill_name(name)
