@@ -43,3 +43,10 @@ claude_docs/
 # Vendored external command copies (#194): third-party prompt content — a durable
 # local copy, never committed (redistribution/licensing). See docs/external-references.md
 .rawgentic-vendored/
+
+# Workflow-run by-products (owner decision 2026-07-20, epic #475 run): review reports
+# and bench raw output stay local — they accumulate per run and are not release
+# content. Already-tracked historical files remain tracked (gitignore only hides new
+# untracked ones). docs/measurements/run_records.jsonl stays COMMITTED (#92/#93).
+docs/reviews/
+docs/measurements/bakeoff_results.jsonl
