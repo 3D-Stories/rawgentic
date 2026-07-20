@@ -1464,7 +1464,7 @@ recorded for the PR body and session notes.
    ```
 
 4. **Pre-PR test gate** (conditional):
-   - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure
+   - If `capabilities.has_tests`: the full-suite evidence is the Step 9 run — re-run the full suite here ONLY when a commit landed after Step 9 touching code or a test-pinned surface (per `<test-run-discipline>`, SKILL.md); block the PR on any failure. **Prose-only scoped exception (#527):** when EVERY post-Step-9 commit touches ONLY prose/doc files (`*.md`, `docs/`) plus their own guard test files under `tests/` (no `hooks/`, no `phase_executor/`, no `scripts/`, no shared behavior code, and no shared test infrastructure — `conftest.py`, `tests/corpus.py`, cross-file test helpers), run the affected guard test files plus `tests/hooks/test_adversarial_review_registration.py` (the version pin) SCOPED and consume the Step 9 full-suite result as the regression evidence — log a session-note marker naming the scoped set (e.g. `#### Step 12 pre-PR gate: scoped (<files>)`); any code-bearing commit keeps the full re-run.
    - If NOT `capabilities.has_tests`: re-run key verification commands, document results
 
 4a. **P15 review-state gate:** read via `plan_lib.read_review_state(repo_root, branch)`. If the returned state is `None` (missing or branch mismatch) OR `state["last_review_log_status"] != "applied"`, REFUSE to open the PR and surface unresolved review state to the user (or to the issue comment in headless mode). This catches any Step 8a suspend that did not resolve before the PR-creation attempt.

@@ -33,6 +33,22 @@ pattern) at RUN START beside the merge-policy question — same stall class cove
 unattended quota pauses. Small-standard lane; suite 3874→3876, 0 regressions; guards
 `TestEpicRunOwnerNotification` red-before-green.
 
+- PR #539, squash-merged b6cd0ba (2026-07-20), 4/4 lanes green on 3ds-fleet-linux.
+  Run deviations D-4/D-5/D-6: GitHub Actions partial outage → mid-run CI migration to
+  the org self-hosted fleet (PR #540, 9a8d617; group now allows public repos with
+  all_external_contributors fork-PR approval).
+
+### #527 — WF2 pre-PR gate goes scoped for prose-only post-Step-9 fixes · v3.73.0
+
+Epic #509 lever 2: 5/9 children re-ran the full suite (~2.4 min each) at Step 12 for
+guard-pinned prose tweaks. `<test-run-discipline>` exception (a) + steps.md §12 item 4
+now carry a precise file-list predicate (prose/docs + own guard tests only; hooks/,
+phase_executor/, scripts/, shared behavior code, and shared test infrastructure all
+force the full re-run) with the scoped set = affected guard files + the version-pin
+test, consuming the Step 9 full-suite result as regression evidence. Review breaker
+fired once (shared-test-infra edge, owner elected tighten — predicate now fully
+mechanical). Small-standard lane; suite 3876→3877; guard red-before-green.
+
 - PR / merge SHA: filled at close-out.
 
 ## Epic #493 — WF2 speed levers (manual drive)
