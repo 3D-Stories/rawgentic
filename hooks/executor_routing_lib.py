@@ -793,11 +793,11 @@ def supervised_dispatch(
     plan_context,
     mk_nonce: Callable,
     mk_probe_cid: Callable,
+    target: dict,
+    snapshot,
+    enforce,
     await_timeout_s: float = 3600.0,
     containment_root: Optional[str] = None,
-    target: Optional[dict] = None,
-    snapshot=None,
-    enforce=None,
     author_provider: Optional[str] = None,
 ) -> dict:
     """#470 §1/§2a — the SUPERVISED internal branch for a MUTATING seat. Runs the fail-closed
@@ -921,29 +921,27 @@ def supervised_dispatch(
     # gate outcome — check_pre's existing logic refuses a "bakeoff" outcome on a single dispatch
     # (the bake-off owns that dispatch), so a gate that mandated a bake-off can never proceed here.
     # Recorded BEFORE launch; a fail verdict never launches.
-    if enforce is not None and target is not None and snapshot is not None:
-        attestation = enforce.GateAttestation(
-            gate_outcome=gate_outcome,
-            policy_digest=gate_decision.policy_digest,
-            input_digest=enforce.launch_input_digest(seat, target, ce))
-        receipt = enforce.check_pre(
-            seat, target, snapshot, correlation_id=ce, attempt_id="0-supervised",
-            author_provider=author_provider, attestation=attestation)
-        audit.append_receipt(receipt)
-        if receipt.verdict == "fail":
-            return _err(EXIT_ENFORCEMENT, "pre_check_denied", "; ".join(receipt.violations),
-                        retryable=False, correlation_id=ce, audit_path=audit_path)
-    else:
-        # Injected-stub unit paths may omit the enforcement trio; production (_run_supervised)
-        # always passes all three — pinned by tests (a supervised launch without a receipt is
-        # exactly Step-11 C2).
-        receipt = None
+    # Step-11 re-review RH3: the trio (target/snapshot/enforce) is REQUIRED — no launch-capable
+    # call can skip the receipt, and only an EXPLICIT "pass" verdict launches (positive gate).
+    attestation = enforce.GateAttestation(
+        gate_outcome=gate_outcome,
+        policy_digest=gate_decision.policy_digest,
+        input_digest=enforce.launch_input_digest(seat, target, ce))
+    receipt = enforce.check_pre(
+        seat, target, snapshot, correlation_id=ce, attempt_id="0-supervised",
+        author_provider=author_provider, attestation=attestation)
+    audit.append_receipt(receipt)
+    if receipt.verdict != "pass":
+        return _err(EXIT_ENFORCEMENT, "pre_check_denied", "; ".join(receipt.violations)
+                    or f"non-pass verdict {receipt.verdict!r}",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
 
     # STEP 6 — provision the seat worktree, then launch (identity captured in JobRegistry).
     identity, handle = provision()
     record = supervisor.launch(
         seat, prompt, identity=identity, handle=handle, profile=profile,
         effort=effort, timeout=timeout, target=target, author_provider=author_provider,
+        receipt_nonce=receipt.nonce,
         snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
     state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
 
@@ -957,16 +955,15 @@ def supervised_dispatch(
     # verify_post on the final observation (Step-11 C2) — same breach semantics as the sync path:
     # an envelope with a wrong/missing identity is a NON-retryable enforcement failure; an
     # availability-shaped obs is exit 3.
-    if enforce is not None:
-        pc = enforce.verify_post(obs or {})
-        if not pc.ok:
-            return _err(EXIT_ENFORCEMENT, pc.reason,
-                        f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
-                        correlation_id=ce, audit_path=audit_path)
-        if not pc.verified:
-            return _err(EXIT_AVAILABILITY, "supervised_unverified",
-                        f"supervised seat {seat!r} produced no verifiable envelope ({pc.reason})",
-                        retryable=True, correlation_id=ce, audit_path=audit_path)
+    pc = enforce.verify_post(obs or {})
+    if not pc.ok:
+        return _err(EXIT_ENFORCEMENT, pc.reason,
+                    f"identity breach on supervised seat {seat!r}", retryable=pc.retryable,
+                    correlation_id=ce, audit_path=audit_path)
+    if not pc.verified:
+        return _err(EXIT_AVAILABILITY, "supervised_unverified",
+                    f"supervised seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                    retryable=True, correlation_id=ce, audit_path=audit_path)
     return {
         "ok": True, "exit": EXIT_OK, "action": "executor_supervised", "seat": seat,
         "state": state, "correlation_id": ce, "audit_path": audit_path,
@@ -1128,7 +1125,13 @@ def mint_gate(plan_content: str, issue_complexity: str, plan_est_lines,
     file_count = DISTINCT files across tasks), so ``verified_decision``'s key-for-key cross-check
     passes on a fresh plan by construction. Records the plan digest (freshness binding). Returns
     the JSON-safe dict ``_load_gate_decision`` round-trips. Raises PlanFormatError/ValueError on
-    malformed input (caller maps to exit 2)."""
+    malformed input (caller maps to exit 2).
+
+    TRUST BOUNDARY (Step-11 re-review RH4): ``issue_complexity`` and ``plan_est_lines`` are
+    ORCHESTRATOR-authoritative inputs — the WF2 Step-2 complexity classification and the plan
+    estimate — under the same in-process trust model ``verified_decision`` documents (defends
+    against authoring errors and stale reuse, not a hostile in-process caller). argparse pins
+    the complexity vocabulary; lines are validated non-negative at the CLI."""
     tasks = plan_lib.parse_tasks(plan_content)
     if not tasks:
         raise plan_lib.PlanFormatError("mint-gate: plan parses to zero tasks (check heading form)")
@@ -1148,6 +1151,9 @@ def _do_mint_gate(args) -> int:
         plan_content = Path(args.plan_file).read_text(encoding="utf-8")
     except OSError as e:
         return _emit(_err(EXIT_MALFORMED, "plan_file_unreadable", str(e), retryable=False))
+    if args.plan_est_lines < 0:
+        return _emit(_err(EXIT_MALFORMED, "mint_gate_invalid_input",
+                          "plan-est-lines must be non-negative", retryable=False))
     try:
         obj = mint_gate(plan_content, args.issue_complexity, args.plan_est_lines)
     except (plan_lib.PlanFormatError, ValueError) as e:

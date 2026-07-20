@@ -20,7 +20,8 @@ er._ensure_pe_importable()  # put phase_executor/src on sys.path for this test m
 # positive — the 39 tests below exercise these imports. Scoped disable, not a blanket one.
 # pylint: disable=no-name-in-module
 from phase_executor import contract, enforce, routing  # noqa: E402
-from phase_executor.engine import run_seat  # noqa: E402
+from phase_executor.adapters import codex_cli  # noqa: E402
+from phase_executor.engine import run_seat, PROVIDER_ENGINE as _PROVIDER_ENGINE  # noqa: E402
 from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: E402
 # pylint: enable=no-name-in-module
 import jsonschema  # noqa: E402
@@ -1395,6 +1396,8 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
         calls.append(True)
         return None, {"handle": True}  # stub supervisor ignores identity/handle content
 
+    snap = _snapshot()
+    tgt = routing.eligible_targets("build", snap)[0]
     res = er.supervised_dispatch(
         seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build",
         effort=None, timeout=5.0, engine="claude", profile=profile,
@@ -1403,6 +1406,7 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
         snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
         canary=_canary, canary_evidence=_cev, supervisor=sup, probe_session=probe_session,
         provision=provision, gate_decision=gd, plan_context=ctx,
+        target=tgt, snapshot=snap, enforce=enforce,
         mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}")
     return res, sup, qc, calls
 
@@ -1463,6 +1467,8 @@ def test_supervised_missing_gate_refuses_malformed(tmp_path):
         canary=_canary, canary_evidence=_cev, supervisor=_StubSupervisor(),
         probe_session=lambda **k: [], provision=lambda: (None, None),
         gate_decision=None, plan_context=None,
+        target=routing.eligible_targets("build", _snapshot())[0], snapshot=_snapshot(),
+        enforce=enforce,
         mk_nonce=lambda: "N", mk_probe_cid=lambda c: "p")
     assert res["exit"] == er.EXIT_MALFORMED
     assert res["error"]["code"] == "gate_file_required"
@@ -1493,6 +1499,8 @@ def test_supervised_refuses_unsandboxed_mutating_engine(tmp_path):
         canary=_canary, canary_evidence=_cev, supervisor=sup,
         probe_session=lambda **k: [], provision=lambda: (None, None),
         gate_decision=gd, plan_context=ctx,
+        target=routing.eligible_targets("build", _snapshot())[0], snapshot=_snapshot(),
+        enforce=enforce,
         mk_nonce=lambda: "N", mk_probe_cid=lambda c: "p")
     assert res["exit"] == er.EXIT_REFUSED
     assert res["error"]["code"] == "canary_refused"
@@ -1506,7 +1514,6 @@ def _codex_supervised_kw(tmp_path):
     root = tmp_path / "wtroot"
     wt = root / "wt-codex"
     wt.mkdir(parents=True)
-    from phase_executor.adapters import codex_cli
     argv = codex_cli.build_mutating_command("gpt-5.6-terra", str(wt), effort="low",
                                             containment_root=str(root))
     gd, ctx = _gate()
@@ -1518,13 +1525,25 @@ def _codex_supervised_kw(tmp_path):
 
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
     profile = _contract.LaunchProfile(session_policy="fresh", mutating=True, worktree=str(wt))
+    real_snap = routing.snapshot_from_file(routing.default_table_path())
+    codex_tgt = [t for t in routing.eligible_targets("build", real_snap)
+                 if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
+                 in er.MUTATING_FS_SANDBOXED][0]
+
+    class _MatchSup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", {"parse_status": "ok",
+                                 "requested_model": codex_tgt["model"],
+                                 "actual_model": codex_tgt["model"]}
+
     return dict(
         seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build:codex",
         effort=None, timeout=5.0, engine="codex", profile=profile, final_argv=argv,
         snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
-        canary=_canary, canary_evidence=_cev, supervisor=_StubSupervisor(),
+        canary=_canary, canary_evidence=_cev, supervisor=_MatchSup(),
         probe_session=probe_session, provision=lambda: (None, {"handle": True}),
         gate_decision=gd, plan_context=ctx,
+        target=codex_tgt, snapshot=real_snap, enforce=enforce,
         mk_nonce=lambda: "N-codex", mk_probe_cid=lambda c: "p",
         containment_root=str(root)), probe_calls
 
@@ -1555,16 +1574,13 @@ def test_supervised_codex_out_of_containment_refuses(tmp_path):
 
 
 # ---------------------------------------------------------------- Step-11 remediation (#470)
-from phase_executor.engine import PROVIDER_ENGINE as _PROVIDER_ENGINE  # noqa: E402
 def test_supervised_check_pre_receipt_minted_before_launch(tmp_path):
     """Step-11 C1+C2: a supervised launch mints the SAME check_pre enforcement receipt the sync
     path mints (recorded to the audit log before launch), and verify_post runs on the final
     observation. Driven with the real default table's sandboxed build-chain entry."""
-    import phase_executor.routing as routing_mod
-    import phase_executor.enforce as enforce_mod
     kw, _ = _codex_supervised_kw(tmp_path)
-    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
-    targets = routing_mod.eligible_targets("build", snap)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    targets = routing.eligible_targets("build", snap)
     codex_targets = [t for t in targets
                      if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
                      in er.MUTATING_FS_SANDBOXED]
@@ -1575,7 +1591,7 @@ def test_supervised_check_pre_receipt_minted_before_launch(tmp_path):
         def await_job(self, record, *, timeout_s=3600.0):
             return "completed", {"parse_status": "ok",
                                  "requested_model": tgt["model"], "actual_model": tgt["model"]}
-    kw.update(target=tgt, snapshot=snap, enforce=enforce_mod, supervisor=_Sup())
+    kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=_Sup())
     res = er.supervised_dispatch(**kw)
     assert res["ok"] is True, res
     audit_files = list((tmp_path / "runs").rglob("*.jsonl"))
@@ -1587,17 +1603,15 @@ def test_supervised_check_pre_receipt_minted_before_launch(tmp_path):
 def test_supervised_bakeoff_gate_refuses_single_dispatch(tmp_path):
     """Step-11 C1: a gate decision that mandates a bake-off must REFUSE the supervised single
     dispatch (check_pre rejects the bakeoff attestation) — never proceed to a mutating launch."""
-    import phase_executor.routing as routing_mod
-    import phase_executor.enforce as enforce_mod
     kw, _ = _codex_supervised_kw(tmp_path)
-    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
-    targets = routing_mod.eligible_targets("build", snap)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    targets = routing.eligible_targets("build", snap)
     tgt = [t for t in targets
            if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
            in er.MUTATING_FS_SANDBOXED][0]
     gd, ctx = _gate(bakeoff=True)
     sup = _StubSupervisor()
-    kw.update(target=tgt, snapshot=snap, enforce=enforce_mod, supervisor=sup,
+    kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=sup,
               gate_decision=gd, plan_context=ctx)
     res = er.supervised_dispatch(**kw)
     assert res["exit"] == er.EXIT_ENFORCEMENT, res
@@ -1608,18 +1622,16 @@ def test_supervised_bakeoff_gate_refuses_single_dispatch(tmp_path):
 def test_supervised_verify_post_breach_refuses(tmp_path):
     """Step-11 C2: a completed supervised job whose observation reports the WRONG model is an
     enforcement breach (exit 4), not a success."""
-    import phase_executor.routing as routing_mod
-    import phase_executor.enforce as enforce_mod
     kw, _ = _codex_supervised_kw(tmp_path)
-    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
-    tgt = [t for t in routing_mod.eligible_targets("build", snap)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    tgt = [t for t in routing.eligible_targets("build", snap)
            if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
            in er.MUTATING_FS_SANDBOXED][0]
     class _Sup(_StubSupervisor):
         def await_job(self, record, *, timeout_s=3600.0):
             return "completed", {"parse_status": "ok",
                                  "requested_model": tgt["model"], "actual_model": "wrong-model-9"}
-    kw.update(target=tgt, snapshot=snap, enforce=enforce_mod, supervisor=_Sup())
+    kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=_Sup())
     res = er.supervised_dispatch(**kw)
     assert res["exit"] == er.EXIT_ENFORCEMENT
     assert res["error"]["code"] == "requested_actual_mismatch"
@@ -1628,9 +1640,8 @@ def test_supervised_verify_post_breach_refuses(tmp_path):
 def test_run_supervised_filters_to_sandboxed_lane_on_real_table():
     """Step-11 H1: the default table's build seat (claude primary) must FILTER to its sandboxed
     chain entry for the supervised branch — pure filter logic pinned against the real table."""
-    import phase_executor.routing as routing_mod
-    snap = routing_mod.snapshot_from_file(routing_mod.default_table_path())
-    targets = routing_mod.eligible_targets("build", snap)
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    targets = routing.eligible_targets("build", snap)
     primary_engine = _PROVIDER_ENGINE.get(targets[0]["lane"]["provider"],
                                             targets[0]["lane"]["provider"])
     assert primary_engine not in er.MUTATING_FS_SANDBOXED, \

@@ -248,7 +248,7 @@ class TmuxSupervisor:
     def launch(self, seat: str, prompt: str, *, identity: WorktreeIdentity,
                handle: WorktreeHandle, profile: Optional[contract.LaunchProfile] = None,
                effort: Optional[str] = None, timeout: float = 300.0,
-               target: Optional[dict] = None,
+               target: Optional[dict] = None, receipt_nonce: Optional[str] = None,
                author_provider: Optional[str] = None, resume_session_id: Optional[str] = None,
                resume_attempts: int = 0, quota_timeout: float = 300.0,
                snapshot_dir: Optional[str] = None,
@@ -348,7 +348,8 @@ class TmuxSupervisor:
                 permit_ref=permit_ref, command_digest=digest, spec_digest=spec_digest,
                 provider_session_id=resume_session_id, provider_exit_code=None,
                 resume_attempts=resume_attempts, state="running",
-                created_at=self._clock(), quarantine_reason=None)
+                created_at=self._clock(), quarantine_reason=None,
+                receipt_nonce=receipt_nonce)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
@@ -735,14 +736,15 @@ class TmuxSupervisor:
         recover() refuses the adoption rather than over-admit."""
         if record.permit_ref == "unbounded":
             return True
-        targets = routing.eligible_targets(record.identity.seat, self._snapshot)
-        if not targets:
-            raise routing.RoutingError(
-                f"adopt {record.session_name}: seat {record.identity.seat!r} has no eligible "
-                f"target — cannot re-establish its permit")
+        # Step-11 re-review RH2: the pool is derived from the permit token's OWN parent dir —
+        # the pool the launch actually acquired under. Re-resolving eligible_targets[0] here
+        # would name the PRIMARY lane's pool, which can differ from the launched lane's pool
+        # (the H1 mutating-eligibility filter launches build on its codex chain entry while the
+        # primary is claude) — a wrong pool name checks the wrong ceiling on reclaim.
+        pool = Path(record.permit_ref).parent.parent.name  # <root>/<POOL>/<account>/permit-*
         # Step-11 H4: surface the CAS outcome — False = another live orchestrator won and OWNS
         # the job (recover() yields it), True = this process owns the permit.
-        return self._quota.reestablish_permit(targets[0]["lane"]["pool"], record.permit_ref)
+        return self._quota.reestablish_permit(pool, record.permit_ref)
 
     def recover(self, run_id: str) -> list:
         """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
