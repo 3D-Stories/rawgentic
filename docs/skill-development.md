@@ -127,7 +127,15 @@ pass rate vs 72% without (+28% delta).
    list are invisible to the marketplace but still discoverable by local
    installs.**
 
-3. **Reinstall the plugin** after adding the file (see the update workflow in
+3. **Verify every registration surface with the checker (#528).** Run
+   `python3 hooks/skill_registration_check.py check --skill <name> --project-root .`
+   — it computes each surface from the tree (whitelist position and
+   whitelist==disk, codex symlink, `sync_shared_blocks.py` MANIFEST membership,
+   config-loading canary, README count strings) and grep-sweeps all hand-pinned
+   count copies, printing each stale surface by name; exit 1 while any is
+   stale. The `add-skill` workspace skill drives this for you.
+
+4. **Reinstall the plugin** after adding the file (see the update workflow in
    the workspace `CLAUDE.md`). Existing sessions will not pick up new skills
    until they restart.
 
