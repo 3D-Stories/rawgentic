@@ -188,6 +188,107 @@ def test_work_product_empty_digest_string_rejected():
         contract.validate_observation(d)
 
 
+# --- #469 W6 Task 3: new AC-I1 telemetry fields (typed optional; POPULATION deferred to #470) ---
+
+_I1_FIELDS = ("session_policy", "worktree_id", "tmux_session", "budget", "hook_denials")
+
+
+def test_i1_fields_omitted_when_absent():
+    """All new I1 fields are optional-additive: absent when unset (the canary_result precedent)."""
+    d = _obs_ok().to_dict()
+    for f in _I1_FIELDS:
+        assert f not in d
+    contract.validate_observation(d)
+
+
+@pytest.mark.parametrize("policy", ["fresh", "resume"])
+def test_session_policy_set_and_validates(policy):
+    d = _obs_ok(session_policy=policy).to_dict()
+    assert d["session_policy"] == policy
+    contract.validate_observation(d)
+
+
+def test_session_policy_bad_value_rejected():
+    d = _obs_ok(session_policy="paused").to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_worktree_id_set_and_empty_rejected():
+    d = _obs_ok(worktree_id="run1/build/0-aaaa").to_dict()
+    assert d["worktree_id"] == "run1/build/0-aaaa"
+    contract.validate_observation(d)
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(_obs_ok(worktree_id="").to_dict())
+
+
+def test_tmux_session_set_and_empty_rejected():
+    d = _obs_ok(tmux_session="pe-run1-build-0").to_dict()
+    assert d["tmux_session"] == "pe-run1-build-0"
+    contract.validate_observation(d)
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(_obs_ok(tmux_session="").to_dict())
+
+
+def test_budget_set_and_validates():
+    d = _obs_ok(budget={"reserved_usd": 5.0, "spent_usd": 1.25}).to_dict()
+    assert d["budget"] == {"reserved_usd": 5.0, "spent_usd": 1.25}
+    contract.validate_observation(d)
+    contract.validate_observation(_obs_ok(budget={"reserved_usd": 0, "spent_usd": 0}).to_dict())
+
+
+@pytest.mark.parametrize("bad", [
+    {"reserved_usd": -1, "spent_usd": 0},
+    {"reserved_usd": 0, "spent_usd": -0.01},
+    {"reserved_usd": 1.0},                       # missing spent_usd
+    {"reserved_usd": 1.0, "spent_usd": 0.0, "x": 1},  # extra key
+    {"reserved_usd": "1", "spent_usd": 0},       # non-number
+])
+def test_budget_malformed_rejected(bad):
+    d = _obs_ok(budget=bad).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_hook_denials_set_and_validates():
+    for n in (0, 3):
+        d = _obs_ok(hook_denials=n).to_dict()
+        assert d["hook_denials"] == n
+        contract.validate_observation(d)
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "2", True])
+def test_hook_denials_malformed_rejected(bad):
+    d = _obs_ok(hook_denials=bad).to_dict()
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
+def test_all_i1_fields_and_work_product_roundtrip_together():
+    d = _obs_ok(session_policy="resume", worktree_id="w", tmux_session="t",
+                budget={"reserved_usd": 2, "spent_usd": 1}, hook_denials=0,
+                work_product=_wp()).to_dict()
+    for f in _I1_FIELDS + ("work_product",):
+        assert f in d
+    contract.validate_observation(d)
+
+
+@pytest.mark.parametrize("field_kwargs", [
+    {"session_policy": "fresh"},
+    {"worktree_id": "w"},
+    {"tmux_session": "t"},
+    {"budget": {"reserved_usd": 1, "spent_usd": 0}},
+    {"hook_denials": 1},
+])
+def test_i1_field_on_v1_document_rejected(field_kwargs):
+    """Freeze proof: each v2-only I1 field on a doc DECLARING "1" is rejected (dispatch -> frozen
+    v1, which has no such property)."""
+    d = _obs_ok(**field_kwargs).to_dict()
+    d["schema_version"] = "1"
+    with pytest.raises(jsonschema.ValidationError):
+        contract.validate_observation(d)
+
+
 # --- #465 T1: effort gate + stepdown + Observation.effort ---
 
 class TestResolveEffort:

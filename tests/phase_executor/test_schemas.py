@@ -256,12 +256,19 @@ def test_schema_version_is_2():
 
 
 def test_frozen_v1_is_subset_of_v2():
-    """Frozen invariant: v1 removed nothing — its field set is a subset of v2's (v2 only adds).
-    The specific v2-only additions (work_product + I1 fields) are asserted absent-from-v1 in the
-    work_product / I1 tests, once those fields exist."""
+    """Frozen invariant: v1 removed nothing — its field set is a subset of v2's (v2 only adds)."""
     v1_props = set(V1_SCHEMA["properties"])
     v2_props = set(OBS_SCHEMA["properties"])
     assert v1_props <= v2_props
+
+
+def test_v2_only_fields_absent_from_frozen_v1():
+    """The #469 v2 additions (work_product + AC-I1 fields) exist in v2 and are ABSENT from frozen
+    v1 — so a v2-only field on a "1"-declared doc is rejected by dispatch (the freeze guarantee)."""
+    v2_only = {"work_product", "session_policy", "worktree_id", "tmux_session", "budget",
+               "hook_denials"}
+    assert v2_only <= set(OBS_SCHEMA["properties"])
+    assert v2_only.isdisjoint(set(V1_SCHEMA["properties"]))
 
 
 def test_observation_schema_dispatches_by_version():

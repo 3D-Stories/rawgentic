@@ -163,6 +163,14 @@ class Observation:
     # (absent on legacy/read-only records; the canary_result precedent) — emitted only when set,
     # a schema_version "2" field.
     work_product: Optional[dict] = None
+    # #469 W6 (AC-I1): dispatch telemetry — the TYPED optional fields are added now; POPULATION is
+    # deferred to #470 (mirroring the #468 canary_result field -> #470 wiring split). Emitted only
+    # when set; every existing producer passes None -> byte-identical legacy Observation.
+    session_policy: Optional[str] = None      # "fresh" | "resume" (the D-8 policy used)
+    worktree_id: Optional[str] = None          # WorktreeIdentity
+    tmux_session: Optional[str] = None         # registry.session_name
+    budget: Optional[dict] = None              # {reserved_usd, spent_usd} in USD (cent precision)
+    hook_denials: Optional[int] = None         # nonnegative COUNT (events -> run-record, not here)
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -205,6 +213,17 @@ class Observation:
         # work_product (#469): the executor-derived produced-artifact record, emitted only when set.
         if self.work_product is not None:
             out["work_product"] = dict(self.work_product)
+        # #469 AC-I1 dispatch telemetry: each emitted only when set (population deferred to #470).
+        if self.session_policy is not None:
+            out["session_policy"] = self.session_policy
+        if self.worktree_id is not None:
+            out["worktree_id"] = self.worktree_id
+        if self.tmux_session is not None:
+            out["tmux_session"] = self.tmux_session
+        if self.budget is not None:
+            out["budget"] = dict(self.budget)
+        if self.hook_denials is not None:
+            out["hook_denials"] = self.hook_denials
         return out
 
 

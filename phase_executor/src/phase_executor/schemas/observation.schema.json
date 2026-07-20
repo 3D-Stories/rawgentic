@@ -443,6 +443,49 @@
           ]
         }
       }
+    },
+    "session_policy": {
+      "description": "#469 W6 (AC-I1): the D-8 session policy actually used for this dispatch. OPTIONAL/additive (absent on legacy/read-only records) — POPULATION is wired by #470.",
+      "enum": [
+        "fresh",
+        "resume"
+      ]
+    },
+    "worktree_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "#469 W6 (AC-I1): the WorktreeIdentity of the engine-managed worktree for this dispatch. OPTIONAL/additive — POPULATION is wired by #470."
+    },
+    "tmux_session": {
+      "type": "string",
+      "minLength": 1,
+      "description": "#469 W6 (AC-I1): the supervisor tmux session name (registry.session_name) for this dispatch. Host-specific; redaction/retention is defined on the consuming run-record / #473 sidecar, not here. OPTIONAL/additive — POPULATION is wired by #470."
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reserved_usd",
+        "spent_usd"
+      ],
+      "description": "#469 W6 (AC-I1): the cost envelope for this dispatch. Unit is US dollars; values carry cent precision (a value is USD, e.g. 0.25 = 25 cents). OPTIONAL/additive — POPULATION is wired by #470.",
+      "properties": {
+        "reserved_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD reserved/atomically-held before launch (>= 0)."
+        },
+        "spent_usd": {
+          "type": "number",
+          "minimum": 0,
+          "description": "USD actually spent by this dispatch (>= 0)."
+        }
+      }
+    },
+    "hook_denials": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "#469 W6 (AC-I1): count of PreToolUse hook denials the seat received during this dispatch (a nonnegative COUNT — detailed denial EVENTS go to the run-record, not every Observation, avoiding duplicated/sensitive payloads per-dispatch). OPTIONAL/additive — POPULATION is wired by #470."
     }
   },
   "allOf": [
