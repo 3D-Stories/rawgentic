@@ -196,3 +196,17 @@ def test_status_method_delegates_to_derive_state(tmp_path):
     assert "derive_state(" in src
     src2 = inspect.getsource(supervisor.TmuxSupervisor._sentinel)
     assert "read_sentinel(" in src2
+
+
+def test_status_method_skips_live_probe_when_sentinel_valid():
+    """8a R1#1/R2#3: the method keeps the pre-lift short-circuit — a sentinel-bearing job
+    never spawns the tmux probe (and a hung socket can't convert 'completed' into a raise)."""
+    import types as _types
+    sup2 = object.__new__(supervisor.TmuxSupervisor)
+    rec = _rec()
+    calls = []
+    sup2._registry = _types.SimpleNamespace(get=lambda i: rec)
+    sup2._sentinel = lambda r: {"ok": 1}
+    sup2._live = lambda r: calls.append("live") or True
+    assert sup2.status(rec.identity) == "completed"
+    assert calls == []

@@ -258,3 +258,19 @@ class JobRegistry:
 
     def all(self) -> list:
         return [_record_from_dict(d) for d in self._read().values()]
+
+
+def read_all(registry_root: str) -> list:
+    """READ-ONLY view of ``<registry_root>/jobs.json`` (#471 AC-J3): unlike constructing a
+    ``JobRegistry`` (whose ``__init__`` mkdir/chmods the root — a metadata write), this
+    touches nothing. Missing file = empty (first run); present-but-corrupt raises
+    ``RegistryCorrupt`` (same fail-loud contract as ``JobRegistry._read``)."""
+    path = os.path.join(registry_root, "jobs.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        raise RegistryCorrupt(f"jobs.json unreadable/corrupt at {path}: {exc}") from exc
+    return [_record_from_dict(d) for d in data.values()]

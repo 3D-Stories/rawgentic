@@ -468,7 +468,11 @@ class TmuxSupervisor:
             raise SupervisorError(f"unknown job {identity}")
         if record.state in _TERMINAL_STATES:
             return record.state
-        return derive_state(record, sentinel=self._sentinel(record), live=self._live(record))
+        # 8a R1#1: keep the pre-lift short-circuit — a sentinel-bearing job never spawns
+        # the tmux probe (and a hung socket can't turn 'completed' into a raise).
+        sentinel = self._sentinel(record)
+        live = self._live(record) if sentinel is None else False
+        return derive_state(record, sentinel=sentinel, live=live)
 
     def mark_quota_paused(self, identity: WorktreeIdentity,
                           provider_session_id: Optional[str]) -> JobRecord:

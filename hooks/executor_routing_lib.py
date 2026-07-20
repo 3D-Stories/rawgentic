@@ -1014,6 +1014,7 @@ def _import_phase_executor():
     from phase_executor.supervisor import TmuxSupervisor  # noqa: PLC0415
     import phase_executor.supervisor as supervisor_mod  # noqa: PLC0415 — #471 status surface
     from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
+    from phase_executor.registry import read_all as registry_read_all  # noqa: PLC0415
     from phase_executor.registry import session_name as registry_session_name  # noqa: PLC0415
     from phase_executor.worktree import WorktreeIdentity, WorktreeManager  # noqa: PLC0415
     from phase_executor.adapters import ADAPTERS  # noqa: PLC0415
@@ -1023,6 +1024,7 @@ def _import_phase_executor():
         canary=canary, canary_evidence=canary_evidence, contract=contract,
         PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
         supervisor=supervisor_mod, JobRegistry=JobRegistry, RegistryCorrupt=RegistryCorrupt,
+        registry_read_all=registry_read_all,
         registry_session_name=registry_session_name,
         WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
     )
@@ -1491,11 +1493,21 @@ def _status_tail(path: Path, limit: int = 200) -> str:
     return lines[-1][:limit] if lines else ""
 
 
+# 8a R2#1 (High): the ONLY files the activity probe may select/echo. input.md is the raw
+# prompt (written BEFORE the provider call — during the whole running window it is the
+# newest file) and the pane spec/.incomplete are runner internals; tailing any of them
+# into the status JSON is a prompt/config leak.
+_ACTIVITY_ALLOWLIST = frozenset({"transport.stdout.txt", "stderr.txt", "output.md",
+                                 "observation.json"})
+
+
 def _status_activity(record, *, clock=time.time) -> Optional[dict]:
-    """AC-J1f: the latest capture write (file, age, tail line). Read-only, best-effort —
-    a missing/racing capture dir is ``None``, never an error."""
+    """AC-J1f: the latest capture write (file, age, tail line) among the OUTPUT artifacts
+    (``_ACTIVITY_ALLOWLIST`` — never the prompt/spec). Read-only, best-effort — a
+    missing/racing capture dir is ``None``, never an error."""
     try:
-        files = [p for p in Path(record.capture_dir).iterdir() if p.is_file()]
+        files = [p for p in Path(record.capture_dir).iterdir()
+                 if p.is_file() and p.name in _ACTIVITY_ALLOWLIST]
         if not files:
             return None
         newest = max(files, key=lambda p: p.stat().st_mtime)
@@ -1527,15 +1539,15 @@ def _do_status(args) -> int:
                           retryable=False))
     registry_root = Path(repo_root) / ".rawgentic" / "runtime" / "registry"
     out = {"run_id": args.run, "generated_at": int(time.time()), "seats": [], "exit": EXIT_OK}
-    if not (registry_root / "jobs.json").exists():
-        # first run / no registry — empty view is honest here (missing-file semantics,
-        # registry.py); constructing JobRegistry would mkdir/chmod, which a read-only
-        # surface must not do.
-        return _emit(out)
     try:
-        records = pe.JobRegistry(str(registry_root)).by_run(args.run)
+        # registry.read_all, never a JobRegistry: its __init__ mkdir/chmods the root —
+        # a metadata write the AC-J3 read-only surface must not perform (8a R2#2).
+        records = [r for r in pe.registry_read_all(str(registry_root))
+                   if r.identity.run_id == args.run]
     except pe.RegistryCorrupt as e:
         return _emit(_err(EXIT_INTERNAL, "registry_corrupt", str(e), retryable=False))
+    if not records:
+        return _emit(out)
 
     has_tmux = shutil.which("tmux") is not None
 

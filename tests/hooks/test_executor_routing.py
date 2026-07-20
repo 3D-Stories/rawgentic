@@ -1693,7 +1693,7 @@ def _status_repo(tmp_path, *, state="running", with_obs=False, with_spec=True,
         obs["actual_model"] = "claude-sonnet-5"
         (cap / "observation.json").write_text(json.dumps(obs), encoding="utf-8")
     if with_activity:
-        (cap / "transport.txt").write_text("first line\nlast activity line\n", encoding="utf-8")
+        (cap / "transport.stdout.txt").write_text("first line\nlast activity line\n", encoding="utf-8")
     return ws, repo, reg_root
 
 
@@ -1718,7 +1718,7 @@ def test_cli_status_renders_seat_row(tmp_path):
     assert row["requested_model"] == "claude-sonnet-5" and row["effort"] == "high"
     assert row["actual_model"] == "claude-sonnet-5" and row["engine"] == "claude"
     assert row["eta"] == "no estimate"
-    assert row["last_activity"]["file"] in ("transport.txt", "observation.json")
+    assert row["last_activity"]["file"] in ("transport.stdout.txt", "observation.json")
     assert row["last_activity"]["tail"]
 
 
@@ -1758,3 +1758,30 @@ def test_cli_status_missing_project_path_exit2(tmp_path):
     ws = _ws(tmp_path, path="./projects/gone")
     r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
     assert r.returncode == er.EXIT_MALFORMED
+
+
+def test_cli_status_running_window_never_leaks_prompt(tmp_path):
+    # 8a R2#1 (High): during the running window the capture dir holds ONLY .incomplete +
+    # input.md (the raw prompt — claude_cli.py writes it BEFORE the provider call). The
+    # activity probe must never select/echo it.
+    ws, repo, _ = _status_repo(tmp_path, with_obs=False, with_spec=True)
+    cap = repo / ".rawgentic" / "runs" / "run1" / "build" / "0-aaaa1111"
+    (cap / ".incomplete").write_text("engine invocation has not completed\n", encoding="utf-8")
+    (cap / "input.md").write_text("SECRET-PROMPT-MARKER do the thing\n", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    (row,) = json.loads(r.stdout)["seats"]
+    assert "SECRET-PROMPT-MARKER" not in r.stdout
+    assert row["last_activity"] is None  # only non-allowlisted files present
+
+
+def test_cli_status_read_only_no_registry_dir_metadata_write(tmp_path):
+    # 8a R2#2 (Medium): the read path must not construct JobRegistry — its __init__
+    # mkdir/chmods the registry root (a metadata write on a read-only surface).
+    ws, _, reg_root = _status_repo(tmp_path)
+    import os as _os
+    before = _os.stat(reg_root)
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    after = _os.stat(reg_root)
+    assert (before.st_mode, before.st_ctime_ns) == (after.st_mode, after.st_ctime_ns)
