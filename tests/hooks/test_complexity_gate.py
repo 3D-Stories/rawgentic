@@ -287,3 +287,44 @@ def test_verified_decision_absent_key_with_none_value_refused_464():
     assert "no_such_key" not in gd.input_snapshot
     with pytest.raises(pl.GateTamperError, match="missing"):
         pl.verified_decision(gd, expected_context={"no_such_key": None})
+
+
+# --- #470 §2b: plan-file digest recording (enforced gate-freshness) -----------------------------
+def test_plan_content_digest_shape_and_determinism():
+    d1 = pl.plan_content_digest("### Task 1: build\n- riskLevel: standard\n")
+    d2 = pl.plan_content_digest("### Task 1: build\n- riskLevel: standard\n")
+    assert d1.startswith("sha256:") and d1 == d2
+    # a single byte of plan change yields a different digest (stale-evident).
+    assert d1 != pl.plan_content_digest("### Task 1: build\n- riskLevel: high\n")
+
+
+def test_needs_bakeoff_records_plan_digest_when_given():
+    task, issue, plan_est = _clean()
+    plan = "### Task 1: build\n- riskLevel: standard\n- files: hooks/foo.py\n"
+    d = pl.needs_bakeoff(task, issue, plan_est, plan_content=plan)
+    assert d.input_snapshot["plan_digest"] == pl.plan_content_digest(plan)
+
+
+def test_plan_digest_omitted_without_plan_content():
+    # back-compat: a gate minted the pre-#470 way carries NO plan_digest key at all — the executor
+    # fail-closes on its ABSENCE (never silently passes on missing evidence).
+    d = pl.needs_bakeoff(*_clean())
+    assert "plan_digest" not in d.input_snapshot
+
+
+def test_plan_digest_bound_by_policy_digest():
+    # plan_digest rides input_snapshot, so policy_digest binds it: a different plan file ⇒ a
+    # different gate digest (tamper/stale-evident).
+    task, issue, plan_est = _clean()
+    a = pl.needs_bakeoff(task, issue, plan_est, plan_content="A")
+    b = pl.needs_bakeoff(task, issue, plan_est, plan_content="B")
+    assert a.policy_digest != b.policy_digest
+
+
+def test_plan_digest_does_not_change_reasons_or_decision():
+    # additive field: it must not perturb the bake-off trigger logic (reasons_from_snapshot ignores it).
+    task, issue, plan_est = _clean(task={"risk_level": "high"})
+    with_plan = pl.needs_bakeoff(task, issue, plan_est, plan_content="### Task 1: x\n- riskLevel: high\n")
+    without = pl.needs_bakeoff(task, issue, plan_est)
+    assert with_plan.reason_codes == without.reason_codes
+    assert with_plan.decision == without.decision is True

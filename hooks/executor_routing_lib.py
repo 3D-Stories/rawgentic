@@ -44,6 +44,7 @@ from typing import Any, Callable, Final, Optional
 # Sibling hook imports (hooks/*.py import each other via PYTHONPATH=hooks / sys.path.insert).
 import capabilities_lib  # #445 sanctioned .rawgentic.json reader for the seat-table pointer
 import complexity_gate  # #429 gate authentication for the build-dispatch path (#464 §E)
+import plan_lib  # #470 §2b: parse the live plan file to mint risk_level + file_count
 from model_routing_lib import _ABSENT, _load_block, _load_project_entry
 
 # --- constants ---------------------------------------------------------------------------------
@@ -574,11 +575,14 @@ def dispatch_seat(
     once on the final Observation to drive the exit code.
 
     #464 §E — build gate: a seat whose TABLE role == ``"build"`` REQUIRES both an authenticated #429
-    ``gate_decision`` and an independently-sourced ``plan_context``. The gate is authenticated ONCE
-    here (pre-loop, pre-receipt) via ``complexity_gate.verified_decision`` so a missing/tampered/stale
-    gate fails closed BEFORE any receipt is minted; the launch-bound ``GateAttestation`` is minted
-    PER-ATTEMPT (its ``input_digest`` binds to the exact target, which differs across fallbacks) and
-    passed into ``check_pre``. Non-build seats pass ``attestation=None`` — byte-identical to #427.
+    ``gate_decision`` and a ``plan_context``. #470 §2b: the CLI mints ``plan_context`` INTERNALLY from
+    the live plan file (``mint_plan_context``) — no caller-assembled context crosses the CLI boundary;
+    ``dispatch_seat`` still accepts the minted dict (and the bench/tests pass one directly). The gate
+    is authenticated ONCE here (pre-loop, pre-receipt) via ``complexity_gate.verified_decision`` so a
+    missing/tampered/stale gate fails closed BEFORE any receipt is minted; the launch-bound
+    ``GateAttestation`` is minted PER-ATTEMPT (its ``input_digest`` binds to the exact target, which
+    differs across fallbacks) and passed into ``check_pre``. Non-build seats pass ``attestation=None``
+    — byte-identical to #427.
     """
     # #464 §B: a competitive-only seat (design) can never be single-dispatched — the bake-off owns
     # its dispatch. Refuse BEFORE table load / provider call (exit 2, malformed-input class).
@@ -607,8 +611,9 @@ def dispatch_seat(
                         retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
         if not isinstance(plan_context, dict) or not plan_context:
             return _err(EXIT_MALFORMED, "plan_context_required",
-                        f"build seat {seat!r} requires a non-empty plan context (--plan-context); an "
-                        f"empty context can never silently disable the stale-decision defense",
+                        f"build seat {seat!r} requires a non-empty plan context (minted internally "
+                        f"from --plan-file); an empty context can never silently disable the "
+                        f"stale-decision defense",
                         retryable=False, correlation_id=correlation_id, audit_path=str(audit.path))
         # Step-11 diff review (reopens step6-H1): exact key-set equality — a PARTIAL context
         # (any canonical key omitted) or a smuggled extra key silently narrows the cross-check,
@@ -854,6 +859,72 @@ def _load_gate_decision(path):
     )
 
 
+class PlanStale(Exception):
+    """#470 §2b enforcement refusal: a build gate no longer matches its live plan file. Carries a
+    structured ``code`` — ``gate_stale_for_plan`` (the live plan's digest differs from the digest the
+    gate recorded at mint — the plan was revised, so the gate must be re-run) or
+    ``gate_missing_plan_digest`` (a pre-#470 gate that recorded no plan digest — a security control
+    never silently passes on absent evidence). The CLI maps both to ``EXIT_ENFORCEMENT`` (4)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def mint_plan_context(gate_decision, plan_content: str, *, run_id=None, correlation_id=None):
+    """#470 §2b — mint the canonical plan context INTERNALLY (no caller-assembled context object
+    crosses the dispatch boundary) and ENFORCE gate-freshness against the live plan.
+
+    Sources, per key (design §2b — the plan file alone cannot mint all four): ``risk_level`` +
+    ``file_count`` from the live ``plan_content`` via ``plan_lib.parse_tasks`` — ``risk_level`` is the
+    aggregate (``high`` if ANY task is high, else ``standard``) and ``file_count`` is the count of
+    DISTINCT files declared across all tasks; ``complexity`` + ``lines`` are copied from the gate
+    decision's OWN authenticated snapshot (the gate already authenticated them — one source of truth,
+    no re-fetch). The sibling gate-minting step supplies ``plan_est`` facts that agree with the parsed
+    plan, so ``verified_decision``'s later cross-check of the two plan-derived facts holds on a fresh
+    plan.
+
+    Freshness (R4′, fail-closed): recompute the live plan's ``plan_content_digest`` and compare it to
+    the digest the gate RECORDED at mint. An ABSENT recorded digest (a pre-#470 gate) raises
+    ``PlanStale('gate_missing_plan_digest')``; a MISMATCH raises ``PlanStale('gate_stale_for_plan')``.
+    A byte-identical plan is the "nothing changed" case — the old gate IS current — and passes.
+
+    Returns ``(plan_context, freshness_record)``. ``plan_context`` is exactly the canonical
+    ``REQUIRED_PLAN_CONTEXT_KEYS`` mapping (dispatch re-authenticates it via ``verified_decision``);
+    ``freshness_record`` is the audit tuple (gate ``policy_digest``, live plan digest, run_id,
+    correlation_id) dispatch records alongside the receipt. Raises ``plan_lib.PlanFormatError`` on an
+    unparseable plan — the CLI maps it to the malformed-input class (exit 2)."""
+    snapshot = gate_decision.input_snapshot
+    recorded = snapshot.get("plan_digest")
+    if not recorded:  # None or "" — a pre-#470 gate recorded no plan digest: fail closed, distinctly
+        raise PlanStale(
+            "gate_missing_plan_digest",
+            "gate decision recorded no plan digest (pre-#470 gate) — re-run the complexity gate so "
+            "it binds the live plan before dispatching a build seat")
+    live_digest = complexity_gate.plan_content_digest(plan_content)
+    if live_digest != recorded:
+        raise PlanStale(
+            "gate_stale_for_plan",
+            "live plan digest differs from the gate's recorded digest — the plan was revised; "
+            "re-run the complexity gate to authorize this build dispatch")
+    tasks = plan_lib.parse_tasks(plan_content)  # PlanFormatError bubbles → CLI exit 2 (malformed)
+    risk_level = "high" if any(t.risk_level == "high" for t in tasks) else "standard"
+    file_count = len({f for t in tasks for f in t.files})
+    plan_context = {
+        "risk_level": risk_level,
+        "complexity": snapshot.get("complexity"),
+        "lines": snapshot.get("lines"),
+        "file_count": file_count,
+    }
+    freshness = {
+        "gate_policy_digest": gate_decision.policy_digest,
+        "plan_digest": live_digest,
+        "run_id": run_id,
+        "correlation_id": correlation_id,
+    }
+    return plan_context, freshness
+
+
 def _do_dispatch(args) -> int:
     # Guarded import: a stale tree / missing dep fails CLOSED to exit 5 (never a silent inherit).
     try:
@@ -894,18 +965,54 @@ def _do_dispatch(args) -> int:
     except OSError as e:
         return _emit(_err(EXIT_MALFORMED, "prompt_or_context_unreadable", str(e), retryable=False,
                           correlation_id=args.correlation_id))
-    # #464 §E: optional build-gate evidence. A build-role seat REQUIRES both (validated inside
-    # dispatch_seat, which reads the seat's role from the table); a non-build seat ignores them. An
-    # unreadable/malformed gate file or plan context is bad input (exit 2).
-    gate_decision = plan_context = None
+    # #464 §E / #470 §2b: build-gate evidence. A build-role seat REQUIRES an authenticated gate file
+    # (--gate-file) AND the live implementation plan (--plan-file). An unreadable/malformed gate file
+    # is bad input (exit 2). The plan context is minted INTERNALLY below — no caller-assembled context
+    # object crosses this boundary.
+    gate_decision = None
     try:
         if args.gate_file:
             gate_decision = _load_gate_decision(args.gate_file)
-        if args.plan_context:
-            plan_context = json.loads(Path(args.plan_context).read_text(encoding="utf-8"))
     except (OSError, ValueError, KeyError, TypeError) as e:
         return _emit(_err(EXIT_MALFORMED, "gate_input_unreadable", f"{type(e).__name__}: {e}",
                           retryable=False, correlation_id=args.correlation_id))
+    # The live plan file is a trust-boundary input: a missing/unreadable one is bad input (exit 2).
+    plan_content = None
+    if args.plan_file:
+        try:
+            plan_content = Path(args.plan_file).read_text(encoding="utf-8")
+        except OSError as e:
+            return _emit(_err(EXIT_MALFORMED, "plan_file_unreadable", str(e), retryable=False,
+                              correlation_id=args.correlation_id))
+    # Role governs whether the plan context is minted. snapshot.seat raises RoutingError on a
+    # stale/wrong-project table — map it into the taxonomy rather than leaking a traceback.
+    try:
+        role = snap.seat(args.seat).get("role")
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    # #470 §2b: mint the canonical plan context internally + enforce plan-digest freshness. A build
+    # seat requires the plan file; with the gate present, the mint recomputes the live plan's digest
+    # and REFUSES a stale gate (gate_stale_for_plan) or a pre-#470 gate with no recorded digest
+    # (gate_missing_plan_digest) — enforcement class, exit 4 — before any provider launch. A build
+    # seat with no gate falls through to dispatch_seat's gate_file_required refusal (exit 2).
+    plan_context = plan_freshness = None
+    if role == "build":
+        if plan_content is None:
+            return _emit(_err(EXIT_MALFORMED, "plan_file_required",
+                              f"build seat {args.seat!r} requires the live implementation plan (--plan-file)",
+                              retryable=False, correlation_id=args.correlation_id))
+        if gate_decision is not None:
+            try:
+                plan_context, plan_freshness = mint_plan_context(
+                    gate_decision, plan_content,
+                    run_id=args.run_id, correlation_id=args.correlation_id)
+            except PlanStale as e:
+                return _emit(_err(EXIT_ENFORCEMENT, e.code, str(e), retryable=False,
+                                  correlation_id=args.correlation_id))
+            except plan_lib.PlanFormatError as e:
+                return _emit(_err(EXIT_MALFORMED, "plan_file_malformed", str(e), retryable=False,
+                                  correlation_id=args.correlation_id))
     try:
         quota = pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency())
         audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
@@ -921,6 +1028,11 @@ def _do_dispatch(args) -> int:
         gate_decision=gate_decision, plan_context=plan_context,
         quota_timeout=pe.QuotaTimeout,
     )
+    # #470 §2b audit trail: record the plan-freshness binding (gate policy_digest, live plan digest,
+    # run_id, correlation_id) alongside the dispatch result. Attached to the emitted structured
+    # output — the dispatch CLI's own audit surface — on every build attempt that got past the mint.
+    if plan_freshness is not None and isinstance(result, dict):
+        result["plan_freshness"] = plan_freshness
     return _emit(result)
 
 
@@ -940,7 +1052,7 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--run-id", required=True, dest="run_id")
     d.add_argument("--context-file", action="append", dest="context_file")
     d.add_argument("--gate-file", dest="gate_file")          # #464 §E: #429 GateDecision JSON (build seat)
-    d.add_argument("--plan-context", dest="plan_context")    # #464 §E: independently-sourced plan facts
+    d.add_argument("--plan-file", dest="plan_file")          # #470 §2b: live impl-plan.md; context minted internally
     d.add_argument("--correlation-id", dest="correlation_id")
     d.add_argument("--author-provider", dest="author_provider")
     d.add_argument("--effort")

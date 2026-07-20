@@ -417,7 +417,7 @@ def test_do_dispatch_missing_routing_table_structured(tmp_path, monkeypatch):
     class A:
         seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
         correlation_id = None; author_provider = None; effort = None; timeout = 5.0
-        workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
+        workspace = ws; project = "rawgentic"; gate_file = None; plan_file = None
     rc = er._do_dispatch(A())
     # EXACT exit 5 (Step-11 R1): a missing PACKAGE-DEFAULT table is the internal-fault class —
     # exit 2 is reserved for declared-override config errors (the 8a-A1 documented asymmetry).
@@ -551,6 +551,81 @@ def test_dispatch_design_refused_exit2(tmp_path):
     assert res["error"]["code"] == "competitive_only_seat"
 
 
+# --- #470 §2b: internal plan-context mint + enforced plan-digest freshness ------------------------
+_PLAN_STD = ("### Task 1: build the thing (#470)\n"
+             "- riskLevel: standard\n"
+             "- files: hooks/foo.py, hooks/bar.py\n")
+
+
+def _gate470(plan_content=_PLAN_STD, *, risk="standard", complexity="standard", lines=7, file_count=2):
+    """A #470 build gate that RECORDS the plan-file digest it was minted against. The snapshot facts
+    are set to MATCH what the mint derives from ``plan_content`` (aggregate risk, distinct-file count)
+    so verified_decision's cross-check passes on a fresh plan — mirroring the sibling gate-minting
+    step whose plan_est agrees with the parsed plan."""
+    return cg.needs_bakeoff({"risk_level": risk}, {"complexity": complexity},
+                            {"files": [], "lines": lines, "file_count": file_count},
+                            plan_content=plan_content)
+
+
+def test_mint_plan_context_happy_derives_four_keys():
+    gd = _gate470()
+    ctx, fresh = er.mint_plan_context(gd, _PLAN_STD, run_id="r1", correlation_id="c1")
+    # risk_level + file_count from the LIVE plan; complexity + lines from the gate's own record.
+    assert ctx == {"risk_level": "standard", "complexity": "standard", "lines": 7, "file_count": 2}
+    # exactly the canonical key set, and it authenticates against the gate (dispatch re-checks it).
+    assert frozenset(ctx) == cg.REQUIRED_PLAN_CONTEXT_KEYS
+    assert cg.verified_decision(gd, expected_context=ctx) is False
+    # audit tuple: gate policy_digest + live plan digest + run/correlation ids.
+    assert fresh == {"gate_policy_digest": gd.policy_digest,
+                     "plan_digest": cg.plan_content_digest(_PLAN_STD),
+                     "run_id": "r1", "correlation_id": "c1"}
+
+
+def test_mint_plan_context_high_risk_aggregate():
+    plan = ("### Task 1: a\n- riskLevel: standard\n- files: a.py\n\n"
+            "### Task 2: b\n- riskLevel: high (security surface)\n- files: b.py\n")
+    gd = _gate470(plan, risk="high", file_count=2)
+    ctx, _ = er.mint_plan_context(gd, plan)
+    # ANY high task ⇒ aggregate high; file_count = count of DISTINCT declared files.
+    assert ctx["risk_level"] == "high" and ctx["file_count"] == 2
+
+
+def test_mint_plan_context_byte_identical_plan_passes():
+    # design §2b: a byte-identical plan is the "nothing changed" case — the old gate IS current.
+    gd = _gate470()
+    ctx, fresh = er.mint_plan_context(gd, _PLAN_STD)
+    assert fresh["plan_digest"] == gd.input_snapshot["plan_digest"]
+    assert ctx["risk_level"] == "standard"
+
+
+def test_mint_plan_context_stale_plan_raises_gate_stale():
+    gd = _gate470()
+    revised = _PLAN_STD + "- files: hooks/extra.py\n"  # plan edited after the gate was minted
+    with pytest.raises(er.PlanStale) as ei:
+        er.mint_plan_context(gd, revised)
+    assert ei.value.code == "gate_stale_for_plan"
+
+
+def test_mint_plan_context_missing_recorded_digest_raises():
+    # pre-#470 gate (no plan_content at mint) ⇒ no recorded plan_digest ⇒ fail-closed, distinct code.
+    gd = cg.needs_bakeoff({"risk_level": "standard"}, {"complexity": "standard"},
+                          {"files": [], "lines": 7, "file_count": 2})
+    assert "plan_digest" not in gd.input_snapshot
+    with pytest.raises(er.PlanStale) as ei:
+        er.mint_plan_context(gd, _PLAN_STD)
+    assert ei.value.code == "gate_missing_plan_digest"
+
+
+def test_mint_plan_context_malformed_plan_bubbles_format_error():
+    import plan_lib  # noqa: PLC0415
+    # a partial plan (a task heading with no riskLevel line) is a fail-closed parse — bubbled so the
+    # CLI maps it to the malformed-input class (exit 2). Fresh digest so the parse is actually reached.
+    bad = "### Task 1: a\n- riskLevel: standard\n\n### Task 2: b\n- files: x.py\n"
+    gd = _gate470(bad, file_count=1)
+    with pytest.raises(plan_lib.PlanFormatError):
+        er.mint_plan_context(gd, bad)
+
+
 # --- #464 §E: build-dispatch gate (attested, launch-bound, context-cross-checked) -----------------
 def test_build_missing_gate_file_exit2_no_receipt(tmp_path):
     res, audit = _dispatch_build(tmp_path, None, {"risk_level": "standard"})
@@ -624,32 +699,76 @@ def test_build_gate_bakeoff_denied_receipt_only_exit4(tmp_path):
     assert not any(r["kind"] == "observation" for r in recs)
 
 
-def test_cli_build_stale_gate_exit4(tmp_path):
-    # Integration through the CLI --gate-file / --plan-context wiring on the shipped table: a stale
-    # (context-mismatched) gate is rejected pre-launch (exit 4), so no provider call is made.
-    # #445 migration (S1/P2-G1): the fake project declares a phaseExecutorTable override pointing
-    # at a copied table via a COMPLETE valid .rawgentic.json (derive hard-requires repo+project) —
-    # exercising the new override resolution end-to-end on the way to the gate check.
+def _cli_build_env(tmp_path, gate_obj, *, plan_text=_PLAN_STD, write_plan=True):
+    """A real CLI dispatch environment for the build seat (#470 §2b): a project declaring a
+    phaseExecutorTable override → a copied shipped table, a workspace binding build=executor, the
+    gate file, and (optionally) the live plan file. Returns an args-namespace instance for
+    er._do_dispatch. #445 migration (S1/P2-G1): the override resolution is exercised end-to-end on
+    the way to the gate/freshness check."""
     repo = tmp_path / "projects" / "rawgentic"
     table_dst = repo / "claude_docs" / "routing" / "phase-executor-table.json"
     table_dst.parent.mkdir(parents=True)
     table_dst.write_bytes(routing.default_table_path().read_bytes())
     _cfg(repo, pointer="claude_docs/routing/phase-executor-table.json")
     ws = _ws(tmp_path, {"version": 1, "seats": {"build": "executor"}}, path="./projects/rawgentic")
-    gd, ctx = _gate()  # snapshot risk_level == "standard"
     gf = tmp_path / "gate.json"
-    gf.write_text(json.dumps({"decision": gd.decision, "reason_codes": list(gd.reason_codes),
-                              "input_snapshot": gd.input_snapshot, "policy_digest": gd.policy_digest}),
-                  encoding="utf-8")
-    cf = tmp_path / "ctx.json"
-    cf.write_text(json.dumps(dict(ctx, risk_level="high")), encoding="utf-8")  # mismatched fact
+    gf.write_text(json.dumps({"decision": gate_obj.decision, "reason_codes": list(gate_obj.reason_codes),
+                              "input_snapshot": gate_obj.input_snapshot,
+                              "policy_digest": gate_obj.policy_digest}), encoding="utf-8")
     (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    plan_path = tmp_path / "impl-plan.md"
+    if write_plan:
+        plan_path.write_text(plan_text, encoding="utf-8")
 
     class A:
         seat = "build"; prompt_file = str(tmp_path / "p.txt"); run_id = "run1"; context_file = None
         correlation_id = "wf2:build"; author_provider = None; effort = None; timeout = 5.0
-        workspace = ws; project = "rawgentic"; gate_file = str(gf); plan_context = str(cf)
-    assert er._do_dispatch(A()) == er.EXIT_ENFORCEMENT
+        workspace = ws; project = "rawgentic"; gate_file = str(gf)
+        plan_file = str(plan_path) if write_plan else None
+    return A()
+
+
+def test_cli_build_stale_plan_gate_stale_exit4(tmp_path, capsys):
+    # Integration through the CLI --gate-file / --plan-file wiring (#470 §2b): the gate was minted
+    # against _PLAN_STD; the live plan on disk was revised, so its digest no longer matches the
+    # gate's recorded digest -> gate_stale_for_plan (enforcement, exit 4), refused pre-launch.
+    gd = _gate470()
+    a = _cli_build_env(tmp_path, gd, plan_text=_PLAN_STD + "- files: hooks/extra.py\n")
+    assert er._do_dispatch(a) == er.EXIT_ENFORCEMENT
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "gate_stale_for_plan"
+
+
+def test_cli_build_missing_plan_digest_exit4(tmp_path, capsys):
+    # A pre-#470 gate (minted with no plan_content) carries no recorded plan digest -> fail-closed
+    # with the DISTINCT back-compat code (a security control never silently passes on absent evidence).
+    gd = cg.needs_bakeoff({"risk_level": "standard"}, {"complexity": "standard"},
+                          {"files": [], "lines": 7, "file_count": 2})
+    a = _cli_build_env(tmp_path, gd)
+    assert er._do_dispatch(a) == er.EXIT_ENFORCEMENT
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "gate_missing_plan_digest"
+
+
+def test_cli_build_missing_plan_file_exit2(tmp_path, capsys):
+    # a build seat now REQUIRES the live plan file (--plan-file replaces --plan-context).
+    gd = _gate470()
+    a = _cli_build_env(tmp_path, gd, write_plan=False)
+    assert er._do_dispatch(a) == er.EXIT_MALFORMED
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "plan_file_required"
+
+
+def test_cli_build_unreadable_plan_file_exit2(tmp_path, capsys):
+    gd = _gate470()
+    a = _cli_build_env(tmp_path, gd)
+    a.plan_file = str(tmp_path / "does-not-exist.md")
+    assert er._do_dispatch(a) == er.EXIT_MALFORMED
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "plan_file_unreadable"
+
+
+def test_cli_dispatch_parser_rejects_removed_plan_context_arg(tmp_path):
+    # #470 §2b: the caller-assembled --plan-context arg is FULLY REMOVED from the CLI surface.
+    with pytest.raises(SystemExit):
+        er.main(["dispatch", "--seat", "build", "--prompt-file", "x", "--run-id", "r",
+                 "--workspace", "w", "--project", "p", "--plan-context", "ctx.json"])
 
 
 def test_gate_file_nondict_snapshot_structured_exit2_464(tmp_path):
@@ -924,7 +1043,7 @@ class TestResolveSeatCliObservability:
         class A:
             seat = "ship"; prompt_file = str(tmp_path / "p.txt"); run_id = "r1"; context_file = None
             correlation_id = "t"; author_provider = None; effort = None; timeout = 5.0
-            workspace = ws; project = "rawgentic"; gate_file = None; plan_context = None
+            workspace = ws; project = "rawgentic"; gate_file = None; plan_file = None
         assert er._do_dispatch(A()) == er.EXIT_MALFORMED
 
     def test_seed_refuses_dangling_symlink_dest(self, tmp_path):
