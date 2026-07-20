@@ -62,6 +62,26 @@ WF2 is actively evolving. When a merged PR changes the WF2 spine:
 
 Skeletal workflows follow the same shape with `skeletal:true` and phase-level steps.
 
+## Executor-seat routing block (#447)
+
+The newest WF2 rev renders, per station that maps to an executor seat, that seat's
+default model + fallback chain + routing-mode classification (a "Routing mode" detail
+panel + an overview seat badge). Those values are **generated, never hand-hardcoded**:
+`hooks/diagram_seat_data.py` joins the #445 routing-table source-of-truth
+(`executor_routing_lib.resolve_table` → `table_projection`) with the curated
+`PHASE_SEAT_MAP` (station id → seat/placement — the one input with no machine-readable
+source, from `docs/planning/2026-07-17-wf2-wf3-executor-seat-placement.md`) and emits a
+`DATA.seatRouting` JSON object **between** the `/*SEAT-ROUTING-START*/` … `/*SEAT-ROUTING-END*/`
+sentinels (the `DATA.seatRouting =` assignment and its `;` sit OUTSIDE the sentinels, so the
+between-sentinels slice is pure JSON).
+
+- **Regenerate after any routing-table change:** `python3 hooks/diagram_seat_data.py write`.
+- **CI drift guard:** `test_seat_routing_block_matches_source_of_truth` runs the generator's
+  `check` — a config change not mirrored into the diagram fails CI.
+- Routing-mode classification is the **static** capability view (executor-wired ∈ `WIRED_SEATS`,
+  competitive ∈ `COMPETITIVE_ONLY`, gate-flagged bake-off for `build`), NOT the per-project
+  `resolve-seat` runtime action. The panel + badge render only on the newest rev.
+
 ## Regenerating the README snapshots
 
 Serve the file over localhost (browsers block `file:` in headless tooling), render at
