@@ -385,3 +385,18 @@ def test_schema_rejects_nonempty_violations():
     d["canary_result"] = {**_passing_result().pass_summary(), "violations": ["boom"]}
     with pytest.raises(jsonschema.ValidationError):
         contract.validate_observation(d)
+
+
+def test_refuse_with_null_violation_is_not_dropped(monkeypatch):
+    """Aggregation fail-open regression (Step-11 security lead): a check returning REFUSE with
+    a null violation string must NOT be dropped from the verdict. Verdict is keyed off the check
+    verdicts, not the accumulated violation list, and every refuse contributes a legible tag."""
+    monkeypatch.setitem(canary._CHECKS, "codex_containment",
+                        lambda ev: canary.CheckResult("codex_containment", canary.PASS))
+    monkeypatch.setitem(canary._CHECKS, "bare_absent",
+                        lambda ev: canary.CheckResult("bare_absent", canary.REFUSE, None))
+    ev = canary.CanaryEvidence(provider="codex", profile="mutating")
+    r = canary.evaluate_canary("codex_mutating", ev)
+    assert r.verdict == canary.REFUSE, "a REFUSE check with a null violation was silently dropped (fail-open)"
+    assert r.violations, "a refusing check must contribute a legible violation"
+    assert any("bare_absent" in v for v in r.violations)

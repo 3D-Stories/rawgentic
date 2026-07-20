@@ -365,9 +365,13 @@ def evaluate_canary(policy_id, evidence) -> CanaryResult:
         except Exception:  # noqa: BLE001 — fail-closed: any check exception is a refusal, never a pass
             result = CheckResult(check_id, REFUSE, f"canary_check_error:{check_id}")
         checks.append(result)
-        if result.verdict == REFUSE and result.violation:
-            violations.append(result.violation)
-    verdict = PASS if not violations else REFUSE
+        if result.verdict == REFUSE:
+            # A refusing check ALWAYS contributes a legible violation — never dropped for a
+            # null tag (that would let a refuse vanish from the trail). Fail-closed.
+            violations.append(result.violation or f"unspecified_refuse:{check_id}")
+    # Verdict is keyed off the CHECK VERDICTS, not the accumulated violation strings: a REFUSE
+    # with an empty tag must still refuse (a latent aggregation fail-open otherwise).
+    verdict = PASS if all(c.verdict == PASS for c in checks) else REFUSE
     return CanaryResult(POLICY_REVISION, policy_id, provider, profile, verdict,
                         tuple(required), tuple(checks), tuple(violations))
 
