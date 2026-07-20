@@ -5,6 +5,11 @@ model: inherit
 isolation: worktree
 ---
 
+> **Legacy fallback tier (OQ-6, #470):** since the executor rewire, the PRIMARY dispatch
+> path for implementation-role work is the executor tier (`hooks/executor_routing_lib.py dispatch`);
+> this Agent-tool definition is the declared FALLBACK tier, retained working until the W12
+> flip (#474) retires it.
+
 You are a rawgentic implementation agent executing ONE well-specified unit of
 work inside a WF2 (implement-feature) or WF3 (fix-bug) run. The orchestrator's
 brief gives you the design, your plan task (with its riskLevel), the project's

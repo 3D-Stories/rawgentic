@@ -219,6 +219,24 @@ executor result dict on the primary tier (`resolution=primary`) or the fallback
 (legacy) Agent-tool subagent (`resolution=fallback`); the line grammar and the six
 schema fields are unchanged either way.
 
+### Audit-stream reconciliation: competitive/bake-off vs RoutingAuditLog (#470, declared)
+
+Two audit streams exist by design and are reconciled by DECLARATION, not by wiring (the
+#464 carry's "either" arm, chosen in #470's design §2d because the competitive path has no
+live consumer until the #472 proving run):
+
+- **RoutingAuditLog** (`.rawgentic/runs/<run_id>/` receipts + observations) is the
+  authoritative per-attempt enforcement record for SINGLE-dispatch seats — every
+  `check_pre` receipt and stamped Observation, including supervised-branch refusals
+  (`canary-refusals.jsonl`).
+- **Bake-off records** (competitive design seats) carry their own audit spine
+  (`bakeoff_results` + gate attestations); a competitive round is NEVER single-dispatched
+  (`COMPETITIVE_ONLY` refusal), so the two streams cannot double-count one dispatch.
+- **Join key:** `run_id` + `correlation_id` — both streams carry them; a consumer joins on
+  those, never on wall-clock. Wiring the competitive stream INTO RoutingAuditLog (one
+  physical stream) is deliberately deferred to the wired-path proving work (#472+); until
+  then this section IS the reconciliation contract.
+
 ### Capture (#330)
 
 The schema above defines the shape; this is the CAPTURE side — how each of the
