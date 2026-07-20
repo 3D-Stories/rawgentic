@@ -134,6 +134,11 @@ class Observation:
     # {requested, native, resolution, capability_revision}; optional-additive (absent on
     # legacy records; consumers tolerate absence — the dispatched_lane precedent).
     effort: Optional[dict] = None
+    # #468 W5: the guardrail-canary PASS summary for a dispatched launch (a refusal never spawns,
+    # so an Observation's canary is always a pass). EXACTLY the 8 keys canary.CanaryResult.
+    # pass_summary() emits. Optional-additive (absent on legacy/non-canary records; the
+    # dispatched_lane/effort precedent) — emitted only when set, no schema version bump.
+    canary_result: Optional[dict] = None
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict:
@@ -169,6 +174,10 @@ class Observation:
             out["effort"] = dict(self.effort)
         if self.dispatched_lane is not None:
             out["dispatched_lane"] = dict(self.dispatched_lane)
+        # canary_result (#468): the pass summary, emitted only when set (a dispatched launch's
+        # canary; refusal data travels on CanaryRefused, never the Observation).
+        if self.canary_result is not None:
+            out["canary_result"] = dict(self.canary_result)
         return out
 
 

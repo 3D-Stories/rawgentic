@@ -277,6 +277,58 @@
           "minimum": 1
         }
       }
+    },
+    "canary_result": {
+      "type": "object",
+      "description": "#468 W5: the fail-closed guardrail-canary PASS summary for a dispatched launch (a refusal never spawns, so this is always a pass). EXACTLY the keys canary.CanaryResult.pass_summary() emits (a test pins the two sets equal). OPTIONAL/additive (absent on legacy/non-canary records); refusal data travels on the CompositionError, never here.",
+      "additionalProperties": false,
+      "required": [
+        "policy_revision",
+        "policy_id",
+        "provider",
+        "profile",
+        "verdict",
+        "required_checks",
+        "passed_checks",
+        "violations"
+      ],
+      "properties": {
+        "policy_revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "policy_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "const": "pass"
+        },
+        "required_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "passed_checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "violations": {
+          "type": "array",
+          "maxItems": 0
+        }
+      }
     }
   },
   "allOf": [
