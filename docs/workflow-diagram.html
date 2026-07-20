@@ -920,6 +920,17 @@ const DATA = {
 DATA.seatRouting =
 /*SEAT-ROUTING-START*/
 {
+  "mappedStationIds": [
+    "1",
+    "11",
+    "12",
+    "2",
+    "3",
+    "4",
+    "5",
+    "8",
+    "8a"
+  ],
   "provenance": {
     "config_digest": "sha256:def472ba676b61156295357963fc690e7c592bf3bc59ba97f5c43c93b7b99c32",
     "generator_version": 1
@@ -982,7 +993,7 @@ DATA.seatRouting =
         "claude-opus-4-8"
       ],
       "classification": "competitive",
-      "note": "competitive: gpt-5.6-sol vs claude-opus-4-8 + glm-5.2 judge",
+      "note": "competitive: gpt-5.6-sol vs claude-opus-4-8 + cross-model judge",
       "placement": "Executor (competitive)",
       "primary": "gpt-5.6-sol",
       "role": null,
@@ -1103,14 +1114,22 @@ function route(){
 function href(wf,ver,step){ return '#/'+wf+'/'+ver+(step?'/s/'+step:''); }
 
 function badge(cls,txt){ return h('span',{class:'bdg'+(cls?' '+cls:'')},txt); }
-function seatRecord(r, s){
-  /* #447: the executor-seat record for a station, gated to the newest rev only
-     (seat routing is a current-state annotation, not part of a historical spine). */
-  if(!r) return null;
+function seatMapped(r, s){
+  /* #447: does this station carry an executor seat? Scoped to WF2 (seat routing is
+     WF2-only; station ids are reused across workflows), to the newest rev (a current-state
+     annotation, not a historical-spine snapshot), and to the generated mapped set. */
+  if(!r || r.wf !== 'wf2') return false;
   var w = DATA.workflows[r.wf];
-  if(!w || r.ver !== w.revs[0]) return null;
-  if(!DATA.seatRouting || !DATA.seatRouting.records) return null;
-  var rec = DATA.seatRouting.records[s.id];
+  if(!w || r.ver !== w.revs[0]) return false;
+  var sr = DATA.seatRouting;
+  return !!(sr && Array.isArray(sr.mappedStationIds) && sr.mappedStationIds.indexOf(s.id) !== -1);
+}
+function seatRecord(r, s){
+  /* The record for a mapped station; null if it is missing/corrupt at runtime, so
+     renderRoutingPanel shows its "unavailable" fallback rather than the panel silently
+     vanishing. Callers gate on seatMapped(r, s) first. */
+  var sr = DATA.seatRouting;
+  var rec = (sr && sr.records) ? sr.records[s.id] : null;
   return (rec && typeof rec === 'object') ? rec : null;
 }
 function renderRoutingPanel(rec){
@@ -1143,9 +1162,11 @@ function nodeBadges(s, r){
   if(s.kind==='gate') out.push(badge('gate','quality gate'));
   if(s.nonneg) out.push(badge('nonneg','non-negotiable'));
   if(s.lane && s.lane!=='unchanged') out.push(badge('lane','lane: '+s.lane));
-  var rec = seatRecord(r, s);
-  if(rec && typeof rec.seat === 'string' && typeof rec.classification === 'string')
-    out.push(badge('seat', rec.seat+' · '+rec.classification));
+  if(seatMapped(r, s)){
+    var rec = seatRecord(r, s);
+    if(rec && typeof rec.seat === 'string' && typeof rec.classification === 'string')
+      out.push(badge('seat', rec.seat+' · '+rec.classification));
+  }
   return out;
 }
 function revTri(s){
@@ -1247,8 +1268,7 @@ function buildDetailSheet(r){
     right.push(h('div',{class:right.length?'mt16':''},panel('Small-Standard Lane',null,
       h('p',null, s.lane==='unchanged' ? 'Unchanged — runs exactly as on the full spine.' : s.lane))));
   }
-  const seatRec = seatRecord(r, s);
-  if(seatRec) right.push(h('div',{class:right.length?'mt16':''}, renderRoutingPanel(seatRec)));
+  if(seatMapped(r, s)) right.push(h('div',{class:right.length?'mt16':''}, renderRoutingPanel(seatRecord(r, s))));
   const tri = revTri(s);
   const sheet = h('section',{class:'sheet','aria-label':'Station detail'},
     h('div',{class:'crumb'},
@@ -1258,7 +1278,7 @@ function buildDetailSheet(r){
       h('div',{class:'dnum'},s.num),
       h('div',null,
         h('h1',{class:'dtitle'},s.name),
-        h('div',{class:'badges dkind'},nodeBadges(s), tri ? badge('revd','Δ changed in '+r.ver) : null))),
+        h('div',{class:'badges dkind'},nodeBadges(s, r), tri ? badge('revd','Δ changed in '+r.ver) : null))),
     h('div',{class:'cols'}, h('div',null,left), h('div',null,right)),
     h('div',{class:'pn'},
       prev ? h('a',{href:href(r.wf,r.ver,prev.id)},h('span',{class:'lbl'},'← prev station'),prev.num+' '+prev.name) : h('span'),

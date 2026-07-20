@@ -121,6 +121,32 @@ class TestBuildSeatDataset:
         with pytest.raises(ValueError):
             dsd.build_seat_dataset(proj, (("5", "plan", "Executor", ("#447",)),))
 
+    def test_chain_with_non_string_element_fails_closed(self):
+        proj = json.loads(json.dumps(FIXTURE_PROJECTION))
+        proj["seats"][3]["chain"] = ["claude-fable-5", None, 7]  # plan
+        with pytest.raises(ValueError):
+            dsd.build_seat_dataset(proj, (("5", "plan", "Executor", ("#447",)),))
+
+    def test_chain_with_empty_string_element_fails_closed(self):
+        proj = json.loads(json.dumps(FIXTURE_PROJECTION))
+        proj["seats"][3]["chain"] = ["claude-fable-5", "   "]  # plan
+        with pytest.raises(ValueError):
+            dsd.build_seat_dataset(proj, (("5", "plan", "Executor", ("#447",)),))
+
+    def test_dataset_carries_mapped_station_ids(self):
+        manifest = (("4", "review", "x", ("#447",)), ("8a", "review", "y", ("#447",)))
+        ds = dsd.build_seat_dataset(FIXTURE_PROJECTION, manifest)
+        assert ds["mappedStationIds"] == ["4", "8a"]  # sorted, matches records keys
+        assert set(ds["mappedStationIds"]) == set(ds["records"])
+
+    def test_seat_note_derives_from_projection_not_hardcoded(self):
+        proj = json.loads(json.dumps(FIXTURE_PROJECTION))
+        proj["seats"][2]["primary"] = "gpt-9-nova"  # design
+        proj["seats"][2]["chain"] = ["claude-x"]
+        ds = dsd.build_seat_dataset(proj, (("3", "design", "x", ("#447",)),))
+        note = ds["records"]["3"]["note"]
+        assert "gpt-9-nova" in note and "claude-x" in note  # note tracks the projection
+
 
 class TestRealManifest:
     def test_real_phase_seat_map_generates_against_live_table(self):

@@ -21,9 +21,12 @@ import json
 import sys
 from pathlib import Path
 
-# Sibling hook: the #445 single seat-table resolution + its projection.
+# Sibling hooks: the #445 single seat-table resolution + its projection, and the
+# repo's atomic shared-file writer (#264 convention — never a bare write_text on a
+# committed file).
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import executor_routing_lib as er  # noqa: E402
+from atomic_write_lib import atomic_write_text  # noqa: E402
 
 GENERATOR_VERSION = 1
 START = "/*SEAT-ROUTING-START*/"
@@ -69,9 +72,19 @@ def classify_seat(seat: str) -> str:
     raise ValueError(f"unknown seat {seat!r}: not build/design and not in WIRED_SEATS")
 
 
+def _seat_row(projection: dict, seat: str):
+    return next((s for s in projection.get("seats", []) if s.get("seat") == seat), None)
+
+
 def _seat_note(seat: str, projection: dict) -> str | None:
+    # Derive model identifiers from the projection (drift-guarded), never hardcode —
+    # a routing-table change must not leave a stale note behind a green drift guard.
     if seat == "design":
-        return "competitive: gpt-5.6-sol vs claude-opus-4-8 + glm-5.2 judge"
+        row = _seat_row(projection, "design")
+        if row and row.get("primary"):
+            cands = " vs ".join([row["primary"], *row.get("chain", [])])
+            return f"competitive: {cands} + cross-model judge"
+        return "competitive design bake-off"
     if seat == "build":
         cands = ", ".join(projection.get("build_bake_off", []))
         return f"gate-flagged bake-off candidates: {cands}"
@@ -99,8 +112,8 @@ def build_seat_dataset(projection: dict, phase_seat_map=PHASE_SEAT_MAP) -> dict:
         chain = row.get("chain")
         if not primary or not isinstance(primary, str):
             raise ValueError(f"seat {seat!r} has an empty/invalid primary model")
-        if not isinstance(chain, list):
-            raise ValueError(f"seat {seat!r} chain is not a list")
+        if not isinstance(chain, list) or not all(isinstance(x, str) and x.strip() for x in chain):
+            raise ValueError(f"seat {seat!r} chain must be a list of non-empty strings")
         classification = classify_seat(seat)
         if classification not in _CLASSIFICATIONS:
             raise ValueError(f"seat {seat!r} produced an unrecognized classification {classification!r}")
@@ -119,6 +132,10 @@ def build_seat_dataset(projection: dict, phase_seat_map=PHASE_SEAT_MAP) -> dict:
             "config_digest": projection.get("config_digest"),
             "generator_version": GENERATOR_VERSION,
         },
+        # The stations that SHOULD carry a routing panel — lets the renderer show the
+        # defensive "unavailable" fallback for a mapped station whose record is
+        # missing/corrupt at runtime, rather than silently omitting the panel.
+        "mappedStationIds": sorted(records),
         "records": records,
     }
 
@@ -145,6 +162,10 @@ def _render_block(dataset: dict) -> str:
 
 
 def _split_sentinels(text: str):
+    if text.count(START) != 1 or text.count(END) != 1:
+        raise ValueError(
+            f"expected exactly one {START} .. {END} pair "
+            f"({text.count(START)} start / {text.count(END)} end found)")
     si = text.find(START)
     ei = text.find(END)
     if si < 0 or ei < 0 or ei < si:
@@ -164,7 +185,7 @@ def do_write(html_path: Path) -> int:
     block = "\n" + _render_block(dataset) + "\n"
     new = text[:inner_start] + block + text[inner_end:]
     if new != text:
-        html_path.write_text(new)
+        atomic_write_text(html_path, new, prefix=".diagram-", suffix=".tmp")
     return 0
 
 

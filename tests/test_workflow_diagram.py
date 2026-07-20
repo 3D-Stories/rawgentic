@@ -258,12 +258,14 @@ def test_seat_routing_block_parses_and_has_valid_schema():
     block = _seat_block()
     assert not block.startswith("DATA.seatRouting"), "assignment leaked between the sentinels"
     data = json.loads(block)  # raises if the slice is not pure JSON
-    assert set(data) >= {"provenance", "records"}
+    assert set(data) >= {"provenance", "records", "mappedStationIds"}
+    assert set(data["mappedStationIds"]) == set(data["records"])
     valid_cls = {"executor-wired", "competitive", "bake-off"}
     for sid, rec in data["records"].items():
         assert rec["stationId"] == sid
         assert isinstance(rec["primary"], str) and rec["primary"]
         assert isinstance(rec["chain"], list)
+        assert all(isinstance(x, str) and x.strip() for x in rec["chain"])
         assert rec["classification"] in valid_cls
 
 
@@ -286,21 +288,43 @@ def test_seat_panel_absent_on_old_rev():
     """Seat routing is a current-state overlay: the panel + badge render only for
     the newest rev, so a historical-rev view carries no routing annotation."""
     text = _html()
-    i = text.find("function seatRecord(")
-    assert i > 0, "seatRecord gate missing"
-    body = text[i:i + 400]
+    i = text.find("function seatMapped(")
+    assert i > 0, "seatMapped gate missing"
+    body = text[i:i + 500]
     assert "r.ver !== w.revs[0]" in body, "seat panel not gated to the newest rev"
 
 
+def _wf2_newest_rev_steps_slice(text):
+    """The exact substring of WF2's newest-rev steps array (NOT the rest of the file —
+    a station id from an old rev or another workflow must not satisfy the join guard)."""
+    wf2 = text[re.search(r'\bwf2:\s*\{', text).start():]
+    newest = re.search(r'revs:\["([0-9.]+)"', wf2).group(1)
+    v = wf2.find('"%s": {' % newest)
+    assert v > 0, f"wf2 versions[{newest}] not found"
+    rest = wf2[v + len(newest) + 4:]
+    nxt = re.search(r'"\d+\.\d+\.\d+": \{', rest)  # the next version entry
+    return wf2[v: v + len(newest) + 4 + nxt.start()] if nxt else wf2[v:]
+
+
 def test_manifest_station_ids_match_diagram():
-    """The join is DATA.seatRouting.records[s.id]; a manifest id that diverges from
-    a real station id silently renders nothing while every other test stays green.
-    Pin that every manifest station id is a real WF2 station id."""
-    text = _html()
-    m = re.search(r'\bwf2:\s*\{', text)
-    block = text[m.start():]
-    station_ids = set(re.findall(r'\{id:"([^"]+)",\s*(?:rev:\{.*?\},\s*)?num:', block))
-    assert station_ids, "no WF2 station ids parsed"
+    """The join is DATA.seatRouting.records[s.id]; a manifest id that diverges from a
+    real NEWEST-WF2-REV station id silently renders nothing while every other test stays
+    green. Pin the manifest ids against ONLY the newest WF2 rev's steps — not the whole
+    file (which would let an old-rev or other-workflow id falsely satisfy this)."""
+    slice_ = _wf2_newest_rev_steps_slice(_html())
+    station_ids = set(re.findall(r'\{id:"([^"]+)",', slice_))
+    assert station_ids, "no WF2 newest-rev station ids parsed"
     manifest_ids = {sid for sid, *_ in _dsd.PHASE_SEAT_MAP}
     assert manifest_ids <= station_ids, (
-        f"manifest station ids not in the diagram: {manifest_ids - station_ids}")
+        f"manifest station ids not in the newest WF2 rev: {manifest_ids - station_ids}")
+
+
+def test_seat_panel_scoped_to_wf2():
+    """Station ids are reused across workflows; the seat panel/badge must be scoped to
+    WF2 or WF2's seat data leaks onto WF1/WF3/WF5/WF14/WF17 stations sharing an id."""
+    text = _html()
+    i = text.find("function seatMapped(")
+    assert i > 0, "seatMapped gate missing"
+    body = text[i:i + 500]
+    assert "r.wf !== 'wf2'" in body, "seat routing not scoped to WF2"
+    assert "mappedStationIds" in body, "mapped-set membership not enforced"
