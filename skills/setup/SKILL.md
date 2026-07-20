@@ -244,13 +244,17 @@ project's `.rawgentic_workspace.json` entry.
 
 Runs on **every** setup invocation (including Sub-flow A re-runs). Shows the RESOLVED
 per-phase seat models (`show-table`) and offers a sparse tweak (per-seat `primary`/`chain`
-only) validated through `apply-table --validate-only`. Declining or accepting the defaults
-**stages nothing and touches nothing** — the package-default resolution stands
-(byte-identical behavior). This step only COLLECTS: the validated `phaseExecutorTable`
-pointer is merged into the `.rawgentic.json` draft at Step 3 and applied at the Step 6
-write (it is a project-config field, NOT a workspace field — it never rides Step 8);
-materialization of the table file happens after the Step-5 confirm, immediately before
-Step 6.
+only) validated through `apply-table --validate-only`. When the config has no
+`phaseExecutorTable` key, declining or accepting the defaults **stages the
+answered-defaults sentinel `"phaseExecutorTable": {"version": 1, "file": null}`** —
+resolution stays byte-identical package-default (capabilities_lib derives the sentinel
+exactly like an absent section), but key presence records the answer so the
+`post_update_reconcile` staleness nudge stops re-firing (#531). An existing key (real
+pointer or sentinel) is kept verbatim on decline — never rewritten. This step only
+COLLECTS: the validated `phaseExecutorTable` pointer (or the sentinel) is merged into the
+`.rawgentic.json` draft at Step 3 and applied at the Step 6 write (it is a project-config
+field, NOT a workspace field — it never rides Step 8); materialization of the table file
+happens after the Step-5 confirm, immediately before Step 6.
 
 **Read `references/integrations.md` before executing Step 2i.**
 
@@ -321,7 +325,9 @@ Requirements:
 - Include the `phaseExecutorTable` pointer when Step 2i staged one (materialize the table
   file first — re-run `apply-table` with `--expected-candidate-digest` from the Step-2i
   validate-only output; on any later abort the fresh-created file is retained and named in
-  a warning, never auto-deleted)
+  a warning, never auto-deleted). When Step 2i staged the answered-defaults **sentinel**
+  (`{"version": 1, "file": null}`, #531) instead, include it as-is — no table file exists
+  or is materialized for the sentinel
 - Omit optional sections that have no content (don't write empty objects/arrays for undetected capabilities)
 - Format as pretty-printed JSON (2-space indent)
 - Show the user the exact content before writing and get a final "go ahead"

@@ -255,11 +255,19 @@ workspace file (Step 8).
    making it configurable), `table_source`, and `config_digest`. If the project already
    declares `phaseExecutorTable`, this IS the current override — change-or-keep applies,
    never rewrite silently.
-2. **Ask**: "Keep the current resolved seat models? (Enter = keep)". Declining or keeping
-   **stages nothing and touches nothing** — the current resolution (package default, or the
+2. **Ask**: "Keep the current resolved seat models? (Enter = keep)". Seat-model
+   RESOLUTION is untouched either way — the current resolution (package default, or the
    project's existing override when one is declared) stands, byte-identical to not running
    this step (diff-DF4: for an overridden project Enter keeps the OVERRIDE — never imply a
-   reset happened). `show-table` is read-only.
+   reset happened). `show-table` is read-only. What IS staged (#531): when the config has
+   **no `phaseExecutorTable` key at all**, declining or keeping defaults stages the
+   answered-defaults sentinel `"phaseExecutorTable": {"version": 1, "file": null}` for the
+   Step-3 draft merge — key presence records "asked and answered" so the
+   `post_update_reconcile` staleness nudge stops re-firing on every switch, while
+   `capabilities_lib` derives the sentinel identically to an absent section (package
+   default; no table file exists or is created). When the key already exists (a real
+   pointer OR the sentinel), declining stages nothing — the existing value is kept
+   verbatim, never rewritten.
 3. **On tweak**: collect a sparse per-seat patch — `primary` and/or `chain` model names
    only (a supplied chain REPLACES the whole chain; models must already have a lane in
    the base table). Write it to a temp patch file, then validate WITHOUT writing:

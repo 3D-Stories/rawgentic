@@ -564,9 +564,8 @@ class TestPhaseExecutorTable:
         {"file": "t.json"},                            # version missing
         {"version": 2, "file": "t.json"},              # unsupported version
         {"version": True, "file": "t.json"},           # bool masquerading as int
-        {"version": 1},                                # file missing
+        {"version": 1},                                # file missing (sentinel must be explicit)
         {"version": 1, "file": ""},                    # empty
-        {"version": 1, "file": None},                  # null
         {"version": 1, "file": 3},                     # wrong type
         {"version": 1, "file": "/abs/table.json"},     # absolute
         {"version": 1, "file": "../escape.json"},      # traversal
@@ -580,6 +579,26 @@ class TestPhaseExecutorTable:
     def test_field_registered_in_canonical_set(self):
         from capabilities_lib import CAPABILITY_FIELDS
         assert "phase_executor_table" in CAPABILITY_FIELDS
+
+    # --- #531: answered-defaults sentinel {"version": 1, "file": null} ---
+
+    def test_sentinel_null_file_is_answered_defaults(self):
+        # Explicit file: null records "answered — keep package defaults" so the
+        # staleness nudge stops; derivation is identical to an absent section.
+        caps = self._derive(phaseExecutorTable={"version": 1, "file": None})
+        assert caps["phase_executor_table"] is None
+
+    def test_sentinel_tolerates_extra_keys_like_real_pointer(self):
+        # Parity with test_comment_key_is_tolerated: unknown keys are tolerated
+        # alongside the sentinel exactly as alongside a real pointer.
+        caps = self._derive(phaseExecutorTable={
+            "$comment": "docs", "version": 1, "file": None})
+        assert caps["phase_executor_table"] is None
+
+    def test_sentinel_still_requires_version(self):
+        from capabilities_lib import CapabilitiesError
+        with pytest.raises(CapabilitiesError, match="version must be 1"):
+            self._derive(phaseExecutorTable={"file": None})
 
 
 class TestConfigTemplateDocumentsPhaseExecutorTable:
