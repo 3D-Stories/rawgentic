@@ -219,3 +219,88 @@ def test_every_ordered_workflow_has_nonempty_default_steps():
             f"{key}: versions[{newest}] must carry a real steps ARRAY "
             f"(steps:null or a missing versions entry for revs[0] crashes the SPA)"
         )
+
+
+# --- #447: executor-seat routing block (generated from the #445 source-of-truth) ---
+import json  # noqa: E402
+import sys  # noqa: E402
+
+sys.path.insert(0, str(REPO_ROOT / "hooks"))
+import diagram_seat_data as _dsd  # noqa: E402
+
+_START = "/*SEAT-ROUTING-START*/"
+_END = "/*SEAT-ROUTING-END*/"
+
+
+def _seat_block():
+    text = _html()
+    i = text.find(_START) + len(_START)
+    j = text.find(_END)
+    assert 0 < i < j, "seat-routing sentinels missing or out of order"
+    return text[i:j].strip()
+
+
+def test_seat_routing_block_matches_source_of_truth():
+    """AC2 drift guard: the committed DATA.seatRouting equals what the generator
+    derives from the #445 routing-table source-of-truth. Config drift fails CI —
+    the 'not hand-hardcoded' enforcement."""
+    committed = json.loads(_seat_block())
+    expected = _dsd.build_seat_dataset(_dsd.load_projection(), _dsd.PHASE_SEAT_MAP)
+    assert committed == expected, (
+        "DATA.seatRouting is stale vs the routing table; run "
+        "`python3 hooks/diagram_seat_data.py write`")
+
+
+def test_seat_routing_block_parses_and_has_valid_schema():
+    """The between-sentinels slice is PURE JSON (not the `DATA.seatRouting =`
+    assignment, not an executable fragment that could crash the tab), with a
+    valid record schema."""
+    block = _seat_block()
+    assert not block.startswith("DATA.seatRouting"), "assignment leaked between the sentinels"
+    data = json.loads(block)  # raises if the slice is not pure JSON
+    assert set(data) >= {"provenance", "records"}
+    valid_cls = {"executor-wired", "competitive", "bake-off"}
+    for sid, rec in data["records"].items():
+        assert rec["stationId"] == sid
+        assert isinstance(rec["primary"], str) and rec["primary"]
+        assert isinstance(rec["chain"], list)
+        assert rec["classification"] in valid_cls
+
+
+def test_render_routing_panel_is_defensive():
+    """The renderer's tab-crash mitigation (the F3 fallback) cannot be silently
+    deleted: the source normalizes inputs, guards the chain with Array.isArray,
+    and carries the 'Routing metadata unavailable' fallback. (Runtime behaviour is
+    proven by the Step-9 Playwright malformed-input smoke — the repo has no CI
+    JS-execution harness.)"""
+    text = _html()
+    i = text.find("function renderRoutingPanel(")
+    assert i > 0, "renderRoutingPanel missing"
+    body = text[i:i + 1400]
+    assert "Routing metadata unavailable" in body, "defensive fallback removed"
+    assert "Array.isArray(rec.chain)" in body, "chain no longer array-guarded"
+    assert "typeof rec" in body, "input normalization removed"
+
+
+def test_seat_panel_absent_on_old_rev():
+    """Seat routing is a current-state overlay: the panel + badge render only for
+    the newest rev, so a historical-rev view carries no routing annotation."""
+    text = _html()
+    i = text.find("function seatRecord(")
+    assert i > 0, "seatRecord gate missing"
+    body = text[i:i + 400]
+    assert "r.ver !== w.revs[0]" in body, "seat panel not gated to the newest rev"
+
+
+def test_manifest_station_ids_match_diagram():
+    """The join is DATA.seatRouting.records[s.id]; a manifest id that diverges from
+    a real station id silently renders nothing while every other test stays green.
+    Pin that every manifest station id is a real WF2 station id."""
+    text = _html()
+    m = re.search(r'\bwf2:\s*\{', text)
+    block = text[m.start():]
+    station_ids = set(re.findall(r'\{id:"([^"]+)",\s*(?:rev:\{.*?\},\s*)?num:', block))
+    assert station_ids, "no WF2 station ids parsed"
+    manifest_ids = {sid for sid, *_ in _dsd.PHASE_SEAT_MAP}
+    assert manifest_ids <= station_ids, (
+        f"manifest station ids not in the diagram: {manifest_ids - station_ids}")
