@@ -17,9 +17,7 @@ on:
 
 jobs:
   lint:
-    runs-on:
-      group: 3ds-fleet
-      labels: [self-hosted, linux]
+    runs-on: ${{ fromJSON(vars.RAWGENTIC_RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
 
