@@ -49,6 +49,26 @@ test, consuming the Step 9 full-suite result as regression evidence. Review brea
 fired once (shared-test-infra edge, owner elected tighten — predicate now fully
 mechanical). Small-standard lane; suite 3876→3877; guard red-before-green.
 
+- PR #541, squash-merged c9b6533 (2026-07-20), 4/4 lanes green on 3ds-fleet-linux (serial,
+  pre-D-8; hosted-first routing restored after via #542/v3.73.1).
+
+### #528 — skill-registration surface checker: every count pin, computed · v3.74.0
+
+Epic #509 lever 3: the new-skill registration walk cost ~4 min + one full-suite round-trip
+per skill, including a burned round-trip on a second hand-pinned SDLC count in
+`tests/test_interview_skill.py` that the guard-file subset doesn't cover. New
+`hooks/skill_registration_check.py` (pure core + thin CLI, fail-closed): given a skill
+name, prints every registration surface current-vs-expected — frontmatter, whitelist
+position + whitelist==disk, codex symlink, MANIFEST membership, config-loading canary,
+computed README count strings — then grep-sweeps ALL hand-pinned count copies (tests/,
+README body, plugin/marketplace/codex descriptions, .rawgentic.json; negative pins and
+the Changelog excluded); exit 1 names each stale surface. The `add-skill` workspace skill
+and `docs/skill-development.md` run it as the verify step. Its own first sweep caught a
+live straggler (.rawgentic.json "8 SDLC" vs pinned 9 — fixed in-PR). Small-standard lane;
+suite 3877→3918, 0 regressions; 41 tests (37 core red-before-green); Step-11 2-agent
+review yielded 6 unique findings, all resolved (negative-pin per-occurrence match,
+fail-closed encoding walk, fullmatch anchor, changelog count fix).
+
 - PR / merge SHA: filled at close-out.
 
 ## Epic #493 — WF2 speed levers (manual drive)

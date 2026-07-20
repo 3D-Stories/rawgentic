@@ -3,7 +3,7 @@
   "project": {
     "name": "rawgentic",
     "type": "library",
-    "description": "8 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code with quality gates, code review, and deployment verification"
+    "description": "9 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code with quality gates, code review, and deployment verification"
   },
   "repo": {
     "provider": "github",
