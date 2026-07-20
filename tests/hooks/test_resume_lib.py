@@ -254,6 +254,123 @@ class TestResumeSkillWiring:
             "is the single source of truth for the resume ordering."
         )
 
+    def test_skill_names_registry_recovery_on_resume(self):
+        """#470 Task 8: after the notes-cascade the resumption protocol must query
+        the executor JobRegistry and recover-adopt live jobs via
+        `supervisor.recover(run_id)`, keyed on tmux session identity, with the
+        D-12 permit re-establishment note. Anchored to the canonical prose so the
+        registry-recovery step cannot silently drop out of the protocol."""
+        block = self._resumption_block()
+        assert "supervisor.recover(run_id)" in block, (
+            "the resumption protocol must name supervisor.recover(run_id) as the "
+            "registry-recovery action after the notes-cascade"
+        )
+        assert "tmux session" in block, (
+            "the resumption protocol must name tmux session identity as the "
+            "adoption key"
+        )
+        assert "D-12" in block, (
+            "the resumption protocol must carry the D-12 permit re-establishment "
+            "note for adopted jobs"
+        )
+
+    def test_skill_passes_registry_state_flag(self):
+        """The detect-step invocation must pass --registry-state so the registry
+        advisory is part of the deterministic call, not left to prose."""
+        assert "--registry-state" in self._resumption_block()
+
+
+class TestRegistryAdvisoryFunction:
+    """#470 Task 8 — executor JobRegistry advisory on resume. Additive to step
+    detection: the resume STEP never changes (advisory, not a new cascade
+    branch); the helper only produces the advisory line the CLI surfaces."""
+
+    def test_absent_returns_none(self):
+        from resume_lib import registry_advisory
+        assert registry_advisory("absent") is None
+
+    def test_none_live_advises_no_live_jobs(self):
+        from resume_lib import registry_advisory
+        adv = registry_advisory("none-live")
+        assert adv is not None
+        assert "no live executor jobs" in adv
+
+    def test_live_jobs_advises_recover_adopt_quarantine(self):
+        from resume_lib import registry_advisory
+        adv = registry_advisory("live-jobs")
+        assert adv is not None
+        # names the action, the adoption key, both dispositions, ordering before
+        # any re-dispatch, and the D-12 permit note.
+        assert "supervisor.recover(run_id)" in adv
+        assert "tmux session" in adv
+        assert "ADOPTED" in adv
+        assert "QUARANTINED" in adv
+        assert "D-12" in adv
+        assert "re-dispatch" in adv
+
+    @pytest.mark.parametrize("bad", ["", "bogus", "Absent", "live", None])
+    def test_invalid_registry_state_raises(self, bad):
+        from resume_lib import registry_advisory
+        with pytest.raises(ValueError):
+            registry_advisory(bad)
+
+
+class TestRegistryStateCLI:
+    """--registry-state (#470 Task 8): the advisory rides STDERR; stdout stays the
+    bare step so `STEP=$(... detect-step ...)` capture is byte-identical when the
+    registry is absent and unchanged when it is present."""
+
+    def test_default_registry_state_absent_no_advisory(self):
+        out, err, rc = _run_cli(
+            "detect-step", "--pr-state", "none",
+            "--branch-state", "empty", "--notes-state", "none",
+        )
+        assert rc == 0, err
+        assert out.strip() == "8"
+        assert "registry" not in err.lower()
+
+    def test_absent_stdout_byte_identical_to_omitted(self):
+        base_out, base_err, _ = _run_cli(
+            "detect-step", "--pr-state", "none",
+            "--branch-state", "empty", "--notes-state", "none",
+        )
+        out, err, rc = _run_cli(
+            "detect-step", "--pr-state", "none",
+            "--branch-state", "empty", "--notes-state", "none",
+            "--registry-state", "absent",
+        )
+        assert rc == 0, err
+        assert out == base_out
+        assert err == base_err
+
+    def test_none_live_advisory_on_stderr_step_unchanged(self):
+        out, err, rc = _run_cli(
+            "detect-step", "--pr-state", "none",
+            "--branch-state", "empty", "--notes-state", "none",
+            "--registry-state", "none-live",
+        )
+        assert rc == 0, err
+        assert out.strip() == "8"  # step unchanged — advisory is additive
+        assert "no live executor jobs" in err
+
+    def test_live_jobs_recover_advisory_on_stderr_step_unchanged(self):
+        out, err, rc = _run_cli(
+            "detect-step", "--pr-state", "open",
+            "--branch-state", "none", "--notes-state", "none",
+            "--registry-state", "live-jobs",
+        )
+        assert rc == 0, err
+        assert out.strip() == "13"  # step unchanged (advisory, not a new branch)
+        assert "supervisor.recover(run_id)" in err
+
+    def test_registry_state_rejects_invalid_value(self):
+        _, _, rc = _run_cli(
+            "detect-step", "--pr-state", "open",
+            "--branch-state", "none", "--notes-state", "none",
+            "--registry-state", "bogus",
+        )
+        assert rc != 0
+
 
 class TestDetectResumeStepHeadless:
     """Issue #47 Layer A — headless mode is PR-terminal: it never merges or deploys.

@@ -53,6 +53,16 @@ NOTES_STATES = ("none", "issue-validated", "design-doc")
 # gate and terminate rather than redo Step 15.
 COMPLETION_GATE = "completion-gate"
 
+# Executor JobRegistry dimension (#470). This dimension is ADVISORY: it NEVER
+# changes the resume step (the step cascade above is the single source of the
+# ordering). It only surfaces what the resuming orchestrator must do about live
+# executor jobs before re-dispatching a seat. ABSENT is the pre-#470 default —
+# a caller that omits it gets byte-identical behavior (no advisory).
+#   absent     -> no executor registry dir for this run (pre-#470)  -> no advisory
+#   none-live  -> registry present, no live jobs                    -> "resume normally" note
+#   live-jobs  -> registry present, live jobs for this run_id       -> recover-adopt advisory
+REGISTRY_STATES = ("absent", "none-live", "live-jobs")
+
 
 def detect_resume_step(
     pr_state: str,
@@ -123,6 +133,45 @@ def detect_resume_step(
     return 1
 
 
+def registry_advisory(registry_state: str) -> str | None:
+    """Return the executor-JobRegistry advisory for a resume, or None (#470).
+
+    This is ADDITIVE to step detection — it NEVER changes the resume step (the
+    step cascade is the single source of the ordering); it only tells the
+    resuming orchestrator what to do about live executor jobs before it
+    re-dispatches any seat. ``absent`` (the pre-#470 default) returns None so a
+    caller that omits the registry state gets byte-identical output.
+
+    ``none-live`` returns a "resume normally" note; ``live-jobs`` returns the
+    recover-adopt advisory naming ``supervisor.recover(run_id)`` (tmux session
+    identity is the adoption key; identity-matched jobs are ADOPTED with the D-12
+    permit re-established under the adopting pid, mismatches QUARANTINED), which
+    must run BEFORE re-dispatching a seat. An unrecognized state raises
+    ``ValueError`` (fail-closed at the boundary, matching the step-cascade enums)
+    rather than silently dropping the advisory.
+    """
+    if registry_state not in REGISTRY_STATES:
+        raise ValueError(
+            f"invalid registry_state {registry_state!r} "
+            f"(expected one of {list(REGISTRY_STATES)})"
+        )
+    if registry_state == "absent":
+        return None
+    if registry_state == "none-live":
+        return (
+            "registry advisory: executor JobRegistry present, no live executor "
+            "jobs for this run_id — resume normally."
+        )
+    # live-jobs
+    return (
+        "registry advisory: live executor jobs for this run_id — run "
+        "supervisor.recover(run_id) BEFORE re-dispatching any seat. "
+        "Identity-matched jobs (tmux session identity is the adoption key) are "
+        "ADOPTED (D-12 quota permit re-established under the adopting pid); "
+        "mismatches are QUARANTINED (surfaced to the user, never adopted)."
+    )
+
+
 def main(argv=None) -> int:
     """CLI entry point.
 
@@ -163,6 +212,15 @@ def main(argv=None) -> int:
                    dest="headless",
                    help="whether running in headless mode (PR-terminal: "
                         "ready-to-merge/merged resume at Step 16, no merge/deploy)")
+    # Executor JobRegistry state (#470). Optional; ABSENT (default) is the
+    # pre-#470 behavior — byte-identical output, no advisory. When present, an
+    # ADVISORY line is written to STDERR so stdout stays the bare step for
+    # `STEP=$(... detect-step ...)` capture; the step itself never changes.
+    p.add_argument("--registry-state", choices=list(REGISTRY_STATES),
+                   default="absent", dest="registry_state",
+                   help="executor JobRegistry state for this run_id; ADVISORY "
+                        "only (never changes the step). live-jobs => recover-adopt "
+                        "advisory on stderr before re-dispatching a seat")
 
     args = parser.parse_args(argv)
 
@@ -178,6 +236,10 @@ def main(argv=None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         print(step)
+        # Registry advisory (#470): stderr only, so stdout stays the bare step.
+        advisory = registry_advisory(args.registry_state)
+        if advisory is not None:
+            print(advisory, file=sys.stderr)
         return 0
 
     return 1
