@@ -1,5 +1,5 @@
 ---
-name: rawgentic:session-recall
+name: session-recall
 description: Full-text search over past Claude Code session history (all projects) via the local FTS5 session index. Use when you need to find what a past session did, said, or decided — "what did we do about X", "which session touched Y", "when did we discuss Z", "search my session history" — and mempalace recall returns nothing or you need the raw conversation text rather than curated memories. Read-only over a local, derived, rebuildable index; never egresses session content. Invoke with /rawgentic:session-recall followed by a search query.
 argument-hint: <query> [--project <dir-name>] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
 ---

@@ -1,5 +1,5 @@
 ---
-name: rawgentic:admit-to-org-runners
+name: admit-to-org-runners
 description: Admit the BOUND project's repo to an org self-hosted runner group and migrate its CI workflow from GitHub-hosted runners to the fleet. Use when a project's `ci.yml` runs on `ubuntu-latest`/`windows-latest`/`macos-*` and you want it on a shared org fleet instead — e.g. org Actions minutes are exhausted (an account-wide pool that blocks hosted jobs in every repo), or the workspace directive is "default self-hosted, never GitHub-hosted." Dry-run by default; fail-closed (never strands CI on a label no online runner has, never leaves a hosted fallback); idempotent. Do NOT use to CREATE runners/groups, to add NEW OS jobs to a workflow (it only migrates existing `runs-on`), or for repo-level (non-org) runners. Invoke with /rawgentic:admit-to-org-runners.
 argument-hint: "[--group <name>] [--admin-token-file <path>] [--workflow <path>] [--apply]  (dry-run unless --apply)"
 ---

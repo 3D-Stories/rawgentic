@@ -1,5 +1,5 @@
 ---
-name: rawgentic:epic-run
+name: epic-run
 description: Use when setting up or driving a multi-issue epic auto-run in a rawgentic project — the user says "cycle through all issues in epic #N", "write me a goal for the epic", "auto-run these children", or asks to sequence WF2 across an epic's task list. Covers drafting the /goal condition, deriving the queue, the merge-policy decision, and the per-child + wrap-up contract. Do NOT use for a single issue (use /rawgentic:implement-feature or /rawgentic:fix-bug directly) or to define/plan the epic itself (that is /rawgentic:create-issue).
 argument-hint: <epic issue number>
 ---

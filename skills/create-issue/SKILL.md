@@ -1,5 +1,5 @@
 ---
-name: rawgentic:create-issue
+name: create-issue
 description: Open and file a NEW GitHub issue — a feature request or bug report — for the active rawgentic project. Use whenever the user wants to capture a desired feature/enhancement or an observed/reproducible bug as a tracked issue, however phrased ("open/log/raise/file an issue", "write up a bug report", "file a feature request", "put it on github", "track this", "users keep asking for X"), even when no repo is named. It targets the repo from the project config, checks for duplicates, conforms to the issue template, and verifies referenced code exists. Do NOT use to implement/fix/code the change itself, to list/search/read existing issues, to comment on or review a PR against an issue, or to edit issue-template files. Invoke with /create-issue followed by a description of the desired feature or observed bug.
 argument-hint: Description of the feature to request or bug to report
 ---

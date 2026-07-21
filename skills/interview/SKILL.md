@@ -1,5 +1,5 @@
 ---
-name: rawgentic:interview
+name: interview
 description: Interview the user about what they want to build BEFORE any code is written. Use at the very start of a new feature, app, component, or behavior change — especially when the requirements are vague or unstated — to identify the core problem, who it is and isn't for, and the key implementation decisions, then summarize an implementation spec for confirmation. Invoke with /rawgentic:interview, or proactively when the user says "let's build", "I want to make", or "can you add" something whose requirements aren't yet pinned down. Complements (does not replace) deeper design exploration like brainstorming.
 argument-hint: optional — what you want to build (e.g., "a habit-tracking app")
 ---

@@ -1,5 +1,5 @@
 ---
-name: rawgentic:epic-post-mortem
+name: epic-post-mortem
 description: WF19 — visual post-mortem of a completed epic auto-run from telemetry, not hand-parsed transcripts. Use at the end of any multi-issue epic run, or when the user says "analyze the epic run", "where did the time go", "phase time breakdown", "how long did each step take", "what should we optimize in the workflow", or "post-epic analysis" — even without the word "epic" when they mean the multi-issue run that just wrapped. Do NOT use to review the shipped code itself (that is WF5 / code review), to assess a single run (that is WF14 run-feedback), or to fix anything it finds (report-only).
 argument-hint: <epic issue number> [--store <path>]
 ---

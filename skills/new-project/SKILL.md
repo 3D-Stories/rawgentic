@@ -1,5 +1,5 @@
 ---
-name: rawgentic:new-project
+name: new-project
 description: Register a new or existing project in the rawgentic workspace. Creates the workspace file on first run, handles GitHub cloning or git init for new folders, and delegates to /rawgentic:setup for configuration. Use when starting a new project, adding an existing project to your workspace, or when the session-start hook says "Run /rawgentic:new-project to get started."
 argument-hint: project name (e.g., my-app) or path (e.g., ./projects/my-app)
 ---

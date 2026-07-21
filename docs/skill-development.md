@@ -12,11 +12,17 @@ The YAML frontmatter has three fields (`skills/create-issue/SKILL.md`):
 
 ```yaml
 ---
-name: rawgentic:create-issue
+name: create-issue
 description: Create a GitHub issue (feature request or bug report) using the WF1 9-step workflow...
 argument-hint: Description of the feature to request or bug to report
 ---
 ```
+
+The `name` is the **bare directory name — never prefixed** (#552). Claude Code
+namespaces plugin skills itself (`/rawgentic:create-issue`); an embedded
+`rawgentic:` prefix gets colon-sanitized to `rawgentic-create-issue` and the
+command doubles to `/rawgentic:rawgentic-create-issue`, unregistering every
+old-style invocation.
 
 ### Body
 
@@ -118,7 +124,9 @@ pass rate vs 72% without (+28% delta).
 
 1. **Create the SKILL.md.** Add `skills/<name>/SKILL.md` with the three
    frontmatter fields (`name`, `description`, `argument-hint`) and the full
-   prompt body. The `name` field must use the `rawgentic:<name>` prefix.
+   prompt body. The `name` field is the bare skill name — NO `rawgentic:`
+   prefix (#552; the harness adds the namespace, and
+   `tests/test_skill_name_frontmatter.py` rejects any colon).
 
 2. **Add to the marketplace skills whitelist.** Edit
    `.claude-plugin/marketplace.json` and add `"./skills/<name>"` to the

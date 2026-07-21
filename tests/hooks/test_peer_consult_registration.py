@@ -14,7 +14,7 @@ def test_skill_dir_and_frontmatter_exist():
     assert skill.exists()
     # LOCATION pin: frontmatter must be in SKILL.md itself (that's how the
     # skill registers); the prose blocks are content pins over the corpus.
-    assert "name: rawgentic:peer-consult" in skill.read_text()
+    assert "name: peer-consult" in skill.read_text()
     corpus = skill_corpus("peer-consult")
     assert "<config-loading>" in corpus
     assert "<completion-gate>" in corpus

@@ -1,5 +1,5 @@
 ---
-name: rawgentic:session-mining
+name: session-mining
 description: WF17 — mine session history for recurring skill/command candidates (detect → queue → synthesize → gate). Use when the user asks to mine sessions for patterns, "what keeps recurring", "what skills should we build", after a campaign wraps, or on-demand workflow-improvement hunts. Report-only — writes only the candidates queue and a report pair; accepted candidates route to WF1 as prepared drafts, nothing is ever auto-filed. Invoke with /rawgentic:session-mining.
 argument-hint: none (optional focus hint, e.g. "look at deploy friction")
 ---

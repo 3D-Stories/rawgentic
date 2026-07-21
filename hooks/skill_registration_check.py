@@ -138,11 +138,17 @@ def check_skill(root: Path, name: str) -> list:
     except (OSError, ValueError) as exc:
         return [Finding("frontmatter", False, f"{skill_md} unreadable: {exc}")]
     missing = []
-    name_re = re.compile(rf"^name:\s*(rawgentic:)?{re.escape(name)}\s*$", re.M)
-    if not name_re.search(text):
-        missing.append(f"name: rawgentic:{name}")
+    # #552: keys must sit in the leading --- frontmatter block, not the body.
+    fm_match = re.match(r"\A---\n(.*?)\n---", text, re.S)
+    frontmatter = fm_match.group(1) if fm_match else ""
+    # #552: bare name only — the harness namespaces it as /rawgentic:<name>; an
+    # embedded prefix gets colon-sanitized and doubles the command. [ \t]* not
+    # \s* — \s eats newlines, letting an empty name: bleed onto the next line.
+    name_re = re.compile(rf"^name:[ \t]*{re.escape(name)}[ \t]*$", re.M)
+    if not name_re.search(frontmatter):
+        missing.append(f"name: {name}")
     for key in ("description:", "argument-hint:"):
-        if not re.search(rf"^{key}", text, re.M):
+        if not re.search(rf"^{key}", frontmatter, re.M):
             missing.append(key)
     if missing:
         findings.append(Finding("frontmatter", False,

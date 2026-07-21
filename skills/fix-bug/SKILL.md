@@ -1,5 +1,5 @@
 ---
-name: rawgentic:fix-bug
+name: fix-bug
 description: Fix a bug using the WF3 14-step workflow with reproduce-first TDD, root cause analysis, lightweight reflect, and conventional commit PR. Invoke with /fix-bug followed by an issue number. Only trigger when the user explicitly invokes /fix-bug or /rawgentic:fix-bug.
 argument-hint: GitHub issue number (e.g., "42") or issue URL
 ---

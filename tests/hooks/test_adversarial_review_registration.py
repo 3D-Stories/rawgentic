@@ -22,7 +22,7 @@ def test_skill_dir_and_frontmatter_exist():
     assert skill.exists()
     # LOCATION pin: frontmatter must be in SKILL.md itself (registration);
     # the prose blocks are content pins over the corpus.
-    assert "name: rawgentic:adversarial-review" in skill.read_text()
+    assert "name: adversarial-review" in skill.read_text()
     corpus = skill_corpus("adversarial-review")
     assert "<config-loading>" in corpus
     assert "<completion-gate>" in corpus
@@ -39,7 +39,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.79.0"
+    assert plugin["version"] == "3.79.1"
 
 
 def test_descriptions_consistent_count():

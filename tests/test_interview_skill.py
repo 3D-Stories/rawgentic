@@ -22,7 +22,7 @@ def test_skill_dir_and_frontmatter_exist():
     assert SKILL.exists(), "skills/interview/SKILL.md missing"
     # LOCATION pin: frontmatter must be in SKILL.md itself (registration).
     text = SKILL.read_text()
-    assert "name: rawgentic:interview" in text
+    assert "name: interview" in text
     assert "description:" in text
     assert "argument-hint:" in text
 

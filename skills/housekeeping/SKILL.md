@@ -1,5 +1,5 @@
 ---
-name: rawgentic:housekeeping
+name: housekeeping
 description: Prune stale entries from the session registry (claude_docs/session_registry.jsonl), which grows one entry per session forever. Use when the user asks to clean up / prune / trim the session registry or workspace housekeeping. Removes entries older than a configurable TTL (default 30 days) and reports what was cleaned. WAL files are NOT pruned here — session-start already rotates any WAL over 5000 lines.
 argument-hint: optional — "dry-run" to preview, or a TTL in days (e.g. "60")
 ---
