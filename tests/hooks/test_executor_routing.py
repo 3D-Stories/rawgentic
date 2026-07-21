@@ -1555,6 +1555,7 @@ def _codex_supervised_kw(tmp_path):
         snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
         canary=_canary, canary_evidence=_cev, supervisor=_MatchSup(),
         probe_session=probe_session, provision=lambda: (None, {"handle": True}),
+        behavioral_probe=lambda **k: {"inside_written": True, "outside_blocked": True},  # #556 default pass
         gate_decision=gd, plan_context=ctx,
         target=codex_tgt, snapshot=real_snap, enforce=enforce,
         mk_nonce=lambda: "N-codex", mk_probe_cid=lambda c: "p",
@@ -1731,6 +1732,46 @@ def test_supervised_appends_observation_to_audit(tmp_path, monkeypatch):
     assert o["dispatched_lane"] and o["correlation_id"] == "wf2:build"
     # D2 integration: the launch itself carried the dispatch correlation
     assert sup.launched[0][1]["correlation_id"] == "wf2:build"
+
+
+def test_supervised_codex_behavioral_leaked_refuses(tmp_path):
+    # #556 AC1: the negative control leaked (out-of-worktree write NOT blocked) -> refuse, no launch.
+    kw, _ = _codex_supervised_kw(tmp_path)
+    kw["behavioral_probe"] = lambda **k: {"inside_written": True, "outside_blocked": False}
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "codex_behavioral" in res["error"]["message"]
+
+
+def test_supervised_codex_behavioral_inside_missing_refuses(tmp_path):
+    # #556 AC1: the in-worktree write did NOT land -> the probe is untrustworthy -> refuse.
+    kw, _ = _codex_supervised_kw(tmp_path)
+    kw["behavioral_probe"] = lambda **k: {"inside_written": False, "outside_blocked": True}
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "codex_behavioral" in res["error"]["message"]
+
+
+def test_supervised_codex_behavioral_unwired_refuses(tmp_path):
+    # #556 AC4 fail-closed: a codex mutating launch with NO behavioral probe seam refuses (never
+    # spawns) — the behavioral gate is enforced at the chokepoint, not by convention.
+    kw, _ = _codex_supervised_kw(tmp_path)
+    kw.pop("behavioral_probe")  # -> supervised_dispatch default None
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert res["error"]["code"] == "canary_refused"
+    assert "behavioral_probe_unwired" in res["error"]["message"]
+
+
+def test_supervised_codex_behavioral_probe_raises_refuses(tmp_path):
+    # #556 fail-closed: a probe exception (e.g. codex CLI absent) refuses, never spawns.
+    def _boom(**_k):
+        raise RuntimeError("codex not found")
+    kw, _ = _codex_supervised_kw(tmp_path)
+    kw["behavioral_probe"] = _boom
+    res = er.supervised_dispatch(**kw)
+    assert res["exit"] == er.EXIT_REFUSED
+    assert "behavioral_probe_failed" in res["error"]["message"]
 
 
 def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
