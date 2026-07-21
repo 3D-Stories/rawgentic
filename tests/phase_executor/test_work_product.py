@@ -116,7 +116,7 @@ def test_derive_reconciles_matching_promotion(repo, mgr, tmp_path):
     h = _wt(repo, mgr, tmp_path)
     (open(os.path.join(h.path, "new.txt"), "w")).write("x\n")
     res = mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
-                      message="promote")
+                      message="promote", path_policy=wt.PROMOTE_ANY)
     assert res.promoted is True
     wp = contract.derive_work_product(mgr, h, kind="code", promotion=res)
     assert wp["promotion_status"] == "promoted"
@@ -128,7 +128,7 @@ def test_derive_refuses_mismatched_promotion(repo, mgr, tmp_path):
     h = _wt(repo, mgr, tmp_path)
     (open(os.path.join(h.path, "new.txt"), "w")).write("x\n")
     real = mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
-                       message="promote")
+                       message="promote", path_policy=wt.PROMOTE_ANY)
     # a PromotionResult whose changed_paths lie about what was produced -> reconcile refuses
     liar = wt.PromotionResult(promoted=True, new_target_sha=real.new_target_sha,
                               base_sha=real.base_sha, head_sha=real.head_sha,
@@ -155,7 +155,7 @@ def test_not_promoted_status_from_refused_promotion(repo, mgr, tmp_path):
     _git(repo, "commit", "-qm", "peer")
     peer = _git(repo, "rev-parse", "integration")[1].strip()
     res = mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha=peer,
-                      message="stale")
+                      message="stale", path_policy=wt.PROMOTE_ANY)
     assert res.promoted is False
     wp = contract.derive_work_product(mgr, h, kind="code", promotion=res)
     assert wp["promotion_status"] == "not_promoted"
