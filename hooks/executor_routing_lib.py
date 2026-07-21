@@ -772,6 +772,23 @@ def _audit_canary_refusal(capture_root: str, run_id: str, payload: dict) -> None
         pass
 
 
+def compose_supervised_argv(adapters, engine: str, model: str, *, effort,
+                            profile, worktree: str, containment_root: str) -> list:
+    """#472 D1 — per-engine supervised composition. The adapters' build signatures deliberately
+    differ (codex: ``build_command(model, cwd, *, effort)`` / ``build_mutating_command(model,
+    worktree, *, effort, containment_root)``; claude: ``build_command(model, *, effort,
+    profile)``), so a one-shape call site TypeErrors on every supervised codex build. Select
+    the composition by engine + ``profile.mutating``; unknown engines fall through to the
+    claude-shaped call and fail loud on a signature mismatch rather than guess."""
+    adapter = adapters[engine]
+    if engine == "codex":
+        if profile is not None and profile.mutating:
+            return adapter.build_mutating_command(
+                model, worktree, effort=effort, containment_root=containment_root)
+        return adapter.build_command(model, worktree, effort=effort)
+    return adapter.build_command(model, effort=effort, profile=profile)
+
+
 def supervised_dispatch(
     *,
     seat: str,
@@ -943,9 +960,22 @@ def supervised_dispatch(
     record = supervisor.launch(
         seat, prompt, identity=identity, handle=handle, profile=profile,
         effort=effort, timeout=timeout, target=target, author_provider=author_provider,
-        receipt_nonce=receipt.nonce,
+        receipt_nonce=receipt.nonce, correlation_id=ce,
         snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
     state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
+
+    # STEP 6.5 — #472 D3: verdict-INDEPENDENT audit append, mirroring the sync path's
+    # per-attempt rule ("append the observation for EVERY attempt"). Every terminal state
+    # that HAS an observation (completed / completed_with_residue / timed_out) lands in the
+    # routing audit, stamped with the dispatched lane + this dispatch's correlation, BEFORE
+    # any verdict branching — a timed-out supervised job must not vanish from the audit.
+    # exited_no_sentinel has no observation: receipt-only (reconcilable Observations = #557).
+    if obs is not None:
+        stamped = dict(obs)
+        stamped["dispatched_lane"] = dict(target["lane"])
+        if not stamped.get("correlation_id"):
+            stamped["correlation_id"] = ce
+        audit.append_observation(stamped, receipt=receipt)
 
     # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.
     if state != "completed":
@@ -1306,8 +1336,9 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
         identity = pe.WorktreeIdentity(run_id=args.run_id, seat=args.seat, attempt=attempt)
         planned_wt = planned_path(str(wt_root), identity)
         profile = pe.contract.profile_from_manifest(manifest, engine=engine, worktree=planned_wt)
-        final_argv = pe.ADAPTERS[engine].build_command(
-            target["model"], effort=eff.native, profile=profile)
+        final_argv = compose_supervised_argv(
+            pe.ADAPTERS, engine, target["model"], effort=eff.native, profile=profile,
+            worktree=planned_wt, containment_root=str(wt_root))
 
         rc, out, _err_txt = _git_runner(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
         if rc != 0:

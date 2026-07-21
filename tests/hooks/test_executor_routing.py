@@ -1359,6 +1359,21 @@ def _happy_probe_stream():
     ]
 
 
+def _valid_obs(requested="claude-sonnet-5", actual=None):
+    """#472 D3: append_observation is fail-loud (schema-validated), so every stub supervisor
+    must return a SCHEMA-VALID observation. correlation_id deliberately None — the dispatch-site
+    ce-stamp branch is what the audit tests exercise."""
+    from phase_executor.capture import hash_text  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    return _contract.Observation(
+        run_id="run1", attempt_id="0-stub0000", correlation_id=None, seat="build",
+        engine="claude", transport="native", requested_model=requested,
+        actual_model=requested if actual is None else actual, prompt_hash=hash_text("hi"),
+        context_hashes=[], usage={"input": 1, "output": 1}, timing_ms=1, queued_ms=0,
+        process={"exit_code": 0, "timed_out": False}, parse_status=_contract.OK,
+        parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:0").to_dict()
+
+
 class _StubSupervisor:
     def __init__(self, state="completed"):
         self.launched = []
@@ -1369,7 +1384,7 @@ class _StubSupervisor:
         return {"seat": seat, "kw": kw}
 
     def await_job(self, record, *, timeout_s=3600.0):
-        return self._state, {"requested_model": "claude-sonnet-5", "actual_model": "claude-sonnet-5"}
+        return self._state, _valid_obs()
 
 
 def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
@@ -1532,9 +1547,7 @@ def _codex_supervised_kw(tmp_path):
 
     class _MatchSup(_StubSupervisor):
         def await_job(self, record, *, timeout_s=3600.0):
-            return "completed", {"parse_status": "ok",
-                                 "requested_model": codex_tgt["model"],
-                                 "actual_model": codex_tgt["model"]}
+            return "completed", _valid_obs(requested=codex_tgt["model"])
 
     return dict(
         seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build:codex",
@@ -1589,8 +1602,7 @@ def test_supervised_check_pre_receipt_minted_before_launch(tmp_path):
     # stub supervisor returns a completed obs whose identity matches THIS target's model
     class _Sup(_StubSupervisor):
         def await_job(self, record, *, timeout_s=3600.0):
-            return "completed", {"parse_status": "ok",
-                                 "requested_model": tgt["model"], "actual_model": tgt["model"]}
+            return "completed", _valid_obs(requested=tgt["model"])
     kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=_Sup())
     res = er.supervised_dispatch(**kw)
     assert res["ok"] is True, res
@@ -1629,8 +1641,7 @@ def test_supervised_verify_post_breach_refuses(tmp_path):
            in er.MUTATING_FS_SANDBOXED][0]
     class _Sup(_StubSupervisor):
         def await_job(self, record, *, timeout_s=3600.0):
-            return "completed", {"parse_status": "ok",
-                                 "requested_model": tgt["model"], "actual_model": "wrong-model-9"}
+            return "completed", _valid_obs(requested=tgt["model"], actual="wrong-model-9")
     kw.update(target=tgt, snapshot=snap, enforce=enforce, supervisor=_Sup())
     res = er.supervised_dispatch(**kw)
     assert res["exit"] == er.EXIT_ENFORCEMENT
@@ -1650,6 +1661,86 @@ def test_run_supervised_filters_to_sandboxed_lane_on_real_table():
                  if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
                  in er.MUTATING_FS_SANDBOXED]
     assert sandboxed, "build chain lost its sandboxed entry — supervised builds all refuse"
+
+
+# --- #472 D1: supervised composition selection (engine-signature-aware) -------------------------
+
+
+def test_compose_supervised_argv_codex_mutating_selects_sandboxed_composition(tmp_path):
+    """#472 D1 root cause: the supervised provisioning called build_command(model, effort=,
+    profile=) — codex's signature is (model, cwd, *, effort), no profile kwarg → TypeError on
+    EVERY supervised codex build. The composer must select build_mutating_command for a
+    mutating codex profile (Landlock overrides + worktree-pinned writable_roots)."""
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    prof = _contract.LaunchProfile(session_policy="fresh", mutating=True)
+    wt_root = tmp_path / "wts"
+    wt = wt_root / "run1" / "build" / "0-aaaa1111"
+    argv = er.compose_supervised_argv(
+        ADAPTERS, "codex", "gpt-5.2-codex", effort="high", profile=prof,
+        worktree=str(wt), containment_root=str(wt_root))
+    joined = " ".join(argv)
+    assert "-s workspace-write" in joined
+    assert er.__name__  # composer lives in the hook lib, not a test-local shim
+    codex_cli.validate_mutating_composition(argv, str(wt.resolve()))
+
+
+def test_compose_supervised_argv_codex_readonly_uses_positional_cwd(tmp_path):
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    prof = _contract.LaunchProfile(session_policy="fresh", mutating=False)
+    wt = tmp_path / "wt"
+    argv = er.compose_supervised_argv(
+        ADAPTERS, "codex", "gpt-5.2-codex", effort="high", profile=prof,
+        worktree=str(wt), containment_root=str(tmp_path))
+    joined = " ".join(argv)
+    assert "-s read-only" in joined and f"-C {wt}" in joined
+
+
+def test_compose_supervised_argv_claude_passes_profile(tmp_path):
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    prof = _contract.LaunchProfile(session_policy="fresh", mutating=False)
+    argv = er.compose_supervised_argv(
+        ADAPTERS, "claude", "claude-sonnet-5", effort=None, profile=prof,
+        worktree=str(tmp_path / "wt"), containment_root=str(tmp_path))
+    assert argv == ADAPTERS["claude"].build_command("claude-sonnet-5", effort=None, profile=prof)
+
+
+def test_codex_build_command_rejects_profile_kwarg():
+    """Pins the D1 root cause so a signature change that silently re-legalizes the old
+    call shape is visible."""
+    with pytest.raises(TypeError):
+        codex_cli.build_command(  # pylint: disable=unexpected-keyword-arg,no-value-for-parameter
+            "gpt-5.2-codex", effort="high",
+            profile=_contract.LaunchProfile(session_policy="fresh", mutating=True))
+
+
+# --- #472 D3: supervised audit append (verdict-independent) -------------------------------------
+
+
+def _audit_records(tmp_path):
+    return enforce.RoutingAuditLog(tmp_path / "runs", "run1").records()
+
+
+def test_supervised_appends_observation_to_audit(tmp_path, monkeypatch):
+    """#472 D3: the supervised branch must append its Observation to the routing audit —
+    stamped with the dispatched lane and the dispatch correlation — mirroring the sync path."""
+    res, sup, _qc, _ = _supervised(tmp_path, monkeypatch=monkeypatch)
+    assert res["ok"] is True
+    obs_recs = [r for r in _audit_records(tmp_path) if r.get("kind") == "observation"]
+    assert len(obs_recs) == 1, "supervised completion left no observation in the audit"
+    o = obs_recs[0]["observation"]
+    assert o["dispatched_lane"] and o["correlation_id"] == "wf2:build"
+    # D2 integration: the launch itself carried the dispatch correlation
+    assert sup.launched[0][1]["correlation_id"] == "wf2:build"
+
+
+def test_supervised_timed_out_still_appends_observation(tmp_path, monkeypatch):
+    """Verdict-INDEPENDENT: a timed_out job's (synthetic) observation is audit-appended even
+    though the dispatch result is an availability error."""
+    res, _sup, _qc, _ = _supervised(tmp_path, state="timed_out", monkeypatch=monkeypatch)
+    assert res["exit"] == er.EXIT_AVAILABILITY
+    obs_recs = [r for r in _audit_records(tmp_path) if r.get("kind") == "observation"]
+    assert len(obs_recs) == 1, "timed_out observation vanished from the audit"
+    assert obs_recs[0]["observation"]["correlation_id"] == "wf2:build"
 
 
 # --- #471 W8: `status --run` — the read-only live-run status surface ----------------------------
