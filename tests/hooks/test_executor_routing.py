@@ -19,7 +19,7 @@ er._ensure_pe_importable()  # put phase_executor/src on sys.path for this test m
 # tests/hooks/ (unlike tests/phase_executor/), so the static no-name-in-module here is a false
 # positive — the 39 tests below exercise these imports. Scoped disable, not a blanket one.
 # pylint: disable=no-name-in-module
-from phase_executor import contract, enforce, routing  # noqa: E402
+from phase_executor import contract, enforce, ledger, routing  # noqa: E402
 from phase_executor.adapters import codex_cli  # noqa: E402
 from phase_executor.engine import run_seat, PROVIDER_ENGINE as _PROVIDER_ENGINE  # noqa: E402
 from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: E402
@@ -1943,3 +1943,106 @@ def test_cli_status_corrupt_spec_marked_not_fatal(tmp_path):
     assert r.returncode == 0
     (row,) = json.loads(r.stdout)["seats"]
     assert row["spec_status"] == "corrupt" and row["requested_model"] is None
+
+
+# ---- #555 ledger-aware chokepoint + close-run + reconcile verb ---------------------------------
+
+def _analysis_project(tmp_path):
+    """A project (default table override) + workspace binding analysis=executor — the setup the
+    #555 close-run/reconcile/chokepoint verbs resolve. Returns (ws_path, repo_path)."""
+    repo = tmp_path / "projects" / "rawgentic"
+    table_dst = repo / "claude_docs" / "routing" / "phase-executor-table.json"
+    table_dst.parent.mkdir(parents=True)
+    table_dst.write_bytes(routing.default_table_path().read_bytes())
+    _cfg(repo, pointer="claude_docs/routing/phase-executor-table.json")
+    ws = _ws(tmp_path, {"version": 1, "seats": {"analysis": "executor"}}, path="./projects/rawgentic")
+    return ws, repo
+
+
+def _dispatch_args(ws, run_id="run1", cid="wf2:step2", seat="analysis"):
+    class A:
+        pass
+    a = A()
+    a.seat = seat; a.prompt_file = None; a.run_id = run_id; a.context_file = None
+    a.correlation_id = cid; a.author_provider = None; a.effort = None; a.timeout = 5.0
+    a.workspace = ws; a.project = "rawgentic"; a.gate_file = None; a.plan_file = None
+    return a
+
+
+def _run_dir(repo, run_id="run1"):
+    return repo / ".rawgentic" / "runs" / run_id
+
+
+def test_cli_chokepoint_refuses_dispatch_after_run_closed(tmp_path, capsys):
+    # #555 AC2: once the ledger is run_closed, a NEW dispatch is refused at the choke-point
+    # (before any spawn), exit 4. Uses close-run to close, then dispatches.
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT
+    assert out["error"]["code"] == "run_closed_dispatch_refused"
+
+
+def test_cli_close_run_then_double_close_refused(tmp_path, capsys):
+    ws, _ = _analysis_project(tmp_path)
+    assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["run_closed"] is True
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    assert rc == er.EXIT_MALFORMED
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "ledger_refused"
+
+
+def test_cli_reconcile_final_refuses_open_ledger(tmp_path, capsys):
+    # #555 AC3: final requires run_closed last.
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg")
+    lg.append_expected("analysis", "c1")
+    rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and out["reconciled"] is False and "run_closed" in out["reason"]
+
+
+def test_cli_reconcile_provisional_tolerates_in_flight(tmp_path, capsys):
+    # #555 AC3: provisional tolerates an open ledger with a not-yet-observed (in-flight) call.
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg")
+    lg.append_expected("analysis", "c1")   # no audit obs yet → missing_receipt, tolerated
+    rc = er.main(["reconcile", "--run-id", "run1", "--mode", "provisional", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_OK and out["reconciled"] is True
+
+
+def test_cli_reconcile_final_zero_expected_refuses(tmp_path, capsys):
+    # #555 AC3/AC4: a closed run with an initial but ZERO expected calls fails final
+    # (require_nonempty — a wiring bug that dropped the expected-set cannot ship vacuously).
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg")
+    lg.append_run_closed()
+    rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and out["reconciled"] is False
+
+
+def test_cli_reconcile_provisional_fails_on_hard_anomaly(tmp_path, capsys):
+    # #555 AC4: provisional STILL fails on a hard breach — an audit receipt for a call the ledger
+    # never expected is an orphan (not an in-flight tolerance case).
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    lg = ledger.ExpectedCallLedger(rd, "run1")
+    lg.append_initial("sha256:cfg")   # zero expected calls
+    # an orphan receipt in the audit: (seat, cid) not in the (empty) expected set
+    orphan_receipt = {"kind": "receipt", "nonce": "n1", "seat": "analysis", "correlation_id": "ghost",
+                      "attempt_id": "0", "target_identity": ["m", "anthropic", "native",
+                      "subscription_oauth", "claude", None, None], "config_digest": "sha256:cfg",
+                      "verdict": "pass"}
+    (rd / "routing-audit.jsonl").write_text(json.dumps(orphan_receipt) + "\n", encoding="utf-8")
+    rc = er.main(["reconcile", "--run-id", "run1", "--mode", "provisional", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ANOMALY and "orphan" in out["anomalies"]
