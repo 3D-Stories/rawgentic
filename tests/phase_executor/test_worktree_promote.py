@@ -57,7 +57,7 @@ def test_promote_fresh_ref_captures_dirty_and_untracked(repo, mgr, tmp_path):
     (open(os.path.join(h.path, "a.txt"), "w")).write("CHANGED\n")   # modify tracked
     (open(os.path.join(h.path, "new.txt"), "w")).write("added\n")    # untracked
     res = mgr.promote(h, target_ref="refs/heads/integration",
-                      expected_target_sha="0" * 40, message="promote 1")
+                      expected_target_sha="0" * 40, message="promote 1", path_policy=wt.PROMOTE_ANY)
     assert res.promoted is True
     assert res.new_target_sha
     # the new ref's tree contains the work product; a.txt is the CHANGED version
@@ -76,7 +76,7 @@ def test_promote_existing_ref_when_base_equals_expected(repo, mgr, tmp_path):
     h = mgr.create(str(repo), _ident(), base, root=str(tmp_path / "wtroot"))
     (open(os.path.join(h.path, "new.txt"), "w")).write("x\n")
     res = mgr.promote(h, target_ref="refs/heads/integration",
-                      expected_target_sha=base, message="advance")
+                      expected_target_sha=base, message="advance", path_policy=wt.PROMOTE_ANY)
     assert res.promoted is True
     assert _git(repo, "rev-parse", "refs/heads/integration")[1].strip() == res.new_target_sha
 
@@ -96,7 +96,7 @@ def test_promote_refuses_stale_base_and_keeps_peer_commit(repo, mgr, tmp_path):
     peer_tip = _git(repo, "rev-parse", "integration")[1].strip()
     assert peer_tip != base  # integration actually moved
     res = mgr.promote(h, target_ref="refs/heads/integration",
-                      expected_target_sha=peer_tip, message="stale promote")
+                      expected_target_sha=peer_tip, message="stale promote", path_policy=wt.PROMOTE_ANY)
     assert res.promoted is False
     assert res.reason == "base stale — rebase"
     # integration still at the peer commit; fileB.txt NOT dropped
@@ -120,9 +120,29 @@ def test_promote_refuses_on_cas_mismatch(repo, mgr, tmp_path):
     moved = _git(repo, "rev-parse", "HEAD")[1].strip()
     _git(repo, "branch", "-f", "integration", moved)  # ...then move it out from under us
     res = mgr.promote(h, target_ref="refs/heads/integration",
-                      expected_target_sha=base, message="cas")
+                      expected_target_sha=base, message="cas", path_policy=wt.PROMOTE_ANY)
     assert res.promoted is False
     assert res.reason == "target advanced or ref state changed"
+
+
+def test_promote_requires_explicit_path_policy(repo, mgr, tmp_path):
+    """#472 D7: the promotion boundary is fail-CLOSED — omitting path_policy (or passing None)
+    is a TypeError, never an implicit allow-all. PROMOTE_ANY is the EXPLICIT allow-all a caller
+    must name to opt out of scoping."""
+    base = _base(repo)
+    h = mgr.create(str(repo), _ident(), base, root=str(tmp_path / "wtroot"))
+    (open(os.path.join(h.path, "new.txt"), "w")).write("x\n")
+    with pytest.raises(TypeError):
+        mgr.promote(h, target_ref="refs/heads/integration",  # pylint: disable=missing-kwoa
+                    expected_target_sha="0" * 40, message="no policy")
+    with pytest.raises(TypeError):
+        mgr.promote(h, target_ref="refs/heads/integration",
+                    expected_target_sha="0" * 40, message="none policy", path_policy=None)
+    # the explicit allow-all still promotes
+    res = mgr.promote(h, target_ref="refs/heads/integration",
+                      expected_target_sha="0" * 40, message="explicit any",
+                      path_policy=wt.PROMOTE_ANY)
+    assert res.promoted is True
 
 
 def test_promote_path_policy_refuses_outside_paths(repo, mgr, tmp_path):
@@ -145,7 +165,7 @@ def test_promote_fails_loud_on_unreadable_path(repo, mgr, tmp_path):
     try:
         with pytest.raises(wt.WorktreeError):
             mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
-                        message="should refuse")
+                        message="should refuse", path_policy=wt.PROMOTE_ANY)
     finally:
         os.chmod(tracked, 0o600)
 

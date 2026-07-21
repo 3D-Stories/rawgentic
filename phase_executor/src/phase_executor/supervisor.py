@@ -150,11 +150,12 @@ def resolve_socket(run_id: str, *, runtime_dir: Optional[str] = None,
 
 def synthetic_observation(*, run_id: str, seat: str, attempt_id: str, engine: str,
                           requested_model: str, prompt: str, parse_status: str,
-                          reason: str, routing_config_digest: str) -> dict:
+                          reason: str, routing_config_digest: str,
+                          correlation_id: Optional[str] = None) -> dict:
     """A schema-valid Observation the SUPERVISOR emits when the pane could not (timeout with
     no child sentinel). Never overwrites a validated child observation (CF-12)."""
     obs = contract.Observation(
-        run_id=run_id, attempt_id=attempt_id, correlation_id=None, seat=seat, engine=engine,
+        run_id=run_id, attempt_id=attempt_id, correlation_id=correlation_id, seat=seat, engine=engine,
         transport="native", requested_model=requested_model, actual_model=None,
         prompt_hash=hash_text(prompt), context_hashes=[], usage=None, timing_ms=0, queued_ms=0,
         process={"exit_code": None, "timed_out": parse_status == contract.TIMEOUT},
@@ -349,7 +350,8 @@ class TmuxSupervisor:
                author_provider: Optional[str] = None, resume_session_id: Optional[str] = None,
                resume_attempts: int = 0, quota_timeout: float = 300.0,
                snapshot_dir: Optional[str] = None,
-               snapshot_digest: Optional[str] = None) -> JobRecord:
+               snapshot_digest: Optional[str] = None,
+               correlation_id: Optional[str] = None) -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
         for the job's lifetime), write the FIXED pane spec, and spawn the pane.
 
@@ -391,7 +393,7 @@ class TmuxSupervisor:
                 "allow_adapter_override": self._allow_adapter_override,
                 "request": {
                     "seat": seat, "requested_model": target["model"], "prompt": prompt,
-                    "transport": lane["transport"], "context": [], "correlation_id": None,
+                    "transport": lane["transport"], "context": [], "correlation_id": correlation_id,
                     "effort": eff.native, "timeout": timeout,
                     "credential_ref": lane.get("credential_ref"),
                     "containment_root": handle.root,
@@ -700,7 +702,8 @@ class TmuxSupervisor:
                     prompt=spec.get("request", {}).get("prompt", ""),
                     parse_status=contract.TIMEOUT,
                     reason=f"supervisor timeout after {timeout_s}s",
-                    routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"))
+                    routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"),
+                    correlation_id=spec.get("request", {}).get("correlation_id"))
                 # #513: the child may have died before create_capture ran, so this
                 # mkdir can be the tree's CREATION site — same 0700 posture applies.
                 cap = ensure_private_dir(Path(record.capture_dir))

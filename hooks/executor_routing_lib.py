@@ -772,6 +772,29 @@ def _audit_canary_refusal(capture_root: str, run_id: str, payload: dict) -> None
         pass
 
 
+def compose_supervised_argv(adapters, engine: str, model: str, *, effort,
+                            profile, worktree: str, containment_root: str) -> list:
+    """#472 D1 — per-engine supervised composition. The adapters' build signatures deliberately
+    differ (codex: ``build_command(model, cwd, *, effort)`` / ``build_mutating_command(model,
+    worktree, *, effort, containment_root)``; claude: ``build_command(model, *, effort,
+    profile)``), so a one-shape call site TypeErrors on every supervised codex build. Select
+    the composition by engine + ``profile.mutating``; an engine with no explicit rule REFUSES
+    (8a R2: a signature-compatible adapter must never be silently claude-shaped past its
+    engine-specific containment). The allowlist check runs BEFORE the adapter lookup
+    (Step-11: a KeyError would be an unaudited internal error, not the documented refusal)."""
+    if engine not in ("codex", "claude"):
+        raise ValueError(
+            f"compose_supervised_argv: engine {engine!r} has no supervised composition rule "
+            f"(known: codex, claude) — refusing to guess a signature (#472 8a R2)")
+    adapter = adapters[engine]
+    if engine == "codex":
+        if profile is not None and profile.mutating:
+            return adapter.build_mutating_command(
+                model, worktree, effort=effort, containment_root=containment_root)
+        return adapter.build_command(model, worktree, effort=effort)
+    return adapter.build_command(model, effort=effort, profile=profile)
+
+
 def supervised_dispatch(
     *,
     seat: str,
@@ -943,9 +966,33 @@ def supervised_dispatch(
     record = supervisor.launch(
         seat, prompt, identity=identity, handle=handle, profile=profile,
         effort=effort, timeout=timeout, target=target, author_provider=author_provider,
-        receipt_nonce=receipt.nonce,
+        receipt_nonce=receipt.nonce, correlation_id=ce,
         snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
     state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
+
+    # STEP 6.5 — #472 D3: verdict-INDEPENDENT audit append, mirroring the sync path's
+    # per-attempt rule ("append the observation for EVERY attempt"). Every terminal state
+    # that HAS an observation (completed / completed_with_residue / timed_out) lands in the
+    # routing audit, stamped with the dispatched lane + this dispatch's correlation, BEFORE
+    # any verdict branching — a timed-out supervised job must not vanish from the audit.
+    # exited_no_sentinel has no observation: receipt-only (reconcilable Observations = #557).
+    if obs is not None:
+        stamped = dict(obs)
+        stamped["dispatched_lane"] = dict(target["lane"])
+        child_cid = stamped.get("correlation_id")
+        if child_cid is None:
+            # a synthetic/legacy observation carries no correlation — adopt the dispatch's
+            stamped["correlation_id"] = ce
+        audit.append_observation(stamped, receipt=receipt)
+        if child_cid is not None and child_cid != ce:
+            # Step-11 wave (3× converged; supersedes the 8a overwrite): a non-matching child
+            # correlation is an IDENTITY VIOLATION — audited AS-IS above (the foreign value is
+            # the evidence), then REFUSED. Relabeling it would launder a stale/crossed/tampered
+            # sentinel into this dispatch and let it falsely satisfy reconciliation.
+            return _err(EXIT_ENFORCEMENT, "correlation_mismatch",
+                        f"child observation correlation {child_cid!r} != dispatch correlation "
+                        f"{ce!r} on supervised seat {seat!r} — foreign observation refused",
+                        retryable=False, correlation_id=ce, audit_path=audit_path)
 
     # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.
     if state != "completed":
@@ -1306,8 +1353,9 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
         identity = pe.WorktreeIdentity(run_id=args.run_id, seat=args.seat, attempt=attempt)
         planned_wt = planned_path(str(wt_root), identity)
         profile = pe.contract.profile_from_manifest(manifest, engine=engine, worktree=planned_wt)
-        final_argv = pe.ADAPTERS[engine].build_command(
-            target["model"], effort=eff.native, profile=profile)
+        final_argv = compose_supervised_argv(
+            pe.ADAPTERS, engine, target["model"], effort=eff.native, profile=profile,
+            worktree=planned_wt, containment_root=str(wt_root))
 
         rc, out, _err_txt = _git_runner(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
         if rc != 0:
@@ -1352,6 +1400,12 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             author_provider=args.author_provider)
     except pe.routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=str(audit.path))
+    except pe.contract.CompositionError as e:
+        # Step-11: CompositionError subclasses RuntimeError, NOT ValueError — without this
+        # clause a compose-time containment refusal escaped as a bare traceback instead of
+        # the design's documented structured exit 5.
+        return _err(EXIT_INTERNAL, "composition_refused", str(e), retryable=False,
                     correlation_id=ce, audit_path=str(audit.path))
     except (ValueError, OSError) as e:
         return _err(EXIT_INTERNAL, "supervised_provision_failed", f"{type(e).__name__}: {e}",

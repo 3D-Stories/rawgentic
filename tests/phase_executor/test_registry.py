@@ -152,6 +152,19 @@ def test_registry_roundtrip_and_atomic(tmp_path):
     assert "rg-1" in json.dumps(idx)
 
 
+def test_registry_persists_receipt_nonce(tmp_path):
+    """#472 F7: receipt_nonce joins the JobRecord to the RoutingAuditLog receipt — it must
+    survive the durable round-trip (a fresh instance reading jobs.json), not just the
+    in-memory cache, or the audit join is lost on every recovery/resume."""
+    root = str(tmp_path / "reg")
+    reg.JobRegistry(root, clock=lambda: 1.0).upsert(
+        _rec(session_name="rg-n", receipt_nonce="nonce-abc123"))
+    fresh = reg.JobRegistry(root, clock=lambda: 1.0)
+    assert fresh.get(_idn()).receipt_nonce == "nonce-abc123"
+    # absent field in a pre-#472 record stays None (additive, no KeyError)
+    assert _rec().receipt_nonce is None
+
+
 def test_registry_upsert_updates_in_place(tmp_path):
     r = reg.JobRegistry(str(tmp_path / "reg"), clock=lambda: 1.0)
     r.upsert(_rec(session_name="rg-1", state="running"))

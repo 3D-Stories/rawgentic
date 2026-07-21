@@ -93,6 +93,13 @@ class PromotionResult:
     reason: str = ""
 
 
+def PROMOTE_ANY(path: str) -> bool:  # pylint: disable=invalid-name,unused-argument
+    """#472 D7: the EXPLICIT allow-all promotion path policy. ``promote`` requires a
+    ``path_policy`` (fail-closed boundary); a caller that genuinely wants every changed
+    path promotable names this instead of omitting the policy."""
+    return True
+
+
 # ---------------------------------------------------------------------------
 # B.1 — pure planning functions (no I/O)
 # ---------------------------------------------------------------------------
@@ -556,21 +563,28 @@ class WorktreeManager:
         return out.strip()
 
     def promote(self, handle: WorktreeHandle, *, target_ref: str, expected_target_sha: str,
-                message: str, path_policy=None) -> PromotionResult:
+                message: str, path_policy) -> PromotionResult:
         """Promote the worktree's filesystem work product onto ``target_ref`` — orchestrator-only,
         CAS-guarded (B.3). Builds an immutable candidate tree (dirty + untracked, no child commit
         needed), guards against a stale base (CF-1: a candidate rooted at a stale base would
         silently revert peer commits), commits parented on ``base_sha`` (NEVER on
         ``expected_target_sha``), and compare-and-swaps the ref. Returns a ``PromotionResult`` —
-        ``promoted=False`` with a reason on a stale base or a moved target, never a silent revert."""
+        ``promoted=False`` with a reason on a stale base or a moved target, never a silent revert.
+
+        ``path_policy`` is REQUIRED (#472 D7): the promotion boundary is fail-closed — a caller
+        that wants no scoping must name ``PROMOTE_ANY`` explicitly; omitting the policy (or
+        passing None) refuses rather than silently promoting every changed path."""
+        if path_policy is None:
+            raise TypeError(
+                "promote: path_policy is required — pass PROMOTE_ANY to explicitly allow all "
+                "paths, or a predicate scoping the promotable set (#472 D7)")
         tree = self._candidate_tree(handle, strict=True)  # promote never silently drops/reverts
         changed = self._candidate_changed(handle, tree)
-        if path_policy is not None:
-            outside = [p for p in changed if not path_policy(p)]
-            if outside:
-                raise WorktreeError(
-                    f"promote refused: {len(outside)} changed path(s) outside promotable policy: "
-                    f"{outside[:3]}")
+        outside = [p for p in changed if not path_policy(p)]
+        if outside:
+            raise WorktreeError(
+                f"promote refused: {len(outside)} changed path(s) outside promotable policy: "
+                f"{outside[:3]}")
         head_sha = self._worktree_head(handle)
         ref_exists = bool(expected_target_sha) and expected_target_sha != self._ZERO_SHA
         # CF-1 base-staleness guard: for an EXISTING ref, the worktree must have been cut at the

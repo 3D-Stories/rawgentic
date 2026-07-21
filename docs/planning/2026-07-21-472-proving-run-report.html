@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#472 Proving-Run Report — Executor Path (epic #475)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 01:30 MDT</div>
+<h1>#472 Proving-Run Report — Executor Path (epic #475)</h1>
+
+</header>
+<main>
+<h1>#472 proving run — report (W9, epic #475)</h1>
+<p><strong>Verdict:</strong> PARTIAL — the wired executor path (merged W1–W8) <strong>held for every read-only seat it dispatched</strong> (9/9 observations <code>requested == actual</code>, receipts + schema-v2 Observations durable), and <strong>is NOT end-to-end-ready for supervised mutating builds</strong>: five WF2 design-gate passes plus code verification converged on six missing-engine-capability defects, now decomposed into hardening epic <strong>#560</strong> (children #554–#559). #472 ships this report (AC4), the five safe self-contained fixes (red-first, below), and the epic filing. AC2 (live codex cell) and AC3 (live account-switch / quota cycle) are <strong>deferred</strong> to the epic children that build their prerequisites — no capture is claimed that did not happen.</p>
+<p><strong>Author:</strong> WF2 orchestrator (sessions 1bce2405 design · 641a6f27 implementation) · <strong>Date:</strong> 2026-07-21 · <strong>Run evidence:</strong> <code>.rawgentic/runs/wf2-472-1bce2405/routing-audit.jsonl</code> (local run telemetry, not committed — integrity pin: <strong>sha256 <code>f092b7ef0377170ad5ab57fc0ef999845880985dcaf84c68193ee06e961e69f5</code></strong>, 19 records = 10 receipts + 9 observations; the per-seat table in §1 is the full summary of those records)</p>
+<h2>1. What the wired path PROVED (confirmed, from the routing audit)</h2>
+<p>The run flipped <code>executorRouting</code> (analysis/review/build → executor) and executed the first sustained real use of the wired dispatch path. Read directly from <code>routing-audit.jsonl</code> (10 receipt lines + 9 observation lines):</p>
+<table>
+<thead><tr><th>Seat</th><th>Dispatches</th><th>requested_model</th><th>actual_model</th><th>Identity</th></tr></thead>
+<tbody>
+<tr><td>analysis (Step 2 fan-out)</td><td>3</td><td>claude-sonnet-5</td><td>claude-sonnet-5</td><td>3/3 match</td></tr>
+<tr><td>review (Step 4 self-review passes)</td><td>6</td><td>gpt-5.6-sol</td><td>gpt-5.6-sol</td><td>6/6 match</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Routing held:</strong> <code>requested == actual</code> on <strong>all 9</strong> observations; all 9 are schema-version-2</li>
+</ul>
+<p>  Observations with receipts joined in the same audit log.</p>
+<ul>
+<li><strong>Cross-model enforcement held — including its refusal path.</strong> The audit&#x27;s one non-pass receipt</li>
+</ul>
+<p>  (verdict <code>fail</code>, violation <code>author_provider_missing</code>, target claude-fable-5 on the review seat)   is the D9 cross-model rule REFUSING a review dispatch that omitted <code>--author-provider</code>; the   corrected dispatch routed to gpt-5.6-sol and passed. The enforcement receipt layer denied   exactly what it was built to deny, before any spawn. Receipts: 9 pass / 1 fail (fail-closed).</p>
+<ul>
+<li><strong>The Observation contract behaved as specified</strong> on every read-only dispatch: prompt hashes,</li>
+</ul>
+<p>  usage, timing, <code>dispatched_lane</code>, correlation ids present and schema-valid.</p>
+<p>(The r6 design&#x27;s prose said &quot;5 review dispatches&quot;; the audit records <strong>6</strong> — the audit is the source of truth and the count here is read from it.)</p>
+<h2>2. The finding: six capability gaps block the full end-to-end proving run</h2>
+<p>Each verified in code during the design passes (file:line on main @ 6e1e3f2). This inventory IS the proving-run result — the remaining Critical/High were missing-engine-capability defects, not design-prose defects, which is why the owner decomposed (D-7). Epic <strong>#560</strong>, dependency-ordered:</p>
+<table>
+<thead><tr><th>#</th><th>Gap (evidence)</th><th>Blocks</th><th>Epic child</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>exited_no_sentinel</code> yields no Observation; failure states not reconcilable (<code>supervisor.py:682-687</code>)</td><td>reconcile joins</td><td><strong>#557</strong> (H4, foundational)</td></tr>
+<tr><td>2</td><td><code>reconcile_run</code> has no pause/recover model — a quota_paused→recovered call can&#x27;t satisfy one logical expected call (<code>enforce.py:513-537</code>)</td><td>AC3</td><td><strong>#554</strong> (H1, dep #557)</td></tr>
+<tr><td>3</td><td>Dispatch chokepoint is ledger-blind — no expected-call ledger, no post-<code>run_closed</code> rejection (<code>executor_routing_lib.py</code> dispatch path)</td><td>audit completeness</td><td><strong>#555</strong> (H2)</td></tr>
+<tr><td>4</td><td>Codex canary is composition-validation only — no behavioral sandboxed write probe with positive/negative controls (<code>canary.py:341-355</code>; spike #452 §5)</td><td><strong>AC2</strong></td><td><strong>#556</strong> (H3)</td></tr>
+<tr><td>5</td><td>No genuine quota detection/classification, no per-call token/turn/$ caps (<code>await_job</code> has no stderr-keyed <code>quota_paused</code> finalization)</td><td><strong>AC3</strong></td><td><strong>#558</strong> (H5)</td></tr>
+<tr><td>6</td><td>No account-switch recovery harness (account-identity capture, audited resume, cross-account verdict)</td><td>AC3 live answer</td><td><strong>#559</strong> (H6, closes #560)</td></tr>
+</tbody>
+</table>
+<h2>3. The five safe fixes this PR lands (red-first, all landed)</h2>
+<p>All five were undisputed across the five review passes; each had a failing test before the fix:</p>
+<table>
+<thead><tr><th>Fix</th><th>Root cause (on main)</th><th>Red → green</th><th>Commit</th></tr></thead>
+<tbody>
+<tr><td><strong>F7</strong> receipt_nonce durability</td><td><code>JobRecord.receipt_nonce</code> declared (<code>registry.py:66</code>) but omitted from serialize/deserialize — the audit join lost on every crash/resume</td><td><code>test_registry_persists_receipt_nonce</code> failed on main; additive field in <code>_record_to_dict</code>/<code>_record_from_dict</code></td><td>77d9079</td></tr>
+<tr><td><strong>D2</strong> correlation threading</td><td><code>launch</code> + <code>synthetic_observation</code> hardcoded <code>correlation_id=None</code> (<code>supervisor.py</code>)</td><td>2 red cells (kwarg TypeErrors); additive params + timeout-site spec read; <code>pane_runner.py:117</code> already propagates</td><td>0f8ef20</td></tr>
+<tr><td><strong>D1</strong> supervised codex composition</td><td><code>_run_supervised</code> called <code>build_command(model, effort=, profile=)</code> — codex signature <code>(model, cwd, *, effort)</code> has no <code>profile</code> kwarg → TypeError on EVERY supervised codex build (and codex is the only <code>MUTATING_FS_SANDBOXED</code> engine, so every supervised mutating dispatch died)</td><td>3 red cells; <code>compose_supervised_argv</code> selects by engine + <code>profile.mutating</code> (mutating codex → <code>build_mutating_command</code> with worktree-pinned <code>writable_roots</code>); root cause pinned by <code>test_codex_build_command_rejects_profile_kwarg</code></td><td>f4e36c8</td></tr>
+<tr><td><strong>D3</strong> supervised audit append</td><td>Supervised branch appended its receipt but never its Observation — a completed/timed-out supervised job vanished from the routing audit</td><td>2 red cells; STEP 6.5 verdict-independent append (completed / completed_with_residue / timed_out; <code>exited_no_sentinel</code> = receipt-only → #557), stamped <code>dispatched_lane</code> + correlation, mirroring the sync path</td><td>f4e36c8</td></tr>
+<tr><td><strong>D7</strong> promote path-policy</td><td><code>promote(path_policy=None)</code> skipped the changed-path check — a fail-open promotion boundary (<code>worktree.py</code>)</td><td>red: omission promoted silently; <code>path_policy</code> now REQUIRED, <code>None</code> refused (TypeError), <code>PROMOTE_ANY</code> is the explicit allow-all; 9 test callers updated (no production callers — grepped)</td><td>86792a9</td></tr>
+</tbody>
+</table>
+<p>Coherence: these make the supervised dispatch path *composable* (D1), *correlation-bound* (D2), *auditable* (D3), its promotion boundary *fail-closed* (D7), and its recovery join *durable* (F7) — the foundation #560&#x27;s builds sit on, with zero new machinery.</p>
+<h2>4. A4/F11 honest disposition</h2>
+<p>The SIGKILL-proxy assumption for quota residue remains <strong>UNCONFIRMED</strong>. A genuine usage-limit exit was <strong>not captured</strong> in this run — the capability to detect and reconcile one does not exist yet (gaps 2 and 5 above; #554/#558). The acceptance-criteria doc (<code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code>) is corrected in this PR to record the deferral instead of claiming a capture that did not happen. #559 re-runs the full end-to-end cycle (including AC2 via #556) once the prerequisites exist.</p>
+<h2>5. What was NOT checked</h2>
+<ul>
+<li>No live codex mutating spawn was executed in #472 (D1&#x27;s composition is validated by the</li>
+</ul>
+<p>  existing compose-time self-check, not a live run) — that live cell is #556/#559.</p>
+<ul>
+<li>No live quota exhaustion or account switch was driven (owner-accepted burn deferral, D-8) —</li>
+</ul>
+<p>  #558/#559.</p>
+<ul>
+<li>The supervised tmux path end-to-end (probe → launch → await → promote) has unit coverage with</li>
+</ul>
+<p>  injected seams only; the RUN_LIVE cell is #559.</p>
+
+</main>
+<footer>Last updated: 2026-07-21 01:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
