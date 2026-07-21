@@ -506,9 +506,23 @@ class TmuxSupervisor:
                 f"job can be quota-paused")
         if self._live(record):
             raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
-        if self._sentinel(record) is not None:
+        sent = self._sentinel(record)
+        if sent is not None and (
+                sent.get("parse_status") not in contract.AVAILABILITY_FAILURES
+                or sent.get("actual_model")):
+            # Resuming a job that already produced an EFFECTFUL result would duplicate it.
+            # Two signals mark "effectful": (a) an envelope-producing status (ok /
+            # parse_error / identity_failure / ...) — not an availability failure; or
+            # (b) a provider-ATTESTED actual_model — the model ran and (if mutating) may
+            # have applied effects/billing, even under an availability-shaped status
+            # (#557 8a review: a child-written no_response/nonzero_exit that nonetheless
+            # attested a model is effectful and must not be resumed). The supervisor's own
+            # synthetic exited_no_sentinel observation carries actual_model=None with an
+            # availability status, so it correctly does NOT trip this guard — pause/resume
+            # is exactly its designed recovery.
             raise SupervisorError(
-                "mark_quota_paused: a valid sentinel exists — the job COMPLETED; resuming "
+                "mark_quota_paused: sentinel indicates an effectful result (an "
+                "envelope-producing status or an attested actual_model) — resuming "
                 "would duplicate its effects")
         record = replace(record, state="quota_paused", provider_session_id=provider_session_id)
         self._registry.upsert(record)
@@ -655,7 +669,8 @@ class TmuxSupervisor:
         completed_with_residue). On deadline → the CF-17 kill, THEN re-check and prefer a
         valid child obs (the writer was in the killed pane group — race-free); else emit the
         supervisor's synthetic timeout observation. Ambiguous dead-no-sentinel →
-        exited_no_sentinel (no auto-resume).
+        exited_no_sentinel (no auto-resume) with the supervisor's synthetic ``no_response``
+        observation (#557 — every terminal state yields a reconcilable Observation).
 
         ``expect_session_id`` (CF-10, resume-identity assert): on collect, the transport's
         ``session_id`` MUST equal it — a resumed launch that landed in the wrong session
@@ -685,8 +700,52 @@ class TmuxSupervisor:
                 obs = self._sentinel(record)  # one post-exit re-check (write vs exit race)
                 if obs is not None:
                     continue
+                # #557 AC1/AC2: death-without-sentinel emits the supervisor's synthetic
+                # Observation (correlation + digest from the spec), so reconcile sees a
+                # BOUND, recorded failure instead of a missing pair. CF-12 holds — reached
+                # only when the sentinel re-check found no VALID child observation.
+                #
+                # #557 8a + Step-11 review (both waves converged): the failure STATUS is
+                # laundering-sensitive. A death is SUSPICIOUS when the child left evidence
+                # it ran the provider — either a schema-invalid observation.json, OR a
+                # captured transport.stdout.txt (written immediately after the provider
+                # process returns, before the observation — adapters/claude_cli.py:142), so
+                # an effectful/billed run that died before writing (a valid) observation is
+                # caught too. A suspicious death → PARSE_ERROR, which verify_post reads as
+                # identity_missing → a breach reconcile refuses even with a verified sibling
+                # (it must not be laundered, and pre-#557 this exact state was fail-closed
+                # via missing_obs). Only a CLEAN death (no such evidence) is a genuine
+                # availability failure → NO_RESPONSE, forgivable by a verified sibling
+                # (chain-fallback parity with timed_out). The malformed original is
+                # preserved as forensics before the synthetic replaces observation.json
+                # (reconcile reads only the audited records, so raw evidence must survive).
+                cap_dir = Path(record.capture_dir)
+                obs_path = cap_dir / "observation.json"
+                malformed_present = obs_path.exists()
+                ran_evidence = malformed_present or (cap_dir / "transport.stdout.txt").exists()
+                spec = self._read_spec(record)
+                obs = synthetic_observation(
+                    run_id=record.identity.run_id, seat=record.identity.seat,
+                    attempt_id=record.attempt_id, engine=spec.get("engine", "claude"),
+                    requested_model=spec.get("request", {}).get("requested_model", "unknown"),
+                    prompt=spec.get("request", {}).get("prompt", ""),
+                    parse_status=(contract.PARSE_ERROR if ran_evidence
+                                  else contract.NO_RESPONSE),
+                    reason=("child exited after producing provider output but without a "
+                            "valid observation" if ran_evidence
+                            else "child exited without sentinel"),
+                    routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"),
+                    correlation_id=spec.get("request", {}).get("correlation_id"))
+                cap = ensure_private_dir(Path(record.capture_dir))
+                if malformed_present:
+                    try:  # preserve the suspicious envelope as forensics — never crash on it
+                        obs_path.replace(cap / "observation.malformed.json")
+                    except OSError:
+                        pass
+                atomic_write_text(cap / "observation.json",
+                                  json.dumps(obs, indent=2, sort_keys=True))
                 self._finish(record, "exited_no_sentinel")
-                return "exited_no_sentinel", None
+                return "exited_no_sentinel", obs
             if time.monotonic() >= deadline:
                 kill_clean = self._kill_job(record)
                 obs = self._sentinel(record)

@@ -408,6 +408,61 @@ def test_reconcile_missing_obs():
     assert not res.ok and ("review", "c1") in res.missing_obs
 
 
+# ---- #557 AC3: terminal failures reconcile as RECORDED failures, not missing pairs ----
+
+def test_verify_post_no_response_synthetic_is_honest_availability():
+    # #557: the exited_no_sentinel synthetic obs (no actual_model, parse_status
+    # no_response) classifies as an honest availability failure — never a breach.
+    pc = enforce.verify_post(_obs_dict(parse_status="no_response", actual_model=None,
+                                       usage=None,
+                                       process={"exit_code": None, "timed_out": False}))
+    assert pc.ok and not pc.verified and pc.reason == "no_response"
+
+
+def test_reconcile_exited_no_sentinel_is_recorded_failure_not_missing_pair():
+    # #557 AC3: a bound no_response obs moves the key OUT of missing_obs — the failure is
+    # attributable (availability-classed); with no verified sibling the run still refuses.
+    recs = [_receipt_rec("n1"), _obs_rec("n1", status="no_response")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert ("review", "c1") not in res.missing_obs
+    assert not res.binding_mismatch
+    assert ("review", "c1") in res.missing_receipt  # all attempts availability-failed: never served
+
+
+def test_reconcile_timed_out_is_recorded_failure_not_missing_pair():
+    # #557 AC3 parity: timed_out reconciles exactly like exited_no_sentinel
+    recs = [_receipt_rec("n1"), _obs_rec("n1", status="timeout")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert ("review", "c1") not in res.missing_obs
+    assert not res.binding_mismatch
+    assert ("review", "c1") in res.missing_receipt
+
+
+def test_reconcile_sibling_success_forgives_clean_availability_failure():
+    # #557 AC3: a CLEAN availability failure (no_response, no attested model) IS forgiven
+    # by a verified sibling — the designed chain-fallback parity with timed_out — but the
+    # failed attempt stays BOUND in the audit, never orphaned, mismatched, or dropped.
+    recs = [_receipt_rec("n1"), _obs_rec("n1", status="no_response"),
+            _receipt_rec("n2"), _obs_rec("n2")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert not res.binding_mismatch and not res.orphan and not res.duplicate
+
+
+def test_reconcile_suspicious_parse_error_not_laundered_by_sibling():
+    # #557 AC3 "cannot be laundered by a sibling success": a SUSPICIOUS death (the
+    # supervisor's parse_error synthetic — a child left an unparseable envelope) reads as
+    # identity_missing in verify_post, so a verified sibling on the SAME expected key does
+    # NOT forgive it — the run refuses.
+    recs = [_receipt_rec("n1"), _obs_rec("n1", status="parse_error"),
+            _receipt_rec("n2"), _obs_rec("n2")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert ("review", "c1") in res.unverified  # breach recorded, not laundered
+
+
 def test_reconcile_binding_mismatch_dispatched_other_target():
     # pre-checked fable-5/claude (receipt tid), but dispatched sonnet via codex (obs lane) -> mismatch
     other = {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth",

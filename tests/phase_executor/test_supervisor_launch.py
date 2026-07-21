@@ -352,12 +352,40 @@ def test_await_timeout_prefers_childs_valid_obs(env_factory):
 @tmux_required
 def test_malformed_obs_is_exited_no_sentinel(env_factory):
     env = env_factory(mode="malformed")
-    rec = env.launch()
+    rec = env.launch(correlation_id="557-mal")
     state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
     assert state == "exited_no_sentinel"
-    assert obs is None
+    # #557 AC1/AC2 + 8a review: a death that left an UNPARSEABLE observation is a
+    # SUSPICIOUS terminal state — the synthetic is schema-valid + correlation-bound (so
+    # the failure is recorded, not lost) but carries PARSE_ERROR, which reconcile treats
+    # as a breach a verified sibling cannot launder.
+    assert obs is not None and obs["parse_status"] == contract.PARSE_ERROR
+    assert obs["correlation_id"] == "557-mal"
+    contract.validate_observation(obs)
+    on_disk = json.loads(Path(rec.capture_dir, "observation.json").read_text(encoding="utf-8"))
+    assert on_disk["parse_status"] == contract.PARSE_ERROR
+    # the malformed original is preserved as forensics, not silently destroyed
+    forensics = json.loads(Path(rec.capture_dir, "observation.malformed.json").read_text(encoding="utf-8"))
+    assert forensics == {"not": "an observation"}
     assert env.registry.get(env.identity).state == "exited_no_sentinel"
     assert env.quota.live_permits("claude") == 0
+
+
+@tmux_required
+def test_effectful_crash_no_obs_is_suspicious_not_forgivable(env_factory):
+    # #557 Step-11 review: a child that ran the provider (transport.stdout.txt captured)
+    # then died before writing observation.json is EFFECTFUL — it must NOT classify as a
+    # clean, sibling-forgivable availability failure. transport-present + obs-absent →
+    # PARSE_ERROR (a breach reconcile refuses), closing the refuse->forgive laundering the
+    # observation.json-only discriminator would have opened.
+    env = env_factory(mode="transport_then_fail")
+    rec = env.launch(correlation_id="557-eff")
+    state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
+    assert state == "exited_no_sentinel"
+    assert obs is not None and obs["parse_status"] == contract.PARSE_ERROR
+    assert obs["correlation_id"] == "557-eff"
+    # the provider transport survives on disk as evidence the model ran
+    assert Path(rec.capture_dir, "transport.stdout.txt").exists()
 
 
 @tmux_required
@@ -366,7 +394,15 @@ def test_nonzero_exit_no_sentinel_not_auto_resumed(env_factory):
     rec = env.launch()
     state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
     assert state == "exited_no_sentinel"  # DEFAULT for ambiguous nonzero exit — never quota_paused
-    assert obs is None
+    # #557 AC1: a CLEAN death (no observation.json at all) is a genuine availability
+    # failure → NO_RESPONSE (forgivable by a verified sibling); the synthetic carries the
+    # REAL routing digest from the spec (binds to its receipt in reconcile), never the
+    # sha256:unknown fallback.
+    assert obs is not None and obs["parse_status"] == contract.NO_RESPONSE
+    assert obs["routing_config_digest"].startswith("sha256:")
+    assert obs["routing_config_digest"] != "sha256:unknown"
+    # no malformed file existed, so none is fabricated
+    assert not Path(rec.capture_dir, "observation.malformed.json").exists()
 
 
 @tmux_required
@@ -406,3 +442,60 @@ def test_status_quota_paused_only_injected(tmp_path):
     assert reg.get(identity).state == "quota_paused"
     with pytest.raises(SupervisorError):  # already terminal-for-recover — refused
         sup.mark_quota_paused(identity, provider_session_id="sess-2")
+
+
+def test_mark_quota_paused_sentinel_guard_boundary(tmp_path):
+    # #557: the completion guard keys on the sentinel's SHAPE, not its existence —
+    # an exited_no_sentinel record now always carries the supervisor's synthetic
+    # availability observation (no_response = recorded failure, resumable), while an
+    # envelope-producing sentinel (ok = effectful child result) still refuses.
+    reg = JobRegistry(str(tmp_path / "reg"))
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+
+    def dead_run(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="no session")
+
+    sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+                         registry_root=str(tmp_path / "reg"), registry=reg, run=dead_run)
+    from phase_executor.registry import JobRecord
+    cap = tmp_path / "cd"
+    cap.mkdir()
+    rec = JobRecord(identity=identity, session_name=session_name(identity), run_socket="s",
+                    pane_pid=1, pane_pgid=1, provider_pgid=None, pane_start_time="0",
+                    worktree_path="w", worktree_base_sha="b", worktree_root="r",
+                    worktree_gitdir="g", worktree_repo="rp", capture_dir=str(cap),
+                    attempt_id="a", permit_ref="unbounded", command_digest="sha256:x",
+                    provider_session_id=None, provider_exit_code=None, resume_attempts=0,
+                    state="exited_no_sentinel", created_at=0.0, quarantine_reason=None)
+    reg.upsert(rec)
+    # availability synthetic (identity-matching) → pause ACCEPTED
+    synth = supervisor.synthetic_observation(
+        run_id="r1", seat="build", attempt_id="a", engine="claude",
+        requested_model="m", prompt="p", parse_status=contract.NO_RESPONSE,
+        reason="child exited without sentinel", routing_config_digest="sha256:d",
+        correlation_id="c1")
+    (cap / "observation.json").write_text(json.dumps(synth), encoding="utf-8")
+    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert got.state == "quota_paused"
+    # envelope-producing OK sentinel → still refused (effects would duplicate)
+    reg.upsert(rec)  # reset state to exited_no_sentinel
+    ok_obs = contract.Observation(
+        run_id="r1", attempt_id="a", seat="build", engine="claude", transport="native",
+        requested_model="m", actual_model="m", prompt_hash="sha256:x",
+        usage={"input": 1, "output": 1}, timing_ms=1, queued_ms=0,
+        process={"exit_code": 0, "timed_out": False}, parse_status="ok",
+        parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:d").to_dict()
+    (cap / "observation.json").write_text(json.dumps(ok_obs), encoding="utf-8")
+    with pytest.raises(SupervisorError):
+        sup.mark_quota_paused(identity, provider_session_id="sess-2")
+    # #557 8a review: an availability-STATUS sentinel that nonetheless ATTESTED a model
+    # is effectful (the model ran / billed) → still refused, even though no_response is an
+    # availability failure. Only the supervisor's actual_model=None synthetic is resumable.
+    reg.upsert(rec)
+    effectful = dict(synth)
+    effectful["actual_model"] = "m"  # provider attested → effectful, not resumable
+    contract.validate_observation(effectful)
+    (cap / "observation.json").write_text(json.dumps(effectful), encoding="utf-8")
+    with pytest.raises(SupervisorError):
+        sup.mark_quota_paused(identity, provider_session_id="sess-3")
