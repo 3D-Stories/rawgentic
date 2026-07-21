@@ -182,23 +182,26 @@ def test_shipped_table_full_seat_set_464():
 # Normative seat-value matrix — design §A (the shipped table's EXACT manifest values).
 _EXPECTED_MANIFEST_464 = {
     "intake":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
-                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 900}},
+                 "confinement": {"anthropic": "hooks"},
+                 "bounds": {"timeout_s": 900, "max_budget_usd": 5.0}},   # 558 AC2
     "analysis": {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
-                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 1200}},
+                 "confinement": {"anthropic": "hooks"},
+                 "bounds": {"timeout_s": 1200, "max_budget_usd": 2.0}},  # 558 AC2
     "design":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
                  "confinement": {"openai": "codex-sandbox-readonly", "anthropic": "hooks"},
-                 "bounds": {"timeout_s": 1800}},
+                 "bounds": {"timeout_s": 1800, "max_budget_usd": 5.0}},  # 558 AC2
     "plan":     {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
                  "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
-                 "bounds": {"timeout_s": 1800}},
+                 "bounds": {"timeout_s": 1800, "max_budget_usd": 5.0}},  # 558 AC2
     "build":    {"session_policy": "fresh", "tool_grants": ["read", "edit", "bash"], "effort": "high",
                  "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-pinned"},
-                 "bounds": {"timeout_s": 3600}},
+                 "bounds": {"timeout_s": 3600, "max_budget_usd": 10.0}},  # 558 AC2
     "review":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
                  "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
-                 "bounds": {"timeout_s": 1800}},
+                 "bounds": {"timeout_s": 1800, "max_budget_usd": 5.0}},  # 558 AC2
     "ship":     {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
-                 "confinement": {"anthropic": "hooks"}, "bounds": {"timeout_s": 900}},
+                 "confinement": {"anthropic": "hooks"},
+                 "bounds": {"timeout_s": 900, "max_budget_usd": 2.0}},   # 558 AC2
 }
 
 

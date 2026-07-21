@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#558 — Genuine quota detection + per-call caps (H5)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 14:00 MDT</div>
+<h1>#558 — Genuine quota detection + per-call caps (H5)</h1>
+
+</header>
+<main>
+<h1>#558 — Genuine quota detection + per-call caps + classifier persistence (H5)</h1>
+<p><strong>Issue:</strong> [#558](https://github.com/3D-Stories/rawgentic/issues/558) · epic #560 executor-hardening · WF2 run <code>wf2-558-0a54ddc6</code> · 2026-07-21 <strong>Baseline:</strong> 4263 passed / 16 skipped / 0 failed @ <code>49c59d5</code> (origin/main).</p>
+<h2>Scope (owner decision D-12, 2026-07-21)</h2>
+<p><strong>#558 ships SHADOW INFRASTRUCTURE.</strong> Deliverables: the versioned conjunctive classifier (shadow-gated — it can classify and persist evidence but never auto-transition until a <code>(classifier_version, rule_table_digest)</code> pair is calibration-allowlisted), the <code>JobRecord.quota_classification</code> evidence field, and the per-call cap wiring. Stated plainly: with the calibration gate, sync-only claude dispatch, and codex-only mutating supervision, <strong>no current production job changes state because of this PR</strong> — every claude <code>NONZERO_EXIT</code> supervised collect starts producing evidence immediately, and the guard machinery is fully tested via injected calibrated stubs. <strong>The live <code>quota_paused</code> transition AC moves to #559</strong> (owner-ratified): #559 captures a genuine usage-limit exit, calibrates the rules against it, adds the ONE allowlist entry, and proves the transition end-to-end. AC-E1&#x27;s &quot;genuine usage-limit&quot; clause is satisfied across #558+#559 jointly, by design.</p>
+<h2>Problem</h2>
+<p>Three coupled gaps surfaced by the #472 proving run (all re-verified on the branch base this run):</p>
+<ul>
+<li><strong>(a) Quota transition unreachable.</strong> A real usage-limit exit-1 child still writes a</li>
+</ul>
+<p>  <code>NONZERO_EXIT</code> <code>observation.json</code> (<code>adapters/base.py:110-111</code>), so <code>await_job</code>&#x27;s collect   branch finalizes <code>completed</code> (<code>supervisor.py:696-700</code>) — and <code>mark_quota_paused</code> then   refuses the terminal state (<code>supervisor.py:505-508</code>). <code>mark_quota_paused</code> has <strong>zero   production callers</strong> (Step-2 blast analysis): quota entry exists only as a test seam.</p>
+<ul>
+<li><strong>(b) AC-B4 per-call caps absent.</strong> The bounds schema</li>
+</ul>
+<p>  (<code>schemas/routing-table.schema.json</code>, <code>$defs.manifest.bounds</code>, <code>additionalProperties:   false</code>) admits only <code>timeout_s</code> (required) + <code>max_budget_usd</code> (optional); every real   manifest supplies <strong>only</strong> <code>timeout_s</code> (<code>routing/rawgentic.routing-table.json</code>). The one   path that requires <code>max_budget_usd</code> (mutating claude, <code>contract.py:356-360</code>) is   production-unreachable (<code>MUTATING_FS_SANDBOXED={codex}</code>). No token/turn field exists at   all; zhipu&#x27;s <code>max_tokens</code> is hardcoded 1024 (<code>adapters/zhipuai_sdk.py:88</code>).</p>
+<ul>
+<li><strong>(c) No classifier evidence field.</strong> <code>JobRecord</code> (<code>registry.py:40-72</code>) has no</li>
+</ul>
+<p>  <code>quota_classification</code>; serde (<code>registry.py:181-210</code>) can&#x27;t carry one.</p>
+<h2>Approaches considered</h2>
+<p><strong>A (chosen) — supervisor-side detection at collection + shared pause-guard helper.</strong> A new pure classifier module consumed inside <code>await_job</code>&#x27;s collect branch; pause finalization goes through <code>_finish</code> with the classification attached to the same upsert. Pros: one writer path (<code>_finish</code> already owns upsert + permit release — Step-2 finding: no permit mirroring needed), evidence atomically persisted, fail-closed guards factored once and shared with <code>mark_quota_paused</code>. Cons: touches the most safety-critical method in the engine — mitigated by red-first fixture corpus + integration tests.</p>
+<p><strong>B (rejected) — caller-side detection in <code>executor_routing_lib</code> after <code>await_job</code> returns.</strong> Rejected: the record is already terminal <code>completed</code> by then (the exact unreachability being fixed); pausing after would need a second upsert (double-write, non-atomic vs AC3) and leaves the supervisor&#x27;s own state machine lying about what happened.</p>
+<h2>Design</h2>
+<h3>AC1 — conjunctive classifier + collection-time detection</h3>
+<p><strong>New module <code>phase_executor/src/phase_executor/quota_detect.py</code></strong> (pure, no I/O — mirrors the &quot;pure core&quot; repo convention; distinct from <code>quota.py</code>, which is the permit coordinator):</p>
+<pre><code>@dataclass(frozen=True)
+class StderrEvidence:            # built at the I/O boundary (supervisor._read_stderr)
+    decoded_text: str            # errors=&quot;replace&quot; decode of what was read
+    raw_sha256: str              # sha256 over the RAW BYTES read (not the decode)
+    byte_count: int
+    read_error: Optional[str]    # &quot;missing&quot; | &quot;unreadable: &lt;errno&gt;&quot; | &quot;oversized&quot; | None
+
+@dataclass(frozen=True)
+class QuotaClassification:
+    verdict: bool                # all four conjuncts true AND read_error is None
+    conjuncts: dict              # {&quot;provider_claude&quot;: bool, &quot;exit_1&quot;: bool,
+                                 #  &quot;usage_limit_lang&quot;: bool, &quot;reset_retry_lang&quot;: bool}
+    engine: str                  # echoed inputs — evidence self-describes
+    exit_code: Optional[int]
+    source: str                  # always &quot;stderr.txt&quot; (the only sanctioned verdict input)
+    rule_ids: tuple              # matched pattern identifiers (e.g. &quot;usage.v1/a&quot;)
+    stderr_sha256: str           # raw-byte hash from StderrEvidence
+    stderr_bytes: int
+    read_error: Optional[str]    # carried from StderrEvidence — distinct from a negative
+    envelope_subtype: Optional[str]  # ALLOWLISTED transport envelope subtype —
+                                 # OBSERVABILITY ONLY, never a verdict input (#559
+                                 # calibration data for the stdout-envelope hypothesis)
+    envelope_subtype_sha256: Optional[str]  # sha of a non-allowlisted subtype (persisted
+                                 # as &quot;unknown&quot; + this hash — pass-4 A-F5)
+    envelope_error: Optional[str]    # &quot;missing&quot; | &quot;malformed&quot; | &quot;oversized&quot; | None —
+                                 # the bounded _envelope_meta reader&#x27;s typed outcome
+    classifier_version: int      # 1 — bump on any rule change
+
+@dataclass(frozen=True)
+class EnvelopeMeta:              # built by supervisor._envelope_meta (bounded reader)
+    session_id: Optional[str]
+    subtype: Optional[str]       # allowlisted, or &quot;unknown&quot;
+    subtype_sha256: Optional[str]  # set when subtype == &quot;unknown&quot;
+    error: Optional[str]         # &quot;missing&quot; | &quot;malformed&quot; | &quot;oversized&quot; | None
+
+def classify_quota_exit(*, engine: str, exit_code: Optional[int],
+                        stderr: StderrEvidence,
+                        envelope: Optional[EnvelopeMeta] = None) -&gt; QuotaClassification: ...</code></pre>
+<p>The classifier copies <code>envelope.subtype</code> / <code>envelope.subtype_sha256</code> / <code>envelope.error</code> into the evidence fields verbatim (observability only, never verdict inputs).</p>
+<p>No raw stderr text is persisted — not even an excerpt (pass-2 self-review F7: provider stderr can carry tokens/URL secrets; <code>jobs.json</code> must not become a secret-bearing surface). <code>rule_ids</code> + hashes identify the match; the capture dir&#x27;s <code>stderr.txt</code> (0700) remains the on-disk forensic source.</p>
+<p><strong>I/O contract (<code>_read_stderr</code> → <code>StderrEvidence</code>):</strong> the file is read as RAW BYTES in bounded-memory chunks up to an 8 MiB ceiling; <code>raw_sha256</code> streams over the bytes actually read; the scan text is the <code>errors=&quot;replace&quot;</code> decode. Files over the ceiling are NOT classified: <code>read_error=&quot;oversized&quot;</code>, prefix hash + true byte count recorded (pass-2 adversarial F5&#x27;s explicit either/or — we choose bounded-with-honest-marker over unbounded full-file streaming). Missing/unreadable files carry their typed <code>read_error</code>. Any non-None <code>read_error</code> forces <code>verdict=False</code> with the reason visible — never indistinguishable from an ordinary negative (pass-2 F4).</p>
+<p><strong>v1 matching contract (normalization — pass-2 adversarial F2):</strong> decode → <code>casefold()</code> → match PER LINE (conjuncts 3 and 4 may match on different lines of the same stderr; no cross-line joining). Patterns are word-boundary-anchored, case-insensitive via the casefold, with bounded proximity inside a line (never unbounded <code>.*</code> across the whole text). The exact regex table + rule ids live in <code>quota_detect.py</code> AS the versioned v1 source of truth, pinned byte-for-byte by the fixture corpus — the design doc pins the normalization rules; the module pins the patterns (one home, no prose/code drift). A canonical serialization of the v1 rule table is digest-asserted in tests next to <code>classifier_version</code> — ANY rule-table change fails the digest test until the version is bumped (pass-3 A-F6: fixtures alone cannot pin the table byte-for-byte).</p>
+<p>Conjunctive — ALL must hold (a miss anywhere → <code>verdict=False</code>, current behavior kept): 1. <code>engine == &quot;claude&quot;</code> (provider conjunct — codex/zhipu never classify). 2. <code>exit_code == 1</code> exactly (SIGKILL 137, exit 2, timeout kills never classify). 3. Usage-limit language in stderr: anchored on <code>usage</code>-proximate limit phrasing    (e.g. <code>usage limit</code>, <code>out of … usage</code>, <code>5-hour/weekly … limit</code>) — deliberately does    NOT match bare <code>limit</code>/<code>rate limit</code>, so API throttling (429) stays negative. 4. Reset/retry language in stderr: <strong>explicit temporal recovery phrasing only</strong> —    <code>resets at/in</code>, <code>try again at/after/in</code>. <code>upgrade</code> is deliberately NOT a match    (Step-4 adversarial F2: an upgrade-only usage-limit message is not temporally    recoverable — pausing it would relaunch an unrecoverable session); an upgrade-only    fixture is a required negative.</p>
+<p>Keyed on <strong>capture <code>stderr.txt</code> ONLY</strong> (<code>capture.py:95-96</code>; reachable as <code>Path(record.capture_dir) / &quot;stderr.txt&quot;</code> — same pattern as <code>_transport_session_id</code>, <code>supervisor.py:1100-1108</code>). The model transcript / <code>transport.stdout.txt</code> is never an input, so transcript-only quota phrases with exit 0 are structurally negative (conjunct 2 fails before text is even consulted).</p>
+<p><strong>Corpus honesty (pinned in the module docstring):</strong> the repo holds ZERO real captured usage-limit stderr (Step-2 corpus sweep: all 16 existing <code>stderr.txt</code> captures are empty; spike #455 and #472 both failed/declined to capture one). Positive fixtures are therefore <strong>synthetic, built from the external-docs shape</strong> (exit 1, no retry, usage+reset language); the classifier ships <code>classifier_version: 1</code> and <strong>#559 (live proving run) calibrates it against a genuine capture</strong> — a version bump + fixture swap is the planned correction path. Negative fixtures mix REAL captured samples (wrong-cwd resume <code>No conversation found with session ID: &lt;id&gt;</code> from spike-455 doc:125; SIGKILL-137-empty) with clearly-labelled synthetic ones (claude-flavored auth expiry, account-selection, network failure, 429 throttle, upgrade-only usage-limit). Fixture bytes stay RAW — provenance lives in filenames + a <code>fixtures/MANIFEST.md</code> sidecar, never inside the file (pass-2 F12: a header would alter the exact bytes classified and hashed; genuine captures get their sha256 asserted in tests). A THIRD real negative was captured this run: the budget-trip probe (<code>--max-budget-usd 0.01</code> → exit 1, EMPTY stderr, envelope <code>error_max_budget_usd</code> on stdout) — pinned as a fixture proving a budget trip never classifies as quota.</p>
+<p><strong>Scope boundary (Step-4 adversarial F1, declined with rationale):</strong> shipping the detector against a synthetic positive corpus IS the owner-ratified #560 decomposition — #558 builds the capability, #559 (live proving run) captures a genuine usage-limit exit and calibrates (<code>acceptance-criteria.md:62</code> records the deferral chain). The classifier is conservative: an unmatched real message means <code>verdict=False</code> → exactly today&#x27;s behavior, never a wrong pause. Keeping the detector &quot;disabled until #559&quot; would leave #559 nothing to calibrate.</p>
+<p><strong>Integration — <code>await_job</code> collect branch (<code>supervisor.py:682-700</code>):</strong> after sentinel validation, gated on the cheap precheck <code>parse_status == NONZERO_EXIT</code> before any file I/O (a normal <code>ok</code> collect never touches <code>stderr.txt</code>). Ordering is kill-first (r6/r7): <code>_kill_job</code> precedes EVERY evidence read — including the resume-identity assert, which is relocated to run post-kill on the bounded <code>_envelope_meta</code> (its failure action, finish <code>&quot;failed&quot;</code> + raise, is unchanged):</p>
+<pre><code># NONZERO_EXIT precheck already passed; resume-identity assert is relocated to run
+# AFTER the kill via the bounded _envelope_meta (its failure action — finish &quot;failed&quot;,
+# raise — is unchanged, just no longer a pre-kill read).
+killed = self._kill_job(record)         # KILL-VERIFY FIRST (r6 evidence ordering):
+                                        # already-dead → True (supervisor.py:577-611);
+                                        # all evidence reads below see a stable,
+                                        # dead-writer snapshot
+spec = self._verified_spec(record)      # digest-checked; parsed from verified bytes
+if spec is None:
+    cls, meta = None, None              # tampered/missing spec: classify nothing
+else:
+    ev = self._read_stderr(record)      # StderrEvidence (bounded, O_NOFOLLOW, fstat)
+    meta = self._envelope_meta(record)  # EnvelopeMeta (bounded 256 KiB prefix)
+    cls = classify_quota_exit(engine=spec_engine, exit_code=_exit_code_of(obs),
+                              stderr=ev, envelope=meta)
+if cls is not None and cls.verdict:
+    decision = self._auto_pause_allowed(record, obs, profile, meta.session_id, cls,
+                                        killed=killed)   # PauseDecision(allowed, refusal)
+    if decision.allowed:                # implies killed is True — kill-verified is a
+        self._finish(record, &quot;quota_paused&quot;,             # guard conjunct
+                     release_permit=True,
+                     provider_session_id=meta.session_id,
+                     provider_exit_code=_exit_code_of(obs),
+                     quota_classification=asdict(cls) | {&quot;paused&quot;: True})
+        return &quot;quota_paused&quot;, obs
+    if decision.refusal == &quot;kill_unverified&quot;:
+        self._finish(record, &quot;completed_with_residue&quot;, release_permit=False,
+                     provider_exit_code=_exit_code_of(obs),
+                     quota_classification=asdict(cls) | {&quot;paused&quot;: False,
+                                                         &quot;refusal&quot;: decision.refusal})
+        return &quot;completed_with_residue&quot;, obs
+    refusal_reason = decision.refusal   # persisted on the completed finalize below
+else:
+    refusal_reason = None               # negative / read_error: evidence self-describes
+# Every OTHER classifier invocation (negative, read_error, refused, spec unverified)
+# still persists its evidence on today&#x27;s finalize (pass-3 S-F10 — the persistence
+# trigger is CLASSIFIER INVOCATION on a claude NONZERO_EXIT collect, never only a
+# positive verdict):
+extra = ({&quot;quota_classification&quot;: asdict(cls)
+          | ({&quot;paused&quot;: False, &quot;refusal&quot;: refusal_reason} if refusal_reason
+             else {&quot;paused&quot;: False})} if cls is not None else
+         {&quot;quota_classification&quot;: {&quot;paused&quot;: False, &quot;refusal&quot;: &quot;spec_unverified&quot;,
+          &quot;classifier_version&quot;: 1}} if spec is None and is_claude_nonzero else {})
+state = &quot;completed&quot; if killed else &quot;completed_with_residue&quot;
+self._finish(record, state, release_permit=killed,
+             provider_exit_code=_exit_code_of(obs), **extra)</code></pre>
+<p><strong>Evidence-snapshot ordering (pass-4 S-F7):</strong> the branch structure above is normative — the sentinel is validated and the writer is KILLED-VERIFIED (<code>_kill_job</code>) <strong>before</strong> <code>stderr.txt</code> / <code>transport.stdout.txt</code> are read for classification, so the hashed evidence describes a stable, dead-writer state (no growth/replacement between sentinel validation and evidence read). Both readers open with <code>O_NOFOLLOW</code>, require a regular file, and <code>fstat</code> the open fd (size/identity) — a symlink or non-regular file is <code>read_error: &quot;unreadable: irregular&quot;</code>. The one already-shipped pre-kill read — <code>_transport_session_id</code> in the resume-identity assert (<code>supervisor.py:689</code>) — is replaced by the bounded <code>_envelope_meta</code> read AFTER the kill, with the assert relocated accordingly (the assert&#x27;s failure action, kill+fail, is unchanged — it just no longer needs to precede the kill).</p>
+<p><strong>Two-layer guard contract (pass-3 A-F2/S-F3 — one shared rule set cannot serve both writers without breaking one of them):</strong></p>
+<ul>
+<li><strong><code>_pause_common_allowed(record, obs, session_id)</code></strong> — shared by BOTH writers:</li>
+</ul>
+<p>  non-empty resumable <code>provider_session_id</code> (no envelope →   <code>refusal: &quot;no_resumable_session&quot;</code> — a <code>quota_paused</code> record with no session id would   make <code>classify_recovery</code>&#x27;s relaunch arm (<code>registry.py:126-127</code>) compose an impossible   <code>--resume</code>); effectful-sentinel refusal (an envelope-producing <code>parse_status</code> not in   <code>AVAILABILITY_FAILURES</code> (<code>contract.py:55</code>) or an attested <code>actual_model</code> → refuse;   <code>NONZERO_EXIT</code> IS an availability failure, so a genuine quota sentinel with   <code>actual_model: null</code> passes); non-terminal record state.</p>
+<ul>
+<li>**<code>_auto_pause_allowed</code> = common + automatic-mode conjuncts, returning a structured</li>
+</ul>
+<p>  <code>PauseDecision(allowed: bool, refusal: Optional[str])</code><strong> — guards evaluate in the   declared order (verified spec → read-only → resume policy → calibration → common   predicate) and the FIRST failing guard&#x27;s reason is the persisted <code>refusal</code> (pass-4   A-F4: deterministic single-reason evidence, not an implementer&#x27;s choice)</strong> (collection-time   detection only): <strong>verified spec</strong> (digest match — pass-3 S-F2); <strong>read-only profile</strong>   (<code>not profile.mutating</code> — a mutating job may have applied Edit/Bash effects before the   quota exit; <code>actual_model: null</code> proves only that no final envelope was emitted →   <code>refusal: &quot;mutating_requires_manual&quot;</code>); <strong>resume policy</strong>   (<code>profile.session_policy == &quot;resume&quot;</code> — a fresh launch composed   <code>--no-session-persistence</code> (<code>claude_cli.py:47-48</code>), resuming it is spike-#455&#x27;s LOUD   failure → <code>refusal: &quot;session_not_persisted&quot;</code>); <strong>calibration gate</strong> (pass-3 S-F5   shadow mode, hardened per pass-4 S-F1 — a <code>&gt;= MIN</code> gate is monotonic while calibration   is not): auto-pause requires <code>(cls.classifier_version, rule_table_digest)</code> ∈   <code>CALIBRATED_CLASSIFIERS</code>, an <strong>exact allowlist of calibrated pairs</strong> that ships EMPTY   (<code>frozenset()</code>) — v1 and every future uncalibrated version/digest runs in SHADOW   (<code>refusal: &quot;uncalibrated_classifier&quot;</code>), even for a custom resume-policy routing table.   #559&#x27;s genuine capture adds the one calibrated pair; a regression test pins that an   unknown future version stays shadow-only. <strong>Kill-verified is itself a guard conjunct</strong>   (r7): <code>_kill_job</code> runs FIRST (before any evidence read — the r6 snapshot ordering) and   its result is passed into <code>_auto_pause_allowed(..., killed=)</code>; <code>killed=False</code> →   <code>PauseDecision(allowed=False, refusal=&quot;kill_unverified&quot;)</code> → the residue branch. Pause   happens only on verified-dead, and every evidence byte was read after that   verification.</p>
+<ul>
+<li><strong>Injected mode (<code>mark_quota_paused</code>)</strong> keeps its EXISTING preconditions exactly</li>
+</ul>
+<p>  (dead job, non-terminal state, non-empty caller-supplied session id — the   owner-authorization boundary is the caller) + <code>_pause_common_allowed</code>&#x27;s sentinel   check, and now routes its write through <code>_finish</code> carrying injected-classification   evidence (<code>{&quot;injected&quot;: true, &quot;paused&quot;: true}</code> — pass-2 F9). Mutating recovery stays   possible HERE by design: the read-only/resume-policy/calibration conjuncts are   automatic-mode-only.</p>
+<p><strong>Spec trust boundary (pass-3 S-F2; typed per pass-4 S-F9):</strong> <code>_verified_spec</code> reads the spec file&#x27;s bytes ONCE, recomputes the digest against <code>record.spec_digest</code> (the same trust rule recovery already applies, <code>supervisor.py:848</code>), and returns the object PARSED FROM THOSE EXACT BYTES (never a second read) — or <code>None</code> on missing/malformed/mismatch. The launch profile used by the guards is reconstructed from that verified object once, strictly validated; a malformed profile inside a digest-valid spec is <code>refusal: &quot;spec_unverified&quot;</code> too. All guard evaluation flows through the typed <code>PauseDecision</code> with deterministic precedence.</p>
+<p><strong>Bounded envelope metadata (pass-3 S-F4):</strong> <code>_envelope_meta</code> replaces the pattern of <code>_transport_session_id</code>&#x27;s unbounded <code>json.load</code> (<code>supervisor.py:1100-1108</code>) for this path: it reads AT MOST 256 KiB of <code>transport.stdout.txt</code>, parses that prefix, and extracts <code>session_id</code> (str-typed) + <code>subtype</code> — oversized/malformed → both None with <code>envelope_error</code> evidence; collection then fails toward refusal without releasing a live permit. The subtype is persisted ONLY through an allowlist (<code>{&quot;success&quot;, &quot;error_max_budget_usd&quot;, &quot;error_during_execution&quot;, ...}</code> — the known CLI result subtypes) with a 64-char bound; anything else persists as <code>&quot;unknown&quot;</code> plus its sha256 (pass-3 A-F7/S-F7 — no raw provider prose reaches <code>jobs.json</code>).</p>
+<p><strong>Production-reachability scope (pass-2 SR-F1, stated plainly):</strong> collection-time detection lives on the SUPERVISED path (<code>await_job</code>) — the epic&#x27;s subject (<code>epic:executor-hardening</code> = &quot;hardening the phase_executor supervised path&quot;). Today&#x27;s non-mutating claude seats dispatch synchronously (<code>engine.run_seat</code>) with no JobRecord, so <code>quota_paused</code> is structurally meaningless there: a sync claude quota exit remains a visible NONZERO_EXIT availability failure that chain-fallback handles, exactly as before. #559 drives the supervised resume-policy claude path live; this PR ships the capability it will exercise.</p>
+<p>The engine for conjunct 1 comes from the persisted pane spec (<code>self._read_spec(record)</code>, already used by both synthetic-observation sites) — never inferred from output shape.</p>
+<p><strong>Docstring update:</strong> <code>supervisor.py:17</code>&#x27;s &quot;entered ONLY via the injected classification&quot; becomes &quot;entered via collection-time detection (<code>quota_detect</code>, #558) or the injected classification (<code>mark_quota_paused</code>)&quot;.</p>
+<p><strong>Downstream readers hold unchanged</strong> (Step-2 audit): <code>classify_recovery</code> (<code>registry.py:126</code>), the <code>status</code> short-circuit set (<code>supervisor.py:175</code>), <code>recover</code>&#x27;s filter (<code>supervisor.py:1051</code>), and the dispatch retryable set (<code>executor_routing_lib.py:1078</code>) all reason off <code>record.state</code> and are writer-agnostic.</p>
+<h3>AC2 — per-call caps (manifest → contract → adapter)</h3>
+<p>Per ratified AC-B4 (<code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md:45</code>): claude gets the per-invocation budget bound — a VERIFIED preflight admission gate with live runtime budget tracking; mid-call termination shape unverified, see platform_apis — codex/zhipu declare compensating enforceable bounds. (AC-B4&#x27;s pre-launch atomic *reservation* clause is run-level budget accounting — OUT of #558&#x27;s AC2 scope per the issue body, which names per-call caps only; noted as epic-#560-adjacent follow-up.)</p>
+<p>1. <strong>Schema</strong> (<code>routing-table.schema.json</code> <code>$defs.manifest.bounds</code>): add optional    <code>max_tokens</code> (integer ≥1) alongside the existing <code>max_budget_usd</code>; <code>timeout_s</code> stays    required. <code>additionalProperties: false</code> retained. 2. <strong>Routing table</strong> (<code>routing/rawgentic.routing-table.json</code>): every claude-primary/chain    seat manifest gains <code>max_budget_usd</code> (values: analysis/ship 2.0 ≈1.35×, review/plan/    intake 5.0 ≈3.4×, build 10.0 ≈6.8× the one observed per-dispatch cost proxy 1.48 from    this run&#x27;s analysis seats — a bound on runaway liability, NOT a guarantee healthy calls    never trip; per-seat cost distributions are #473&#x27;s telemetry scope and the values are    plain config to retune); zhipu-bearing manifests gain <code>max_tokens: 1024</code> — exactly the    current hardcoded bound (<code>zhipuai_sdk.py:88</code>), preserved not loosened (Step-4    adversarial F5); raising it is a separately-justified manifest change. Codex seats keep    <code>timeout_s</code> as THE declared compensating bound — <strong>AC-B4 is AMENDED to say exactly    this (owner decision D-13, 2026-07-21):</strong> <code>codex exec</code> exposes no token/turn option    (live <code>--help</code> probe), so the ratified &quot;timeout + max-token/turn limits&quot; clause    becomes &quot;the enforced supervisor/run_subprocess timeout; token/turn caps adopt if a    future codex CLI grows the flag&quot;. The amendment edit to    <code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code> rides this    PR (contract.py:308 already shipped this reading). 3. <strong>Contract</strong> (<code>LaunchProfile</code> + <code>profile_from_manifest</code>): add    <code>max_tokens: Optional[int] = None</code>, mapped from <code>bounds.max_tokens</code> with the same    strict-type handling as <code>max_budget_usd</code>; the mutating-claude positive-budget    requirement is unchanged. 4. <strong>Adapters:</strong> claude — <code>build_command</code> already composes <code>--max-budget-usd</code>    (<code>claude_cli.py:70-71</code>); now every claude seat&#x27;s profile actually carries a value, so the flag goes live on    every claude dispatch that carries a profile — all non-mutating sync/competitive    dispatches (post item 6) and every supervised dispatch; mutating-on-sync is rejected    outright (item 6). zhipu — <code>zhipuai_sdk.run</code> passes    <code>profile.max_tokens or 1024</code> into the worker request (<code>zhipuai_sdk.py:88</code>,    <code>workers/zhipuai_call.py:37</code> already accepts it). codex — no cap flag exists    (Step-2 confirmed: no token/turn flag in <code>codex exec</code>); its enforced bound remains the    supervisor/run_subprocess timeout, and the design documents that explicitly rather    than inventing an unenforceable knob. 5. <strong>Supervised-path spec threading (Step-4 self-review SR1 — confirmed).</strong> The launch    profile crosses the supervisor→pane-runner boundary as a field-by-field spec dict:    write site <code>supervisor.py:403-405</code>, read site <code>pane_runner.py:93-99</code>    (<code>_profile_from_spec</code>), and the relaunch rebuild <code>supervisor.py:986-990</code>. A new    <code>LaunchProfile.max_tokens</code> MUST be added at ALL THREE sites or the cap silently    vanishes on every supervised dispatch; a spec round-trip test pins each field. 6. <strong>Sync + competitive path threading (pass-2 SR-F2 — CONFIRMED, the dominant gap;    scoped by pass-3 S-F1).</strong> <code>engine.run_seat</code> (<code>engine.py:99-102</code>) and <code>_run_candidate</code>    (<code>engine.py:188</code>) build <code>AdapterRequest</code> with NO profile — the dataclass default    (uncapped) — so manifest caps would never reach ordinary dispatches at all. Fix: both    sites derive the per-target profile via <code>profile_from_manifest</code> <strong>ONLY when the    manifest is non-mutating</strong> (no <code>edit</code>/<code>bash</code> in <code>tool_grants</code>): a mutating manifest    derives a profile that REQUIRES a worktree (<code>contract.py:345,353</code>) which these paths    do not have — deriving unconditionally would fail every build candidate pre-dispatch    (pass-3 S-F1). A mutating manifest on the sync/competitive path is <strong>REJECTED    fail-loud before any candidate dispatch</strong> (r6, pass-4 A-F1 — silently keeping an    uncapped no-profile dispatch would leave exactly the gap AC2 closes; #449&#x27;s build    path reaches <code>run_competitive</code>, so the rejection sits before candidate fan-out);    mutating dispatch is exclusively the supervised path&#x27;s job (which already derives    with a worktree, <code>executor_routing_lib.py:1437</code>). Effective    timeout = <code>min(caller timeout, bounds.timeout_s)</code> — the declared bound can tighten,    never loosen, the caller&#x27;s operational value. <strong>The SAME min() applies at supervised    launch</strong> (pass-4 S-F6: today the caller timeout is written raw into the pane spec,    <code>supervisor.py:399</code>, so a tighter manifest bound is ignored there) — one effective    timeout, computed before dispatch on BOTH paths, used for provider execution and the    supervisor deadline. Side effect, deliberate: sync claude dispatches now also carry    <code>--allowedTools</code> from the manifest&#x27;s <code>tool_grants</code> — a hardening the grants always    declared; production-CLI argv tests (<code>tests/phase_executor/test_engine.py</code>) pin the    exact composed command for single-run, bake-off, and fallback-target paths.    <strong>Bake-off consequence, stated for #449:</strong> with mutating manifests rejected on the    sync/competitive paths, live BUILD bake-off dispatch stays unavailable until a capped    mutating composition exists there — #449&#x27;s live cells therefore cover non-mutating    seats + the design-round bake-off; the build bake-off live cell is out of #449&#x27;s    reach by this design, documented here so neither issue re-litigates it.</p>
+<p>7. <strong>Zhipu adapter boundary validation (pass-2 F11).</strong> <code>LaunchProfile</code> is publicly    constructible; the adapter is the backstop. <code>zhipuai_sdk.run</code> refuses (pre-launch,    <code>CompositionError</code>) a <code>max_tokens</code> that is not a non-boolean <code>int ≥ 1</code>; only a valid    value (or None → 1024 default) reaches the worker request. 8. <strong>Claude budget composition validation (pass-3 S-F8).</strong> <code>LaunchProfile</code> is publicly    constructible; <code>claude_cli.build_command</code> currently stringifies any non-None    <code>max_budget_usd</code>. It gains the same boundary rule as zhipu: a present value must be a    non-boolean finite number &gt; 0, else <code>CompositionError</code> before launch.</p>
+<h3>AC3 — <code>JobRecord.quota_classification</code></h3>
+<ul>
+<li>Additive field: <code>quota_classification: Optional[dict] = None</code> (follows the</li>
+</ul>
+<p>  <code>spec_digest</code>/<code>receipt_nonce</code>/<code>recovered_from</code> additive precedent, <code>registry.py:64-72</code>).</p>
+<ul>
+<li>Serde: <code>_record_to_dict</code> writes it; <code>_record_from_dict</code> reads with <code>.get(...)</code> default</li>
+</ul>
+<p>  <code>None</code> (backward-read: every pre-#558 <code>jobs.json</code> loads unchanged).</p>
+<ul>
+<li>Written <strong>in the same <code>replace(...)</code> + <code>upsert</code> that sets <code>state=&quot;quota_paused&quot;</code></strong></li>
+</ul>
+<p>  (via <code>_finish(**updates)</code> — one atomic registry write, <code>registry.py</code>&#x27;s existing   tempfile+<code>os.replace</code> path), so classification and state can never diverge. Also   written on the refused-pause completed path (evidence-only, <code>paused: false</code>).</p>
+<ul>
+<li>Survives relaunch <strong>explicitly, not automatically</strong> (Step-4 self-review SR2 —</li>
+</ul>
+<p>  confirmed): <code>_relaunch</code> calls <code>launch()</code> (<code>supervisor.py:994-1000</code>), which constructs a   brand-NEW <code>JobRecord</code> under the SAME identity — the upsert replaces the paused record,   so the classification would be lost. Fix: <code>launch()</code> gains an optional   <code>quota_classification</code> passthrough (exactly the <code>recovered_from</code> precedent added by   #554 on the same call, <code>supervisor.py:1000</code>), and <code>_relaunch</code> copies it from the paused   record. A test asserts the field is present on the post-relaunch record.</p>
+<ul>
+<li>Corruption handling <strong>uniform across every read API</strong> (pass-2 F10 — <code>get</code>/<code>all</code>/</li>
+</ul>
+<p>  <code>by_run</code> call <code>_record_from_dict</code> without <code>read_all</code>&#x27;s wrapper): the non-dict check   lives INSIDE <code>_record_from_dict</code> itself, raising <code>RegistryCorrupt</code> directly, so no   registry read path can leak a <code>TypeError</code>. Tests cover <code>get</code>, <code>all</code>, <code>by_run</code>, AND   <code>read_all</code> with a malformed classification, plus a pre-#558 record.</p>
+<h2>File changes</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>phase_executor/src/phase_executor/quota_detect.py</code></td><td>NEW — pure conjunctive classifier</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/supervisor.py</code></td><td>collect-branch detection, <code>_pause_allowed</code> factoring, <code>_read_stderr</code>, docstring</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/registry.py</code></td><td><code>quota_classification</code> field + serde</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/contract.py</code></td><td><code>LaunchProfile.max_tokens</code> + manifest mapping</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/adapters/zhipuai_sdk.py</code></td><td>wire <code>profile.max_tokens</code></td></tr>
+<tr><td><code>phase_executor/src/phase_executor/pane_runner.py</code></td><td><code>_profile_from_spec</code> reads <code>max_tokens</code> (SR1)</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/engine.py</code></td><td>sync + competitive paths derive manifest profile + effective timeout (SR-F2)</td></tr>
+<tr><td><code>phase_executor/src/phase_executor/schemas/routing-table.schema.json</code></td><td><code>bounds.max_tokens</code></td></tr>
+<tr><td><code>phase_executor/src/phase_executor/routing/rawgentic.routing-table.json</code></td><td>per-seat cap values</td></tr>
+<tr><td><code>tests/phase_executor/fixtures/claude-stderr-*.txt</code> + <code>fixtures/MANIFEST.md</code></td><td>NEW — raw classifier corpus; provenance ONLY in filenames + MANIFEST.md (no in-file headers)</td></tr>
+<tr><td><code>tests/phase_executor/test_quota_detect.py</code></td><td>NEW — unit corpus tests</td></tr>
+<tr><td><code>tests/phase_executor/test_supervisor_launch.py</code></td><td>await_job quota-collection integration tests</td></tr>
+<tr><td><code>tests/phase_executor/test_registry.py</code></td><td>field serde/roundtrip/corruption</td></tr>
+<tr><td><code>tests/phase_executor/test_contract.py</code></td><td><code>max_tokens</code> bounds tests</td></tr>
+<tr><td>Version surfaces ×6 + README changelog + this doc</td><td>per repo manual</td></tr>
+</tbody>
+</table>
+<h2>Configuration changes</h2>
+<p>Routing-table manifests as above. No env vars, no new dependencies, no migration (<code>jobs.json</code> is backward-read additive).</p>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>Classifier is <strong>conservative by construction</strong>: any conjunct miss → <code>False</code> → exactly</li>
+</ul>
+<p>  today&#x27;s behavior. A false NEGATIVE finalizes <code>completed</code> — terminal, so   <code>mark_quota_paused</code> cannot convert it afterwards (pass-4 A-F6): recovery from a missed   quota exit is an out-of-band re-dispatch, exactly as today (status quo, stated plainly); a false POSITIVE   could wrongly resume a job — guarded by the conjunctive design + the five <code>_pause_allowed</code>   conjuncts (read-only profile, resume policy, session id, effectful-sentinel refusal,   verified kill).</p>
+<ul>
+<li><code>stderr.txt</code> missing/unreadable/oversized → <code>StderrEvidence.read_error</code> set →</li>
+</ul>
+<p>  <code>verdict=False</code> with the typed reason persisted — distinct from an ordinary negative,   never raises inside <code>await_job</code>.</p>
+<ul>
+<li>Pause refused (mutating / fresh policy / uncalibrated / no session id / effectful sentinel / unverified spec) → visible <code>paused:false</code> evidence with its <code>refusal</code> reason, state = today&#x27;s <code>completed</code>. Kill unverified → <code>completed_with_residue</code>, permit RETAINED — its lifecycle is the EXISTING one: <code>reap_plan</code>&#x27;s <code>_FINALIZED</code> tier sweeps the session once <code>dead_fn</code> confirms both groups dead (<code>registry.py:164-166</code>), and <code>QuotaCoordinator</code>&#x27;s stale-reap (dead holder pid) is the permit-leak backstop (<code>supervisor.py:656-658</code>). Never a silent drop.</li>
+<li>Malformed persisted classification → <code>RegistryCorrupt</code> raised inside</li>
+</ul>
+<p>  <code>_record_from_dict</code> (uniform across get/all/by_run/read_all).</p>
+<h2>Security implications</h2>
+<ul>
+<li>NO provider stderr text is persisted in the registry — rule ids + raw-byte hashes only</li>
+</ul>
+<p>  (a stderr line can carry tokens/URL secrets; the 0700 capture dir keeps the forensic   copy). The envelope subtype persisted is a CLI-generated enum-like string, not prose.</p>
+<ul>
+<li>Automatic pause is quintuple-guarded (read-only, resume-policy, session id,</li>
+</ul>
+<p>  non-effectful sentinel, verified-dead provider) — wrongful resume of a mutating or   still-live job is structurally excluded; mutating pause stays owner-authorized manual.</p>
+<ul>
+<li>No new subprocess surfaces, no new network calls, no credential handling. For claude,</li>
+</ul>
+<p>  <code>max_budget_usd</code> is verified as a preflight admission gate with live runtime budget   tracking — mid-call termination on cap-crossing is UNVERIFIED (platform_apis), so the   enforced per-call bound remains the supervisor/run_subprocess timeout; the zhipu token   bound is preserved (1024), not loosened.</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>claude --max-budget-usd &lt;amount&gt;</code> on headless <code>--print</code> subscription-OAuth invocations (all claude seats, not just mutating)</li>
+</ul>
+<p>  feasibility: verified via spike — FOUR live probes this run (2026-07-21, claude 2.1.216), claim scoped to exactly what they prove. (1) Acceptance: <code>--max-budget-usd 0.50</code> → exit 0, <code>total_cost_usd: 0.3368</code> (flag accepted + cost accounting live under subscription auth). (2) PREFLIGHT gate: <code>--max-budget-usd 0.01</code> → <strong>exit 1, envelope <code>&quot;subtype&quot;: &quot;error_max_budget_usd&quot;</code>, <code>is_error: true</code>, <code>duration_api_ms: 0</code>, zero tokens</strong> — an under-estimate cap refuses BEFORE API work, fail-loud, machine-readable. (3+4) Mid-run crossing attempts: two output-heavy prompts under a barely-above-preflight cap — both times the model declined the token burn (session-config interference), AND probe 4&#x27;s reply QUOTED its remaining budget (&quot;$0.36 left&quot;) → the cap value is surfaced into the runtime (live budget tracking in-call). <strong>What remains unverified: the termination shape when an ADMITTED call crosses its cap mid-run</strong> — the likeliest-wrong claim in this design; named for #559&#x27;s live cycle + #473 telemetry to observe on real trips. The per-call bound claim is therefore: verified preflight admission gate + verified runtime budget tracking + fail-loud machine-readable trip envelope; the supervisor/run_subprocess timeout remains the independently enforced backstop on every dispatch. Budget-trip capture doubles as a REAL negative fixture: exit 1 with EMPTY stderr (envelope on stdout) → the stderr-keyed classifier structurally never confuses a budget trip with a usage-limit exit.   failure: fail-loud   (proven: exit 1 + machine-readable <code>error_max_budget_usd</code> envelope subtype → surfaces as a NONZERO_EXIT observation on our side)</p>
+<ul>
+<li>api: <code>zhipuai</code> SDK <code>max_tokens</code> request parameter</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>workers/zhipuai_call.py:37</code> already passes <code>max_tokens</code> from the request JSON; this design only threads the value from the manifest.   failure: fail-loud   (SDK raises; worker exits nonzero → NONZERO_EXIT observation)</p>
+<ul>
+<li>api: <code>re</code> stdlib classification of captured stderr text</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — stdlib, same pattern class as <code>plan_lib</code>&#x27;s matchers; no platform risk.   failure: fail-loud   (pure function; fixture-pinned)</p>
+<h2>Multi-PR assessment</h2>
+<p>Single PR. ~10 impl files, one contained package + schema/table; no separable phases (classifier without persistence or caps would strand AC coverage).</p>
+<h2>Test strategy (red-first)</h2>
+<p>1. <code>test_quota_detect.py</code>: every positive fixture → <code>verdict=True</code>; EVERY negative-corpus    fixture (wrong-cwd resume, SIGKILL-137, auth expiry, account-selection, network, 429    throttle, exit-0 transcript-quota, upgrade-only usage-limit, budget-trip empty-stderr)    → <code>False</code>; conjunct-isolation cases (right text wrong exit; right exit wrong provider; usage lang without reset lang); read_error evidence distinct from ordinary negative; bounded-read matrix — ceiling−1 / ceiling / ceiling+1 bytes, invalid UTF-8 with asserted raw-byte hash, file growth during read, adversarial maximum-length lines with bounded runtime, no classification from an oversized prefix. 2. <code>await_job</code> integration, TWO primary cases (pass-4 A-F3 — the shipped v1 default is    SHADOW): (i) v1 quota-shaped capture (all other guards satisfied) → <code>completed</code> with    <code>paused:false</code>, <code>refusal:&quot;uncalibrated_classifier&quot;</code>; (ii) an explicit    allowlist-injected calibrated pair (a test-scoped <code>CALIBRATED_CLASSIFIERS</code> containing    the stub&#x27;s <code>(version, digest)</code>) with the same capture →    <code>quota_paused</code>, permit released, classification persisted in the same record,    <code>classify_recovery</code> says <code>relaunch</code> — pinning the path #559 activates by bumping one    constant. Then the refusal matrix — fresh policy →    <code>session_not_persisted</code>; mutating profile → <code>mutating_requires_manual</code>; no envelope →    <code>no_resumable_session</code>; effectful sentinel → refused; kill unverified →    <code>completed_with_residue</code> + permit retained; each with <code>paused:false</code> evidence.    <code>mark_quota_paused</code> routes through <code>_finish</code> with injected evidence; its existing    tests stay green. 3. Registry: roundtrip with/without field; pre-#558 record loads (backward-read);    malformed field → <code>RegistryCorrupt</code>. 4. Contract/adapters: <code>max_tokens</code> mapping, strict types, zhipu wiring, claude argv    carries <code>--max-budget-usd</code> for a bounds-bearing non-mutating profile; supervised spec    ROUND-TRIP pins every profile field incl. <code>max_tokens</code> (write supervisor.py:403-405 →    read pane_runner.py:93-99 → relaunch rebuild :986-990); relaunch-survival test pins    <code>quota_classification</code> on the post-relaunch record.</p>
+<h2>Peer-consult provenance</h2>
+<p>Backend <code>gpt</code> (blind both ways; consult rc=0; report <code>docs/reviews/peer-rawgentic-peer-problem-558-2026-07-21.md</code>, run-local/gitignored). Independent proposal converged on the core: pure versioned stderr-only conjunctive classifier, shared pause-guard helper for both writers, <code>_finish</code> extension with ONE atomic upsert, additive strictly-validated <code>JobRecord</code> field, no invented claude token/turn flags, table-driven corpus with labelled-synthetic positives.</p>
+<p><strong>Adopted from gpt:</strong> bounded stderr read (byte ceiling + replacement decoding); <code>NONZERO_EXIT</code> precheck before file I/O; evidence shape enriched with <code>source</code>/<code>rule_ids</code>/echoed engine+exit; &quot;never silently broaden matches — version every rule change&quot;.</p>
+<p><strong>Declined, with rationale:</strong></p>
+<ul>
+<li>*positive-but-unsafe → <code>exited_no_sentinel</code>/<code>quarantined</code>*: a validated sentinel WAS collected — registry semantics (<code>registry.py:31</code>) define <code>completed</code> as exactly that; relabelling would falsify state for downstream reconcile. <code>completed</code> is terminal (never relaunched), which already satisfies the safety property gpt wanted; the persisted refusal evidence carries the signal.</li>
+<li>*cap union incl. <code>max_turns</code> + caps-required enforcement + adapter capability rejection*: no engine here enforces a turn cap (claude/codex have no flag; zhipu takes tokens) — a dead schema field; caps-required breaks existing third-party tables (gpt&#x27;s own migration-risk item); manifests are per-SEAT and serve multi-engine chains, so &quot;reject unsupported cap for engine&quot; mis-fits — per-engine consumption at composition (each adapter enforces what it can; timeout is the universal floor) is the correct reading of AC-B4&#x27;s &quot;where the provider supports one&quot;.</li>
+<li>*pre-launch atomic reservation ledgers (run+pool, pricing conversion, leases)*: AC-B4&#x27;s OTHER clause — run-level accounting, explicitly out of #558 AC2 (issue body names per-call caps). Recorded as epic-#560-adjacent follow-up in the run-record.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-21 14:00 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

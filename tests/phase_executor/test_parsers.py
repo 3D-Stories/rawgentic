@@ -151,3 +151,40 @@ def test_identity_failure_when_actual_missing():
     d = obs.to_dict()
     assert d["parse_status"] == "identity_failure"
     contract.validate_observation(d)  # non-ok -> null actual allowed
+
+
+# ---- #558 AC2: zhipu adapter max_tokens boundary + threading -----------------
+
+def test_zhipuai_max_tokens_invalid_refuses_pre_launch(tmp_path):
+    from phase_executor import contract as _c
+    from phase_executor.adapters import zhipuai_sdk
+    from phase_executor.adapters.base import AdapterRequest
+    for bad in (True, 0, -1, "1024", 512.5):
+        prof = _c.LaunchProfile(max_tokens=bad)
+        req = AdapterRequest(seat="s", requested_model="glm-5.2", prompt="p", profile=prof)
+        with pytest.raises(_c.CompositionError):
+            zhipuai_sdk.run(req, run_id="r", attempt_id="a", capture_root=tmp_path,
+                            routing_config_digest="sha256:d")
+
+
+def test_zhipuai_max_tokens_threads_and_defaults(tmp_path, monkeypatch):
+    import json as _json
+    from phase_executor import contract as _c
+    from phase_executor.adapters import zhipuai_sdk
+    from phase_executor.adapters.base import AdapterRequest, ProcOutcome
+    captured = []
+
+    def fake_invoke(payload, timeout):
+        captured.append(_json.loads(payload))
+        return ProcOutcome(returncode=0, stdout="", stderr="", timed_out=False)
+
+    monkeypatch.setattr(zhipuai_sdk, "_invoke_worker", fake_invoke)
+    req = AdapterRequest(seat="s", requested_model="glm-5.2", prompt="p",
+                         profile=_c.LaunchProfile(max_tokens=2048))
+    zhipuai_sdk.run(req, run_id="r", attempt_id="a1", capture_root=tmp_path,
+                    routing_config_digest="sha256:d")
+    assert captured[-1]["max_tokens"] == 2048
+    req2 = AdapterRequest(seat="s", requested_model="glm-5.2", prompt="p")
+    zhipuai_sdk.run(req2, run_id="r", attempt_id="a2", capture_root=tmp_path,
+                    routing_config_digest="sha256:d")
+    assert captured[-1]["max_tokens"] == 1024  # None -> the preserved default, not uncapped

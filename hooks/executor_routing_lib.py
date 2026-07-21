@@ -1045,7 +1045,13 @@ def supervised_dispatch(
         effort=effort, timeout=timeout, target=target, author_provider=author_provider,
         receipt_nonce=receipt.nonce, correlation_id=ce,
         snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
-    state, obs = supervisor.await_job(record, timeout_s=await_timeout_s)
+    # #558 S-F6 (3-reviewer converged): ONE effective timeout — the same
+    # min(caller, manifest bound) that launch writes into the pane spec also
+    # clamps the supervisor await deadline, so a hung pane cannot outlive the
+    # declared operational bound holding its permit + worktree.
+    from phase_executor.engine import _effective_timeout, _manifest_for  # noqa: PLC0415
+    eff_deadline = _effective_timeout(_manifest_for(snapshot, seat), timeout)
+    state, obs = supervisor.await_job(record, timeout_s=min(await_timeout_s, eff_deadline))
 
     # STEP 6.5 — #472 D3: verdict-INDEPENDENT audit append, mirroring the sync path's
     # per-attempt rule ("append the observation for EVERY attempt"). Every terminal state

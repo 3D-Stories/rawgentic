@@ -85,7 +85,14 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     if req.resume_session_id is not None:
         # #467 W4: session resume is a claude-only wiring (spike #455) — refuse fail-loud.
         raise contract.CompositionError("zhipuai launch: resume_session_id is not supported")
-    payload = json.dumps({"model": req.requested_model, "prompt": req.prompt, "max_tokens": 1024})
+    # #558 AC2 boundary (pass-2 F11): profiles are publicly constructible — only a
+    # non-bool int >= 1 (or None -> the preserved 1024 default) reaches the worker.
+    mt = req.profile.max_tokens
+    if mt is not None and (not isinstance(mt, int) or isinstance(mt, bool) or mt < 1):
+        raise contract.CompositionError(
+            f"zhipuai launch: max_tokens must be an int >= 1 (got {mt!r})")
+    payload = json.dumps({"model": req.requested_model, "prompt": req.prompt,
+                          "max_tokens": mt if mt is not None else 1024})
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = time.monotonic()

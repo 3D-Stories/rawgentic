@@ -97,6 +97,7 @@ def _profile_from_spec(d: dict) -> contract.LaunchProfile:
         worktree=d.get("worktree"),
         tool_grants=tuple(d.get("tool_grants") or ()),
         max_budget_usd=d.get("max_budget_usd"),
+        max_tokens=d.get("max_tokens"),
     )
     # effective_grants is init=False (populated only by profile_from_manifest); restore the
     # supervisor-derived value verbatim so the adapters' pre-spawn assert still binds.

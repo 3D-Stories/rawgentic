@@ -107,13 +107,16 @@ def test_token_burn_absent_usage_fails_closed(env):
 
 
 def test_audit_on_build_seat_scores_with_gate(env):
-    # #464 §E: build now HAS an audit path — the bench threads a single-outcome #429 gate so check_pre
-    # admits it. A complete receipt+observation pair scores 1.0.
+    # #464 §E gave build an audit path via the SYNC dispatch_seat; #558 AC2 (design r7
+    # item 6, A-F1) rejects a MUTATING manifest on the sync path fail-loud — build's
+    # sync audit cell is therefore structurally unavailable until a capped mutating
+    # composition exists (supervised dispatch owns mutating work). The honest bench
+    # verdict is fail-closed, never a vacuous 1.0.
     fx = copy.deepcopy(_fx("f11-audit-intake"))
     fx["primary_seat"] = "build"
     fx["responses"] = {"build": [{"parse_status": "ok", "actual_model": "claude-sonnet-5",
                                   "payload": "x", "usage": {"input": 1, "output": 1}}]}
-    assert db.run_fixture(fx, **env)["audit_completeness"] == 1.0
+    assert db.run_fixture(fx, **env)["audit_completeness"] == 0.0
 
 
 def test_audit_on_nonwired_seat_fails_closed(env):

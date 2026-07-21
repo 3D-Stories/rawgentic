@@ -167,7 +167,12 @@
             "max_budget_usd": {
               "type": "number",
               "exclusiveMinimum": 0,
-              "description": "#465: enforceable dollar cap for mutating CLAUDE launches (--max-budget-usd). Optional; REQUIRED by profile_from_manifest before a mutating claude profile can derive. Positive by schema so a zero/negative bound can never masquerade as a cap."
+              "description": "#465: enforceable dollar cap for mutating CLAUDE launches (--max-budget-usd). Optional; REQUIRED by profile_from_manifest before a mutating claude profile can derive. Positive by schema so a zero/negative bound can never masquerade as a cap. #558 AC2: every claude-bearing seat manifest now declares one (the per-call preflight budget gate)."
+            },
+            "max_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "#558 AC2: per-call output-token cap. Enforced today by the zhipuai adapter (worker request max_tokens); other engines ignore it. Positive by schema."
             }
           }
         },
