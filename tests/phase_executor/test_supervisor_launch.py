@@ -372,6 +372,23 @@ def test_malformed_obs_is_exited_no_sentinel(env_factory):
 
 
 @tmux_required
+def test_effectful_crash_no_obs_is_suspicious_not_forgivable(env_factory):
+    # #557 Step-11 review: a child that ran the provider (transport.stdout.txt captured)
+    # then died before writing observation.json is EFFECTFUL — it must NOT classify as a
+    # clean, sibling-forgivable availability failure. transport-present + obs-absent →
+    # PARSE_ERROR (a breach reconcile refuses), closing the refuse->forgive laundering the
+    # observation.json-only discriminator would have opened.
+    env = env_factory(mode="transport_then_fail")
+    rec = env.launch(correlation_id="557-eff")
+    state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
+    assert state == "exited_no_sentinel"
+    assert obs is not None and obs["parse_status"] == contract.PARSE_ERROR
+    assert obs["correlation_id"] == "557-eff"
+    # the provider transport survives on disk as evidence the model ran
+    assert Path(rec.capture_dir, "transport.stdout.txt").exists()
+
+
+@tmux_required
 def test_nonzero_exit_no_sentinel_not_auto_resumed(env_factory):
     env = env_factory(mode="exit_nonzero")
     rec = env.launch()

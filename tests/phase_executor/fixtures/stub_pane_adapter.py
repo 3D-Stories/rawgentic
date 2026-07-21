@@ -5,6 +5,8 @@ integration tests over a REAL tmux private socket. Behavior via RAWGENTIC_STUB_M
 - sleep          — never write anything; sleep (timeout / kill paths)
 - ok_then_sleep  — write a valid observation, then sleep (timeout-race: child obs wins)
 - exit_nonzero   — raise (pane_runner exits 1, no sentinel)
+- transport_then_fail — capture provider transport, then die before the observation
+                   (#557: effectful crash — transport present, observation.json absent)
 - malformed      — write a NON-schema observation.json, finalize
 - provider_sleep — spawn a start_new_session 'provider' that sleeps, then sleep
                    (two-group kill / verify-dead paths)
@@ -49,6 +51,9 @@ def run(req, *, run_id, attempt_id, capture_root, routing_config_digest,
         time.sleep(300)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
+    if mode == "transport_then_fail":
+        cap.write_transport("stub: partial provider output before crash")
+        raise RuntimeError("stub: died after transport, before observation")
     if mode == "resume_ok":
         import json as _json
         cap.write_transport(_json.dumps(

@@ -521,7 +521,8 @@ class TmuxSupervisor:
             # availability status, so it correctly does NOT trip this guard — pause/resume
             # is exactly its designed recovery.
             raise SupervisorError(
-                "mark_quota_paused: a valid sentinel exists — the job COMPLETED; resuming "
+                "mark_quota_paused: sentinel indicates an effectful result (an "
+                "envelope-producing status or an attested actual_model) — resuming "
                 "would duplicate its effects")
         record = replace(record, state="quota_paused", provider_session_id=provider_session_id)
         self._registry.upsert(record)
@@ -704,29 +705,35 @@ class TmuxSupervisor:
                 # BOUND, recorded failure instead of a missing pair. CF-12 holds — reached
                 # only when the sentinel re-check found no VALID child observation.
                 #
-                # #557 8a review (both reviewers converged): the failure STATUS is
-                # laundering-sensitive. A CLEAN death (no observation.json at all) is a
-                # genuine availability failure → NO_RESPONSE, which a verified sibling may
-                # forgive (chain-fallback parity with timed_out). A SUSPICIOUS death (a
-                # file exists but is schema-invalid — a child that produced an unparseable
-                # envelope, possibly a wrong-model/billed run) must NOT be forgivable →
-                # PARSE_ERROR (envelope-produced-but-unparseable), which verify_post reads
-                # as identity_missing → a breach reconcile refuses even with a verified
-                # sibling. The malformed original is preserved as forensics before the
-                # synthetic replaces observation.json (reconcile reads only the audited
-                # records, so the raw evidence must survive on disk).
-                obs_path = Path(record.capture_dir) / "observation.json"
+                # #557 8a + Step-11 review (both waves converged): the failure STATUS is
+                # laundering-sensitive. A death is SUSPICIOUS when the child left evidence
+                # it ran the provider — either a schema-invalid observation.json, OR a
+                # captured transport.stdout.txt (written immediately after the provider
+                # process returns, before the observation — adapters/claude_cli.py:142), so
+                # an effectful/billed run that died before writing (a valid) observation is
+                # caught too. A suspicious death → PARSE_ERROR, which verify_post reads as
+                # identity_missing → a breach reconcile refuses even with a verified sibling
+                # (it must not be laundered, and pre-#557 this exact state was fail-closed
+                # via missing_obs). Only a CLEAN death (no such evidence) is a genuine
+                # availability failure → NO_RESPONSE, forgivable by a verified sibling
+                # (chain-fallback parity with timed_out). The malformed original is
+                # preserved as forensics before the synthetic replaces observation.json
+                # (reconcile reads only the audited records, so raw evidence must survive).
+                cap_dir = Path(record.capture_dir)
+                obs_path = cap_dir / "observation.json"
                 malformed_present = obs_path.exists()
+                ran_evidence = malformed_present or (cap_dir / "transport.stdout.txt").exists()
                 spec = self._read_spec(record)
                 obs = synthetic_observation(
                     run_id=record.identity.run_id, seat=record.identity.seat,
                     attempt_id=record.attempt_id, engine=spec.get("engine", "claude"),
                     requested_model=spec.get("request", {}).get("requested_model", "unknown"),
                     prompt=spec.get("request", {}).get("prompt", ""),
-                    parse_status=(contract.PARSE_ERROR if malformed_present
+                    parse_status=(contract.PARSE_ERROR if ran_evidence
                                   else contract.NO_RESPONSE),
-                    reason=("child exited leaving an unparseable observation"
-                            if malformed_present else "child exited without sentinel"),
+                    reason=("child exited after producing provider output but without a "
+                            "valid observation" if ran_evidence
+                            else "child exited without sentinel"),
                     routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"),
                     correlation_id=spec.get("request", {}).get("correlation_id"))
                 cap = ensure_private_dir(Path(record.capture_dir))
