@@ -1,5 +1,5 @@
 ---
-name: rawgentic:run-feedback
+name: run-feedback
 description: WF14 — assess the WORKFLOW MACHINERY of a just-completed rawgentic run (WF1/WF2/WF3/WF5/WF13/epic driver) and route feedback to rawgentic development. Use after any completed WFn run — the user says "assess the workflow run", "run feedback", "post-run assessment", "how did the workflow itself do", or an embedding workflow invokes it with explicit args. Do NOT use to review the deliverable the run shipped (that is WF5 / code review), to assess non-rawgentic workflows, or to fix any defect it finds (report-only).
 argument-hint: latest | --record <path> | --epic <n> | --issues <n,n,...> [--wf <n>] [--session-notes <path>] [--file-issues]
 ---

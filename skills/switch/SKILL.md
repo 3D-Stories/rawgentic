@@ -1,5 +1,5 @@
 ---
-name: rawgentic:switch
+name: switch
 description: Bind this session to a project in the rawgentic workspace, or manage project activation. Use when starting work on a specific project, when the system says "Multiple projects active", or when you want to enable/disable projects. Invoke with /rawgentic:switch followed by a project name, "off <name>" to deactivate, or no args to list all.
 argument-hint: project name (e.g., my-app), "off <name>" to deactivate, or empty to list
 ---

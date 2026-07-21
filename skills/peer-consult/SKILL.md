@@ -1,6 +1,6 @@
 ---
-name: rawgentic:peer-consult
-description: WF13 — Engage a different-model peer senior engineer (NOT a reviewer) to produce an INDEPENDENT design proposal for a problem/spec artifact. Selectable backend (#403) — `gpt` (Codex CLI, default), `glm` (Zhipu GLM via the zhipuai SDK), or `both` (two independent peer proposals). Report-only — writes the peer proposal to <project>/docs/reviews/peer-<slug>-<date>.md (glm: peer-<slug>-<date>-glm.md) and never edits the artifact. Complements WF5 (which critiques) — this one PROPOSES. Invoke with /rawgentic:peer-consult followed by a problem-artifact path. The gpt backend requires the Codex CLI installed and authenticated; glm requires `pip install "zhipuai>=2.1.5"` and ZHIPUAI_API_KEY.
+name: peer-consult
+description: 'WF13 — Engage a different-model peer senior engineer (NOT a reviewer) to produce an INDEPENDENT design proposal for a problem/spec artifact. Selectable backend (#403) — `gpt` (Codex CLI, default), `glm` (Zhipu GLM via the zhipuai SDK), or `both` (two independent peer proposals). Report-only — writes the peer proposal to <project>/docs/reviews/peer-<slug>-<date>.md (glm: peer-<slug>-<date>-glm.md) and never edits the artifact. Complements WF5 (which critiques) — this one PROPOSES. Invoke with /rawgentic:peer-consult followed by a problem-artifact path. The gpt backend requires the Codex CLI installed and authenticated; glm requires `pip install "zhipuai>=2.1.5"` and ZHIPUAI_API_KEY.'
 argument-hint: Problem/spec artifact path (e.g., "docs/design/feature.md") with optional --backend (gpt|glm|both)
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: rawgentic:add-exception
+name: add-exception
 description: Add a guard exception to the project's .rawgentic.json interactively. Use when a WAL guard or security guard blocks a legitimate operation and you want to add a per-project exception. Accepts guard type (wal or security) and a rule name or file path.
 argument-hint: guard type and rule/path (e.g., "wal ssh-prod" or "security eval_injection tests/helpers.js")
 ---

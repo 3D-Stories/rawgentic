@@ -1,5 +1,5 @@
 ---
-name: rawgentic:setup
+name: setup
 description: Configure a project's .rawgentic.json — the structured config that all rawgentic workflow skills depend on. Auto-detects tech stack, testing, CI, database, services, and more for existing codebases; brainstorms intent for blank projects. Handles migration from old CLAUDE.md-based rawgentic setups. Use this whenever a project needs initial configuration, reconfiguration, or when the session-start hook says "Config missing -- run /rawgentic:setup."
 argument-hint: (no arguments needed — operates on the active project)
 ---

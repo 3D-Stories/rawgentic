@@ -1,5 +1,5 @@
 ---
-name: rawgentic:scan
+name: scan
 description: Run the full tool-based security scan (secrets, dependency CVEs, SAST, IaC) over the whole project tree via hooks/security_scan.py --full. The surviving tooling from the deprecated WF9 security-audit workflow — use for an on-demand whole-tree scan outside a PR gate. Invoke with /rawgentic:scan.
 argument-hint: none (scans the active project's whole tree)
 ---

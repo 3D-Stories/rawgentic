@@ -1,5 +1,5 @@
 ---
-name: rawgentic:adversarial-review
+name: adversarial-review
 description: WF5 — Adversarially review a TEXT artifact (design, spec, implementation plan, PRD, ADR, RFC, README) using an independent DIFFERENT-MODEL reviewer. Selectable backend (#403) — `gpt` (Codex CLI, the default), `glm` (Zhipu GLM via the zhipuai SDK), or `both` (two independent reviews, two reports). Report-only — writes a severity-ranked findings report to <project>/docs/reviews/ and NEVER edits the artifact. Also reviews code DIFFS via the `diff` artifact type (refutation lens, report-only) — this complements same-model self-review (the in-repo quality-bar rubric) with a cross-model second opinion on planning artifacts. Invoke with /rawgentic:adversarial-review followed by an artifact path. The gpt backend requires the Codex CLI installed and authenticated; the glm backend requires `pip install "zhipuai>=2.1.5"` and ZHIPUAI_API_KEY.
 argument-hint: Artifact path (e.g., "docs/design/feature.md") with optional type hint (design|spec|plan|prd|adr|rfc|readme|diff) and optional --backend (gpt|glm|both)
 ---

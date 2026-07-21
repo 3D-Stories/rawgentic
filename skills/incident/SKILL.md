@@ -1,5 +1,5 @@
 ---
-name: rawgentic:incident
+name: incident
 description: Respond to a production incident using the WF11 14-step two-phase workflow (stabilize first, then RCA). Phase A restores service rapidly with relaxed principles. Phase B conducts 5 Whys root cause analysis and implements preventive measures. Invoke with /incident followed by a description of the incident.
 argument-hint: Incident description (e.g., "dashboard not loading", "API returning 500s", "service unreachable") or issue number
 ---

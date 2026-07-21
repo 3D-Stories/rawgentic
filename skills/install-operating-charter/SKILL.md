@@ -1,5 +1,5 @@
 ---
-name: rawgentic:install-operating-charter
+name: install-operating-charter
 description: Opt-in installer for a personal "operating charter" — a quality/verification/honesty discipline file that attaches to a CLAUDE.md via a one-line @import. Use when the user asks to install, add, or set up the rawgentic operating charter / operating instructions, or wants agentic quality guardrails imported into their CLAUDE.md. Offers scope {project | global | skip}. Never runs by default and NEVER silently writes the global ~/.claude/CLAUDE.md.
 argument-hint: optional scope — "project" (default) or "global"
 ---
