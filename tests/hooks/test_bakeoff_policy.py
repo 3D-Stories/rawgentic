@@ -283,14 +283,19 @@ def test_build_bakeoff_tampered_decision_field_is_ignored():
         return "SINGLE-SEAT"
 
     verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.5})
-    winner, losers, judge_obs, record = bp.run_build_bakeoff(
-        "build this", gate_decision=tampered, snapshot=snap,
-        quota=pe.QuotaCoordinator(REPO / ".tmp-none2", snap.pool_concurrency()),
-        capture_root=REPO / ".tmp-none2", headless=True, seed=2,
-        complete_fn=lambda p: (verdict, ""), dispatch=_sleeping_dispatch(0.0),
-        default_seat_runner=fake_seat)
+    # #558 AC2 (design r7 item 6, A-F1): the build bake-off dispatches via run_competitive,
+    # which now REJECTS a mutating manifest fail-loud before fan-out — live build bake-off
+    # is documented unavailable until a capped mutating composition exists. The tamper
+    # invariant still holds: decision=False was NOT honored (the single-seat path never ran;
+    # the re-derived bake-off path was entered and rejected on the manifest, not the gate).
+    with pytest.raises(pe.contract.CompositionError):
+        bp.run_build_bakeoff(
+            "build this", gate_decision=tampered, snapshot=snap,
+            quota=pe.QuotaCoordinator(REPO / ".tmp-none2", snap.pool_concurrency()),
+            capture_root=REPO / ".tmp-none2", headless=True, seed=2,
+            complete_fn=lambda p: (verdict, ""), dispatch=_sleeping_dispatch(0.0),
+            default_seat_runner=fake_seat)
     assert seat_calls["n"] == 0           # NOT the single-seat path
-    assert record["n_candidates"] == 3    # the bake-off ran despite decision=False
 
 
 def test_build_bakeoff_gate_false_runs_single_seat_uniform_shape():
@@ -373,20 +378,19 @@ def test_design_round_end_to_end_and_parallel(tmp_path):
 
 
 def test_build_bakeoff_saturates_claude_pool_but_stays_parallel(tmp_path):
-    # M3: the real build set puts sonnet+opus BOTH on the claude pool (limit 2) + terra on codex.
-    # All three must still run concurrently (2 claude slots + 1 codex), proving the ceiling boundary.
+    # M3's concurrency invariant is covered at the engine level
+    # (test_run_competitive_parallel_wall_clock, cross-pool). #558 AC2 (design r7 item 6,
+    # A-F1): the real build set carries a MUTATING manifest, so run_competitive rejects it
+    # fail-loud BEFORE fan-out — live build bake-off is documented unavailable until a
+    # capped mutating composition exists. This pin keeps the unavailability honest.
     snap = pe.snapshot_from_file(TABLE)
     quota = pe.QuotaCoordinator(tmp_path / "permits", snap.pool_concurrency())
     verdict = json.dumps({"winner_draft": 1, "scores": {}, "confidence": 0.6})
-    delay = 0.5
-    t0 = time.monotonic()
-    winner, losers, judge_obs, record = bp.run_build_bakeoff(
-        "build the widget", gate_decision=_real_gate(bake=True), snapshot=snap, quota=quota,
-        capture_root=tmp_path / "cap", headless=True, seed=2, sink_path=tmp_path / "b.jsonl",
-        complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(delay))
-    elapsed = time.monotonic() - t0
-    assert elapsed < delay * 1.8, f"build bake-off serialized on the claude pool: {elapsed:.2f}s"
-    assert record["n_candidates"] == 3
+    with pytest.raises(pe.contract.CompositionError):
+        bp.run_build_bakeoff(
+            "build the widget", gate_decision=_real_gate(bake=True), snapshot=snap, quota=quota,
+            capture_root=tmp_path / "cap", headless=True, seed=2, sink_path=tmp_path / "b.jsonl",
+            complete_fn=lambda prompt: (verdict, ""), dispatch=_sleeping_dispatch(0.0))
 
 
 def test_headless_judge_failure_degrades_to_incumbent_through_engine(tmp_path):
