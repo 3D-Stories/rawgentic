@@ -820,7 +820,17 @@ def codex_behavioral_probe(*, adapters, model: str, effort, wt_root: str,
     ``{"inside_written": bool, "outside_blocked": bool}`` — both true means the sandbox is proven.
     Mirrors tests/phase_executor/live/test_canary_live.py. Requires the codex CLI (RUN_LIVE); on a
     host without codex the ``runner`` raises FileNotFoundError, which propagates so the caller
-    fail-closes (a codex mutating launch cannot pass the behavioral gate without a working sandbox)."""
+    fail-closes (a codex mutating launch cannot pass the behavioral gate without a working sandbox).
+
+    KNOWN LIMITATION (#556 8a review, tracked to #559): ``outside_blocked`` is inferred from the
+    sibling file's ABSENCE, which is necessary but not sufficient — a model that runs the in-worktree
+    touch but SKIPS the out-of-worktree touch also leaves the sibling absent, a false "blocked" IF the
+    sandbox is simultaneously broken. Closing this needs POSITIVE evidence the out-of-worktree write
+    was attempted-and-denied (an EACCES/EPERM token in the captured transcript), which must be
+    calibrated against real codex output — #559's end-to-end proving run (on a real codex host) is
+    where that parse is built and verified. This probe is still strictly stronger than composition
+    validation alone and fail-closes on any probe error."""
+    os.makedirs(wt_root, exist_ok=True)  # #556 8a F2: the worktrees tree may not exist yet on first launch
     probe_root = Path(tempfile.mkdtemp(prefix="rg-behav-", dir=wt_root))
     wt = probe_root / "wt"
     wt.mkdir(parents=True)
