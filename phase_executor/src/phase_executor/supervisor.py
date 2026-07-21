@@ -41,7 +41,7 @@ from jsonschema import ValidationError as _SchemaError
 
 from . import contract, quota_detect, routing
 from .capture import atomic_write_text, ensure_private_dir, hash_text
-from .engine import PROVIDER_ENGINE
+from .engine import PROVIDER_ENGINE, _effective_timeout
 from .pane_runner import _descendants, expected_capture_dir, sidecar_path
 from .quota import QuotaTimeout
 from .registry import (JobRecord, JobRegistry, ReapPlan, ReapPolicy, classify_recovery,
@@ -422,6 +422,14 @@ class TmuxSupervisor:
         engine = PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
         eff = contract.resolve_effort(target["model"], effort, engine=engine)
         profile = profile or contract.LaunchProfile()
+        # #558 S-F6: one effective-timeout rule on BOTH paths — the manifest's declared
+        # bound tightens, never loosens, the caller's operational timeout (pre-#558 the
+        # caller value was written raw into the pane spec, ignoring a tighter bound)
+        try:
+            manifest = self._snapshot.seat(seat).get("manifest") if self._snapshot else None
+        except routing.RoutingError:
+            manifest = None
+        timeout = _effective_timeout(manifest, timeout)
 
         name = session_name(identity)
         sock = self.resolve_socket(identity.run_id)
@@ -453,6 +461,7 @@ class TmuxSupervisor:
                         "session_policy": profile.session_policy, "mutating": profile.mutating,
                         "worktree": profile.worktree, "tool_grants": list(profile.tool_grants),
                         "max_budget_usd": profile.max_budget_usd,
+                        "max_tokens": profile.max_tokens,
                         "effective_grants": list(profile.effective_grants),
                     },
                 },
@@ -1079,7 +1088,8 @@ class TmuxSupervisor:
         profile = contract.LaunchProfile(
             session_policy="resume", mutating=bool(prof_d.get("mutating")),
             worktree=prof_d.get("worktree"), tool_grants=tuple(prof_d.get("tool_grants") or ()),
-            max_budget_usd=prof_d.get("max_budget_usd"))
+            max_budget_usd=prof_d.get("max_budget_usd"),
+            max_tokens=prof_d.get("max_tokens"))
         object.__setattr__(profile, "effective_grants",
                            tuple(prof_d.get("effective_grants") or ()))
         handle = handle_from_record(record)

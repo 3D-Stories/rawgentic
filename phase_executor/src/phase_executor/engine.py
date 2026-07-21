@@ -52,6 +52,46 @@ def _engine_for(lane: dict) -> str:
     return PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
 
 
+def _manifest_for(snapshot: routing.RoutingSnapshot, seat_name: str) -> Optional[dict]:
+    """The seat's capability manifest, or None (manifest-less test/legacy table, or a
+    bake-off candidate naming a seat absent from the table — byte-identical compat)."""
+    try:
+        return snapshot.seat(seat_name).get("manifest")
+    except routing.RoutingError:
+        return None
+
+
+def _reject_mutating_manifest(manifest: Optional[dict], seat_name: str) -> None:
+    """#558 AC2 (r6/A-F1): a MUTATING manifest never dispatches on the sync/competitive
+    paths — no worktree exists here, so profile derivation would fail and silently
+    keeping an uncapped no-profile dispatch is exactly the gap AC2 closes. Mutating
+    dispatch is exclusively the supervised path's job."""
+    if manifest is not None and {"edit", "bash"} & set(manifest.get("tool_grants") or ()):
+        raise contract.CompositionError(
+            f"seat {seat_name!r}: a MUTATING manifest cannot dispatch on the "
+            "sync/competitive path (no worktree, no capped composition) — supervised "
+            "dispatch only (#558 AC2)")
+
+
+def _sync_profile(manifest: Optional[dict], engine: str):
+    """Per-target cap profile for the sync/competitive paths (#558 SR-F2), derived only
+    for a NON-mutating manifest (callers reject mutating first). None manifest → None
+    (the AdapterRequest default keeps pre-#558 behavior byte-identical)."""
+    if manifest is None:
+        return None
+    return contract.profile_from_manifest(manifest, engine=engine)
+
+
+def _effective_timeout(manifest: Optional[dict], caller_timeout: float) -> float:
+    """min(caller, bounds.timeout_s): the declared bound tightens, never loosens
+    (pass-4 S-F6 — one rule on both the sync and supervised paths)."""
+    bounds = (manifest or {}).get("bounds") or {}
+    ts = bounds.get("timeout_s")
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and ts > 0:
+        return min(caller_timeout, float(ts))
+    return caller_timeout
+
+
 def _dispatch_real(engine: str, req: AdapterRequest, *, run_id: str, attempt_id: str,
                    capture_root, digest: str, queued_ms: int, fallback_reason: Optional[str]) -> contract.Observation:
     mod = ADAPTERS[engine]
@@ -86,6 +126,11 @@ def run_seat(
     targets = routing.eligible_targets(seat, snapshot, author_provider=author_provider)
     if not targets:
         raise routing.ChainExhausted(f"seat {seat!r}: no eligible target")
+    # #558 AC2 (SR-F2): the manifest cap reaches every ordinary dispatch — mutating
+    # manifests are rejected fail-loud BEFORE any candidate dispatch
+    manifest = _manifest_for(snapshot, seat)
+    _reject_mutating_manifest(manifest, seat)
+    eff_timeout = _effective_timeout(manifest, timeout)
     last: Optional[contract.Observation] = None
     primary_model = targets[0]["model"]
     import time  # noqa: PLC0415
@@ -96,10 +141,12 @@ def run_seat(
         # pass the native value to the adapter, and stamp the resolution object onto the
         # returned Observation (the dispatched_lane precedent below). recorded == sent.
         eff = contract.resolve_effort(target["model"], effort, engine=engine)
+        profile = _sync_profile(manifest, engine)
+        req_kw = {} if profile is None else {"profile": profile}
         req = AdapterRequest(
             seat=seat, requested_model=target["model"], prompt=prompt, transport=lane["transport"],
-            context=tuple(context), correlation_id=correlation_id, effort=eff.native, timeout=timeout,
-            credential_ref=lane.get("credential_ref"),
+            context=tuple(context), correlation_id=correlation_id, effort=eff.native,
+            timeout=eff_timeout, credential_ref=lane.get("credential_ref"), **req_kw,
         )
         attempt_id = f"{i}-{uuid.uuid4().hex[:8]}"
         fallback_reason = None if i == 0 else f"fallback from {primary_model}: {last.parse_status if last else 'unknown'}"
@@ -185,9 +232,15 @@ def _run_candidate(c: Candidate, *, snapshot, quota, capture_root, run_id, dispa
     # field), so there is nothing to resolve and no effort object is stamped — nothing was
     # requested, so nothing is misrecorded. The codex adapter still applies its
     # registry-sourced None default (ENGINE_NONE_EFFORT) so the wire stays byte-identical.
+    # #558 AC2 (SR-F2): same per-target cap derivation as run_seat (run_competitive
+    # already rejected mutating manifests before fan-out)
+    manifest = _manifest_for(snapshot, c.seat)
+    profile = _sync_profile(manifest, c.engine)
+    req_kw = {} if profile is None else {"profile": profile}
     req = AdapterRequest(
         seat=c.seat, requested_model=c.model, prompt=c.prompt, transport=c.transport,
         context=tuple(c.context), credential_ref=c.credential_ref,
+        timeout=_effective_timeout(manifest, 300.0), **req_kw,
     )
     attempt_id = uuid.uuid4().hex[:8]
     acct = c.credential_ref or "default"
@@ -236,6 +289,10 @@ def run_competitive(
     already released in ``_run_candidate``'s ``finally``. A sink exception never erases results."""
     run_id = run_id or _new_run_id()
     candidates = list(candidates)
+    # #558 AC2 (r6/A-F1): mutating manifests reject fail-loud BEFORE candidate fan-out —
+    # inside the pool a raise would soften into a harness_error Observation
+    for c in candidates:
+        _reject_mutating_manifest(_manifest_for(snapshot, c.seat), c.seat)
     # pool validation — fail closed on an unknown/unset pool (finding f: ceiling bypass)
     known_pools = set(snapshot.pool_concurrency())
     for c in candidates:

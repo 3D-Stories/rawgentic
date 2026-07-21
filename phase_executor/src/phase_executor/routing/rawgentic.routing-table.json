@@ -2,103 +2,208 @@
   "schema_version": "1",
   "provenance": {
     "source": "bench #14",
-    "plan": "docs/planning/2026-07-16-per-phase-model-routing.md §1",
-    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design is now a static row (#464) whose DISPATCH remains competitive (bake-off owns it, E5/#428). Per-seat capability manifests and the top-level policy section land with #464 (W1, epic #475)."
+    "plan": "docs/planning/2026-07-16-per-phase-model-routing.md \u00a71",
+    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design is now a static row (#464) whose DISPATCH remains competitive (bake-off owns it, E5/#428). Per-seat capability manifests and the top-level policy section land with #464 (W1, epic #475). #558 AC2: per-call max_budget_usd on every claude-bearing seat (analysis/ship 2.0, review/plan/intake/design 5.0, build 10.0 \u2014 multiples of the observed 1.48 per-dispatch cost proxy; plain config, #473 retunes); codex-only bounds keep timeout_s as THE compensating bound (AC-B4 as amended D-13)."
   },
   "policy": {
-    "enforced_roles": ["review", "build"]
+    "enforced_roles": [
+      "review",
+      "build"
+    ]
   },
   "pools": {
-    "claude": {"concurrency": 2},
-    "codex": {"concurrency": 4},
-    "zhipu": {"concurrency": 2}
+    "claude": {
+      "concurrency": 2
+    },
+    "codex": {
+      "concurrency": 4
+    },
+    "zhipu": {
+      "concurrency": 2
+    }
   },
   "seats": {
     "intake": {
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read"],
+        "tool_grants": [
+          "read"
+        ],
         "effort": "medium",
-        "confinement": {"anthropic": "hooks"},
-        "bounds": {"timeout_s": 900}
+        "confinement": {
+          "anthropic": "hooks"
+        },
+        "bounds": {
+          "timeout_s": 900,
+          "max_budget_usd": 5.0
+        }
       },
       "primary": {
         "model": "claude-opus-4-8",
-        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        "lane": {
+          "provider": "anthropic",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "claude"
+        }
       },
       "chain": [
         {
           "model": "claude-fable-5",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         },
         {
           "model": "claude-sonnet-5",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         }
       ]
     },
     "analysis": {
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read"],
+        "tool_grants": [
+          "read"
+        ],
         "effort": "medium",
-        "confinement": {"anthropic": "hooks"},
-        "bounds": {"timeout_s": 1200}
+        "confinement": {
+          "anthropic": "hooks"
+        },
+        "bounds": {
+          "timeout_s": 1200,
+          "max_budget_usd": 2.0
+        }
       },
       "primary": {
         "model": "claude-sonnet-5",
-        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        "lane": {
+          "provider": "anthropic",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "claude"
+        }
       },
       "chain": [
         {
           "model": "claude-opus-4-8",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         },
         {
           "model": "claude-fable-5",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         }
       ]
     },
     "design": {
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read"],
+        "tool_grants": [
+          "read"
+        ],
         "effort": "high",
-        "confinement": {"openai": "codex-sandbox-readonly", "anthropic": "hooks"},
-        "bounds": {"timeout_s": 1800}
+        "confinement": {
+          "openai": "codex-sandbox-readonly",
+          "anthropic": "hooks"
+        },
+        "bounds": {
+          "timeout_s": 1800,
+          "max_budget_usd": 5.0
+        }
       },
       "primary": {
         "model": "gpt-5.6-sol",
-        "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+        "lane": {
+          "provider": "openai",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "codex"
+        }
       },
       "chain": [
         {
           "model": "claude-opus-4-8",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         }
       ]
     },
     "plan": {
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read"],
+        "tool_grants": [
+          "read"
+        ],
         "effort": "high",
-        "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
-        "bounds": {"timeout_s": 1800}
+        "confinement": {
+          "anthropic": "hooks",
+          "openai": "codex-sandbox-readonly"
+        },
+        "bounds": {
+          "timeout_s": 1800,
+          "max_budget_usd": 5.0
+        }
       },
       "primary": {
         "model": "claude-opus-4-8",
-        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        "lane": {
+          "provider": "anthropic",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "claude"
+        }
       },
       "chain": [
         {
           "model": "claude-fable-5",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         },
         {
           "model": "gpt-5.6-terra",
-          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+          "lane": {
+            "provider": "openai",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "codex"
+          }
         }
       ]
     },
@@ -107,23 +212,51 @@
       "role": "build",
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read", "edit", "bash"],
+        "tool_grants": [
+          "read",
+          "edit",
+          "bash"
+        ],
         "effort": "high",
-        "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-pinned"},
-        "bounds": {"timeout_s": 3600}
+        "confinement": {
+          "anthropic": "hooks",
+          "openai": "codex-sandbox-pinned"
+        },
+        "bounds": {
+          "timeout_s": 3600,
+          "max_budget_usd": 10.0
+        }
       },
       "primary": {
         "model": "claude-sonnet-5",
-        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        "lane": {
+          "provider": "anthropic",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "claude"
+        }
       },
       "chain": [
         {
           "model": "claude-opus-4-8",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         },
         {
           "model": "gpt-5.6-terra",
-          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+          "lane": {
+            "provider": "openai",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "codex"
+          }
         }
       ]
     },
@@ -132,52 +265,109 @@
       "role": "review",
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read"],
+        "tool_grants": [
+          "read"
+        ],
         "effort": "high",
-        "confinement": {"anthropic": "hooks", "openai": "codex-sandbox-readonly"},
-        "bounds": {"timeout_s": 1800}
+        "confinement": {
+          "anthropic": "hooks",
+          "openai": "codex-sandbox-readonly"
+        },
+        "bounds": {
+          "timeout_s": 1800,
+          "max_budget_usd": 5.0
+        }
       },
       "primary": {
         "model": "claude-fable-5",
-        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        "lane": {
+          "provider": "anthropic",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "claude"
+        }
       },
       "chain": [
         {
           "model": "gpt-5.6-sol",
-          "lane": {"provider": "openai", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "codex"}
+          "lane": {
+            "provider": "openai",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "codex"
+          }
         },
         {
           "model": "claude-sonnet-5",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         }
       ]
     },
     "ship": {
       "manifest": {
         "session_policy": "fresh",
-        "tool_grants": ["read"],
+        "tool_grants": [
+          "read"
+        ],
         "effort": "medium",
-        "confinement": {"anthropic": "hooks"},
-        "bounds": {"timeout_s": 900}
+        "confinement": {
+          "anthropic": "hooks"
+        },
+        "bounds": {
+          "timeout_s": 900,
+          "max_budget_usd": 2.0
+        }
       },
       "primary": {
         "model": "claude-sonnet-5",
-        "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+        "lane": {
+          "provider": "anthropic",
+          "transport": "native",
+          "auth_mode": "subscription_oauth",
+          "credential_ref": null,
+          "pool": "claude"
+        }
       },
       "chain": [
         {
           "model": "claude-opus-4-8",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         },
         {
           "model": "claude-fable-5",
-          "lane": {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth", "credential_ref": null, "pool": "claude"}
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
         }
       ]
     }
   },
   "forbidden_combinations": [
-    {"model_pattern": "haiku", "reason": "rawgentic never routes a model seat to Haiku (config + hook enforced)."},
-    {"rule": "cross_model_author", "reason": "An adversarial reviewer must never share the author's engine (D9)."}
+    {
+      "model_pattern": "haiku",
+      "reason": "rawgentic never routes a model seat to Haiku (config + hook enforced)."
+    },
+    {
+      "rule": "cross_model_author",
+      "reason": "An adversarial reviewer must never share the author's engine (D9)."
+    }
   ]
 }

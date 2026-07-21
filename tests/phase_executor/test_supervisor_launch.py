@@ -824,3 +824,57 @@ def test_launch_accepts_quota_classification_passthrough(env_factory):
         assert env.registry.get(env.identity).quota_classification == {"carried": True}
     finally:
         env.sup.cancel(rec)
+
+
+# ---- #558 AC2: supervised-path cap threading (SR1 spec round-trip + S-F6) -----
+
+def _manifested_snapshot(timeout_s=7, budget=10.0):
+    return routing.RoutingSnapshot.from_table({
+        "schema_version": "1",
+        "pools": {"claude": {"concurrency": 2}},
+        "seats": {"build": {
+            "manifest": {"session_policy": "fresh", "tool_grants": ["read"],
+                         "effort": "medium", "confinement": {"anthropic": "hooks"},
+                         "bounds": {"timeout_s": timeout_s, "max_budget_usd": budget}},
+            "primary": {"model": "claude-sonnet-5", "lane": _lane()}, "chain": []}},
+        "forbidden_combinations": [],
+    })
+
+
+@tmux_required
+def test_supervised_launch_min_timeout_and_max_tokens_round_trip(env_factory):
+    """S-F6: the tighter manifest bound wins in the pane spec (today the caller timeout
+    is written raw); SR1: profile.max_tokens survives the spec write site."""
+    env = env_factory(mode="ok")
+    env.sup._snapshot = _manifested_snapshot(timeout_s=7)
+    prof = contract.LaunchProfile(session_policy="fresh", tool_grants=("read",),
+                                  max_tokens=512)
+    object.__setattr__(prof, "effective_grants", ("read",))
+    rec = env.launch(timeout=9999.0, profile=prof)
+    try:
+        spec = json.loads(Path(env.tmp / "reg" / "specs" / f"{rec.session_name}.json").read_text())
+        assert spec["request"]["timeout"] == 7.0   # min(caller 9999, bounds 7)
+        assert spec["request"]["profile"]["max_tokens"] == 512  # SR1 write site
+        # SR1 read site: pane_runner reconstructs the field
+        from phase_executor import pane_runner as _pr
+        assert _pr._profile_from_spec(spec["request"]["profile"]).max_tokens == 512
+    finally:
+        env.sup.cancel(rec)
+
+
+def test_relaunch_profile_rebuild_preserves_max_tokens(tmp_path, monkeypatch):
+    # SR1 third site: _relaunch's profile rebuild carries max_tokens
+    q = _QuotaCollect(tmp_path, profile=dict(_DEFAULT_PROFILE, max_tokens=512))
+    monkeypatch.setattr(supervisor, "CALIBRATED_CLASSIFIERS", _CALIB)
+    state, _ = q.collect()
+    assert state == "quota_paused"
+    paused = q.stored()
+    captured = {}
+
+    def fake_launch(seat, prompt, **kw):
+        captured.update(kw)
+        return paused
+
+    monkeypatch.setattr(q.sup, "launch", fake_launch)
+    q.sup._relaunch(paused)
+    assert captured["profile"].max_tokens == 512

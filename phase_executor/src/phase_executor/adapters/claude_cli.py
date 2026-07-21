@@ -68,7 +68,15 @@ def build_command(model: str, *, effort: Optional[str] = None,
                 tools.extend(mapped)
             cmd += ["--allowedTools", ",".join(tools)]
         if profile.max_budget_usd is not None:
-            cmd += ["--max-budget-usd", str(profile.max_budget_usd)]
+            # #558 S-F8: profiles are publicly constructible — the composition boundary
+            # refuses a non-numeric/non-finite/non-positive budget before launch
+            import math  # noqa: PLC0415
+            b = profile.max_budget_usd
+            if (not isinstance(b, (int, float)) or isinstance(b, bool)
+                    or not math.isfinite(b) or b <= 0):
+                raise contract.CompositionError(
+                    f"claude launch: max_budget_usd must be a finite number > 0 (got {b!r})")
+            cmd += ["--max-budget-usd", str(b)]
     if effort:
         cmd += ["--effort", effort]
     return cmd

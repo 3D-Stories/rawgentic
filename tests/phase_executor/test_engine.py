@@ -343,3 +343,183 @@ def test_run_seat_stepdown_recorded(tmp_path):
                    effort="max", dispatch=dispatch)
     assert seen["effort"] == "xhigh"
     assert obs.effort["resolution"] == "stepdown" and obs.effort["native"] == "xhigh"
+
+
+# ---- #558 AC2: sync/competitive cap threading (SR-F2) ------------------------
+
+def _manifest(grants=("read",), timeout_s=1200, budget=2.0):
+    return {"session_policy": "fresh", "tool_grants": list(grants), "effort": "medium",
+            "confinement": {"anthropic": "hooks", "openai": "landlock"},
+            "bounds": {"timeout_s": timeout_s, "max_budget_usd": budget}}
+
+
+def _snapshot_manifested(grants=("read",), timeout_s=1200, budget=2.0):
+    table = {
+        "schema_version": "1",
+        "pools": {"claude": {"concurrency": 2}, "codex": {"concurrency": 4}},
+        "seats": {
+            "review": {
+                "manifest": _manifest(grants, timeout_s, budget),
+                "primary": {"model": "claude-fable-5", "lane": _lane("claude")},
+                "chain": [{"model": "claude-sonnet-5", "lane": _lane("claude")}],
+            },
+        },
+        "forbidden_combinations": [],
+    }
+    return routing.RoutingSnapshot.from_table(table)
+
+
+def _req_capture(reqs):
+    def dispatch(engine_name, req, *, run_id, attempt_id, capture_root, digest,
+                 queued_ms, fallback_reason):
+        reqs.append((engine_name, req))
+        return _obs(req, engine_name=engine_name)
+    return dispatch
+
+
+def test_run_seat_derives_manifest_profile_and_min_timeout(tmp_path):
+    """SR-F2: the manifest cap reaches ordinary sync dispatches — profile derived,
+    effective timeout = min(caller, bounds.timeout_s)."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    reqs = []
+    run_seat("review", "p", snapshot=_snapshot_manifested(timeout_s=60), quota=qc,
+             capture_root=tmp_path, timeout=9999.0, dispatch=_req_capture(reqs))
+    _, req = reqs[0]
+    assert req.profile.max_budget_usd == 2.0
+    assert req.profile.effective_grants == ("read",)
+    assert req.timeout == 60.0  # the declared bound tightens, never loosens
+
+
+def test_run_seat_caller_timeout_kept_when_tighter(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    reqs = []
+    run_seat("review", "p", snapshot=_snapshot_manifested(timeout_s=1200), quota=qc,
+             capture_root=tmp_path, timeout=30.0, dispatch=_req_capture(reqs))
+    assert reqs[0][1].timeout == 30.0
+
+
+def test_run_seat_no_manifest_keeps_no_profile(tmp_path):
+    # compat: a manifest-less test/legacy table dispatches exactly as before
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    reqs = []
+    run_seat("solo", "p", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
+             timeout=45.0, dispatch=_req_capture(reqs))
+    _, req = reqs[0]
+    assert req.profile.max_budget_usd is None
+    assert req.timeout == 45.0
+
+
+def test_run_seat_mutating_manifest_rejected_fail_loud(tmp_path):
+    """r6/A-F1: a MUTATING manifest on the sync path is rejected BEFORE any dispatch —
+    silently keeping an uncapped no-profile dispatch is exactly the gap AC2 closes."""
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    reqs = []
+    with pytest.raises(contract.CompositionError):
+        run_seat("review", "p", snapshot=_snapshot_manifested(grants=("read", "edit", "bash")),
+                 quota=qc, capture_root=tmp_path, dispatch=_req_capture(reqs))
+    assert reqs == []  # rejection precedes every candidate dispatch
+
+
+def test_run_competitive_mutating_manifest_rejected_before_fanout(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    snap = _snapshot_manifested(grants=("read", "edit", "bash"))
+    cands = [Candidate(seat="review", model="claude-fable-5", prompt="p",
+                       provider="anthropic", pool="claude")]
+    reqs = []
+    with pytest.raises(contract.CompositionError):
+        run_competitive(cands, judge=_judge_first, snapshot=snap, quota=qc,
+                        capture_root=tmp_path, dispatch=_req_capture(reqs))
+    assert reqs == []  # fail-loud precedes candidate fan-out, never a harness_error
+
+
+def test_run_competitive_derives_candidate_profile_and_min_timeout(tmp_path):
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    snap = _snapshot_manifested(timeout_s=60, budget=5.0)
+    cands = [Candidate(seat="review", model="claude-fable-5", prompt="p",
+                       provider="anthropic", pool="claude")]
+    reqs = []
+    run_competitive(cands, judge=_judge_first, snapshot=snap, quota=qc,
+                    capture_root=tmp_path, dispatch=_req_capture(reqs))
+    _, req = reqs[0]
+    assert req.profile.max_budget_usd == 5.0
+    assert req.timeout == 60.0
+
+
+def test_run_competitive_unknown_seat_keeps_no_profile(tmp_path):
+    # bake-off candidates naming a seat absent from the table stay profile-less (compat)
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    reqs = []
+    run_competitive(_candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(),
+                    quota=qc, capture_root=tmp_path, dispatch=_req_capture(reqs))
+    assert all(r.profile.max_budget_usd is None for _, r in reqs)
+
+
+def test_production_claude_argv_single_run(tmp_path):
+    """Production argv pin: the DEFAULT table's analysis seat composes
+    --max-budget-usd AND --allowedTools on a plain sync dispatch."""
+    import json as _json
+    from phase_executor.adapters import claude_cli
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    qc = QuotaCoordinator(tmp_path / "q", {p: s["concurrency"]
+                                           for p, s in snap.table["pools"].items()})
+    reqs = []
+    run_seat("analysis", "p", snapshot=snap, quota=qc, capture_root=tmp_path,
+             dispatch=_req_capture(reqs))
+    _, req = reqs[0]
+    cmd = claude_cli.build_command(req.requested_model, effort=req.effort, profile=req.profile)
+    assert cmd[cmd.index("--max-budget-usd") + 1] == "2.0"
+    assert "--allowedTools" in cmd
+
+
+def test_production_claude_argv_fallback_target(tmp_path):
+    # the fallback claude target composes the SAME seat cap (review: 5.0)
+    from phase_executor.adapters import claude_cli
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    qc = QuotaCoordinator(tmp_path / "q", {p: s["concurrency"]
+                                           for p, s in snap.table["pools"].items()})
+    reqs = []
+    run_seat("review", "p", snapshot=snap, quota=qc, capture_root=tmp_path,
+             dispatch=_stub_availability_then_capture(reqs))
+    claude_reqs = [r for e, r in reqs if e == "claude"]
+    assert len(claude_reqs) >= 2  # primary + fallback claude target
+    for r in claude_reqs:
+        cmd = claude_cli.build_command(r.requested_model, profile=r.profile)
+        assert cmd[cmd.index("--max-budget-usd") + 1] == "5.0"
+        assert "--allowedTools" in cmd
+
+
+def _stub_availability_then_capture(reqs):
+    def dispatch(engine_name, req, *, run_id, attempt_id, capture_root, digest,
+                 queued_ms, fallback_reason):
+        reqs.append((engine_name, req))
+        return _obs(req, status=contract.NONZERO_EXIT, engine_name=engine_name)
+    return dispatch
+
+
+def test_production_claude_argv_bakeoff_candidate(tmp_path):
+    from phase_executor.adapters import claude_cli
+    snap = routing.snapshot_from_file(routing.default_table_path())
+    qc = QuotaCoordinator(tmp_path / "q", {p: s["concurrency"]
+                                           for p, s in snap.table["pools"].items()})
+    cands = [Candidate(seat="design", model="claude-opus-4-8", prompt="p",
+                       provider="anthropic", pool="claude")]
+    reqs = []
+    run_competitive(cands, judge=_judge_first, snapshot=snap, quota=qc,
+                    capture_root=tmp_path, dispatch=_req_capture(reqs))
+    _, req = reqs[0]
+    cmd = claude_cli.build_command(req.requested_model, profile=req.profile)
+    assert cmd[cmd.index("--max-budget-usd") + 1] == "5.0"
+    assert "--allowedTools" in cmd
+
+
+def test_claude_budget_composition_boundary():
+    """S-F8: LaunchProfile is publicly constructible — build_command refuses a
+    non-finite/non-positive/non-numeric budget before launch."""
+    from phase_executor.adapters import claude_cli
+    good = contract.LaunchProfile(max_budget_usd=2.0)
+    cmd = claude_cli.build_command("claude-sonnet-5", profile=good)
+    assert cmd[cmd.index("--max-budget-usd") + 1] == "2.0"
+    for bad in (True, 0, -1.0, float("inf"), float("nan"), "5"):
+        with pytest.raises(contract.CompositionError):
+            claude_cli.build_command("claude-sonnet-5",
+                                     profile=contract.LaunchProfile(max_budget_usd=bad))

@@ -294,6 +294,7 @@ class LaunchProfile:
     worktree: Optional[str] = None
     tool_grants: tuple = ()
     max_budget_usd: Optional[float] = None
+    max_tokens: Optional[int] = None  # #558 AC2: per-call token cap (zhipu-enforced today)
     effective_grants: tuple = field(default=(), init=False)
 
 
@@ -358,9 +359,11 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
             raise ValueError(
                 "profile_from_manifest: a mutating CLAUDE profile REQUIRES a positive "
                 "bounds.max_budget_usd (the enforceable cost bound)")
+    mt = bounds.get("max_tokens")
     profile = LaunchProfile(session_policy=policy, mutating=mutating, worktree=worktree,
                             tool_grants=grants,
-                            max_budget_usd=float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else None)
+                            max_budget_usd=float(budget) if isinstance(budget, (int, float)) and not isinstance(budget, bool) else None,
+                            max_tokens=mt if isinstance(mt, int) and not isinstance(mt, bool) and mt >= 1 else None)
     object.__setattr__(profile, "effective_grants", effective)
     return profile
 

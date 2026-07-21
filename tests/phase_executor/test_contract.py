@@ -552,3 +552,60 @@ def test_containment_root_filesystem_root_rejected():
     from phase_executor import contract
     with _pt.raises(contract.CompositionError, match="filesystem root"):
         contract.canonical_contained_worktree("/tmp/anything/wt", "/")
+
+
+# ---- #558 AC2: bounds.max_tokens + amended shipped table ---------------------
+
+def test_launch_profile_max_tokens_field_and_manifest_mapping():
+    m = {"session_policy": "fresh", "tool_grants": ["read"], "effort": "low",
+         "confinement": {"zhipuai": "sdk"}, "bounds": {"timeout_s": 60, "max_tokens": 2048}}
+    p = contract.profile_from_manifest(m, engine="zhipuai")
+    assert p.max_tokens == 2048
+    assert contract.LaunchProfile().max_tokens is None  # additive default
+
+
+@pytest.mark.parametrize("bad", [True, "1024", 1024.0, 0, -5])
+def test_profile_from_manifest_max_tokens_strict_types(bad):
+    # same strict-type posture as max_budget_usd: a mis-typed bound never
+    # silently becomes a cap — it drops to None (uncapped is the honest reading)
+    m = {"session_policy": "fresh", "tool_grants": ["read"], "effort": "low",
+         "confinement": {"zhipuai": "sdk"}, "bounds": {"timeout_s": 60, "max_tokens": bad}}
+    p = contract.profile_from_manifest(m, engine="zhipuai")
+    assert p.max_tokens is None
+
+
+def test_routing_table_schema_accepts_and_types_bounds_max_tokens():
+    import copy
+    import json as _json
+    import pathlib
+    p = pathlib.Path(contract.__file__).resolve().parent / "routing" / "rawgentic.routing-table.json"
+    t = _json.loads(p.read_text())
+    ok = copy.deepcopy(t)
+    ok["seats"]["analysis"]["manifest"]["bounds"]["max_tokens"] = 1024
+    contract.validate_routing_table(ok)  # amended schema admits the integer bound
+    bad = copy.deepcopy(t)
+    bad["seats"]["analysis"]["manifest"]["bounds"]["max_tokens"] = "1024"
+    with pytest.raises(Exception):
+        contract.validate_routing_table(bad)
+    bad2 = copy.deepcopy(t)
+    bad2["seats"]["analysis"]["manifest"]["bounds"]["max_tokens"] = 0
+    with pytest.raises(Exception):
+        contract.validate_routing_table(bad2)
+
+
+def test_shipped_table_claude_seats_carry_max_budget_usd():
+    """#558 AC2 (AC-B4 as amended D-13): every claude-bearing seat manifest declares the
+    per-call dollar cap; codex-only bounds stay timeout_s (THE compensating bound)."""
+    import json as _json
+    import pathlib
+    p = pathlib.Path(contract.__file__).resolve().parent / "routing" / "rawgentic.routing-table.json"
+    t = _json.loads(p.read_text())
+    expected = {"analysis": 2.0, "ship": 2.0, "review": 5.0, "plan": 5.0,
+                "intake": 5.0, "design": 5.0, "build": 10.0}
+    for seat_name, want in expected.items():
+        seat = t["seats"][seat_name]
+        providers = {seat["primary"]["lane"]["provider"],
+                     *(c["lane"]["provider"] for c in seat.get("chain", []))}
+        assert "anthropic" in providers, f"{seat_name} not claude-bearing"
+        assert seat["manifest"]["bounds"]["max_budget_usd"] == want, seat_name
+    contract.validate_routing_table(t)
