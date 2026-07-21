@@ -83,7 +83,10 @@ class _GuardProfile:
 def _profile_from_spec(spec: dict) -> Optional[_GuardProfile]:
     """Strictly-validated guard profile from a digest-verified spec — a malformed
     profile inside a digest-valid spec is spec_unverified too (pass-4 S-F9)."""
-    prof = (spec.get("request") or {}).get("profile")
+    request = spec.get("request")
+    if not isinstance(request, dict):  # adv-A5: a truthy non-dict request must never crash
+        return None
+    prof = request.get("profile")
     if not isinstance(prof, dict):
         return None
     sp = prof.get("session_policy")
@@ -745,9 +748,14 @@ class TmuxSupervisor:
                 # resume-identity assert is relocated to run post-kill on the bounded
                 # _envelope_meta (its failure action, finish "failed" + raise, unchanged)
                 killed = self._kill_job(record)
-                is_claude_nonzero = (
-                    obs.get("parse_status") == contract.NONZERO_EXIT
-                    and self._read_spec(record).get("engine") == "claude")
+                # Step-11 converged fix (mech-M2/sec-L2/adv-A2): the claude discriminator
+                # comes from the VERIFIED spec only — an unverifiable spec on ANY nonzero
+                # collect persists spec_unverified rather than silently skipping
+                is_nonzero = obs.get("parse_status") == contract.NONZERO_EXIT
+                vspec = self._verified_spec(record) if is_nonzero else None
+                spec_unverified_nonzero = is_nonzero and vspec is None
+                is_claude_nonzero = (vspec is not None
+                                     and vspec.get("engine") == "claude")
                 meta = (self._envelope_meta(record)
                         if (expect_session_id is not None or is_claude_nonzero) else None)
                 if expect_session_id is not None:
@@ -760,15 +768,12 @@ class TmuxSupervisor:
                 # #558 AC1: collection-time quota detection — classifier invocation is
                 # the persistence trigger on a claude NONZERO_EXIT collect (pass-3 S-F10)
                 cls = None
-                vspec = None
                 refusal_reason = None
                 if is_claude_nonzero:
-                    vspec = self._verified_spec(record)
-                    if vspec is not None:  # tampered/missing spec: classify nothing
-                        ev = self._read_stderr(record)
-                        cls = quota_detect.classify_quota_exit(
-                            engine=vspec.get("engine", ""), exit_code=_exit_code_of(obs),
-                            stderr=ev, envelope=meta)
+                    ev = self._read_stderr(record)
+                    cls = quota_detect.classify_quota_exit(
+                        engine=vspec.get("engine", ""), exit_code=_exit_code_of(obs),
+                        stderr=ev, envelope=meta)
                 if cls is not None and cls.verdict:
                     decision = self._auto_pause_allowed(
                         record, obs, _profile_from_spec(vspec),
@@ -792,7 +797,7 @@ class TmuxSupervisor:
                     if refusal_reason:
                         qc["refusal"] = refusal_reason
                     extra["quota_classification"] = qc
-                elif is_claude_nonzero:  # spec missing/tampered: say why, classify nothing
+                elif spec_unverified_nonzero:  # spec missing/tampered: say why, classify nothing
                     extra["quota_classification"] = {
                         "paused": False, "refusal": "spec_unverified",
                         "classifier_version": quota_detect.CLASSIFIER_VERSION}

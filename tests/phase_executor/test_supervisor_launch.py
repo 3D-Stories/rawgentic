@@ -906,3 +906,27 @@ def test_collect_oversized_session_id_not_persisted(tmp_path, monkeypatch):
     qc = q.stored().quota_classification
     assert qc["refusal"] == "no_resumable_session"
     assert q.stored().provider_session_id is None
+
+
+# ---- Step 11 converged fixes (mech-M2 / sec-L2 / adv-A2 + adv-A5) -------------
+
+def test_collect_tampered_spec_engine_swap_still_persists_spec_unverified(tmp_path):
+    # 3-lens converged finding: the claude discriminator must come from the VERIFIED
+    # spec — tampering that swaps engine to "codex" (breaking the digest) must not
+    # suppress the promised spec_unverified evidence
+    q = _QuotaCollect(tmp_path, engine="codex", tamper_spec=True)
+    state, _ = q.collect()
+    assert state == "completed"
+    qc = q.stored().quota_classification
+    assert qc == {"paused": False, "refusal": "spec_unverified",
+                  "classifier_version": quota_detect.CLASSIFIER_VERSION}
+
+
+def test_profile_from_spec_non_dict_request_returns_none():
+    # adv-A5: a digest-valid spec whose request is a truthy non-dict must be
+    # spec_unverified, never an AttributeError after the job is killed
+    from phase_executor.supervisor import _profile_from_spec
+    assert _profile_from_spec({"request": ["not", "a", "dict"]}) is None
+    assert _profile_from_spec({"request": "nope"}) is None
+    assert _profile_from_spec({"request": 7}) is None
+    assert _profile_from_spec({}) is None
