@@ -66,6 +66,10 @@ class JobRecord:
     receipt_nonce: Optional[str] = None  # Step-11 RH1 (#470): the check_pre enforcement receipt
     #                                      this launch was authorized under — joins the JobRecord
     #                                      to the RoutingAuditLog receipt (additive; None pre-#470)
+    recovered_from: Optional[str] = None  # #554: on a recovery relaunch, the ORIGINAL call's
+    #                                       correlation_id — the reconcile pause/recover join key,
+    #                                       so a resumed call reconciles as ONE authorized attempt
+    #                                       of the original (additive; None on a first launch)
 
 
 @dataclass(frozen=True)
@@ -184,6 +188,7 @@ def _record_to_dict(r: JobRecord) -> dict:
         "worktree_repo": r.worktree_repo, "capture_dir": r.capture_dir, "attempt_id": r.attempt_id,
         "permit_ref": r.permit_ref, "command_digest": r.command_digest,
         "spec_digest": r.spec_digest, "receipt_nonce": r.receipt_nonce,
+        "recovered_from": r.recovered_from,
         "provider_session_id": r.provider_session_id, "provider_exit_code": r.provider_exit_code,
         "resume_attempts": r.resume_attempts, "state": r.state, "created_at": r.created_at,
         "quarantine_reason": r.quarantine_reason,
@@ -201,7 +206,7 @@ def _record_from_dict(d: dict) -> JobRecord:
         worktree_gitdir=d["worktree_gitdir"], worktree_repo=d["worktree_repo"],
         capture_dir=d["capture_dir"], attempt_id=d["attempt_id"], permit_ref=d["permit_ref"],
         command_digest=d["command_digest"], spec_digest=d.get("spec_digest"),
-        receipt_nonce=d.get("receipt_nonce"),
+        receipt_nonce=d.get("receipt_nonce"), recovered_from=d.get("recovered_from"),
         provider_session_id=d.get("provider_session_id"),
         provider_exit_code=d.get("provider_exit_code"), resume_attempts=d["resume_attempts"],
         state=d["state"], created_at=d["created_at"], quarantine_reason=d.get("quarantine_reason"))

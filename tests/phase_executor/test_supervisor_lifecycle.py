@@ -233,6 +233,28 @@ def test_recover_relaunches_quota_paused_under_cap(env_factory):
 
 
 @tmux_required
+def test_relaunch_records_recovery_provenance(env_factory):
+    # #554 AC2: a recovery relaunch is bound to the ORIGINAL call's identity — its own
+    # correlation_id is <origin>#resume<n>, and recovered_from carries the original, both on
+    # the JobRecord and in the persisted spec (the reconcile pause/recover join key).
+    env = env_factory(mode="exit_nonzero")
+    rec = env.launch(correlation_id="554-orig")
+    state, _ = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
+    assert state == "exited_no_sentinel"
+    env.sup.mark_quota_paused(env.identity, provider_session_id="sess-9")
+    sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-9"})
+    actions = sup2.recover(env.identity.run_id)
+    assert actions[0].action == "relaunch"
+    new = actions[0].record
+    assert new.recovered_from == "554-orig"
+    spec = json.loads((Path(env.tmp / "reg" / "specs" / f"{new.session_name}.json")).read_text())
+    assert spec["request"]["recovered_from"] == "554-orig"
+    assert spec["request"]["correlation_id"] == "554-orig#resume1"
+    # persisted+reloaded JobRecord round-trips the provenance
+    assert env.registry.get(env.identity).recovered_from == "554-orig"
+
+
+@tmux_required
 def test_relaunched_job_auto_asserts_resume_identity(env_factory):
     env = env_factory(mode="exit_nonzero")
     rec = env.launch()

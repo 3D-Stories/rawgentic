@@ -447,6 +447,16 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
     exp_set = set(exp_keys)
     known = audited_digests(records, initial_digest)  # raises on a broken epoch chain
 
+    # #554 pause/recover: a recovery attempt is a DISTINCT audited attempt (its own
+    # correlation_id) LINKED to the original expected call via ``recovered_from`` (the
+    # original correlation_id, stamped by supervisor._relaunch). Its EFFECTIVE expected key
+    # is the original's, so it is neither an orphan nor a separate key — it is grouped with
+    # the original attempt under one expected call, and its verified observation satisfies
+    # that call (the original's availability/pause observation is the forgivable failure).
+    # A receipt without ``recovered_from`` keys to itself — unchanged behavior (AC4).
+    def _effective_key(rec):
+        return (rec["seat"], rec.get("recovered_from") or rec["correlation_id"])
+
     receipts = [r for r in records if r.get("kind") == "receipt"]
     observations = [r for r in records if r.get("kind") == "observation"]
 
@@ -462,7 +472,7 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
             by_nonce[n] = r
         if r["config_digest"] not in known:
             unaudited_digest.append(n)
-        if (r["seat"], r["correlation_id"]) not in exp_set:
+        if _effective_key(r) not in exp_set:  # #554: a recovery keys to its original
             orphan.append(f"receipt:{n}")
 
     obs_by_nonce = {}
@@ -492,7 +502,7 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
         if list(obs_tid) != list(rec["target_identity"]) or rec["config_digest"] != inner.get("routing_config_digest"):
             binding_mismatch.append(f"{n}:identity-or-digest")
             continue
-        if (rec["seat"], rec["correlation_id"]) not in exp_set:
+        if _effective_key(rec) not in exp_set:  # #554: the receipt's effective (recovery) key
             orphan.append(f"observation:{n}:unexpected")
             continue
         if n in obs_by_nonce:
@@ -502,7 +512,9 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
 
     for key in exp_keys:
         seat, cid = key
-        rs = [r for r in receipts if r["seat"] == seat and r["correlation_id"] == cid]
+        # #554: group the original attempt AND every recovery attempt (recovered_from == cid)
+        # under this one expected call via the effective key.
+        rs = [r for r in receipts if _effective_key(r) == key]
         for r in rs:
             if r["verdict"] == "fail" and r["nonce"] in obs_by_nonce:
                 failed_precheck.append(r["nonce"])

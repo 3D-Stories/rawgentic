@@ -351,7 +351,8 @@ class TmuxSupervisor:
                resume_attempts: int = 0, quota_timeout: float = 300.0,
                snapshot_dir: Optional[str] = None,
                snapshot_digest: Optional[str] = None,
-               correlation_id: Optional[str] = None) -> JobRecord:
+               correlation_id: Optional[str] = None,
+               recovered_from: Optional[str] = None) -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
         for the job's lifetime), write the FIXED pane spec, and spawn the pane.
 
@@ -394,6 +395,7 @@ class TmuxSupervisor:
                 "request": {
                     "seat": seat, "requested_model": target["model"], "prompt": prompt,
                     "transport": lane["transport"], "context": [], "correlation_id": correlation_id,
+                    "recovered_from": recovered_from,
                     "effort": eff.native, "timeout": timeout,
                     "credential_ref": lane.get("credential_ref"),
                     "containment_root": handle.root,
@@ -448,7 +450,7 @@ class TmuxSupervisor:
                 provider_session_id=resume_session_id, provider_exit_code=None,
                 resume_attempts=resume_attempts, state="running",
                 created_at=self._clock(), quarantine_reason=None,
-                receipt_nonce=receipt_nonce)
+                receipt_nonce=receipt_nonce, recovered_from=recovered_from)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
@@ -958,11 +960,22 @@ class TmuxSupervisor:
     def _relaunch(self, record: JobRecord) -> JobRecord:
         """Relaunch a quota_paused job: same identity/worktree, a resume-policy profile, the
         persisted provider session id (claude ``--resume``), resume_attempts + 1. The
-        resume-identity assert runs at collect time (await_job ``expect_session_id``)."""
+        resume-identity assert runs at collect time (await_job ``expect_session_id``).
+
+        #554 recovery provenance: the relaunch carries its OWN correlation_id
+        (``<original>#resume<n>``) plus ``recovered_from`` = the ORIGINAL call's correlation_id
+        (the ``recovered_from`` already on this record if it is itself a re-recovery, else the
+        original spec's correlation). ``reconcile_run`` groups the recovery under the original
+        expected call via that link — one authorized pause+resume, not an orphan or a new key."""
         spec = self._read_spec(record)
         req = spec.get("request") or {}
         if not req:
             raise SupervisorError(f"relaunch {record.session_name}: spec unreadable")
+        # the join key is the FIRST call's correlation: a re-recovery inherits the record's
+        # recovered_from, so every attempt in the chain reconciles under the one original call.
+        origin_cid = record.recovered_from or req.get("correlation_id")
+        next_attempt = record.resume_attempts + 1
+        recovery_cid = (f"{origin_cid}#resume{next_attempt}" if origin_cid is not None else None)
         if spec.get("engine") != "claude":
             # resume is claude-only (adapters refuse); re-resolving routing could land a
             # different engine and burn a resume slot on a guaranteed compose failure
@@ -983,7 +996,8 @@ class TmuxSupervisor:
             handle=handle, profile=profile, effort=req.get("effort"),
             timeout=float(req.get("timeout", 300.0)),
             resume_session_id=record.provider_session_id,
-            resume_attempts=record.resume_attempts + 1)
+            resume_attempts=next_attempt,
+            correlation_id=recovery_cid, recovered_from=origin_cid)
 
     def _retain(self, record: JobRecord) -> None:
         """W3 disposition on a failure-shaped exit: retain-if-dirty, owner-visible evidence.
