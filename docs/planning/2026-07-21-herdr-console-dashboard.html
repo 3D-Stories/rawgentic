@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Herdr × rawgentic — console plan</title>
+<style>
+:root{
+  --bg:#F3F5F7; --panel:#FFFFFF; --panel2:#EDF0F3; --ink:#1B2430; --muted:#5A6878;
+  --line:#D8DEE5; --accent:#1F7484; --accent-ink:#FFFFFF;
+  --blocked:#C0432B; --warn:#A86A08; --ok:#2E7D4F; --working:#2E6FB0; --idle:#7A8794;
+  --chip-blocked:#F7E4DF; --chip-warn:#F5EAD4; --chip-ok:#DFF0E5; --chip-working:#DFEAF6; --chip-idle:#E8ECEF; --chip-accent:#DCEDF0;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#10151B; --panel:#171E26; --panel2:#1D2630; --ink:#E6EBF1; --muted:#93A1B0;
+    --line:#2A3441; --accent:#4FB3C1; --accent-ink:#0C1216;
+    --blocked:#E06A4F; --warn:#DFA83E; --ok:#5FBE8A; --working:#6AA5DC; --idle:#8B99A8;
+    --chip-blocked:#3A2019; --chip-warn:#382B12; --chip-ok:#16301F; --chip-working:#182A3C; --chip-idle:#232B34; --chip-accent:#13323A;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#10151B; --panel:#171E26; --panel2:#1D2630; --ink:#E6EBF1; --muted:#93A1B0;
+  --line:#2A3441; --accent:#4FB3C1; --accent-ink:#0C1216;
+  --blocked:#E06A4F; --warn:#DFA83E; --ok:#5FBE8A; --working:#6AA5DC; --idle:#8B99A8;
+  --chip-blocked:#3A2019; --chip-warn:#382B12; --chip-ok:#16301F; --chip-working:#182A3C; --chip-idle:#232B34; --chip-accent:#13323A;
+}
+:root[data-theme="light"]{
+  --bg:#F3F5F7; --panel:#FFFFFF; --panel2:#EDF0F3; --ink:#1B2430; --muted:#5A6878;
+  --line:#D8DEE5; --accent:#1F7484; --accent-ink:#FFFFFF;
+  --blocked:#C0432B; --warn:#A86A08; --ok:#2E7D4F; --working:#2E6FB0; --idle:#7A8794;
+  --chip-blocked:#F7E4DF; --chip-warn:#F5EAD4; --chip-ok:#DFF0E5; --chip-working:#DFEAF6; --chip-idle:#E8ECEF; --chip-accent:#DCEDF0;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:28px 20px 64px;
+}
+.mono, h1,h2,h3, th, .chip, .eyebrow, .bar, .slot-id, .num{
+  font-family:ui-monospace,SFMono-Regular,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+}
+.wrap{max-width:1100px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+.bar{
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;
+  font-size:12.5px;color:var(--muted);padding:4px 2px;
+}
+.bar .path{color:var(--ink)}
+.bar .path b{color:var(--accent);font-weight:600}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:0}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.pane>header{
+  display:flex;align-items:center;gap:9px;padding:8px 14px;
+  background:var(--panel2);border-bottom:1px solid var(--line);
+}
+.pane>header .t{font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-family:ui-monospace,SFMono-Regular,"Cascadia Code",Menlo,Consolas,monospace}
+.pane>header .sq{width:9px;height:9px;border-radius:2px;background:var(--accent);flex:none}
+.pane>header .right{margin-left:auto;display:flex;gap:6px}
+.pane .body{padding:16px 18px}
+.chip{
+  display:inline-block;font-size:11px;letter-spacing:.04em;padding:2px 9px;border-radius:999px;
+  white-space:nowrap;font-weight:600;
+}
+.chip.ok{background:var(--chip-ok);color:var(--ok)}
+.chip.warn{background:var(--chip-warn);color:var(--warn)}
+.chip.blocked{background:var(--chip-blocked);color:var(--blocked)}
+.chip.working{background:var(--chip-working);color:var(--working)}
+.chip.idle{background:var(--chip-idle);color:var(--idle)}
+.chip.accent{background:var(--chip-accent);color:var(--accent)}
+h1{font-size:clamp(21px,3.4vw,28px);line-height:1.25;margin:0 0 6px;text-wrap:balance;font-weight:650}
+h1 .cond{color:var(--accent)}
+h2{font-size:16px;margin:0}
+h3{font-size:13.5px;margin:0 0 6px}
+p{margin:8px 0}
+.muted{color:var(--muted)}
+.verdict .risk{border-left:3px solid var(--warn);padding:8px 12px;background:var(--panel2);border-radius:0 4px 4px 0;margin-top:12px}
+.verdict .risk b{color:var(--warn)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;margin-top:12px}
+.fact{border:1px solid var(--line);border-radius:5px;padding:10px 12px;background:var(--panel)}
+.fact .k{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:3px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.fact .v{font-size:13.5px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13.5px;font-variant-numeric:tabular-nums}
+th{
+  text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  font-weight:600;padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.c{white-space:nowrap}
+.phases{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px}
+.phase{border:1px solid var(--line);border-radius:6px;background:var(--panel);display:flex;flex-direction:column}
+.phase>header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--panel2);border-bottom:1px solid var(--line)}
+.phase>header .t{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;font-weight:600}
+.phase>header .chip{margin-left:auto}
+.phase .body{padding:12px 14px;font-size:13.5px;flex:1}
+.phase .gate{border-top:1px dashed var(--line);padding:9px 14px;font-size:12.5px;color:var(--muted)}
+.phase .gate b{color:var(--ink)}
+.callout{
+  border:1px solid var(--line);border-left:3px solid var(--blocked);
+  background:var(--panel2);border-radius:0 5px 5px 0;padding:10px 14px;font-size:13.5px;margin-top:12px;
+}
+.callout b{color:var(--blocked)}
+.epics{display:flex;flex-direction:column;gap:12px}
+.epic{border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.epic>header{display:flex;align-items:center;gap:10px;padding:9px 14px;background:var(--panel2);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.epic>header .t{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:600;font-size:13.5px}
+.epic>header .goal{font-size:12.5px;color:var(--muted)}
+.epic>header .chip{margin-left:auto}
+.slots{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.slot{display:flex;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);border-right:1px solid var(--line);font-size:13px;align-items:baseline}
+.slot-id{flex:none;font-size:12px;color:var(--accent);font-weight:600;min-width:44px}
+.triage-sum{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.tri{flex:1 1 140px;border:1px solid var(--line);border-radius:5px;padding:10px 12px;text-align:center}
+.tri .n{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:24px;font-weight:650;font-variant-numeric:tabular-nums}
+.tri .l{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tri.u .n{color:var(--idle)} .tri.r .n{color:var(--working)} .tri.s .n{color:var(--blocked)} .tri.a .n{color:var(--ok)}
+.sev{display:inline-block;width:3px;align-self:stretch;border-radius:2px;flex:none}
+.qa{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:10px}
+.qa li{display:flex;gap:12px;font-size:13.5px}
+.qa .num{flex:none;color:var(--accent);font-weight:600;font-size:12.5px;min-width:26px}
+.unc{columns:2;column-gap:26px;font-size:13px;margin:6px 0 0;padding-left:18px}
+.unc li{margin-bottom:7px;break-inside:avoid}
+.foot{font-size:12.5px;color:var(--muted);line-height:1.7}
+.foot code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11.5px;background:var(--panel2);padding:1px 5px;border-radius:3px}
+a{color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (max-width:720px){ .unc{columns:1} .slots{grid-template-columns:1fr} }
+@media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="bar" role="banner">
+    <span class="path"><b>herdr</b> × rawgentic ▸ console plan ▸ 2026-07-21 ▸ proposal — nothing filed, nothing installed</span>
+    <span class="legend" aria-label="state legend">
+      <span><span class="dot" style="background:var(--blocked)"></span>blocked</span>
+      <span><span class="dot" style="background:var(--working)"></span>working</span>
+      <span><span class="dot" style="background:var(--ok)"></span>done</span>
+      <span><span class="dot" style="background:var(--idle)"></span>idle</span>
+    </span>
+  </div>
+
+  <section class="pane verdict">
+    <header><span class="sq"></span><span class="t">verdict</span>
+      <span class="right"><span class="chip accent">conditional yes</span></span>
+    </header>
+    <div class="body">
+      <h1><span class="cond">Conditional YES</span> — herdr fits as the workspace console, and later as the executor's terminal runtime.</h1>
+      <p>It purpose-builds exactly the layer rawgentic hand-rolls on raw tmux (named sessions, liveness, reap, plus the human console the dispatch-observability work has been circling). <b>The condition:</b> herdr's heuristic agent-state stays advisory forever — rawgentic's sentinels, exit codes, and audit/reconcile machinery remain the only enforcement evidence. Herdr is the eyes and the substrate, never the judge.</p>
+      <div class="risk"><b>Biggest risk:</b> a &lt;4-month-old, weekly-release prerelease project as substrate under a machine-verified audit pipeline. Bounded by: version pin + <span class="mono">api schema</span> digest, qualification gates with hard NO-GO criteria, and tmux kept as a tested first-class fallback.</div>
+      <div class="risk" style="border-left-color:var(--ok);margin-top:8px"><b style="color:var(--ok)">Recommendation — do it, Phase A only for now.</b> Adopt HD1 (console) immediately: low cost, zero rawgentic code changes, daily value, fully reversible. HD2 (executor runtime) is a separate decision taken later on evidence — after HD1 proves itself, #475/#560 land, and the HD2.0 gate answers the two NO-GO questions. <b>If not herdr:</b> finish #475 → #560 as queued, build a small read-only status CLI over the existing JobRegistry + audit log (the #333 successor), keep tmux + crontab launchers, and hang blocked-notifications off the executor's own Observations — zero new dependencies, but no human console, no phone attach, no semantic agent states.</div>
+      <div class="facts">
+        <div class="fact"><div class="k">what herdr is</div><div class="v">Rust agent multiplexer — server owns real PTYs; thin client; detach / reattach / ssh / phone</div></div>
+        <div class="fact"><div class="k">shipped · cadence</div><div class="v">v0.7.4 (2026-07-15) · 53 releases since 2026-03-27 · ~weekly</div></div>
+        <div class="fact"><div class="k">license</div><div class="v">Dual: AGPL-3.0-or-later + commercial. Separate-process CLI/socket use ⇒ no copyleft obligation on rawgentic</div></div>
+        <div class="fact"><div class="k">control surface</div><div class="v">JSON socket API + CLI (headless-capable, cron-drivable); 0o600 same-user socket — same trust posture as today's tmux</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">overlap map — terminal runtime capabilities</span>
+      <span class="right"><span class="chip ok">8 fit</span><span class="chip warn">2 verify</span></span>
+    </header>
+    <div class="body">
+      <p class="muted" style="margin-top:0">tmux is used for exactly five primitives (spawn-argv, pane-pid, liveness, enumerate, kill). Output capture, tree-kill, and identity are <i>not</i> terminal-runtime work — they stay on <span class="mono">/proc</span> + sentinel files whichever runtime is active.</p>
+      <div class="scroll"><table>
+        <thead><tr><th>capability</th><th>tmux today</th><th>herdr equivalent</th><th>status</th></tr></thead>
+        <tbody>
+          <tr><td>Spawn argv as pane's initial process</td><td class="c mono">new-session -- argv</td><td><span class="mono">agent start -- &lt;argv&gt;</span>; generic-pane argv spawn unproven — <b>text injection is not a substitute</b></td><td class="c"><span class="chip warn">verify · HD2.0</span></td></tr>
+          <tr><td>Read pane PID</td><td class="c mono">display-message</td><td class="mono">pane.process_info</td><td class="c"><span class="chip ok">fit</span></td></tr>
+          <tr><td>Liveness by handle</td><td class="c mono">has-session</td><td><span class="mono">pane.get / agent.get</span> — IDs never reused</td><td class="c"><span class="chip ok">fit</span></td></tr>
+          <tr><td>Enumerate live sessions</td><td class="c mono">list-sessions</td><td class="mono">pane.list / session.snapshot</td><td class="c"><span class="chip ok">fit</span></td></tr>
+          <tr><td>Kill by handle</td><td class="c mono">kill-session</td><td><span class="mono">pane.close</span> (tree-kill stays /proc + killpg)</td><td class="c"><span class="chip ok">fit</span></td></tr>
+          <tr><td>Kill whole namespace</td><td class="c mono">kill-server</td><td class="mono">session stop / server.stop</td><td class="c"><span class="chip ok">fit</span></td></tr>
+          <tr><td>Private run-scoped namespace</td><td class="c mono">-S run.sock</td><td>named session per run_id — own socket, panes, state</td><td class="c"><span class="chip ok">strong fit</span></td></tr>
+          <tr><td>Durable naming + re-adoption</td><td>deterministic <span class="mono">rg-*</span> name</td><td>opaque never-reused pane ID persisted on JobRecord; labels diagnostic only</td><td class="c"><span class="chip ok">fit, new shape</span></td></tr>
+          <tr><td>Env injection into pane</td><td>server-env inheritance</td><td><span class="mono">HERDR_*</span> injected; caller env unproven (<span class="mono">env(1)</span> fallback)</td><td class="c"><span class="chip warn">verify · HD2.0</span></td></tr>
+          <tr><td>Version/capability preflight</td><td class="c mono">tmux -V + probes</td><td><span class="mono">ping</span> + <span class="mono">api schema --json</span> digest pin</td><td class="c"><span class="chip ok">fit</span></td></tr>
+        </tbody>
+      </table></div>
+      <p class="muted" style="margin-bottom:0"><b style="color:var(--ink)">Herdr does NOT cover</b> (stays rawgentic-owned): routing/enforcement/canary · RoutingAuditLog + reconcile · worktree <i>promotion</i> (CAS + path policy) · quota detection + recovery · every WF2/WF3 gate.</p>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">adoption plan — three phases</span></header>
+    <div class="body">
+      <div class="phases">
+        <div class="phase">
+          <header><span class="t">A · console</span><span class="chip ok">can start now</span></header>
+          <div class="body">Herdr becomes the owner's console. Orchestrator sessions + epic launchers move into herdr panes (argv-only <span class="mono">agent start</span>); executor children stay in tmux. Blocked→iMessage bridge, reviewed Claude-integration install, runbook. Zero rawgentic code changes.</div>
+          <div class="gate"><b>Gate:</b> HD1.0 no-code platform qualification under the real cron env. <b>Rollback:</b> stop using it — tmux untouched.</div>
+        </div>
+        <div class="phase">
+          <header><span class="t">B · executor runtime</span><span class="chip blocked">gated</span></header>
+          <div class="body">TerminalRuntime seam (tmux impl + herdr impl). Children launch by argv into one named herdr session per run; events advisory-only, every transition revalidated against JobRegistry + /proc + sentinel. Native resume OFF for executor sessions — one resume authority.</div>
+          <div class="gate"><b>Entry:</b> #475 closed · #554–#558 landed · #559 proving run green on tmux · HD2.0 NO-GO gate passed. <b>Rollback:</b> drain herdr runs, then downgrade — never a flag flip on live runs.</div>
+        </div>
+        <div class="phase">
+          <header><span class="t">C · agent skill + UX</span><span class="chip idle">queued</span></header>
+          <div class="body">Adapted HERDR_ENV-gated skill for orchestrator panes (spawn helpers, read neighbors, wait); stall-triage recipes replace capture-pane archaeology; bench cell on the herdr runtime; notification/dashboard polish.</div>
+          <div class="gate"><b>Entry:</b> HD1 done (skill after HD2 flip for executor-facing parts). <b>Rollback:</b> remove the skill.</div>
+        </div>
+      </div>
+      <div class="callout"><b>Hard NO-GO:</b> if argv-as-initial-process spawn (or caller env injection) is unavailable, executor adoption STOPS at the HD2.0 gate. Keystroke injection (<span class="mono">pane run</span> = text + Enter) is never an acceptable substitute on a launch path.</div>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">sequencing</span></header>
+    <div class="body scroll">
+      <table>
+        <thead><tr><th>order</th><th>work</th><th>entry</th><th>exit</th></tr></thead>
+        <tbody>
+          <tr><td class="c num">1</td><td>Finish epic #475 (#449 → #473 → #474)</td><td>running (paused)</td><td>epic closed</td></tr>
+          <tr><td class="c num">1∥</td><td><b>HD1 console</b> — parallel, non-preempting</td><td>HD1.0 qualification green</td><td>one epic run observed through herdr</td></tr>
+          <tr><td class="c num">2</td><td>Epic #560 hardening (#554–#558, then #559)</td><td>#475 done</td><td>#559 proving run green on tmux</td></tr>
+          <tr><td class="c num">3</td><td><b>HD2 executor runtime</b></td><td>#475 + #560 done · HD2.0 gate</td><td>proving cell green on herdr + soak</td></tr>
+          <tr><td class="c num">4</td><td><b>HD3 skill + UX</b></td><td>HD2 flipped (HD3.1 after HD1)</td><td>skill shipped + reviewed</td></tr>
+          <tr><td class="c num">any</td><td>Housekeeping closes: #333 · #457 · #408</td><td>owner nod</td><td>closed with completion comments</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">proposed epics — label epic:herdr</span>
+      <span class="right"><span class="chip accent">15 children</span></span>
+    </header>
+    <div class="body epics">
+      <div class="epic">
+        <header><span class="t">HD1 — herdr console adoption</span><span class="goal">exit: one epic auto-run driven + observed through herdr</span><span class="chip ok">ready</span></header>
+        <div class="slots">
+          <div class="slot"><span class="slot-id">1.0</span><span>Platform qualification, no code — real cron env, argv start, event reconnect, notify transport. <b>Gates all HD1 siblings.</b></span></div>
+          <div class="slot"><span class="slot-id">1.1</span><span>Vet + pinned install (never curl|sh) + config baseline (manifest_check off, pane_history off)</span></div>
+          <div class="slot"><span class="slot-id">1.2</span><span>Claude integration install, diff-reviewed — settings.json + wal-guard/mempalace hooks intact</span></div>
+          <div class="slot"><span class="slot-id">1.3</span><span>Epic-launcher herdr variant — argv-only agent start; NO-GO ⇒ keep tmux</span></div>
+          <div class="slot"><span class="slot-id">1.4</span><span>Blocked→notify-owner bridge — real approval screens asserted, heartbeat, labels only (no pane contents)</span></div>
+          <div class="slot"><span class="slot-id">1.5</span><span>Runbook + workspace conventions (one workspace per project, tabs per run)</span></div>
+        </div>
+      </div>
+      <div class="epic">
+        <header><span class="t">HD2 — herdr executor runtime</span><span class="goal">exit: #559-class cell green on herdr · soak passed</span><span class="chip blocked">gated on #475 + #560</span></header>
+        <div class="slots">
+          <div class="slot"><span class="slot-id">2.0</span><span>Qualification gate + committed compatibility manifest — <b>hard NO-GO stops the epic</b></span></div>
+          <div class="slot"><span class="slot-id">2.1</span><span>TerminalRuntime seam — tmux impl extracted, zero behavior change; preflight wired into dispatch</span></div>
+          <div class="slot"><span class="slot-id">2.2</span><span>Herdr runtime impl — launch/identity/enumeration/termination parity; screen methods excluded</span></div>
+          <div class="slot"><span class="slot-id">2.3</span><span>Recovery/adoption — session.snapshot ↔ JobRegistry; native resume off (separate config root)</span></div>
+          <div class="slot"><span class="slot-id">2.4</span><span>Events-driven liveness, advisory — every transition revalidated; poll fallback</span></div>
+          <div class="slot"><span class="slot-id">2.5</span><span>A/B + flip — crash/reap/recovery matrix, drain-based rollback, scheduled dual-backend fixture</span></div>
+        </div>
+      </div>
+      <div class="epic">
+        <header><span class="t">HD3 — agent skill + console UX</span><span class="goal">exit: skill shipped + reviewed</span><span class="chip idle">queued</span></header>
+        <div class="slots">
+          <div class="slot"><span class="slot-id">3.1</span><span>Adapted herdr skill, HERDR_ENV-gated — validated against pinned binary (upstream skill has live CLI drift)</span></div>
+          <div class="slot"><span class="slot-id">3.2</span><span>Stall-triage recipes — pane.read/agent.explain replace capture-pane archaeology</span></div>
+          <div class="slot"><span class="slot-id">3.3</span><span>Driver-bench cell on herdr runtime — overhead vs tmux baseline</span></div>
+          <div class="slot"><span class="slot-id">3.4</span><span>Dashboard/notification polish — deferred until HD1/HD2 experience accumulates</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">backlog triage — all 46 open issues</span></header>
+    <div class="body">
+      <div class="triage-sum">
+        <div class="tri u"><div class="n">37</div><div class="l">unchanged</div></div>
+        <div class="tri r"><div class="n">6</div><div class="l">re-scope</div></div>
+        <div class="tri s"><div class="n">3</div><div class="l">close as complete</div></div>
+        <div class="tri a"><div class="n">0</div><div class="l">absorbed</div></div>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>issue</th><th>proposed disposition</th><th>rationale</th></tr></thead>
+        <tbody>
+          <tr><td class="c num">#333</td><td>dispatch-observability epic</td><td class="c"><span class="chip blocked">close</span></td><td>all 10 children merged/closed — verified via gh 2026-07-21</td></tr>
+          <tr><td class="c num">#457</td><td>executor-spikes epic</td><td class="c"><span class="chip blocked">close</span></td><td>all 5 spikes closed; PRs #458–#462 landed</td></tr>
+          <tr><td class="c num">#408</td><td>GLM follow-ups epic</td><td class="c"><span class="chip blocked">close</span></td><td>all 4 children closed</td></tr>
+          <tr><td class="c num">#557</td><td>H4 failure Observations</td><td class="c"><span class="chip working">re-scope</span></td><td>one sentence: herdr events = optional advisory source, post-HD2</td></tr>
+          <tr><td class="c num">#559</td><td>H6 proving run</td><td class="c"><span class="chip working">re-scope</span></td><td>becomes HD2 entry criterion; herdr re-run = HD2.5 exit evidence</td></tr>
+          <tr><td class="c num">#474</td><td>W12 migration flip</td><td class="c"><span class="chip working">re-scope</span></td><td>explicit "flip completes before any runtime swap" sequencing</td></tr>
+          <tr><td class="c num">#390</td><td>workspace-doctor</td><td class="c"><span class="chip working">re-scope</span></td><td>add herdr checks: binary + version pin, server, schema digest</td></tr>
+          <tr><td class="c num">#357</td><td>Codex gpt-5.6-sol pin</td><td class="c"><span class="chip working">re-scope</span></td><td>CLI prereq now satisfied — live probe MODEL-OK on codex-cli 0.144.1</td></tr>
+          <tr><td class="c num">#537</td><td>security-vet skill</td><td class="c"><span class="chip working">re-scope</span></td><td>this analysis is the skill's worked example / fixture</td></tr>
+          <tr><td class="c num">HD1–3</td><td>new epics, 15 children</td><td class="c"><span class="chip ok">file</span></td><td>after owner review — HD1 startable now, HD2 gated, HD3 queued</td></tr>
+        </tbody>
+      </table></div>
+      <p class="muted" style="margin-bottom:0">The other 37 issues are untouched by herdr (engine/enforcement, WF prose, telemetry, skills hygiene — incl. epic #560 itself, which stays as HD2's entry criterion). Every close/re-scope above is an <b style="color:var(--ink)">owner decision</b> — nothing has been filed, edited, or closed.</p>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">risk register</span></header>
+    <div class="body scroll">
+      <table>
+        <thead><tr><th></th><th>risk</th><th>sev</th><th>mitigation</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev" style="background:var(--warn)">&nbsp;</span></td><td>Prerelease velocity / API drift</td><td class="c"><span class="chip warn">high</span></td><td>pin one release; vendor <span class="mono">api schema</span> digest; workspace-doctor check; seam keeps tmux fallback</td></tr>
+          <tr><td><span class="sev" style="background:var(--warn)">&nbsp;</span></td><td>Heuristic agent state (claude/codex = screen manifests)</td><td class="c"><span class="chip warn">high if misused</span></td><td>advisory-only by drift-guarded rule; sentinels/exit codes/Observations stay the evidence</td></tr>
+          <tr><td><span class="sev" style="background:var(--warn)">&nbsp;</span></td><td>Two resume authorities (native restore vs classify_recovery)</td><td class="c"><span class="chip warn">high if unaddressed</span></td><td>restore OFF for executor sessions via separate config root; HD2.0 hard test</td></tr>
+          <tr><td><span class="sev" style="background:var(--working)">&nbsp;</span></td><td>Dual AGPL/commercial license</td><td class="c"><span class="chip working">medium</span></td><td>separate-process invocation only; re-verify before any bundling/distribution; commercial exit exists</td></tr>
+          <tr><td><span class="sev" style="background:var(--working)">&nbsp;</span></td><td>Remote detection-manifest auto-update from herdr.dev</td><td class="c"><span class="chip working">medium</span></td><td><span class="mono">manifest_check = false</span>; local overrides pinned</td></tr>
+          <tr><td><span class="sev" style="background:var(--working)">&nbsp;</span></td><td>Integration install edits ~/.claude/settings.json</td><td class="c"><span class="chip working">medium</span></td><td>HD1.2 diff-review before accept; hook suite verified after</td></tr>
+          <tr><td><span class="sev" style="background:var(--working)">&nbsp;</span></td><td>tmux fallback rots after herdr becomes default</td><td class="c"><span class="chip working">medium</span></td><td>scheduled dual-backend proving fixture until explicit deprecation</td></tr>
+          <tr><td><span class="sev" style="background:var(--working)">&nbsp;</span></td><td>Missed socket events across disconnects</td><td class="c"><span class="chip working">medium</span></td><td>reconnect = snapshot + registry reconciliation; polling fallback</td></tr>
+          <tr><td><span class="sev" style="background:var(--working)">&nbsp;</span></td><td>Single-maintainer bus factor</td><td class="c"><span class="chip working">medium</span></td><td>seam + tmux fallback = exit ramp; AGPL guarantees forkability</td></tr>
+          <tr><td><span class="sev" style="background:var(--idle)">&nbsp;</span></td><td>Idle CPU / TUI quirks</td><td class="c"><span class="chip idle">low</span></td><td>server headless for unattended runs; acceptable for console use</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">assumptions to clarify — owner decisions</span>
+      <span class="right"><span class="chip warn">6 questions</span></span>
+    </header>
+    <div class="body">
+      <ol class="qa">
+        <li><span class="num">Q1</span><span><b>"Main console" = observation + terminal control, not the orchestrator.</b> rawgentic keeps gates/routing/audit/epic-driver; herdr sits underneath and around it. If herdr should <i>drive</i> work instead, the phasing changes materially. Assumed the former — confirm.</span></li>
+        <li><span class="num">Q2</span><span><b>Console lives on this workspace host</b>, attached locally or via <span class="mono">herdr --remote</span> from laptop/phone. A server elsewhere breaks Phase A's launcher integration.</span></li>
+        <li><span class="num">Q3</span><span><b>Adoption depth decided per phase.</b> Stop-at-console-only stays a live option; HD2 committed only after HD1 proves daily value and #475/#560 land.</span></li>
+        <li><span class="num">Q4</span><span><b>Run priority:</b> #475 (paused) + #560 keep the queue; HD1 slots in parallel, non-preempting. Confirm before HD1 consumes run time.</span></li>
+        <li><span class="num">Q5</span><span><b>License posture sign-off:</b> the AGPL read (separate process ⇒ no obligation) is careful license reading, not legal counsel. Acceptable for internal tooling?</span></li>
+        <li><span class="num">Q6</span><span><b>Same-user socket trust boundary</b> (0o600, full control to any same-user process) — identical to today's tmux posture. Acceptable as-is?</span></li>
+      </ol>
+      <h3 style="margin-top:16px">Open technical uncertainties (each with its home)</h3>
+      <ul class="unc">
+        <li>Argv-as-initial-process spawn for generic panes — NO-GO criterion → HD1.0 / HD2.0</li>
+        <li>Caller env injection (PYTHONPATH, CLAUDE_CONFIG_DIR) — env(1) fallback → HD2.0</li>
+        <li><span class="mono">resume_agents_on_restore</span> scope — global config likely; separate config root → HD2.0 hard test</li>
+        <li><span class="mono">pane.process_info</span> field parity with tmux pane-pid path → HD2.2</li>
+        <li>Socket latency/stability + idle CPU at our concurrency → HD1.0 / HD2.5 soak</li>
+        <li><span class="mono">session.snapshot</span> completeness on &gt;20-pane sessions → HD2.3</li>
+        <li>Blocked-detection miss rate on our real approval screens → HD1.4 real-screen AC</li>
+        <li>Upstream skill/CLI drift cadence (live example: skill documents a <span class="mono">herdr wait</span> group the CLI doesn't have) → pin + re-validate per bump</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="pane">
+    <header><span class="sq"></span><span class="t">review trail</span>
+      <span class="right"><span class="chip ok">consult done</span><span class="chip ok">adversarial 7/7 adopted</span></span>
+    </header>
+    <div class="body foot">
+      <p style="margin-top:0"><b style="color:var(--ink)">Thought partner:</b> gpt-5.6-sol (codex-cli 0.144.1) via the engine consult CLI — converged on the same architecture; adopted its qualification-gate, never-mix-namespaces, backend-per-run, dual-backend-fixture, and notification-redaction refinements. Report: <code>docs/reviews/peer-2026-07-21-herdr-console-plan-consult.md</code> (run-local — docs/reviews/ is gitignored per the 2026-07-20 owner decision, #548)</p>
+      <p><b style="color:var(--ink)">Adversarial review (WF5):</b> gpt-5.6-sol, 7 findings (4 High / 3 Medium), all verified real and adopted — incl. the drain-based rollback, the heuristic-miss notification AC, and the missing 46th issue (epic #560 itself). Report: <code>docs/reviews/2026-07-21-herdr-console-plan-md-2026-07-21.md</code></p>
+      <p style="margin-bottom:0"><b style="color:var(--ink)">Full plan:</b> <code>docs/planning/2026-07-21-herdr-console-plan.md</code> (+ rendered .html) · analysis grounded in the herdr repo @ 44f2211 (read-only clone), herdr.dev docs, third-party reviews, and a file:line inventory of <code>phase_executor</code> + <code>executor_routing_lib.py</code>. Herdr was not built or executed; repo content treated as data, never instructions.</p>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
