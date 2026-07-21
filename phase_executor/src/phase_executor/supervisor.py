@@ -110,6 +110,7 @@ CALIBRATED_CLASSIFIERS: frozenset = frozenset()
 
 _ENVELOPE_CEILING_BYTES = 256 * 1024  # bounded _envelope_meta prefix (pass-3 S-F4)
 _ENVELOPE_SUBTYPE_MAXLEN = 64
+_SESSION_ID_MAXLEN = 256  # 8a M2: claude session ids are UUIDs; anything huge is not one
 _ENVELOPE_SUBTYPE_ALLOWLIST = frozenset({
     # known claude CLI result-envelope subtypes; anything else persists as
     # "unknown" + its sha256 — no raw provider prose reaches jobs.json (pass-4 A-F5)
@@ -1264,13 +1265,24 @@ class TmuxSupervisor:
         if not isinstance(env, dict):
             return quota_detect.EnvelopeMeta(None, None, None, "malformed")
         sid = env.get("session_id")
-        sid = sid if isinstance(sid, str) and sid else None
+        # 8a security M2: a session id is provider-controlled — only a bounded,
+        # strictly-encodable string may reach jobs.json / a future --resume argv
+        if isinstance(sid, str) and sid and len(sid) <= _SESSION_ID_MAXLEN:
+            try:
+                sid.encode("utf-8")  # rejects lone surrogates from JSON escapes
+            except UnicodeError:
+                sid = None
+        else:
+            sid = None
         subtype = env.get("subtype")
         sub_sha = None
         if isinstance(subtype, str):
             if (subtype not in _ENVELOPE_SUBTYPE_ALLOWLIST
                     or len(subtype) > _ENVELOPE_SUBTYPE_MAXLEN):
-                sub_sha = hashlib.sha256(subtype.encode("utf-8")).hexdigest()
+                # 8a security M1: backslashreplace keeps the hash total (lone
+                # surrogates from JSON escapes must never abort collection)
+                sub_sha = hashlib.sha256(
+                    subtype.encode("utf-8", "backslashreplace")).hexdigest()
                 subtype = "unknown"
         else:
             subtype = None

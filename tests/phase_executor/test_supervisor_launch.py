@@ -878,3 +878,31 @@ def test_relaunch_profile_rebuild_preserves_max_tokens(tmp_path, monkeypatch):
     monkeypatch.setattr(q.sup, "launch", fake_launch)
     q.sup._relaunch(paused)
     assert captured["profile"].max_tokens == 512
+
+
+# ---- 8a security wave (M1/M2): envelope unicode + session-id bounds -----------
+
+def test_collect_surrogate_subtype_never_crashes(tmp_path):
+    # a lone-surrogate JSON escape in the subtype must become "unknown"+sha evidence,
+    # never a UnicodeEncodeError aborting collection after the kill
+    q = _QuotaCollect(tmp_path,
+                      envelope='{"session_id": "sess-1", "subtype": "\\ud800bad"}')
+    state, _ = q.collect()
+    assert state == "completed"
+    qc = q.stored().quota_classification
+    assert qc["envelope_subtype"] == "unknown"
+    assert isinstance(qc["envelope_subtype_sha256"], str) and qc["envelope_subtype_sha256"]
+
+
+def test_collect_oversized_session_id_not_persisted(tmp_path, monkeypatch):
+    # a session id beyond the provider's plausible bound is refused as evidence,
+    # never persisted into jobs.json / a future --resume argv
+    big_sid = "s" * 300
+    q = _QuotaCollect(tmp_path,
+                      envelope='{"session_id": "' + big_sid + '", "subtype": "success"}')
+    monkeypatch.setattr(supervisor, "CALIBRATED_CLASSIFIERS", _CALIB)
+    state, _ = q.collect()
+    assert state == "completed"  # no resumable session -> refused, evidence persisted
+    qc = q.stored().quota_classification
+    assert qc["refusal"] == "no_resumable_session"
+    assert q.stored().provider_session_id is None

@@ -145,7 +145,11 @@ def classify_quota_exit(*, engine: str, exit_code: Optional[int],
     """
     text_hits = {"usage_limit_lang": False, "reset_retry_lang": False}
     matched: list = []
-    lines = [line.casefold() for line in stderr.decoded_text.splitlines()]
+    # 8a security M3: evidence with any read_error is NOT classified — no matching
+    # runs over an oversized/unreadable prefix (the verdict is already forced False,
+    # and scanning attacker-sized text would be free CPU for the adversary)
+    lines = ([] if stderr.read_error is not None
+             else [line.casefold() for line in stderr.decoded_text.splitlines()])
     for rid, conjunct, rx in _COMPILED:
         for line in lines:
             if rx.search(line):

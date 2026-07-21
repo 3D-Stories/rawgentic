@@ -195,3 +195,18 @@ def test_rule_table_digest_pinned_next_to_version():
     digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()
     assert digest == RULE_TABLE_DIGEST, (
         "rule table changed — bump classifier_version AND RULE_TABLE_DIGEST together")
+
+
+# --- 8a security wave (M3): read_error short-circuits matching -----------------
+
+def test_read_error_skips_matching_entirely():
+    # oversized/unreadable evidence is NOT classified (design: "Files over the
+    # ceiling are NOT classified") — no rule matching runs over the prefix, so an
+    # adversarial newline-heavy oversized stderr costs nothing.
+    ev = StderrEvidence(decoded_text="usage limit resets at 3am", raw_sha256="x",
+                        byte_count=10, read_error="unreadable: EACCES")
+    cls = classify_quota_exit(engine="claude", exit_code=1, stderr=ev)
+    assert cls.verdict is False
+    assert cls.rule_ids == ()
+    assert cls.conjuncts["usage_limit_lang"] is False
+    assert cls.conjuncts["reset_retry_lang"] is False
