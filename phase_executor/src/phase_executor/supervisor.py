@@ -507,13 +507,19 @@ class TmuxSupervisor:
         if self._live(record):
             raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
         sent = self._sentinel(record)
-        if sent is not None and sent.get("parse_status") not in contract.AVAILABILITY_FAILURES:
-            # An envelope-producing sentinel (ok / parse_error / identity_failure / ...)
-            # means the child ran to an effectful result — resuming would duplicate it.
-            # Since #557 an exited_no_sentinel record ALWAYS carries the supervisor's
-            # synthetic availability observation (no_response) — that is a RECORDED
-            # FAILURE, not a completion, and pause/resume is exactly its designed
-            # recovery, so availability-failure sentinels do not trip this guard.
+        if sent is not None and (
+                sent.get("parse_status") not in contract.AVAILABILITY_FAILURES
+                or sent.get("actual_model")):
+            # Resuming a job that already produced an EFFECTFUL result would duplicate it.
+            # Two signals mark "effectful": (a) an envelope-producing status (ok /
+            # parse_error / identity_failure / ...) — not an availability failure; or
+            # (b) a provider-ATTESTED actual_model — the model ran and (if mutating) may
+            # have applied effects/billing, even under an availability-shaped status
+            # (#557 8a review: a child-written no_response/nonzero_exit that nonetheless
+            # attested a model is effectful and must not be resumed). The supervisor's own
+            # synthetic exited_no_sentinel observation carries actual_model=None with an
+            # availability status, so it correctly does NOT trip this guard — pause/resume
+            # is exactly its designed recovery.
             raise SupervisorError(
                 "mark_quota_paused: a valid sentinel exists — the job COMPLETED; resuming "
                 "would duplicate its effects")
@@ -695,22 +701,40 @@ class TmuxSupervisor:
                     continue
                 # #557 AC1/AC2: death-without-sentinel emits the supervisor's synthetic
                 # Observation (correlation + digest from the spec), so reconcile sees a
-                # bound, availability-classed recorded failure instead of a missing pair.
-                # Ordering and capture posture mirror the timeout path below; CF-12 holds —
-                # this branch is only reached when the sentinel re-check found no valid
-                # child observation (a malformed file may be replaced, same as on timeout;
-                # the raw pane capture retains the forensics).
+                # BOUND, recorded failure instead of a missing pair. CF-12 holds — reached
+                # only when the sentinel re-check found no VALID child observation.
+                #
+                # #557 8a review (both reviewers converged): the failure STATUS is
+                # laundering-sensitive. A CLEAN death (no observation.json at all) is a
+                # genuine availability failure → NO_RESPONSE, which a verified sibling may
+                # forgive (chain-fallback parity with timed_out). A SUSPICIOUS death (a
+                # file exists but is schema-invalid — a child that produced an unparseable
+                # envelope, possibly a wrong-model/billed run) must NOT be forgivable →
+                # PARSE_ERROR (envelope-produced-but-unparseable), which verify_post reads
+                # as identity_missing → a breach reconcile refuses even with a verified
+                # sibling. The malformed original is preserved as forensics before the
+                # synthetic replaces observation.json (reconcile reads only the audited
+                # records, so the raw evidence must survive on disk).
+                obs_path = Path(record.capture_dir) / "observation.json"
+                malformed_present = obs_path.exists()
                 spec = self._read_spec(record)
                 obs = synthetic_observation(
                     run_id=record.identity.run_id, seat=record.identity.seat,
                     attempt_id=record.attempt_id, engine=spec.get("engine", "claude"),
                     requested_model=spec.get("request", {}).get("requested_model", "unknown"),
                     prompt=spec.get("request", {}).get("prompt", ""),
-                    parse_status=contract.NO_RESPONSE,
-                    reason="child exited without sentinel",
+                    parse_status=(contract.PARSE_ERROR if malformed_present
+                                  else contract.NO_RESPONSE),
+                    reason=("child exited leaving an unparseable observation"
+                            if malformed_present else "child exited without sentinel"),
                     routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"),
                     correlation_id=spec.get("request", {}).get("correlation_id"))
                 cap = ensure_private_dir(Path(record.capture_dir))
+                if malformed_present:
+                    try:  # preserve the suspicious envelope as forensics — never crash on it
+                        obs_path.replace(cap / "observation.malformed.json")
+                    except OSError:
+                        pass
                 atomic_write_text(cap / "observation.json",
                                   json.dumps(obs, indent=2, sort_keys=True))
                 self._finish(record, "exited_no_sentinel")

@@ -355,15 +355,18 @@ def test_malformed_obs_is_exited_no_sentinel(env_factory):
     rec = env.launch(correlation_id="557-mal")
     state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
     assert state == "exited_no_sentinel"
-    # #557 AC1/AC2: the death-without-sentinel yields a schema-valid, correlation-bound
-    # synthetic Observation — the failure that most needs auditing must not vanish.
-    assert obs is not None and obs["parse_status"] == contract.NO_RESPONSE
+    # #557 AC1/AC2 + 8a review: a death that left an UNPARSEABLE observation is a
+    # SUSPICIOUS terminal state — the synthetic is schema-valid + correlation-bound (so
+    # the failure is recorded, not lost) but carries PARSE_ERROR, which reconcile treats
+    # as a breach a verified sibling cannot launder.
+    assert obs is not None and obs["parse_status"] == contract.PARSE_ERROR
     assert obs["correlation_id"] == "557-mal"
     contract.validate_observation(obs)
-    # the synthetic replaced the malformed file on disk (timeout-path convention; raw
-    # pane capture retains the forensics)
     on_disk = json.loads(Path(rec.capture_dir, "observation.json").read_text(encoding="utf-8"))
-    assert on_disk["parse_status"] == contract.NO_RESPONSE
+    assert on_disk["parse_status"] == contract.PARSE_ERROR
+    # the malformed original is preserved as forensics, not silently destroyed
+    forensics = json.loads(Path(rec.capture_dir, "observation.malformed.json").read_text(encoding="utf-8"))
+    assert forensics == {"not": "an observation"}
     assert env.registry.get(env.identity).state == "exited_no_sentinel"
     assert env.quota.live_permits("claude") == 0
 
@@ -374,11 +377,15 @@ def test_nonzero_exit_no_sentinel_not_auto_resumed(env_factory):
     rec = env.launch()
     state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=30)
     assert state == "exited_no_sentinel"  # DEFAULT for ambiguous nonzero exit — never quota_paused
-    # #557 AC1: synthetic Observation carries the REAL routing digest from the spec (binds
-    # to its receipt in reconcile), not the sha256:unknown fallback
+    # #557 AC1: a CLEAN death (no observation.json at all) is a genuine availability
+    # failure → NO_RESPONSE (forgivable by a verified sibling); the synthetic carries the
+    # REAL routing digest from the spec (binds to its receipt in reconcile), never the
+    # sha256:unknown fallback.
     assert obs is not None and obs["parse_status"] == contract.NO_RESPONSE
     assert obs["routing_config_digest"].startswith("sha256:")
     assert obs["routing_config_digest"] != "sha256:unknown"
+    # no malformed file existed, so none is fabricated
+    assert not Path(rec.capture_dir, "observation.malformed.json").exists()
 
 
 @tmux_required
@@ -465,3 +472,13 @@ def test_mark_quota_paused_sentinel_guard_boundary(tmp_path):
     (cap / "observation.json").write_text(json.dumps(ok_obs), encoding="utf-8")
     with pytest.raises(SupervisorError):
         sup.mark_quota_paused(identity, provider_session_id="sess-2")
+    # #557 8a review: an availability-STATUS sentinel that nonetheless ATTESTED a model
+    # is effectful (the model ran / billed) → still refused, even though no_response is an
+    # availability failure. Only the supervisor's actual_model=None synthetic is resumable.
+    reg.upsert(rec)
+    effectful = dict(synth)
+    effectful["actual_model"] = "m"  # provider attested → effectful, not resumable
+    contract.validate_observation(effectful)
+    (cap / "observation.json").write_text(json.dumps(effectful), encoding="utf-8")
+    with pytest.raises(SupervisorError):
+        sup.mark_quota_paused(identity, provider_session_id="sess-3")
