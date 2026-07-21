@@ -364,14 +364,19 @@ _DEF_LANE = {"provider": "anthropic", "transport": "native", "auth_mode": "subsc
 _DEF_TID = ("claude-fable-5", "anthropic", "native", "subscription_oauth", "claude", None, None)
 
 
-def _receipt_rec(nonce, seat="review", cid="c1", verdict="pass", tid=_DEF_TID, digest="sha256:d"):
-    return {"kind": "receipt", "nonce": nonce, "seat": seat, "correlation_id": cid, "attempt_id": "0",
-            "target_identity": list(tid), "config_digest": digest, "gate_digest": None,
-            "author_provider": "openai", "verdict": verdict, "violations": []}
+def _receipt_rec(nonce, seat="review", cid="c1", verdict="pass", tid=_DEF_TID, digest="sha256:d",
+                 recovered_from=None):
+    r = {"kind": "receipt", "nonce": nonce, "seat": seat, "correlation_id": cid, "attempt_id": "0",
+         "target_identity": list(tid), "config_digest": digest, "gate_digest": None,
+         "author_provider": "openai", "verdict": verdict, "violations": []}
+    if recovered_from is not None:  # #554 provenance: recovery attempt of an earlier expected call
+        r["recovered_from"] = recovered_from
+    return r
 
 
-def _obs_rec(nonce, requested="claude-fable-5", actual="claude-fable-5", lane=None, status="ok", digest="sha256:d"):
-    inner = _obs_dict(seat="review", correlation_id="c1", requested_model=requested, actual_model=actual,
+def _obs_rec(nonce, requested="claude-fable-5", actual="claude-fable-5", lane=None, status="ok",
+             digest="sha256:d", cid="c1"):
+    inner = _obs_dict(seat="review", correlation_id=cid, requested_model=requested, actual_model=actual,
                       parse_status=status, routing_config_digest=digest)
     if status != "ok":
         inner["actual_model"] = None
@@ -449,6 +454,82 @@ def test_reconcile_sibling_success_forgives_clean_availability_failure():
     res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
     assert res.ok, res
     assert not res.binding_mismatch and not res.orphan and not res.duplicate
+
+
+def test_reconcile_pause_recover_is_one_satisfied_call():
+    # #554 AC1: a quota_paused original (availability obs) + a recovery attempt (own correlation
+    # c1#resume1, recovered_from=c1, verified obs) reconciles OK as ONE satisfied expected call —
+    # not two keys, not an unsatisfied availability-only key. The recovery is grouped under the
+    # original expected key (review, c1) via recovered_from.
+    recs = [
+        _receipt_rec("n1", cid="c1"), _obs_rec("n1", status="no_response", cid="c1"),
+        _receipt_rec("n2", cid="c1#resume1", recovered_from="c1"), _obs_rec("n2", cid="c1#resume1"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert not res.orphan and not res.missing_receipt and not res.binding_mismatch
+
+
+def test_reconcile_pause_without_recovery_still_fails():
+    # #554 AC3 (no laundering): a quota_paused original with NO recovery is an availability-only
+    # key → never served → refuse.
+    recs = [_receipt_rec("n1", cid="c1"), _obs_rec("n1", status="no_response", cid="c1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.missing_receipt
+
+
+def test_reconcile_recovery_receipt_not_orphaned():
+    # #554: a recovery receipt whose OWN (seat, correlation_id) is not an expected key must not be
+    # flagged orphan — it is attributed to the original via recovered_from.
+    recs = [
+        _receipt_rec("n1", cid="c1"), _obs_rec("n1", status="no_response", cid="c1"),
+        _receipt_rec("n2", cid="c1#resume1", recovered_from="c1"), _obs_rec("n2", cid="c1#resume1"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.orphan, res.orphan
+
+
+def test_reconcile_recovery_with_no_verified_obs_still_fails():
+    # #554 AC3 corollary: a recovery attempt that ALSO only produced an availability obs (still
+    # never verified) does not satisfy — no laundering by a mere resume that also failed.
+    recs = [
+        _receipt_rec("n1", cid="c1"), _obs_rec("n1", status="no_response", cid="c1"),
+        _receipt_rec("n2", cid="c1#resume1", recovered_from="c1"),
+        _obs_rec("n2", status="timeout", cid="c1#resume1"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.missing_receipt
+
+
+def test_reconcile_recovery_to_nonexistent_key_is_orphan():
+    # #554 8a review (attack e): a recovery whose recovered_from names a NON-EXISTENT expected
+    # key must FAIL CLOSED (orphan), never silently drop.
+    recs = [_receipt_rec("n2", cid="ghost#resume1", recovered_from="ghost"),
+            _obs_rec("n2", cid="ghost#resume1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n2" in o for o in res.orphan)
+
+
+def test_reconcile_receipt_recovered_from_non_string_rejected():
+    # #554 8a review (F2): a non-string recovered_from is rejected as a structured anomaly by the
+    # record validator, not an ungraceful TypeError crash in reconcile.
+    bad = _receipt_rec("n1", cid="c1")
+    bad["recovered_from"] = ["c1"]  # unhashable — would crash the effective-key build
+    with pytest.raises(ValueError):
+        enforce._validate_record(bad, 1)
+
+
+def test_reconcile_recovery_breach_not_laundered():
+    # #554 AC3/AC4: if the recovery attempt is a BREACH (wrong model), the original key is unverified
+    # — a recovery cannot launder a breach any more than a sibling can.
+    recs = [
+        _receipt_rec("n1", cid="c1"), _obs_rec("n1", status="no_response", cid="c1"),
+        _receipt_rec("n2", cid="c1#resume1", recovered_from="c1"),
+        _obs_rec("n2", requested="claude-fable-5", actual="claude-sonnet-5", cid="c1#resume1"),
+    ]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and ("review", "c1") in res.unverified
 
 
 def test_reconcile_suspicious_parse_error_not_laundered_by_sibling():

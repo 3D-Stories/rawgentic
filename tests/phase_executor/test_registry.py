@@ -165,6 +165,19 @@ def test_registry_persists_receipt_nonce(tmp_path):
     assert _rec().receipt_nonce is None
 
 
+def test_registry_persists_recovered_from(tmp_path):
+    """#554: recovered_from is the reconcile pause/recover join key — it must survive the durable
+    round-trip (a fresh instance reading jobs.json), tmux-independent, or the recovery provenance
+    is lost across a supervisor restart and a re-recovery can't inherit the root origin."""
+    root = str(tmp_path / "reg")
+    reg.JobRegistry(root, clock=lambda: 1.0).upsert(
+        _rec(session_name="rg-r", recovered_from="554-orig"))
+    fresh = reg.JobRegistry(root, clock=lambda: 1.0)
+    assert fresh.get(_idn()).recovered_from == "554-orig"
+    # absent field in a pre-#554 record stays None (additive, no KeyError)
+    assert _rec().recovered_from is None
+
+
 def test_registry_upsert_updates_in_place(tmp_path):
     r = reg.JobRegistry(str(tmp_path / "reg"), clock=lambda: 1.0)
     r.upsert(_rec(session_name="rg-1", state="running"))
