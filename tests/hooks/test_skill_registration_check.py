@@ -37,7 +37,7 @@ def d(s):
 
 
 FRONTMATTER = """---
-name: rawgentic:{name}
+name: {name}
 description: test skill
 argument-hint: none
 ---
@@ -146,18 +146,28 @@ def test_missing_skill_md_is_stale(tmp_path):
 def test_frontmatter_missing_keys_stale(tmp_path):
     root = make_repo(tmp_path)
     (root / "skills" / "alpha" / "SKILL.md").write_text(
-        "---\nname: rawgentic:alpha\n---\nbody\n")
+        "---\nname: alpha\n---\nbody\n")
     bad = stale(src.check_skill(root, "alpha"))
     assert any(f.surface == "frontmatter" for f in bad)
 
 
-def test_frontmatter_bare_name_tolerated(tmp_path):
-    # sync-security-patterns deviation: bare name (no rawgentic: prefix) passes
+def test_frontmatter_bare_name_passes(tmp_path):
+    # #552: bare name is the canonical form — the harness namespaces it
     root = make_repo(tmp_path)
     (root / "skills" / "beta" / "SKILL.md").write_text(
         "---\nname: beta\ndescription: d\nargument-hint: h\n---\nbody\n")
     assert not [f for f in stale(src.check_skill(root, "beta"))
                 if f.surface == "frontmatter"]
+
+
+def test_frontmatter_prefixed_name_stale(tmp_path):
+    # #552: an embedded rawgentic: prefix is the defect the checker must flag —
+    # the loader colon-sanitizes it and doubles the command name
+    root = make_repo(tmp_path)
+    (root / "skills" / "beta" / "SKILL.md").write_text(
+        "---\nname: rawgentic:beta\ndescription: d\nargument-hint: h\n---\nbody\n")
+    bad = stale(src.check_skill(root, "beta"))
+    assert any(f.surface == "frontmatter" for f in bad)
 
 
 def test_whitelist_missing_entry_stale(tmp_path):
