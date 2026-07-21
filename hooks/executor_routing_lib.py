@@ -1551,24 +1551,30 @@ def _do_status(args) -> int:
 
     has_tmux = shutil.which("tmux") is not None
 
-    def live_fn(record) -> bool:
+    def live_fn(record) -> tuple:
+        """(live, probe_error) — a failed/unavailable probe is NEVER silently 'dead'
+        (gpt-diff A3): the row carries the degradation."""
         if not has_tmux:
-            return False
+            return False, "tmux unavailable on this host"
         try:
             res = subprocess.run(
                 ["tmux", "-S", record.run_socket, "has-session", "-t", record.session_name],
                 capture_output=True, text=True, timeout=10, check=False)
-            return res.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            return False
+            return res.returncode == 0, None
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return False, f"liveness probe failed: {type(e).__name__}"
 
-    def spec_fn(record) -> Optional[dict]:
+    def spec_fn(record) -> tuple:
+        """(spec, status) — missing vs corrupt launch specs stay distinguishable per row
+        (gpt-diff A5); a corrupt spec never kills the whole run view."""
         p = registry_root / "specs" / f"{pe.registry_session_name(record.identity)}.json"
         try:
             with open(p, encoding="utf-8") as fh:
-                return json.load(fh)
+                return json.load(fh), "ok"
+        except FileNotFoundError:
+            return None, "missing"
         except (OSError, ValueError):
-            return None
+            return None, "corrupt"
 
     out["seats"] = pe.supervisor.run_status(
         records, live_fn=live_fn, sentinel_fn=pe.supervisor.read_sentinel,

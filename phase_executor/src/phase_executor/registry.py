@@ -273,4 +273,11 @@ def read_all(registry_root: str) -> list:
         return []
     except (OSError, ValueError) as exc:
         raise RegistryCorrupt(f"jobs.json unreadable/corrupt at {path}: {exc}") from exc
-    return [_record_from_dict(d) for d in data.values()]
+    if not isinstance(data, dict):
+        raise RegistryCorrupt(f"jobs.json at {path} is not an object (got {type(data).__name__})")
+    try:
+        return [_record_from_dict(d) for d in data.values()]
+    except (KeyError, TypeError, AttributeError) as exc:
+        # a structurally-malformed record is the same corruption class as unparseable
+        # JSON (gpt-diff A1) — never a bare KeyError escaping to the caller
+        raise RegistryCorrupt(f"jobs.json at {path} holds a malformed record: {exc!r}") from exc

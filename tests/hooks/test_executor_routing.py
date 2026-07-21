@@ -1785,3 +1785,24 @@ def test_cli_status_read_only_no_registry_dir_metadata_write(tmp_path):
     assert r.returncode == 0
     after = _os.stat(reg_root)
     assert (before.st_mode, before.st_ctime_ns) == (after.st_mode, after.st_ctime_ns)
+
+
+def test_cli_status_wrong_shape_jobs_json_structured_error(tmp_path):
+    # Step-11 L2: valid JSON of the wrong shape (top-level list) must be the structured
+    # registry_corrupt exit 5, not an AttributeError traceback.
+    ws, _, reg_root = _status_repo(tmp_path)
+    (reg_root / "jobs.json").write_text("[1, 2]", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == er.EXIT_INTERNAL
+    assert json.loads(r.stdout)["error"]["code"] == "registry_corrupt"
+
+
+def test_cli_status_corrupt_spec_marked_not_fatal(tmp_path):
+    # gpt-diff A5: a corrupt launch spec is a per-row marker, never a whole-run failure.
+    ws, _, reg_root = _status_repo(tmp_path)
+    spec = reg_root / "specs"
+    (spec / next(spec.glob("*.json")).name).write_text("{corrupt", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    (row,) = json.loads(r.stdout)["seats"]
+    assert row["spec_status"] == "corrupt" and row["requested_model"] is None

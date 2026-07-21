@@ -168,3 +168,13 @@ def test_classify_quota_paused_identity_mismatch_quarantines():
                                  sentinel_valid=False) == "quarantine"
     assert reg.classify_recovery(r, live=False, identity_matches=False,
                                  sentinel_valid=True) == "quarantine"
+
+
+# ---- read_all (#471 read-only view) --------------------------------------
+
+def test_read_all_wraps_malformed_record_in_registry_corrupt(tmp_path):
+    # gpt-diff A1: a record dict missing required keys must raise RegistryCorrupt,
+    # never a bare KeyError escaping to the caller.
+    (tmp_path / "jobs.json").write_text(json.dumps({"rg-x": {"not": "a record"}}), encoding="utf-8")
+    with pytest.raises(reg.RegistryCorrupt):
+        reg.read_all(str(tmp_path))

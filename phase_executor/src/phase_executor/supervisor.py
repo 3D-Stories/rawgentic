@@ -211,22 +211,30 @@ def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) ->
     """AC-J1 per-seat rows for a run — pure composition, all I/O injected (AC-J3: the
     status surface reads registry/spec/capture only, never mutates run state).
 
+    Injected contracts: ``live_fn(record) -> (live: bool, probe_error: Optional[str])``
+    (gpt-diff A3 — a failed/unavailable probe is visible per row, never silently "dead");
+    ``spec_fn(record) -> (spec: Optional[dict], status: "ok"|"missing"|"corrupt")``
+    (gpt-diff A5); ``sentinel_fn(record) -> Optional[dict]``.
+
     Every record produces a row — stale/abnormal entries stay visible, never filtered.
     ``recorded_state`` keeps the raw registry state alongside the derived ``state`` so
     all nine OQ-8 states are distinguishable (derivation never outputs ``launched``).
-    Terminal records skip the live/sentinel probes entirely (no tmux/capture touch for
-    settled jobs). ``eta`` is the literal ``"no estimate"`` until AC-I3 wall-time
-    history exists (#449) — never a fabricated number."""
+    A terminal record skips only the tmux probe — the sentinel is still read, because
+    completed is exactly when ``actual_model`` IS known (gpt-diff A4). ``eta`` is the
+    literal ``"no estimate"`` until AC-I3 wall-time history exists (#449) — never a
+    fabricated number."""
     now = clock()
     run_start = min((r.created_at for r in records), default=now)
     rows = []
     for record in records:
-        if record.state in _TERMINAL_STATES:
-            sentinel, live = None, False
+        sentinel = sentinel_fn(record)
+        if record.state in _TERMINAL_STATES or sentinel is not None:
+            live, probe_error = False, None       # settled/sentinel-bearing: no tmux probe
         else:
-            sentinel = sentinel_fn(record)
-            live = bool(live_fn(record)) if sentinel is None else False
-        spec = spec_fn(record) or {}
+            live, probe_error = live_fn(record)
+            live = bool(live)
+        spec, spec_status = spec_fn(record)
+        spec = spec or {}
         request = spec.get("request") or {}
         rows.append({
             "seat": record.identity.seat,
@@ -240,11 +248,13 @@ def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) ->
             "requested_model": request.get("requested_model"),
             "effort": request.get("effort"),
             "engine": spec.get("engine"),
+            "spec_status": spec_status,
+            "probe_error": probe_error,
             "actual_model": (sentinel or {}).get("actual_model"),
             "correlation_id": (sentinel or {}).get("correlation_id"),
             "eta": "no estimate",
-            "elapsed_s": int(now - record.created_at),
-            "run_elapsed_s": int(now - run_start),
+            "elapsed_s": max(0, int(now - record.created_at)),
+            "run_elapsed_s": max(0, int(now - run_start)),
             "resume_attempts": record.resume_attempts,
             "quarantine_reason": record.quarantine_reason,
             "last_activity": activity_fn(record),

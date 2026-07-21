@@ -115,8 +115,8 @@ def test_derive_state_dead_no_sentinel():
 # ---- run_status rows -------------------------------------------------------------------
 
 
-def _row(records, *, live=lambda r: False, sentinel=lambda r: None,
-         spec=lambda r: None, activity=lambda r: None, clock=lambda: 2000.0):
+def _row(records, *, live=lambda r: (False, None), sentinel=lambda r: None,
+         spec=lambda r: (None, "missing"), activity=lambda r: None, clock=lambda: 2000.0):
     return supervisor.run_status(records, live_fn=live, sentinel_fn=sentinel,
                                  spec_fn=spec, activity_fn=activity, clock=clock)
 
@@ -128,7 +128,7 @@ def test_run_status_empty():
 def test_run_status_row_fields():
     rec = _rec(created_at=1000.0, resume_attempts=1)
     obs = _obs(rec, actual_model="claude-sonnet-5", correlation_id="c-1")
-    rows = _row([rec], sentinel=lambda r: obs, spec=lambda r: _spec(),
+    rows = _row([rec], sentinel=lambda r: obs, spec=lambda r: (_spec(), "ok"),
                 activity=lambda r: {"file": "transport.txt", "age_s": 3, "tail": "last line"})
     (row,) = rows
     assert row["seat"] == "build" and row["attempt"] == "0-aaaa1111"
@@ -179,11 +179,11 @@ def test_run_status_run_elapsed_uses_earliest_start():
     assert all(r["run_elapsed_s"] == 900 for r in rows)
 
 
-def test_run_status_terminal_records_skip_probes():
+def test_run_status_terminal_records_skip_tmux_probe():
     calls = []
     rec = _rec(state="quarantined")
-    _row([rec], live=lambda r: calls.append("live"), sentinel=lambda r: calls.append("sent"))
-    assert calls == []  # a dead-terminal record never triggers tmux/capture probes
+    _row([rec], live=lambda r: (calls.append("live"), None)[0:2], sentinel=lambda r: None)
+    assert calls == []  # a settled record never spawns the tmux probe (sentinel read is allowed — A4)
 
 
 # ---- method delegation (the lift is behavior-preserving) -------------------------------
@@ -210,3 +210,32 @@ def test_status_method_skips_live_probe_when_sentinel_valid():
     sup2._live = lambda r: calls.append("live") or True
     assert sup2.status(rec.identity) == "completed"
     assert calls == []
+
+
+def test_run_status_terminal_record_still_surfaces_observation_metadata():
+    """gpt-diff A4 (High): completed is exactly when actual_model IS known — a terminal
+    recorded state must not blank the observation join (only the tmux probe is skipped)."""
+    rec = _rec(state="completed")
+    obs = _obs(rec, actual_model="claude-sonnet-5", correlation_id="c-9")
+    (row,) = _row([rec], sentinel=lambda r: obs)
+    assert row["state"] == "completed" and row["recorded_state"] == "completed"
+    assert row["actual_model"] == "claude-sonnet-5"
+    assert row["correlation_id"] == "c-9"
+
+
+def test_run_status_probe_error_visible():
+    """gpt-diff A3: a failed/unavailable liveness probe is visible per row, never silently
+    'dead' — the state derivation stays conservative but the degradation is legible."""
+    (row,) = _row([_rec()], live=lambda r: (False, "tmux unavailable"))
+    assert row["state"] == "exited_no_sentinel"
+    assert row["probe_error"] == "tmux unavailable"
+    (row2,) = _row([_rec()], live=lambda r: (True, None))
+    assert row2["state"] == "running" and row2["probe_error"] is None
+
+
+def test_run_status_spec_status_visible():
+    """gpt-diff A5: missing vs corrupt launch spec is distinguishable per row."""
+    (row,) = _row([_rec()], spec=lambda r: (None, "corrupt"))
+    assert row["spec_status"] == "corrupt" and row["requested_model"] is None
+    (row2,) = _row([_rec()], spec=lambda r: (_spec(), "ok"))
+    assert row2["spec_status"] == "ok" and row2["requested_model"] == "claude-sonnet-5"
