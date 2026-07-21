@@ -165,6 +165,103 @@ def synthetic_observation(*, run_id: str, seat: str, attempt_id: str, engine: st
     return d
 
 
+# ---------------------------------------------------------------------------
+# #471 W8 — pure status derivation (read-only; shared by TmuxSupervisor.status
+# and the `status --run` CLI surface, which composes these without a supervisor)
+# ---------------------------------------------------------------------------
+
+_TERMINAL_STATES = frozenset({"completed", "completed_with_residue", "failed",
+                              "quarantined", "quota_paused", "timed_out"})
+
+
+def read_sentinel(record: JobRecord) -> Optional[dict]:
+    """The validated child observation, or None. Validity = schema-valid + identity match
+    (run/seat/attempt), INDEPENDENT of ``.incomplete`` (CF-9)."""
+    path = Path(record.capture_dir) / "observation.json"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            obs = json.load(fh)
+        contract.validate_observation(obs)
+    except (OSError, ValueError, _SchemaError):
+        # absent/unreadable/malformed/schema-invalid = no sentinel. Anything else
+        # (a bug in validation itself) raises — masking it as "no sentinel" would
+        # silently reroute completed jobs to exited_no_sentinel (8a R2 finding).
+        return None
+    if (obs.get("run_id") == record.identity.run_id
+            and obs.get("seat") == record.identity.seat
+            and obs.get("attempt_id") == record.attempt_id):
+        return obs
+    return None
+
+
+def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool) -> str:
+    """Derived state: terminal recorded state passes through; valid sentinel → completed;
+    live session → running; else exited_no_sentinel (NEVER quota_paused — that
+    classification is injected, CF-6)."""
+    if record.state in _TERMINAL_STATES:
+        return record.state
+    if sentinel is not None:
+        return "completed"
+    if live:
+        return "running"
+    return "exited_no_sentinel"
+
+
+def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) -> list:
+    """AC-J1 per-seat rows for a run — pure composition, all I/O injected (AC-J3: the
+    status surface reads registry/spec/capture only, never mutates run state).
+
+    Injected contracts: ``live_fn(record) -> (live: bool, probe_error: Optional[str])``
+    (gpt-diff A3 — a failed/unavailable probe is visible per row, never silently "dead");
+    ``spec_fn(record) -> (spec: Optional[dict], status: "ok"|"missing"|"corrupt")``
+    (gpt-diff A5); ``sentinel_fn(record) -> Optional[dict]``.
+
+    Every record produces a row — stale/abnormal entries stay visible, never filtered.
+    ``recorded_state`` keeps the raw registry state alongside the derived ``state`` so
+    all nine OQ-8 states are distinguishable (derivation never outputs ``launched``).
+    A terminal record skips only the tmux probe — the sentinel is still read, because
+    completed is exactly when ``actual_model`` IS known (gpt-diff A4). ``eta`` is the
+    literal ``"no estimate"`` until AC-I3 wall-time history exists (#449) — never a
+    fabricated number."""
+    now = clock()
+    run_start = min((r.created_at for r in records), default=now)
+    rows = []
+    for record in records:
+        sentinel = sentinel_fn(record)
+        if record.state in _TERMINAL_STATES or sentinel is not None:
+            live, probe_error = False, None       # settled/sentinel-bearing: no tmux probe
+        else:
+            live, probe_error = live_fn(record)
+            live = bool(live)
+        spec, spec_status = spec_fn(record)
+        spec = spec or {}
+        request = spec.get("request") or {}
+        rows.append({
+            "seat": record.identity.seat,
+            "attempt": record.attempt_id,
+            "state": derive_state(record, sentinel=sentinel, live=live),
+            "recorded_state": record.state,
+            "session_name": record.session_name,
+            "run_socket": record.run_socket,
+            "worktree_path": record.worktree_path,
+            "capture_dir": record.capture_dir,
+            "requested_model": request.get("requested_model"),
+            "effort": request.get("effort"),
+            "engine": spec.get("engine"),
+            "spec_status": spec_status,
+            "probe_error": probe_error,
+            "actual_model": (sentinel or {}).get("actual_model"),
+            "correlation_id": (sentinel or {}).get("correlation_id"),
+            "eta": "no estimate",
+            "elapsed_s": max(0, int(now - record.created_at)),
+            "run_elapsed_s": max(0, int(now - run_start)),
+            "resume_attempts": record.resume_attempts,
+            "quarantine_reason": record.quarantine_reason,
+            "last_activity": activity_fn(record),
+        })
+    return rows
+
+
 class TmuxSupervisor:
     """Async seat execution: launch/status/await_job/cancel (+ recover/reap in the lifecycle
     tier). ``run`` (subprocess runner) and ``clock`` are injected for the pure tests; the
@@ -371,39 +468,21 @@ class TmuxSupervisor:
         return self._tmux(record.run_socket, "has-session", "-t", record.session_name).returncode == 0
 
     def _sentinel(self, record: JobRecord) -> Optional[dict]:
-        """The validated child observation, or None. Validity = schema-valid + identity match
-        (run/seat/attempt), INDEPENDENT of ``.incomplete`` (CF-9)."""
-        path = Path(record.capture_dir) / "observation.json"
-        try:
-            with open(path, encoding="utf-8") as fh:
-                obs = json.load(fh)
-            contract.validate_observation(obs)
-        except (OSError, ValueError, _SchemaError):
-            # absent/unreadable/malformed/schema-invalid = no sentinel. Anything else
-            # (a bug in validation itself) raises — masking it as "no sentinel" would
-            # silently reroute completed jobs to exited_no_sentinel (8a R2 finding).
-            return None
-        if (obs.get("run_id") == record.identity.run_id
-                and obs.get("seat") == record.identity.seat
-                and obs.get("attempt_id") == record.attempt_id):
-            return obs
-        return None
+        return read_sentinel(record)
 
     def status(self, identity: WorktreeIdentity) -> str:
-        """Derived state: valid sentinel → completed; live session → running; a dead session
-        with no sentinel keeps its terminal recorded state or defaults to exited_no_sentinel
-        (NEVER quota_paused — that classification is injected, CF-6)."""
+        """Derived state via the lifted ``derive_state`` (#471 W8 — one derivation source for
+        the method and the read-only status surface)."""
         record = self._registry.get(identity)
         if record is None:
             raise SupervisorError(f"unknown job {identity}")
-        if record.state in ("completed", "completed_with_residue", "failed", "quarantined",
-                            "quota_paused", "timed_out"):
+        if record.state in _TERMINAL_STATES:
             return record.state
-        if self._sentinel(record) is not None:
-            return "completed"
-        if self._live(record):
-            return "running"
-        return "exited_no_sentinel"
+        # 8a R1#1: keep the pre-lift short-circuit — a sentinel-bearing job never spawns
+        # the tmux probe (and a hung socket can't turn 'completed' into a raise).
+        sentinel = self._sentinel(record)
+        live = self._live(record) if sentinel is None else False
+        return derive_state(record, sentinel=sentinel, live=live)
 
     def mark_quota_paused(self, identity: WorktreeIdentity,
                           provider_session_id: Optional[str]) -> JobRecord:

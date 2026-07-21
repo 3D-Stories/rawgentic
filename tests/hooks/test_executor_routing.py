@@ -1650,3 +1650,159 @@ def test_run_supervised_filters_to_sandboxed_lane_on_real_table():
                  if _PROVIDER_ENGINE.get(t["lane"]["provider"], t["lane"]["provider"])
                  in er.MUTATING_FS_SANDBOXED]
     assert sandboxed, "build chain lost its sandboxed entry — supervised builds all refuse"
+
+
+# --- #471 W8: `status --run` — the read-only live-run status surface ----------------------------
+# pylint: disable=no-name-in-module
+from phase_executor.registry import JobRecord, JobRegistry, session_name as _sname  # noqa: E402
+from phase_executor.worktree import WorktreeIdentity as _WId  # noqa: E402
+# pylint: enable=no-name-in-module
+
+
+def _status_repo(tmp_path, *, state="running", with_obs=False, with_spec=True,
+                 with_activity=False, run_id="run1"):
+    """A fake project repo with a seeded job registry + optional spec/observation/capture."""
+    repo = tmp_path / "projects" / "statusrepo"
+    _cfg(repo)
+    ws = _ws(tmp_path, path="./projects/statusrepo")
+    reg_root = repo / ".rawgentic" / "runtime" / "registry"
+    idn = _WId(run_id=run_id, seat="build", attempt="0-aaaa1111")
+    cap = repo / ".rawgentic" / "runs" / run_id / "build" / "0-aaaa1111"
+    cap.mkdir(parents=True)
+    rec = JobRecord(
+        identity=idn, session_name=_sname(idn), run_socket=str(tmp_path / "no.sock"),
+        pane_pid=1, pane_pgid=1, provider_pgid=None, pane_start_time="1",
+        worktree_path=str(repo / "wt"), worktree_base_sha="0" * 40, worktree_root=str(repo),
+        worktree_gitdir=str(repo / ".git"), worktree_repo=str(repo), capture_dir=str(cap),
+        attempt_id="0-aaaa1111", permit_ref="claude:default", command_digest="sha256:abc",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0,
+        state=state, created_at=1.0, quarantine_reason=None)
+    JobRegistry(str(reg_root)).upsert(rec)
+    if with_spec:
+        specs = reg_root / "specs"
+        specs.mkdir(parents=True, exist_ok=True)
+        (specs / f"{_sname(idn)}.json").write_text(json.dumps(
+            {"engine": "claude", "request": {"requested_model": "claude-sonnet-5",
+                                             "effort": "high"}}), encoding="utf-8")
+    if with_obs:
+        from phase_executor.supervisor import synthetic_observation  # noqa: PLC0415  # pylint: disable=no-name-in-module
+        obs = synthetic_observation(
+            run_id=run_id, seat="build", attempt_id="0-aaaa1111", engine="claude",
+            requested_model="claude-sonnet-5", prompt="hi", parse_status=contract.TIMEOUT,
+            reason="t", routing_config_digest="sha256:" + "0" * 64)
+        obs["actual_model"] = "claude-sonnet-5"
+        (cap / "observation.json").write_text(json.dumps(obs), encoding="utf-8")
+    if with_activity:
+        (cap / "transport.stdout.txt").write_text("first line\nlast activity line\n", encoding="utf-8")
+    return ws, repo, reg_root
+
+
+def test_cli_status_missing_registry_empty_seats(tmp_path):
+    repo = tmp_path / "projects" / "statusrepo"
+    _cfg(repo)
+    ws = _ws(tmp_path, path="./projects/statusrepo")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["run_id"] == "run1" and out["seats"] == []
+
+
+def test_cli_status_renders_seat_row(tmp_path):
+    ws, _, _ = _status_repo(tmp_path, with_obs=True, with_activity=True)
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    (row,) = json.loads(r.stdout)["seats"]
+    assert row["seat"] == "build"
+    assert row["state"] == "completed"          # valid sentinel wins over dead session
+    assert row["recorded_state"] == "running"   # stale registry state visible, not hidden
+    assert row["requested_model"] == "claude-sonnet-5" and row["effort"] == "high"
+    assert row["actual_model"] == "claude-sonnet-5" and row["engine"] == "claude"
+    assert row["eta"] == "no estimate"
+    assert row["last_activity"]["file"] in ("transport.stdout.txt", "observation.json")
+    assert row["last_activity"]["tail"]
+
+
+def test_cli_status_dead_session_no_sentinel(tmp_path):
+    ws, _, _ = _status_repo(tmp_path, with_obs=False)
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    (row,) = json.loads(r.stdout)["seats"]
+    assert row["state"] == "exited_no_sentinel"
+    assert row["actual_model"] is None and row["last_activity"] is None
+
+
+def test_cli_status_filters_to_run(tmp_path):
+    ws, _, _ = _status_repo(tmp_path, run_id="run1")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "other")
+    assert r.returncode == 0 and json.loads(r.stdout)["seats"] == []
+
+
+def test_cli_status_corrupt_registry_structured_error(tmp_path):
+    ws, _, reg_root = _status_repo(tmp_path)
+    (reg_root / "jobs.json").write_text("{corrupt", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == er.EXIT_INTERNAL
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and out["error"]["code"] == "registry_corrupt"
+
+
+def test_cli_status_is_read_only(tmp_path):
+    # AC-J3: a status call never mutates run state — jobs.json bytes are untouched.
+    ws, _, reg_root = _status_repo(tmp_path, with_obs=True, with_activity=True)
+    before = (reg_root / "jobs.json").read_bytes()
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    assert (reg_root / "jobs.json").read_bytes() == before
+
+
+def test_cli_status_missing_project_path_exit2(tmp_path):
+    ws = _ws(tmp_path, path="./projects/gone")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == er.EXIT_MALFORMED
+
+
+def test_cli_status_running_window_never_leaks_prompt(tmp_path):
+    # 8a R2#1 (High): during the running window the capture dir holds ONLY .incomplete +
+    # input.md (the raw prompt — claude_cli.py writes it BEFORE the provider call). The
+    # activity probe must never select/echo it.
+    ws, repo, _ = _status_repo(tmp_path, with_obs=False, with_spec=True)
+    cap = repo / ".rawgentic" / "runs" / "run1" / "build" / "0-aaaa1111"
+    (cap / ".incomplete").write_text("engine invocation has not completed\n", encoding="utf-8")
+    (cap / "input.md").write_text("SECRET-PROMPT-MARKER do the thing\n", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    (row,) = json.loads(r.stdout)["seats"]
+    assert "SECRET-PROMPT-MARKER" not in r.stdout
+    assert row["last_activity"] is None  # only non-allowlisted files present
+
+
+def test_cli_status_read_only_no_registry_dir_metadata_write(tmp_path):
+    # 8a R2#2 (Medium): the read path must not construct JobRegistry — its __init__
+    # mkdir/chmods the registry root (a metadata write on a read-only surface).
+    ws, _, reg_root = _status_repo(tmp_path)
+    import os as _os
+    before = _os.stat(reg_root)
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    after = _os.stat(reg_root)
+    assert (before.st_mode, before.st_ctime_ns) == (after.st_mode, after.st_ctime_ns)
+
+
+def test_cli_status_wrong_shape_jobs_json_structured_error(tmp_path):
+    # Step-11 L2: valid JSON of the wrong shape (top-level list) must be the structured
+    # registry_corrupt exit 5, not an AttributeError traceback.
+    ws, _, reg_root = _status_repo(tmp_path)
+    (reg_root / "jobs.json").write_text("[1, 2]", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == er.EXIT_INTERNAL
+    assert json.loads(r.stdout)["error"]["code"] == "registry_corrupt"
+
+
+def test_cli_status_corrupt_spec_marked_not_fatal(tmp_path):
+    # gpt-diff A5: a corrupt launch spec is a per-row marker, never a whole-run failure.
+    ws, _, reg_root = _status_repo(tmp_path)
+    spec = reg_root / "specs"
+    (spec / next(spec.glob("*.json")).name).write_text("{corrupt", encoding="utf-8")
+    r = _run_cli("status", "--workspace", ws, "--project", "rawgentic", "--run", "run1")
+    assert r.returncode == 0
+    (row,) = json.loads(r.stdout)["seats"]
+    assert row["spec_status"] == "corrupt" and row["requested_model"] is None
