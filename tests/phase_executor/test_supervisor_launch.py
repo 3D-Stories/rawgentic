@@ -315,6 +315,29 @@ def test_await_timeout_writes_supervisor_timeout_obs(env_factory):
 
 
 @tmux_required
+def test_launch_threads_correlation_id_into_spec_and_timeout_obs(env_factory):
+    """#472 D2: launch(correlation_id=...) lands in the pane spec's request (the child's
+    observation reads it from there — pane_runner already propagates it) AND in the
+    supervisor's synthetic timeout observation, so the WF2 correlation join survives
+    both the happy path and the pane-death path."""
+    env = env_factory(mode="sleep")
+    rec = env.launch(correlation_id="472-step8-t2")
+    spec = json.loads(Path(env.tmp / "reg" / "specs" / f"{rec.session_name}.json").read_text())
+    assert spec["request"]["correlation_id"] == "472-step8-t2"
+    state, obs = env.sup.await_job(rec, poll_s=0.2, timeout_s=2)
+    assert state == "timed_out"
+    assert obs["correlation_id"] == "472-step8-t2"
+
+
+def test_synthetic_observation_carries_correlation_id():
+    d = supervisor.synthetic_observation(
+        run_id="r1", seat="build", attempt_id="0-abcd1234", engine="claude",
+        requested_model="m", prompt="p", parse_status=contract.TIMEOUT,
+        reason="t", routing_config_digest="sha256:x", correlation_id="cid-9")
+    assert d["correlation_id"] == "cid-9"
+
+
+@tmux_required
 def test_await_timeout_prefers_childs_valid_obs(env_factory):
     # CF-12: the obs-writer is the pane_runner, killed before the re-check — a valid child
     # obs found AFTER the kill wins; the supervisor's timeout obs never clobbers it.
