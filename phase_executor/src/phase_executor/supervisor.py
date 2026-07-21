@@ -506,7 +506,14 @@ class TmuxSupervisor:
                 f"job can be quota-paused")
         if self._live(record):
             raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
-        if self._sentinel(record) is not None:
+        sent = self._sentinel(record)
+        if sent is not None and sent.get("parse_status") not in contract.AVAILABILITY_FAILURES:
+            # An envelope-producing sentinel (ok / parse_error / identity_failure / ...)
+            # means the child ran to an effectful result — resuming would duplicate it.
+            # Since #557 an exited_no_sentinel record ALWAYS carries the supervisor's
+            # synthetic availability observation (no_response) — that is a RECORDED
+            # FAILURE, not a completion, and pause/resume is exactly its designed
+            # recovery, so availability-failure sentinels do not trip this guard.
             raise SupervisorError(
                 "mark_quota_paused: a valid sentinel exists — the job COMPLETED; resuming "
                 "would duplicate its effects")
@@ -655,7 +662,8 @@ class TmuxSupervisor:
         completed_with_residue). On deadline → the CF-17 kill, THEN re-check and prefer a
         valid child obs (the writer was in the killed pane group — race-free); else emit the
         supervisor's synthetic timeout observation. Ambiguous dead-no-sentinel →
-        exited_no_sentinel (no auto-resume).
+        exited_no_sentinel (no auto-resume) with the supervisor's synthetic ``no_response``
+        observation (#557 — every terminal state yields a reconcilable Observation).
 
         ``expect_session_id`` (CF-10, resume-identity assert): on collect, the transport's
         ``session_id`` MUST equal it — a resumed launch that landed in the wrong session
@@ -685,8 +693,28 @@ class TmuxSupervisor:
                 obs = self._sentinel(record)  # one post-exit re-check (write vs exit race)
                 if obs is not None:
                     continue
+                # #557 AC1/AC2: death-without-sentinel emits the supervisor's synthetic
+                # Observation (correlation + digest from the spec), so reconcile sees a
+                # bound, availability-classed recorded failure instead of a missing pair.
+                # Ordering and capture posture mirror the timeout path below; CF-12 holds —
+                # this branch is only reached when the sentinel re-check found no valid
+                # child observation (a malformed file may be replaced, same as on timeout;
+                # the raw pane capture retains the forensics).
+                spec = self._read_spec(record)
+                obs = synthetic_observation(
+                    run_id=record.identity.run_id, seat=record.identity.seat,
+                    attempt_id=record.attempt_id, engine=spec.get("engine", "claude"),
+                    requested_model=spec.get("request", {}).get("requested_model", "unknown"),
+                    prompt=spec.get("request", {}).get("prompt", ""),
+                    parse_status=contract.NO_RESPONSE,
+                    reason="child exited without sentinel",
+                    routing_config_digest=spec.get("routing_config_digest", "sha256:unknown"),
+                    correlation_id=spec.get("request", {}).get("correlation_id"))
+                cap = ensure_private_dir(Path(record.capture_dir))
+                atomic_write_text(cap / "observation.json",
+                                  json.dumps(obs, indent=2, sort_keys=True))
                 self._finish(record, "exited_no_sentinel")
-                return "exited_no_sentinel", None
+                return "exited_no_sentinel", obs
             if time.monotonic() >= deadline:
                 kill_clean = self._kill_job(record)
                 obs = self._sentinel(record)

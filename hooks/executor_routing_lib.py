@@ -972,10 +972,12 @@ def supervised_dispatch(
 
     # STEP 6.5 — #472 D3: verdict-INDEPENDENT audit append, mirroring the sync path's
     # per-attempt rule ("append the observation for EVERY attempt"). Every terminal state
-    # that HAS an observation (completed / completed_with_residue / timed_out) lands in the
-    # routing audit, stamped with the dispatched lane + this dispatch's correlation, BEFORE
-    # any verdict branching — a timed-out supervised job must not vanish from the audit.
-    # exited_no_sentinel has no observation: receipt-only (reconcilable Observations = #557).
+    # that HAS an observation lands in the routing audit, stamped with the dispatched lane
+    # + this dispatch's correlation, BEFORE any verdict branching — a failed supervised job
+    # must not vanish from the audit. Since #557 that is ALL four terminal states: completed
+    # / completed_with_residue / timed_out / exited_no_sentinel (the supervisor emits a
+    # synthetic no_response observation for the last), so the `obs is not None` guard is
+    # belt-and-braces, not a semantic branch.
     if obs is not None:
         stamped = dict(obs)
         stamped["dispatched_lane"] = dict(target["lane"])
