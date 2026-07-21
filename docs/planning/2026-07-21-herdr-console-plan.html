@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Herdr as the workspace console — analysis + phased integration plan</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 02:40 MDT</div>
+<h1>Herdr as the workspace console — analysis + phased integration plan</h1>
+
+</header>
+<main>
+<h1>Herdr as the workspace console — analysis + phased integration plan</h1>
+<p><strong>Date:</strong> 2026-07-21 · <strong>Author:</strong> WF-adjacent analysis session (goal-driven) · <strong>Status:</strong> PROPOSAL — nothing filed, nothing installed <strong>Subject:</strong> [ogulcancelik/herdr](https://github.com/ogulcancelik/herdr) as the main console application for the rawgentic workspace, in conjunction with the rawgentic plugin.</p>
+<p>---</p>
+<h2>Verdict (read this first)</h2>
+<p><strong>Conditional YES.</strong> Herdr is a strong fit as the workspace&#x27;s human console and — later — as the executor&#x27;s terminal runtime, because it purpose-builds exactly the layer rawgentic hand-rolls on raw tmux today (named sessions, liveness, output capture, reap, plus the human-facing observability the whole dispatch-observability effort gestures at). The condition: adopt it in phases that never let herdr&#x27;s heuristic agent-state become load-bearing for enforcement — rawgentic&#x27;s audit/reconcile/gate machinery stays the source of truth; herdr is the eyes and the terminal substrate, never the judge.</p>
+<p><strong>Single biggest risk:</strong> velocity/stability of a &lt;4-month-old, fast-moving prerelease project (74 releases since 2026-03-27, latest a prerelease; single lead maintainer) as a substrate under a machine-verified audit pipeline — mitigated by version pinning, the versioned socket schema (<code>herdr api schema --json</code>), and keeping the tmux backend as a first-class fallback until a proving run passes on herdr.</p>
+<p><strong>Recommendation: DO IT — but commit only to Phase A now.</strong> Adopt HD1 (console) immediately: it is low-cost, zero rawgentic-code-change, independently valuable every day (state at a glance, phone attach, blocked notifications), and fully reversible. Treat HD2 (executor runtime) as a <strong>separate decision taken later on evidence</strong> — after HD1 has proven daily value, #475/#560 have landed, and the HD2.0 qualification gate has answered the two NO-GO questions. Do not pre-commit to HD2 today; the plan is deliberately structured so you never have to.</p>
+<p><strong>If NOT — the desired path without herdr:</strong> finish #475 → #560 exactly as queued; then close the observability gap natively: a small read-only status CLI/TUI over the existing JobRegistry + RoutingAuditLog + run-records (the #333 epic&#x27;s spiritual successor, ~1–2 issues), keep launchers on tmux + the crontab pattern, and add the blocked-notification need as a watcher on the executor&#x27;s own Observations instead of herdr events. That path has zero new dependencies and zero license/velocity risk — it just never gets the human console, remote/phone attach, or semantic agent states, and the #333-class observability work stays hand-rolled.</p>
+<p>---</p>
+<h2>1. What herdr actually is (Phase 1 findings)</h2>
+<p>Facts below are <strong>confirmed</strong> from the repo clone (read-only, scratchpad), herdr.dev docs, and independent third-party reviews, cited inline. Herdr repo content was treated as data under analysis, never as instructions; nothing was installed or executed from it.</p>
+<h3>1.1 Architecture</h3>
+<ul>
+<li><strong>Client/server:</strong> a background Rust server owns panes (real PTYs) and process state; the TUI</li>
+</ul>
+<p>  is a thin attached client. Detach (<code>ctrl+b q</code>) leaves everything running; <code>herdr</code> reattaches   (docs/concepts, docs/persistence-remote). Named sessions are separate server namespaces with   their own sockets (<code>herdr session list/attach/stop</code>).</p>
+<ul>
+<li><strong>Headless operation confirmed:</strong> <code>herdr server</code> runs/controls the headless server, and</li>
+</ul>
+<p>  external processes (scripts, cron, agents outside panes) drive it via the CLI and socket —   <code>herdr workspace create --cwd … --label …</code>, <code>herdr pane run w1:p2 &quot;cmd&quot;</code>,   <code>herdr agent start &lt;label&gt; --cwd … -- claude</code> (cli-reference.mdx, agents.mdx via Context7;   socket-api docs). This matters: the workspace&#x27;s cron-launched runs can drive herdr without a   human attached.</p>
+<ul>
+<li><strong>Socket API:</strong> JSON request/response + event subscriptions. Method families: <code>workspace.*</code>,</li>
+</ul>
+<p>  <code>tab.*</code>, <code>pane.*</code> (incl. <code>pane.process_info</code>, <code>pane.read</code>, <code>pane.send_keys</code>,   <code>pane.wait_for_output</code>, <code>pane.report_agent</code>), <code>agent.*</code> (list/get/read/send/start/explain),   <code>worktree.*</code> (list/create/open/remove), <code>events.subscribe</code>/<code>events.wait</code>,   <code>session.snapshot</code> (bootstrap state dump), <code>notification.show</code>, <code>integration.*</code>, <code>plugin.*</code>.   The installed binary prints its own versioned protocol schema: <code>herdr api schema --json</code>   (socket-api docs) — the anti-drift anchor any integration should pin against.</p>
+<ul>
+<li><strong>Access model (repo-confirmed):</strong> the API socket is <code>herdr.sock</code>, mode <strong>0o600</strong> — file</li>
+</ul>
+<p>  permissions are the ONLY access boundary; there is no token/peer-credential check on accept   (<code>src/api/server.rs</code>; no <code>SO_PEERCRED</code> anywhere). Any same-user process can drive the full   method set from outside a pane — the <code>HERDR_ENV=1</code> skill gate is <strong>advisory prose</strong>, enforced   only against nested TUI launches (<code>src/main.rs:424-451</code>). No inbound TCP exists anywhere   (<code>TcpListener</code> grep = 0); outbound network is pull-only (version check + detection-manifest   index from herdr.dev, both disableable). For a same-user orchestrator this is exactly the   trust model tmux&#x27;s private socket gives us today.</p>
+<ul>
+<li><strong>External terminal bridge:</strong> beyond the CLI, <code>herdr terminal session observe w1:p1</code> streams</li>
+</ul>
+<p>  read-only NDJSON frames of a pane, and <code>… control --takeover</code> is a single-owner writable   controller (persistence-remote docs; <code>src/cli/spec.rs:675-713</code>) — a sanctioned surface for   external tooling to watch or drive a herdr-owned terminal.</p>
+<ul>
+<li><strong>Remote/ssh:</strong> <code>herdr --remote &lt;host&gt;</code> runs a local thin client against a remote server over</li>
+</ul>
+<p>  ssh; or ssh in and attach tmux-style. Sessions survive client disconnect; reattach from any   terminal including a phone (persistence-remote docs).</p>
+<h3>1.2 The herdr agent skill (<code>SKILL.md</code> at repo root)</h3>
+<p>A markdown skill teaching an embedded agent to control herdr from <strong>inside</strong> a herdr-managed pane, gated on <code>HERDR_ENV=1</code> (if unset: say so and stop — an agent outside herdr must not control a session it does not own). Command groups: <code>pane</code>, <code>workspace</code>, <code>worktree</code>, <code>tab</code>, <code>wait</code>, <code>terminal</code>, <code>notification</code>, <code>integration</code>, <code>session</code>. Contract highlights (SKILL.md):</p>
+<ul>
+<li>discovery via <code>herdr &lt;group&gt;</code> (never bare <code>herdr</code> — that attaches the TUI; never probe</li>
+</ul>
+<p>  mutating commands by omitting args — <code>herdr workspace create</code> executes with defaults);</p>
+<ul>
+<li>IDs are opaque short handles (<code>w1</code>, <code>w1:t1</code>, <code>w1:p1</code>, <code>term_…</code>); closed IDs never reused;</li>
+</ul>
+<p>  re-read create/split/move responses after mutations, never construct IDs;</p>
+<ul>
+<li>most control commands print JSON — read identifiers and state from responses, not predictions;</li>
+<li>herdr injects caller context env (e.g. <code>HERDR_ENV</code>, tab/pane ids) into every managed pane.</li>
+</ul>
+<p>With it an agent can: inspect neighboring work, split panes and run commands without stealing focus, read pane output, wait on output or agent status, start helper agents in sibling panes (agent-skill docs).</p>
+<p><strong>Known drift inside the skill (repo-confirmed):</strong> <code>SKILL.md</code> documents a top-level <code>herdr wait</code> command group (<code>wait agent-status</code> / <code>wait output</code>), but the CLI spec has no top-level <code>wait</code> — the real commands are <code>herdr agent wait --until &lt;status&gt;</code> and <code>herdr pane wait-output --match/--regex</code> (<code>src/cli/spec.rs:377-390</code>; <code>src/api/wait.rs</code>). The skill hedges correctly (&quot;the installed binary is the authority&quot;), but this is concrete evidence that any adapted skill (HD3.1) must be validated against the pinned binary, never trusted from upstream prose. Wait semantics worth keeping: <code>agent wait</code> pins the resolved pane occupant (a replacement process returns <code>agent_not_running</code>, never a false satisfy); <code>agent prompt --wait</code> requires an observed state change within 5s or returns <code>agent_prompt_stalled</code>; <code>pane run</code> sends <strong>text + Enter</strong> into the pane (keystroke injection — fine for interactive helpers, NOT a process-spawn primitive; see §6).</p>
+<h3>1.3 Agent awareness (the feature tmux lacks)</h3>
+<ul>
+<li><strong>States:</strong> <code>blocked</code> / <code>working</code> / <code>done</code> / <code>idle</code> / <code>unknown</code>, rolled up pane → tab →</li>
+</ul>
+<p>  workspace → sidebar (concepts docs).</p>
+<ul>
+<li><strong>Status authority model (agents docs):</strong> per-pane single authority. Agents with complete</li>
+</ul>
+<p>  lifecycle hooks (Pi, OMP, OpenCode, Kilo, Kimi, Hermes, MastraCode) are hook-authoritative.   <strong>Claude Code and Codex are deliberately NOT lifecycle authorities</strong> — their integrations   report *session identity only* (for native <code>claude --resume</code> restore); their live state comes   from <strong>screen-manifest detection</strong>: herdr reads the live bottom-of-buffer screen snapshot and   classifies it against TOML manifests. Blocked detection is deliberately strict (only known   approval/question UI shapes); unknown prompts fall back to <code>idle</code>.</p>
+<ul>
+<li><strong>Consequence for rawgentic (load-bearing):</strong> for our two primary engines (claude, codex),</li>
+</ul>
+<p>  herdr&#x27;s <code>working</code>/<code>blocked</code>/<code>done</code> is a *heuristic screen classifier*, not ground truth. It is   excellent for a human console and for advisory waits; it must never replace sentinel files,   exit codes, or Observation reconciliation as enforcement evidence. Independent review   (maxtokens.ai, 2026-06-14) reaches the same conclusion: &quot;the <code>done</code> status shouldn&#x27;t become   the single source of truth… wait for a specific output marker or a structured response.&quot;</p>
+<ul>
+<li><strong>Remote detection manifests:</strong> herdr auto-fetches manifest updates from herdr.dev and applies</li>
+</ul>
+<p>  them without restart (agents docs). For a reproducible, audited pipeline this is a   supply-chain/reproducibility concern; disable with <code>[update] manifest_check = false</code> and pin   local overrides in <code>~/.config/herdr/agent-detection/&lt;agent&gt;.toml</code>.</p>
+<h3>1.4 Session persistence and restore (session-state docs)</h3>
+<table>
+<thead><tr><th>Path</th><th>What survives</th></tr></thead>
+<tbody>
+<tr><td>Detach/reattach</td><td>everything — processes never stop (strongest path)</td></tr>
+<tr><td>Server restart (snapshot restore)</td><td>layout/cwd/focus only; processes gone; panes come back as fresh shells</td></tr>
+<tr><td>Pane screen history (<code>[experimental] pane_history</code>, off by default)</td><td>recent screen contents — off by default because it persists secrets</td></tr>
+<tr><td><strong>Native agent session restore</strong> (on by default)</td><td>supported agents resume their own conversation: Claude Code via integration v6 → <code>claude --resume &lt;session&gt;</code>; Codex v5 → <code>codex resume</code></td></tr>
+<tr><td>Live handoff (<code>herdr update --handoff</code>, experimental)</td><td>PTY fds transferred to the new server — processes keep running across server replacement</td></tr>
+</tbody>
+</table>
+<p><strong>Scope caveat (F3 adopted, evidence found):</strong> the persistence-remote docs state a named session &quot;still shares the same global config file&quot; — so <code>[session] resume_agents_on_restore</code> is very likely GLOBAL, not per-session. The workable split is therefore a <strong>separate config root for the executor&#x27;s herdr server</strong> (e.g. <code>XDG_CONFIG_HOME</code> override at server launch) with native restore off, while the owner&#x27;s console server keeps its own config with restore on. HD2.0 carries the hard qualification test: create interactive + executor sessions, restart herdr, assert only the interactive agent resumes; record the exact config paths and launch arguments in the compatibility manifest.</p>
+<p><strong>Consequence (sharpened by the touchpoint inventory, §2):</strong> herdr&#x27;s native restore issues <code>claude --resume &lt;session-ref&gt;</code> on its own authority after a server restart — which is *precisely* the operation rawgentic&#x27;s <code>supervisor._relaunch</code> performs deliberately, under a resume cap (<code>MAX_RESUME=2</code>), with the persisted <code>provider_session_id</code> asserted at collect time (<code>await_job(expect_session_id=…)</code> — a mismatch registers <code>failed</code> and raises). Two resume authorities racing on the same conversation is exactly the class of bug the executor-hardening epic exists to kill. Any executor-backend phase must pick ONE owner per pane class (proposal: <code>[session] resume_agents_on_restore = false</code> for executor-managed panes/sessions; herdr native restore stays on for the owner&#x27;s interactive panes).</p>
+<h3>1.5 Plugins, integrations, notifications</h3>
+<ul>
+<li><strong>Plugins:</strong> directory + <code>herdr-plugin.toml</code> manifest; argv commands (no shell); event hooks</li>
+</ul>
+<p>  (e.g. <code>on = &quot;worktree.created&quot;</code>), actions, panes, link handlers. The full herdr CLI is the   plugin API; <strong>no sandbox</strong> — &quot;a plugin is ordinary code… yours to vet&quot; (plugins docs). Same   trust posture as Claude Code plugins.</p>
+<ul>
+<li><strong>Integrations:</strong> <code>herdr integration install claude</code> writes <code>hooks/herdr-agent-state.sh</code> into</li>
+</ul>
+<p>  <code>~/.claude/</code> and <strong>edits <code>settings.json</code></strong> to add hook entries (session-identity reporting).   Any install on this workspace must be diff-reviewed first — our <code>settings.json</code> carries   wal-guard and mempalace hooks that must not be perturbed.</p>
+<ul>
+<li><strong>Notifications:</strong> <code>notification.show</code> + agent-state events via <code>events.subscribe</code> — the raw</li>
+</ul>
+<p>  material for a &quot;blocked → iMessage via notify-owner&quot; bridge.</p>
+<h3>1.6 Operational profile</h3>
+<ul>
+<li><strong>License (repo-confirmed):</strong> <strong>dual-licensed — AGPL-3.0-or-later + a commercial license</strong></li>
+</ul>
+<p>  for organizations that cannot comply with AGPL (<code>LICENSE:1-8</code>; <code>Cargo.toml</code>   <code>license = &quot;AGPL-3.0-or-later&quot;</code>; README §license; this explains GitHub API&#x27;s <code>NOASSERTION</code>).   Analysis in §5: CLI/socket invocation as a separate process creates no copyleft obligation on   rawgentic; linking/vendoring would. We do neither in any proposed phase — and the commercial   option is a standing exit if that ever changes.</p>
+<ul>
+<li><strong>Maturity/velocity:</strong> repo created 2026-03-27; shipped version <strong>0.7.4</strong> (2026-07-15,</li>
+</ul>
+<p>  <code>Cargo.toml</code>); 53 versioned CHANGELOG releases at a roughly weekly cadence (sometimes 2 in   2 days); latest GitHub release is a dated <strong>prerelease</strong> (2026-07-17); 18.9k stars, 1.2k   forks, 81 open issues, 50 contributors with a single dominant author (GitHub metadata,   fetched 2026-07-21). ~193k lines of Rust in <code>src/</code>, real integration-test suite   (detach/reattach, live handoff, multi-client, headless server — <code>tests/</code>). API stability:   an explicit protocol version rides every <code>ping</code>, clients are told to handle unknown fields   gracefully, and a <code>protocol_guard</code> reports mismatches — but <strong>no hard semver/back-compat   guarantee is stated</strong> (socket-api docs; <code>src/cli/protocol_guard.rs</code>). Active independent   coverage: Better Stack, DevOps Toolbox, madflex (2026-07-09), maxtokens.ai (2026-06-14),   Moshi guides. Real-world rough edges reported: idle CPU (renderer redraws animated agent   panes), kitty-protocol key-repeat quirk, no automatic tab rename, occasional prompt-redraw   races (madflex).</p>
+<ul>
+<li><strong>Install paths:</strong> install script (<code>curl | sh</code> — <strong>not</strong> for this workspace), Homebrew, mise,</li>
+</ul>
+<p>  release binaries, nix flake, <code>cargo build</code> from source. Proposal: pinned release binary with   checksum, or source build — a sanctioned-path decision inside the epic.</p>
+<ul>
+<li><strong>Platform:</strong> Linux/macOS first-class; Windows beta.</li>
+</ul>
+<h3>1.7 The key architectural caveat for us</h3>
+<p>Herdr detects the <strong>foreground process in its own panes</strong>. An agent running inside tmux inside a herdr pane is invisible as an agent — herdr sees tmux (maxtokens.ai review; consistent with the screen-manifest model). Today&#x27;s rawgentic executor children live in <strong>raw tmux sessions</strong> (<code>rg-*</code>), and today&#x27;s epic launchers run Claude in tmux via cron. <strong>A console-only herdr adds semantic value only for processes actually launched into herdr panes.</strong> This single fact shapes the whole phasing in §3.</p>
+<p>---</p>
+<h2>2. The rawgentic side (Phase 2 findings)</h2>
+<h3>2.1 What rawgentic hand-rolls today (subagent inventory, file:line-verified)</h3>
+<p><strong>The reframing fact:</strong> the supervised executor uses tmux for exactly <strong>five things</strong> — (1) spawn a durable named session running an argv as the pane&#x27;s *initial process* (<code>supervisor.py:428</code>, <code>new-session -d -s &lt;name&gt; -c &lt;cwd&gt; -- &lt;argv&gt;</code>); (2) read the pane PID once (<code>supervisor.py:432</code>, <code>display-message #{pane_pid}</code>); (3) liveness by name (<code>supervisor.py:470</code>, <code>has-session</code>; also the read-only status probe <code>executor_routing_lib.py:1615</code>); (4) enumerate sessions (<code>supervisor.py:982</code>, <code>list-sessions</code> — reap&#x27;s derived liveness + CF-11 unknown-session detection); (5) teardown (<code>kill-session</code> at <code>supervisor.py:461/621/1009</code>, <code>kill-server</code> at <code>:773</code>). <strong><code>send-keys</code> and <code>capture-pane</code> are deliberately never used</strong> (<code>supervisor.py:6</code> — F7): completion is process-exit + an atomic <code>observation.json</code> sentinel (<code>pane_runner.py:231-241</code>), process-tree kill is <code>/proc</code> descendant snapshots + <code>os.killpg</code> (<code>supervisor.py:551-623</code>), and identity (pgid, start-time PID-reuse guards, provider-pgid sidecar) is all <code>/proc</code>-derived (<code>supervisor.py:437,443,1047</code>; <code>pane_runner.py:135-156</code>).</p>
+<p>The private, run-scoped tmux <strong>socket path</strong> (<code>resolve_socket</code>, <code>supervisor.py:122-148</code>) is the durability anchor: it is persisted on the JobRecord (<code>run_socket</code>) and re-used verbatim by <code>recover()</code> after an orchestrator restart to find sessions again by their deterministic names (<code>registry.session_name</code> → <code>rg-&lt;run&gt;-&lt;seat&gt;-&lt;attempt&gt;</code>, <code>registry.py:90-94</code>). The Observation&#x27;s <code>tmux_session</code> field is that same name (<code>contract.py:171</code>). Audit ordering is runtime-independent: the receipt is appended <strong>before</strong> any spawn (<code>executor_routing_lib.py:958</code>) and the observation <strong>after</strong> the full lifecycle completes (<code>:986</code>) — a terminal-runtime swap under <code>supervisor.launch</code>/<code>await_job</code> does not touch it. (Also noted en route: <code>supervisor.preflight</code> exists and is tested but is <strong>not wired</strong> into the live dispatch path — a pre-existing gap, named here, that HD2.1&#x27;s seam should close for whichever runtime is active.)</p>
+<p><code>session_policy</code> (<code>fresh</code>/<code>resume</code>) is the <strong>provider conversation</strong> policy, orthogonal to the terminal session: <code>resume</code> is entered only by <code>supervisor._relaunch</code> for a <code>quota_paused</code> job (<code>claude --resume &lt;provider_session_id&gt;</code>, capped <code>MAX_RESUME=2</code>, identity-asserted at collect); codex refuses resume fail-loud. Every routing-table seat ships <code>fresh</code>.</p>
+<h3>2.1b Required capabilities ↔ herdr mapping</h3>
+<p>The ten capabilities a replacement terminal runtime must provide (consumption sites verified), and what herdr offers for each:</p>
+<table>
+<thead><tr><th>#</th><th>Required capability (load-bearing for)</th><th>tmux today</th><th>herdr equivalent</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Spawn argv as pane&#x27;s INITIAL process, cwd pinned (launch, audit)</td><td><code>new-session -- argv</code></td><td><code>herdr agent start … --cwd … -- &lt;argv&gt;</code> (argv form confirmed); generic non-agent pane spawn-with-argv <strong>unverified</strong> — <code>pane run</code> is text+Enter, NOT a spawn primitive</td><td><strong>verify in HD2.2</strong></td></tr>
+<tr><td>2</td><td>Read pane PID (launch → pgid/start-time identity)</td><td><code>display-message #{pane_pid}</code></td><td><code>pane.process_info</code></td><td>confirmed method exists; field parity unverified</td></tr>
+<tr><td>3</td><td>Liveness by handle (liveness, recovery gate)</td><td><code>has-session</code></td><td><code>pane.get</code> / <code>agent.get</code>; IDs never reused ⇒ a dead pane is unambiguous</td><td>good</td></tr>
+<tr><td>4</td><td>Enumerate live sessions (reap, unknown-session detection)</td><td><code>list-sessions</code></td><td><code>pane.list</code> / <code>agent.list</code> / <code>session.snapshot</code></td><td>good</td></tr>
+<tr><td>5</td><td>Kill by handle (rollback, reap)</td><td><code>kill-session</code></td><td><code>pane.close</code> (tree-kill stays <code>/proc</code>+<code>killpg</code>, unchanged)</td><td>good</td></tr>
+<tr><td>6</td><td>Kill whole namespace (cleanup)</td><td><code>kill-server</code></td><td><code>herdr session stop &lt;name&gt;</code> / <code>server.stop</code></td><td>good</td></tr>
+<tr><td>7</td><td>Private run-scoped namespace/socket (durability anchor)</td><td><code>-S &lt;run&gt;.sock</code></td><td><strong>named sessions</strong> — own panes, sockets, state (<code>~/.config/herdr/sessions/&lt;name&gt;/herdr.sock</code>); or <code>HERDR_SOCKET_PATH</code></td><td>strong fit: one herdr named session per run_id</td></tr>
+<tr><td>8</td><td>Durable naming + re-adoption after orchestrator restart (recovery)</td><td>deterministic <code>rg-*</code> name, re-probed on the persisted socket</td><td>pane IDs are server-assigned opaque handles, <strong>never reused</strong> — persist the returned ID on the JobRecord (plus <code>pane.rename</code> to carry the <code>rg-*</code> label for humans); re-adopt via <code>session.snapshot</code> on the persisted session socket</td><td>fit, different shape: store-ID instead of derive-name</td></tr>
+<tr><td>9</td><td>Env injection into pane (PYTHONPATH, creds)</td><td>server-env inheritance on private socket</td><td>herdr injects <code>HERDR_*</code> context; arbitrary per-pane env <strong>unverified</strong> — fallback: wrap argv with <code>env(1)</code></td><td><strong>verify in HD2.2</strong></td></tr>
+<tr><td>10</td><td>Version/capability preflight (fail-closed gate)</td><td><code>tmux -V</code> + verb probes</td><td><code>ping</code> (protocol version) + <code>herdr api schema --json</code> pin + probe verbs</td><td>good — and HD2.1 should wire preflight into dispatch (closing the pre-existing gap)</td></tr>
+</tbody>
+</table>
+<p><strong>Not needed from the terminal runtime</strong> (stays OS/filesystem, must NOT be ported onto herdr APIs): output capture (sentinel files), process-tree kill (<code>/proc</code> + <code>killpg</code>), pid/pgid/ start-time identity (<code>/proc</code>). Herdr&#x27;s <code>pane.read</code>/screen snapshots are console/triage surfaces, never enforcement evidence.</p>
+<h3>2.2 What herdr does NOT cover (stays rawgentic-owned, confirmed)</h3>
+<ul>
+<li>Routing/seat resolution, fallback chains, enforcement, canary, gates — all of</li>
+</ul>
+<p>  <code>executor_routing_lib.py</code> above the terminal layer.</p>
+<ul>
+<li>RoutingAuditLog Observations, reconcile, correlation binding — herdr has no audit ledger.</li>
+<li>Worktree <strong>promotion</strong> (CAS, base-staleness guard, path policy — <code>worktree.py promote</code>):</li>
+</ul>
+<p>  herdr&#x27;s <code>worktree.*</code> is create/open/remove + workspace attachment, not integration-branch   promotion.</p>
+<ul>
+<li>Quota detection, per-call caps, account-switch recovery (#558/#559 territory).</li>
+<li>Everything WF2/WF3: gates, loop-backs, run-records, telemetry.</li>
+</ul>
+<p>---</p>
+<h2>3. The plan — three phases (Phase 3)</h2>
+<p><strong>Recommendation:</strong> adopt in the order A → B → C below. Alternatives weighed: (i) *big-bang executor swap* — rejected: two migrations racing (#474 legacy flip + runtime swap) with no proven baseline; (ii) *console-only forever* — under-uses the socket API where rawgentic&#x27;s real pain (liveness, adoption, observability) lives; (iii) *build our own console on the #333 telemetry* — months of TUI work herdr already does better, against the one-helper-one-home rule.</p>
+<h3>Phase A — herdr as the owner console (no rawgentic code changes)</h3>
+<p><strong>What:</strong> stand herdr up as the workspace console; move *orchestrator* sessions (interactive work, epic-run launchers) into herdr panes so they gain state, persistence, remote/phone attach. Executor children stay in raw tmux (invisible to the console as agents — accepted, §1.7).</p>
+<ul>
+<li>Vet + install pinned herdr (no <code>curl | sh</code>; checksummed release binary or source build);</li>
+</ul>
+<p>  config baseline: <code>[update] manifest_check = false</code> decision, sounds, mouse.</p>
+<ul>
+<li>Review-then-install the Claude Code integration (diff <code>settings.json</code> changes against</li>
+</ul>
+<p>  wal-guard/mempalace hooks before accepting).</p>
+<ul>
+<li>Launcher integration: epic launchers (<code>epic475-resume.sh</code>-class, the long-run-resume crontab</li>
+</ul>
+<p>  pattern) get a herdr variant — <strong>argv-based <code>herdr agent start … -- &lt;argv&gt;</code> only</strong> (F4   adopted: <code>pane run</code> is text+Enter keystroke injection, §1.2 — never a launch mechanism for an   unattended cron path; if the launcher&#x27;s process cannot start argv as the pane&#x27;s initial   process, HD1.3 is NO-GO and tmux stays). Cron → headless server confirmed workable (§1.1),   exact cron-environment behavior proven in HD1.0.</p>
+<ul>
+<li>Notify bridge: <code>events.subscribe</code> watcher → notify-owner (blocked-state iMessage).</li>
+<li>Runbook + workspace naming conventions (one workspace per project, tabs per run).</li>
+</ul>
+<p><strong>Rollback:</strong> stop using it — tmux path untouched. <strong>Risk:</strong> low; blast radius = launcher scripts + owner muscle memory.</p>
+<h3>Phase B — herdr as the executor terminal runtime (replaces raw tmux in <code>supervisor.py</code>)</h3>
+<p><strong>B.0 — qualification gate first (peer-consult adoption).</strong> Before any wiring: qualify ONE pinned herdr binary in isolation and commit a <strong>compatibility manifest</strong> (binary version, protocol version, <code>api schema</code> digest, required methods, config invariants). Hard-gate on: exact argv-as-initial-process launch, caller-supplied env injection, PID identity parity, enumeration/close, event-loss recovery via <code>session.snapshot</code>, and namespace shutdown at our concurrency. <strong>If argv-as-initial-process spawn is unavailable, executor adoption STOPS — text injection (<code>pane run</code>) is not an acceptable substitute</strong> (the F7-equivalent rule). Dispatch preflight fails closed whenever the live binary/schema drifts from the qualified manifest.</p>
+<p><strong>What:</strong> a <code>TerminalRuntime</code> seam in <code>phase_executor</code> with two implementations — <code>tmux</code> (today&#x27;s code) and <code>herdr</code> (socket API). Launch children by argv into a dedicated herdr <strong>named session per run_id</strong> (never mixed with the owner&#x27;s console session — separate lifecycle namespaces, separate config); identity from <code>pane.process_info</code> + the returned opaque pane ID persisted on the JobRecord (labels via <code>pane.rename</code> are diagnostic only, never recovery keys); liveness from <code>events.subscribe</code>/<code>agent.get</code> (replacing poll loops) — <strong>advisory only</strong>: events may wake the supervisor, but every transition is revalidated against JobRegistry identity, <code>/proc</code> state, and the observation sentinel before any state change. Reap/quarantine via <code>pane.close</code> + retained worktrees exactly as today (tree-kill stays <code>/proc</code>+<code>killpg</code>); recovery/adoption via <code>session.snapshot</code> reconciled against the JobRegistry, with <code>resume_agents_on_restore = false</code> for executor sessions (ONE resume authority: <code>classify_recovery</code>) — and a server restart is treated as process loss unless OS identity proves otherwise (a restored layout is not a surviving child). The backend is chosen <strong>once per run and persisted</strong> — no mixed-backend runs, extending the existing no-mixed-tier rule.</p>
+<p><strong>Entry criteria (hard):</strong> epic #475 closed (#449, #473, #474 landed) AND executor-hardening #554–#558 landed AND the #559 proving run has passed <strong>on the tmux runtime</strong> — the swap needs a proven baseline to A/B against, and a second migration must not race the #474 legacy flip. <strong>Exit criterion:</strong> the #559-class proving cell re-run green on the herdr runtime with identical Observation/reconcile results (requested==actual, zero anomalies), plus a soak window.</p>
+<p><strong>Rollback (adversarial-review F1 adopted):</strong> the backend flag affects <strong>new runs only</strong> — an in-flight herdr run still needs the herdr-capable supervisor for recovery and cleanup. Rollback = stop new herdr admissions → drain (or explicitly quarantine + terminate) all herdr runs → verify no herdr namespaces remain → only then a code downgrade. JobRecord schema changes stay backward-readable by both implementations; the drain sequence is part of HD2.5&#x27;s crash/recovery tests. <strong>Risk:</strong> medium — new dependency in the child-lifecycle path; bounded by the seam + baseline A/B.</p>
+<h3>Phase C — agent-skill integration + console UX</h3>
+<p><strong>What:</strong> orchestrator sessions (which now run inside herdr panes) get the herdr skill (HERDR_ENV-gated, adapted into the workspace skill library after WF5-style review of its prose) so the orchestrator can spawn helper panes, read neighbors, and wait on output — e.g. watching a child&#x27;s live pane during a stall triage instead of <code>tmux capture-pane</code> archaeology. Console UX hardening: dashboards, notification routing, possibly a driver-bench cell on the herdr runtime.</p>
+<p><strong>Rollback:</strong> remove the skill. <strong>Risk:</strong> low; the skill is advisory tooling, gated on <code>HERDR_ENV</code>.</p>
+<p>---</p>
+<h2>4. Milestone/epic restructure proposal (Phase 4)</h2>
+<p>Follows the modernization-program pattern (epics M1–M4 #167–#170: one epic per milestone, program label, epic bodies carry child slots). <strong>Nothing here is filed — proposal only.</strong></p>
+<h3>4.1 Proposed epics (label: <code>epic:herdr</code>)</h3>
+<p><strong>Epic HD1 — herdr console adoption (Phase A).</strong> Goal: herdr is the owner&#x27;s daily console; epic runs launch into it. Exit: one full epic auto-run driven and observed through herdr, runbook committed. Children (sketches in §4.4): <strong>HD1.0 no-code platform qualification (F6 adopted — gates every other HD1 child)</strong> · HD1.1 vet+pinned install + config baseline · HD1.2 integration install review (settings.json diff) · HD1.3 launcher herdr variant · HD1.4 blocked→notify-owner bridge · HD1.5 runbook + conventions.</p>
+<p><strong>Epic HD2 — herdr executor runtime (Phase B).</strong> Goal: executor children run in herdr panes behind a runtime seam, tmux impl retained. Exit: #559-class proving cell green on herdr runtime; soak passed. Entry: #475 closed, #554–#558 landed, #559 passed on tmux. Children: <strong>HD2.0 qualification gate + compatibility manifest (hard NO-GO on missing argv-spawn/env-injection)</strong> · HD2.1 TerminalRuntime seam (tmux impl extracted, no behavior change; preflight wired into dispatch) · HD2.2 herdr runtime impl (launch/identity/capture/kill) · HD2.3 recovery/adoption mapping (session.snapshot ↔ JobRegistry; native-resume off for executor sessions) · HD2.4 events-driven liveness (advisory, revalidated) · HD2.5 A/B validation + flip decision + a <strong>scheduled dual-backend proving fixture</strong> so the tmux fallback cannot silently rot.</p>
+<p><strong>Epic HD3 — herdr agent-skill + console UX (Phase C).</strong> Goal: orchestrator uses herdr as a tool; console UX complete. Children: HD3.1 adapted herdr skill (HERDR_ENV-gated) + review · HD3.2 stall-triage recipes (replace capture-pane archaeology) · HD3.3 bench cell on herdr runtime · HD3.4 dashboard/notification UX polish.</p>
+<h3>4.2 Full backlog triage — all 46 open issues</h3>
+<p>Dispositions: <strong>unchanged</strong> (herdr doesn&#x27;t touch it) · <strong>re-scope</strong> (survives, body/AC changes) · <strong>supersede/close</strong> (moot — with evidence) · <strong>absorb</strong> (folds into an HD epic).</p>
+<p><strong>Unchanged (37):</strong> #554, #555, #556, #558 (engine/enforcement — herdr has no ledger, no canary, no quota model); <strong>#560 (the hardening epic itself — its queue and goal are untouched; it is an HD2 entry criterion)</strong>; #549 (Observation usage telemetry); #449, #473, #475 (executor-wiring remainder — must finish first, entry criteria for HD2); #394 (fallback-tier reviewer liveness — prose for the Agent-tool tier; herdr gives the *executor* tier an analog, noted in body only if touched anyway); #371 (Agent-tool worktree spawn — different dispatch layer); #365, #364, #363, #362, #361, #356, #355, #350, #346, #345 (WF2/telemetry machinery); #391, #400 (session-index / mining); #399, #395, #380, #379, #372, #370 (WF prose/hooks hardening); #360, #359, #358 (codex-design epic + WF15/WF16); #484 (bake-off config); #450 (ultracode interop — harness Workflow tool, orthogonal runtime); #536, #535, #534 (skills hygiene).</p>
+<p><strong>Re-scope (6):</strong></p>
+<ul>
+<li><strong>#557</strong> (reconcilable failure Observations): core fix unchanged; add one sentence — herdr</li>
+</ul>
+<p>  agent-state events MAY feed an *additional advisory* observation source post-HD2, never an   Observation substitute.</p>
+<ul>
+<li><strong>#559</strong> (proving run): runs on the tmux runtime as written — becomes HD2&#x27;s entry criterion;</li>
+</ul>
+<p>  add &quot;re-run the cell on the herdr runtime&quot; as HD2.5&#x27;s exit evidence.</p>
+<ul>
+<li><strong>#474</strong> (migration flip W12): add explicit sequencing sentence — the legacy→executor flip</li>
+</ul>
+<p>  completes BEFORE any terminal-runtime swap begins (no two racing migrations).</p>
+<ul>
+<li><strong>#390</strong> (workspace-doctor): add herdr checks — binary present + version == pinned, server</li>
+</ul>
+<p>  reachable, <code>api schema</code> version matches the vendored pin.</p>
+<ul>
+<li><strong>#357</strong> (Codex model pin): CLI-upgrade prerequisite is now SATISFIED — live probe this</li>
+</ul>
+<p>  session: codex-cli 0.144.1, <code>codex exec -m gpt-5.6-sol</code> → MODEL-OK. Re-scope to the   config-pin work only.</p>
+<ul>
+<li><strong>#537</strong> (security-vet skill): this analysis is a manual worked example of the skill&#x27;s flow</li>
+</ul>
+<p>  (clone → verdict → risks → artifact → hardening epic) — cite it as the skill&#x27;s fixture.</p>
+<p><strong>Supersede/close (3 — housekeeping, NOT herdr-caused; verified this session via <code>gh</code>):</strong></p>
+<ul>
+<li><strong>#333</strong> (dispatch-observability epic): all 10 children CLOSED (#329–#332, #338, #340–#344) —</li>
+</ul>
+<p>  close as complete. Herdr&#x27;s console is the *spiritual successor* to its observability goal, but   the epic&#x27;s own queue is done.</p>
+<ul>
+<li><strong>#457</strong> (executor-spikes epic): all 5 children CLOSED (#452–#456; PRs #458–#462) — close as</li>
+</ul>
+<p>  complete.</p>
+<ul>
+<li><strong>#408</strong> (GLM follow-ups epic): all 4 children CLOSED (#407, #393, #405, #406) — close as</li>
+</ul>
+<p>  complete.</p>
+<p><strong>Absorb (0):</strong> no existing issue folds into an HD epic — the herdr work is genuinely new surface; existing issues keep their homes.</p>
+<h3>4.3 Sequencing</h3>
+<table>
+<thead><tr><th>Order</th><th>Epic/work</th><th>Entry</th><th>Exit</th></tr></thead>
+<tbody>
+<tr><td>1 (now)</td><td>finish epic #475 (#449 → #473 → #474)</td><td>running (paused)</td><td>epic closed</td></tr>
+<tr><td>1 (parallel)</td><td><strong>HD1 console</strong> — independent of engine work</td><td>herdr vetted + pinned</td><td>epic run observed through herdr</td></tr>
+<tr><td>2</td><td>epic #560 (#554–#558 then #559)</td><td>#475 done (per its own plan)</td><td>#559 proving run green on tmux</td></tr>
+<tr><td>3</td><td><strong>HD2 executor runtime</strong></td><td>#475 + #560 done</td><td>proving cell green on herdr + soak</td></tr>
+<tr><td>4</td><td><strong>HD3 skill + UX</strong></td><td>HD2 flipped (HD3.1 can start after HD1)</td><td>skill shipped + reviewed</td></tr>
+<tr><td>any</td><td>housekeeping closes (#333, #457, #408)</td><td>owner nod</td><td>closed with completion comments</td></tr>
+</tbody>
+</table>
+<h3>4.4 New-issue sketches (titles + AC bullets — for owner review, then WF1)</h3>
+<ul>
+<li><strong>HD1.0 <code>chore(console): platform qualification (no code changes)</code></strong> — exercise the pinned</li>
+</ul>
+<p>  binary under the REAL cron environment and this host&#x27;s permissions: headless server start,   named-session routing, <code>agent start -- &lt;argv&gt;</code>, event-subscriber reconnect, notify-owner   transport reachability; record surfaced errors + socket/config paths in a checked-in   capability manifest. *AC: every Phase-A-assumed call proven live; failures block HD1.2–HD1.4,   not just document them.*</p>
+<ul>
+<li><strong>HD1.1 <code>feat(console): vet + pinned herdr install + config baseline</code></strong> — checksummed</li>
+</ul>
+<p>  release/source install (never <code>curl|sh</code>); <code>[update] manifest_check=false</code> (or documented   exception); sounds/mouse defaults; version pin recorded; security-vet artifact linked. *AC:   install reproducible from the runbook on a clean host; pin verified by workspace-doctor   (post-#390 re-scope).*</p>
+<ul>
+<li><strong>HD1.2 <code>feat(console): Claude Code integration install, reviewed</code></strong> — capture the exact</li>
+</ul>
+<p>  settings.json diff + hook script; verify wal-guard/mempalace hooks unperturbed; document   uninstall. *AC: diff committed to the runbook; existing hook suite green after install.*</p>
+<ul>
+<li><strong>HD1.3 <code>feat(console): epic-launcher herdr variant</code></strong> — long-run-resume launcher gains a</li>
+</ul>
+<p>  herdr mode (<code>herdr agent start</code>/<code>pane run</code> into a named workspace); cron→headless server   proven; tmux mode retained. *AC: one real resume cycle through cron lands in a herdr pane;   fallback documented.*</p>
+<ul>
+<li><strong>HD1.4 <code>feat(console): blocked→notify-owner bridge</code></strong> — <code>events.subscribe</code> watcher →</li>
+</ul>
+<p>  iMessage on blocked-state transitions with debounce + dedup. *AC (F2 adopted — the heuristic   can MISS a real prompt, emitting no event at all): drive representative real Claude and Codex   approval/question screens through the pinned detection manifests and assert a notification   within a deadline; watcher heartbeat + explicit warning/metric when disconnected or when a   waiting process sits <code>idle</code>/<code>unknown</code> with no recognized transition; reconnect +   snapshot-reconciliation tested, not just detach; notification bodies carry pane labels only,   never pane contents (screen text can hold prompts/credentials).*</p>
+<ul>
+<li><strong>HD1.5 <code>docs(console): herdr runbook + workspace conventions</code></strong> — one workspace per project;</li>
+</ul>
+<p>  tab conventions per run; attach/detach/remote recipes; known rough edges (idle CPU, key   repeat). *AC: runbook committed; a second operator can drive a run from it.*</p>
+<ul>
+<li><strong>HD2.0 <code>chore(executor): herdr qualification gate + compatibility manifest</code></strong> — isolated</li>
+</ul>
+<p>  pinned-binary qualification per Phase B.0; checked-in manifest (version, protocol,   schema digest, required methods, config invariants: <code>resume_agents_on_restore=false</code>,   <code>manifest_check=false</code>, <code>pane_history=false</code> for executor sessions); red-first probes for   argv-spawn + env-injection; <strong>NO-GO verdict stops the epic</strong>.</p>
+<ul>
+<li><strong>HD2.1 <code>refactor(executor): TerminalRuntime seam — extract tmux impl</code></strong> — interface:</li>
+</ul>
+<p>  preflight() / start(argv,env,cwd,label)→RuntimeLocator / inspect_identity() / alive() /   enumerate() / terminate() / stop_namespace() / adopt(locator, expected_identity); tmux impl   extracted with zero behavior change; <strong>preflight wired into the live dispatch path</strong> (closes   the pre-existing gap, §2.1); full suite + proving fixtures green.</p>
+<ul>
+<li><strong>HD2.2 <code>feat(executor): herdr runtime impl</code></strong> — socket-API client (schema pinned via</li>
+</ul>
+<p>  <code>api schema</code>); <strong>launch/identity/enumeration/termination parity</strong> (F7 adopted: <code>pane.read</code>   and every screen-capture method are EXCLUDED from TerminalRuntime — screen access exists   only in separate human-triage tooling, never the runtime contract); JobRecord field mapping   documented. *First ACs: prove the two §2.1b unverified capabilities — (1)   argv-as-initial-process spawn for a non-agent pane (never text-injection), (2) arbitrary   per-pane env injection (or the documented <code>env(1)</code> wrapper fallback) — red-first, before any   wiring.*</p>
+<ul>
+<li><strong>HD2.3 <code>feat(executor): recovery/adoption mapping</code></strong> — <code>session.snapshot</code> ↔ JobRegistry</li>
+</ul>
+<p>  reconcile; <code>resume_agents_on_restore=false</code> for executor panes; classify_recovery outcomes   preserved (adopt/relaunch/quarantine/fail) with red-first tests per state.</p>
+<ul>
+<li><strong>HD2.4 <code>feat(executor): events-driven liveness (advisory)</code></strong> — subscribe to agent/pane</li>
+</ul>
+<p>  events as the poll-replacement; sentinel/exit-code enforcement unchanged (drift-guarded   sentence); degraded mode = poll fallback.</p>
+<ul>
+<li><strong>HD2.5 <code>chore(executor): herdr runtime A/B + flip decision</code></strong> — #559-class cell re-run on</li>
+</ul>
+<p>  herdr runtime; identical reconcile outcome required; crash/reap/recovery matrix (orchestrator   crash, herdr server loss, client detach, stale pane, PID reuse, missed event, partial   launch); soak window; flip config + rollback documented; scheduled dual-backend proving   fixture keeps the tmux fallback tested until an explicit deprecation decision.</p>
+<ul>
+<li><strong>HD3.1 <code>feat(skills): herdr agent skill (adapted, HERDR_ENV-gated)</code></strong> — vendored/adapted</li>
+</ul>
+<p>  from upstream SKILL.md after adversarial review of its prose; registration via add-skill.</p>
+<ul>
+<li><strong>HD3.2 <code>docs(skills): stall-triage recipes on the console</code></strong> — replace <code>tmux capture-pane</code></li>
+</ul>
+<p>  archaeology in runbooks with <code>pane.read</code>/<code>agent.explain</code> recipes.</p>
+<ul>
+<li><strong>HD3.3 <code>chore(bench): driver-bench cell on the herdr runtime</code></strong> — one live cell variant;</li>
+</ul>
+<p>  compares runtime overhead vs tmux baseline.</p>
+<ul>
+<li><strong>HD3.4 <code>feat(console): dashboard/notification polish</code></strong> — deferred until HD1/HD2 experience</li>
+</ul>
+<p>  accumulates; placeholder.</p>
+<h3>4.5 Consolidated owner-decision list</h3>
+<table>
+<thead><tr><th>#</th><th>Current title (short)</th><th>Proposed disposition</th><th>Rationale (one line)</th></tr></thead>
+<tbody>
+<tr><td>#333</td><td>dispatch-observability epic</td><td>CLOSE as complete</td><td>all 10 children merged/closed (verified via gh 2026-07-21)</td></tr>
+<tr><td>#457</td><td>executor-spikes epic</td><td>CLOSE as complete</td><td>all 5 spikes closed; PRs #458–#462 landed</td></tr>
+<tr><td>#408</td><td>GLM follow-ups epic</td><td>CLOSE as complete</td><td>all 4 children closed</td></tr>
+<tr><td>#557</td><td>H4 failure Observations</td><td>RE-SCOPE (one sentence)</td><td>herdr events = optional advisory source, post-HD2</td></tr>
+<tr><td>#559</td><td>H6 proving run</td><td>RE-SCOPE (sequencing)</td><td>becomes HD2 entry criterion; herdr re-run = HD2.5 exit</td></tr>
+<tr><td>#474</td><td>W12 migration flip</td><td>RE-SCOPE (sequencing)</td><td>explicit &quot;before any runtime swap&quot; sentence</td></tr>
+<tr><td>#390</td><td>workspace-doctor</td><td>RE-SCOPE (add checks)</td><td>herdr binary/version/server/schema-pin checks</td></tr>
+<tr><td>#357</td><td>Codex gpt-5.6-sol pin</td><td>RE-SCOPE (shrink)</td><td>CLI prereq satisfied — probe MODEL-OK on 0.144.1</td></tr>
+<tr><td>#537</td><td>security-vet skill</td><td>RE-SCOPE (cite fixture)</td><td>this analysis is the worked example</td></tr>
+<tr><td>—</td><td>new epics HD1/HD2/HD3</td><td>FILE (15 children)</td><td>§4.1/§4.4; HD1 can start now, HD2 gated</td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>5. Risk register</h2>
+<table>
+<thead><tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td><strong>AGPL-3.0 license</strong></td><td>Medium (legal)</td><td>Confirmed posture: rawgentic invokes herdr as a separate process over CLI/socket — no linking, no vendoring, no distribution of herdr, no network service exposing herdr to third parties ⇒ no copyleft obligation attaches to rawgentic code in any proposed phase. Re-verify if ever bundling herdr in an image we ship. GitHub API shows <code>NOASSERTION</code> while the README badges AGPL-3.0 — LICENSE file text is the authority (34KB, AGPL-length; §1.6).</td></tr>
+<tr><td><strong>Prerelease velocity / API drift</strong></td><td>High (ops)</td><td>Pin one release; vendor <code>herdr api schema --json</code> output; workspace-doctor check (#390 re-scope); runtime seam keeps tmux fallback.</td></tr>
+<tr><td><strong>Heuristic agent state (claude/codex = screen manifests)</strong></td><td>High if misused</td><td>Hard rule in HD2.4 + drift-guarded sentence: herdr state is advisory; sentinels/exit codes/Observations remain enforcement evidence.</td></tr>
+<tr><td><strong>Remote manifest auto-update from herdr.dev</strong></td><td>Medium (supply chain)</td><td><code>[update] manifest_check = false</code>; local manifest overrides pinned in config dir.</td></tr>
+<tr><td><strong>Two resume authorities</strong> (herdr native restore vs classify_recovery)</td><td>High if unaddressed</td><td><code>resume_agents_on_restore = false</code> for executor panes (HD2.3); executor recovery stays sole authority.</td></tr>
+<tr><td><strong>Integration install edits <code>~/.claude/settings.json</code></strong></td><td>Medium</td><td>HD1.2 diff-review before accept; verify wal-guard/mempalace hooks intact.</td></tr>
+<tr><td><strong>Single-maintainer bus factor</strong></td><td>Medium</td><td>Seam + tmux fallback = exit ramp; AGPL guarantees forkability.</td></tr>
+<tr><td><strong>tmux fallback rots once herdr is default</strong></td><td>Medium</td><td>Scheduled dual-backend proving fixture (HD2.5) until explicit deprecation — an untested fallback is not a rollback strategy.</td></tr>
+<tr><td><strong>Missed socket events across disconnects</strong></td><td>Medium</td><td>Reconnect always starts <code>session.snapshot</code> + registry reconciliation; polling remains the degraded fallback (HD2.4).</td></tr>
+<tr><td><strong>Idle CPU / TUI quirks</strong></td><td>Low</td><td>Known (madflex); server headless for unattended runs; acceptable for console use.</td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>6. Assumptions needing owner clarification + open uncertainties</h2>
+<p>Every item below is an <strong>assumption this plan is built on</strong> — each states what was assumed, why, and what would confirm or overturn it. The first five need an explicit owner answer; the rest are technical uncertainties with a named home.</p>
+<h3>6.1 Assumptions to clarify with the owner</h3>
+<p>1. <strong>&quot;Main console application&quot; = observation + terminal-control surface, NOT the    orchestrator.</strong> This plan keeps rawgentic as the sole workflow/orchestration owner (gates,    routing, audit, epic driver) and puts herdr underneath/around it as the terminal runtime and    human console. If the intent was for herdr to *drive* work (herdr-native orchestration,    agents coordinating via the herdr skill as the primary mechanism), the phasing and epic    structure change materially. <strong>Assumed the former</strong> — confirm. 2. <strong>Where the console lives.</strong> Assumed: herdr server runs on THIS workspace host (where the    runs execute), owner attaches locally / via <code>herdr --remote</code> from elsewhere (laptop, phone    over ssh). Alternative (server on another box) breaks Phase A&#x27;s launcher integration. 3. <strong>Adoption depth is decided per-phase, not upfront.</strong> Assumed the owner wants the option to    stop at console-only (HD1) if daily use disappoints — HD2&#x27;s engineering cost (seam +    qualification + A/B) is only committed after HD1 proves value AND #475/#560 land. If the    owner already knows they want the full executor swap, HD2.0/HD2.1 can be scheduled earlier    (still behind the same entry criteria). 4. <strong>Run priority.</strong> Assumed epic #475 (paused) and hardening #560 keep queue priority; herdr    work (HD1) slots in as parallel, non-preempting work. Confirm before HD1 consumes run time. 5. <strong>License posture sign-off.</strong> §5&#x27;s AGPL analysis (separate-process invocation ⇒ no copyleft    obligation) is careful reading of the license text plus the project&#x27;s own dual-license    framing — it is NOT legal counsel. Assumed acceptable for internal tooling use; the    commercial-license contact exists if the owner wants belt-and-suspenders. 6. <strong>Same-user trust boundary is acceptable.</strong> The herdr socket is 0o600, same-user-full-    control (§1.1) — identical to today&#x27;s tmux private socket posture. Assumed fine; if the    host ever runs mixed-trust processes under this account, revisit (least-privilege service    account is the named mitigation).</p>
+<h3>6.2 Technical uncertainties (each with its home)</h3>
+<ul>
+<li><strong>Argv-as-initial-process spawn for generic panes</strong> — confirmed for <code>agent start</code> kinds;</li>
+</ul>
+<p>  unverified for arbitrary non-agent commands. Load-bearing (F4/F7); NO-GO criterion.   → HD1.0 (launcher path) / HD2.0 (executor path).</p>
+<ul>
+<li><strong>Per-pane env injection</strong> (PYTHONPATH, CLAUDE_CONFIG_DIR) — unverified; <code>env(1)</code> wrapper is</li>
+</ul>
+<p>  the fallback. → HD2.0.</p>
+<ul>
+<li><strong><code>resume_agents_on_restore</code> scope</strong> — docs say named sessions share the global config file,</li>
+</ul>
+<p>  so per-session scoping likely requires a separate config root (§1.4). → HD2.0 hard test.</p>
+<ul>
+<li><strong><code>pane.process_info</code> field parity</strong> with tmux&#x27;s pane_pid (+ our /proc-derived pgid/</li>
+</ul>
+<p>  start-time) — method exists, fields unexercised. → HD2.2.</p>
+<ul>
+<li><strong>Socket latency/stability at our concurrency</strong> (≤3 children + orchestrator, long sessions)</li>
+</ul>
+<p>  and idle CPU with many animated panes — unmeasured. → HD1.0 / HD2.5 soak.</p>
+<ul>
+<li><strong><code>session.snapshot</code> completeness</strong> on large sessions (&gt;20 panes). → HD2.3.</li>
+<li><strong>Blocked-detection miss rate</strong> on our real approval screens (strict manifests fall back to</li>
+</ul>
+<p>  <code>idle</code>) — bounded by HD1.4&#x27;s real-screen AC, never enforcement-relevant by design.</p>
+<ul>
+<li><strong>Upstream skill/CLI drift cadence</strong> (the <code>herdr wait</code> drift in §1.2 is live evidence) —</li>
+</ul>
+<p>  bounded by pinning + <code>api schema</code> digest checks; re-validate on every pin bump.</p>
+<h2>6b. What was NOT checked</h2>
+<ul>
+<li>Herdr was <strong>not built or executed</strong> — all findings are from reading the repo, official docs,</li>
+</ul>
+<p>  and third-party reviews. Hands-on latency/stability of the socket API under our concurrency   (≤3 children + orchestrator) is unmeasured → HD1.1/HD2.2 carry it.</p>
+<ul>
+<li>The exact JobRecord↔pane identity mapping (pane pid/pgid/start-time parity with tmux&#x27;s</li>
+</ul>
+<p>  <code>pane_start_time</code>) is asserted from <code>pane.process_info</code>&#x27;s existence, not exercised → HD2.2.</p>
+<ul>
+<li><strong>Argv-as-initial-process spawn for a non-agent pane</strong>: <code>agent start … -- &lt;argv&gt;</code> is</li>
+</ul>
+<p>  confirmed for agent kinds; whether a generic pane can be created with an arbitrary argv as   its initial process (rather than <code>pane run</code> text-injection into a shell) is unverified —   load-bearing for the F7-equivalent rule (no keystroke injection on the launch path) → HD2.2   first AC.</p>
+<ul>
+<li><strong>Arbitrary per-pane env injection</strong> (PYTHONPATH, CLAUDE_CONFIG_DIR): herdr injects its own</li>
+</ul>
+<p>  <code>HERDR_*</code> context; caller-supplied env unverified (fallback exists: <code>env(1)</code> wrapper) →   HD2.2 first AC.</p>
+<ul>
+<li><code>session.snapshot</code> completeness against a large (&gt;20 pane) session.</li>
+<li>Windows beta quality (irrelevant to this Linux workspace).</li>
+<li>The herdr plugin marketplace&#x27;s individual plugins (none proposed for adoption).</li>
+</ul>
+<h2>7. Review trail</h2>
+<ul>
+<li><strong>Cross-model thought partner (done):</strong> gpt-5.6-sol via the engine consult CLI</li>
+</ul>
+<p>  (<code>adversarial_review_lib.py consult</code>, <code>RAWGENTIC_ADV_REVIEW_MODEL=gpt-5.6-sol</code>,   codex-cli 0.144.1) — report:   <code>docs/reviews/peer-2026-07-21-herdr-console-plan-consult.md</code> (run-local: <code>docs/reviews/</code> is   gitignored by owner decision 2026-07-20, #548 — the adopted content is summarized here in   full). Peer proposal converged on   the same architecture (console/backend separation, seam, advisory-only state, single   resume authority). Adopted from it: the B.0 qualification gate + compatibility manifest   with hard NO-GO on missing argv-spawn; never-mix console/executor namespaces;   backend-per-run persisted; the scheduled dual-backend proving fixture; notification   redaction; server-restart-is-process-loss framing. Not adopted: none rejected —   the proposal contained no conflicting recommendation.</p>
+<ul>
+<li><strong>WF5 adversarial review (done):</strong> gpt-5.6-sol (reasoning high) via</li>
+</ul>
+<p>  <code>adversarial_review_lib.py review --type design</code> — report:   <code>docs/reviews/2026-07-21-herdr-console-plan-md-2026-07-21.md</code> (run-local per #548; all   findings restated below). 7 findings   (0 Critical / 4 High / 3 Medium), <strong>all 7 verified real and ADOPTED</strong>:   F1 rollback = drain-then-downgrade, never a flag flip (Phase B + HD2.5) ·   F2 HD1.4 AC now drives real approval screens + heartbeat (a heuristic miss emits no   event) · F3 resume-scope assumption replaced with evidence (global config file ⇒   separate config root) + HD2.0 hard test · F4 <code>pane run</code> removed from the launcher path   (argv-only) · F5 missing 46th issue found — it was epic #560 itself, now dispositioned   unchanged · F6 new HD1.0 no-code platform qualification gates Phase A · F7 &quot;capture&quot;   dropped from HD2.2 (screen methods excluded from TerminalRuntime).</p>
+<ul>
+<li>Visual dashboard artifact (published 2026-07-21):</li>
+</ul>
+<p>  https://claude.ai/code/artifact/e5e51d5b-7481-4ef1-b1c3-f5df3f944c19 — source of truth is   the committed <code>docs/planning/2026-07-21-herdr-console-dashboard.html</code>.</p>
+
+</main>
+<footer>Last updated: 2026-07-21 02:40 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
