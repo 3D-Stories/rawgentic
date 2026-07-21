@@ -291,6 +291,12 @@ def _validate_record(obj, lineno: int) -> None:
         raise ValueError(f"audit line {lineno}: {kind} missing fields {missing}")
     if kind == "receipt" and obj["verdict"] not in _VERDICTS:
         raise ValueError(f"audit line {lineno}: bad verdict {obj['verdict']!r}")
+    if kind == "receipt" and "recovered_from" in obj and not (
+            obj["recovered_from"] is None or isinstance(obj["recovered_from"], str)):
+        # #554: the recovery-join field is str-or-None; a non-string (e.g. a list) would build an
+        # unhashable effective key and crash reconcile_run with a bare TypeError. Reject it as a
+        # structured anomaly instead — fail-closed, and never an ungraceful crash on a tampered log.
+        raise ValueError(f"audit line {lineno}: receipt recovered_from not a string-or-null")
     if kind == "receipt" and obj.get("role") == "build" and obj.get("verdict") == "pass":
         # #464 §E: an APPROVED build receipt must PROVE it was gated — truthy gate_outcome +
         # gate_input_digest (fail-closed; empty strings prove nothing). A verdict='fail' build
@@ -449,11 +455,17 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
 
     # #554 pause/recover: a recovery attempt is a DISTINCT audited attempt (its own
     # correlation_id) LINKED to the original expected call via ``recovered_from`` (the
-    # original correlation_id, stamped by supervisor._relaunch). Its EFFECTIVE expected key
-    # is the original's, so it is neither an orphan nor a separate key — it is grouped with
-    # the original attempt under one expected call, and its verified observation satisfies
-    # that call (the original's availability/pause observation is the forgivable failure).
-    # A receipt without ``recovered_from`` keys to itself — unchanged behavior (AC4).
+    # original correlation_id). Its EFFECTIVE expected key is the original's, so it is
+    # neither an orphan nor a separate key — it is grouped with the original attempt under
+    # one expected call, and its verified observation satisfies that call (the original's
+    # availability/pause observation is the forgivable failure). A receipt without
+    # ``recovered_from`` keys to itself — unchanged behavior (AC4).
+    #   PROVENANCE SOURCE: supervisor._relaunch records ``recovered_from`` on the JobRecord +
+    #   pane spec. Emitting it onto the audit RECEIPT (extending check_pre/PreReceipt, minted
+    #   only by the supervisor) and wiring a recovered attempt's receipt/observation into the
+    #   RoutingAuditLog is the #555 ledger chokepoint's job — reconcile_run has no live caller
+    #   until then (#420). So this join is exercised here by unit tests with synthesized
+    #   records; the #555 PR that feeds real receipts MUST re-run the #554 laundering battery.
     def _effective_key(rec):
         return (rec["seat"], rec.get("recovered_from") or rec["correlation_id"])
 

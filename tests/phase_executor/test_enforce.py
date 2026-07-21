@@ -501,6 +501,25 @@ def test_reconcile_recovery_with_no_verified_obs_still_fails():
     assert not res.ok and ("review", "c1") in res.missing_receipt
 
 
+def test_reconcile_recovery_to_nonexistent_key_is_orphan():
+    # #554 8a review (attack e): a recovery whose recovered_from names a NON-EXISTENT expected
+    # key must FAIL CLOSED (orphan), never silently drop.
+    recs = [_receipt_rec("n2", cid="ghost#resume1", recovered_from="ghost"),
+            _obs_rec("n2", cid="ghost#resume1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok
+    assert any("n2" in o for o in res.orphan)
+
+
+def test_reconcile_receipt_recovered_from_non_string_rejected():
+    # #554 8a review (F2): a non-string recovered_from is rejected as a structured anomaly by the
+    # record validator, not an ungraceful TypeError crash in reconcile.
+    bad = _receipt_rec("n1", cid="c1")
+    bad["recovered_from"] = ["c1"]  # unhashable — would crash the effective-key build
+    with pytest.raises(ValueError):
+        enforce._validate_record(bad, 1)
+
+
 def test_reconcile_recovery_breach_not_laundered():
     # #554 AC3/AC4: if the recovery attempt is a BREACH (wrong model), the original key is unverified
     # — a recovery cannot launder a breach any more than a sibling can.
