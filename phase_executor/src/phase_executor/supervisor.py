@@ -14,28 +14,32 @@ pane group + every snapshot pid + the sidecar-surfaced provider pgid, then (d) v
 WHOLE snapshot and BOTH groups dead (Z-state = dead) before ``kill-session``. A verify
 failure is ``completed_with_residue`` — handed to the reaper, never claimed clean.
 
-``quota_paused`` is entered ONLY via the injected classification (``mark_quota_paused`` —
-W9 #472 owns the genuine usage-limit discriminator); ``status`` defaults every ambiguous
+``quota_paused`` is entered via collection-time detection (``quota_detect``, #558 —
+shadow-gated behind the ``CALIBRATED_CLASSIFIERS`` allowlist, which ships EMPTY) or the
+injected classification (``mark_quota_paused``); ``status`` defaults every ambiguous
 nonzero exit to ``exited_no_sentinel`` (NO auto-resume, CF-6).
 """
 from __future__ import annotations
 
+import errno
+import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat as stat_mod
 import subprocess
 import sys
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
 from jsonschema import ValidationError as _SchemaError
 
-from . import contract, routing
+from . import contract, quota_detect, routing
 from .capture import atomic_write_text, ensure_private_dir, hash_text
 from .engine import PROVIDER_ENGINE
 from .pane_runner import _descendants, expected_capture_dir, sidecar_path
@@ -66,6 +70,51 @@ class RecoveryAction:
     identity: WorktreeIdentity
     action: str
     record: JobRecord
+
+
+@dataclass(frozen=True)
+class _GuardProfile:
+    """The two profile facts the #558 pause guards read, reconstructed from the
+    VERIFIED spec (never trusted from an unverified read)."""
+    session_policy: str
+    mutating: bool
+
+
+def _profile_from_spec(spec: dict) -> Optional[_GuardProfile]:
+    """Strictly-validated guard profile from a digest-verified spec — a malformed
+    profile inside a digest-valid spec is spec_unverified too (pass-4 S-F9)."""
+    prof = (spec.get("request") or {}).get("profile")
+    if not isinstance(prof, dict):
+        return None
+    sp = prof.get("session_policy")
+    mut = prof.get("mutating")
+    if sp not in ("fresh", "resume") or not isinstance(mut, bool):
+        return None
+    return _GuardProfile(session_policy=sp, mutating=mut)
+
+
+@dataclass(frozen=True)
+class PauseDecision:
+    """#558: the typed auto-pause verdict — guards evaluate in declared order and the
+    FIRST failing guard's reason is the persisted ``refusal`` (deterministic
+    single-reason evidence, pass-4 A-F4)."""
+    allowed: bool
+    refusal: Optional[str] = None
+
+
+#: #558 D-12 shadow gate: the EXACT (classifier_version, rule_table_digest) pairs
+#: calibrated against a GENUINE captured usage-limit exit. Ships EMPTY — v1 and every
+#: future uncalibrated pair runs in SHADOW (evidence persisted, auto-pause refused as
+#: "uncalibrated_classifier"). #559's live proving run adds the first pair.
+CALIBRATED_CLASSIFIERS: frozenset = frozenset()
+
+_ENVELOPE_CEILING_BYTES = 256 * 1024  # bounded _envelope_meta prefix (pass-3 S-F4)
+_ENVELOPE_SUBTYPE_MAXLEN = 64
+_ENVELOPE_SUBTYPE_ALLOWLIST = frozenset({
+    # known claude CLI result-envelope subtypes; anything else persists as
+    # "unknown" + its sha256 — no raw provider prose reaches jobs.json (pass-4 A-F5)
+    "success", "error", "error_during_execution", "error_max_budget_usd",
+    "error_max_turns"})
 
 
 def _default_run(cmd, *, env=None, cwd=None, timeout=30):
@@ -352,7 +401,8 @@ class TmuxSupervisor:
                snapshot_dir: Optional[str] = None,
                snapshot_digest: Optional[str] = None,
                correlation_id: Optional[str] = None,
-               recovered_from: Optional[str] = None) -> JobRecord:
+               recovered_from: Optional[str] = None,
+               quota_classification: Optional[dict] = None) -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
         for the job's lifetime), write the FIXED pane spec, and spawn the pane.
 
@@ -450,7 +500,8 @@ class TmuxSupervisor:
                 provider_session_id=resume_session_id, provider_exit_code=None,
                 resume_attempts=resume_attempts, state="running",
                 created_at=self._clock(), quarantine_reason=None,
-                receipt_nonce=receipt_nonce, recovered_from=recovered_from)
+                receipt_nonce=receipt_nonce, recovered_from=recovered_from,
+                quota_classification=quota_classification)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
@@ -509,30 +560,24 @@ class TmuxSupervisor:
         if self._live(record):
             raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
         sent = self._sentinel(record)
-        if sent is not None and (
-                sent.get("parse_status") not in contract.AVAILABILITY_FAILURES
-                or sent.get("actual_model")):
-            # Resuming a job that already produced an EFFECTFUL result would duplicate it.
-            # Two signals mark "effectful": (a) an envelope-producing status (ok /
-            # parse_error / identity_failure / ...) — not an availability failure; or
-            # (b) a provider-ATTESTED actual_model — the model ran and (if mutating) may
-            # have applied effects/billing, even under an availability-shaped status
-            # (#557 8a review: a child-written no_response/nonzero_exit that nonetheless
-            # attested a model is effectful and must not be resumed). The supervisor's own
-            # synthetic exited_no_sentinel observation carries actual_model=None with an
-            # availability status, so it correctly does NOT trip this guard — pause/resume
-            # is exactly its designed recovery.
+        if self._sentinel_effectful(sent):
+            # Resuming a job that already produced an EFFECTFUL result would duplicate it
+            # (the shared _sentinel_effectful predicate — see its docstring; the
+            # supervisor's own synthetic exited_no_sentinel observation carries
+            # actual_model=None with an availability status, so it correctly does NOT
+            # trip this guard — pause/resume is exactly its designed recovery).
             raise SupervisorError(
                 "mark_quota_paused: sentinel indicates an effectful result (an "
                 "envelope-producing status or an attested actual_model) — resuming "
                 "would duplicate its effects")
-        record = replace(record, state="quota_paused", provider_session_id=provider_session_id)
-        self._registry.upsert(record)
-        # the provider exited (usage-limit exit-1) — free the pool slot NOW, else the
-        # relaunch under the same session_name strands the old permit context manager
-        # and deadlocks a concurrency-1 pool on the job's own permit (8a R2 finding)
-        self._release_permit(record)
-        return record
+        # routes through _finish (release_permit=True): the provider exited (usage-limit
+        # exit-1) — free the pool slot NOW, else the relaunch under the same session_name
+        # strands the old permit context manager and deadlocks a concurrency-1 pool on
+        # the job's own permit (8a R2 finding). Injected-classification evidence rides
+        # the same upsert (#558 pass-2 F9).
+        return self._finish(record, "quota_paused",
+                            provider_session_id=provider_session_id,
+                            quota_classification={"injected": True, "paused": True})
 
     # -- kill (AC-E4, CF-17) ---------------------------------------------------
 
@@ -685,18 +730,65 @@ class TmuxSupervisor:
                 # session id (Step-11 codex #8) — the caller param only overrides/adds
                 if expect_session_id is None and record.resume_attempts > 0:
                     expect_session_id = record.provider_session_id or "<missing>"
+                # KILL-VERIFY FIRST (#558 r6 evidence ordering): every evidence read
+                # below (envelope, stderr) sees a stable, dead-writer snapshot — the
+                # resume-identity assert is relocated to run post-kill on the bounded
+                # _envelope_meta (its failure action, finish "failed" + raise, unchanged)
+                killed = self._kill_job(record)
+                is_claude_nonzero = (
+                    obs.get("parse_status") == contract.NONZERO_EXIT
+                    and self._read_spec(record).get("engine") == "claude")
+                meta = (self._envelope_meta(record)
+                        if (expect_session_id is not None or is_claude_nonzero) else None)
                 if expect_session_id is not None:
-                    got = self._transport_session_id(record)
+                    got = meta.session_id
                     if got != expect_session_id:
-                        killed = self._kill_job(record)
                         self._finish(record, "failed", release_permit=killed)
                         raise SupervisorError(
                             f"resume identity mismatch: transport session_id {got!r} != "
                             f"persisted {expect_session_id!r} (wrong-cwd resume shape)")
-                clean = self._kill_job(record)
-                state = "completed" if clean else "completed_with_residue"
-                self._finish(record, state, release_permit=clean,
-                             provider_exit_code=_exit_code_of(obs))
+                # #558 AC1: collection-time quota detection — classifier invocation is
+                # the persistence trigger on a claude NONZERO_EXIT collect (pass-3 S-F10)
+                cls = None
+                vspec = None
+                refusal_reason = None
+                if is_claude_nonzero:
+                    vspec = self._verified_spec(record)
+                    if vspec is not None:  # tampered/missing spec: classify nothing
+                        ev = self._read_stderr(record)
+                        cls = quota_detect.classify_quota_exit(
+                            engine=vspec.get("engine", ""), exit_code=_exit_code_of(obs),
+                            stderr=ev, envelope=meta)
+                if cls is not None and cls.verdict:
+                    decision = self._auto_pause_allowed(
+                        record, obs, _profile_from_spec(vspec),
+                        meta.session_id if meta else None, cls, killed=killed)
+                    if decision.allowed:  # implies killed — kill-verified is a guard conjunct
+                        self._finish(record, "quota_paused", release_permit=True,
+                                     provider_session_id=meta.session_id,
+                                     provider_exit_code=_exit_code_of(obs),
+                                     quota_classification=dict(asdict(cls), paused=True))
+                        return "quota_paused", obs
+                    if decision.refusal == "kill_unverified":
+                        self._finish(record, "completed_with_residue", release_permit=False,
+                                     provider_exit_code=_exit_code_of(obs),
+                                     quota_classification=dict(asdict(cls), paused=False,
+                                                               refusal=decision.refusal))
+                        return "completed_with_residue", obs
+                    refusal_reason = decision.refusal
+                extra = {}
+                if cls is not None:
+                    qc = dict(asdict(cls), paused=False)
+                    if refusal_reason:
+                        qc["refusal"] = refusal_reason
+                    extra["quota_classification"] = qc
+                elif is_claude_nonzero:  # spec missing/tampered: say why, classify nothing
+                    extra["quota_classification"] = {
+                        "paused": False, "refusal": "spec_unverified",
+                        "classifier_version": quota_detect.CLASSIFIER_VERSION}
+                state = "completed" if killed else "completed_with_residue"
+                self._finish(record, state, release_permit=killed,
+                             provider_exit_code=_exit_code_of(obs), **extra)
                 return state, obs
             if not self._live(record):
                 obs = self._sentinel(record)  # one post-exit re-check (write vs exit race)
@@ -997,7 +1089,8 @@ class TmuxSupervisor:
             timeout=float(req.get("timeout", 300.0)),
             resume_session_id=record.provider_session_id,
             resume_attempts=next_attempt,
-            correlation_id=recovery_cid, recovered_from=origin_cid)
+            correlation_id=recovery_cid, recovered_from=origin_cid,
+            quota_classification=record.quota_classification)
 
     def _retain(self, record: JobRecord) -> None:
         """W3 disposition on a failure-shaped exit: retain-if-dirty, owner-visible evidence.
@@ -1096,6 +1189,153 @@ class TmuxSupervisor:
         return plan
 
     # -- helpers ----------------------------------------------------------------
+
+    # -- #558 evidence readers + pause guards (bounded, O_NOFOLLOW, fstat) -------
+
+    @staticmethod
+    def _evidence_read(path: Path, ceiling: int):
+        """Bounded raw-byte read → ``(data, true_byte_count, read_error)``. O_NOFOLLOW +
+        regular-file + fstat: a symlink or non-regular target is
+        ``unreadable: irregular``; content past the ceiling (including growth during
+        the read) is ``oversized`` with the prefix returned and the true size
+        recorded (pass-4 S-F7 snapshot posture — callers kill-verify first)."""
+        try:
+            fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        except FileNotFoundError:
+            return b"", 0, "missing"
+        except OSError as exc:
+            reason = "irregular" if exc.errno == errno.ELOOP else (exc.strerror or "error")
+            return b"", 0, f"unreadable: {reason}"
+        try:
+            st = os.fstat(fd)
+            if not stat_mod.S_ISREG(st.st_mode):
+                return b"", 0, "unreadable: irregular"
+            chunks = []
+            remaining = ceiling
+            while remaining > 0:
+                chunk = os.read(fd, min(65536, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            data = b"".join(chunks)
+            if os.read(fd, 1):  # more content past the ceiling, or growth during read
+                return data, os.fstat(fd).st_size, "oversized"
+            return data, len(data), None
+        finally:
+            os.close(fd)
+
+    def _read_stderr(self, record: JobRecord) -> quota_detect.StderrEvidence:
+        """The capture's ``stderr.txt`` as bounded StderrEvidence — the ONLY sanctioned
+        classifier verdict input (#558 AC1)."""
+        data, count, err = self._evidence_read(
+            Path(record.capture_dir) / "stderr.txt", quota_detect.CEILING_BYTES)
+        return quota_detect.StderrEvidence(
+            decoded_text=data.decode("utf-8", errors="replace"),
+            raw_sha256=(hashlib.sha256(data).hexdigest()
+                        if err in (None, "oversized") else ""),
+            byte_count=count, read_error=err)
+
+    def _envelope_meta(self, record: JobRecord) -> quota_detect.EnvelopeMeta:
+        """Bounded (256 KiB) replacement for the unbounded ``_transport_session_id``
+        read on the collect path (pass-3 S-F4): session_id + ALLOWLISTED subtype only —
+        observability, never a verdict input."""
+        data, _count, err = self._evidence_read(
+            Path(record.capture_dir) / "transport.stdout.txt", _ENVELOPE_CEILING_BYTES)
+        if err == "oversized":
+            return quota_detect.EnvelopeMeta(None, None, None, "oversized")
+        if err is not None:
+            return quota_detect.EnvelopeMeta(
+                None, None, None, "missing" if err == "missing" else "malformed")
+        try:
+            env = json.loads(data.decode("utf-8", errors="replace"))
+        except ValueError:
+            return quota_detect.EnvelopeMeta(None, None, None, "malformed")
+        if not isinstance(env, dict):
+            return quota_detect.EnvelopeMeta(None, None, None, "malformed")
+        sid = env.get("session_id")
+        sid = sid if isinstance(sid, str) and sid else None
+        subtype = env.get("subtype")
+        sub_sha = None
+        if isinstance(subtype, str):
+            if (subtype not in _ENVELOPE_SUBTYPE_ALLOWLIST
+                    or len(subtype) > _ENVELOPE_SUBTYPE_MAXLEN):
+                sub_sha = hashlib.sha256(subtype.encode("utf-8")).hexdigest()
+                subtype = "unknown"
+        else:
+            subtype = None
+        return quota_detect.EnvelopeMeta(session_id=sid, subtype=subtype,
+                                         subtype_sha256=sub_sha, error=None)
+
+    def _verified_spec(self, record: JobRecord) -> Optional[dict]:
+        """The pane spec parsed from digest-VERIFIED bytes (read once — pass-3 S-F2,
+        the same trust rule recovery applies), or None on missing/malformed/mismatch."""
+        path = Path(self._registry_root) / "specs" / f"{record.session_name}.json"
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return None
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        if not record.spec_digest or hash_text(text) != record.spec_digest:
+            return None
+        try:
+            spec = json.loads(text)
+        except ValueError:
+            return None
+        return spec if isinstance(spec, dict) else None
+
+    @staticmethod
+    def _sentinel_effectful(sent: Optional[dict]) -> bool:
+        """True when a sentinel indicates an EFFECTFUL result — an envelope-producing
+        parse_status (not an availability failure) or a provider-ATTESTED actual_model.
+        Resuming such a job would duplicate its effects (#557 8a review)."""
+        return sent is not None and (
+            sent.get("parse_status") not in contract.AVAILABILITY_FAILURES
+            or bool(sent.get("actual_model")))
+
+    def _pause_common_allowed(self, record: JobRecord, obs: Optional[dict],
+                              session_id: Optional[str]) -> Optional[str]:
+        """The guard set shared by BOTH quota_paused writers (pass-3 A-F2/S-F3) —
+        returns the refusal reason, or None when the pause is permissible."""
+        if not session_id:
+            # a quota_paused record with no session id would make classify_recovery's
+            # relaunch arm compose an impossible --resume
+            return "no_resumable_session"
+        if self._sentinel_effectful(obs):
+            return "effectful_sentinel"
+        if record.state in _TERMINAL_STATES:
+            return "terminal_state"
+        return None
+
+    def _auto_pause_allowed(self, record: JobRecord, obs: dict,
+                            profile: Optional[_GuardProfile],
+                            session_id: Optional[str],
+                            cls: quota_detect.QuotaClassification, *,
+                            killed: bool) -> PauseDecision:
+        """Automatic-mode pause guards, declared order = refusal precedence:
+        verified-spec/profile → read-only → resume-policy → calibration allowlist →
+        common → kill-verified. ``allowed=True`` implies ``killed`` (r7: pause only on
+        verified-dead; every evidence byte was read after that verification)."""
+        if profile is None:
+            return PauseDecision(False, "spec_unverified")
+        if profile.mutating:
+            # a mutating job may have applied Edit/Bash effects before the quota exit
+            return PauseDecision(False, "mutating_requires_manual")
+        if profile.session_policy != "resume":
+            # a fresh launch composed --no-session-persistence; resuming it is
+            # spike-#455's LOUD failure
+            return PauseDecision(False, "session_not_persisted")
+        if (cls.classifier_version, quota_detect.RULE_TABLE_DIGEST) not in CALIBRATED_CLASSIFIERS:
+            return PauseDecision(False, "uncalibrated_classifier")
+        common = self._pause_common_allowed(record, obs, session_id)
+        if common is not None:
+            return PauseDecision(False, common)
+        if not killed:
+            return PauseDecision(False, "kill_unverified")
+        return PauseDecision(True, None)
 
     def _transport_session_id(self, record: JobRecord) -> Optional[str]:
         """The provider session id from the transport capture (claude envelope's
