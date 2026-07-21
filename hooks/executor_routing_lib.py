@@ -64,6 +64,7 @@ SUPPORTED_VERSION: Final[int] = 1
 
 # Exit-code taxonomy (structured {ok:false,error:{code,message,retryable}} on every non-zero).
 EXIT_OK: Final[int] = 0
+EXIT_ANOMALY: Final[int] = 1        # #555 reconcile verb: ledger↔audit anomalies present (not ok)
 EXIT_MALFORMED: Final[int] = 2      # bad input / config / invalid seat or mode (non-retryable)
 EXIT_AVAILABILITY: Final[int] = 3   # chain exhaustion / quota / timeout / availability (retryable)
 EXIT_ENFORCEMENT: Final[int] = 4    # pre-check denial or requested!=actual identity breach (non-retryable)
@@ -1057,6 +1058,8 @@ def _import_phase_executor():
     import phase_executor.canary as canary  # noqa: PLC0415 — #470 §2a supervised branch
     import phase_executor.canary_evidence as canary_evidence  # noqa: PLC0415
     import phase_executor.contract as contract  # noqa: PLC0415
+    import phase_executor.ledger as ledger  # noqa: PLC0415 — #555 expected-call ledger
+    import phase_executor.capture as capture  # noqa: PLC0415 — #555 sanitize_component (dir colocation)
     from phase_executor import run_seat  # noqa: PLC0415
     from phase_executor.engine import _dispatch_real, PROVIDER_ENGINE  # noqa: PLC0415
     from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
@@ -1073,6 +1076,7 @@ def _import_phase_executor():
         canary=canary, canary_evidence=canary_evidence, contract=contract,
         PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
         supervisor=supervisor_mod, JobRegistry=JobRegistry, RegistryCorrupt=RegistryCorrupt,
+        ledger=ledger, capture=capture,
         registry_read_all=registry_read_all,
         registry_session_name=registry_session_name,
         WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
@@ -1508,6 +1512,42 @@ def _do_dispatch(args) -> int:
     except (OSError, ValueError) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #555 AC2 — ledger-aware choke-point (the ONE choke both the sync and supervised branches pass
+    # through). Fail closed: a run whose expected-call ledger is run_closed refuses any NEW dispatch
+    # BEFORE any spawn or audit append, and every accepted call is appended to the ledger
+    # append-before-dispatch — "zero uninstrumented dispatch" (#472 AC1) is enforced here, not by
+    # convention. The initial_digest is seeded lazily from the resolved table's config digest.
+    # colocate the ledger with the audit: RoutingAuditLog sanitizes run_id for ITS dir, so the
+    # ledger MUST use the identical transform or the two land in different dirs (#555 8a F10).
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
+        if led.read().initial_digest is None:
+            try:
+                led.append_initial(snap.config_digest)
+            except pe.ledger.LedgerError:
+                # a concurrent first dispatch seeded the same initial_digest — benign
+                if led.read().initial_digest is None:
+                    raise
+        if led.is_closed():
+            return _emit(_err(EXIT_ENFORCEMENT, "run_closed_dispatch_refused",
+                              f"run {args.run_id!r} ledger is run_closed — new dispatch refused (#555)",
+                              retryable=False, correlation_id=args.correlation_id))
+        # correlation_id IS the ledger/reconcile join key — a keyless dispatch would be an
+        # UNINSTRUMENTED spawn (no ledger record, an orphan at reconcile), the exact thing the
+        # choke-point exists to make impossible. Refuse it here, not by convention (#555 AC2).
+        if not args.correlation_id:
+            return _emit(_err(EXIT_MALFORMED, "correlation_id_required",
+                              "dispatch requires --correlation-id (the ledger/reconcile join key)",
+                              retryable=False, correlation_id=None))
+        led.append_expected(args.seat, args.correlation_id)  # append-before-dispatch (dup → fail closed)
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
     # #470 §1 internal routing: inspect the resolved target's staged LaunchProfile. A MUTATING
     # profile routes to the supervised branch (gate-auth → stage-and-bind → phase-1 canary → probe
     # session → require_canary → launch, in-process) INSIDE this same CLI call — there is no second
@@ -1638,6 +1678,106 @@ def _do_status(args) -> int:
     return _emit(out)
 
 
+def _ledger_for(args, pe):
+    """Resolve (repo_root, ExpectedCallLedger) for the run — shared by close-run + reconcile.
+    Raises MalformedConfig / RoutingError (mapped to exit 2 by the callers)."""
+    repo_root = resolve_repo_root(args.workspace, args.project)
+    if not Path(repo_root).is_dir():
+        raise MalformedConfig(f"project {args.project!r} path {str(repo_root)!r} does not exist")
+    snap = resolve_table(repo_root, pe.routing).snapshot
+    paths = derive_paths(Path(repo_root), args.project, args.run_id, snap.pool_concurrency())
+    # same sanitize as RoutingAuditLog (dir colocation, #555 8a F10)
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    return repo_root, snap, paths, pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
+
+
+def _do_close_run(args) -> int:
+    """#555: append the terminal ``run_closed`` marker so no further dispatch is accepted and a
+    ``reconcile --mode final`` can run. Idempotent-guarded: a double close fails closed (exit 2)."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        _, snap, _, led = _ledger_for(args, pe)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    try:
+        # a run closed with ZERO dispatches never seeded its initial record — seed it (the first
+        # record MUST be 'initial') so the closed ledger is well-formed and reconcile-readable.
+        if led.read().initial_digest is None:
+            led.append_initial(snap.config_digest)
+        led.append_run_closed()
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_MALFORMED, "ledger_refused", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False))
+    return _emit({"run_id": args.run_id, "run_closed": True, "exit": EXIT_OK})
+
+
+# reconcile-verb anomaly buckets that a PROVISIONAL (mid-run) check tolerates as in-flight
+# (an expected call not yet observed); every OTHER bucket is a hard breach that fails both modes.
+_PROVISIONAL_TOLERATED = frozenset({"missing_receipt", "missing_obs"})
+
+
+def _do_reconcile(args) -> int:
+    """#555 AC3: bind the expected-call ledger against the routing audit and report a verdict.
+    ``--mode provisional`` tolerates an open ledger and in-flight (not-yet-observed) calls, failing
+    only on a hard breach; ``--mode final`` requires ``run_closed`` last AND zero anomalies. Exit
+    0 = reconciled, 1 = anomalies, 2 = usage/malformed."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        _, _, paths, led = _ledger_for(args, pe)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    try:
+        state = led.read()
+        audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+        records = audit.records()
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_MALFORMED, "ledger_refused", str(e), retryable=False))
+    except (OSError, ValueError) as e:
+        return _emit(_err(EXIT_MALFORMED, "audit_unreadable", f"{type(e).__name__}: {e}",
+                          retryable=False))
+    final = args.mode == "final"
+    if final and not state.closed:
+        return _emit({"run_id": args.run_id, "mode": args.mode, "reconciled": False,
+                      "reason": "ledger not run_closed", "exit": EXIT_ANOMALY})
+    if state.initial_digest is None:
+        # no dispatch recorded yet: provisional passes vacuously, final fails (nothing closed a run)
+        return _emit({"run_id": args.run_id, "mode": args.mode, "reconciled": not final,
+                      "reason": "no initial_digest (no dispatch recorded)",
+                      "exit": EXIT_OK if not final else EXIT_ANOMALY})
+    expected = [e.as_expected_call() for e in state.expected]
+    try:
+        rec = pe.enforce.reconcile_run(expected, records, initial_digest=state.initial_digest,
+                                       require_nonempty=final)
+    except ValueError as e:  # duplicate expected tuples / broken epoch chain — fail-closed anomaly
+        return _emit({"run_id": args.run_id, "mode": args.mode, "reconciled": False,
+                      "reason": f"reconcile_run: {e}", "exit": EXIT_ANOMALY})
+    buckets = {"missing_receipt": rec.missing_receipt, "failed_precheck": rec.failed_precheck,
+               "missing_obs": rec.missing_obs, "binding_mismatch": rec.binding_mismatch,
+               "duplicate_nonce": rec.duplicate_nonce, "duplicate": rec.duplicate,
+               "unverified": rec.unverified, "unaudited_digest": rec.unaudited_digest,
+               "orphan": rec.orphan}
+    present = {k: list(v) for k, v in buckets.items() if v}
+    if final:
+        reconciled = rec.ok
+    else:
+        # provisional: fail only on a HARD breach; tolerate not-yet-observed in-flight calls
+        reconciled = not any(k not in _PROVISIONAL_TOLERATED for k in present)
+    return _emit({"run_id": args.run_id, "mode": args.mode, "closed": state.closed,
+                  "expected_calls": len(expected), "reconciled": reconciled,
+                  "anomalies": present, "exit": EXIT_OK if reconciled else EXIT_ANOMALY})
+
+
 def main(argv: Optional[list] = None) -> int:
     p = argparse.ArgumentParser(prog="executor_routing_lib")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1692,6 +1832,19 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--validate-only", action="store_true", dest="validate_only")
     ap.add_argument("--reset-to-default", action="store_true", dest="reset_to_default")
     ap.set_defaults(fn=_do_apply)
+
+    cr = sub.add_parser("close-run", help="#555: append the terminal run_closed ledger marker")
+    cr.add_argument("--run-id", required=True, dest="run_id")
+    cr.add_argument("--workspace", required=True)
+    cr.add_argument("--project", required=True)
+    cr.set_defaults(fn=_do_close_run)
+
+    rc = sub.add_parser("reconcile", help="#555: bind the expected-call ledger against the routing audit")
+    rc.add_argument("--run-id", required=True, dest="run_id")
+    rc.add_argument("--mode", required=True, choices=["provisional", "final"])
+    rc.add_argument("--workspace", required=True)
+    rc.add_argument("--project", required=True)
+    rc.set_defaults(fn=_do_reconcile)
 
     args = p.parse_args(argv)
     return args.fn(args)
