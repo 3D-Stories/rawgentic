@@ -1987,6 +1987,20 @@ def test_cli_chokepoint_refuses_dispatch_after_run_closed(tmp_path, capsys):
     assert out["error"]["code"] == "run_closed_dispatch_refused"
 
 
+def test_cli_chokepoint_refuses_keyless_dispatch(tmp_path, capsys):
+    # #555 AC2 (8a F2): a dispatch with no correlation_id would be an uninstrumented spawn (no
+    # ledger record) — the choke-point refuses it (exit 2) rather than spawning by convention.
+    ws, repo = _analysis_project(tmp_path)
+    a = _dispatch_args(ws, cid=None)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED and out["error"]["code"] == "correlation_id_required"
+    # and nothing was appended to the ledger (no expected record for a refused keyless call)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    assert lg.read().expected == []
+
+
 def test_cli_close_run_then_double_close_refused(tmp_path, capsys):
     ws, _ = _analysis_project(tmp_path)
     assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK

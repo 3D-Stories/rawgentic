@@ -1534,10 +1534,14 @@ def _do_dispatch(args) -> int:
             return _emit(_err(EXIT_ENFORCEMENT, "run_closed_dispatch_refused",
                               f"run {args.run_id!r} ledger is run_closed — new dispatch refused (#555)",
                               retryable=False, correlation_id=args.correlation_id))
-        # correlation_id is the ledger/reconcile join key; append only a keyable call (WF2 always
-        # supplies one). A duplicate (seat, correlation_id) is a caller error — fail closed.
-        if args.correlation_id:
-            led.append_expected(args.seat, args.correlation_id)
+        # correlation_id IS the ledger/reconcile join key — a keyless dispatch would be an
+        # UNINSTRUMENTED spawn (no ledger record, an orphan at reconcile), the exact thing the
+        # choke-point exists to make impossible. Refuse it here, not by convention (#555 AC2).
+        if not args.correlation_id:
+            return _emit(_err(EXIT_MALFORMED, "correlation_id_required",
+                              "dispatch requires --correlation-id (the ledger/reconcile join key)",
+                              retryable=False, correlation_id=None))
+        led.append_expected(args.seat, args.correlation_id)  # append-before-dispatch (dup → fail closed)
     except pe.ledger.LedgerError as e:
         return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused", str(e), retryable=False,
                           correlation_id=args.correlation_id))
