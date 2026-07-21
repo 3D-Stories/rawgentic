@@ -76,10 +76,12 @@ Every claim below carries its evidence; when a doc and a test disagree, **the te
 
 **Versioning — one PR = one issue = one bump = one changelog entry**
 - Patch for fix/chore/docs/ci; minor for feat; major is rare and curated.
-- The version lives in THREE surfaces that must match: `.claude-plugin/plugin.json`,
-  `plugins/rawgentic/.codex-plugin/plugin.json`, and the pinned assert
-  `tests/hooks/test_adversarial_review_registration.py::test_plugin_version_bumped`.
-  The third is a TEST — a scoped local run misses it; CI fails.
+- The version lives in FOUR surfaces that must match: `.claude-plugin/plugin.json`,
+  `plugins/rawgentic/.codex-plugin/plugin.json`, the pinned assert
+  `tests/hooks/test_adversarial_review_registration.py::test_plugin_version_bumped`,
+  and `phase_executor/src/phase_executor/canary.py` `EXPECTED_PLUGIN_VERSION`
+  (since #470; a mismatch fails `tests/phase_executor/test_canary_evidence.py` with
+  12 refuse-verdict errors). Two are TESTS — a scoped local run misses them; CI fails.
 - Version→PR archaeology: walk `git log -- .claude-plugin/plugin.json`; no map is kept.
 
 **README changelog — the exact entry shape** (README `## Changelog`, one line per
@@ -178,12 +180,15 @@ load-bearing for resume. Never edit or truncate an existing entry.
 
 ## 4. Mistakes a weaker model WILL make here — and the rule that prevents each
 
-1. **Bumping one or two of the three version surfaces.** Rule: all three (§2), then
-   `pytest tests/hooks/test_adversarial_review_registration.py -q`.
+1. **Bumping some but not all FOUR version surfaces** (canary.py's
+   `EXPECTED_PLUGIN_VERSION` is the one everyone forgets — #552 found it the hard
+   way). Rule: all four (§2), then
+   `pytest tests/hooks/test_adversarial_review_registration.py tests/phase_executor/test_canary_evidence.py -q`.
 2. **Adding a skill by touching only `skills/<name>/`.** Registration spans **up to
    seven surfaces plus count guards — the authoritative list lives in the `add-skill`
    workspace skill; do not trust any restated count here or in the workspace manual.**
-   The load-bearing ones: SKILL.md (frontmatter `name: rawgentic:<name>`,
+   The load-bearing ones: SKILL.md (frontmatter `name: <name>` — bare, never
+   prefixed; #552),
    `description` = WHEN-triggers, `argument-hint`); the
    `.claude-plugin/marketplace.json` whitelist entry **in alphabetical position**
    (tests pin neighbors, e.g. `test_adversarial_review_registration.py:36`); the symlink
@@ -241,10 +246,12 @@ load-bearing for resume. Never edit or truncate an existing entry.
 16. **Running `parse_depends_on` on the epic body.** Its `- [ ] #N` children read as
     dependencies. Rule: epic body = queue only; deps from each child's own body.
 17. **Rewriting session notes.** Rule: append-only, always (`>>`), keep `— DONE` markers.
-18. **"Fixing" `sync-security-patterns`' bare frontmatter name** (no `rawgentic:` prefix,
-    no argument-hint — the one deviation). Rule: check what depends on the bare name
-    before normalizing it; the marketplace validator compares names after stripping
-    `:`/`-`, so a rename can collide.
+18. **"Normalizing" a skill `name:` back to the prefixed form.** Since #552 the bare
+    name IS the rule for ALL skills (`name: switch`, never `name: rawgentic:switch`):
+    current Claude Code forbids the colon and would double the command to
+    `/rawgentic:rawgentic-switch`. Guards: `tests/test_skill_name_frontmatter.py` +
+    the registration checker. (The marketplace validator compares names after
+    stripping `:`/`-`, so the #552 rename collided with nothing.)
 19. **Putting a `SKILL.md` in a workspace dir or a `version` on the marketplace plugin
     entry.** The org-marketplace validator walks ALL `skills/**/SKILL.md` and rejects
     both (`docs/skill-development.md:141-160`; snapshots use `SKILL.snapshot.md`).
@@ -264,7 +271,7 @@ load-bearing for resume. Never edit or truncate an existing entry.
 - [ ] `python3 hooks/security_scan.py scan --project-root . --project-type library
       --base-ref origin/main` — findings fixed or user-decided; absent scanners noted as
       a visible skip in the PR body
-- [ ] Version ×3 surfaces; `test_plugin_version_bumped` passes
+- [ ] Version ×4 surfaces; `test_plugin_version_bumped` + `test_canary_evidence.py` pass
 - [ ] README updated INCLUDING a changelog entry in the exact §2 shape (diagram decision
       + `Suite old→new` tail); count strings still true
 - [ ] Relevant `docs/*.md` updated for the area touched
