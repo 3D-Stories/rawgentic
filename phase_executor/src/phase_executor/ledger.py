@@ -11,21 +11,31 @@ consume it without importing hooks; the hooks-side choke-point calls ``append_ex
 ``append_run_closed`` / ``read``. Sibling of the run's ``routing-audit.jsonl`` under
 ``<capture_root>/<run_id>/``.
 
+Threat model (honest, #555 8a review): the PRIMARY containment is worktree ISOLATION — a mutating
+(codex) child runs in its own worktree with no write path to the main checkout's
+``.rawgentic/runs/``, so it cannot reach this ledger. The file-level hardening below is
+defense-in-depth against an OTHER-uid actor and accidental corruption; it does NOT defend a
+same-uid writer with run-dir access (``O_NOFOLLOW`` refuses a symlinked leaf but not a hardlink, and
+a 0600 file is same-uid-writable). Isolation is the boundary, not the file mode.
+
 Hardening (AC1), all fail-closed (raise ``LedgerError``): the leaf is opened ``O_NOFOLLOW`` (a
-symlinked ledger is refused — a codex child's workspace-write cannot redirect it); a byte cap and a
-record cap bound a tampered/huge file; every record carries the run_id and a mismatch is refused;
-the FIRST record must be ``initial`` (exactly once); ``run_closed`` may appear only as the LAST
-record and only once; no append after ``run_closed``; duplicate ``(seat, correlation_id)`` among the
-``expected`` records is refused. A malformed line, a bad kind, or a missing field raises — the
-ledger is a security boundary, never silently skipped.
+symlinked leaf is refused); every mutation is an atomic read-check-append under an exclusive
+``flock`` (two concurrent dispatch processes cannot both seed 'initial' nor slip an 'expected' past
+a concurrent close — matching RoutingAuditLog's every-append lock); a byte cap and a record cap
+bound a tampered/huge file; every record carries the run_id and a mismatch is refused; the FIRST
+record must be ``initial`` (exactly once); ``run_closed`` may appear only as the LAST record and only
+once; no append after ``run_closed``; duplicate ``(seat, correlation_id)`` among the ``expected``
+records is refused. A malformed line, a bad kind, a non-UTF-8 byte, or a missing field raises —
+never silently skipped.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from .enforce import ExpectedCall
 
@@ -91,7 +101,10 @@ class ExpectedCallLedger:
             os.close(fd)
         if len(data) > MAX_LEDGER_BYTES:
             raise LedgerError(f"ledger {self.path}: exceeds byte cap {MAX_LEDGER_BYTES}")
-        return data.decode("utf-8")
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError as e:  # a corrupted/tampered non-UTF-8 ledger fails CLOSED, never
+            raise LedgerError(f"ledger {self.path}: not valid UTF-8 ({e})") from e  # a bare crash
 
     def read(self) -> LedgerState:
         """Parse + fully validate the ledger. Fail-closed on ANY anomaly. An absent ledger is a
@@ -99,6 +112,9 @@ class ExpectedCallLedger:
         text = self._read_text_nofollow()
         if text is None:
             return LedgerState()
+        return self._parse(text)
+
+    def _parse(self, text: str) -> LedgerState:
         lines = [ln for ln in text.splitlines() if ln.strip()]
         if len(lines) > MAX_LEDGER_RECORDS:
             raise LedgerError(
@@ -151,46 +167,67 @@ class ExpectedCallLedger:
 
     # -- appending -----------------------------------------------------------
 
-    def _append_line_nofollow(self, rec: dict) -> None:
-        """Append one JSON line, creating the leaf O_NOFOLLOW|O_APPEND (a pre-planted symlink at the
-        leaf is refused). The directory is the supervisor-owned 0700 run dir."""
-        rec = {"run_id": self.run_id, **rec}
-        payload = (json.dumps(rec, sort_keys=True) + "\n").encode("utf-8")
+    def _locked_append(self, rec: dict, precheck: Callable[[LedgerState], None]) -> None:
+        """Atomic read-check-append under an exclusive flock on the leaf (matching the
+        RoutingAuditLog's every-append lock). The lock makes the check-then-append indivisible
+        across the ≤3 concurrent dispatch PROCESSES, so two concurrent first-dispatches cannot
+        both write 'initial' and a dispatch cannot slip an 'expected' past a concurrent close
+        (#555 8a review F1/F3 — the AC2 refusal is enforced at the choke-point, not by
+        convention). The leaf is opened O_NOFOLLOW (a symlinked leaf is refused); O_CREAT makes
+        the first append self-seed the file. ``precheck`` validates the freshly-parsed state
+        HELD under the lock and raises LedgerError on an illegal transition."""
+        os.makedirs(self.path.parent, mode=0o700, exist_ok=True)
         try:
-            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-        except OSError as e:  # ELOOP (symlinked leaf) fails closed
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        except OSError as e:  # ELOOP (symlinked leaf) and friends fail closed
             raise LedgerError(f"ledger {self.path}: unopenable for append ({e})") from e
         try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            st = os.fstat(fd)
+            if st.st_size > MAX_LEDGER_BYTES:
+                raise LedgerError(f"ledger {self.path}: {st.st_size} bytes exceeds cap")
+            data = os.read(fd, MAX_LEDGER_BYTES + 1)
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError as e:
+                raise LedgerError(f"ledger {self.path}: not valid UTF-8 ({e})") from e
+            state = self._parse(text) if text.strip() else LedgerState()
+            precheck(state)  # raises LedgerError on an illegal transition (HELD under the lock)
+            payload = (json.dumps({"run_id": self.run_id, **rec}, sort_keys=True) + "\n").encode("utf-8")
+            os.lseek(fd, 0, os.SEEK_END)
             os.write(fd, payload)
         finally:
-            os.close(fd)
+            os.close(fd)  # releases the flock
 
     def append_initial(self, initial_digest: str) -> None:
-        st = self.read()
-        if st.initial_digest is not None or st.expected or st.closed:
-            raise LedgerError(f"ledger {self.path}: initial must be the first and only 'initial'")
         if not isinstance(initial_digest, str) or not initial_digest:
             raise LedgerError("append_initial: initial_digest must be a non-empty string")
-        self._append_line_nofollow({"kind": "initial", "initial_digest": initial_digest})
+
+        def _check(st: LedgerState) -> None:
+            if st.initial_digest is not None or st.expected or st.closed:
+                raise LedgerError(f"ledger {self.path}: initial must be the first and only 'initial'")
+        self._locked_append({"kind": "initial", "initial_digest": initial_digest}, _check)
 
     def append_expected(self, seat: str, correlation_id: str,
                         recovered_from: Optional[str] = None) -> None:
-        st = self.read()  # read-validate the whole ledger first (fail-closed)
-        if st.initial_digest is None:
-            raise LedgerError(f"ledger {self.path}: append_expected before append_initial")
-        if st.closed:
-            raise LedgerError(f"ledger {self.path}: run_closed — dispatch refused (#555 AC2)")
-        if any(e.seat == seat and e.correlation_id == correlation_id for e in st.expected):
-            raise LedgerError(f"ledger {self.path}: duplicate expected call ({seat}, {correlation_id})")
-        self._append_line_nofollow({"kind": "expected", "seat": seat,
-                                    "correlation_id": correlation_id,
-                                    "recovered_from": recovered_from})
+        def _check(st: LedgerState) -> None:
+            if st.initial_digest is None:
+                raise LedgerError(f"ledger {self.path}: append_expected before append_initial")
+            if st.closed:
+                raise LedgerError(f"ledger {self.path}: run_closed — dispatch refused (#555 AC2)")
+            if any(e.seat == seat and e.correlation_id == correlation_id for e in st.expected):
+                raise LedgerError(
+                    f"ledger {self.path}: duplicate expected call ({seat}, {correlation_id})")
+        self._locked_append({"kind": "expected", "seat": seat, "correlation_id": correlation_id,
+                             "recovered_from": recovered_from}, _check)
 
     def append_run_closed(self) -> None:
-        st = self.read()
-        if st.closed:
-            raise LedgerError(f"ledger {self.path}: already run_closed")
-        self._append_line_nofollow({"kind": "run_closed"})
+        def _check(st: LedgerState) -> None:
+            if st.initial_digest is None:
+                raise LedgerError(f"ledger {self.path}: run_closed before initial")
+            if st.closed:
+                raise LedgerError(f"ledger {self.path}: already run_closed")
+        self._locked_append({"kind": "run_closed"}, _check)
 
     def is_closed(self) -> bool:
         return self.read().closed

@@ -93,11 +93,14 @@ def test_oversized_ledger_refused(tmp_path):
         lg.read()
 
 
-def test_too_many_records_refused(tmp_path):
+def test_too_many_records_refused(tmp_path, monkeypatch):
+    # exercise the RECORD cap specifically (a small cap so it trips before the byte cap — with the
+    # shipped 100k cap a file that long trips the byte cap first, so this pins the record path).
+    monkeypatch.setattr(L, "MAX_LEDGER_RECORDS", 5)
     lg = _new(tmp_path)
     lg.append_initial("sha256:cfg")
     with open(lg.path, "a", encoding="utf-8") as fh:
-        for i in range(L.MAX_LEDGER_RECORDS + 1):
+        for i in range(6):
             fh.write(json.dumps({"kind": "expected", "run_id": "r1", "seat": "review",
                                  "correlation_id": f"c{i}", "recovered_from": None}) + "\n")
     with pytest.raises(L.LedgerError):

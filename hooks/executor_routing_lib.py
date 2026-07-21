@@ -1059,6 +1059,7 @@ def _import_phase_executor():
     import phase_executor.canary_evidence as canary_evidence  # noqa: PLC0415
     import phase_executor.contract as contract  # noqa: PLC0415
     import phase_executor.ledger as ledger  # noqa: PLC0415 — #555 expected-call ledger
+    import phase_executor.capture as capture  # noqa: PLC0415 — #555 sanitize_component (dir colocation)
     from phase_executor import run_seat  # noqa: PLC0415
     from phase_executor.engine import _dispatch_real, PROVIDER_ENGINE  # noqa: PLC0415
     from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
@@ -1075,7 +1076,7 @@ def _import_phase_executor():
         canary=canary, canary_evidence=canary_evidence, contract=contract,
         PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
         supervisor=supervisor_mod, JobRegistry=JobRegistry, RegistryCorrupt=RegistryCorrupt,
-        ledger=ledger,
+        ledger=ledger, capture=capture,
         registry_read_all=registry_read_all,
         registry_session_name=registry_session_name,
         WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
@@ -1516,7 +1517,9 @@ def _do_dispatch(args) -> int:
     # BEFORE any spawn or audit append, and every accepted call is appended to the ledger
     # append-before-dispatch — "zero uninstrumented dispatch" (#472 AC1) is enforced here, not by
     # convention. The initial_digest is seeded lazily from the resolved table's config digest.
-    run_dir = Path(paths["capture_root"]) / args.run_id
+    # colocate the ledger with the audit: RoutingAuditLog sanitizes run_id for ITS dir, so the
+    # ledger MUST use the identical transform or the two land in different dirs (#555 8a F10).
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
@@ -1679,7 +1682,8 @@ def _ledger_for(args, pe):
         raise MalformedConfig(f"project {args.project!r} path {str(repo_root)!r} does not exist")
     snap = resolve_table(repo_root, pe.routing).snapshot
     paths = derive_paths(Path(repo_root), args.project, args.run_id, snap.pool_concurrency())
-    run_dir = Path(paths["capture_root"]) / args.run_id
+    # same sanitize as RoutingAuditLog (dir colocation, #555 8a F10)
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
     return repo_root, snap, paths, pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
 
 

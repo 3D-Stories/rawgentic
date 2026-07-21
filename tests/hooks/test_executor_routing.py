@@ -2016,6 +2016,41 @@ def test_cli_reconcile_provisional_tolerates_in_flight(tmp_path, capsys):
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "provisional", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
     assert rc == er.EXIT_OK and out["reconciled"] is True
+    # discriminating (8a F8): the verb must READ the ledger's expected set — a regression that
+    # dropped the expected-set wiring would report 0 here and this assert would catch it.
+    assert out["expected_calls"] == 1
+
+
+def test_cli_reconcile_final_clean_reconciles_ok(tmp_path, capsys):
+    # #555 AC3 (clean run reconciles OK) at the VERB level: a closed ledger whose one expected call
+    # binds to a passed receipt + verified observation in the audit → exit 0. (reconcile_run's full
+    # binding algebra is covered in test_enforce.py; this pins the verb's ledger↔audit wiring.)
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    lg = ledger.ExpectedCallLedger(rd, "run1")
+    lg.append_initial("sha256:cfg")
+    lg.append_expected("analysis", "c1")
+    lg.append_run_closed()
+    lane = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
+            "pool": "claude", "credential_ref": None}
+    tid = list(enforce.target_identity({"model": "claude-sonnet-5", "lane": lane}))
+    receipt = {"kind": "receipt", "nonce": "n1", "seat": "analysis", "correlation_id": "c1",
+               "attempt_id": "0", "target_identity": tid, "config_digest": "sha256:cfg",
+               "verdict": "pass"}
+    obs_inner = {"schema_version": "1", "run_id": "run1", "attempt_id": "0", "seat": "analysis",
+                 "correlation_id": "c1",
+                 "engine": "claude", "transport": "native", "requested_model": "claude-sonnet-5",
+                 "actual_model": "claude-sonnet-5", "prompt_hash": "sha256:x", "context_hashes": [],
+                 "usage": {"input": 1, "output": 1}, "timing_ms": 1, "queued_ms": 0,
+                 "process": {"exit_code": 0, "timed_out": False}, "parse_status": "ok",
+                 "parsed_payload": None, "raw_capture_path": None, "fallback_reason": None,
+                 "routing_config_digest": "sha256:cfg", "dispatched_lane": lane}
+    obs = {"kind": "observation", "receipt_nonce": "n1", "observation": obs_inner}
+    (rd / "routing-audit.jsonl").write_text(json.dumps(receipt) + "\n" + json.dumps(obs) + "\n",
+                                            encoding="utf-8")
+    rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_OK and out["reconciled"] is True and out["expected_calls"] == 1
 
 
 def test_cli_reconcile_final_zero_expected_refuses(tmp_path, capsys):
