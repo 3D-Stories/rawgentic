@@ -760,6 +760,12 @@ class TmuxSupervisor:
                         if (expect_session_id is not None or is_claude_nonzero) else None)
                 if expect_session_id is not None:
                     got = meta.session_id
+                    if got is None and meta.error == "oversized":
+                        # S11-R1: a LEGITIMATE large envelope must not fail a resumed
+                        # job's identity assert — fall back to the pre-#558 full read
+                        # (byte-compat) for the ASSERT only; classification still
+                        # refuses auto-pause on the oversized bounded evidence
+                        got = self._transport_session_id(record)
                     if got != expect_session_id:
                         self._finish(record, "failed", release_permit=killed)
                         raise SupervisorError(

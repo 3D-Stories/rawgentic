@@ -2136,3 +2136,20 @@ def test_cli_reconcile_provisional_fails_on_hard_anomaly(tmp_path, capsys):
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "provisional", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
     assert rc == er.EXIT_ANOMALY and "orphan" in out["anomalies"]
+
+
+def test_supervised_await_deadline_clamped_to_effective_timeout(tmp_path, monkeypatch):
+    """#558 S-F6 (3-reviewer converged): ONE effective timeout — the manifest/caller
+    bound must also be the supervisor await deadline, not an independent 3600s default
+    that retains a hung pane + permit + worktree for an hour."""
+    seen = {}
+    orig = _StubSupervisor.await_job
+
+    def spy(self, record, *, timeout_s=3600.0):
+        seen["timeout_s"] = timeout_s
+        return orig(self, record, timeout_s=timeout_s)
+
+    monkeypatch.setattr(_StubSupervisor, "await_job", spy)
+    res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch)
+    assert res["exit"] == er.EXIT_OK, res
+    assert seen["timeout_s"] == 5.0  # min(await default 3600, effective min(5.0, manifest))

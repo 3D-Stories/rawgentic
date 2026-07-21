@@ -930,3 +930,19 @@ def test_profile_from_spec_non_dict_request_returns_none():
     assert _profile_from_spec({"request": "nope"}) is None
     assert _profile_from_spec({"request": 7}) is None
     assert _profile_from_spec({}) is None
+
+
+def test_collect_oversized_envelope_falls_back_for_resume_identity(tmp_path):
+    # S11-R1 Medium: a LEGITIMATE resumed collect whose valid envelope exceeds the
+    # 256KiB bounded-read ceiling must not fail the identity assert — the assert
+    # falls back to the pre-#558 full-envelope read (byte-compat); classification
+    # still refuses auto-pause on the oversized evidence.
+    big = json.dumps({"session_id": "sess-1", "result": "x" * (300 * 1024)})
+    q = _QuotaCollect(tmp_path, envelope=big)
+    rec = q.record
+    from dataclasses import replace as _replace
+    rec = _replace(rec, resume_attempts=1, provider_session_id="sess-1")
+    q.reg.upsert(rec)
+    state, obs = q.sup.await_job(rec, poll_s=0.1, timeout_s=5)
+    assert state == "completed"  # NOT "failed" — identity matched via fallback read
+    assert obs is not None
