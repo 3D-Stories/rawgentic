@@ -35,7 +35,7 @@ from . import contract
 
 # --- Pinned constants (re-pinned per release, drift-guarded by test_canary_digest_pin.py) ---
 POLICY_REVISION = 1
-EXPECTED_PLUGIN_VERSION = "3.83.0"
+EXPECTED_PLUGIN_VERSION = "3.84.0"
 # Computed live over hooks/hooks.json + the scripts referenced in its command fields (the
 # canonical length-framed encoding below). test_canary_digest_pin.py asserts pin == live.
 EXPECTED_REGISTRATION_DIGEST = "sha256:7ec8cbff3426af999406db12dec82d327271db352a848721c650fc65451747ce"
@@ -61,7 +61,7 @@ _KNOWN_NONENFORCING_PRETOOL_GUARDS = frozenset({"wal-bind-guard", "wal-pre"})
 # REQUIRED check is a refusal, never a pass).
 POLICIES = {
     "claude_mutating": ["hooks_digest", "plugin_version", "lane_provisioned", "positive_deny", "bare_absent"],
-    "codex_mutating": ["codex_containment", "bare_absent"],
+    "codex_mutating": ["codex_containment", "codex_behavioral", "bare_absent"],
 }
 
 _PLUGIN_ROOT_VAR = "${CLAUDE_PLUGIN_ROOT}"
@@ -124,6 +124,11 @@ class CanaryEvidence:
     codex_argv: Optional[list] = None
     codex_worktree: Optional[str] = None
     codex_containment_root: Optional[str] = None  # approved root — the canary RE-VERIFIES containment (not just roots==wt)
+    # codex_behavioral (#556 H3): the result of a pre-spawn behavioral probe that launched the EXACT
+    # mutating composition in a THROWAWAY worktree — {"inside_written": bool, "outside_blocked": bool}
+    # (fail-closed: absent / not-both-true -> refuse). Composition-validation alone does not prove the
+    # sandbox actually confines a write; this does.
+    codex_behavioral: Optional[dict] = None
     # bare_absent
     final_argv: Optional[list] = None
 
@@ -355,6 +360,19 @@ def _check_codex_containment(ev: CanaryEvidence) -> CheckResult:
     return CheckResult("codex_containment", PASS)
 
 
+def _check_codex_behavioral(ev: CanaryEvidence) -> CheckResult:
+    """#556 H3 — the BEHAVIORAL containment proof. Composition validation (codex_containment) proves
+    the argv/roots are shaped right; this proves the sandbox ACTUALLY confined a real write: a
+    pre-spawn probe launched the exact mutating composition in a throwaway worktree and reported
+    whether an in-worktree write LANDED and an out-of-worktree (sibling) write was BLOCKED. Both must
+    be true. Fail-closed: absent evidence, a non-dict, or either signal false/missing -> refuse (a
+    negative control that did NOT block is the exact escape this check exists to catch)."""
+    b = ev.codex_behavioral
+    if not isinstance(b, dict) or b.get("inside_written") is not True or b.get("outside_blocked") is not True:
+        return CheckResult("codex_behavioral", REFUSE, "codex_behavioral")
+    return CheckResult("codex_behavioral", PASS)
+
+
 def _check_bare_absent(ev: CanaryEvidence) -> CheckResult:
     argv = ev.final_argv
     if not argv or not isinstance(argv, list) or not all(isinstance(a, str) for a in argv):
@@ -370,6 +388,7 @@ _CHECKS = {
     "lane_provisioned": _check_lane_provisioned,
     "positive_deny": _check_positive_deny,
     "codex_containment": _check_codex_containment,
+    "codex_behavioral": _check_codex_behavioral,
     "bare_absent": _check_bare_absent,
 }
 

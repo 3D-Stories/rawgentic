@@ -128,6 +128,27 @@ def test_codex_out_of_worktree_negative_control_live(tmp_path):
     subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=300)
     assert (wt / "inside.txt").exists()             # in-worktree write landed
     assert not (sibling / "outside.txt").exists()   # sibling write BLOCKED by the sandbox
-    # the canary codex_containment check accepts the SAME composed argv
-    ev = canary.CanaryEvidence(provider="codex", codex_argv=cmd, codex_worktree=canon, final_argv=cmd)
+    # the canary codex_containment check accepts the SAME composed argv (#556 AC2: codex_containment_root
+    # is REQUIRED evidence — the check RE-VERIFIES containment against the approved root, so omitting it
+    # made this assert fail on the `not root` fail-closed guard).
+    ev = canary.CanaryEvidence(provider="codex", codex_argv=cmd, codex_worktree=canon,
+                               codex_containment_root=str(root), final_argv=cmd)
     assert canary._check_codex_containment(ev).verdict == "pass"  # noqa: SLF001
+
+
+@pytest.mark.skipif(not _HAVE_CODEX, reason="codex CLI not on PATH")
+def test_codex_behavioral_gate_live(tmp_path):
+    """#556 AC3 — the BEHAVIORAL gate end-to-end on this host: the reusable probe launches the exact
+    mutating composition in a throwaway worktree and reports inside-landed / outside-blocked; both
+    true, and the canary codex_behavioral check accepts that evidence. (RUN_LIVE + codex on PATH.)"""
+    import sys  # noqa: PLC0415
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[3] / "hooks"))
+    import executor_routing_lib as er  # noqa: PLC0415
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415
+    wt_root = tmp_path / "wtroot"
+    wt_root.mkdir()
+    result = er.codex_behavioral_probe(adapters=ADAPTERS, model="gpt-5.6-terra", effort="low",
+                                       wt_root=str(wt_root))
+    assert result == {"inside_written": True, "outside_blocked": True}, result
+    ev = canary.CanaryEvidence(provider="codex", codex_behavioral=result)
+    assert canary._check_codex_behavioral(ev).verdict == "pass"  # noqa: SLF001

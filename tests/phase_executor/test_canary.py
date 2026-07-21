@@ -59,7 +59,8 @@ def _codex_evidence(tmp_path, **over):
     cmd = codex_cli.build_mutating_command("gpt-5.6-terra", str(wt), effort="low",
                                            containment_root=str(root))
     base = dict(provider="codex", profile="mutating", dispatch_nonce="N1", snapshot_digest="S1",
-                codex_argv=cmd, codex_worktree=canon, codex_containment_root=str(root), final_argv=cmd)
+                codex_argv=cmd, codex_worktree=canon, codex_containment_root=str(root), final_argv=cmd,
+                codex_behavioral={"inside_written": True, "outside_blocked": True})  # #556 passing probe
     base.update(over)
     return canary.CanaryEvidence(**base)
 
@@ -82,7 +83,31 @@ def test_claude_full_pass():
 def test_codex_full_pass(tmp_path):
     res = canary.evaluate_canary("codex_mutating", _codex_evidence(tmp_path))
     assert res.verdict == "pass", res.violations
-    assert res.required_checks == ("codex_containment", "bare_absent")
+    assert res.required_checks == ("codex_containment", "codex_behavioral", "bare_absent")
+
+
+@pytest.mark.parametrize("behav,tag", [
+    (None, "codex_behavioral"),                                       # absent -> refuse (fail-closed)
+    ({}, "codex_behavioral"),                                         # empty dict
+    ({"inside_written": True, "outside_blocked": False}, "codex_behavioral"),   # NEGATIVE CONTROL leaked
+    ({"inside_written": False, "outside_blocked": True}, "codex_behavioral"),   # in-worktree write did NOT land
+    ({"inside_written": True}, "codex_behavioral"),                  # missing outside_blocked
+    ("not-a-dict", "codex_behavioral"),
+])
+def test_codex_behavioral_refuse(tmp_path, behav, tag):
+    # #556 H3: composition can be valid yet the sandbox not actually confine a write — the behavioral
+    # proof must be present AND both signals true, else refuse (a leaked negative control is the exact
+    # escape this catches).
+    res = canary.evaluate_canary("codex_mutating", _codex_evidence(tmp_path, codex_behavioral=behav))
+    assert res.verdict == "refuse"
+    assert tag in res.violations
+
+
+def test_codex_behavioral_pass(tmp_path):
+    res = canary.evaluate_canary("codex_mutating",
+                                 _codex_evidence(tmp_path,
+                                                 codex_behavioral={"inside_written": True, "outside_blocked": True}))
+    assert res.verdict == "pass", res.violations
 
 
 # --------------------------------------------------------------- per-check refuse paths
