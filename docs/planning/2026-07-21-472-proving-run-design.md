@@ -18,8 +18,9 @@ this design carries only work the five review passes never disputed.
 `docs/planning/2026-07-21-472-proving-run-report.md` (+ rendered `.html` via `render_artifact.py`,
 committed, published as an Artifact per the design-doc mandate). Contents:
 - **What WAS proven on the wired path:** the run flipped `executorRouting` (analysis/review/build
-  → executor) and executed real executor dispatches — 3 Step-2 analysis seats + 5 Step-4 review
-  seats (self-review ×5 passes on gpt-5.6-sol cross-model, `requested==actual` verified on every
+  → executor) and executed real executor dispatches — 3 Step-2 analysis seats + 6 Step-4 review
+  seats (self-review passes on gpt-5.6-sol cross-model; the audit log is the count's source of
+  truth, `requested==actual` verified on every
   one, receipts + schema-v2 Observations in `.rawgentic/runs/wf2-472-1bce2405/routing-audit.jsonl`).
   This is the first sustained real use of the wired dispatch path and it held: cross-model routing,
   the enforcement receipt (author_provider on review seats), and the Observation contract all
@@ -95,7 +96,7 @@ A new epic decomposing the six capability builds the proving run surfaced, depen
 | docs/planning/2026-07-21-472-proving-run-{design,report}.md + .html | this design + the report |
 | docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md | A4/F11 honest disposition (no genuine capture; deferred to epic) |
 | 6 version surfaces + README changelog | 3.79.1→3.80.0 (plugin ×4, feat) + phase_executor 0.1.0→0.2.0 (promote API change) |
-| docs/measurements/run_records.jsonl | rides (#471+#552 rows dirty; #472 row at Step 16) |
+| docs/measurements/run_records.jsonl | rides (#471+#552 dirty rows committed here; #472's own Step-16 telemetry row is written post-merge and rides the NEXT PR — slot-15 convention, #470/#471 precedent) |
 
 ## Error handling / failure modes
 - D1 composition mismatch → `CompositionError` → structured exit 5 (fail-closed).
@@ -128,5 +129,4 @@ each pass surfaced real, code-confirmed defects, converging on the finding that 
 Critical/High are missing-engine-capability defects requiring builds, not design edits. Owner
 decisions: (D-a) fix-and-prove full; (D-b) accept burn + AC3=account-switch; (D-c 2026-07-21)
 DECOMPOSE — report + safe fixes here, six builds to a hardening epic. Design loop-backs: 3 consumed
-(r1/r2/r3 volume loops) under the owner's budget-raise-to-5; r6 is the narrowed convergent design,
-expected to pass its gate because every disputed surface is removed.
+(r1/r2/r3 volume loops) under the owner's budget-raise-to-5; r6 is the narrowed convergent design.

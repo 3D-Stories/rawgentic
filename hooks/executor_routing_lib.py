@@ -780,18 +780,19 @@ def compose_supervised_argv(adapters, engine: str, model: str, *, effort,
     profile)``), so a one-shape call site TypeErrors on every supervised codex build. Select
     the composition by engine + ``profile.mutating``; an engine with no explicit rule REFUSES
     (8a R2: a signature-compatible adapter must never be silently claude-shaped past its
-    engine-specific containment)."""
+    engine-specific containment). The allowlist check runs BEFORE the adapter lookup
+    (Step-11: a KeyError would be an unaudited internal error, not the documented refusal)."""
+    if engine not in ("codex", "claude"):
+        raise ValueError(
+            f"compose_supervised_argv: engine {engine!r} has no supervised composition rule "
+            f"(known: codex, claude) — refusing to guess a signature (#472 8a R2)")
     adapter = adapters[engine]
     if engine == "codex":
         if profile is not None and profile.mutating:
             return adapter.build_mutating_command(
                 model, worktree, effort=effort, containment_root=containment_root)
         return adapter.build_command(model, worktree, effort=effort)
-    if engine == "claude":
-        return adapter.build_command(model, effort=effort, profile=profile)
-    raise ValueError(
-        f"compose_supervised_argv: engine {engine!r} has no supervised composition rule "
-        f"(known: codex, claude) — refusing to guess a signature (#472 8a R2)")
+    return adapter.build_command(model, effort=effort, profile=profile)
 
 
 def supervised_dispatch(
@@ -978,11 +979,20 @@ def supervised_dispatch(
     if obs is not None:
         stamped = dict(obs)
         stamped["dispatched_lane"] = dict(target["lane"])
-        # 8a R1+R2 (converged): the dispatch correlation is AUTHORITATIVE for the audit copy —
-        # a stale/foreign child value must not misattribute the record in reconciliation. The
-        # raw child observation.json in the capture dir stays unmodified as evidence.
-        stamped["correlation_id"] = ce
+        child_cid = stamped.get("correlation_id")
+        if child_cid is None:
+            # a synthetic/legacy observation carries no correlation — adopt the dispatch's
+            stamped["correlation_id"] = ce
         audit.append_observation(stamped, receipt=receipt)
+        if child_cid is not None and child_cid != ce:
+            # Step-11 wave (3× converged; supersedes the 8a overwrite): a non-matching child
+            # correlation is an IDENTITY VIOLATION — audited AS-IS above (the foreign value is
+            # the evidence), then REFUSED. Relabeling it would launder a stale/crossed/tampered
+            # sentinel into this dispatch and let it falsely satisfy reconciliation.
+            return _err(EXIT_ENFORCEMENT, "correlation_mismatch",
+                        f"child observation correlation {child_cid!r} != dispatch correlation "
+                        f"{ce!r} on supervised seat {seat!r} — foreign observation refused",
+                        retryable=False, correlation_id=ce, audit_path=audit_path)
 
     # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.
     if state != "completed":
@@ -1390,6 +1400,12 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             author_provider=args.author_provider)
     except pe.routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=str(audit.path))
+    except pe.contract.CompositionError as e:
+        # Step-11: CompositionError subclasses RuntimeError, NOT ValueError — without this
+        # clause a compose-time containment refusal escaped as a bare traceback instead of
+        # the design's documented structured exit 5.
+        return _err(EXIT_INTERNAL, "composition_refused", str(e), retryable=False,
                     correlation_id=ce, audit_path=str(audit.path))
     except (ValueError, OSError) as e:
         return _err(EXIT_INTERNAL, "supervised_provision_failed", f"{type(e).__name__}: {e}",

@@ -11,6 +11,9 @@ claimed that did not happen.
 
 **Author:** WF2 orchestrator (sessions 1bce2405 design · 641a6f27 implementation) ·
 **Date:** 2026-07-21 · **Run evidence:** `.rawgentic/runs/wf2-472-1bce2405/routing-audit.jsonl`
+(local run telemetry, not committed — integrity pin: **sha256
+`f092b7ef0377170ad5ab57fc0ef999845880985dcaf84c68193ee06e961e69f5`**, 19 records = 10 receipts +
+9 observations; the per-seat table in §1 is the full summary of those records)
 
 ## 1. What the wired path PROVED (confirmed, from the routing audit)
 
