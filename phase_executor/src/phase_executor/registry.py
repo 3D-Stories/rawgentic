@@ -70,6 +70,10 @@ class JobRecord:
     #                                       correlation_id — the reconcile pause/recover join key,
     #                                       so a resumed call reconciles as ONE authorized attempt
     #                                       of the original (additive; None on a first launch)
+    quota_classification: Optional[dict] = None  # #558 AC3: asdict(QuotaClassification) evidence
+    #                                       persisted at collection (positive OR negative/refused —
+    #                                       the persistence trigger is classifier invocation);
+    #                                       what #559 calibration + recovery read (additive; None pre-#558)
 
 
 @dataclass(frozen=True)
@@ -189,6 +193,7 @@ def _record_to_dict(r: JobRecord) -> dict:
         "permit_ref": r.permit_ref, "command_digest": r.command_digest,
         "spec_digest": r.spec_digest, "receipt_nonce": r.receipt_nonce,
         "recovered_from": r.recovered_from,
+        "quota_classification": r.quota_classification,
         "provider_session_id": r.provider_session_id, "provider_exit_code": r.provider_exit_code,
         "resume_attempts": r.resume_attempts, "state": r.state, "created_at": r.created_at,
         "quarantine_reason": r.quarantine_reason,
@@ -197,6 +202,12 @@ def _record_to_dict(r: JobRecord) -> dict:
 
 def _record_from_dict(d: dict) -> JobRecord:
     idn = d["identity"]
+    qc = d.get("quota_classification")
+    if qc is not None and not isinstance(qc, dict):
+        # same corruption class as unparseable JSON — the kill/reap/recover paths
+        # must never see a silently-coerced classification (#558 AC3)
+        raise RegistryCorrupt(
+            f"quota_classification must be an object or null (got {type(qc).__name__})")
     return JobRecord(
         identity=WorktreeIdentity(run_id=idn["run_id"], seat=idn["seat"], attempt=idn["attempt"]),
         session_name=d["session_name"], run_socket=d["run_socket"], pane_pid=d["pane_pid"],
@@ -209,7 +220,8 @@ def _record_from_dict(d: dict) -> JobRecord:
         receipt_nonce=d.get("receipt_nonce"), recovered_from=d.get("recovered_from"),
         provider_session_id=d.get("provider_session_id"),
         provider_exit_code=d.get("provider_exit_code"), resume_attempts=d["resume_attempts"],
-        state=d["state"], created_at=d["created_at"], quarantine_reason=d.get("quarantine_reason"))
+        state=d["state"], created_at=d["created_at"], quarantine_reason=d.get("quarantine_reason"),
+        quota_classification=qc)
 
 
 class JobRegistry:

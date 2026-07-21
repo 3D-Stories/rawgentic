@@ -204,3 +204,58 @@ def test_read_all_wraps_malformed_record_in_registry_corrupt(tmp_path):
     (tmp_path / "jobs.json").write_text(json.dumps({"rg-x": {"not": "a record"}}), encoding="utf-8")
     with pytest.raises(reg.RegistryCorrupt):
         reg.read_all(str(tmp_path))
+
+
+# ---- quota_classification (#558 AC3) --------------------------------------
+
+def test_registry_persists_quota_classification(tmp_path):
+    """#558 AC3: the classifier's evidence dict must survive the durable round-trip
+    (a fresh instance reading jobs.json) — it is what #559's calibration and the
+    reconcile/recover paths read post-restart."""
+    root = str(tmp_path / "reg")
+    qc = {"verdict": True, "classifier_version": 1, "rule_ids": ["usage.v1/a"]}
+    reg.JobRegistry(root, clock=lambda: 1.0).upsert(
+        _rec(session_name="rg-q", quota_classification=qc))
+    fresh = reg.JobRegistry(root, clock=lambda: 1.0)
+    assert fresh.get(_idn()).quota_classification == qc
+    # absent field in a pre-#558 record stays None (additive, no KeyError)
+    assert _rec().quota_classification is None
+
+
+def test_registry_quota_classification_backward_read(tmp_path):
+    # a pre-#558 jobs.json record dict (no quota_classification key) loads -> None
+    d = reg._record_to_dict(_rec(session_name="rg-old"))
+    d.pop("quota_classification", None)
+    key = reg.session_name(_idn())
+    (tmp_path / "jobs.json").write_text(json.dumps({key: d}), encoding="utf-8")
+    recs = reg.read_all(str(tmp_path))
+    assert len(recs) == 1 and recs[0].quota_classification is None
+
+
+def test_registry_quota_classification_malformed_raises_corrupt(tmp_path):
+    """A non-dict quota_classification is the RegistryCorrupt corruption class —
+    raised inside _record_from_dict so get, all, by_run AND read_all all surface it,
+    never a silently-coerced value."""
+    d = reg._record_to_dict(_rec())
+    d["quota_classification"] = "not-a-dict"
+    key = reg.session_name(_idn())
+    (tmp_path / "jobs.json").write_text(json.dumps({key: d}), encoding="utf-8")
+    with pytest.raises(reg.RegistryCorrupt):
+        reg.read_all(str(tmp_path))
+    r = reg.JobRegistry(str(tmp_path), clock=lambda: 1.0)
+    with pytest.raises(reg.RegistryCorrupt):
+        r.get(_idn())
+    with pytest.raises(reg.RegistryCorrupt):
+        r.all()
+    with pytest.raises(reg.RegistryCorrupt):
+        r.by_run("run1")
+
+
+def test_registry_quota_classification_survives_upsert_in_place(tmp_path):
+    r = reg.JobRegistry(str(tmp_path / "reg"), clock=lambda: 1.0)
+    qc = {"verdict": False, "classifier_version": 1}
+    r.upsert(_rec(session_name="rg-1", state="running", quota_classification=qc))
+    r.upsert(_rec(session_name="rg-1", state="quota_paused", quota_classification=qc))
+    got = r.get(_idn())
+    assert got.state == "quota_paused"
+    assert got.quota_classification == qc
