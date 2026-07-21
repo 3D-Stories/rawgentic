@@ -778,15 +778,20 @@ def compose_supervised_argv(adapters, engine: str, model: str, *, effort,
     differ (codex: ``build_command(model, cwd, *, effort)`` / ``build_mutating_command(model,
     worktree, *, effort, containment_root)``; claude: ``build_command(model, *, effort,
     profile)``), so a one-shape call site TypeErrors on every supervised codex build. Select
-    the composition by engine + ``profile.mutating``; unknown engines fall through to the
-    claude-shaped call and fail loud on a signature mismatch rather than guess."""
+    the composition by engine + ``profile.mutating``; an engine with no explicit rule REFUSES
+    (8a R2: a signature-compatible adapter must never be silently claude-shaped past its
+    engine-specific containment)."""
     adapter = adapters[engine]
     if engine == "codex":
         if profile is not None and profile.mutating:
             return adapter.build_mutating_command(
                 model, worktree, effort=effort, containment_root=containment_root)
         return adapter.build_command(model, worktree, effort=effort)
-    return adapter.build_command(model, effort=effort, profile=profile)
+    if engine == "claude":
+        return adapter.build_command(model, effort=effort, profile=profile)
+    raise ValueError(
+        f"compose_supervised_argv: engine {engine!r} has no supervised composition rule "
+        f"(known: codex, claude) — refusing to guess a signature (#472 8a R2)")
 
 
 def supervised_dispatch(
@@ -973,8 +978,10 @@ def supervised_dispatch(
     if obs is not None:
         stamped = dict(obs)
         stamped["dispatched_lane"] = dict(target["lane"])
-        if not stamped.get("correlation_id"):
-            stamped["correlation_id"] = ce
+        # 8a R1+R2 (converged): the dispatch correlation is AUTHORITATIVE for the audit copy —
+        # a stale/foreign child value must not misattribute the record in reconciliation. The
+        # raw child observation.json in the capture dir stays unmodified as evidence.
+        stamped["correlation_id"] = ce
         audit.append_observation(stamped, receipt=receipt)
 
     # STEP 7 — one dispatch result, only after identity capture + phase-2 pass.

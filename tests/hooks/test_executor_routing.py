@@ -1359,13 +1359,13 @@ def _happy_probe_stream():
     ]
 
 
-def _valid_obs(requested="claude-sonnet-5", actual=None):
+def _valid_obs(requested="claude-sonnet-5", actual=None, correlation_id=None):
     """#472 D3: append_observation is fail-loud (schema-validated), so every stub supervisor
-    must return a SCHEMA-VALID observation. correlation_id deliberately None — the dispatch-site
-    ce-stamp branch is what the audit tests exercise."""
+    must return a SCHEMA-VALID observation. correlation_id default None — the dispatch-site
+    ce-stamp is what the audit tests exercise."""
     from phase_executor.capture import hash_text  # noqa: PLC0415  # pylint: disable=no-name-in-module
     return _contract.Observation(
-        run_id="run1", attempt_id="0-stub0000", correlation_id=None, seat="build",
+        run_id="run1", attempt_id="0-stub0000", correlation_id=correlation_id, seat="build",
         engine="claude", transport="native", requested_model=requested,
         actual_model=requested if actual is None else actual, prompt_hash=hash_text("hi"),
         context_hashes=[], usage={"input": 1, "output": 1}, timing_ms=1, queued_ms=0,
@@ -1731,6 +1731,49 @@ def test_supervised_appends_observation_to_audit(tmp_path, monkeypatch):
     assert o["dispatched_lane"] and o["correlation_id"] == "wf2:build"
     # D2 integration: the launch itself carried the dispatch correlation
     assert sup.launched[0][1]["correlation_id"] == "wf2:build"
+
+
+def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
+    """#472 8a R2: an engine with no supervised composition rule must REFUSE, never be silently
+    claude-shaped — a signature-compatible adapter would otherwise compose without its
+    engine-specific containment."""
+    from phase_executor.adapters import ADAPTERS  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    prof = _contract.LaunchProfile(session_policy="fresh", mutating=False)
+    with pytest.raises(ValueError, match="no supervised composition rule"):
+        er.compose_supervised_argv(
+            ADAPTERS, "zhipuai", "glm-5.2", effort=None, profile=prof,
+            worktree=str(tmp_path / "wt"), containment_root=str(tmp_path))
+
+
+def test_supervised_audit_stamp_overrides_foreign_correlation(tmp_path, monkeypatch):
+    """#472 8a R1+R2 (converged): the dispatch correlation is AUTHORITATIVE for the audit —
+    a stale/foreign non-empty child value must not ride into reconciliation. (The raw child
+    observation in the capture dir stays unmodified; only the audit copy is stamped.)"""
+    class _ForeignSup(_StubSupervisor):
+        def await_job(self, record, *, timeout_s=3600.0):
+            return "completed", _valid_obs(correlation_id="stale-foreign-cid")
+
+    qc = QuotaCoordinator(tmp_path / "permits", {"claude": 2})
+    monkeypatch.setattr(er, "MUTATING_FS_SANDBOXED", frozenset({"codex", "claude"}))
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    gd, ctx = _gate()
+    snap = _snapshot()
+    res = er.supervised_dispatch(
+        seat="build", prompt="hi", run_id="run1", correlation_id="wf2:build",
+        effort=None, timeout=5.0, engine="claude",
+        profile=_contract.LaunchProfile(session_policy="fresh", mutating=True),
+        final_argv=["claude", "--print", "--model", "claude-sonnet-5",
+                    "--output-format", "json"],
+        snapshot_dir=str(REPO_ROOT), capture_root=str(tmp_path / "runs"), audit=audit,
+        canary=_canary, canary_evidence=_cev, supervisor=_ForeignSup(),
+        probe_session=lambda **k: _happy_probe_stream(),
+        provision=lambda: (None, {"handle": True}),
+        gate_decision=gd, plan_context=ctx, target=routing.eligible_targets("build", snap)[0],
+        snapshot=snap, enforce=enforce,
+        mk_nonce=lambda: "N", mk_probe_cid=lambda c: f"probe-{c[:3]}")
+    assert res["ok"] is True, res
+    obs_recs = [r for r in _audit_records(tmp_path) if r.get("kind") == "observation"]
+    assert obs_recs[0]["observation"]["correlation_id"] == "wf2:build"
 
 
 def test_supervised_timed_out_still_appends_observation(tmp_path, monkeypatch):
