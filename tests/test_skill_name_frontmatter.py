@@ -13,7 +13,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 SKILLS = REPO / "skills"
 
-NAME_RE = re.compile(r"^name:\s*(.+?)\s*$", re.M)
+# [ \t]* not \s* — \s matches newlines even under re.M, so an empty name:
+# value would bleed onto the next line (#552 review finding). \S anchors a
+# non-empty value.
+NAME_RE = re.compile(r"^name:[ \t]*(\S.*?)[ \t]*$", re.M)
+FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---", re.S)
 
 
 def _skill_dirs():
@@ -24,7 +28,11 @@ def test_skill_names_are_bare_directory_names():
     violations = []
     for d in _skill_dirs():
         text = (d / "SKILL.md").read_text(encoding="utf-8")
-        m = NAME_RE.search(text)
+        fm = FRONTMATTER_RE.match(text)
+        if fm is None:
+            violations.append(f"{d.name}: no frontmatter block")
+            continue
+        m = NAME_RE.search(fm.group(1))
         if m is None:
             violations.append(f"{d.name}: no name: field")
             continue

@@ -170,6 +170,26 @@ def test_frontmatter_prefixed_name_stale(tmp_path):
     assert any(f.surface == "frontmatter" for f in bad)
 
 
+def test_frontmatter_empty_name_with_stray_line_stale(tmp_path):
+    # #552 review: `\s*` matches newlines, so an EMPTY name: value used to
+    # bleed onto a stray next line and pass. Must be flagged stale.
+    root = make_repo(tmp_path)
+    (root / "skills" / "beta" / "SKILL.md").write_text(
+        "---\nname:\nbeta\ndescription: d\nargument-hint: h\n---\nbody\n")
+    bad = stale(src.check_skill(root, "beta"))
+    assert any(f.surface == "frontmatter" for f in bad)
+
+
+def test_frontmatter_name_in_body_only_stale(tmp_path):
+    # #552 review: a flush-left `name: beta` in the BODY must not satisfy the
+    # frontmatter requirement.
+    root = make_repo(tmp_path)
+    (root / "skills" / "beta" / "SKILL.md").write_text(
+        "---\ndescription: d\nargument-hint: h\n---\nbody\nname: beta\n")
+    bad = stale(src.check_skill(root, "beta"))
+    assert any(f.surface == "frontmatter" for f in bad)
+
+
 def test_whitelist_missing_entry_stale(tmp_path):
     root = make_repo(tmp_path)
     mp = root / ".claude-plugin" / "marketplace.json"
