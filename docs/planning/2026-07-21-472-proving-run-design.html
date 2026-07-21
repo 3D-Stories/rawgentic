@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#472 Proving-Run Design r6 (narrowed)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 01:04 MDT</div>
+<h1>#472 Proving-Run Design r6 (narrowed)</h1>
+
+</header>
+<main>
+<h1>#472 proving run — design r6 (W9, epic #475) — NARROWED per owner decompose decision</h1>
+<p><strong>Status:</strong> r6 for WF2 Step 4 pass 6 · <strong>Author:</strong> WF2 orchestrator session 1bce2405 · <strong>Date:</strong> 2026-07-21 · <strong>Scope:</strong> owner decision 2026-07-21 — <strong>DECOMPOSE</strong>. Five design passes (r1→r5) proved the wired path (merged W1–W8) is NOT end-to-end-ready: the remaining Critical/High are missing-engine-capability defects, not design-prose defects. #472 therefore ships (1) the committed <strong>proving-run report</strong> as its primary deliverable (AC4 — the answer to &quot;does the work actually work?&quot;), (2) the <strong>safe, self-contained code fixes</strong> that stand alone, and (3) a filed <strong>hardening epic</strong> decomposing the six capability builds. AC2 (live codex cell) and AC3 (live account-switch/quota cycle) are DEFERRED to the epic children that build their prerequisites.</p>
+<p>This is the convergent scope: the six contentious deep-machinery items are removed from #472, so this design carries only work the five review passes never disputed.</p>
+<h2>What #472 ships</h2>
+<h3>A. Proving-run report (AC4 — primary deliverable)</h3>
+<p><code>docs/planning/2026-07-21-472-proving-run-report.md</code> (+ rendered <code>.html</code> via <code>render_artifact.py</code>, committed, published as an Artifact per the design-doc mandate). Contents:</p>
+<ul>
+<li><strong>What WAS proven on the wired path:</strong> the run flipped <code>executorRouting</code> (analysis/review/build</li>
+</ul>
+<p>  → executor) and executed real executor dispatches — 3 Step-2 analysis seats + 5 Step-4 review   seats (self-review ×5 passes on gpt-5.6-sol cross-model, <code>requested==actual</code> verified on every   one, receipts + schema-v2 Observations in <code>.rawgentic/runs/wf2-472-1bce2405/routing-audit.jsonl</code>).   This is the first sustained real use of the wired dispatch path and it held: cross-model routing,   the enforcement receipt (author_provider on review seats), and the Observation contract all   behaved as specified.</p>
+<ul>
+<li><strong>The six capability gaps that block a full end-to-end proving run</strong> (each with file:line</li>
+</ul>
+<p>  evidence from this session&#x27;s verification), and for each: why it blocks which AC, and the fix   shape. This inventory IS the proving-run&#x27;s finding.</p>
+<ul>
+<li><strong>The safe fixes this PR lands</strong> (Part B) with red→green evidence.</li>
+<li><strong>A4/F11 disposition:</strong> the SIGKILL-proxy assumption for quota residue remains UNCONFIRMED (a</li>
+</ul>
+<p>  genuine usage-limit exit was NOT captured — the capability to detect+reconcile it doesn&#x27;t exist   yet; epic child #4/#5). The AC-doc correction records this honestly rather than claiming a   capture that didn&#x27;t happen.</p>
+<h3>B. Safe self-contained code fixes (real bug fixes to merged code; TDD, never disputed across 5 passes)</h3>
+<ul>
+<li><strong>D1 — supervised codex composition.</strong> <code>_run_supervised</code> (executor_routing_lib.py:1309) calls</li>
+</ul>
+<p>  <code>build_command(model, effort=, profile=)</code>; codex <code>build_command(model, cwd, *, effort)</code> has no   <code>profile</code> kwarg → TypeError. Fix: select the composition by engine+<code>profile.mutating</code>; mutating   codex → <code>build_mutating_command(model, worktree, effort=, containment_root=)</code>; mismatch →   <code>CompositionError</code>. RED: a <code>_do_dispatch</code> mutating-build cell fails TypeError on main.</p>
+<ul>
+<li><strong>D2 — correlation threading.</strong> <code>TmuxSupervisor.launch</code> and <code>synthetic_observation</code> hardcode</li>
+</ul>
+<p>  <code>correlation_id=None</code> (supervisor.py:392-395, 151-160). Fix: additive <code>correlation_id</code> param on   both (default None preserves every existing caller). Makes a supervised Observation bindable by   reconcile.</p>
+<ul>
+<li><strong>D3 — supervised audit append.</strong> The supervised branch appends its receipt but never appends the</li>
+</ul>
+<p>  collected Observation (executor_routing_lib.py:921-978). Fix: append the Observation to the audit   for every terminal state that HAS one (completed / completed_with_residue / timed_out), stamped   with <code>dispatched_lane</code> + correlation — mirroring the sync path (executor_routing_lib.py:698-701).   (<code>exited_no_sentinel</code> legitimately has no Observation — a reconcilable failure-Observation for   that state is epic child #4, not #472.)</p>
+<ul>
+<li><strong>D7 — promote path-policy required.</strong> <code>promote(path_policy=None)</code> skips the changed-path check</li>
+</ul>
+<p>  (worktree.py:558-573). Fix: make <code>path_policy</code> a REQUIRED keyword; add a <code>PROMOTE_ANY</code> explicit   allow-all sentinel; update the ~9 existing test callers (test_worktree_promote.py,   test_work_product.py) to pass it. Closes the fail-open promotion boundary before the epic&#x27;s   behavioral-canary child ever drives a real mutating promotion.</p>
+<ul>
+<li><strong>F7 — receipt_nonce durability.</strong> <code>receipt_nonce</code> is a <code>JobRecord</code> field (registry.py:66) but</li>
+</ul>
+<p>  omitted from serialize/deserialize (registry.py:177-206) → lost on crash/resume. Fix: serialize   it; round-trip test.</p>
+<p>These five are coherent: &quot;make the supervised dispatch path composable, correlation-bound, auditable, and its promotion boundary fail-closed, and its recovery join durable&quot; — the foundation the epic&#x27;s deeper builds sit on, with zero new machinery and no disputed surface.</p>
+<h3>C. Hardening epic (filed, not built here)</h3>
+<p>A new epic decomposing the six capability builds the proving run surfaced, dependency-ordered: 1. <strong>Reconcile pause/recover model</strong> — <code>reconcile_run</code> must treat a quota_paused→recovered call as    one logical expected call satisfied by the recovery (enforce.py:513-537 has no such model today). 2. <strong>Ledger-aware dispatch chokepoint</strong> — <code>_do_dispatch</code> must consult the expected-call ledger and    reject a dispatch after <code>run_closed</code> (executor_routing_lib.py:1361 is ledger-blind); includes the    expected-call ledger + <code>reconcile</code> verb (deferred here because a ledger without the chokepoint is    escapable — a Critical). 3. <strong>Behavioral codex canary</strong> — launch a sandboxed child with external positive/negative write    verification before mutation (canary.py:341-355 is composition-validation only; spike #452 §5    spec). Unblocks AC2&#x27;s &quot;confined, negative-control passed.&quot; 4. <strong>Reconcilable failure Observations</strong> — <code>exited_no_sentinel</code> returns None + synthetic timeout obs    has <code>correlation_id=None</code> (supervisor.py:151-160, 682-687); every terminal state needs a    correlation-bound Observation. 5. <strong>Per-call caps + genuine quota detection/classification</strong> — AC-B4 hard token/turn/$ caps    (currently absent), plus quota detection in <code>await_job</code> keyed on capture <code>stderr.txt</code> finalizing    <code>quota_paused</code> directly, plus the classifier evidence field on <code>JobRecord</code>. Unblocks AC3&#x27;s live    quota cycle. 6. <strong>Account-switch recovery proof harness</strong> — the AC3 account-state machine (account-identity    capture, audited resume, cross-account verdict) on top of builds 1–5. This is where the owner&#x27;s    &quot;does it recover on a new account?&quot; question gets its live answer.</p>
+<h2>File changes (this PR only)</h2>
+<table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td>hooks/executor_routing_lib.py</td><td>D1 composition select; D3 supervised audit append</td></tr>
+<tr><td>phase_executor/src/phase_executor/supervisor.py</td><td>D2 correlation_id on launch + synthetic_observation</td></tr>
+<tr><td>phase_executor/src/phase_executor/worktree.py</td><td>D7 promote path_policy required + PROMOTE_ANY</td></tr>
+<tr><td>phase_executor/src/phase_executor/registry.py</td><td>F7 receipt_nonce serialize/deserialize</td></tr>
+<tr><td>tests/hooks/test_executor_routing.py, tests/phase_executor/{test_supervisor_launch,test_worktree_promote,test_work_product,test_registry}.py</td><td>RED-first cells; update 9 promote callers</td></tr>
+<tr><td>docs/planning/2026-07-21-472-proving-run-{design,report}.md + .html</td><td>this design + the report</td></tr>
+<tr><td>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</td><td>A4/F11 honest disposition (no genuine capture; deferred to epic)</td></tr>
+<tr><td>6 version surfaces + README changelog</td><td>3.79.1→3.80.0 (plugin ×4, feat) + phase_executor 0.1.0→0.2.0 (promote API change)</td></tr>
+<tr><td>docs/measurements/run_records.jsonl</td><td>rides (#471+#552 rows dirty; #472 row at Step 16)</td></tr>
+</tbody>
+</table>
+<h2>Error handling / failure modes</h2>
+<ul>
+<li>D1 composition mismatch → <code>CompositionError</code> → structured exit 5 (fail-closed).</li>
+<li>D2/D3 additive — default None preserves all existing behavior; a supervised dispatch that has no</li>
+</ul>
+<p>  Observation (exited_no_sentinel) appends only its receipt, exactly as the sync path treats an   availability failure (reconcilable failure-Observations = epic child #4).</p>
+<ul>
+<li>D7 — a caller with no explicit policy is a TypeError at call time (loud); PROMOTE_ANY is the</li>
+</ul>
+<p>  visible opt-in for allow-all.</p>
+<ul>
+<li>F7 — additive field with a backward-read default; old jobs.json rows load unchanged.</li>
+</ul>
+<h2>Security implications</h2>
+<ul>
+<li>D7 closes the fail-open promotion boundary (no caller can silently promote out-of-scope paths).</li>
+<li>No credential reads, no live burn, no account switch in this PR (all deferred to the epic).</li>
+<li>No new external dependency; no new machinery.</li>
+</ul>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis: none The five fixes are pure in-repo bug fixes against merged code + a report; no platform/external API is exercised (the codex/claude/tmux live paths that r1–r5 declared are all deferred to the epic children that actually drive them). The one API touched — <code>codex_cli.build_mutating_command</code> — is only COMPOSED in D1 (its argv is validated by the existing self-check), not executed live in #472.</p>
+<h2>Multi-PR assessment</h2>
+<p>Single PR. Code diff ~180 lines (D1 ~50, D2 ~25, D3 ~40, D7 ~30, F7 ~15) + tests ~200 + the report prose. Well under any split threshold; the six deep builds are the filed epic, not this PR.</p>
+<h2>Revision history + loop-back accounting</h2>
+<p>r1 (10 High) → r2 (13 High/1 Crit) → r3 (2 Crit/8 High) → r4 (2 Crit/9 High) → r5 (2 Crit/12 High): each pass surfaced real, code-confirmed defects, converging on the finding that the remaining Critical/High are missing-engine-capability defects requiring builds, not design edits. Owner decisions: (D-a) fix-and-prove full; (D-b) accept burn + AC3=account-switch; (D-c 2026-07-21) DECOMPOSE — report + safe fixes here, six builds to a hardening epic. Design loop-backs: 3 consumed (r1/r2/r3 volume loops) under the owner&#x27;s budget-raise-to-5; r6 is the narrowed convergent design, expected to pass its gate because every disputed surface is removed.</p>
+
+</main>
+<footer>Last updated: 2026-07-21 01:04 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
