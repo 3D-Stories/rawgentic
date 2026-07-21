@@ -14,6 +14,36 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Standalone — #552: bare skill `name:` frontmatter — un-double the slash commands · v3.79.1
+
+**Interrupt fix, owner-ordered mid-epic-475-pause (2026-07-20).** New Claude Code builds
+namespace plugin skills themselves and forbid a colon in the `name:` field; the embedded
+`rawgentic:` prefix (a deliberate 2026-03 design choice) was colon-sanitized and every
+command doubled (`/rawgentic:rawgentic-switch`), unregistering all old-style
+`/rawgentic:<name>` invocations — including the epic-475 resume script's. Control case
+proving the mechanism: `sync-security-patterns`, the one bare-named skill, registered clean.
+
+**Fix (root-cause, minimal).** Strip the prefix from all 20 `name:` fields — the 145
+in-body `/rawgentic:*` cross-references, the resume script, and the handoff needed ZERO
+edits (the old names simply re-register). Registration checker now requires the bare form
+with frontmatter-scoped, newline-safe matching; new guard `tests/test_skill_name_frontmatter.py`
+(red first: 20 named violations). Bonus: `peer-consult` description quoted — pre-existing
+Codex-validator YAML failure; validator now passes 21/21. Found+documented the FOURTH
+version surface (`phase_executor` `canary.py` `EXPECTED_PLUGIN_VERSION`, since #470);
+CLAUDE.md version rules ×3→×4.
+
+**Reviews.** WF5 gpt adversarial on the RCA: 5 findings (1 High — Codex-mirror
+verification, resolved via validator evidence; 4 Medium — all applied: bare-only checker,
+red-test-first ordering, UNVERIFIED old-build claim, live post-reinstall acceptance).
+Step-9 2× opus: silent-failure-hunter caught a REAL Medium in the new code (`\s*` eats
+newlines — empty `name:` + stray line passed both guards; confirmed live, fixed, 3 new
+red tests); code-reviewer 0 Critical/Important, scope confirmed complete.
+
+**Status.** PR + CI + merge SHA filled by the next slot's pass (established convention).
+Post-reinstall acceptance is the owner's: listing shows `/rawgentic:<name>` ×21, no
+doubles, `/rawgentic:switch rawgentic` resolves. Follow-up (out of scope, pre-existing):
+`skills/create-issue-workspace/skill-snapshot/SKILL.md` naming vs org-validator rule.
+
 ## Epic #529 — run-speed levers from the #509 profiler (auto-run)
 
 **Status: IN PROGRESS (started 2026-07-20, auto-merge scoped grant D-1).** Queue #526 →
