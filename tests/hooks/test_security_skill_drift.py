@@ -72,11 +72,12 @@ def test_sync_skill_path_rule_uses_pathpattern_not_suggestedglobs():
     `suggestedGlobs` is an exception-hint list no matcher reads, so a glob placed
     there silently never fires — the exact silent non-enforcement this issue fixes."""
     text = SYNC_SKILL.read_text(encoding="utf-8")
-    idx = text.find("path-type entry")
-    assert idx != -1, "path_check mapping instruction not found"
-    # In the mapping sentence, the glob destination must be pathPattern, not suggestedGlobs.
-    sentence = text[idx:idx + 400]
-    assert "pathPattern" in sentence, "path_check mapping must name pathPattern as the glob field"
-    assert "in `suggestedGlobs`" not in sentence, (
-        "path_check mapping must not send the glob to suggestedGlobs (never matched)"
+    # A path-only rule's glob must go to pathPattern (the consumer's matcher field);
+    # sending it to suggestedGlobs (an exception-hint list no matcher reads) never fires.
+    assert "pathPattern" in text, "path_check mapping must name pathPattern as the glob field"
+    assert "glob in `suggestedGlobs`" not in text, (
+        "path rule must not send the glob to suggestedGlobs (never matched)"
     )
+    # path_filter (a scope on a content rule) must not be conflated with path_check
+    # (a standalone path matcher) — the conflation would misclassify content rules.
+    assert "path_filter" in text, "sync skill must distinguish path_filter from path_check"
