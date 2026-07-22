@@ -724,9 +724,11 @@ def _glm_prereq() -> tuple[bool, str]:
     return True, f"GLM ready ({sdk_detail}, endpoint {redact_endpoint(url)})."
 
 
+CODEX_INSTALL_CMD = "npm install -g @openai/codex"
+
 _INSTALL_MSG = (
-    "Codex CLI is not installed. Install it (standalone binary) with:\n"
-    "  curl -fsSL https://codex.openai.com/install.sh | bash\n"
+    "Codex CLI is not installed. Install it with:\n"
+    f"  {CODEX_INSTALL_CMD}\n"
     "then restart your shell so `codex` is on PATH."
 )
 _AUTH_MSG = (

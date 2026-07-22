@@ -100,7 +100,7 @@ Check the active project's entry for the `adversarialReview` field.
     because WF1 is a lean drafting workflow (no multi-agent critique), so most
     projects don't need a cross-model pass on issue specs — offer it as an opt-in
     add ("also enable for create-issue? (y/n) [default: n]"). Remind them the Codex CLI must be installed
-    and authenticated (`curl -fsSL https://codex.openai.com/install.sh | bash`
+    and authenticated (`npm install -g @openai/codex`
     then `codex login`); if Codex is absent at run time the gate fails closed and
     is skipped (no error, just no cross-model pass). WF4 (refactor) was removed at v3.0.0 (#161); a configured refactor entry is inert and only fires on
     the Extract/Restructure path (Rename/Simplify skips it).

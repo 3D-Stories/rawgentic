@@ -649,7 +649,7 @@ proceeds. The engine also scans the artifact for obvious secrets (API keys, pass
 tokens, private keys) and names any detected categories in the notice. Set
 `RAWGENTIC_ADV_REVIEW_BLOCK_SECRETS=1` to make detection blocking instead of advisory.
 Findings reports are written locally to `<project>/docs/reviews/` and are never uploaded.
-The gpt backend requires the Codex CLI installed (`curl -fsSL https://codex.openai.com/install.sh | bash`)
+The gpt backend requires the Codex CLI installed (`npm install -g @openai/codex`)
 and authenticated (`codex login`, or `printenv OPENAI_API_KEY | codex login --with-api-key`
 for headless/CI). The glm backend (#403) requires `pip install "zhipuai>=2.1.5"` and a key in
 `ZHIPUAI_API_KEY` — its egress goes to z.ai/Zhipu (a distinct provider and jurisdiction),
