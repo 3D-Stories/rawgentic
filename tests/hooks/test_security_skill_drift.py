@@ -64,3 +64,19 @@ def test_sync_skill_captures_regex_and_handles_path_check():
     text = SYNC_SKILL.read_text(encoding="utf-8")
     assert "regex" in text, "sync skill must instruct capturing the regex field"
     assert "path_check" in text, "sync skill must handle path_check-based rules explicitly"
+
+
+def test_sync_skill_path_rule_uses_pathpattern_not_suggestedglobs():
+    """A synced path rule must carry the glob in `pathPattern` — the field the
+    security-guard consumer (hooks/security_guard_lib.py match_patterns) matches on.
+    `suggestedGlobs` is an exception-hint list no matcher reads, so a glob placed
+    there silently never fires — the exact silent non-enforcement this issue fixes."""
+    text = SYNC_SKILL.read_text(encoding="utf-8")
+    idx = text.find("path-type entry")
+    assert idx != -1, "path_check mapping instruction not found"
+    # In the mapping sentence, the glob destination must be pathPattern, not suggestedGlobs.
+    sentence = text[idx:idx + 400]
+    assert "pathPattern" in sentence, "path_check mapping must name pathPattern as the glob field"
+    assert "in `suggestedGlobs`" not in sentence, (
+        "path_check mapping must not send the glob to suggestedGlobs (never matched)"
+    )
