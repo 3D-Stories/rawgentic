@@ -48,7 +48,7 @@ If the guard type is ambiguous, ask the user to clarify.
 
 ### Known WAL guard rules (12):
 
-Look up the rule name in this table. The full list of WAL rule names is defined in the `PATTERN_NAMES` array in `hooks/wal-guard` (lines 69-82). The 12 rules are:
+Look up the rule name in this table. The full list of WAL rule names is defined in the `PATTERN_NAMES` array in `hooks/wal-guard`. The 12 rules are:
 
 `ssh-prod`, `scp-prod`, `rsync-prod`, `docker-prod-operate`, `docker-prod-destroy`, `ansible-prod-mutate`, `kubectl-prod-operate`, `kubectl-prod-destroy`, `helm-prod-operate`, `helm-prod-destroy`, `terraform-prod-operate`, `terraform-prod-destroy`
 
@@ -150,7 +150,7 @@ This will write an explicit guards.security array to .rawgentic.json.
 
 **Preset expansion for security guards:**
 - `sandbox` -> no rules active
-- `standard` -> `eval_injection new_function_injection child_process_exec react_dangerously_set_html document_write_xss innerHTML_xss`
+- `standard` -> `document_write_xss eval_injection innerHTML_xss new_function_injection os_system_injection pickle_deserialization`
 - `strict` -> all 10 rules
 
 ---
