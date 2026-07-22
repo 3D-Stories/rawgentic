@@ -300,7 +300,8 @@ def _mk_row(guid, ts, text, from_me=True):
             "handle": {"address": OWNER}}
 
 
-def test_ask_owner_captures_sent_guid_exact_text_wins(tmp_path):
+def test_ask_owner_captures_sent_guid_exact_text_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     sent = []
     calls = []
 
@@ -317,7 +318,8 @@ def test_ask_owner_captures_sent_guid_exact_text_wins(tmp_path):
     assert calls, "self-query ran"
 
 
-def test_ask_owner_sent_guid_none_when_only_ack_echoes(tmp_path):
+def test_ask_owner_sent_guid_none_when_only_ack_echoes(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     # Adversarial A1: token-containing rows that never equal the full ask text are
     # ACK contamination — NEVER guid evidence; exhaust retries, return None
     def tr(**kw):
@@ -334,7 +336,8 @@ def test_ask_owner_sent_guid_none_when_only_ack_echoes(tmp_path):
     assert len(calls) == 3  # kept polling for an exact row
 
 
-def test_ask_owner_sent_guid_exact_appears_on_retry(tmp_path):
+def test_ask_owner_sent_guid_exact_appears_on_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     sent = []
     state = {"n": 0}
 
@@ -350,7 +353,8 @@ def test_ask_owner_sent_guid_exact_appears_on_retry(tmp_path):
     assert rec["sent_guid"] == "ASK" and state["n"] == 2
 
 
-def test_ask_owner_sent_guid_none_on_miss_with_bounded_retry(tmp_path):
+def test_ask_owner_sent_guid_none_on_miss_with_bounded_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     sleeps = []
     calls = []
     rec = ask_owner("go?", "runM", state_dir=tmp_path, notify=lambda m: "200",
@@ -360,7 +364,8 @@ def test_ask_owner_sent_guid_none_on_miss_with_bounded_retry(tmp_path):
     assert len(calls) == 3 and len(sleeps) == 2  # ≤3 polls, sleep between only
 
 
-def test_ask_owner_sent_guid_none_on_transport_failure_ask_still_sent(tmp_path):
+def test_ask_owner_sent_guid_none_on_transport_failure_ask_still_sent(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     def tr(**kw):
         raise BridgeUnreachable("down")
     rec = ask_owner("go?", "runF", state_dir=tmp_path, notify=lambda m: "200",
@@ -368,7 +373,8 @@ def test_ask_owner_sent_guid_none_on_transport_failure_ask_still_sent(tmp_path):
     assert rec["status"] == "sent" and rec["sent_guid"] is None
 
 
-def test_ask_owner_sent_guid_none_on_unexpected_transport_exception(tmp_path):
+def test_ask_owner_sent_guid_none_on_unexpected_transport_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     # Adversarial A2: ANY Exception (not just the anticipated trio) degrades to None
     def tr(**kw):
         raise RuntimeError("unexpected")
@@ -377,7 +383,8 @@ def test_ask_owner_sent_guid_none_on_unexpected_transport_exception(tmp_path):
     assert rec["status"] == "sent" and rec["sent_guid"] is None
 
 
-def test_ask_owner_sent_guid_none_on_sleep_exception(tmp_path):
+def test_ask_owner_sent_guid_none_on_sleep_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     def boom(_s):
         raise OSError("sleep broke")
     rec = ask_owner("go?", "runS", state_dir=tmp_path, notify=lambda m: "200",
@@ -394,7 +401,8 @@ def test_ask_owner_no_self_query_on_send_failure(tmp_path):
     assert not calls  # nothing to find — the send never landed
 
 
-def test_ask_owner_sent_guid_none_on_malformed_rows_ask_still_persisted(tmp_path):
+def test_ask_owner_sent_guid_none_on_malformed_rows_ask_still_persisted(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
     # 8a F1: a non-dict row must degrade to sent_guid None — never crash ask_owner
     # after the send already landed (design: "never fails the ask")
     rec = ask_owner("go?", "runMal", state_dir=tmp_path, notify=lambda m: "200",
