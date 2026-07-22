@@ -93,3 +93,23 @@ dimensions (seat/fallback selection, gate, enforcement, winner propagation, audi
 recovery, token burn). The stubbed matrix is a reproducibility/regression baseline (the deterministic
 path is model-independent); the opus-vs-sonnet comparison is the 3 live cells (`RUN_LIVE`). The
 orchestrator seat stays opus until the live campaign reports (owner-confirmed).
+
+### Live cells (#449)
+
+The live path routes the SAME scorers through the real adapters (`live_dispatch` →
+`phase_executor.engine._dispatch_real`) with hard cost ceilings and per-dispatch observability
+(requested/actual model, fallback, `session_policy` requested-vs-actual — an observability
+dimension, not a fresh-vs-resume A/B):
+
+```bash
+RUN_LIVE=1 python3 hooks/driver_bench_lib.py --live [--max-calls 40] [--max-budget-usd 10.0]
+```
+
+Reports land in `docs/measurements/driver-bench/live-<ts>.json` (the stubbed baseline is never
+clobbered) with a `cost` block: `billable_calls` is the hard floor; `reported_cost_usd` sums only
+engine-reported usage cost. A tripped ceiling aborts with `aborted: budget_exceeded` and the
+partial cells. Cells the live path cannot run are TYPED, never silent: glm-judge cells skip
+without a glm credential (`ZHIPUAI_API_KEY`/`ZHIPU_API_KEY`/`GLM_API_KEY`); a build-seat sync
+dispatch is `unsupported` (#558 A-F1 — mutating manifests are supervised-path only) and is
+excluded from dimension means. The tightly-capped pytest cell:
+`RUN_LIVE=1 pytest tests/hooks/test_driver_bench.py::test_live_matrix_end_to_end_small -q`.

@@ -427,3 +427,29 @@ class TestLiveMatrix:
                               cwd=str(REPO), env=env2, capture_output=True, text=True, timeout=60)
         assert proc.returncode != 0
         assert "RUN_LIVE" in (proc.stderr + proc.stdout)
+
+
+# ---- #449 T4: the deferred LIVE cell (#138 — real billable calls, owner-attended) ---------------
+@pytest.mark.skipif(os.environ.get("RUN_LIVE") != "1",
+                    reason="live driver-bench: REAL billable model calls; set RUN_LIVE=1 (glm judge "
+                           "cells additionally need ZHIPUAI_API_KEY; see docs/model-routing.md)")
+def test_live_matrix_end_to_end_small():
+    """One tightly-capped live pass (3 fixtures, ceilings 8 calls / $3) through the REAL
+    adapters — the #449 deferred verification cell. Asserts the report SHAPE and the
+    ceiling discipline, not model quality (that's the campaign's question)."""
+    pe2 = db._pe()
+    rt = db.resolve_bench_table()
+    snap = rt.snapshot
+    tmp = REPO / ".rawgentic" / "driver-bench-live-test"
+    import shutil as _sh
+    _sh.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    fxs = [db.load_fixture(db.FIXTURE_DIR / f"{n}.json")
+           for n in ("f01-intake-clean", "f05-gate-bakeoff", "f07-enforcement-ok")]
+    r = db.run_matrix(fxs, snapshot=snap,
+                      quota_factory=lambda: pe2.QuotaCoordinator(tmp / "q", snap.pool_concurrency()),
+                      capture_root=tmp, models=("live",), reps=1, live=True,
+                      dispatch=db.live_dispatch(), max_calls=8, max_budget_usd=3.0)
+    assert r["live"] is True and r["cost"]["billable_calls"] <= 8
+    out = db.write_live_report(r)
+    assert Path(out).exists()

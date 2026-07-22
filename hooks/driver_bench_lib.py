@@ -456,7 +456,7 @@ def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO, 
 
     if live and os.environ.get("RUN_LIVE") != "1":
         print("--live makes REAL billable model calls: refuse without RUN_LIVE=1 "
-              "(export RUN_LIVE=1 to confirm; see docs/testing.md driver-bench section)",
+              "(export RUN_LIVE=1 to confirm; see docs/model-routing.md, Driver-bench live cells)",
               file=sys.stderr)
         raise SystemExit(2)
     resolved = resolve_bench_table(repo_root)
