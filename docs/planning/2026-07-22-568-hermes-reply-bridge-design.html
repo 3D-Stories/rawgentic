@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#568 Phase 1 — Hermes two-way owner-reply bridge (design rev-2)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 22:05 MDT</div>
+<h1>#568 Phase 1 — Hermes two-way owner-reply bridge (design rev-2)</h1>
+
+</header>
+<main>
+<h1>Design — #568 Phase 1: two-way owner-reply bridge (Hermes comms substrate)</h1>
+<ul>
+<li><strong>Issue:</strong> #568 · <strong>Scope:</strong> <strong>Phase 1 only</strong> — the two-way owner-reply bridge. Phase 2+ (Hermes offload seat, full comms substrate) is deferred to a future design-doc/WF1 epic (owner comment).</li>
+<li><strong>Date:</strong> 2026-07-22 · <strong>Session:</strong> ed47a344 · <strong>Complexity:</strong> standard_feature · full spine</li>
+<li><strong>Rev 2</strong> — revised after Step-4 pass-1 critique (Codex adversarial + opus self-review): token-only correlation, two-store crash model, single canonical inbox, <code>atomic_write_lib</code>, advisory-envelope. See &quot;Review synthesis&quot;.</li>
+</ul>
+<h2>Problem</h2>
+<p>Unattended/overnight harness runs (<code>claude -p --resume</code> sessions) can text the owner (outbound, <code>sentinel/bin/notify.sh</code>) but cannot receive the <strong>reply</strong>. Phase 1 closes the inbound half so a run can ask by text and receive the answer by text.</p>
+<h2>Investigation result (AC1 — tap, don&#x27;t rebuild)</h2>
+<p>The Hermes gateway on darwin <strong>already relays inbound</strong> (BlueBubbles → gateway <strong>webhook</strong> <code>webhook_port: 8645</code> → <code>channel_skill_bindings</code> → gateway-internal Hermes skill; proven by sentinel reboot-by-text). <strong>But it routes to gateway-internal skills, not to any sink a separate <code>claude -p</code> harness session can read.</strong> Intercepting it needs a darwin skill deploy + cross-host sink — owner-gated, blocked while owner away. <strong>Decision:</strong> the harness <strong>taps the same BlueBubbles message store via its read API</strong> (idempotent query — reads don&#x27;t consume), reusing the existing credential; no gateway rebuild, no conflict (handle-once is per-consumer). Full note: <code>docs/planning/2026-07-22-568-hermes-inbound-investigation.md</code>.</p>
+<h2>Approaches</h2>
+<ul>
+<li><strong>A — harness-side read-only poller against <code>message/query</code>  ✅ CHOSEN.</strong> No darwin deploy; reuses <code>bluebubbles.env</code> + <code>notify.sh</code>; idempotent (no gateway conflict); unit-testable with a fake transport; lands entirely in rawgentic. Con: poll not push (~15 s).</li>
+<li><strong>B — deploy a Hermes gateway skill on darwin → shared sink  ❌ Phase-2+.</strong> Push, reuses gateway routing, but needs owner-gated darwin deploy + cross-host sink; couples harness to gateway internals.</li>
+</ul>
+<h2>Architecture (Approach A) — module <code>hooks/hermes_bridge.py</code></h2>
+<p>All transport (HTTP query, notify send) is injected for CI (no live creds), mirroring notify.sh&#x27;s <code>NOTIFY_CURL</code>/<code>NOTIFY_PYTHON</code> override idiom.</p>
+<p><strong>1. Outbound ask</strong> — <code>ask_owner(question, run_id) -&gt; ask_record</code></p>
+<ul>
+<li>Mint a high-entropy bracketed token <code>token = &quot;[RG-&quot; + secrets.token_hex(6).upper() + &quot;]&quot;</code> (48 bits, exact-match; routing is NEVER derived from free reply text). Create the ask record <strong>create-if-absent</strong> via <code>os.open(path, O_CREAT|O_EXCL|O_WRONLY)</code> (collision → re-mint + retry) since the token is also the record key. This write-once identity file uses O_EXCL, NOT <code>atomic_write_text</code> — the helper&#x27;s <code>os.replace</code> is an unconditional overwrite (documented carve-out; see State store). A later <code>status</code> transition (prepared→sent) DOES overwrite via <code>atomic_write_text</code>.</li>
+<li>Ask record <code>{token, run_id, question, sent_ts_ms, status}</code>. Outbound states <code>prepared</code> → <code>sent</code> (notify rc 0 / HTTP 2xx) → or <code>delivery_unknown</code> (send timed out AFTER submission). <strong>A <code>delivery_unknown</code> ask is NEVER auto-resent with a new token</strong> (would duplicate the question) — preserved for reconciliation.</li>
+<li>Send via existing <code>sentinel/bin/notify.sh</code> (reuse <strong>unchanged</strong> — one outbound voice), embedding the token: <code>&quot;&lt;question&gt;\n(reply to this message, keep ref &lt;token&gt;)&quot;</code>.</li>
+</ul>
+<p><strong>2. Inbound poll</strong> — <code>poll_reply(ask_record, timeout_s, interval_s=15) -&gt; Reply | Status</code></p>
+<ul>
+<li>Query <code>POST {BB_URL}/api/v1/message/query?password=PW</code> — <strong>password in a curl <code>-K</code> file</strong> (the read path reuses notify.sh&#x27;s send-path <code>-K</code> idiom; never argv) — for the owner DM, <code>sort:&quot;DESC&quot;</code>, small <code>limit</code>, <code>dateCreated &gt; sent_ts_ms</code>.</li>
+<li><strong>Direction/owner filter:</strong> keep only <code>handle.address == BB_RECIPIENT</code> AND <code>isFromMe == false</code>. For a 1:1 owner DM the handle filter is belt-and-suspenders; <code>isFromMe:false</code> is the load-bearing direction control.</li>
+<li><strong>Correlation — TOKEN-ONLY, EXACT (Phase 1):</strong> a reply matches iff the exact bracketed <code>token</code> appears in <code>text</code>. <strong><code>replyToGuid</code> correlation is CUT from Phase 1</strong> — <code>notify.sh</code> returns only the HTTP code (<code>-o /dev/null -w %{http_code}</code>), so the sent GUID is not capturable without modifying it, and the live probe never observed a populated <code>replyToGuid</code>. (Phase-2: capture the sent GUID + probe <code>replyToGuid</code> to add the reply-gesture path.) No positional/time-window fallback (would weaken wrong-question/wrong-recipient safety); an untokened message is <code>unmatched</code>.</li>
+<li><strong>Per-GUID lifecycle + two stores (fixes never-lose):</strong> <code>observed.jsonl</code> records each fetched message once — its dedup means only &quot;do not re-append an identical observation&quot; and <strong>does NOT gate delivery</strong>. A SEPARATE <code>consumed</code> store marks a guid delivered; <strong>delivery reprocessing is gated ONLY on the consumed store, written AFTER the inbox file.</strong> A crash between observe-append and inbox-write leaves the guid observed-but-not-consumed → next poll re-classifies and delivers it. A guid is a terminal no-op only once its inbox delivery is durable.</li>
+<li><strong>Reply classifications</strong> (each delivers nothing except <code>matched</code>): <code>matched</code> (exactly one message carries the open token) · <code>unmatched</code> (no token) · <code>echo_or_empty</code> (only the token, or reproduces the question with no answer) · <code>ambiguous</code> (<strong>≥2 distinct messages each carrying the open token</strong> → NO_ACTION, owner disambiguates) · <code>late</code> (token already consumed → reconciliation notice, answer unchanged). <strong>Zero matches = <code>UNMATCHED</code>, never <code>AMBIGUOUS</code>.</strong></li>
+<li>Returns <code>Reply{guid,text,dateCreated}</code> only on <code>matched</code>; else <code>Status</code> ∈ <code>{NO_REPLY_YET, TIMEOUT, UNREACHABLE, AMBIGUOUS, UNMATCHED}</code>.</li>
+</ul>
+<p><strong>3. Deliver into workflow</strong> — reuse the existing <code>claude -p --resume</code> launcher pattern (AC3, no bespoke injection)</p>
+<ul>
+<li><strong>Single canonical inbox:</strong> on <code>matched</code>, write <code>claude_docs/.hermes-bridge/inbox/&lt;run_id&gt;/&lt;delivery_id&gt;.json</code> (deterministic <code>delivery_id = sha1(guid)[:12]</code>) <strong>create-if-absent</strong> (<code>os.open(O_CREAT|O_EXCL)</code>, <code>mkdir</code> the per-run dir first): if the <code>delivery_id</code> file already exists, <strong>SKIP the re-write</strong>. Gating the re-write on file-existence (not only the consumed ledger) means a crash-replay never reverts a file the launcher has already advanced (<code>ready</code>→<code>claimed</code>) — closes the never-double-act window. Schema <code>{delivery_id, run_id, token, guid, dateCreated, reply_text, state:&quot;ready&quot;}</code>. Mark the guid consumed ONLY after the inbox file exists. <strong>The Markdown session-notes path is dropped</strong> — <code>session_notes.md</code> stays the append-only human resume log, not a delivery sink.</li>
+<li><strong>Resume-glue (home named):</strong> the consumer that turns the inbox file into a resume prompt lives in the <strong>workspace launcher</strong> (<code>epic475-resume.sh</code> at workspace root; <code>sentinel/bin/provision_hermes_reboot.sh</code>) — OUTSIDE the rawgentic repo. Phase-1 rawgentic deliverable = the inbox contract + a unit-tested <code>render_resume_prompt(inbox_json) -&gt; str</code> helper the launcher calls. The launcher atomically renames <code>ready</code>→<code>claimed</code> before resuming, retains the claimed file until success, and a <strong>stale <code>claimed</code> is explicit human recovery, never auto-replayed</strong> (never double-act). Wiring the launcher + the genuine-human round-trip are documented-deferred (owner away) — see AC-deferral.</li>
+</ul>
+<h2>State store (<code>claude_docs/.hermes-bridge/</code>, git-excluded via <code>.gitignore:25</code>)</h2>
+<ul>
+<li><code>observed.jsonl</code> — append-only observation ledger (persist-before-classify; dedup = don&#x27;t-re-append-observation ONLY).</li>
+<li><code>consumed.jsonl</code> — delivered-guid ledger (the ONLY delivery gate; written after the inbox file).</li>
+<li><code>asks/&lt;token&gt;.json</code> — ask record + outbound state (atomic create-if-absent).</li>
+<li><code>inbox/&lt;run_id&gt;/&lt;delivery_id&gt;.json</code> — canonical delivery outbox (atomic via <code>atomic_write_lib</code>, deterministic id).</li>
+<li><strong>Write discipline:</strong> write-once IDENTITY files (<code>asks/&lt;token&gt;.json</code> initial create, <code>inbox/.../&lt;delivery_id&gt;.json</code>) use <code>os.open(O_CREAT|O_EXCL)</code> create-if-absent (collision-safe + crash-replay-safe: skip on exists). <code>atomic_write_lib.atomic_write_text</code> (mkstemp + <code>os.replace</code>, unconditional overwrite, symlink-safe, temp-unlinked-on-error) is used for full-file OVERWRITES (e.g. an ask record&#x27;s <code>status</code> transition) — CLAUDE.md §5 mistake #12 (reuse the helper, never hand-roll <code>os.rename</code>). Ledgers (<code>observed.jsonl</code>, <code>consumed.jsonl</code>) are append-only (<code>open(&#x27;a&#x27;)</code>). Rationale for JSON/JSONL over the peer&#x27;s SQLite: repo has no SQLite precedent and consistently uses JSON state (<code>run_records.jsonl</code>, <code>dispositions.jsonl</code>, <code>.wf2-state/</code>); same guarantees hold (append persist-before-classify, unique-by-guid dedup via ledger scan, atomic delivery). SQLite is a future upgrade if question volume ever needs indexed queries.</li>
+</ul>
+<h2>Fail-safe semantics (AC6 — never lose / never wrong-act)</h2>
+<ul>
+<li><strong>Never lose:</strong> reads are idempotent; delivery is gated ONLY on the <code>consumed</code> ledger, written AFTER the durable inbox file (write-inbox-before-mark-consumed). A crash anywhere before consume → next poll re-delivers (the guid is observed but not consumed). The observed-ledger never suppresses an undelivered reply.</li>
+<li><strong>Never wrong-act:</strong> <code>ambiguous</code> (≥2 tokened matches) and <code>unmatched</code> (0 matches) both deliver NOTHING → degrade to &quot;owner comes to the session&quot;. <code>UNREACHABLE</code> (HTTP error / conn fail) is distinct from <code>NO_REPLY_YET</code> — the run must NOT proceed as if the owner declined. <code>TIMEOUT</code> delivers nothing (never means yes/no/cancel/continue). <code>delivery_unknown</code> outbound never auto-resends.</li>
+<li><strong>Untrusted input:</strong> reply <code>text</code> is NEVER executed — reject NULs, bound size, preserve original, serialize as JSON; written as labeled DATA. (Enforcement boundary: see Security.)</li>
+</ul>
+<h2>Security implications</h2>
+<ul>
+<li>Secrets by NAME: <code>BLUEBUBBLES_PASSWORD</code> via the curl <code>-K</code> file on BOTH send (notify.sh) and the new read path — never argv, never logs; <code>?password=</code> redacted from ALL logs AND exception/traceback strings. Reuse <code>~/.config/vm-update-monitor/bluebubbles.env</code>.</li>
+<li>Owner-only: strict <code>BB_RECIPIENT</code> + <code>isFromMe:false</code>; group chats / other handles ignored.</li>
+<li><strong>Untrusted-input enforcement (advisory envelope is NOT the boundary):</strong> the &quot;treat as DATA&quot; banner prepended to the resume prompt is <strong>advisory framing</strong>, not an enforcement control — an LLM can be steered past a banner. The ENFORCED bound: (1) inbox content populates ONLY the recorded question&#x27;s answer; (2) an owner text reply must NOT, by itself, unlock auto-approval of any destructive/new-scope action — the harness permission classifier / owner gate stays active on a reply-triggered resume; (3) embedded directives in a reply are surfaced, never executed. Since the source chat is owner-only, third-party injection is not the threat; the residual risk is the owner&#x27;s own reply being over-interpreted as broad authority — the permission gate is what actually bounds it.</li>
+<li><strong>Transport (accepted LAN exception):</strong> <code>message/query</code> and <code>message/text</code> go over plaintext HTTP on the homelab LAN (<code>.205</code>↔<code>.148</code>, same-L2). Password + message contents are exposed to an on-path LAN observer. Accepted threat-model exception — consistent with the existing production <code>notify.sh</code> (same plaintext <code>http://</code> bridge); the endpoint is LAN-internal, the credential least-privilege. HTTPS/tunnel is out of Phase-1 scope (would touch the shared BlueBubbles server config).</li>
+</ul>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: POST /api/v1/message/query on the BlueBubbles Server REST API (BB_URL=http://10.0.17.148:1234)</li>
+</ul>
+<p>  feasibility: verified via spike — live probe 2026-07-22 from host .205 (session-notes Step 2 &quot;LIVE PROBE&quot;): POST {BB_URL}/api/v1/message/query?password=PW body {&quot;chatGuid&quot;:&quot;iMessage;-;+14036189135&quot;,&quot;limit&quot;:3,&quot;offset&quot;:0,&quot;with&quot;:[&quot;chat&quot;,&quot;handle&quot;],&quot;sort&quot;:&quot;DESC&quot;} → HTTP 200, data[] of message objects carrying guid, text, dateCreated (epoch ms), isFromMe, handle.address — the EXACT fields the token-only correlation + dedup use. (replyToGuid is NOT relied on — cut from Phase 1.)   failure: fail-silent   surface: the poller returns a distinct UNREACHABLE status on any non-2xx / connection failure (never &quot;no reply&quot;); logged (password redacted), run degrades to owner-attended. Test #1 exercises UNREACHABLE via the fake transport.</p>
+<ul>
+<li>api: POST /api/v1/message/text on the BlueBubbles Server REST API (outbound send, via notify.sh, unchanged)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — projects/sentinel/bin/notify.sh (production; owner completion-note pattern). Only the HTTP code is consumed (rc 0 = 2xx); the sent GUID is intentionally NOT needed (token-only correlation).   failure: fail-loud   surface: notify.sh returns the HTTP code; non-2xx → send-failure → ask recorded <code>delivery_unknown</code>, not <code>sent</code>.</p>
+<h2>File changes</h2>
+<ul>
+<li>NEW <code>hooks/hermes_bridge.py</code> — <code>ask_owner</code> / <code>poll_reply</code> / <code>deliver</code> / <code>render_resume_prompt</code> + <code>--self-check</code>; injectable transport (query fn) + notify fn.</li>
+<li>NEW <code>tests/hooks/test_hermes_bridge.py</code> — fake transport + fake notify + tmp state dir (no live creds). Cover: request shape + <code>-K</code> secret handling; owner/direction filter; observed-vs-consumed two-store; <strong>crash-replay re-delivers exactly once</strong>; <strong>token-only exact correlation + <code>unmatched</code> when token absent</strong> (NO serialized-fallback); <code>echo_or_empty</code>; <code>ambiguous</code> (≥2 tokened) → no delivery; zero-match = UNMATCHED; <code>UNREACHABLE</code>≠<code>NO_REPLY_YET</code>; since-ts; <code>delivery_unknown</code> no-resend; write-inbox-before-consume ordering; NUL-reject + size-bound; <code>render_resume_prompt</code> envelope shape + embedded-directive surfaced (not executed); password redacted in logs+tracebacks.</li>
+<li>NEW <code>docs/planning/2026-07-22-568-hermes-inbound-investigation.md</code> (AC1).</li>
+<li>NEW <code>docs/planning/2026-07-22-568-hermes-reply-bridge-design.{md,html}</code> (this).</li>
+<li>MOD <code>README.md</code> (Changelog + feature + suite tail); version bump surfaces (feat→<strong>minor</strong>): <code>.claude-plugin/plugin.json</code>, <code>plugins/rawgentic/.codex-plugin/plugin.json</code>, the <code>test_plugin_version_bumped</code> pin, AND <code>canary.py:38 EXPECTED_PLUGIN_VERSION</code> (HARD lane <code>test_canary_evidence.py:76</code> — confirmed present at 3.86.0). NO <code>phase_executor</code> bump (untouched). VERIFY the full live surface list via pr-preflight. Workflow-diagram no-spine-change decision recorded.</li>
+</ul>
+<h2>Multi-PR: single PR (&lt; 500 lines, self-contained).</h2>
+<h2>Owner-gated / deferred (owner away) — explicit</h2>
+<ul>
+<li><strong>AC4 genuine-human round-trip</strong> (owner texts back) needs the owner → documented-deferred; a <strong>simulated</strong> owner reply (inject a tokened test message via message/text, or a fixture) demonstrates the full path mechanically (inbox written + <code>render_resume_prompt</code> output shown).</li>
+<li><strong>Launcher resume-glue wiring</strong> (<code>epic475-resume.sh</code> reading the inbox → resume prompt) lives OUTSIDE the rawgentic repo → the &quot;acted-on&quot; half of AC4 is Phase-1-documented + demo-only, not wired in this PR. Phase-1 rawgentic ships the inbox contract + <code>render_resume_prompt</code> (unit-tested); the launcher edit is a separate follow-up.</li>
+</ul>
+<h2>Verification strategy</h2>
+<ul>
+<li><code>pytest tests/hooks/test_hermes_bridge.py</code> (fake transport) — red-before-green per task.</li>
+<li><code>hooks/hermes_bridge.py --self-check</code> — assert-based, no live bridge.</li>
+<li>FULL suite once at Step 9 (baseline diff). Mechanical live demo (simulated owner reply) for AC4; genuine-human + launcher wiring deferred.</li>
+</ul>
+<h2>Review synthesis (provenance)</h2>
+<ul>
+<li>Peer consult (Codex, blind): <code>docs/reviews/peer-rawgentic-peer-problem-568-2026-07-22.md</code>.</li>
+<li>Step-4 pass-1 adversarial (Codex): <code>docs/reviews/2026-07-22-568-hermes-reply-bridge-design-md-2026-07-22.md</code> (1 Crit, 3 High, 4 Med) + opus self-review (2 High, 4 Med, 1 Low). Rev-2 changes made in response: never-lose two-store fix (Crit), token-only correlation (High — replyToGuid unbuildable), single canonical inbox (High), AMBIGUOUS single definition + serialized-fallback removed (High), <code>atomic_write_lib</code> reuse (Med), advisory-envelope + enforced permission-gate (Med), token entropy+collision-check (Med), plaintext-LAN exception documented (Med), resume-glue home named + demo-only (Low). Cut from Phase 1 (both reviewers concur): gateway/webhook changes, message bus, session injection, NLP matching, multi-owner, dashboards, auto command execution.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-21 22:05 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
