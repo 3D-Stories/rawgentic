@@ -27,6 +27,11 @@ def _snapshot():
                 ],
             },
             "solo": {"primary": {"model": "claude-opus-4-8", "lane": _lane("claude")}, "chain": []},
+            # DECLARED but manifest-less seats — bake-off candidates name these, so the seat
+            # exists (H3 validation passes) but carries no cap manifest (the legitimate None,
+            # run_seat parity). An UNKNOWN seat is a different thing and fails loud (H3 #559).
+            "design": {"primary": {"model": "claude-opus-4-8", "lane": _lane("claude")}, "chain": []},
+            "build": {"primary": {"model": "claude-opus-4-8", "lane": _lane("claude")}, "chain": []},
         },
         "forbidden_combinations": [
             {"model_pattern": "haiku", "reason": "never Haiku"},
@@ -231,7 +236,7 @@ def test_cross_model_author_skips_same_provider(tmp_path):
 
 def test_unknown_pool_fails_closed(tmp_path):
     qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
-    bad = [Candidate(seat="x", model="m", prompt="p", provider="anthropic", pool="ghost")]
+    bad = [Candidate(seat="build", model="m", prompt="p", provider="anthropic", pool="ghost")]
     with pytest.raises(ValueError):
         run_competitive(bad, judge=_judge_first, snapshot=_snapshot(), quota=qc,
                         capture_root=tmp_path, dispatch=_stub())
@@ -239,7 +244,7 @@ def test_unknown_pool_fails_closed(tmp_path):
 
 def test_all_forbidden_chain_exhausted(tmp_path):
     qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
-    haikus = [Candidate(seat="x", model="claude-haiku-4-5", prompt="p", provider="anthropic", pool="claude")]
+    haikus = [Candidate(seat="build", model="claude-haiku-4-5", prompt="p", provider="anthropic", pool="claude")]
     with pytest.raises(routing.ChainExhausted):
         run_competitive(haikus, judge=_judge_first, snapshot=_snapshot(), quota=qc,
                         capture_root=tmp_path, dispatch=_stub())
@@ -445,13 +450,36 @@ def test_run_competitive_derives_candidate_profile_and_min_timeout(tmp_path):
     assert req.timeout == 60.0
 
 
-def test_run_competitive_unknown_seat_keeps_no_profile(tmp_path):
-    # bake-off candidates naming a seat absent from the table stay profile-less (compat)
+def test_run_competitive_unknown_seat_fails_loud(tmp_path):
+    # H3 (#559): a candidate naming a seat ABSENT from the table fails loud BEFORE fan-out —
+    # an unknown seat resolves to no manifest (_manifest_for swallows RoutingError → None) and
+    # would dispatch UNCAPPED, the cost-cap bypass this closes (flip of the r2 no-profile pin).
     qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4, "zhipu": 2})
+    ghost = [Candidate(seat="ghost", model="claude-opus-4-8", prompt="p",
+                       provider="anthropic", pool="claude")]
     reqs = []
-    run_competitive(_candidates_cross_pool(), judge=_judge_first, snapshot=_snapshot(),
-                    quota=qc, capture_root=tmp_path, dispatch=_req_capture(reqs))
-    assert all(r.profile.max_budget_usd is None for _, r in reqs)
+    with pytest.raises(ValueError):
+        run_competitive(ghost, judge=_judge_first, snapshot=_snapshot(), quota=qc,
+                        capture_root=tmp_path, dispatch=_req_capture(reqs))
+    assert reqs == []  # fail-loud precedes candidate fan-out, never a dispatch
+
+
+def test_run_competitive_seatless_table_fails_loud(tmp_path):
+    # H3 (#559, no no-seats carve-out r3 C4/ADV-2): a snapshot whose table has NO usable seats
+    # mapping fails the SAME way for any candidate seat — the r2 carve-out preserved the exact
+    # bypass for a supported input shape.
+    snap = routing.RoutingSnapshot.from_table({
+        "schema_version": "1", "pools": {"claude": {"concurrency": 2}},
+        "seats": {}, "forbidden_combinations": [],
+    })
+    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
+    cands = [Candidate(seat="build", model="claude-opus-4-8", prompt="p",
+                       provider="anthropic", pool="claude")]
+    reqs = []
+    with pytest.raises(ValueError):
+        run_competitive(cands, judge=_judge_first, snapshot=snap, quota=qc,
+                        capture_root=tmp_path, dispatch=_req_capture(reqs))
+    assert reqs == []
 
 
 def test_production_claude_argv_single_run(tmp_path):
