@@ -553,14 +553,29 @@ class TmuxSupervisor:
         return derive_state(record, sentinel=sentinel, live=live)
 
     def mark_quota_paused(self, identity: WorktreeIdentity,
-                          provider_session_id: Optional[str]) -> JobRecord:
-        """The INJECTED quota classification (owner Q6/W9 owns the discriminator): records
-        quota_paused + the provider session id the relaunch will ``--resume``.
+                          provider_session_id: Optional[str]) -> str:
+        """The INJECTED quota classification (owner Q6/W9 owns the discriminator). H1 (#559,
+        design §2.1) — the REQUIRED guard order, kill-verify BEFORE releasing the permit:
 
-        Fail-closed preconditions (Step-11 codex #7 — a mislabelled pause could relaunch a
-        COMPLETED mutating job and duplicate its side effects, or admit concurrent work
-        while a live provider still runs): the job must be DEAD, have NO valid sentinel,
-        not already be terminal, and carry a non-empty session id."""
+          1. identity / provider-session / terminal-state validations (a completed/terminal
+             record refuses injection before any kill — Step-11 codex #7);
+          2. pre-kill effectful-sentinel reject — an effectful job is NEVER killed by a quota
+             injection (the cheap early exit; the shared ``_sentinel_effectful`` predicate);
+          3. ``_kill_job`` (the two-group + descendant-snapshot primitive) — this REPLACES
+             the old ``_live`` probe: a permit is released only on a VERIFIED kill, closing
+             the release-on-unverified-kill gap;
+          4. post-kill sentinel RE-READ (the check/kill race — a live child can write an
+             effectful sentinel between step 2's read and the verified kill): a post-kill
+             effect makes this an interrupted, uncertain outcome → ``completed_with_residue``
+             (non-success, non-resumable, permit released), NEVER ``quota_paused``;
+          5. verified-dead + no effect → ``quota_paused`` (permit released — free the pool
+             slot NOW, else the relaunch under the same session_name deadlocks a
+             concurrency-1 pool on the job's own permit, 8a R2);
+          6. unverified kill (residue) → ``completed_with_residue``, permit RETAINED (parity
+             with the automatic path's ``kill_unverified`` refusal, ``await_job`` :793-797).
+
+        Returns the terminal state string. Injected-classification evidence rides the
+        ``_finish`` upsert (#558 pass-2 F9)."""
         record = self._registry.get(identity)
         if record is None:
             raise SupervisorError(f"unknown job {identity}")
@@ -570,27 +585,36 @@ class TmuxSupervisor:
             raise SupervisorError(
                 f"mark_quota_paused: record is {record.state!r} — only a non-terminal dead "
                 f"job can be quota-paused")
-        if self._live(record):
-            raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
-        sent = self._sentinel(record)
-        if self._sentinel_effectful(sent):
-            # Resuming a job that already produced an EFFECTFUL result would duplicate it
-            # (the shared _sentinel_effectful predicate — see its docstring; the
-            # supervisor's own synthetic exited_no_sentinel observation carries
-            # actual_model=None with an availability status, so it correctly does NOT
-            # trip this guard — pause/resume is exactly its designed recovery).
+        # (2) pre-kill effectful reject — refuse an effectful result BEFORE any kill attempt
+        # (the supervisor's own synthetic exited_no_sentinel observation carries
+        # actual_model=None with an availability status, so it correctly does NOT trip this
+        # guard — pause/resume is exactly its designed recovery).
+        if self._sentinel_effectful(self._sentinel(record)):
             raise SupervisorError(
                 "mark_quota_paused: sentinel indicates an effectful result (an "
                 "envelope-producing status or an attested actual_model) — resuming "
                 "would duplicate its effects")
-        # routes through _finish (release_permit=True): the provider exited (usage-limit
-        # exit-1) — free the pool slot NOW, else the relaunch under the same session_name
-        # strands the old permit context manager and deadlocks a concurrency-1 pool on
-        # the job's own permit (8a R2 finding). Injected-classification evidence rides
-        # the same upsert (#558 pass-2 F9).
+        # (3) kill-verify — replaces the _live probe: a live child is killed and the kill is
+        # verified; only a verified-dead job frees its permit.
+        killed = self._kill_job(record)
+        if not killed:
+            # (6) residue: process death UNVERIFIED — retain the permit (Step-11 codex #3 /
+            # await_job kill_unverified parity); not resumable.
+            return self._finish(
+                record, "completed_with_residue", release_permit=False,
+                quota_classification={"injected": True, "paused": False,
+                                      "refusal": "kill_unverified"}).state
+        # (4) post-kill sentinel re-read — the check/kill race: an effect that appeared during
+        # the kill is an interrupted, uncertain outcome, never a "paused"/"success".
+        if self._sentinel_effectful(self._sentinel(record)):
+            return self._finish(
+                record, "completed_with_residue", release_permit=True,
+                quota_classification={"injected": True, "paused": False,
+                                      "refusal": "effectful_post_kill"}).state
+        # (5) verified-dead, no effect → the designed pause/resume recovery.
         return self._finish(record, "quota_paused",
                             provider_session_id=provider_session_id,
-                            quota_classification={"injected": True, "paused": True})
+                            quota_classification={"injected": True, "paused": True}).state
 
     # -- kill (AC-E4, CF-17) ---------------------------------------------------
 

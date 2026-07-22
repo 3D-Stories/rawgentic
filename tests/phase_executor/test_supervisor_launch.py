@@ -436,9 +436,9 @@ def test_status_quota_paused_only_injected(tmp_path):
     reg.upsert(rec)
     with pytest.raises(SupervisorError):  # empty session id refused
         sup.mark_quota_paused(identity, provider_session_id=None)
-    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
-    assert got.state == "quota_paused"
-    assert got.provider_session_id == "sess-1"
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
+    assert reg.get(identity).provider_session_id == "sess-1"
     assert reg.get(identity).state == "quota_paused"
     with pytest.raises(SupervisorError):  # already terminal-for-recover — refused
         sup.mark_quota_paused(identity, provider_session_id="sess-2")
@@ -475,8 +475,8 @@ def test_mark_quota_paused_sentinel_guard_boundary(tmp_path):
         reason="child exited without sentinel", routing_config_digest="sha256:d",
         correlation_id="c1")
     (cap / "observation.json").write_text(json.dumps(synth), encoding="utf-8")
-    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
-    assert got.state == "quota_paused"
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
     # envelope-producing OK sentinel → still refused (effects would duplicate)
     reg.upsert(rec)  # reset state to exited_no_sentinel
     ok_obs = contract.Observation(
@@ -790,9 +790,8 @@ def test_mark_quota_paused_injects_classification_evidence(tmp_path):
               provider_session_id=None, provider_exit_code=None, resume_attempts=0,
               state="exited_no_sentinel", created_at=0.0, quarantine_reason=None)
     reg.upsert(rec)
-    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
-    assert got.state == "quota_paused"
-    assert got.quota_classification == {"injected": True, "paused": True}
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
     assert reg.get(identity).quota_classification == {"injected": True, "paused": True}
 
 

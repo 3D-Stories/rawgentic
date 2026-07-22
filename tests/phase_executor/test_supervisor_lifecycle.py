@@ -485,3 +485,101 @@ def test_reap_retains_dirty_dead_worktree(env_factory):
     env.sup.reap(env.identity.run_id, clean_fn=dirty_clean_fn)
     assert len(env.manager.finalized) == n_finalized
     assert env.registry.get(env.identity).quarantine_reason.startswith("reaped:")
+
+
+# ---------------------------------------------------------------------------
+# H1 (#559): mark_quota_paused KILL-VERIFIES before releasing the permit, and
+# re-reads the sentinel post-kill to catch the check/kill race (design §2.1).
+# Pure tests — _kill_job / _sentinel are stubbed so the outcome (verified-dead,
+# residue, effectful-pre-kill, race) is exact, no tmux needed.
+# ---------------------------------------------------------------------------
+
+
+def _quota_sup(tmp_path):
+    """A supervisor over a real registry with a dead runner (no tmux needed)."""
+    reg = JobRegistry(str(tmp_path / "reg"))
+    sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+                         registry_root=str(tmp_path / "reg"), registry=reg,
+                         run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+    return sup, reg
+
+
+def _pausable_record(identity, tmp_path):
+    cap = tmp_path / "cd"
+    cap.mkdir(parents=True, exist_ok=True)
+    return _make_record(identity, tmp_path, capture_dir=str(cap), state="exited_no_sentinel")
+
+
+def test_mark_quota_paused_kill_verified_releases_permit(tmp_path, monkeypatch):
+    # (a) verified kill → quota_paused + permit released; _kill_job IS invoked (the _live
+    # short-circuit is gone). Return is the terminal state STRING.
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    released, kills = [], []
+    monkeypatch.setattr(sup, "_release_permit", lambda rec: released.append(rec.session_name))
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: (kills.append(1) or True))
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
+    assert kills, "_kill_job must be invoked (no _live short-circuit before permit release)"
+    assert released, "a verified kill releases the permit"
+    stored = reg.get(identity)
+    assert stored.state == "quota_paused"
+    assert stored.provider_session_id == "sess-1"
+
+
+def test_mark_quota_paused_residue_retains_permit(tmp_path, monkeypatch):
+    # (b) kill NOT verified (residue) → completed_with_residue, permit RETAINED, NOT paused
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    released = []
+    monkeypatch.setattr(sup, "_release_permit", lambda rec: released.append(rec.session_name))
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: False)
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "completed_with_residue"
+    assert released == [], "a residue (unverified kill) must NOT release the permit"
+    stored = reg.get(identity)
+    assert stored.state == "completed_with_residue"
+    assert stored.quota_classification["paused"] is False
+    assert stored.quota_classification["refusal"] == "kill_unverified"
+
+
+def test_mark_quota_paused_effectful_never_kills(tmp_path, monkeypatch):
+    # (c) an effectful sentinel present BEFORE the kill → refuse, _kill_job NEVER called,
+    # record untouched
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    kills = []
+    monkeypatch.setattr(sup, "_sentinel", lambda rec: {"parse_status": "ok"})  # effectful
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: (kills.append(1) or True))
+    with pytest.raises(SupervisorError):
+        sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert kills == [], "an effectful job is refused BEFORE any kill"
+    assert reg.get(identity).state == "exited_no_sentinel"
+
+
+def test_mark_quota_paused_post_kill_effectful_is_residue(tmp_path, monkeypatch):
+    # (d) the check/kill RACE: a live child writes an effectful sentinel DURING the kill.
+    # Pre-kill sentinel is non-effectful → proceed → verified kill → post-kill re-read finds
+    # the effect → completed_with_residue (non-success), NEVER quota_paused.
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    seen = {"n": 0}
+
+    def racing_sentinel(rec):
+        seen["n"] += 1
+        return None if seen["n"] == 1 else {"parse_status": "ok"}  # effect appears post-kill
+
+    kills = []
+    monkeypatch.setattr(sup, "_sentinel", racing_sentinel)
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: (kills.append(1) or True))
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "completed_with_residue", "post-kill effect is never a success/pause"
+    assert kills, "the kill ran; the effect is detected by the post-kill re-read"
+    stored = reg.get(identity)
+    assert stored.state == "completed_with_residue"
+    assert stored.quota_classification["paused"] is False
+    assert stored.quota_classification["refusal"] == "effectful_post_kill"
