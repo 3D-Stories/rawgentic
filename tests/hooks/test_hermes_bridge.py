@@ -1,9 +1,10 @@
 """Tests for hooks/hermes_bridge.py — #568 Phase 1 two-way owner-reply bridge.
 
 No live BlueBubbles creds: a fake transport (callable) and fake notify (callable)
-are injected. State lives under tmp_path. Covers correlation (token-only, exact),
-the two-store never-lose crash model, fail-safe classifications, untrusted-input
-handling, and secret redaction.
+are injected. State lives under tmp_path. Covers correlation (quote-first via
+replyToGuid == sent_guid, token-fallback — legacy bracketed exact / new RG-NNNNNN
+word-boundary, #584), the sent-GUID self-query, the two-store never-lose crash
+model, fail-safe classifications, untrusted-input handling, and secret redaction.
 """
 import json
 import os
@@ -25,6 +26,7 @@ from hermes_bridge import (  # noqa: E402
     _is_owner_inbound,
     _safe_component,
     ask_owner,
+    interpret_reply,
     classify_batch,
     deliver,
     is_echo_or_empty,
@@ -61,11 +63,15 @@ def _ask(state_dir, token="[RG-ABCDEF012345]", sent_ts=500_000, run_id="run1",
 # ---------- token ----------
 def test_mint_token_shape():
     tok = mint_token()
-    assert re.fullmatch(r"\[RG-[0-9A-F]{12}\]", tok), tok
+    assert re.fullmatch(r"RG-\d{6}", tok), tok  # #584: short phone-typeable form
 
 
-def test_mint_token_unique():
-    assert len({mint_token() for _ in range(200)}) == 200  # 48-bit, no dupes at this scale
+def test_mint_token_unique_deterministic(monkeypatch):
+    # #584: deterministic — stubbed randbelow, never a probabilistic 200-draw (2% flaky in 1e6)
+    seq = iter([7, 7, 42])
+    monkeypatch.setattr("hermes_bridge.secrets.randbelow", lambda n: next(seq))
+    a, b, c = mint_token(), mint_token(), mint_token()
+    assert a == b == "RG-000007" and c == "RG-000042"
 
 
 # ---------- ask_owner ----------
@@ -75,8 +81,10 @@ def test_ask_owner_sent_on_rc_2xx(tmp_path):
                     notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 111)
     assert rec["status"] == "sent"
     assert rec["sent_ts_ms"] == 111
-    assert re.fullmatch(r"\[RG-[0-9A-F]{12}\]", rec["token"])
-    assert rec["token"] in sent[0] and "reply to this message" in sent[0]
+    assert re.fullmatch(r"RG-\d{6}", rec["token"])
+    assert rec["token"] in sent[0] and "Reply to this message" in sent[0]
+    # #584 AC6: ref line is the LAST line, bare — no punctuation after the token
+    assert sent[0].splitlines()[-1] == f"Reply to this message — ref {rec['token']}"
     # persisted, readable
     p = tmp_path / "asks" / f"{rec['token']}.json"
     assert json.loads(p.read_text())["status"] == "sent"
@@ -92,13 +100,332 @@ def test_ask_owner_delivery_unknown_on_send_failure_no_resend(tmp_path):
 
 def test_ask_owner_token_create_if_absent(tmp_path, monkeypatch):
     # force a collision on the first mint, then a fresh one
-    seq = iter(["[RG-AAAAAAAAAAAA]", "[RG-AAAAAAAAAAAA]", "[RG-BBBBBBBBBBBB]"])
+    seq = iter(["RG-111111", "RG-111111", "RG-222222"])
     monkeypatch.setattr("hermes_bridge.mint_token", lambda: next(seq))
     r1 = ask_owner("q1", "r1", state_dir=tmp_path, notify=lambda m: "200", now_ms=lambda: 1)
     r2 = ask_owner("q2", "r2", state_dir=tmp_path, notify=lambda m: "200", now_ms=lambda: 2)
-    assert r1["token"] == "[RG-AAAAAAAAAAAA]"
-    assert r2["token"] == "[RG-BBBBBBBBBBBB]"  # collided token re-minted, first ask not clobbered
-    assert json.loads((tmp_path / "asks" / "[RG-AAAAAAAAAAAA].json").read_text())["question"] == "q1"
+    assert r1["token"] == "RG-111111"
+    assert r2["token"] == "RG-222222"  # collided token re-minted, first ask not clobbered
+    assert json.loads((tmp_path / "asks" / "RG-111111.json").read_text())["question"] == "q1"
+
+
+def test_ask_owner_options_template_ref_last_bare(tmp_path):
+    # #584 AC6: options variant — ref line last, bare token, no trailing punctuation
+    sent = []
+    rec = ask_owner("pick", "runO", state_dir=tmp_path,
+                    notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 9,
+                    options=[{"id": 1, "label": "a"}, {"id": 2, "label": "b"}],
+                    response_mode="option_required")
+    lines = sent[0].splitlines()
+    assert lines[-1] == f"Reply with the option number — ref {rec['token']}"
+    assert not re.search(re.escape(rec["token"]) + r"[^\s]", sent[0])
+
+
+# ---------- quote-match arm + widened token match (#584 AC2/3/4/7) ----------
+# Fixture pinned from the 2026-07-22 live spike (owner reply-gesture, BlueBubbles store):
+# locks the field NAME and population against server drift (#584 F4).
+SPIKE_QUOTED_REPLY = {"guid": "E0C1B981-6C1A-4449-A22F-24998DF95516",
+                      "dateCreated": 1784744179014,
+                      "text": "1 [RG-BC4759D5E568]",
+                      "isFromMe": False,
+                      "replyToGuid": "8034046D-8E5D-4D7A-9B0D-23163514E523",
+                      "handle": {"address": OWNER}}
+
+
+def _own(guid, text, ts=200, reply_to=None):
+    m = {"guid": guid, "dateCreated": ts, "text": text, "isFromMe": False,
+         "handle": {"address": OWNER}}
+    if reply_to is not None:
+        m["replyToGuid"] = reply_to
+    return m
+
+
+def test_spike_fixture_row_matches_through_production_path():
+    # Recorded-fixture sanity (adversarial A3): the verbatim live row must quote-match
+    # through classify_batch itself — locks the replyToGuid field NAME as consumed by
+    # the production path, not just as a dict key. (Live drift detection is out of
+    # scope; a server change surfaces when a NEW capture disagrees with this shape.)
+    disp, m = classify_batch([SPIKE_QUOTED_REPLY], "RG-999999", set(), "q?",
+                             sent_guid=SPIKE_QUOTED_REPLY["replyToGuid"])
+    assert disp == "matched" and m["guid"] == SPIKE_QUOTED_REPLY["guid"]
+
+
+def test_classify_quote_match_no_token_free_text():
+    disp, m = classify_batch([_own("g1", "any words at all", reply_to="SG")],
+                             "RG-123456", set(), "q?", sent_guid="SG")
+    assert disp == "matched" and m["guid"] == "g1"
+
+
+def test_classify_quote_match_option_mode_selected():
+    opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+    disp, m = classify_batch([_own("g1", "1", reply_to="SG")],
+                             "RG-123456", set(), "q?", sent_guid="SG",
+                             options=opts, response_mode="option_required")
+    assert disp == "matched" and m["guid"] == "g1"
+
+
+def test_classify_null_sent_guid_plain_message_never_matches():
+    # F1: the None==None wrong-delivery case — plain owner chatter, no token, no replyToGuid
+    disp, _ = classify_batch([_own("g1", "totally unrelated chatter")],
+                             "RG-123456", set(), "q?", sent_guid=None)
+    assert disp == "unmatched"
+
+
+def test_classify_null_sent_guid_quote_arm_inert():
+    disp, _ = classify_batch([_own("g1", "no token here", reply_to="whatever")],
+                             "RG-123456", set(), "q?", sent_guid=None)
+    assert disp == "unmatched"
+
+
+def test_classify_quote_plus_token_two_candidates_ambiguous():
+    msgs = [_own("g1", "no token", reply_to="SG"), _own("g2", "answer RG-123456")]
+    disp, _ = classify_batch(msgs, "RG-123456", set(), "q?", sent_guid="SG")
+    assert disp == "ambiguous"
+
+
+def test_classify_quote_match_answered_is_late():
+    disp, _ = classify_batch([_own("g1", "hi", reply_to="SG")],
+                             "RG-123456", set(), "q?", answered=True, sent_guid="SG")
+    assert disp == "late"
+
+
+def test_numeric_token_word_boundary_forms():
+    tok = "RG-482913"
+    assert classify_batch([_own("g1", "1 RG-482913")], tok, set(), "q?")[0] == "matched"
+    assert classify_batch([_own("g2", "answer [RG-482913]")], tok, set(), "q?")[0] == "matched"
+    # Step-11 R2: a LONE bracketed token is an echo, never an answer (never-wrong-act)
+    assert classify_batch([_own("g5", "[RG-482913]")], tok, set(), "q?")[0] == "echo_or_empty"
+    assert classify_batch([_own("g3", "RG-4829139")], tok, set(), "q?")[0] == "unmatched"
+    assert classify_batch([_own("g4", "XRG-482913")], tok, set(), "q?")[0] == "unmatched"
+
+
+def test_legacy_token_exact_bracketed_only_and_no_cross_match():
+    legacy = "[RG-AAAAAAAAAAAA]"
+    assert classify_batch([_own("g1", "ok [RG-AAAAAAAAAAAA]")], legacy, set(), "q?")[0] == "matched"
+    assert classify_batch([_own("g2", "ok RG-AAAAAAAAAAAA")], legacy, set(), "q?")[0] == "unmatched"
+    assert classify_batch([_own("g3", "[RG-AAAAAAAAAAAA]")], "RG-123456", set(), "q?")[0] == "unmatched"
+
+
+def test_poll_once_threads_sent_guid_quote_match(tmp_path):
+    rec = _ask(tmp_path, token="RG-123456", sent_ts=100)
+    rec["sent_guid"] = "SG"
+    (tmp_path / "asks" / "RG-123456.json").write_text(json.dumps(rec))
+    tr = lambda **kw: [_own("g1", "quoted answer, no ref", ts=200, reply_to="SG")]
+    out = poll_once(rec, state_dir=tmp_path, transport=tr)
+    assert out["disposition"] == "matched"
+
+
+def test_poll_once_since_filter_applies_to_quoted_replies(tmp_path):
+    rec = _ask(tmp_path, token="RG-123456", sent_ts=100)
+    rec["sent_guid"] = "SG"
+    # upstream _is_owner_inbound since-ts filter applies uniformly regardless of match arm
+    # (classify_batch itself is timestamp-agnostic — 8a F3 rename for honesty)
+    tr = lambda **kw: [_own("g1", "stale quote", ts=50, reply_to="SG")]
+    out = poll_once(rec, state_dir=tmp_path, transport=tr)
+    assert out["disposition"] in ("none", "unmatched")
+
+
+# ---------- property suite: widened-matcher never-wrong-act (#584 AC4, F6) ----------
+# Exhaustive over the enumerated domain (repo pattern: hermes_policy property tests) —
+# stdlib parametrization, no hypothesis dep.
+NEW_TOK, LEGACY_TOK, SG, OTHER = "RG-123456", "[RG-AAAAAAAAAAAA]", "SGUID", "OTHERGUID"
+
+
+def _msg_text(form, ask_token):
+    if form == "match_bare":
+        return f"answer {ask_token.strip('[]') if ask_token.startswith('[') else ask_token}"
+    if form == "match_exact":
+        return f"answer {ask_token}"
+    if form == "cross":  # the OTHER token family — must never match
+        other = LEGACY_TOK if not ask_token.startswith("[") else NEW_TOK
+        return f"answer {other}"
+    return "plain chatter"
+
+
+@pytest.mark.parametrize("ask_token", [NEW_TOK, LEGACY_TOK])
+@pytest.mark.parametrize("form", ["match_bare", "match_exact", "cross", "none"])
+@pytest.mark.parametrize("reply_to", [None, SG, OTHER])
+@pytest.mark.parametrize("sent_guid", [None, SG])
+def test_property_single_message_match_iff_valid_arm(ask_token, form, reply_to, sent_guid):
+    text = _msg_text(form, ask_token)
+    msg = _own("g1", text, reply_to=reply_to)
+    disp, m = classify_batch([msg], ask_token, set(), "q?", sent_guid=sent_guid)
+    quote_valid = bool(sent_guid) and bool(reply_to) and reply_to == sent_guid
+    if ask_token.startswith("["):
+        token_valid = form == "match_exact"  # legacy: exact bracketed substring only
+    else:
+        token_valid = form in ("match_bare", "match_exact")  # brackets optional
+    expected_match = quote_valid or token_valid
+    assert (disp == "matched") == expected_match, (disp, text, reply_to, sent_guid)
+    if disp == "matched":
+        assert m["guid"] == "g1"
+
+
+@pytest.mark.parametrize("sent_guid", [None, SG])
+def test_property_two_distinct_candidates_never_matched(sent_guid):
+    msgs = [_own("g1", f"a {NEW_TOK}"), _own("g2", f"b {NEW_TOK}", reply_to=sent_guid or "x")]
+    disp, _ = classify_batch(msgs, NEW_TOK, set(), "q?", sent_guid=sent_guid)
+    assert disp != "matched"  # two fresh candidates → ambiguous, deliver nothing
+
+
+@pytest.mark.parametrize("reply_to", [None, SG, OTHER])
+def test_property_answered_never_rematches(reply_to):
+    msg = _own("g1", f"x {NEW_TOK}", reply_to=reply_to)
+    disp, _ = classify_batch([msg], NEW_TOK, set(), "q?", answered=True, sent_guid=SG)
+    assert disp == "late"
+
+
+# ---------- interpret_reply token-strip + quote-only (#584 AC5) ----------
+def test_interpret_quote_only_number_no_ref():
+    opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+    assert interpret_reply("1", token="RG-123456", options=opts,
+                           response_mode="option_required") == ("selected", 1)
+
+
+def test_interpret_bracketed_new_form_token_stripped():
+    opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+    assert interpret_reply("1 [RG-482913]", token="RG-482913", options=opts,
+                           response_mode="option_required") == ("selected", 1)
+
+
+def test_interpret_nonsense_still_unmatched_under_option_required():
+    opts = [{"id": 1, "label": "a"}]
+    assert interpret_reply("banana", token="RG-482913", options=opts,
+                           response_mode="option_required") == ("unmatched_option", None)
+
+
+# ---------- sent-GUID self-query (#584 AC1) ----------
+def _mk_row(guid, ts, text, from_me=True):
+    return {"guid": guid, "dateCreated": ts, "text": text, "isFromMe": from_me,
+            "handle": {"address": OWNER}}
+
+
+def test_ask_owner_captures_sent_guid_exact_text_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    sent = []
+    calls = []
+
+    def tr(**kw):
+        calls.append(kw)
+        # ACK echo is EARLIER-or-equal and also contains the token; exact-text row must win
+        return [_mk_row("ACK", 111, "Received: " + sent[0].splitlines()[-1]),
+                _mk_row("ASK", 111, sent[0])]
+
+    rec = ask_owner("go?", "runG", state_dir=tmp_path,
+                    notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 111,
+                    transport=tr, sleep=lambda s: None)
+    assert rec["sent_guid"] == "ASK"
+    assert calls, "self-query ran"
+
+
+def test_ask_owner_sent_guid_none_when_only_ack_echoes(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    # Adversarial A1: token-containing rows that never equal the full ask text are
+    # ACK contamination — NEVER guid evidence; exhaust retries, return None
+    def tr(**kw):
+        return [_mk_row("ACK1", 500, "echo tok " + tok_holder[0]),
+                _mk_row("ACK2", 200, "other echo " + tok_holder[0])]
+    tok_holder = [""]
+    orig_notify = lambda m: (tok_holder.__setitem__(0, m.splitlines()[-1].split()[-1]), "200")[1]
+    calls = []
+    rec = ask_owner("go?", "runE", state_dir=tmp_path, notify=orig_notify,
+                    now_ms=lambda: 100,
+                    transport=lambda **kw: (calls.append(1), tr(**kw))[1],
+                    sleep=lambda s: None)
+    assert rec["sent_guid"] is None
+    assert len(calls) == 3  # kept polling for an exact row
+
+
+def test_ask_owner_sent_guid_exact_appears_on_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    sent = []
+    state = {"n": 0}
+
+    def tr(**kw):
+        state["n"] += 1
+        if state["n"] < 2:
+            return [_mk_row("ACK", 150, "Received " + sent[0].splitlines()[-1])]
+        return [_mk_row("ASK", 160, sent[0])]
+
+    rec = ask_owner("go?", "runL", state_dir=tmp_path,
+                    notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 100,
+                    transport=tr, sleep=lambda s: None)
+    assert rec["sent_guid"] == "ASK" and state["n"] == 2
+
+
+def test_ask_owner_sent_guid_none_on_miss_with_bounded_retry(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    sleeps = []
+    calls = []
+    rec = ask_owner("go?", "runM", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: (calls.append(1), [])[1],
+                    sleep=lambda s: sleeps.append(s))
+    assert rec["sent_guid"] is None
+    assert len(calls) == 3 and len(sleeps) == 2  # ≤3 polls, sleep between only
+
+
+def test_ask_owner_sent_guid_none_on_transport_failure_ask_still_sent(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    def tr(**kw):
+        raise BridgeUnreachable("down")
+    rec = ask_owner("go?", "runF", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=tr, sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+
+
+def test_ask_owner_sent_guid_none_on_unexpected_transport_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    # Adversarial A2: ANY Exception (not just the anticipated trio) degrades to None
+    def tr(**kw):
+        raise RuntimeError("unexpected")
+    rec = ask_owner("go?", "runU", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=tr, sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+
+
+def test_ask_owner_sent_guid_none_on_sleep_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    def boom(_s):
+        raise OSError("sleep broke")
+    rec = ask_owner("go?", "runS", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: [], sleep=boom)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+
+
+def test_ask_owner_no_self_query_on_send_failure(tmp_path):
+    calls = []
+    rec = ask_owner("go?", "runX", state_dir=tmp_path, notify=lambda m: "000",
+                    now_ms=lambda: 1, transport=lambda **kw: (calls.append(1), [])[1],
+                    sleep=lambda s: None)
+    assert rec["status"] == "delivery_unknown" and rec["sent_guid"] is None
+    assert not calls  # nothing to find — the send never landed
+
+
+def test_ask_owner_sent_guid_none_on_malformed_rows_ask_still_persisted(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: OWNER)  # CI has no bluebubbles.env
+    # 8a F1: a non-dict row must degrade to sent_guid None — never crash ask_owner
+    # after the send already landed (design: "never fails the ask")
+    rec = ask_owner("go?", "runMal", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: [None, "notadict", 42],
+                    sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+    p = tmp_path / "asks" / f"{rec['token']}.json"
+    assert json.loads(p.read_text())["status"] == "sent"  # final record persisted
+
+
+def test_ask_owner_no_self_query_when_recipient_unresolved(tmp_path, monkeypatch):
+    # 8a F2: unresolved recipient short-circuits — no queries, no sleeps (fail-closed convention)
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: None)
+    calls = []
+    rec = ask_owner("go?", "runR", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: (calls.append(1), [])[1],
+                    sleep=lambda s: None)
+    assert rec["sent_guid"] is None and not calls
+
+
+def test_ask_owner_no_transport_means_no_self_query(tmp_path):
+    rec = ask_owner("go?", "runN", state_dir=tmp_path, notify=lambda m: "200", now_ms=lambda: 1)
+    assert rec["sent_guid"] is None  # fail-open: quote arm inert, token path unaffected
 
 
 # ---------- classify_batch (pure) ----------
@@ -136,6 +463,11 @@ def test_classify_late_when_consumed():
     tok = "[RG-ABCDEF012345]"
     disp, _ = classify_batch([_msg("g1", f"yes {tok}")], tok, {"g1"}, "Proceed?")
     assert disp == "late"
+
+
+def test_is_echo_or_empty_lone_bracketed_new_form():
+    # Step-11 R2 red-first: strip must mirror interpret_reply's two-stage form
+    assert is_echo_or_empty("[RG-482913]", "RG-482913", "q?")
 
 
 def test_is_echo_or_empty():

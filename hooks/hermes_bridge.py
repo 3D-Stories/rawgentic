@@ -7,8 +7,10 @@ store (idempotent read) rather than rebuilding the Hermes gateway. See
 docs/planning/2026-07-22-568-hermes-reply-bridge-design.md.
 
 Design invariants (the load-bearing ones):
-- Correlation is TOKEN-ONLY, EXACT: a reply matches an open ask iff the exact
-  bracketed token appears in its text. No fuzzy / positional fallback.
+- Correlation is QUOTE-FIRST, TOKEN-FALLBACK (#584): a reply matches an open ask
+  iff it quote-replies the ask's own sent message (replyToGuid == sent_guid, both
+  truthy) OR carries the ask's token (legacy bracketed exact; new RG-NNNNNN at a
+  word boundary, brackets optional). No fuzzy / positional fallback.
 - Never lose: two stores. `observed.jsonl` only prevents re-appending an
   observation; it NEVER gates delivery. `consumed.jsonl` is the sole delivery
   gate and is written AFTER the durable inbox file. A crash before consume →
@@ -41,11 +43,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atomic_write_lib import atomic_write_text  # noqa: E402
 
 OWNER_ENV_KEYS = ("BB_URL", "BB_RECIPIENT", "BLUEBUBBLES_PASSWORD")
-TOKEN_RE = re.compile(r"\[RG-[0-9A-F]{12}\]")
+# #584: two-format — legacy 48-bit bracketed asks still in flight (AC7) + new short numeric form
+TOKEN_RE = re.compile(r"\[RG-[0-9A-F]{12}\]|\bRG-\d{6}\b")
 RESPONSE_MODES = ("free_text", "option_required", "option_or_text")  # #568 Phase-2
 MAX_REPLY = 8000
 POLL_LIMIT = 25
 MAX_POLL_PAGES = 20  # backlog-stop cap; overflow → fail-closed, never a silent "no reply"
+SELF_QUERY_SKEW_MS = 5000   # #584: clock skew allowance around the ask's sent_ts
+SELF_QUERY_ATTEMPTS = 3     # #584: bounded send-propagation retry (fixed count, no deadline clock)
+SELF_QUERY_RETRY_S = 2
 _TRUNC = "…[truncated]"
 _BB_CONF_DEFAULT = os.path.expanduser("~/.config/vm-update-monitor/bluebubbles.env")
 
@@ -62,8 +68,12 @@ def _now_ms() -> int:
 
 
 def mint_token() -> str:
-    """High-entropy (48-bit) bracketed exact-match token, e.g. [RG-A1B2C3D4E5F6]."""
-    return "[RG-" + secrets.token_hex(6).upper() + "]"
+    """Short phone-typeable correlation token, e.g. RG-482913 (#584, owner decision).
+
+    Correlation-only — the trust boundary is the owner-handle filter, never the token.
+    The RG- prefix makes accidental all-numeric collision (a pasted OTP/order number)
+    impossible; collision among persisted asks is handled by the O_EXCL create loop."""
+    return f"RG-{secrets.randbelow(1000000):06d}"
 
 
 def redact(text: str) -> str:
@@ -84,8 +94,12 @@ def _safe_component(name: str) -> str:
 
 
 def is_echo_or_empty(text: str, token: str, question: str) -> bool:
-    """A reply that is just the token, blank, or the echoed question is not an answer."""
-    rest = text.replace(token, "").strip()
+    """A reply that is just the token, blank, or the echoed question is not an answer.
+
+    Two-stage strip mirrors interpret_reply (#584 Step-11 R2): a lone bracketed
+    new-form token ("[RG-482913]") must strip clean, not leave "[]" and pass as
+    an answer — never-wrong-act."""
+    rest = text.replace(f"[{token}]", "").replace(token, "").strip()
     if not rest:
         return True
     return _norm(rest) == _norm(question or "")
@@ -136,7 +150,9 @@ def interpret_reply(raw: str, *, token: str, options, response_mode: str):
     No options → always 'free_text' (Phase-1 behavior). Never-wrong-act: anything that does not
     resolve to exactly one option is 'ambiguous' (deliver nothing) or, under option_required,
     'unmatched_option'. Label collisions are impossible (blocked at creation)."""
-    rest = (raw or "").replace(token, "").strip()
+    # #584: strip the ref if present — bracketed form first ("1 [RG-482913]" must not
+    # leave a dangling "[]"); quote-only replies carry no ref and pass through unchanged.
+    rest = (raw or "").replace(f"[{token}]", "").replace(token, "").strip()
     if not options:
         # #568 Step-11 Codex5: an option_required ask with no options never silently free-texts.
         return ("unmatched_option", None) if response_mode == "option_required" else ("free_text", None)
@@ -191,7 +207,7 @@ def maybe_send_clarification(ask_record, disposition, *, state_dir, notify=None)
     notify = notify or _default_notify
     opts = ask_record.get("options") or []
     msg = ("Your reply didn't match an option. Reply with the number:\n"
-           f"{render_options(opts)}\n(keep ref {token})")
+           f"{render_options(opts)}\nKeep ref {token}")
     # Step-11 Codex8: mark sent ONLY on a 2xx — a failed send stays retryable (the owner never
     # got it), so a later poll can re-send exactly once when transport recovers.
     code = str(notify(msg))
@@ -309,14 +325,52 @@ def _close_ask(state_dir, token: str, guid: str) -> None:
 # --------------------------------------------------------------------------- #
 # outbound ask
 # --------------------------------------------------------------------------- #
+def _capture_sent_guid(msg_text, token, sent_ts, recipient, transport, sleep):
+    """#584 AC1: find our own just-sent ask in the store and return its guid, or None.
+
+    Hazard (live-probed): the gateway persona ACK-echoes the token back as isFromMe,
+    so token-substring alone is contaminated. Pick: exact-full-text row first, else
+    earliest dateCreated (the ask precedes any echo); deterministic (ts, guid) tie-break.
+    Fail-open — any miss/failure returns None (quote arm stays inert; token path intact)."""
+    if not recipient:  # unresolved recipient is a misconfig → fail CLOSED, no queries (8a F2)
+        return None
+    for attempt in range(SELF_QUERY_ATTEMPTS):
+        try:
+            rows = transport(chat_guid=_chat_guid(recipient),
+                             since_ms=sent_ts - SELF_QUERY_SKEW_MS, limit=POLL_LIMIT)
+            # EXACT-full-text rows only (adversarial A1): token-containing rows that are
+            # not the ask verbatim are gateway ACK contamination — never guid evidence.
+            # No exact row yet → keep polling; exhausted → None (quote arm stays inert).
+            exact = [r for r in rows or []
+                     if isinstance(r, dict)
+                     and r.get("isFromMe") and r.get("guid")
+                     and (r.get("text") or "") == msg_text
+                     and (r.get("dateCreated") or 0) >= sent_ts - SELF_QUERY_SKEW_MS]
+            if exact:
+                return min(exact, key=lambda r: ((r.get("dateCreated") or 0), r.get("guid") or ""))["guid"]
+            if attempt < SELF_QUERY_ATTEMPTS - 1:
+                sleep(SELF_QUERY_RETRY_S)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # A2: the self-query must NEVER fail the ask after the send landed —
+            # any Exception (incl. a broken sleep) degrades to None. BaseException
+            # (KeyboardInterrupt/SystemExit) deliberately passes through.
+            return None
+    return None
+
+
 def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
-              options=None, response_mode="free_text"):
+              options=None, response_mode="free_text", transport=None, sleep=None):
     """Mint a token, record the ask (create-if-absent), send it, return the record.
 
     #568 Phase-2: an optional numbered-option set. `options` (list of {id,label}) is validated
     FAIL-CLOSED before anything is minted or sent — a colliding/invalid set raises and no ask is
     created or delivered. `response_mode` ∈ RESPONSE_MODES. Default (no options, free_text) is
-    byte-identical to Phase-1."""
+    byte-identical to Phase-1.
+
+    #584: `transport` (optional) — when provided AND the send lands (2xx), a bounded
+    post-send self-query captures the sent message's own guid into rec["sent_guid"]
+    for quote-match correlation; `sleep` is the injectable retry delay. No transport
+    → no self-query, sent_guid stays None (token path unaffected)."""
     if response_mode not in RESPONSE_MODES:
         raise ValueError(f"response_mode must be one of {RESPONSE_MODES}: {response_mode!r}")
     if options is not None:
@@ -350,13 +404,21 @@ def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
         json.dump(rec, f)
 
     if options is not None:
+        # #584 AC6: ref line LAST and bare — no punctuation after the token (test-pinned)
         msg = (f"{question}\n{render_options(options)}\n"
-               f"(reply with the option number, keep ref {token})")
+               f"Reply with the option number — ref {token}")
     else:
-        msg = f"{question}\n(reply to this message, keep ref {token})"
+        msg = f"{question}\nReply to this message — ref {token}"
     code = str(notify(msg))
     rec["status"] = "sent" if _is_2xx(code) else "delivery_unknown"
-    atomic_write_text(str(path), json.dumps(rec))  # overwrite the status only
+    # #584 AC1: capture our sent message's guid so replies can quote-match. Only when a
+    # transport was explicitly provided (never ambient live I/O from a test's default path)
+    # and the send landed (2xx) — otherwise fail-open to null (token path unaffected).
+    rec["sent_guid"] = None
+    if transport is not None and _is_2xx(code):
+        rec["sent_guid"] = _capture_sent_guid(msg, token, now, rec["recipient"],
+                                              transport, sleep or time.sleep)
+    atomic_write_text(str(path), json.dumps(rec))  # overwrite status + sent_guid only
     return rec
 
 
@@ -382,21 +444,33 @@ def _default_notify(msg: str) -> str:
 # --------------------------------------------------------------------------- #
 # inbound classify + poll
 # --------------------------------------------------------------------------- #
+def _token_in_text(token, text):
+    """#584 token-type discrimination — the two forms never cross-match (AC7).
+
+    Legacy 48-bit asks (pre-upgrade, still open) match by exact bracketed substring;
+    the new short form matches at word boundaries, brackets optional ("[RG-482913]"
+    contains a word-bounded RG-482913)."""
+    if token.startswith("["):
+        return token in text
+    return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
+
+
 def classify_batch(owner_msgs, token, consumed_guids, question, answered=False,
-                   options=None, response_mode="free_text"):
+                   options=None, response_mode="free_text", sent_guid=None):
     """Pure classification over already-filtered owner-inbound messages.
 
     Returns (disposition, matched_msg_or_None). disposition in
     {matched, ambiguous, echo_or_empty, late, unmatched, none}.
 
-    A candidate answer must carry a guid AND the exact token AND be NUL-free;
-    guid-less, dup-guid (first wins), and NUL-bearing messages are dropped from
-    the answer set (they deliver nothing, never crash) — so the delivery path
-    only ever sees a clean, guid-bearing message.
+    A candidate answer must carry a guid, be NUL-free, and EITHER quote-match the
+    ask (#584: `sent_guid` truthy AND the message's `replyToGuid` truthy AND equal —
+    never a bare `==`, so null×null can never wrong-deliver) OR token-match per
+    `_token_in_text`. Guid-less, dup-guid (first wins), and NUL-bearing messages are
+    dropped from the answer set (they deliver nothing, never crash).
 
     `answered` = the ask's token has already been closed by a prior delivery
     (never-double-act, keyed on the ASK TOKEN not the message guid): once True,
-    any further tokened message is `late`, never a second `matched`.
+    any further candidate message is `late`, never a second `matched`.
     """
     if not owner_msgs:
         return ("none", None)
@@ -404,7 +478,10 @@ def classify_batch(owner_msgs, token, consumed_guids, question, answered=False,
     for m in owner_msgs:
         g = m.get("guid")
         text = m.get("text") or ""
-        if not g or g in seen or token not in text:
+        if not g or g in seen:
+            continue
+        quote = bool(sent_guid) and bool(m.get("replyToGuid")) and m.get("replyToGuid") == sent_guid
+        if not quote and not _token_in_text(token, text):
             continue
         seen.add(g)
         if "\x00" in text:  # malformed → never a valid answer (fail-safe: deliver nothing)
@@ -466,7 +543,8 @@ def poll_once(ask_record, *, state_dir, transport=None, now_ms=None):  # pylint:
     disp, m = classify_batch(owner_msgs, token, consumed,
                              ask_record.get("question", ""), answered=answered,
                              options=ask_record.get("options"),
-                             response_mode=ask_record.get("response_mode", "free_text"))
+                             response_mode=ask_record.get("response_mode", "free_text"),
+                             sent_guid=ask_record.get("sent_guid"))
     return {"disposition": disp, "reply": m}
 
 
@@ -679,6 +757,27 @@ def self_check() -> int:
         rec2 = ask_owner("q", "sc2", state_dir=d, notify=lambda m: "000", now_ms=lambda: 1)
         chk(rec2["status"] == "delivery_unknown", "send-fail -> delivery_unknown")
 
+        # #584: sent-GUID capture + quote-only match end to end
+        sent3 = []
+
+        def tr_self(**k):
+            return [{"guid": "ASK3", "text": sent3[0], "dateCreated": 300,
+                     "isFromMe": True, "handle": {"address": "+14036189135"}}]
+
+        rec3 = ask_owner("Quote me?", "sc3", state_dir=d,
+                         notify=lambda m: (sent3.append(m), "200")[1], now_ms=lambda: 300,
+                         transport=tr_self, sleep=lambda s: None)
+        chk(rec3["sent_guid"] == "ASK3", "sent-guid captured via self-query")
+        rec3["recipient"] = "+14036189135"
+
+        def tr_quote(**k):
+            return [{"guid": "g9", "text": "sounds good", "dateCreated": 400,
+                     "isFromMe": False, "replyToGuid": "ASK3",
+                     "handle": {"address": "+14036189135"}}]
+
+        chk(poll_once(rec3, state_dir=d, transport=tr_quote)["disposition"] == "matched",
+            "quote-only reply (no ref) matched")
+
     print("SELF-CHECK PASS" if fails == 0 else f"SELF-CHECK FAIL ({fails})")
     return 0 if fails == 0 else 1
 
@@ -695,7 +794,7 @@ def main(argv=None) -> int:
         return self_check()
     sd = _default_state_dir()
     if args.cmd == "ask":
-        rec = ask_owner(args.question, args.run_id, state_dir=sd)
+        rec = ask_owner(args.question, args.run_id, state_dir=sd, transport=_default_transport)
         print(json.dumps(rec)); return 0
     if args.cmd == "poll":
         tok = _safe_component(args.token)
