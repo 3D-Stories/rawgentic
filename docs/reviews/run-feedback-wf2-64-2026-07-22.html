@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WF14 run-feedback — WF2 #64</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-report blockquote{background:var(--code);border-left-color:var(--accent)}
+.tpl-report tbody tr:nth-child(even){background:var(--code)}
+</style>
+</head>
+<body class="tpl-report">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 13:46 MDT</div>
+<h1>WF14 run-feedback — WF2 #64</h1>
+
+</header>
+<main>
+<h1>WF14 run-feedback — WF2 #64 (recall supersede + three-way KG rule)</h1>
+<p>Rubric: v2 (2026-07-10, #377) · Mode: full · Record: <code>projects/rawgentic-memorypalace/docs/measurements/run_records.jsonl</code> (last line, issue 64) · Assessed project: rawgentic-memorypalace · Plugin loaded: <strong>v3.90.3</strong> (cache); current main: <strong>v3.91.0</strong></p>
+<h2>At a glance</h2>
+<p><strong>Strong, proportional run — the small-standard lane sized the ceremony correctly, every mandatory step ran with a justified skip for each conditional, the single code-review dispatch caught a real defect on the documented happy path, and telemetry validated clean on first summarize with zero mismatches.</strong></p>
+<table>
+<thead><tr><th>Dimension</th><th>Score</th><th>One-line verdict</th></tr></thead>
+<tbody>
+<tr><td>Step fidelity</td><td><strong><span class="score">5/5</span></strong></td><td>All 11 mandatory markers present; every conditional skip (6/8a/13/14/15) quotes its met condition.</td></tr>
+<tr><td>Gate value</td><td><strong><span class="score">5/5</span></strong></td><td>Step 11 caught a real defect pre-merge (quote-stripping on the documented <code>supersede &quot;…&quot;</code> form), applied in <code>45b288a</code>.</td></tr>
+<tr><td>Prose clarity</td><td><strong><span class="score">4/5</span></strong></td><td>Ran without a failed command, but ≥2 path sentences needed interpretation (<code>claude_docs/</code> and <code>hooks/</code> relative-path resolution when bound-project ≠ cwd).</td></tr>
+<tr><td>Dispatch reliability</td><td><strong><span class="score">5/5</span></strong></td><td>1 reviewer dispatch, resolved first-try, non-vacuous, model-as-routed (inherit→session), fallback tier declared not improvised.</td></tr>
+<tr><td>Telemetry honesty</td><td><strong><span class="score">4/5</span></strong></td><td>Valid on first summarize (rc=0); all audited fields match except 2 documented known-limitations (session-level <code>usage</code>, pre-merge <code>outcome.merged</code>).</td></tr>
+<tr><td>Cost sanity</td><td><strong><span class="score">3/5</span></strong></td><td>Capped by the rubric — <code>usage</code> is session-level only, so per-run token proportionality is unverifiable. Lane decision itself was sound.</td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Best catch:</strong> Step 11 — the <code>supersede</code> parse never stripped surrounding quotes, so the documented <code>supersede &quot;rawgentic decided use-Zod -&gt; use-Valibot&quot;</code> invocation would have carried a leading <code>&quot;</code> onto <code>subject</code> and a trailing <code>&quot;</code> onto <code>new_object</code>. Reviewer cited Section 2 (search) which strips explicitly; fixed in <code>45b288a</code>. A real defect on the exact happy path, not ceremony.</li>
+<li><strong>Worst friction:</strong> <code>&lt;step-tracking&gt;</code> names <code>claude_docs/session_notes.md</code> as a bare relative path; with a bound project ≠ cwd there are TWO <code>claude_docs/</code> dirs (workspace-root + project) and the prose never says which. Interpreted as the project&#x27;s (matching prior #305/#306 runs). <code>skills/implement-feature/SKILL.md</code> <code>&lt;step-tracking&gt;</code>.</li>
+<li><strong>Routed:</strong> 0 plugin defects filed (none found; run is clean of broken machinery). 1 friction → mempalace memory. 1 telemetry-vocab observation → report-only, drop reason stated.</li>
+</ul>
+<h2>Evidence ledger (load-bearing facts)</h2>
+<table>
+<thead><tr><th>Fact</th><th>Tag</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>All 11 mandatory WF2 markers present</td><td>confirmed</td><td>session_notes.md:139–171, quoted below</td></tr>
+<tr><td>Lane = small-standard, correctly elected</td><td>confirmed</td><td><code>lane_decision</code> → <code>tier=lane</code> (simple_change, 0 impl files); marker :143</td></tr>
+<tr><td>Step 11 caught F1 (quote-strip), applied</td><td>confirmed</td><td>reviewer output (Medium 0.55); commit <code>45b288a</code>; marker :162</td></tr>
+<tr><td>Full suite 239/0 vs baseline 224/0 (+15)</td><td>confirmed</td><td>marker :160 / :171; two full runs per test-run-discipline</td></tr>
+<tr><td>Run-record valid, rc=0</td><td>confirmed</td><td><code>validate_record(strict=True)</code> → <code>[]</code></td></tr>
+<tr><td>0 loop-backs</td><td>confirmed</td><td><code>claude_docs/.wf2-state/64/loopback_counters.json</code> absent</td></tr>
+<tr><td><code>usage</code> is whole-session tokens</td><td>known-limitation</td><td>record <code>usage.capture_status=captured</code> but attribution is session-level by design</td></tr>
+<tr><td><code>outcome.merged=false</code> in record; PR later MERGED</td><td>known-limitation</td><td>Step 16 assembles pre-merge (<code>ecb79d7</code> merged after, on user approval)</td></tr>
+<tr><td>Plugin defect verification target</td><td>confirmed</td><td>loaded v3.90.3, main v3.91.0 — no defect found needing main re-verify</td></tr>
+</tbody>
+</table>
+<p>Quoted mandatory markers:</p>
+<ul>
+<li><code>### WF2 Step 1: Receive Issue — DONE (#64: manual issue, ACs present, library/no-CI/no-deploy)</code></li>
+<li><code>### WF2 Step 2: Analyze Codebase — DONE (#64: simple_change, small-standard lane eligible)</code></li>
+<li><code>### WF2 Step 3: Design — DONE (#64: … platform_apis 1 declared, feasibility gate ok=True [])</code></li>
+<li><code>### WF2 Step 4: Quality Gate Design — DONE (#64: rubric pass, feasibility gate ok=True)</code></li>
+<li><code>### WF2 Step 5: Implementation Plan — DONE (#64: 5-task checklist, lane, no high-risk)</code></li>
+<li><code>### WF2 Step 8: Implementation — DONE (#64: recall supersede + three-way rule)</code></li>
+<li><code>### WF2 Step 9: Quality Gate Drift — DONE (#64: all 4 ACs evidenced, full suite 239/0)</code></li>
+<li><code>### WF2 Step 11: Code Review — DONE (#64: 0 blocking; 3 sub-threshold findings applied)</code></li>
+<li><code>### WF2 Step 11.5: Security Scan — DONE (#64: PASS exit 0; visible skips iac n/a, sca osv nothing-to-scan)</code></li>
+<li><code>### WF2 Step 12: Create PR — DONE (#64: …/pull/65)</code></li>
+<li><code>### WF2 Step 16: Completion — DONE (#64: run-record rc=0 persisted; …)</code></li>
+</ul>
+<p>Conditional skips (each condition quoted): Step 6 <code>skipped (small-standard lane)</code>; Step 8a <code>skipped (#64: no riskLevel:high task in plan)</code>; Step 13 <code>skipped (#64: has_ci=false; PR #65 0 checks, CLEAN)</code>; Steps 14/15 skipped then Step 14 re-logged DONE after user-authorized merge.</p>
+<h2>Telemetry audit</h2>
+<table>
+<thead><tr><th>field</th><th>recorded</th><th>session evidence</th><th>verdict</th><th>impact</th><th>routing</th></tr></thead>
+<tbody>
+<tr><td>workflow</td><td>implement-feature</td><td>WF2 markers</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>workflow_version</td><td>3.90.3</td><td>cache base dir 3.90.3</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>issue</td><td>64 / feature / standard</td><td>#64 enhancement, simple_change</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>changes</td><td>8f / +230 / -5 / 3 commits</td><td><code>git diff --shortstat</code> = 8/230/5; 3 commits</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>tests</td><td>+15, 239/239</td><td>markers :160/:171 (baseline 224/0)</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>gates[]</td><td>4 pass, 6/8a/15 skip, 9 pass, 11 3/3 pass</td><td>markers match findings/resolved</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>security_scan</td><td>ran, 0/0, skip[iac,sca]</td><td>Step 11.5 PASS + skips</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>loop_backs</td><td>0/3</td><td>counters file absent</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>outcome</td><td>pr 65, merged=false, ci not_configured</td><td>merged AFTER assembly (Step 16 pre-merge)</td><td>known-limitation</td><td>none — assembly-time snapshot is correct</td><td>telemetry lane (store-lag pattern, #333)</td></tr>
+<tr><td>usage</td><td>23.8M in / 216k out, captured</td><td>whole-session tokens</td><td>known-limitation</td><td>per-run cost unverifiable</td><td>standing weak-spot #329/#330</td></tr>
+<tr><td>reviewer_kind</td><td>4=inline, 11=hand_rolled_multi</td><td>Step 11 ran 1 reviewer (lane)</td><td>match (per prescribed mapping)</td><td>vocab has no single-reviewer value</td><td>report-only note (below)</td></tr>
+<tr><td>dispatches[]</td><td>1× review/reviewer/ok/fallback</td><td>1 DISPATCH line + reviewer ran</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>goal_guard</td><td>set</td><td>Step 1b marker (set)</td><td>match</td><td>—</td><td>—</td></tr>
+<tr><td>lane</td><td>small-standard</td><td>Step 2 lane election</td><td>match</td><td>—</td><td>—</td></tr>
+</tbody>
+</table>
+<p>Verdict tally: <strong>match 11 · known-limitation 2 · mismatch 0 · missing-in-record 0 · missing-in-session 0 · unverifiable 0.</strong></p>
+<h2>Findings &amp; classification</h2>
+<p>1. <strong>PLUGIN FRICTION — session-notes path ambiguity.</strong> <code>&lt;step-tracking&gt;</code> in <code>skills/implement-feature/SKILL.md</code> names <code>claude_docs/session_notes.md</code> as a bare relative path. With a session bound to a project whose repo ≠ the cwd, two <code>claude_docs/</code> dirs exist (workspace-root, where <code>/switch</code> writes the registry, and the project&#x27;s). The prose never disambiguates; a weaker model could split the audit trail across both. Resolved here by matching the prior #305/#306 convention (project <code>claude_docs/</code>). → mempalace friction memory. 2. <strong>PLUGIN FRICTION (minor) — <code>reviewer_kind</code> vocab gap.</strong> The lane&#x27;s Step 11 runs ≥1 reviewer; a single-reviewer lane gate is still recorded <code>hand_rolled_multi</code> because the run-record enumeration maps Step 11 → <code>hand_rolled_multi</code> unconditionally and the vocab <code>{inline, reflexion, builtin_code_review, codex, hand_rolled_multi}</code> has no single-reviewer member. Accurate per the prescribed mapping, mildly misleading as telemetry. → report-only; <strong>dropped from filing</strong>: low value, and the lane&#x27;s single-reviewer semantics are documented — a vocab addition is not worth a cap slot. Note for #333 if the telemetry epic revisits reviewer_kind. 3. <strong>ENVIRONMENT (project-config) — no <code>modelRouting</code>.</strong> rawgentic-memorypalace has no <code>modelRouting</code>, so the review-lens fast-tier optimization didn&#x27;t apply and an opus reviewer read a small doc diff. Not a WF2 machinery defect — the project is flagged &quot;behind&quot; by the setup nag. No action here (WF14 is report-only toward project config).</p>
+<p>No PLUGIN DEFECTS found. No mandatory step skipped, no gate finding left unevaluated, no vacuous dispatch trusted, no telemetry mismatch — nothing reproducible to file against <code>3D-Stories/rawgentic</code>.</p>
+<h2>Routing</h2>
+<ul>
+<li><strong>Plugin defects filed:</strong> none (none found).</li>
+<li><strong>Telemetry improvements filed:</strong> none — finding #2 dropped with reason (low value / documented / likely-dup of the #333 reviewer_kind area); the two <code>known-limitation</code> verdicts are standing weak-spots already tracked at #329/#330/#333, linked not refiled.</li>
+<li><strong>Friction memorized:</strong> 1 mempalace memory (finding #1), id <code>drawer_rawgentic_feedback_dfb8058d03f795c31925301d</code> (save verified by returned id).</li>
+<li><strong>Cap:</strong> 0 of 3 used.</li>
+</ul>
+<h2>Environment note (WF14 delivery)</h2>
+<p>This assessment could not write its <code>.md</code>/<code>.html</code> pair to the mandated <code>projects/rawgentic/docs/reviews/</code> location: a concurrent session is bound to and actively working in <code>projects/rawgentic</code> (branch <code>feature/473-telemetry-baselines-alerts</code>, PR #569), and the <code>wal-bind-guard</code> PreToolUse hook blocks this session (bound to <code>rawgentic-memorypalace</code>) from writing into the rawgentic repo tree. This is the expected cross-session isolation guard — not forced. The <code>.md</code> is preserved in the session scratchpad; it must be landed under <code>projects/rawgentic/docs/reviews/</code> from a session bound to <code>rawgentic</code>, or with an explicit approved write.</p>
+<pre><code>WF RUN ASSESSMENT — WF2 @ v3.90.3 (issue #64, PR #65, lane small-standard) · rubric v2
+Fidelity 5/5 · Gates 5/5 · Clarity 4/5 · Dispatch 5/5 · Telemetry 4/5 · Cost 3/5
+Mode: full · Record: projects/rawgentic-memorypalace/docs/measurements/run_records.jsonl (issue 64)
+Best catch: Step 11 quote-stripping defect on the documented supersede invocation (applied 45b288a)
+Worst friction: claude_docs/session_notes.md path ambiguity when bound-project ≠ cwd — skills/implement-feature/SKILL.md &lt;step-tracking&gt;
+Telemetry verdicts: match 11 · known-limitation 2 · mismatch 0 · missing-in-record 0 · missing-in-session 0 · unverifiable 0
+Defects filed: none | Telemetry filed: none | Not filed (cap): 0 | Friction memorized: drawer_rawgentic_feedback_dfb8058d03f795c31925301d | Clean run: yes (no defects)
+Report: (blocked from projects/rawgentic/docs/reviews/ — see Environment note) · scratchpad copy preserved · Artifact: https://claude.ai/code/artifact/5678cae1-dbbd-4379-9599-37c29a49231e
+Inferred (unconfirmed) claims: none</code></pre>
+
+</main>
+<footer>Last updated: 2026-07-22 13:46 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
