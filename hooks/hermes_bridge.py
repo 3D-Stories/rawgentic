@@ -141,7 +141,9 @@ def interpret_reply(raw: str, *, token: str, options, response_mode: str):
     No options → always 'free_text' (Phase-1 behavior). Never-wrong-act: anything that does not
     resolve to exactly one option is 'ambiguous' (deliver nothing) or, under option_required,
     'unmatched_option'. Label collisions are impossible (blocked at creation)."""
-    rest = (raw or "").replace(token, "").strip()
+    # #584: strip the ref if present — bracketed form first ("1 [RG-482913]" must not
+    # leave a dangling "[]"); quote-only replies carry no ref and pass through unchanged.
+    rest = (raw or "").replace(f"[{token}]", "").replace(token, "").strip()
     if not options:
         # #568 Step-11 Codex5: an option_required ask with no options never silently free-texts.
         return ("unmatched_option", None) if response_mode == "option_required" else ("free_text", None)

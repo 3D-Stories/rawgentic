@@ -25,6 +25,7 @@ from hermes_bridge import (  # noqa: E402
     _is_owner_inbound,
     _safe_component,
     ask_owner,
+    interpret_reply,
     classify_batch,
     deliver,
     is_echo_or_empty,
@@ -211,6 +212,25 @@ def test_poll_once_quote_reply_before_ask_filtered(tmp_path):
     tr = lambda **kw: [_own("g1", "stale quote", ts=50, reply_to="SG")]
     out = poll_once(rec, state_dir=tmp_path, transport=tr)
     assert out["disposition"] in ("none", "unmatched")
+
+
+# ---------- interpret_reply token-strip + quote-only (#584 AC5) ----------
+def test_interpret_quote_only_number_no_ref():
+    opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+    assert interpret_reply("1", token="RG-123456", options=opts,
+                           response_mode="option_required") == ("selected", 1)
+
+
+def test_interpret_bracketed_new_form_token_stripped():
+    opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+    assert interpret_reply("1 [RG-482913]", token="RG-482913", options=opts,
+                           response_mode="option_required") == ("selected", 1)
+
+
+def test_interpret_nonsense_still_unmatched_under_option_required():
+    opts = [{"id": 1, "label": "a"}]
+    assert interpret_reply("banana", token="RG-482913", options=opts,
+                           response_mode="option_required") == ("unmatched_option", None)
 
 
 # ---------- sent-GUID self-query (#584 AC1) ----------
