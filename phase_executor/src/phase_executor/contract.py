@@ -368,7 +368,7 @@ def profile_from_manifest(manifest: dict, *, engine: str, worktree: Optional[str
     return profile
 
 
-_EFFORT_ENGINES = frozenset({"claude", "codex", "zhipuai"})
+_EFFORT_ENGINES = frozenset({"claude", "codex", "zhipuai", "hermes"})
 
 
 def resolve_effort(model: str, requested: Optional[str], *, engine: str) -> "EffortResolution":

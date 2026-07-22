@@ -25,6 +25,11 @@ SUPPORTED_EFFORT: dict = {
     "gpt-5.6-luna": _ALL,
     "gpt-5.5": ("low", "medium", "high", "xhigh"),
     "glm-5.2": _ALL,
+    # #568 Phase-2: the Hermes gateway has a FIXED internal model + no effort control; the seat
+    # pins medium so routing validation is satisfied, and the adapter accepts-but-does-not-forward
+    # it. Additive new-engine row — CAPABILITY_REVISION is deliberately NOT bumped (no existing
+    # model's capability changed; test_engine pins the produced revision at 1).
+    "hermes-agent": ("medium",),
 }
 
 # Per-ENGINE None policy (#465 S1/P2-S1): what a None-effort request becomes on the wire.

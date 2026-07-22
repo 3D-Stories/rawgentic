@@ -26,7 +26,8 @@ from .adapters.base import AdapterRequest
 from .quota import QuotaCoordinator
 
 # provider (lane) -> adapter engine family
-PROVIDER_ENGINE = {"anthropic": "claude", "openai": "codex", "zhipuai": "zhipuai"}
+PROVIDER_ENGINE = {"anthropic": "claude", "openai": "codex", "zhipuai": "zhipuai",
+                   "nousresearch": "hermes"}
 # Statuses that warrant a chain fallback: the transport failed to deliver a usable response.
 # Single-sourced in contract so engine (fallback) and enforce (breach classification) agree.
 AVAILABILITY_FAILURES = contract.AVAILABILITY_FAILURES
