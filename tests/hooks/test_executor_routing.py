@@ -524,7 +524,7 @@ def test_offload_is_wired_and_single_dispatchable():
 def test_offload_seat_resolves_in_default_table():
     # The default routing table carries the offload seat on the hermes/nousresearch lane.
     import pathlib
-    from phase_executor import routing as _routing
+    from phase_executor import routing as _routing  # pylint: disable=no-name-in-module
     rt = er.resolve_table(pathlib.Path("."), _routing)
     seat = rt.snapshot.seat("offload")
     assert seat["primary"]["model"] == "hermes-agent"
