@@ -1452,6 +1452,78 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
             "candidate_tree_sha": candidate_tree_sha, "correlation_id": ce}
 
 
+def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
+                ledger_closed: bool, await_timeout_s: float = 3600.0,
+                correlation_id: Optional[str] = None) -> dict:
+    """#559 C1 (design §2.7): the recovery-dispatch chokepoint. Refuses a ``run_closed`` ledger;
+    supplies the recovery gate (resolve target → ``check_pre`` → ``append_receipt`` →
+    ``RecoveryAuthorization`` | ``None``) so every relaunch is RECEIPTED; runs
+    ``supervisor.recover`` (the ONE gated relaunch path); then awaits each relaunched record,
+    appends its Observation bound to the recovery receipt, and ``verify_post``s. NO
+    ``append_expected`` — a recovery is an attempt under the ORIGINAL expected call, linked by
+    ``recovered_from`` (reconcile groups it, R1). Exit taxonomy mirrors ``dispatch``."""
+    import types as _types  # noqa: PLC0415
+    from phase_executor.supervisor import RecoveryAuthorization  # noqa: PLC0415
+    ce = correlation_id
+    audit_path = str(audit.path)
+    if ledger_closed:
+        return _err(EXIT_ENFORCEMENT, "run_closed_recover_refused",
+                    f"run {run_id!r} ledger is run_closed — recovery refused (#559)",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    nonce_by_sid, lane_by_sid = {}, {}
+
+    def gate(*, record, correlation_id, recovered_from):
+        targets = routing.eligible_targets(record.identity.seat, snapshot)
+        if not targets:
+            return None
+        resolved_target = targets[0]
+        receipt = enforce.check_pre(
+            record.identity.seat, resolved_target, snapshot, correlation_id=correlation_id,
+            attempt_id=f"{record.resume_attempts + 1}-recover", recovered_from=recovered_from)
+        audit.append_receipt(receipt)  # recorded BEFORE launch (R2); a fail verdict → refuse (None)
+        if receipt.verdict != "pass":
+            return None
+        nonce_by_sid[record.session_name] = receipt.nonce
+        lane_by_sid[record.session_name] = dict(resolved_target["lane"])
+        return RecoveryAuthorization(receipt.nonce, resolved_target, snapshot.config_digest)
+
+    try:
+        actions = supervisor.recover(run_id, dispatch_gate=gate)
+    except routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+    results, worst = [], EXIT_OK
+    for a in actions:
+        entry = {"seat": a.identity.seat, "run_id": a.identity.run_id, "action": a.action}
+        if a.action == "relaunch":
+            state, obs = supervisor.await_job(a.record, timeout_s=await_timeout_s)
+            entry["state"] = state
+            nonce = nonce_by_sid.get(a.record.session_name)
+            # every terminal state that HAS an observation binds it to the recovery receipt (R2):
+            # a post-receipt death would otherwise leave an observation-less receipt that reconcile
+            # catches as missing_obs.
+            if obs is not None and nonce:
+                stamped = dict(obs)
+                if lane_by_sid.get(a.record.session_name) and not stamped.get("dispatched_lane"):
+                    stamped["dispatched_lane"] = lane_by_sid[a.record.session_name]
+                audit.append_observation(stamped, receipt=_types.SimpleNamespace(nonce=nonce))
+            if state == "completed":
+                pc = enforce.verify_post(obs or {})
+                if not pc.ok:
+                    entry["verify"] = pc.reason
+                    worst = EXIT_ENFORCEMENT
+                elif not pc.verified:
+                    entry["verify"] = f"unverified: {pc.reason}"
+                    worst = max(worst, EXIT_AVAILABILITY)
+            else:
+                worst = max(worst, EXIT_AVAILABILITY)
+        elif a.action.startswith("relaunch_refused") or a.action in ("fail", "quarantine"):
+            worst = max(worst, EXIT_AVAILABILITY)
+        results.append(entry)
+    return {"ok": worst == EXIT_OK, "exit": worst, "action": "recover_run",
+            "run_id": run_id, "results": results, "audit_path": audit_path, "correlation_id": ce}
+
+
 def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlation_id=None, audit_path=None) -> dict:
     err = {"code": code, "message": message, "retryable": retryable}
     if correlation_id is not None:
@@ -2087,6 +2159,54 @@ def _do_probe_account(args) -> int:
     return _emit(probe_account(args.claude_bin))
 
 
+def _do_recover_run(args) -> int:
+    """#559 C1: CLI wrapper for the recovery-dispatch chokepoint. The live await/relaunch is the
+    RUN_LIVE seam (CELL-3b); the gate + run_closed refusal + reconcile-provenance logic is
+    unit-tested against recover_run with an injected supervisor."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        snap = resolve_table(repo_root, pe.routing).snapshot
+        paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
+    base = Path(repo_root)
+    registry_root = base / ".rawgentic" / "runtime" / "registry"
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        registry = JobRegistry(str(registry_root))
+        audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
+        ledger_closed = led.is_closed()
+        wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+        supervisor = pe.TmuxSupervisor(
+            snapshot=snap, quota=pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency()),
+            capture_root=paths["capture_root"], registry_root=str(registry_root),
+            registry=registry, worktree_manager=wm,
+            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+    except (OSError, ValueError, RegistryCorrupt) as e:
+        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
+                          retryable=False, correlation_id=args.correlation_id))
+    return _emit(recover_run(
+        run_id=args.run_id, supervisor=supervisor, snapshot=snap, audit=audit,
+        routing=pe.routing, enforce=pe.enforce, ledger_closed=ledger_closed,
+        correlation_id=args.correlation_id))
+
+
 def _do_collect_work_product(args) -> int:
     """#559 AC1: CLI wrapper — resolve the run's registry/audit + a WorktreeManager, then run the
     two-phase collect_work_product. The live git/CAS seam (CELL-1); the two-phase + idempotency
@@ -2366,6 +2486,14 @@ def main(argv: Optional[list] = None) -> int:
                         help="#559 AC2a: observe the active claude account identity (digest + categories, no raw PII)")
     pa.add_argument("--claude-bin", dest="claude_bin", default="claude")
     pa.set_defaults(fn=_do_probe_account)
+
+    rr = sub.add_parser("recover-run",
+                        help="#559 C1: ledgered/receipted recovery relaunch of quota_paused jobs")
+    rr.add_argument("--run-id", required=True, dest="run_id")
+    rr.add_argument("--correlation-id", dest="correlation_id")
+    rr.add_argument("--workspace", required=True)
+    rr.add_argument("--project", required=True)
+    rr.set_defaults(fn=_do_recover_run)
 
     cw = sub.add_parser("collect-work-product",
                         help="#559 AC1: promote a completed build's appendix work product + record an audited binding")

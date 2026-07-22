@@ -30,6 +30,18 @@ HAS_TMUX = shutil.which("tmux") is not None
 tmux_required = pytest.mark.skipif(not HAS_TMUX, reason="tmux not installed")
 
 
+def _pass_gate(sup):
+    """#559 C1: a fake recovery dispatch_gate returning a canned RecoveryAuthorization bound to the
+    resolved target + the supervisor's snapshot digest — the SAME contract production's gate uses
+    (there is exactly one gated relaunch path; tests never reach an ungated one)."""
+    def gate(*, record, correlation_id, recovered_from):
+        resolved_target = routing.eligible_targets(record.identity.seat, sup._snapshot)[0]
+        return supervisor.RecoveryAuthorization(
+            receipt_nonce="rcpt-" + uuid.uuid4().hex[:8], resolved_target=resolved_target,
+            config_digest=sup._snapshot.config_digest)
+    return gate
+
+
 def _lane(pool="claude"):
     return {"provider": "anthropic", "transport": "native",
             "auth_mode": "subscription_oauth", "credential_ref": None, "pool": pool}
@@ -179,7 +191,7 @@ def test_recover_adopts_live_matching_job(env_factory):
     env = env_factory(mode="ok_then_sleep")
     rec = env.launch()
     try:
-        actions = env.sup.recover(env.identity.run_id)
+        actions = env.sup.recover(env.identity.run_id, dispatch_gate=_pass_gate(env.sup))
         assert len(actions) == 1
         assert actions[0].action == "adopt"
         assert env.registry.get(env.identity).state == "running"
@@ -194,7 +206,7 @@ def test_recover_quarantines_digest_mismatch_kills_and_retains(env_factory):
     # tamper the spec: the recomputed command digest no longer matches the record
     spec_path = Path(env.tmp / "reg" / "specs" / f"{rec.session_name}.json")
     spec_path.write_text(json.dumps({"tampered": True}), encoding="utf-8")
-    actions = env.sup.recover(env.identity.run_id)
+    actions = env.sup.recover(env.identity.run_id, dispatch_gate=_pass_gate(env.sup))
     assert actions[0].action == "quarantine"
     stored = env.registry.get(env.identity)
     assert stored.state == "quarantined"
@@ -216,7 +228,7 @@ def test_recover_relaunches_quota_paused_under_cap(env_factory):
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
     # recovery happens in a SECOND supervisor over the same durable state (post-compaction)
     sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-42"})
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert actions[0].action == "relaunch"
     new = actions[0].record
     assert new.resume_attempts == rec.resume_attempts + 1
@@ -243,7 +255,7 @@ def test_relaunch_records_recovery_provenance(env_factory):
     assert state == "exited_no_sentinel"
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-9")
     sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-9"})
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert actions[0].action == "relaunch"
     new = actions[0].record
     assert new.recovered_from == "554-orig"
@@ -262,7 +274,7 @@ def test_relaunched_job_auto_asserts_resume_identity(env_factory):
     assert state == "exited_no_sentinel"
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
     sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-WRONG"})
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert actions[0].action == "relaunch"
     with pytest.raises(SupervisorError):  # no expect_session_id passed — the auto-assert fires
         sup2.await_job(actions[0].record, poll_s=0.2, timeout_s=30)
@@ -426,7 +438,7 @@ def test_recover_fail_at_resume_cap(tmp_path):
                          capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"),
                          registry=reg, run=dead_run)
     sup._identity_matches = lambda r: True  # isolate the CAP rule from spec-file plumbing
-    actions = sup.recover("r1")
+    actions = sup.recover("r1", dispatch_gate=_pass_gate(sup))
     assert actions[0].action == "fail"
     assert reg.get(identity).state == "failed"
 

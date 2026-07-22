@@ -64,6 +64,18 @@ class SpecTamperError(SupervisorError):
     from an ordinary relaunch failure (which fails the record) so ``recover`` can route it."""
 
 
+class RecoveryRefused(SupervisorError):
+    """A recovery relaunch was REFUSED before launch (#559 C1, design §2.7) — the gate declined
+    (``gate``) or the record is a mutating/build recovery (``mutating_recovery_unsupported``, R6).
+    The record STAYS quota_paused (no _finish, no launch); ``recover`` reports
+    ``relaunch_refused (<reason>)`` and continues. Distinct from SpecTamperError (quarantine) and
+    an ordinary relaunch failure (fail), so ``recover`` routes it without burning a resume slot."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"relaunch refused: {reason}")
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class PreflightResult:
     supported: bool
@@ -72,11 +84,23 @@ class PreflightResult:
 
 @dataclass(frozen=True)
 class RecoveryAction:
-    """One recover() verdict: ``action`` ∈ {adopt, quarantine, relaunch, fail};
-    ``record`` is the post-action record (the NEW record for a relaunch)."""
+    """One recover() verdict: ``action`` ∈ {adopt, quarantine, relaunch, fail, yielded,
+    relaunch_refused (...)}; ``record`` is the post-action record (the NEW record for a relaunch)."""
     identity: WorktreeIdentity
     action: str
     record: JobRecord
+
+
+@dataclass(frozen=True)
+class RecoveryAuthorization:
+    """#559 C1 (design §2.7): the typed authorization a recovery ``dispatch_gate`` returns — NOT a
+    bare nonce. ``receipt_nonce`` binds the minted-and-audited pre-receipt; ``resolved_target`` is
+    the concrete target ``check_pre`` bound its identity to (threaded into ``launch`` to prevent
+    re-resolution drift); ``config_digest`` is asserted equal to the relaunch's composed digest
+    before launch (P4-M — validated, not merely carried). A gate returning ``None`` REFUSES."""
+    receipt_nonce: str
+    resolved_target: dict
+    config_digest: str
 
 
 @dataclass(frozen=True)
@@ -1033,11 +1057,18 @@ class TmuxSupervisor:
         # the job (recover() yields it), True = this process owns the permit.
         return self._quota.reestablish_permit(pool, record.permit_ref)
 
-    def recover(self, run_id: str) -> list:
+    def recover(self, run_id: str, *, dispatch_gate) -> list:
         """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
         quarantine (kill both groups + W3 retain — the untrusted writer never survives) /
         relaunch (``--resume`` from the seat's worktree cwd, capped at MAX_RESUME) / fail.
-        Returns [RecoveryAction], one per record considered."""
+        Returns [RecoveryAction], one per record considered.
+
+        #559 C1 (design §2.7): ``dispatch_gate`` is MANDATORY (no default, no ungated escape hatch,
+        R11/F-a) — a recovery relaunch is now ledgered/receipted like any dispatch. The gate,
+        called only AFTER the prelaunch checks (spec verification, mutating refusal), mints + audits
+        the pre-receipt and returns a ``RecoveryAuthorization`` (or ``None`` to refuse). Tests
+        exercise recovery by passing an explicit fake gate — there is exactly ONE relaunch path and
+        it is always gated."""
         actions = []
         for record in self._registry.by_run(run_id):
             if record.state in ("completed", "completed_with_residue", "failed", "quarantined"):
@@ -1088,8 +1119,14 @@ class TmuxSupervisor:
                 actions.append(RecoveryAction(record.identity, "quarantine", done))
             elif verdict == "relaunch":
                 try:
-                    new = self._relaunch(record)
+                    new = self._relaunch(record, dispatch_gate=dispatch_gate)
                     actions.append(RecoveryAction(record.identity, "relaunch", new))
+                except RecoveryRefused as e:
+                    # #559 C1/R6: the gate declined, or a mutating/build recovery is unsupported.
+                    # The record STAYS quota_paused (no _finish, no launch) — no resume slot burned,
+                    # no receipt minted. Reported so the CLI/report surfaces the refusal honestly.
+                    actions.append(RecoveryAction(
+                        record.identity, f"relaunch_refused ({e.reason})", record))
                 except SpecTamperError:
                     # H2 (#559): the relaunch spec bytes failed digest verification — the
                     # post-identity-check TOCTOU window. The untrusted writer never
@@ -1113,7 +1150,7 @@ class TmuxSupervisor:
                 actions.append(RecoveryAction(record.identity, "fail", done))
         return actions
 
-    def _relaunch(self, record: JobRecord) -> JobRecord:
+    def _relaunch(self, record: JobRecord, *, dispatch_gate) -> JobRecord:
         """Relaunch a quota_paused job: same identity/worktree, a resume-policy profile, the
         persisted provider session id (claude ``--resume``), resume_attempts + 1. The
         resume-identity assert runs at collect time (await_job ``expect_session_id``).
@@ -1129,7 +1166,16 @@ class TmuxSupervisor:
         re-read HERE fall in the time-of-check/time-of-use window; trusting them unverified is
         the injection vector. ``None`` (missing/malformed/digest-mismatch) → ``SpecTamperError``
         → recover() quarantines, never relaunches. (``_read_spec`` stays for the
-        synthetic-observation forensic paths only.)"""
+        synthetic-observation forensic paths only.)
+
+        C1 (#559, design §2.7): the relaunch is RECEIPTED. ALL prelaunch checks (verified spec,
+        claude-only, mutating refusal) run BEFORE the gate — a refused record consumes NO receipt
+        (R2). The gate mints+audits the pre-receipt and returns a ``RecoveryAuthorization``; ``None``
+        → ``RecoveryRefused('gate')`` (record stays quota_paused). Its ``resolved_target`` is
+        threaded into ``launch`` (no re-resolution drift) and its ``config_digest`` is asserted equal
+        to the composed digest (P4-M) before launch. NO ``append_expected`` — the recovery is an
+        attempt under the ORIGINAL expected call, linked by ``recovered_from`` (reconcile groups it,
+        R1)."""
         spec = self._verified_spec(record)
         if spec is None:
             raise SpecTamperError(
@@ -1150,9 +1196,24 @@ class TmuxSupervisor:
                 f"relaunch {record.session_name}: resume is claude-only, "
                 f"spec engine {spec.get('engine')!r}")
         prof_d = dict(req.get("profile") or {})
-        prof_d["session_policy"] = "resume"
+        # R6: a mutating/build recovery would need a fresh behavioral canary — refuse it here (the
+        # record STAYS quota_paused, no receipt, no launch); mutating recovery is a named follow-up.
+        if bool(prof_d.get("mutating")):
+            raise RecoveryRefused("mutating_recovery_unsupported")
+        # PRELAUNCH CHECKS DONE — only now is the receipt minted (R2). The gate RESOLVES the target,
+        # mints+audits the pre-receipt bound to it, and returns the authorization (its
+        # resolved_target threaded into launch prevents re-resolution drift); None REFUSES (record
+        # stays quota_paused, no launch).
+        authz = dispatch_gate(record=record, correlation_id=recovery_cid, recovered_from=origin_cid)
+        if authz is None:
+            raise RecoveryRefused("gate")
+        if authz.config_digest != self._snapshot.config_digest:
+            # P4-M: the field is VALIDATED, not merely carried — a drift aborts the relaunch loud
+            raise SupervisorError(
+                f"relaunch {record.session_name}: config_digest drift — authorization "
+                f"{authz.config_digest!r} != composed {self._snapshot.config_digest!r}")
         profile = contract.LaunchProfile(
-            session_policy="resume", mutating=bool(prof_d.get("mutating")),
+            session_policy="resume", mutating=False,
             worktree=prof_d.get("worktree"), tool_grants=tuple(prof_d.get("tool_grants") or ()),
             max_budget_usd=prof_d.get("max_budget_usd"),
             max_tokens=prof_d.get("max_tokens"))
@@ -1163,6 +1224,7 @@ class TmuxSupervisor:
             record.identity.seat, req.get("prompt", ""), identity=record.identity,
             handle=handle, profile=profile, effort=req.get("effort"),
             timeout=float(req.get("timeout", 300.0)),
+            target=authz.resolved_target, receipt_nonce=authz.receipt_nonce,
             resume_session_id=record.provider_session_id,
             resume_attempts=next_attempt,
             correlation_id=recovery_cid, recovered_from=origin_cid,

@@ -110,6 +110,11 @@ class PreReceipt:
     role: Optional[str] = None
     gate_outcome: Optional[str] = None
     gate_input_digest: Optional[str] = None
+    # #559 C1 (design §2.7): the recovery-provenance join field — the ORIGINAL call's
+    # correlation_id when this receipt is a recovery relaunch, else None. The reader
+    # (_validate_record) already validates str-or-null (#554); reconcile groups a recovery
+    # attempt under the original expected call via ``recovered_from or correlation_id``.
+    recovered_from: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -127,6 +132,7 @@ class PreReceipt:
             "role": self.role,
             "gate_outcome": self.gate_outcome,
             "gate_input_digest": self.gate_input_digest,
+            "recovered_from": self.recovered_from,
         }
 
 
@@ -136,7 +142,8 @@ def _declared_identities(seat_obj: dict) -> set:
 
 
 def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, gate_digest=None,
-              author_provider=None, nonce=None, attestation: "GateAttestation | None" = None) -> PreReceipt:
+              author_provider=None, nonce=None, attestation: "GateAttestation | None" = None,
+              recovered_from: Optional[str] = None) -> PreReceipt:
     """Pre-dispatch enforcement, evaluated against the EXACT snapshot that will serve the call.
 
     Accumulates ALL violations (never short-circuits — the caller sees every problem):
@@ -217,6 +224,7 @@ def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, 
         role=role or None,
         gate_outcome=valid_attestation.gate_outcome if valid_attestation is not None else None,
         gate_input_digest=valid_attestation.input_digest if valid_attestation is not None else None,
+        recovered_from=recovered_from,
     )
 
 

@@ -2003,10 +2003,11 @@ def test_resume_dispatch_session_mismatch_fails_loud(tmp_path):
 # AC1 (#559): collect_work_product — two-phase, crash-recoverable, audit-idempotent
 # ---------------------------------------------------------------------------
 
-def _completed_record(tmp_path, *, receipt_nonce="rn1", session="sess1", state="completed"):
+def _completed_record(tmp_path, *, receipt_nonce="rn1", session="sess1", state="completed",
+                      seat="build"):
     from phase_executor.registry import JobRecord  # noqa: PLC0415
     from phase_executor.worktree import WorktreeIdentity  # noqa: PLC0415
-    ident = WorktreeIdentity(run_id="run1", seat="build", attempt="0-a")
+    ident = WorktreeIdentity(run_id="run1", seat=seat, attempt="0-a")
     return JobRecord(
         identity=ident, session_name=session, run_socket="s", pane_pid=1, pane_pgid=1,
         provider_pgid=None, pane_start_time="0", worktree_path=str(tmp_path / "wt"),
@@ -2131,6 +2132,65 @@ def test_collect_work_product_refuses_incomplete_job(tmp_path):
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path, state="running")), _FakeMgr())
     assert not res["ok"] and res["error"]["code"] == "job_not_completed"
     assert _wp_records(audit) == []
+
+
+# ---------------------------------------------------------------------------
+# C1 (#559): recover_run — ledgered/receipted recovery relaunch chokepoint
+# ---------------------------------------------------------------------------
+
+class _RecoverSup:
+    def __init__(self, record, *, await_state="completed"):
+        self._record = record
+        self._await_state = await_state
+        self.await_calls = []
+
+    def recover(self, run_id, *, dispatch_gate):
+        # exercise the REAL gate the way production _relaunch does (prelaunch checks passed)
+        import dataclasses as _dc  # noqa: PLC0415
+        from phase_executor.supervisor import RecoveryAction  # noqa: PLC0415
+        authz = dispatch_gate(record=self._record, correlation_id="orig#resume1", recovered_from="orig")
+        if authz is None:
+            return [RecoveryAction(self._record.identity, "relaunch_refused (gate)", self._record)]
+        new = _dc.replace(self._record, receipt_nonce=authz.receipt_nonce)
+        return [RecoveryAction(self._record.identity, "relaunch", new)]
+
+    def await_job(self, record, *, timeout_s=3600.0):
+        self.await_calls.append(record.session_name)
+        return self._await_state, _valid_obs()
+
+
+def _recover(tmp_path, sup, *, ledger_closed=False):
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er.recover_run(run_id="run1", supervisor=sup, snapshot=_snapshot(), audit=audit,
+                         routing=routing, enforce=enforce, ledger_closed=ledger_closed,
+                         correlation_id="c1")
+    return res, audit
+
+
+def test_recover_run_refuses_closed_ledger(tmp_path):
+    res, _ = _recover(tmp_path, _RecoverSup(_completed_record(tmp_path)), ledger_closed=True)
+    assert not res["ok"] and res["error"]["code"] == "run_closed_recover_refused"
+
+
+def test_recover_run_relaunch_is_receipted_and_verified(tmp_path):
+    rec = _completed_record(tmp_path, seat="intake")
+    sup = _RecoverSup(rec)
+    res, audit = _recover(tmp_path, sup)
+    assert res["ok"] and res["exit"] == er.EXIT_OK
+    assert res["results"][0]["action"] == "relaunch" and res["results"][0]["state"] == "completed"
+    kinds = [r.get("kind") for r in audit.records()]
+    assert "receipt" in kinds and "observation" in kinds  # relaunch is receipted AND observed
+    assert sup.await_calls == [rec.session_name]
+
+
+def test_recover_run_gate_fail_refuses_relaunch(tmp_path):
+    # a review seat with no author_provider fails check_pre → gate returns None → relaunch_refused
+    rec = _completed_record(tmp_path, seat="review")
+    res, audit = _recover(tmp_path, _RecoverSup(rec))
+    assert res["results"][0]["action"] == "relaunch_refused (gate)"
+    recs = audit.records()
+    assert any(r.get("kind") == "receipt" and r.get("verdict") == "fail" for r in recs)
+    assert not any(r.get("kind") == "observation" for r in recs)  # no obs for a refused relaunch
 
 
 def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
