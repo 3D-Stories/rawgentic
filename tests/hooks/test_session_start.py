@@ -30,6 +30,71 @@ def _run_session_start(cwd, session_id="test-sess", event_type="startup", env_ov
     return run_hook("session-start", stdin, cwd=cwd, env_override=env_override)
 
 
+class TestScannerInstallLeakGuard:
+    """Regression (#576): a session-start invocation inside the test suite must
+    never fire the real background `pipx install semgrep` — it orphaned 117G of
+    `semgrep-core` into /tmp (166 copies) and filled the host disk. The invariant
+    lives in `hooks/scanner_bootstrap.py` itself (`_pytest_install_optout`): under
+    pytest (`PYTEST_CURRENT_TEST` set) with no explicit installer override it opts
+    out of the install. That covers EVERY session-start entry point — the
+    `run_hook` helper, the direct `TestEventSourceContract` callers, and the direct
+    `subprocess.run` spawns in `TestSpawnConsolidation` — not just one helper. The
+    e2e installer tests set `RAWGENTIC_SCANNER_INSTALLER` and are unaffected."""
+
+    def test_default_session_start_records_skip_and_leaves_no_install(
+        self, make_workspace, tmp_path
+    ):
+        """A DEFAULT session-start call via run_hook (no scanner env) records a
+        skipped-optout outcome and leaves no real scanner install under the fake
+        HOME — the invariant closes the leak end-to-end."""
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        _run_session_start(ws.root, event_type="startup",
+                           env_override={"HOME": str(fake_home)})
+        status = fake_home / ".rawgentic" / "scanner-status.json"
+        assert status.exists(), "scanner_bootstrap did not run"
+        st = json.loads(status.read_text())
+        assert st["outcome"] == "skipped-optout-env", st
+        assert not list(fake_home.rglob("semgrep-core")), "a real scanner install leaked"
+
+    def test_direct_subprocess_session_start_leaves_no_install(
+        self, make_workspace, tmp_path
+    ):
+        """The bypass path: a session-start spawn that does NOT route through
+        run_hook (as TestSpawnConsolidation does) must ALSO be covered. Even with
+        a fake HOME whose scanners are absent (the exact #576 trigger), the
+        pytest invariant opts out — no real install launches."""
+        import subprocess as sp
+        from tests.hooks.conftest import HOOKS_DIR
+        ws = make_workspace(registry_entries=[
+            {"session_id": "test-sess", "project": "testproj",
+             "project_path": "./projects/testproj"}])
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        # A fake HOME (its pipx is empty) is the #576 trigger: pre-fix, decide()
+        # returned "install" and launched the real installer here. The pytest
+        # invariant short-circuits to skipped-optout-env BEFORE the presence
+        # check, so no install launches regardless of scanner presence.
+        env = dict(os.environ)
+        env["HOME"] = str(fake_home)
+        payload = json.dumps({
+            "session_id": "test-sess", "cwd": str(ws.root),
+            "hook_event_name": "SessionStart", "source": "startup",
+        })
+        r = sp.run(["bash", str(HOOKS_DIR / "session-start")], input=payload,
+                   capture_output=True, text=True, timeout=30,
+                   cwd=str(ws.root), env=env)
+        assert r.returncode == 0, r.stderr
+        status = fake_home / ".rawgentic" / "scanner-status.json"
+        assert status.exists(), "scanner_bootstrap did not run"
+        st = json.loads(status.read_text())
+        assert st["outcome"] == "skipped-optout-env", st
+        assert not list(fake_home.rglob("semgrep-core")), "a real scanner install leaked"
+
+
 class TestEventSourceContract:
     """Claude Code delivers the startup/resume/clear/compact subtype in the
     `source` field; `hook_event_name` is always the literal "SessionStart".

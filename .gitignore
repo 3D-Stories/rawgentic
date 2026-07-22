@@ -58,3 +58,5 @@ docs/measurements/driver-bench/live-*.json
 # its lock + quarantine siblings are per-run bookkeeping, never committed.
 docs/measurements/seat-outcomes.jsonl.lock
 docs/measurements/seat-outcomes.jsonl.quarantine
+
+docs/planning/2026-07-22-backlog-tracker.data.json
