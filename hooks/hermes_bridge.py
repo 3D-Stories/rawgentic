@@ -422,21 +422,33 @@ def _default_notify(msg: str) -> str:
 # --------------------------------------------------------------------------- #
 # inbound classify + poll
 # --------------------------------------------------------------------------- #
+def _token_in_text(token, text):
+    """#584 token-type discrimination — the two forms never cross-match (AC7).
+
+    Legacy 48-bit asks (pre-upgrade, still open) match by exact bracketed substring;
+    the new short form matches at word boundaries, brackets optional ("[RG-482913]"
+    contains a word-bounded RG-482913)."""
+    if token.startswith("["):
+        return token in text
+    return re.search(r"\b" + re.escape(token) + r"\b", text) is not None
+
+
 def classify_batch(owner_msgs, token, consumed_guids, question, answered=False,
-                   options=None, response_mode="free_text"):
+                   options=None, response_mode="free_text", sent_guid=None):
     """Pure classification over already-filtered owner-inbound messages.
 
     Returns (disposition, matched_msg_or_None). disposition in
     {matched, ambiguous, echo_or_empty, late, unmatched, none}.
 
-    A candidate answer must carry a guid AND the exact token AND be NUL-free;
-    guid-less, dup-guid (first wins), and NUL-bearing messages are dropped from
-    the answer set (they deliver nothing, never crash) — so the delivery path
-    only ever sees a clean, guid-bearing message.
+    A candidate answer must carry a guid, be NUL-free, and EITHER quote-match the
+    ask (#584: `sent_guid` truthy AND the message's `replyToGuid` truthy AND equal —
+    never a bare `==`, so null×null can never wrong-deliver) OR token-match per
+    `_token_in_text`. Guid-less, dup-guid (first wins), and NUL-bearing messages are
+    dropped from the answer set (they deliver nothing, never crash).
 
     `answered` = the ask's token has already been closed by a prior delivery
     (never-double-act, keyed on the ASK TOKEN not the message guid): once True,
-    any further tokened message is `late`, never a second `matched`.
+    any further candidate message is `late`, never a second `matched`.
     """
     if not owner_msgs:
         return ("none", None)
@@ -444,7 +456,10 @@ def classify_batch(owner_msgs, token, consumed_guids, question, answered=False,
     for m in owner_msgs:
         g = m.get("guid")
         text = m.get("text") or ""
-        if not g or g in seen or token not in text:
+        if not g or g in seen:
+            continue
+        quote = bool(sent_guid) and bool(m.get("replyToGuid")) and m.get("replyToGuid") == sent_guid
+        if not quote and not _token_in_text(token, text):
             continue
         seen.add(g)
         if "\x00" in text:  # malformed → never a valid answer (fail-safe: deliver nothing)
@@ -506,7 +521,8 @@ def poll_once(ask_record, *, state_dir, transport=None, now_ms=None):  # pylint:
     disp, m = classify_batch(owner_msgs, token, consumed,
                              ask_record.get("question", ""), answered=answered,
                              options=ask_record.get("options"),
-                             response_mode=ask_record.get("response_mode", "free_text"))
+                             response_mode=ask_record.get("response_mode", "free_text"),
+                             sent_guid=ask_record.get("sent_guid"))
     return {"disposition": disp, "reply": m}
 
 

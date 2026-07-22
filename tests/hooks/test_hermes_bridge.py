@@ -119,6 +119,100 @@ def test_ask_owner_options_template_ref_last_bare(tmp_path):
     assert not re.search(re.escape(rec["token"]) + r"[^\s]", sent[0])
 
 
+# ---------- quote-match arm + widened token match (#584 AC2/3/4/7) ----------
+# Fixture pinned from the 2026-07-22 live spike (owner reply-gesture, BlueBubbles store):
+# locks the field NAME and population against server drift (#584 F4).
+SPIKE_QUOTED_REPLY = {"guid": "E0C1B981-6C1A-4449-A22F-24998DF95516",
+                      "dateCreated": 1784744179014,
+                      "text": "1 [RG-BC4759D5E568]",
+                      "isFromMe": False,
+                      "replyToGuid": "8034046D-8E5D-4D7A-9B0D-23163514E523",
+                      "handle": {"address": OWNER}}
+
+
+def _own(guid, text, ts=200, reply_to=None):
+    m = {"guid": guid, "dateCreated": ts, "text": text, "isFromMe": False,
+         "handle": {"address": OWNER}}
+    if reply_to is not None:
+        m["replyToGuid"] = reply_to
+    return m
+
+
+def test_spike_fixture_field_names():
+    assert SPIKE_QUOTED_REPLY["replyToGuid"], "BlueBubbles reply-gesture field drifted"
+
+
+def test_classify_quote_match_no_token_free_text():
+    disp, m = classify_batch([_own("g1", "any words at all", reply_to="SG")],
+                             "RG-123456", set(), "q?", sent_guid="SG")
+    assert disp == "matched" and m["guid"] == "g1"
+
+
+def test_classify_quote_match_option_mode_selected():
+    opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]
+    disp, m = classify_batch([_own("g1", "1", reply_to="SG")],
+                             "RG-123456", set(), "q?", sent_guid="SG",
+                             options=opts, response_mode="option_required")
+    assert disp == "matched" and m["guid"] == "g1"
+
+
+def test_classify_null_sent_guid_plain_message_never_matches():
+    # F1: the None==None wrong-delivery case — plain owner chatter, no token, no replyToGuid
+    disp, _ = classify_batch([_own("g1", "totally unrelated chatter")],
+                             "RG-123456", set(), "q?", sent_guid=None)
+    assert disp == "unmatched"
+
+
+def test_classify_null_sent_guid_quote_arm_inert():
+    disp, _ = classify_batch([_own("g1", "no token here", reply_to="whatever")],
+                             "RG-123456", set(), "q?", sent_guid=None)
+    assert disp == "unmatched"
+
+
+def test_classify_quote_plus_token_two_candidates_ambiguous():
+    msgs = [_own("g1", "no token", reply_to="SG"), _own("g2", "answer RG-123456")]
+    disp, _ = classify_batch(msgs, "RG-123456", set(), "q?", sent_guid="SG")
+    assert disp == "ambiguous"
+
+
+def test_classify_quote_match_answered_is_late():
+    disp, _ = classify_batch([_own("g1", "hi", reply_to="SG")],
+                             "RG-123456", set(), "q?", answered=True, sent_guid="SG")
+    assert disp == "late"
+
+
+def test_numeric_token_word_boundary_forms():
+    tok = "RG-482913"
+    assert classify_batch([_own("g1", "1 RG-482913")], tok, set(), "q?")[0] == "matched"
+    assert classify_batch([_own("g2", "[RG-482913]")], tok, set(), "q?")[0] == "matched"
+    assert classify_batch([_own("g3", "RG-4829139")], tok, set(), "q?")[0] == "unmatched"
+    assert classify_batch([_own("g4", "XRG-482913")], tok, set(), "q?")[0] == "unmatched"
+
+
+def test_legacy_token_exact_bracketed_only_and_no_cross_match():
+    legacy = "[RG-AAAAAAAAAAAA]"
+    assert classify_batch([_own("g1", "ok [RG-AAAAAAAAAAAA]")], legacy, set(), "q?")[0] == "matched"
+    assert classify_batch([_own("g2", "ok RG-AAAAAAAAAAAA")], legacy, set(), "q?")[0] == "unmatched"
+    assert classify_batch([_own("g3", "[RG-AAAAAAAAAAAA]")], "RG-123456", set(), "q?")[0] == "unmatched"
+
+
+def test_poll_once_threads_sent_guid_quote_match(tmp_path):
+    rec = _ask(tmp_path, token="RG-123456", sent_ts=100)
+    rec["sent_guid"] = "SG"
+    (tmp_path / "asks" / "RG-123456.json").write_text(json.dumps(rec))
+    tr = lambda **kw: [_own("g1", "quoted answer, no ref", ts=200, reply_to="SG")]
+    out = poll_once(rec, state_dir=tmp_path, transport=tr)
+    assert out["disposition"] == "matched"
+
+
+def test_poll_once_quote_reply_before_ask_filtered(tmp_path):
+    rec = _ask(tmp_path, token="RG-123456", sent_ts=100)
+    rec["sent_guid"] = "SG"
+    tr = lambda **kw: [_own("g1", "stale quote", ts=50, reply_to="SG")]
+    out = poll_once(rec, state_dir=tmp_path, transport=tr)
+    assert out["disposition"] in ("none", "unmatched")
+
+
 # ---------- sent-GUID self-query (#584 AC1) ----------
 def _mk_row(guid, ts, text, from_me=True):
     return {"guid": guid, "dateCreated": ts, "text": text, "isFromMe": from_me,
