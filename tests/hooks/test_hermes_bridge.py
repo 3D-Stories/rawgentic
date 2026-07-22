@@ -206,9 +206,11 @@ def test_poll_once_threads_sent_guid_quote_match(tmp_path):
     assert out["disposition"] == "matched"
 
 
-def test_poll_once_quote_reply_before_ask_filtered(tmp_path):
+def test_poll_once_since_filter_applies_to_quoted_replies(tmp_path):
     rec = _ask(tmp_path, token="RG-123456", sent_ts=100)
     rec["sent_guid"] = "SG"
+    # upstream _is_owner_inbound since-ts filter applies uniformly regardless of match arm
+    # (classify_batch itself is timestamp-agnostic — 8a F3 rename for honesty)
     tr = lambda **kw: [_own("g1", "stale quote", ts=50, reply_to="SG")]
     out = poll_once(rec, state_dir=tmp_path, transport=tr)
     assert out["disposition"] in ("none", "unmatched")
@@ -342,6 +344,27 @@ def test_ask_owner_no_self_query_on_send_failure(tmp_path):
                     sleep=lambda s: None)
     assert rec["status"] == "delivery_unknown" and rec["sent_guid"] is None
     assert not calls  # nothing to find — the send never landed
+
+
+def test_ask_owner_sent_guid_none_on_malformed_rows_ask_still_persisted(tmp_path):
+    # 8a F1: a non-dict row must degrade to sent_guid None — never crash ask_owner
+    # after the send already landed (design: "never fails the ask")
+    rec = ask_owner("go?", "runMal", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: [None, "notadict", 42],
+                    sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+    p = tmp_path / "asks" / f"{rec['token']}.json"
+    assert json.loads(p.read_text())["status"] == "sent"  # final record persisted
+
+
+def test_ask_owner_no_self_query_when_recipient_unresolved(tmp_path, monkeypatch):
+    # 8a F2: unresolved recipient short-circuits — no queries, no sleeps (fail-closed convention)
+    monkeypatch.setattr("hermes_bridge.owner_recipient", lambda: None)
+    calls = []
+    rec = ask_owner("go?", "runR", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: (calls.append(1), [])[1],
+                    sleep=lambda s: None)
+    assert rec["sent_guid"] is None and not calls
 
 
 def test_ask_owner_no_transport_means_no_self_query(tmp_path):

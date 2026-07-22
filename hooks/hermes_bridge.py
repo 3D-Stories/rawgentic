@@ -47,6 +47,9 @@ RESPONSE_MODES = ("free_text", "option_required", "option_or_text")  # #568 Phas
 MAX_REPLY = 8000
 POLL_LIMIT = 25
 MAX_POLL_PAGES = 20  # backlog-stop cap; overflow → fail-closed, never a silent "no reply"
+SELF_QUERY_SKEW_MS = 5000   # #584: clock skew allowance around the ask's sent_ts
+SELF_QUERY_ATTEMPTS = 3     # #584: bounded send-propagation retry (fixed count, no deadline clock)
+SELF_QUERY_RETRY_S = 2
 _TRUNC = "…[truncated]"
 _BB_CONF_DEFAULT = os.path.expanduser("~/.config/vm-update-monitor/bluebubbles.env")
 
@@ -323,23 +326,27 @@ def _capture_sent_guid(msg_text, token, sent_ts, recipient, transport, sleep):
     so token-substring alone is contaminated. Pick: exact-full-text row first, else
     earliest dateCreated (the ask precedes any echo); deterministic (ts, guid) tie-break.
     Fail-open — any miss/failure returns None (quote arm stays inert; token path intact)."""
-    skew = 5000
-    for attempt in range(3):
+    if not recipient:  # unresolved recipient is a misconfig → fail CLOSED, no queries (8a F2)
+        return None
+    for attempt in range(SELF_QUERY_ATTEMPTS):
         try:
-            rows = transport(chat_guid=_chat_guid(recipient), since_ms=sent_ts - skew,
-                             limit=POLL_LIMIT)
-        except BridgeUnreachable:
+            rows = transport(chat_guid=_chat_guid(recipient),
+                             since_ms=sent_ts - SELF_QUERY_SKEW_MS, limit=POLL_LIMIT)
+            # isinstance guard + broad except: a malformed row degrades to None — the
+            # self-query must NEVER crash ask_owner after the send landed (8a F1)
+            cands = [r for r in rows or []
+                     if isinstance(r, dict)
+                     and r.get("isFromMe") and r.get("guid")
+                     and token in (r.get("text") or "")
+                     and (r.get("dateCreated") or 0) >= sent_ts - SELF_QUERY_SKEW_MS]
+            if cands:
+                exact = [r for r in cands if (r.get("text") or "") == msg_text]
+                pool = exact or cands
+                return min(pool, key=lambda r: ((r.get("dateCreated") or 0), r.get("guid") or ""))["guid"]
+        except (BridgeUnreachable, AttributeError, TypeError):
             return None
-        cands = [r for r in rows or []
-                 if r.get("isFromMe") and r.get("guid")
-                 and token in (r.get("text") or "")
-                 and (r.get("dateCreated") or 0) >= sent_ts - skew]
-        if cands:
-            exact = [r for r in cands if (r.get("text") or "") == msg_text]
-            pool = exact or cands
-            return min(pool, key=lambda r: ((r.get("dateCreated") or 0), r.get("guid") or ""))["guid"]
-        if attempt < 2:
-            sleep(2)
+        if attempt < SELF_QUERY_ATTEMPTS - 1:
+            sleep(SELF_QUERY_RETRY_S)
     return None
 
 
