@@ -396,6 +396,74 @@ def test_reconcile_happy_e2e_ok():
     assert res.ok, res
 
 
+# ---- #559 AC1: work_product binding (design §2.6) ----
+
+def _valid_wp(promotion_status="promoted"):
+    return {"kind": "docs", "worktree_path": "/wt", "base_sha": "b", "head_sha": "h",
+            "content_tree_sha": "t", "changed_paths": ["docs/planning/appendix/x.md"],
+            "documents": [], "tests": [], "promotion_status": promotion_status}
+
+
+def _wp_rec(nonce, tree="sha256:tree1", new="sha256:new1"):
+    return {"kind": "work_product", "receipt_nonce": nonce,
+            "candidate_tree_sha": tree, "new_sha": new, "work_product": _valid_wp("promoted")}
+
+
+def _obs_rec_wp(nonce, promotion_status, cid="c1"):
+    # build via the dataclass so the observation carries the CURRENT schema_version that permits
+    # the embedded work_product (the _obs_dict helper pins an older schema_version without it).
+    o = contract.Observation(
+        run_id="r", attempt_id="0-x", correlation_id=cid, seat="review", engine="claude",
+        transport="native", requested_model="claude-fable-5", actual_model="claude-fable-5",
+        prompt_hash="sha256:x", context_hashes=[], usage={"input": 1, "output": 1}, timing_ms=1,
+        queued_ms=0, process={"exit_code": 0, "timed_out": False}, parse_status="ok",
+        parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:d", work_product=_valid_wp(promotion_status)).to_dict()
+    o["dispatched_lane"] = _DEF_LANE
+    return {"kind": "observation", "receipt_nonce": nonce, "observation": o}
+
+
+def test_reconcile_work_product_bound_ok():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.orphan_work_product == () == res.duplicate_work_product == res.missing_work_product
+
+
+def test_reconcile_work_product_orphan_unknown_nonce():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _wp_rec("ghost")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("ghost" in x for x in res.orphan_work_product)
+
+
+def test_reconcile_work_product_duplicate_per_receipt():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _wp_rec("n1"), _wp_rec("n1", new="sha256:new2")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and "n1" in res.duplicate_work_product
+
+
+def test_reconcile_promoted_observation_without_record_is_missing():
+    # an observation CLAIMING a promotion (embedded work_product.promotion_status=promoted) with NO
+    # matching work_product record → missing_work_product (a promoted-but-unrecorded product is an
+    # anomaly, not a silent pass).
+    recs = [_receipt_rec("n1"), _obs_rec_wp("n1", "promoted")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
+def test_reconcile_promoted_observation_with_record_ok():
+    # the same promoted observation WITH its work_product record → bound, no anomaly
+    recs = [_receipt_rec("n1"), _obs_rec_wp("n1", "promoted"), _wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
+def test_reconcile_not_promoted_observation_needs_no_record():
+    recs = [_receipt_rec("n1"), _obs_rec_wp("n1", "not_attempted")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+
+
 def test_reconcile_missing_receipt():
     res = enforce.reconcile_run([_EC()], [], initial_digest="sha256:d")
     assert not res.ok and ("review", "c1") in res.missing_receipt
