@@ -375,8 +375,13 @@ def validate_seat_outcome(row) -> list:
             if _num_or_none(usage.get("cost_proxy")) is None and usage.get("cost_proxy") is not None:
                 errs.append("usage.cost_proxy must be a finite non-negative number or null")
     bud = row.get("budget")
-    if bud is not None and not isinstance(bud, dict):
-        errs.append("budget must be null or an object")
+    if bud is not None:
+        if not isinstance(bud, dict) or set(bud) - {"reserved_usd", "spent_usd"}:
+            errs.append("budget must be null or exactly {reserved_usd, spent_usd}")
+        else:
+            for k in ("reserved_usd", "spent_usd"):
+                if k in bud and bud[k] is not None and _num_or_none(bud[k]) is None:
+                    errs.append(f"budget.{k} must be a finite non-negative number or null")
     for k in ("timing_ms", "queued_ms", "hook_denials"):
         v = row.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
@@ -446,9 +451,13 @@ def _safe_open_read(path: Path):
     return fd
 
 
-def _safe_read_text(path: Path) -> str:
+def _safe_read_text(path: Path, *, max_bytes: int = None) -> str:
+    """Open ONCE (O_NOFOLLOW), fstat regular-file + size, and read from the SAME fd — so the
+    size check and the read cannot straddle a path swap (TOCTOU-safe; Step-11 finding)."""
     fd = _safe_open_read(path)
     try:
+        if max_bytes is not None and os.fstat(fd).st_size > max_bytes:
+            raise HarvestBounds(f"{path}: {os.fstat(fd).st_size} bytes > {max_bytes}")
         with os.fdopen(fd, "r", encoding="utf-8") as f:
             return f.read()
     except BaseException:
@@ -457,14 +466,6 @@ def _safe_read_text(path: Path) -> str:
         except OSError:
             pass
         raise
-
-
-def _fstat_size(path: Path) -> int:
-    fd = _safe_open_read(path)
-    try:
-        return os.fstat(fd).st_size
-    finally:
-        os.close(fd)
 
 
 def _read_audit(audit_path: Path):
@@ -476,10 +477,7 @@ def _read_audit(audit_path: Path):
     nonce_counts = {}       # receipt nonces
     obs_nonce_counts = {}   # observation-envelope receipt_nonce references
     obs = []
-    size = _fstat_size(audit_path)
-    if size > AUDIT_MAX_BYTES:
-        raise HarvestBounds(f"audit file {size} bytes > {AUDIT_MAX_BYTES}")
-    for raw in _safe_read_text(audit_path).splitlines():
+    for raw in _safe_read_text(audit_path, max_bytes=AUDIT_MAX_BYTES).splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -1276,15 +1274,24 @@ def main(argv=None) -> int:
         return _cmd_run_end(args)
 
     if args.cmd == "harvest":
+        # Standalone harvest attributes an issue ONLY from a record that VALIDATES and whose
+        # run_id positively matches --run-id (Step-11: an arbitrary parseable record must not
+        # misattribute committed rows). Otherwise issue stays null (recovery-tool posture).
         issue = None
         if args.record_file:
+            import work_summary  # noqa: PLC0415
             try:
                 rec = json.loads(Path(args.record_file).read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                rec = None
+            if isinstance(rec, dict) and not work_summary.validate_record(rec, strict=True) \
+                    and rec.get("run_id") == args.run_id:
                 iss = (rec.get("issue") or {}).get("number") if isinstance(rec.get("issue"), dict) else None
                 if isinstance(iss, int) and not isinstance(iss, bool) and iss > 0:
                     issue = iss
-            except (OSError, json.JSONDecodeError):
-                pass
+            else:
+                print("harvest: --record-file did not validate or run_id mismatch — issue:null",
+                      file=sys.stderr)
         cap = args.capture_root or str(Path(args.project_root) / ".rawgentic" / "runs")
         store = resolve_store_path(args.project_root, args.store)
         try:

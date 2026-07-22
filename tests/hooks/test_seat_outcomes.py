@@ -903,3 +903,41 @@ class TestStep11Regressions:
         results = so.evaluate_alerts(rec, [], _baseline_with_p90(), so.DEFAULT_THRESHOLDS)
         rf = [r for r in results if r["rule"] == "review_findings_p90"][0]
         assert rf["status"] == "not_evaluated" and rf["reason"] == "missing_input"
+
+
+class TestStep11bResiduals:
+    def test_budget_subvalidation(self):
+        row = so.derive_seat_outcome(_obs(), issue=1)
+        row.pop("redacted_fields", None)
+        row["budget"] = {"leak": "/root/x"}  # planted arbitrary budget
+        assert so.validate_seat_outcome(row)
+
+    def test_budget_valid_shape_passes(self):
+        row = so.derive_seat_outcome(_obs(), issue=1)
+        row.pop("redacted_fields", None)
+        row["budget"] = {"reserved_usd": 1.0, "spent_usd": 0.5}
+        assert so.validate_seat_outcome(row) == []
+
+    def test_audit_size_bound_single_fd(self, tmp_path):
+        # size check + read share one fd (no separate _fstat_size); over-bound still aborts
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")])
+        audit = cap / "wf2-473-x" / "routing-audit.jsonl"
+        audit.write_text("x" * (10 * 1024 * 1024 + 10))  # exceed AUDIT_MAX_BYTES
+        store = tmp_path / "seat-outcomes.jsonl"
+        with pytest.raises(so.HarvestBounds):
+            so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+
+    def test_standalone_harvest_bad_record_issue_null(self, tmp_path):
+        run_id = "wf2-473-sh"
+        cap = _write_audit(tmp_path, run_id, [_obs(attempt_id="0-a")])
+        # an arbitrary record with a positive issue but NO matching run_id must not attribute
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps({"issue": {"number": 999}, "run_id": "SOMETHING-ELSE"}))
+        store = tmp_path / "docs" / "measurements" / "seat-outcomes.jsonl"
+        res = subprocess.run([sys.executable, str(CLI), "harvest", "--run-id", run_id,
+                              "--record-file", str(rf), "--project-root", str(tmp_path),
+                              "--capture-root", str(cap)],
+                             capture_output=True, text=True, cwd=str(tmp_path))
+        assert res.returncode == 0, res.stderr
+        rows = [json.loads(l) for l in store.read_text().splitlines()]
+        assert all(r["issue"] is None for r in rows)  # never cross-attributed
