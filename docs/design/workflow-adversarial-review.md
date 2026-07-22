@@ -172,7 +172,7 @@ skill count, and the WF2/WF3 config-gated invocations.
 
 ## Troubleshooting
 
-- **"Codex CLI is not installed"** — `curl -fsSL https://codex.openai.com/install.sh | bash`.
+- **"Codex CLI is not installed"** — `npm install -g @openai/codex`.
 - **"not authenticated"** — `codex login`; for headless, API-key auth.
 - **Exit 3 (timeout/error)** — Codex failed; retry or check `codex` status.
 - **Exit 4 (parse error)** — Codex returned unexpected output; artifact may be too large.

@@ -545,7 +545,7 @@ are found. Findings reports are written locally to `<project>/docs/reviews/` and
 never uploaded. The feature is **default-disabled** per project; existing WF1/WF2/WF3/WF4
 runs are unchanged unless explicitly opted in via `adversarialReview` (WF5) or `peerConsult`
 (WF13) in `.rawgentic_workspace.json`. Requires the Codex CLI installed
-(`curl -fsSL https://codex.openai.com/install.sh | bash`) and authenticated
+(`npm install -g @openai/codex`) and authenticated
 (`codex login`). See [config-reference.md](docs/config-reference.md#adversarial-review-data-handling).
 
 ### Run-Record Telemetry (Tier-2 substrate)
@@ -726,6 +726,8 @@ For major changes, please open an issue first to discuss the approach.
 Entries are one line per released version (most recent first), derived from the
 merged PR. Dates are the merge dates; `#N` links the PR.
 
+### v3.90.2 (2026-07-22)
+- **Codex CLI install command: dead URL replaced at 7 sites, single-sourced (#580).** The documented install command pointed at a retired domain (NXDOMAIN) — the exact self-fix text printed when the Codex prereq gate STOPs, so a user blocked on a missing Codex CLI could not recover by following it. All 7 occurrences (the issue's 6 sites + README) now carry the official npm method `npm install -g @openai/codex` (verified against the live openai/codex README; the curl installer's domain moved once already — the npm package name is the stable surface). The canonical string is single-sourced as `CODEX_INSTALL_CMD` in `hooks/adversarial_review_lib.py` (`_INSTALL_MSG` builds from it), and a new drift guard (`tests/test_codex_install_drift.py`, 4 tests, red-before-green) pins the constant, requires it verbatim at every doc site, and asserts the dead domain is absent across README/skills/docs/hooks. No workflow-spine change → no diagram REV. Suite 4574+18skip→4578+18skip.
 ### v3.90.1 (2026-07-22)
 - **incident skill bootstraps its label before creating the tracking issue (#581).** The incident workflow's Step-1 `gh issue create --repo … --label incident` (`skills/incident/SKILL.md:150`) had no step creating the `incident` label when absent, so `gh issue create --label` errored on any repo lacking it — the `incident` label was missing even in this repo; Step 1 now runs `gh label create incident … 2>/dev/null || true` first, mirroring the create-issue/run-feedback label-bootstrap pattern. +1 drift-guard test (`tests/test_incident_skill.py`, red-before-green). No workflow-spine change → no diagram REV. Suite 4574→4575.
 ### v3.90.0 (2026-07-22)

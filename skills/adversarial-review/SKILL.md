@@ -157,7 +157,7 @@ Size:     <bytes> (cap <MAX_BYTES>)
    python3 hooks/adversarial_review_lib.py prereq --backend <resolved backend> [--headless]
    ```
 2. If the prerequisite check fails (exit 2), **STOP** and print the message verbatim. It tells the user how to install and authenticate:
-   - gpt — install (standalone binary): `curl -fsSL https://codex.openai.com/install.sh | bash`; authenticate: `codex login` (headless/CI: `printenv OPENAI_API_KEY | codex login --with-api-key`)
+   - gpt — install: `npm install -g @openai/codex`; authenticate: `codex login` (headless/CI: `printenv OPENAI_API_KEY | codex login --with-api-key`)
    - glm — install: `pip install "zhipuai>=2.1.5"`; credential: export `ZHIPUAI_API_KEY` (a z.ai Coding Plan subscription key works with the default endpoint)
 3. **`both` is DEGRADE-AND-WARN (#403):** the check passes when AT LEAST ONE backend is ready; the message names BOTH backends' results, and an unready backend is a loud warning (the run will degrade to the ready backend, exit 5). Only zero-ready fails. Surface the warning to the user, then proceed.
 4. **Headless note:** ChatGPT OAuth login is interactive-only. If the session is headless (`RAWGENTIC_HEADLESS=1`) and the gpt prereq fails on authentication, this is a terminal ERROR — do not wait for an interactive login. The glm credential is an env var (no interactive step), so its headless message is the same export instruction.
