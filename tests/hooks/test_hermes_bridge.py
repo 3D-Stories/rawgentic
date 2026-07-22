@@ -214,6 +214,56 @@ def test_poll_once_quote_reply_before_ask_filtered(tmp_path):
     assert out["disposition"] in ("none", "unmatched")
 
 
+# ---------- property suite: widened-matcher never-wrong-act (#584 AC4, F6) ----------
+# Exhaustive over the enumerated domain (repo pattern: hermes_policy property tests) —
+# stdlib parametrization, no hypothesis dep.
+NEW_TOK, LEGACY_TOK, SG, OTHER = "RG-123456", "[RG-AAAAAAAAAAAA]", "SGUID", "OTHERGUID"
+
+
+def _msg_text(form, ask_token):
+    if form == "match_bare":
+        return f"answer {ask_token.strip('[]') if ask_token.startswith('[') else ask_token}"
+    if form == "match_exact":
+        return f"answer {ask_token}"
+    if form == "cross":  # the OTHER token family — must never match
+        other = LEGACY_TOK if not ask_token.startswith("[") else NEW_TOK
+        return f"answer {other}"
+    return "plain chatter"
+
+
+@pytest.mark.parametrize("ask_token", [NEW_TOK, LEGACY_TOK])
+@pytest.mark.parametrize("form", ["match_bare", "match_exact", "cross", "none"])
+@pytest.mark.parametrize("reply_to", [None, SG, OTHER])
+@pytest.mark.parametrize("sent_guid", [None, SG])
+def test_property_single_message_match_iff_valid_arm(ask_token, form, reply_to, sent_guid):
+    text = _msg_text(form, ask_token)
+    msg = _own("g1", text, reply_to=reply_to)
+    disp, m = classify_batch([msg], ask_token, set(), "q?", sent_guid=sent_guid)
+    quote_valid = bool(sent_guid) and bool(reply_to) and reply_to == sent_guid
+    if ask_token.startswith("["):
+        token_valid = form == "match_exact"  # legacy: exact bracketed substring only
+    else:
+        token_valid = form in ("match_bare", "match_exact")  # brackets optional
+    expected_match = quote_valid or token_valid
+    assert (disp == "matched") == expected_match, (disp, text, reply_to, sent_guid)
+    if disp == "matched":
+        assert m["guid"] == "g1"
+
+
+@pytest.mark.parametrize("sent_guid", [None, SG])
+def test_property_two_distinct_candidates_never_matched(sent_guid):
+    msgs = [_own("g1", f"a {NEW_TOK}"), _own("g2", f"b {NEW_TOK}", reply_to=sent_guid or "x")]
+    disp, _ = classify_batch(msgs, NEW_TOK, set(), "q?", sent_guid=sent_guid)
+    assert disp != "matched"  # two fresh candidates → ambiguous, deliver nothing
+
+
+@pytest.mark.parametrize("reply_to", [None, SG, OTHER])
+def test_property_answered_never_rematches(reply_to):
+    msg = _own("g1", f"x {NEW_TOK}", reply_to=reply_to)
+    disp, _ = classify_batch([msg], NEW_TOK, set(), "q?", answered=True, sent_guid=SG)
+    assert disp == "late"
+
+
 # ---------- interpret_reply token-strip + quote-only (#584 AC5) ----------
 def test_interpret_quote_only_number_no_ref():
     opts = [{"id": 1, "label": "a"}, {"id": 2, "label": "b"}]

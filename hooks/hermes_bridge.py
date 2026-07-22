@@ -737,6 +737,27 @@ def self_check() -> int:
         rec2 = ask_owner("q", "sc2", state_dir=d, notify=lambda m: "000", now_ms=lambda: 1)
         chk(rec2["status"] == "delivery_unknown", "send-fail -> delivery_unknown")
 
+        # #584: sent-GUID capture + quote-only match end to end
+        sent3 = []
+
+        def tr_self(**k):
+            return [{"guid": "ASK3", "text": sent3[0], "dateCreated": 300,
+                     "isFromMe": True, "handle": {"address": "+14036189135"}}]
+
+        rec3 = ask_owner("Quote me?", "sc3", state_dir=d,
+                         notify=lambda m: (sent3.append(m), "200")[1], now_ms=lambda: 300,
+                         transport=tr_self, sleep=lambda s: None)
+        chk(rec3["sent_guid"] == "ASK3", "sent-guid captured via self-query")
+        rec3["recipient"] = "+14036189135"
+
+        def tr_quote(**k):
+            return [{"guid": "g9", "text": "sounds good", "dateCreated": 400,
+                     "isFromMe": False, "replyToGuid": "ASK3",
+                     "handle": {"address": "+14036189135"}}]
+
+        chk(poll_once(rec3, state_dir=d, transport=tr_quote)["disposition"] == "matched",
+            "quote-only reply (no ref) matched")
+
     print("SELF-CHECK PASS" if fails == 0 else f"SELF-CHECK FAIL ({fails})")
     return 0 if fails == 0 else 1
 
