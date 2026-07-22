@@ -3,11 +3,11 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Sync security patterns from the official security-guidance plugin. The official plugin is at ~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/security_reminder_hook.py. The rawgentic plugin root is at /tmp/rawgentic-sync-test/basic-sync. The upstream plugin has added a new pattern 'sql_injection' that does not exist in security-patterns.json. Run the sync and report what changed.",
+      "prompt": "Sync security patterns from the official security-guidance plugin. The official plugin is at ~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/patterns.py. The rawgentic plugin root is at /tmp/rawgentic-sync-test/basic-sync. The upstream plugin has added a new pattern 'sql_injection' that does not exist in security-patterns.json. Run the sync and report what changed.",
       "expected_output": "Agent reads the official plugin's SECURITY_PATTERNS list, compares with current security-patterns.json, adds the new sql_injection pattern with source upstream, and reports it as Added",
       "files": [],
       "expectations": [
-        "Reads SECURITY_PATTERNS from the official security_reminder_hook.py",
+        "Reads SECURITY_PATTERNS from the official patterns.py",
         "Reads current hooks/security-patterns.json from the rawgentic plugin",
         "New pattern added with source set to upstream",
         "Report includes Added section listing the new pattern"

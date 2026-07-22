@@ -455,7 +455,7 @@ class TestSecurityStaleness:
         plugin_dir = tmp_path / "official-plugin" / "plugins" / "security-guidance"
         hooks_dir = plugin_dir / "hooks"
         hooks_dir.mkdir(parents=True)
-        pattern_file = hooks_dir / "security_reminder_hook.py"
+        pattern_file = hooks_dir / "patterns.py"
         pattern_file.write_text(content)
         return plugin_dir.parent.parent  # returns the dir to set as OFFICIAL_SECURITY_PLUGIN_DIR
 
@@ -488,7 +488,7 @@ class TestSecurityStaleness:
 
         # Compute the real hash and write it as the marker
         pattern_file = (
-            official_dir / "plugins" / "security-guidance" / "hooks" / "security_reminder_hook.py"
+            official_dir / "plugins" / "security-guidance" / "hooks" / "patterns.py"
         )
         real_hash = hashlib.sha256(pattern_file.read_bytes()).hexdigest()
 
@@ -507,6 +507,43 @@ class TestSecurityStaleness:
             ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
             assert "security patterns" not in ctx.lower()
             assert "sync-security-patterns" not in ctx.lower()
+
+    def test_warns_again_when_patterns_py_content_drifts(self, make_workspace, tmp_path):
+        """#579 AC2: the staleness check must hash patterns.py (the upstream data file),
+        so a real change to patterns.py re-fires the nudge even after a prior sync.
+        Regression guard: before the fix the check hashed security_reminder_hook.py,
+        which no longer changes when patterns.py entries change, so drift never re-fired."""
+        ws = make_workspace()
+        v1 = "SECURITY_PATTERNS = [{'ruleName': 'a'}]"
+        official_dir = self._setup_official_plugin(tmp_path, content=v1)
+        pattern_file = (
+            official_dir / "plugins" / "security-guidance" / "hooks" / "patterns.py"
+        )
+        marker_dir = tmp_path / "marker"
+        marker_dir.mkdir()
+        # Marker records the post-sync hash of patterns.py v1 -> no warning.
+        (marker_dir / ".last-security-sync-hash").write_text(
+            hashlib.sha256(pattern_file.read_bytes()).hexdigest()
+        )
+        env = {
+            "OFFICIAL_SECURITY_PLUGIN_DIR": str(official_dir),
+            "SECURITY_SYNC_MARKER_DIR": str(marker_dir),
+        }
+        stdout, _, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        if output:
+            ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+            assert "sync-security-patterns" not in ctx.lower()
+
+        # patterns.py drifts (new rule added) -> marker is now stale -> warning re-fires.
+        pattern_file.write_text("SECURITY_PATTERNS = [{'ruleName': 'a'}, {'ruleName': 'b'}]")
+        stdout, _, rc = _run_session_start(ws.root, env_override=env)
+        assert rc == 0
+        output = parse_hook_output(stdout)
+        assert output is not None
+        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert "security patterns" in ctx.lower() or "sync-security-patterns" in ctx.lower()
 
     def test_no_warning_when_official_plugin_missing(self, make_workspace, tmp_path):
         """When official plugin is not installed, no warning or error."""
