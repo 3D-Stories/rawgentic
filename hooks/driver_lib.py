@@ -269,6 +269,85 @@ def _is_int(x) -> bool:
     return isinstance(x, int) and not isinstance(x, bool)
 
 
+# --------------------------------------------------------------------------- #
+# #569: fresh-session-per-child handoff (process-boundary continuity)
+# --------------------------------------------------------------------------- #
+FRESH_SESSION_MODE = "fresh-session"
+
+
+def _build_resume_prompt(state: dict, next_issue: int) -> str:
+    """The canonical idempotent, state-re-deriving resume prompt for a fresh session (no
+    in-context memory). Used for the interactive hand-back + a direct `claude -p` spawn; the
+    crontab launcher's own static prompt conforms to this (design §4 SR1)."""
+    camp = state.get("campaign", "the campaign")
+    epic = state.get("epic")
+    epic_ref = f"epic #{epic}" if _is_int(epic) else camp
+    return (
+        f"Fresh-session resume for {epic_ref}. Re-bind the project (/rawgentic:switch), "
+        "git fetch origin, read the driver-state + epic-<N>-autorun-log, and run the next ready "
+        f"child (currently #{next_issue}) via /rawgentic:implement-feature to full WF2 completion. "
+        "Derive position from durable state, never in-context memory; never re-do a merged/closed "
+        "child; restate the run's auth grant. On a blocker, post the ERROR comment and end so the "
+        "next fresh session continues."
+    )
+
+
+def fresh_session_handoff(state: dict, *, mode: str) -> dict:
+    """Decide the process-boundary handoff after a child reaches a terminal outcome (#569).
+
+    Returns an explicit disposition (NEVER a bare None — design §4 [2]):
+    - ``{"outcome": "single_session"}`` when ``mode`` is not the fresh-session mode: no boundary,
+      the driver loops in-session exactly as today (byte-identical default).
+    - ``{"outcome": "complete"}`` ONLY when EVERY child is ``merged`` — the sole epic-close trigger.
+    - ``{"outcome": "ready", "next_issue", "generation", "campaign", "resume_prompt"}`` when a
+      queued dependency-satisfied child exists (``generation`` is the monotonic claim token).
+    - ``{"outcome": "blocked"}`` when unmerged children remain but none is ready (all
+      deferred/abandoned/dependency-blocked) — the epic stays OPEN; NEVER conflated with complete.
+    """
+    if mode != FRESH_SESSION_MODE:
+        return {"outcome": "single_session"}
+    issues = state.get("issues", [])
+    _numbers(issues)  # fail-closed on missing/non-int/duplicate number
+    if issues and all(i.get("status") == "merged" for i in issues):
+        return {"outcome": "complete"}
+    nxt = next_ready_issue(state)
+    if nxt is not None:
+        generation = (state.get("generation") if _is_int(state.get("generation")) else 0) + 1
+        return {"outcome": "ready", "next_issue": nxt, "generation": generation,
+                "campaign": state.get("campaign", ""),
+                "resume_prompt": _build_resume_prompt(state, nxt)}
+    return {"outcome": "blocked"}
+
+
+def fresh_session_available(state: dict, *, launcher_armed: bool,
+                            handoff_writable: bool) -> tuple[bool, str]:
+    """Pre-launch AC6 check (pure over injected probes): can the process boundary be crossed?
+    Fail-open — a False result means the driver degrades to the single-session loop with a visible
+    marker, never aborts. (Post-end takeover failure is a separate, acknowledged-handoff concern —
+    design §5.)"""
+    if not launcher_armed:
+        return (False, "no durable launcher armed")
+    if not handoff_writable:
+        return (False, "handoff path not writable")
+    return (True, "ok")
+
+
+def handoff_claim(state: dict, generation: int) -> tuple[bool, dict]:
+    """Atomically CLAIM the pending handoff for ``generation`` (the exactly-one-successor
+    singleton, design §5/§6). Pure + idempotent: returns ``(True, new_state)`` only for the FIRST
+    claim of a matching, unclaimed generation; a second claim, a wrong generation, or no pending
+    handoff returns ``(False, state)`` unchanged. The caller persists ``new_state`` under the
+    launcher flock."""
+    pend = state.get("handoff_pending")
+    if not isinstance(pend, dict) or pend.get("generation") != generation:
+        return (False, state)
+    if state.get("handoff_claimed") == generation:
+        return (False, state)
+    new = dict(state)
+    new["handoff_claimed"] = generation
+    return (True, new)
+
+
 def validate_driver_state(state: dict) -> tuple[bool, list[str]]:
     """Minimal readability check for a driver-state object (schema v1 and v2).
 

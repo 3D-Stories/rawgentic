@@ -20,6 +20,7 @@ HOOKS_DIR = Path(__file__).resolve().parent.parent.parent / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
 
 import driver_lib  # noqa: E402
+import driver_lib as dl  # noqa: E402  (#569 handoff-helper tests use the short alias)
 
 
 # --------------------------------------------------------------------------- #
@@ -479,3 +480,88 @@ class TestCampaignGoalText:
         ]
         with pytest.raises(driver_lib.DependencyCycleError):
             driver_lib.campaign_goal_text(state)
+
+
+# ======================================================================= #
+# #569: fresh-session-per-child handoff helpers
+# ======================================================================= #
+def _st(issues, *, mode=None, generation=None, campaign="epic-475", extra=None):
+    s = {"schema_version": 2, "campaign": campaign, "issues": issues}
+    if mode is not None:
+        s["session_mode"] = mode
+    if generation is not None:
+        s["generation"] = generation
+    if extra:
+        s.update(extra)
+    return s
+
+
+def _iss(n, status, deps=None):
+    i = {"number": n, "status": status}
+    if deps is not None:
+        i["depends_on"] = deps
+    return i
+
+
+class TestFreshSessionHandoff:
+    def test_single_session_when_mode_absent(self):
+        s = _st([_iss(1, "merged"), _iss(2, "queued")])
+        assert dl.fresh_session_handoff(s, mode=s.get("session_mode", "single-session")) == {"outcome": "single_session"}
+
+    def test_ready_returns_next_and_generation(self):
+        s = _st([_iss(1, "merged"), _iss(2, "queued")], mode="fresh-session", generation=3)
+        d = dl.fresh_session_handoff(s, mode="fresh-session")
+        assert d["outcome"] == "ready"
+        assert d["next_issue"] == 2
+        assert d["generation"] == 4  # monotonic bump
+        assert isinstance(d["resume_prompt"], str) and "2" in d["resume_prompt"]
+
+    def test_complete_only_when_all_merged(self):
+        s = _st([_iss(1, "merged"), _iss(2, "merged")], mode="fresh-session")
+        assert dl.fresh_session_handoff(s, mode="fresh-session")["outcome"] == "complete"
+
+    def test_blocked_when_unmerged_but_none_ready(self):
+        # a deferred child + a queued child that depends on it → nothing ready, not complete.
+        s = _st([_iss(1, "deferred"), _iss(2, "queued", deps=[1])], mode="fresh-session")
+        d = dl.fresh_session_handoff(s, mode="fresh-session")
+        assert d["outcome"] == "blocked"  # #569 [2]: never "complete" while a child is unmerged
+
+    def test_abandoned_alone_is_blocked_not_complete(self):
+        s = _st([_iss(1, "merged"), _iss(2, "abandoned")], mode="fresh-session")
+        assert dl.fresh_session_handoff(s, mode="fresh-session")["outcome"] == "blocked"
+
+
+class TestFreshSessionAvailable:
+    def test_ok_when_armed_and_writable(self):
+        ok, reason = dl.fresh_session_available(_st([]), launcher_armed=True, handoff_writable=True)
+        assert ok is True
+
+    def test_not_armed_fails(self):
+        ok, reason = dl.fresh_session_available(_st([]), launcher_armed=False, handoff_writable=True)
+        assert ok is False and "launcher" in reason.lower()
+
+    def test_not_writable_fails(self):
+        ok, reason = dl.fresh_session_available(_st([]), launcher_armed=True, handoff_writable=False)
+        assert ok is False and "writ" in reason.lower()
+
+
+class TestHandoffClaim:
+    def test_claim_matching_generation(self):
+        s = _st([], extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
+        ok, new = dl.handoff_claim(s, 5)
+        assert ok is True and new["handoff_claimed"] == 5
+
+    def test_second_claim_is_idempotent_false(self):
+        s = _st([], extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
+        ok1, s1 = dl.handoff_claim(s, 5)
+        ok2, s2 = dl.handoff_claim(s1, 5)
+        assert ok1 is True and ok2 is False  # exactly-one-successor singleton
+
+    def test_wrong_generation_not_claimed(self):
+        s = _st([], extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
+        ok, new = dl.handoff_claim(s, 4)
+        assert ok is False
+
+    def test_no_pending_not_claimed(self):
+        ok, new = dl.handoff_claim(_st([]), 1)
+        assert ok is False
