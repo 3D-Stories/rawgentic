@@ -61,11 +61,15 @@ def _ask(state_dir, token="[RG-ABCDEF012345]", sent_ts=500_000, run_id="run1",
 # ---------- token ----------
 def test_mint_token_shape():
     tok = mint_token()
-    assert re.fullmatch(r"\[RG-[0-9A-F]{12}\]", tok), tok
+    assert re.fullmatch(r"RG-\d{6}", tok), tok  # #584: short phone-typeable form
 
 
-def test_mint_token_unique():
-    assert len({mint_token() for _ in range(200)}) == 200  # 48-bit, no dupes at this scale
+def test_mint_token_unique_deterministic(monkeypatch):
+    # #584: deterministic — stubbed randbelow, never a probabilistic 200-draw (2% flaky in 1e6)
+    seq = iter([7, 7, 42])
+    monkeypatch.setattr("hermes_bridge.secrets.randbelow", lambda n: next(seq))
+    a, b, c = mint_token(), mint_token(), mint_token()
+    assert a == b == "RG-000007" and c == "RG-000042"
 
 
 # ---------- ask_owner ----------
@@ -75,8 +79,10 @@ def test_ask_owner_sent_on_rc_2xx(tmp_path):
                     notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 111)
     assert rec["status"] == "sent"
     assert rec["sent_ts_ms"] == 111
-    assert re.fullmatch(r"\[RG-[0-9A-F]{12}\]", rec["token"])
-    assert rec["token"] in sent[0] and "reply to this message" in sent[0]
+    assert re.fullmatch(r"RG-\d{6}", rec["token"])
+    assert rec["token"] in sent[0] and "Reply to this message" in sent[0]
+    # #584 AC6: ref line is the LAST line, bare — no punctuation after the token
+    assert sent[0].splitlines()[-1] == f"Reply to this message — ref {rec['token']}"
     # persisted, readable
     p = tmp_path / "asks" / f"{rec['token']}.json"
     assert json.loads(p.read_text())["status"] == "sent"
@@ -92,13 +98,25 @@ def test_ask_owner_delivery_unknown_on_send_failure_no_resend(tmp_path):
 
 def test_ask_owner_token_create_if_absent(tmp_path, monkeypatch):
     # force a collision on the first mint, then a fresh one
-    seq = iter(["[RG-AAAAAAAAAAAA]", "[RG-AAAAAAAAAAAA]", "[RG-BBBBBBBBBBBB]"])
+    seq = iter(["RG-111111", "RG-111111", "RG-222222"])
     monkeypatch.setattr("hermes_bridge.mint_token", lambda: next(seq))
     r1 = ask_owner("q1", "r1", state_dir=tmp_path, notify=lambda m: "200", now_ms=lambda: 1)
     r2 = ask_owner("q2", "r2", state_dir=tmp_path, notify=lambda m: "200", now_ms=lambda: 2)
-    assert r1["token"] == "[RG-AAAAAAAAAAAA]"
-    assert r2["token"] == "[RG-BBBBBBBBBBBB]"  # collided token re-minted, first ask not clobbered
-    assert json.loads((tmp_path / "asks" / "[RG-AAAAAAAAAAAA].json").read_text())["question"] == "q1"
+    assert r1["token"] == "RG-111111"
+    assert r2["token"] == "RG-222222"  # collided token re-minted, first ask not clobbered
+    assert json.loads((tmp_path / "asks" / "RG-111111.json").read_text())["question"] == "q1"
+
+
+def test_ask_owner_options_template_ref_last_bare(tmp_path):
+    # #584 AC6: options variant — ref line last, bare token, no trailing punctuation
+    sent = []
+    rec = ask_owner("pick", "runO", state_dir=tmp_path,
+                    notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 9,
+                    options=[{"id": 1, "label": "a"}, {"id": 2, "label": "b"}],
+                    response_mode="option_required")
+    lines = sent[0].splitlines()
+    assert lines[-1] == f"Reply with the option number — ref {rec['token']}"
+    assert not re.search(re.escape(rec["token"]) + r"[^\s]", sent[0])
 
 
 # ---------- classify_batch (pure) ----------

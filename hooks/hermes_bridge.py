@@ -41,7 +41,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atomic_write_lib import atomic_write_text  # noqa: E402
 
 OWNER_ENV_KEYS = ("BB_URL", "BB_RECIPIENT", "BLUEBUBBLES_PASSWORD")
-TOKEN_RE = re.compile(r"\[RG-[0-9A-F]{12}\]")
+# #584: two-format — legacy 48-bit bracketed asks still in flight (AC7) + new short numeric form
+TOKEN_RE = re.compile(r"\[RG-[0-9A-F]{12}\]|\bRG-\d{6}\b")
 RESPONSE_MODES = ("free_text", "option_required", "option_or_text")  # #568 Phase-2
 MAX_REPLY = 8000
 POLL_LIMIT = 25
@@ -62,8 +63,12 @@ def _now_ms() -> int:
 
 
 def mint_token() -> str:
-    """High-entropy (48-bit) bracketed exact-match token, e.g. [RG-A1B2C3D4E5F6]."""
-    return "[RG-" + secrets.token_hex(6).upper() + "]"
+    """Short phone-typeable correlation token, e.g. RG-482913 (#584, owner decision).
+
+    Correlation-only — the trust boundary is the owner-handle filter, never the token.
+    The RG- prefix makes accidental all-numeric collision (a pasted OTP/order number)
+    impossible; collision among persisted asks is handled by the O_EXCL create loop."""
+    return f"RG-{secrets.randbelow(1000000):06d}"
 
 
 def redact(text: str) -> str:
@@ -191,7 +196,7 @@ def maybe_send_clarification(ask_record, disposition, *, state_dir, notify=None)
     notify = notify or _default_notify
     opts = ask_record.get("options") or []
     msg = ("Your reply didn't match an option. Reply with the number:\n"
-           f"{render_options(opts)}\n(keep ref {token})")
+           f"{render_options(opts)}\nKeep ref {token}")
     # Step-11 Codex8: mark sent ONLY on a 2xx — a failed send stays retryable (the owner never
     # got it), so a later poll can re-send exactly once when transport recovers.
     code = str(notify(msg))
@@ -350,10 +355,11 @@ def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
         json.dump(rec, f)
 
     if options is not None:
+        # #584 AC6: ref line LAST and bare — no punctuation after the token (test-pinned)
         msg = (f"{question}\n{render_options(options)}\n"
-               f"(reply with the option number, keep ref {token})")
+               f"Reply with the option number — ref {token}")
     else:
-        msg = f"{question}\n(reply to this message, keep ref {token})"
+        msg = f"{question}\nReply to this message — ref {token}"
     code = str(notify(msg))
     rec["status"] = "sent" if _is_2xx(code) else "delivery_unknown"
     atomic_write_text(str(path), json.dumps(rec))  # overwrite the status only
