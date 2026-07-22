@@ -865,7 +865,7 @@ def parse_denial_evidence(output: Optional[str], *, target: str) -> dict:
     return empty
 
 
-_ACCOUNT_DIGEST_PREFIX: Final[str] = "rawgentic-account-identity:v1|"
+_ACCOUNT_DIGEST_PREFIX: Final[str] = "rawgentic-account-identity:v2|"
 
 
 def probe_account(claude_bin: str = "claude", *, runner=subprocess.run, timeout: float = 30.0) -> dict:
@@ -907,8 +907,12 @@ def probe_account(claude_bin: str = "claude", *, runner=subprocess.run, timeout:
     email, org_id = data.get("email"), data.get("orgId")
     if not (isinstance(email, str) and email and isinstance(org_id, str) and org_id):
         return _empty("parse_error")  # authenticated but the identity fields are absent
+    # domain-separate the identity fields unambiguously (8a-L3): a raw ``email + "|" + org_id``
+    # concat collides across distinct identities when a field contains "|" (e.g. ("a|b","c") vs
+    # ("a","b|c")). JSON-encoding the pair makes the boundary injective.
     digest = hashlib.sha256(
-        (_ACCOUNT_DIGEST_PREFIX + email + "|" + org_id).encode("utf-8")).hexdigest()
+        (_ACCOUNT_DIGEST_PREFIX
+         + json.dumps([email, org_id], separators=(",", ":"))).encode("utf-8")).hexdigest()
     return {"status": "ok", "logged_in": True, "identity_digest": digest,
             "subscription_type": data.get("subscriptionType"),
             "auth_method": data.get("authMethod")}

@@ -1885,7 +1885,8 @@ def test_probe_account_ok_digest_no_pii():
     assert p["status"] == "ok" and p["logged_in"] is True
     assert p["subscription_type"] == "team" and p["auth_method"] == "oauth"
     assert p["identity_digest"] == _h.sha256(
-        (er._ACCOUNT_DIGEST_PREFIX + "dev@example.com|org-abc").encode("utf-8")).hexdigest()
+        (er._ACCOUNT_DIGEST_PREFIX
+         + json.dumps(["dev@example.com", "org-abc"], separators=(",", ":"))).encode("utf-8")).hexdigest()
     blob = json.dumps(p)
     assert "dev@example.com" not in blob and "org-abc" not in blob and "@" not in blob
     assert er.account_probe_ok_for_paid(p) is True
@@ -1922,6 +1923,18 @@ def test_probe_account_digest_stability_and_separation():
     assert d1 == d1b and d1 != d2  # stable per identity; changes when orgId changes
 
 
+def test_probe_account_digest_no_delimiter_collision():
+    # #559 8a-L3: the digest must domain-separate email from orgId unambiguously. Two DISTINCT
+    # identities that would collide under a naive `email + "|" + orgId` concat — ("a|b","c") and
+    # ("a","b|c") both fold to "a|b|c" — MUST produce different digests, else a real A->B account
+    # switch reads as "no change" and silently aborts the dependent cell.
+    jx = json.dumps({"loggedIn": True, "email": "a|b", "orgId": "c"})
+    jy = json.dumps({"loggedIn": True, "email": "a", "orgId": "b|c"})
+    dx = er.probe_account("claude", runner=_fake_auth_runner(0, jx))["identity_digest"]
+    dy = er.probe_account("claude", runner=_fake_auth_runner(0, jy))["identity_digest"]
+    assert dx and dy and dx != dy
+
+
 # ---------------------------------------------------------------------------
 # AC2a (#559): resume_dispatch — claude-only resumed session through the chokepoint
 # ---------------------------------------------------------------------------
@@ -1938,7 +1951,7 @@ class _ResumeSup:
     def await_job(self, record, *, timeout_s=3600.0, expect_session_id=None):
         self.awaited.append(expect_session_id)
         if self._mismatch:
-            from phase_executor.supervisor import SupervisorError  # noqa: PLC0415
+            from phase_executor.supervisor import SupervisorError  # noqa: PLC0415  # pylint: disable=no-name-in-module
             raise SupervisorError(
                 f"resume identity mismatch: transport session_id 'other' != {expect_session_id!r}")
         return self._state, _valid_obs()
@@ -2005,8 +2018,8 @@ def test_resume_dispatch_session_mismatch_fails_loud(tmp_path):
 
 def _completed_record(tmp_path, *, receipt_nonce="rn1", session="sess1", state="completed",
                       seat="build"):
-    from phase_executor.registry import JobRecord  # noqa: PLC0415
-    from phase_executor.worktree import WorktreeIdentity  # noqa: PLC0415
+    from phase_executor.registry import JobRecord  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    from phase_executor.worktree import WorktreeIdentity  # noqa: PLC0415  # pylint: disable=no-name-in-module
     ident = WorktreeIdentity(run_id="run1", seat=seat, attempt="0-a")
     return JobRecord(
         identity=ident, session_name=session, run_socket="s", pane_pid=1, pane_pgid=1,
@@ -2042,7 +2055,7 @@ class _FakeMgr:
 
     def promote(self, handle, *, target_ref, expected_target_sha, message, path_policy):
         self.promote_calls.append((target_ref, expected_target_sha))
-        from phase_executor.worktree import WorktreeError, PromotionResult  # noqa: PLC0415
+        from phase_executor.worktree import WorktreeError, PromotionResult  # noqa: PLC0415  # pylint: disable=no-name-in-module
         outside = [p for p in self._changed if not path_policy(p)]
         if outside:
             raise WorktreeError(f"outside policy: {outside}")
@@ -2147,7 +2160,7 @@ class _RecoverSup:
     def recover(self, run_id, *, dispatch_gate):
         # exercise the REAL gate the way production _relaunch does (prelaunch checks passed)
         import dataclasses as _dc  # noqa: PLC0415
-        from phase_executor.supervisor import RecoveryAction  # noqa: PLC0415
+        from phase_executor.supervisor import RecoveryAction  # noqa: PLC0415  # pylint: disable=no-name-in-module
         authz = dispatch_gate(record=self._record, correlation_id="orig#resume1", recovered_from="orig")
         if authz is None:
             return [RecoveryAction(self._record.identity, "relaunch_refused (gate)", self._record)]
