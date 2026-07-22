@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#584 — Reply-quote correlation (lane design)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-spec table th{color:var(--accent)}
+.tpl-spec li{margin:.2em 0}
+</style>
+</head>
+<body class="tpl-spec">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 12:50 MDT</div>
+<h1>#584 — Reply-quote correlation (lane design)</h1>
+
+</header>
+<main>
+<h1>#584 — Reply-quote GUID correlation + short numeric fallback token (lane design note)</h1>
+<p>Small-standard lane brief (simple_change, 4 impl files). Parent arc: #568 (Phase-1 PR #573, Phase-2 PR #574). UAT evidence 2026-07-22: the owner&#x27;s two natural reply gestures (quote-reply without token; bare token without brackets) both failed the exact-bracketed-token matcher.</p>
+<h2>Approach (single obvious path)</h2>
+<p>Widen <code>classify_batch</code> candidate matching from token-only to <strong>quote-first, token-fallback</strong>, and shorten the token. All never-wrong-act invariants (two-store never-lose, token-closure, consumed-GUID dedupe, ambiguity-refuses, temporal scoping) unchanged.</p>
+<p><strong>Match precedence per candidate message (guid-bearing, NUL-free, owner-inbound, dateCreated &gt; sent_ts):</strong> 1. <strong>Quote-match:</strong> <code>msg.replyToGuid == ask.sent_guid</code> (exact equality vs stored value; None never matches). 2. <strong>Token-match:</strong> legacy exact bracketed <code>[RG-…]</code> (AC7) OR new numeric token at word boundary, brackets optional.</p>
+<h2>File changes</h2>
+<ul>
+<li><code>hooks/hermes_bridge.py</code>:</li>
+<li><code>mint_token()</code> → 6-digit numeric string (<code>secrets.randbelow</code>), collision-checked: existing O_EXCL asks-file create loop retries on collision (already 8 attempts); token rendered as <code>ref 482913</code>.</li>
+<li><code>ask_owner()</code> → after 2xx send, <strong>sent-GUID self-query</strong>: via existing <code>_default_transport</code>, rows where <code>isFromMe</code> AND token in text AND <code>dateCreated &gt;= sent_ts</code> (small skew allowance), pick <strong>EARLIEST dateCreated</strong> — the ask precedes any gateway ACK echo (live hazard: Darwin ACKs echo the token back as isFromMe; newest-row pick would capture the ACK, probe guids 8768B0BF vs 54016324). Miss/failure → <code>sent_guid: null</code>, logged, ask proceeds (quote path inert, token path = Phase-1 behavior).</li>
+<li><code>classify_batch()</code> → quote-match arm + widened token-match; ambiguity semantics unchanged (two distinct candidates → ambiguous → deliver nothing).</li>
+<li><code>interpret_reply()</code> → strip token if present (quote-only replies carry none); numeric option parse unchanged.</li>
+<li>Message template → <code>(reply to this message — ref 482913)</code> / options variant <code>(reply with the option number — ref 482913)</code>: no trailing paren adjacent to ref (AC6).</li>
+<li><code>tests/hooks/test_hermes_bridge.py</code> → red-first cases per AC (see plan).</li>
+<li>Version surfaces ×N (grep current version at bump time) + README Changelog.</li>
+</ul>
+<h2>Failure modes</h2>
+<ul>
+<li><strong>Send propagation delay:</strong> self-query may run before the sent message lands in the store → short bounded retry (≤3 polls, ~2s apart), then <code>sent_guid: null</code> (fail-open to token path). Never fails the ask.</li>
+<li><strong>ACK-echo contamination:</strong> earliest-row rule above; ACKs are also <code>isFromMe</code>-filtered OUT of inbound candidate flow (existing owner-inbound filter), so echoes can never false-match as replies.</li>
+<li><strong>Owner quotes a non-ask message</strong> (observed live: Cell A retry quoted a Darwin chat message): quote arm no-match → token arm → standard dispositions. Degrades, never wrong-acts.</li>
+<li><strong>Quote-match to consumed/closed ask:</strong> existing token-closure/consumed flow classifies <code>late</code> — never double-delivers.</li>
+<li><strong>6-digit numeric in unrelated owner text:</strong> word-boundary + temporal scoping + open-ask-only + ambiguity-refuses; residual risk accepted (correlation-only token, no auth role).</li>
+</ul>
+<h2>Security implications</h2>
+<p>No new secrets, no new endpoints, send path unchanged (notify.sh reuse). <code>replyToGuid</code> used only for equality against a locally-stored GUID (no dereference, no execution). Numeric token lowers entropy but token is correlation-only — inbound already filtered to the owner recipient; never-wrong-act refusal on ambiguity retained. Inbound text remains untrusted DATA (envelope unchanged).</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: POST /api/v1/message/query returning isFromMe rows with guid/text/dateCreated/replyToGuid on the BlueBubbles server</li>
+</ul>
+<p>  feasibility: verified via spike — live probes this session via the exact shipped invocation (<code>hb._default_transport(chat_guid=..., since_ms=..., limit=...)</code>): outbound ask row found isFromMe=True guid=54016324 (Cell B ask); replyToGuid populated on all owner inline replies (guids 8034046D/54016324/B75F6CB1/B8B6E537 resolved to their quoted targets)   failure: fail-loud   surface: BridgeUnreachable raised on non-2xx/parse/unexpected shape (existing <code>_query_page</code> contract — never a silent empty result)</p>
+<h2>Amendments (Step 4 spec-tightening pass, owner decisions 2026-07-22)</h2>
+<p><strong>Owner decisions (breaker resolution):</strong> token format = <code>RG-</code> + 6 digits (<code>RG-482913</code>) — accidental all-numeric collision impossible, still phone-typeable; ref rendered on its OWN line with no enclosing punctuation.</p>
+<p>1. <strong>(F1, High) Quote-arm null guard — normative:</strong> the quote arm evaluates ONLY when <code>ask.sent_guid</code> is truthy AND <code>msg.replyToGuid</code> is truthy AND they are equal. Never a bare <code>==</code>. Mandatory red-first test: <code>sent_guid=None</code> × plain owner message (<code>replyToGuid</code> absent) must NOT match — the None==None wrong-delivery case. 2. <strong>(F2, High) Token format:</strong> <code>mint_token()</code> → <code>RG-</code> + <code>secrets.randbelow</code> 6 digits. Match arm: word-boundary <code>\bRG-\d{6}\b</code>, brackets optional (<code>[RG-482913]</code> also accepted). Entropy note: ~20-bit space is correlation-only; trust boundary remains the owner-handle filter; quote arm is primary. Owner signed off on the residual (prefixed) collision risk explicitly. 3. <strong>(F7) Exact templates (pinned by test — no punctuation after the token):</strong></p>
+<ul>
+<li>free_text: last line <code>Reply to this message — ref RG-482913</code></li>
+<li>options: last line <code>Reply with the option number — ref RG-482913</code></li>
+</ul>
+<p>4. <strong>(F3) Enumerated breakages to update in the same tasks:</strong> <code>TOKEN_RE</code> (:44) → two-format matcher (legacy <code>\[RG-[0-9A-F]{12}\]</code> OR new form); <code>self_check</code> token assert (:655); <code>test_mint_token_shape</code> (:62); <code>test_ask_owner_sent_on_rc_2xx</code> (:78, template text); <code>test_mint_token_unique</code> (:67) → deterministic rewrite via stubbed <code>secrets.randbelow</code> (200-draw probabilistic test is ~2% flaky in a 1e6 space). 5. <strong>(F4) Phase-1 reversal reconciled:</strong> Phase-1&#x27;s probe &quot;never observed a populated replyToGuid&quot; because its probe messages were not reply-gestures; the #568 inbound investigation (:23) already noted the field is set only on the iMessage reply gesture, and today&#x27;s spike resolved 4 reply-gesture guids to their quoted targets. A captured spike row (owner reply-gesture with populated replyToGuid) is pinned as a test fixture to lock the field name against BlueBubbles drift. 6. <strong>(F5) Injectability — normative:</strong> <code>ask_owner</code> gains <code>transport=None, sleep=None, clock=None</code> params (repo convention: all I/O injected); injected paths short-circuit the retry (no real sleeps in tests). Tradeoff recorded: the post-send self-query is racy vs capturing the guid from the send response, chosen to avoid touching sentinel-shared notify.sh (cross-project blast radius); the racy path fail-opens to <code>sent_guid: null</code> (token fallback), never wrong-acts. 7. <strong>(F6) Property tests — created, not extended:</strong> NEW property suite over the widened matcher asserting: no owner message resolves <code>matched</code> unless it uniquely quote-matches a truthy <code>sent_guid</code> or uniquely token-matches; two distinct candidates → deliver nothing; null <code>sent_guid</code> → quote arm inert; legacy and numeric token forms never cross-match. 8. <strong>(F8) Plumbing — explicit:</strong> <code>classify_batch</code> gains a <code>sent_guid</code> parameter; <code>poll_once</code> passes <code>ask_record.get(&quot;sent_guid&quot;)</code>. Token-type discrimination: legacy tokens match by exact bracketed substring; new tokens by word-boundary regex. Self-query tie-break on equal <code>dateCreated</code>: prefer the row whose text equals the full rendered ask; residual mis-pick degrades the quote path only (never wrong-acts; inbound ACK echoes are isFromMe-filtered). 9. <strong>(Low note) Wording:</strong> collision check is against all persisted ask files (open or closed), not merely open asks.</p>
+
+</main>
+<footer>Last updated: 2026-07-22 12:50 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
