@@ -29,12 +29,16 @@ def test_i3_join_and_reference_fields_documented():
         assert token in section, f"I3 join/reference field {token!r} not documented"
 
 
-def test_i3_sidecar_deferred_to_473():
-    """The seat-outcomes sidecar is documented as DEFERRED to #473 — the H3 scope boundary."""
+def test_i3_sidecar_shipped_in_473():
+    """The seat-outcomes sidecar SHIPPED in #473: the README section names the store path, the
+    hooks module that writes it, and the idempotency key (was DEFERRED pre-#473)."""
     section = _i3_section()
-    assert "seat-outcomes" in section
+    assert "seat-outcomes.jsonl" in section
     assert "#473" in section
-    assert "DEFERRED" in section
+    assert "hooks/seat_outcomes_lib.py" in section
+    assert "attempt_id" in section  # the (run_id, attempt_id) idempotency key
+    # the no-code-in-phase_executor boundary is restated (guards below still enforce it)
+    assert "hooks/" in section
 
 
 def test_469_introduces_no_seat_outcomes_sidecar_schema():

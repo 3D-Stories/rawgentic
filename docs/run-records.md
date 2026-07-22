@@ -480,3 +480,68 @@ add the entry), not auto-wired — and the first real captures are **owner-gated
 on the live Action (the auth secret, #195). Until ≥10 accumulate, the #162
 decision stays "computable, pending data" (see
 `docs/measurements/2026-07-05-issue-162-data-gate-decision.md`).
+
+## I3 seat-outcomes sidecar — cross-run baselines & advisory alerts (`hooks/seat_outcomes_lib.py`, #473, W11)
+
+The per-dispatch executor Observations live in an **ephemeral, git-excluded**
+`.rawgentic/runs/<run-id>/routing-audit.jsonl`; cross-run learning cannot read them once the
+run's capture dir is swept. The **I3 sidecar** (`docs/measurements/seat-outcomes.jsonl`,
+committed like `run_records.jsonl`) is the durable home: at WF2/WF3 run end
+`hooks/seat_outcomes_lib.py run-end` harvests that run's observations into one row per
+terminal, receipt-bound dispatch, then computes baselines and evaluates advisory alerts.
+
+**Row schema (`schema_version:"1"`).** Join keys `run_id`, `attempt_id` (the idempotency key —
+a re-run appends nothing), `correlation_id`, `issue` (sourced ONLY from a validated matching
+`--record-file`; NEVER parsed from correlation text; must be `> 0`), `seat`, `engine`, `model`
+(canonical engine-reported id; null when unattested), `models_match`, `lane` (minus
+`credential_ref`), structured `fallback` (never the raw reason string), `usage`, `timing_ms`,
+`queued_ms`, `exit_code`/`timed_out`, `canary_verdict`, `work_product_ref` (SHA subset only),
+`hook_denials`, `budget`, `experiment_id`/`arm` (AC-K4 stubs, null). **Retention is
+fail-closed:** vocabulary fields are validated against the Observation schema's enums; identity
+fields pass a grammar allowlist **plus a path-shape rejection step** (leading `/`, `..`/`.`
+segments, drive/UNC prefixes, ≥2 `/` → redacted to null + a `redacted_fields` tally). No free
+text, no filesystem paths, and no `credential_ref`/`prompt_hash`/`parsed_payload` ever reach
+git. **Documented residuals:** a grammar-shaped, non-path opaque token pasted into a trace key
+(`correlation_id`, model id) is retained by decision, and exact activity timestamps/counts are
+retained in git history — both are accepted for a telemetry substrate.
+
+**Harvest is non-destructive and locked.** Under an exclusive `flock` (acquired before the
+store is read), the rewrite preserves every original line: valid v1 rows are kept, unknown
+future-`schema_version` rows pass through byte-verbatim, and invalid interior rows or a torn
+terminal fragment are moved to the gitignored `seat-outcomes.jsonl.quarantine` (never
+re-committed, preserved for diagnosis). A same-`(run_id, attempt_id)` row with a different
+content digest **aborts before any write**; the one merge exception is `issue` enrichment
+(null → a validated positive value). The store has **no byte cap** and its dedup key index is
+**O(number of rows)** (declared honestly, not "bounded"): `run-end` emits a
+`telemetry: sidecar large (N rows)` advisory past `SIDECAR_SOFT_MAX_ROWS` (50 000).
+**Deferred follow-ups:** store compaction (or a disk-backed index) before that ceiling; and
+locking the I2 `run_records.jsonl` append itself (today unlocked — pre-existing, out of #473
+scope; the review-baseline read tolerates a torn terminal I2 line).
+
+**Baselines (AC-K2).** Rolling per-`(seat, canonical model)` baselines over the latest
+`windowSize` rows (ordered by `(recorded_at, run_id, attempt_id)` — ingestion order): p50 =
+median, p90 = nearest-rank; a metric with `n < minSamples` reports `insufficient_history` with
+no numbers (never a fabricated value). Driver-bench reports are **reference anchors**, reported
+separately and never merged into the operational percentiles.
+
+**Alerts (AC-K3) — advisory, never a gate.** Unconditional rules (`fallback_fired`,
+`dispatch_failures`, `model_mismatch`, `parse_failure`) fire regardless of history; statistical
+rules (`seat_wall_time_p90`, `seat_cost_p90`, `review_findings_p90`) require an `ok` baseline
+and otherwise report `not_evaluated` (a missing metric is never read as zero). Only
+`status=="fired"` results render; they ride the run-record as `extra` rows
+(`telemetry-alert:<rule>`) folded in via a Python JSON read-modify-write at Step 16 and are
+appended to session notes. Alert presence never changes an exit code — an alert asks the owner
+to look, it does not block. **A quota-pause rule is deferred**: no producer signal exists yet
+(`fallback_reason` carries no quota taxonomy and live quota classification ships shadow); it
+lands when genuine quota capture activates (#559 OPS follow-up).
+
+**Config (`telemetryAlerts`, AC-K5 / #446).** `{"version":1, "enabled":true, "windowSize":30,
+"minSamples":5, "thresholds":{...}}`. Count rules take `false | non-negative int`; toggle
+rules take a bool; `enabled:false` disables evaluation (harvest still runs). Setup Step 2j
+stages it via `seat_outcomes_lib.py validate-config` (strict — unknown keys rejected); the
+runtime loader fails open to the documented defaults (parsing `enabled` first, so a valid
+`enabled:false` beside a malformed sibling still disables).
+
+**Commit flow.** Telemetry written after a merge rides the NEXT PR, staged BY NAME — exactly
+the `run_records.jsonl` slot-15 convention, now covering `seat-outcomes.jsonl` too. The
+`.lock` and `.quarantine` siblings are gitignored.
