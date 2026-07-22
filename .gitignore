@@ -58,3 +58,6 @@ docs/measurements/driver-bench/live-*.json
 # its lock + quarantine siblings are per-run bookkeeping, never committed.
 docs/measurements/seat-outcomes.jsonl.lock
 docs/measurements/seat-outcomes.jsonl.quarantine
+
+# #473 backlog tracker: HTML is self-contained; the .data.json is a regeneration cache
+docs/planning/2026-07-22-backlog-tracker.data.json
