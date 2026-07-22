@@ -305,10 +305,248 @@ def validate_seat_outcome(row) -> list:
     return errs
 
 
+# --- harvest: consume-time validation + binding + non-destructive locked rewrite ----------
+import fcntl  # noqa: E402
+import os  # noqa: E402
+
+AUDIT_MAX_BYTES = 10 * 1024 * 1024
+AUDIT_MAX_ENTRIES = 500
+LINE_MAX_BYTES = 64 * 1024
+SIDECAR_SOFT_MAX_ROWS = 50_000
+
+
+class DigestConflict(Exception):
+    """A same-key row already in the store has a DIFFERENT content digest — abort before write."""
+
+
+class HarvestBounds(Exception):
+    """An input exceeded a hard bound (aborts before any write)."""
+
+
+def _target_identity(model, lane):
+    """Replicate enforce.target_identity for the binding check (avoids importing enforce here;
+    the shape is the frozen (model, provider, transport, auth_mode, pool, credential_ref, extra)
+    tuple — matched against the receipt's stored target_identity list)."""
+    from phase_executor.enforce import target_identity  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    return list(target_identity({"model": model, "lane": lane}))
+
+
+def _read_audit(audit_path: Path):
+    """Line-tolerant read of routing-audit.jsonl → (receipts_by_nonce, nonce_counts, obs_list,
+    counters). Duplicate-key JSON is rejected. Malformed/oversize lines are counted, not fatal."""
+    counters = {"skipped_malformed": 0}
+    receipts = {}
+    nonce_counts = {}
+    obs = []
+    size = audit_path.stat().st_size
+    if size > AUDIT_MAX_BYTES:
+        raise HarvestBounds(f"audit file {size} bytes > {AUDIT_MAX_BYTES}")
+    for raw in audit_path.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        if len(raw.encode("utf-8")) > LINE_MAX_BYTES:
+            counters["skipped_malformed"] += 1
+            continue
+        try:
+            rec = json.loads(raw, object_pairs_hook=_no_dup_keys)
+        except (json.JSONDecodeError, ValueError):
+            counters["skipped_malformed"] += 1
+            continue
+        kind = rec.get("kind")
+        if kind == "receipt":
+            n = rec.get("nonce")
+            nonce_counts[n] = nonce_counts.get(n, 0) + 1
+            receipts[n] = rec
+        elif kind == "observation":
+            obs.append(rec)
+            if len(obs) > AUDIT_MAX_ENTRIES:
+                raise HarvestBounds(f"audit > {AUDIT_MAX_ENTRIES} observation entries")
+    return receipts, nonce_counts, obs, counters
+
+
+def _no_dup_keys(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise ValueError(f"duplicate JSON key {k!r}")
+        seen[k] = v
+    return seen
+
+
+def _bind_ok(envelope, receipts, nonce_counts, run_id):
+    """Return (True, inner) if the observation is bound to a valid pass-verdict receipt for
+    THIS run, else (False, reason). Honest scope: detects orphan/tamper, NOT hostile forgery."""
+    inner = envelope.get("observation")
+    if not isinstance(inner, dict):
+        return False, "no-inner"
+    if inner.get("run_id") != run_id:
+        return False, "run-id-mismatch"
+    nonce = envelope.get("receipt_nonce")
+    rec = receipts.get(nonce)
+    if rec is None:
+        return False, "no-receipt"
+    if nonce_counts.get(nonce, 0) != 1:
+        return False, "dup-nonce"
+    if rec.get("verdict") != "pass":
+        return False, "verdict-not-pass"
+    if inner.get("attempt_id") != rec.get("attempt_id"):
+        return False, "attempt-drift"
+    if inner.get("seat") != rec.get("seat"):
+        return False, "seat-drift"
+    if inner.get("correlation_id") != rec.get("correlation_id"):
+        return False, "correlation-drift"
+    try:
+        tid = _target_identity(inner.get("requested_model"), inner.get("dispatched_lane"))
+    except Exception:  # pylint: disable=broad-exception-caught
+        return False, "identity-error"
+    if tid != list(rec.get("target_identity") or []):
+        return False, "identity-mismatch"
+    if rec.get("config_digest") != inner.get("routing_config_digest"):
+        return False, "digest-mismatch"
+    return True, inner
+
+
+def resolve_store_path(project_root, store) -> Path:
+    if store is not None:
+        return Path(store)
+    return Path(project_root).joinpath(*DEFAULT_STORE_RELPATH)
+
+
+def _read_store(store_path: Path):
+    """Stream the committed store → (valid_index {key: (digest,row)}, kept_lines, quarantine,
+    counters). valid v1 rows index + keep; future-version pass through (kept); invalid interior
+    rows → quarantine; a torn terminal fragment → quarantine. Nothing is deleted."""
+    index = {}
+    kept = []  # verbatim lines to re-commit (valid v1 + future-version)
+    quarantine = []
+    counters = {"passed_through": 0, "quarantined": 0}
+    if not store_path.exists():
+        return index, kept, quarantine, counters
+    lines = store_path.read_text(encoding="utf-8").splitlines()
+    for i, raw in enumerate(lines):
+        s = raw.strip()
+        if not s:
+            continue
+        is_last = (i == len(lines) - 1)
+        try:
+            rec = json.loads(s, object_pairs_hook=_no_dup_keys)
+        except (json.JSONDecodeError, ValueError):
+            quarantine.append(raw)  # torn terminal or malformed interior → quarantine
+            counters["quarantined"] += 1
+            continue
+        sv = rec.get("schema_version")
+        if sv != SCHEMA_VERSION:
+            kept.append(raw)  # forward-compat: pass through byte-verbatim
+            counters["passed_through"] += 1
+            continue
+        if validate_seat_outcome(rec):
+            quarantine.append(raw)  # invalid v1 row → quarantine, never re-committed
+            counters["quarantined"] += 1
+            continue
+        key = (rec.get("run_id"), rec.get("attempt_id"))
+        index[key] = (content_digest(rec), rec)
+        kept.append(raw)
+    return index, kept, quarantine, counters
+
+
+def harvest(capture_root, run_id, store, *, issue=None, now, project_root=None):
+    """Harvest one run's audit observations into the durable committed sidecar.
+
+    Locked (flock), consume-time-validated, binding-checked, non-destructive. Returns a result
+    dict with per-outcome counters. Raises DigestConflict / HarvestBounds (both leave the store
+    untouched). ``now`` is the recorded_at stamp (ISO-8601 UTC; the CLI supplies it)."""
+    store_path = resolve_store_path(project_root, store) if project_root else Path(store)
+    audit_path = Path(capture_root) / run_id / "routing-audit.jsonl"
+    res = {"rows_appended": 0, "skipped_malformed": 0, "skipped_invalid_observation": 0,
+           "skipped_unbound": 0, "passed_through": 0, "quarantined": 0, "redacted_fields": 0,
+           "note": None}
+    if not audit_path.exists():
+        res["note"] = "telemetry: no capture dir"
+        return res
+
+    # Lock FIRST (before reading the store) so read+evaluate+rewrite are one critical section.
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = store_path.with_name(store_path.name + ".lock")
+    lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        receipts, nonce_counts, obs_envelopes, ac = _read_audit(audit_path)
+        res["skipped_malformed"] = ac["skipped_malformed"]
+
+        derived = []
+        for env in obs_envelopes:
+            ok, inner = _bind_ok(env, receipts, nonce_counts, run_id)
+            if not ok:
+                res["skipped_unbound"] += 1
+                continue
+            try:
+                from phase_executor.contract import validate_observation  # noqa: PLC0415  # pylint: disable=no-name-in-module
+                validate_observation(inner)
+            except Exception:  # pylint: disable=broad-exception-caught
+                res["skipped_invalid_observation"] += 1
+                continue
+            row = derive_seat_outcome(inner, issue=issue, recorded_at=now)
+            if validate_seat_outcome(row):
+                res["skipped_invalid_observation"] += 1
+                continue
+            res["redacted_fields"] += row.pop("redacted_fields", 0)
+            derived.append(row)
+
+        index, kept, quarantine, sc = _read_store(store_path)
+        res["passed_through"] = sc["passed_through"]
+        res["quarantined"] = sc["quarantined"]
+
+        new_lines = []
+        for row in derived:
+            key = (row["run_id"], row["attempt_id"])
+            dig = content_digest(row)
+            if key in index:
+                existing_dig, existing_row = index[key]
+                if existing_dig != dig:
+                    raise DigestConflict(f"{key}: existing digest != new (store untouched)")
+                # enrichment: null issue → validated positive
+                if existing_row.get("issue") is None and row.get("issue"):
+                    existing_row["issue"] = row["issue"]
+                    kept = [ln for ln in kept
+                            if (json.loads(ln).get("run_id"), json.loads(ln).get("attempt_id")) != key]
+                    kept.append(json.dumps(existing_row, separators=(",", ":")))
+                continue  # idempotent skip
+            index[key] = (dig, row)
+            new_lines.append(json.dumps({k: v for k, v in row.items()}, separators=(",", ":")))
+            res["rows_appended"] += 1
+
+        if quarantine:
+            q_path = store_path.with_name(store_path.name + ".quarantine")
+            with open(q_path, "a", encoding="utf-8") as f:
+                for ln in quarantine:
+                    f.write(ln + "\n")
+
+        final = "\n".join(kept + new_lines)
+        if final:
+            final += "\n"
+        _atomic_write(str(store_path), final)
+
+        total_rows = len([1 for ln in (kept + new_lines) if ln.strip()])
+        if total_rows > SIDECAR_SOFT_MAX_ROWS:
+            res["note"] = f"telemetry: sidecar large ({total_rows} rows)"
+        return res
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def _atomic_write(path, text):
+    """Route through the repo one-home atomic writer (mkstemp+os.replace)."""
+    import atomic_write_lib  # noqa: PLC0415
+    atomic_write_lib.atomic_write_text(path, text, prefix=".seat-outcomes-", fsync=True)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="seat_outcomes_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("noop")  # placeholder until T2-T4 verbs land
+    sub.add_parser("noop")  # baselines/alerts/run-end verbs land in T3/T4
     parser.parse_args(argv)
     return 2
 

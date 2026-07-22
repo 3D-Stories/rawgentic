@@ -221,3 +221,152 @@ class TestValidator:
         row = so.derive_seat_outcome(_obs(), issue=1)
         del row["attempt_id"]
         assert so.validate_seat_outcome(row)
+
+
+# ---------------------------------------------------------------------------
+# T2 — consume-time validated, binding-checked, non-destructive locked harvest
+# ---------------------------------------------------------------------------
+
+NOW = "2026-07-22T12:00:00Z"
+
+
+def _harvest(tmp_path, run_id, obs_list, store=None, issue=None):
+    cap = _write_audit(tmp_path, run_id, obs_list)
+    store = store or (tmp_path / "seat-outcomes.jsonl")
+    res = so.harvest(cap, run_id, store, issue=issue, now=NOW)
+    return res, store
+
+
+class TestHarvest:
+    def test_appends_valid_rows(self, tmp_path):
+        res, store = _harvest(tmp_path, "wf2-473-x",
+                              [_obs(attempt_id="0-a"), _obs(attempt_id="0-b")], issue=473)
+        assert res["rows_appended"] == 2
+        rows = [json.loads(l) for l in store.read_text().splitlines()]
+        assert len(rows) == 2
+        assert all(so.validate_seat_outcome(r) == [] for r in rows)
+        assert all(r["issue"] == 473 for r in rows)
+
+    def test_idempotent_rerun_appends_nothing(self, tmp_path):
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")])
+        store = tmp_path / "seat-outcomes.jsonl"
+        so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        res2 = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res2["rows_appended"] == 0
+        assert len(store.read_text().splitlines()) == 1
+
+    def test_inner_run_id_filter(self, tmp_path):
+        # observation whose inner run_id != --run-id is excluded
+        cap = _write_audit(tmp_path, "wf2-OTHER", [_obs(attempt_id="0-a")])
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 0
+
+    def test_missing_capture_dir_zero_rows(self, tmp_path):
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(tmp_path / ".rawgentic" / "runs", "nope", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 0
+        assert res.get("note")
+
+    def test_malformed_audit_line_counted_not_fatal(self, tmp_path):
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")])
+        audit = cap / "wf2-473-x" / "routing-audit.jsonl"
+        with audit.open("a", encoding="utf-8") as f:
+            f.write("{not json\n")
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 1
+        assert res["skipped_malformed"] == 1
+
+
+class TestBinding:
+    def test_failed_verdict_unbound(self, tmp_path):
+        import phase_executor.enforce as enforce  # noqa: PLC0415  # pylint: disable=no-name-in-module
+        cap = tmp_path / ".rawgentic" / "runs"
+        log = enforce.RoutingAuditLog(cap, "wf2-473-x")
+        o = _obs(attempt_id="0-a")
+        o["run_id"] = "wf2-473-x"
+        lane = o["dispatched_lane"]
+        # append a receipt/obs pair but with a NON-pass verdict receipt
+        r = enforce.PreReceipt(nonce="n0", seat=o["seat"], correlation_id=o["correlation_id"],
+                               attempt_id=o["attempt_id"],
+                               target_identity=enforce.target_identity(
+                                   {"model": o["requested_model"], "lane": lane}),
+                               config_digest=o["routing_config_digest"], gate_digest=None,
+                               author_provider="openai", verdict="pass", violations=())
+        log.append_receipt(r)
+        log.append_observation(o, receipt=r)
+        # now hand-craft a failed-verdict receipt referenced by a second obs
+        audit = log.path
+        rec = json.loads(audit.read_text().splitlines()[0])
+        rec["verdict"] = "fail"
+        rec["nonce"] = "nbad"
+        o2 = dict(o); o2["attempt_id"] = "0-b"
+        with audit.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(rec) + "\n")
+            f.write(json.dumps({"kind": "observation", "receipt_nonce": "nbad",
+                                "observation": {**o2, "attempt_id": "0-b"}}) + "\n")
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 1  # only the pass-verdict one
+        assert res["skipped_unbound"] >= 1
+
+    def test_orphan_nonce_unbound(self, tmp_path):
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")])
+        audit = cap / "wf2-473-x" / "routing-audit.jsonl"
+        o = _obs(attempt_id="0-orphan"); o["run_id"] = "wf2-473-x"
+        with audit.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "observation", "receipt_nonce": "no-such-nonce",
+                                "observation": o}) + "\n")
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["skipped_unbound"] >= 1
+        assert res["rows_appended"] == 1
+
+
+class TestNonDestructiveRewrite:
+    def test_future_version_row_passed_through(self, tmp_path):
+        store = tmp_path / "seat-outcomes.jsonl"
+        store.write_text(json.dumps({"schema_version": "9", "future": "data"}) + "\n")
+        res, _ = _harvest(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")], store=store, issue=1)
+        lines = store.read_text().splitlines()
+        assert any(json.loads(l).get("schema_version") == "9" for l in lines)
+        assert res["passed_through"] >= 1
+
+    def test_invalid_interior_row_quarantined_not_committed(self, tmp_path):
+        store = tmp_path / "seat-outcomes.jsonl"
+        # a v1 row that fails validation (bad recorded_at) sitting BEFORE a valid trailing one
+        bad = {"schema_version": "1", "run_id": "old", "attempt_id": "0-old",
+               "recorded_at": "garbage", "leaked": "/root/secret"}
+        good = so.derive_seat_outcome(_obs(attempt_id="0-keep"), issue=2, recorded_at=NOW)
+        store.write_text(json.dumps(bad) + "\n" + json.dumps(good) + "\n")
+        res, _ = _harvest(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")], store=store, issue=1)
+        committed = store.read_text()
+        assert "/root/secret" not in committed  # never re-committed
+        assert res["quarantined"] >= 1
+        q = tmp_path / "seat-outcomes.jsonl.quarantine"
+        assert q.exists() and "0-old" in q.read_text()  # preserved for diagnosis
+
+    def test_digest_conflict_aborts_before_write(self, tmp_path):
+        store = tmp_path / "seat-outcomes.jsonl"
+        # pre-seed a row with the SAME (run_id, attempt_id) but different content
+        existing = so.derive_seat_outcome(_obs(attempt_id="0-a", timing_ms=999), issue=1,
+                                          recorded_at=NOW)
+        store.write_text(json.dumps(existing) + "\n")
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a", timing_ms=1)])
+        with pytest.raises(so.DigestConflict):
+            so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        # original untouched
+        assert json.loads(store.read_text().splitlines()[0])["timing_ms"] == 999
+
+
+class TestStorePaths:
+    def test_absent_default_store_is_empty_history(self, tmp_path):
+        res, store = _harvest(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")], issue=1)
+        assert res["rows_appended"] == 1
+        assert store.exists()
+
+    def test_gitignore_has_lock_and_quarantine(self):
+        gi = (REPO_ROOT / ".gitignore").read_text()
+        assert "seat-outcomes.jsonl.lock" in gi
+        assert "seat-outcomes.jsonl.quarantine" in gi
