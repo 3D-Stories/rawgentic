@@ -2106,9 +2106,41 @@ class _FakeMgr:
             reason="" if self._promoted else "target advanced")
 
 
+def _seed_authorized_audit(audit, *, nonce="rn1", cid="c1", seat="build", run_id="run1"):
+    """#571 F7: seed a passing BUILD receipt + a verified completed observation for `nonce` so
+    collect_work_product's promotion-authorization precondition is satisfied. Uses _write_locked
+    (records() validates on read-back) and a real contract.Observation so verify_post().verified
+    is True (requested_model == actual_model)."""
+    from phase_executor import contract  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    # Idempotent: repeated _collect calls share one audit FILE (same tmp_path+run_id); re-seeding
+    # would write a 2nd build receipt and trip F7's exactly-1 check.
+    if any(r.get("kind") == "receipt" and r.get("nonce") == nonce and r.get("role") == "build"
+           for r in audit.records()):
+        return
+    audit._write_locked({  # pylint: disable=protected-access
+        "kind": "receipt", "nonce": nonce, "seat": seat, "correlation_id": cid, "attempt_id": "0-a",
+        "target_identity": ["codex-model", "openai", "cli", "api_key", "codex", None, None],
+        "config_digest": "sha256:d", "gate_digest": "sha256:g", "author_provider": None,
+        "verdict": "pass", "violations": [], "role": "build", "gate_outcome": "single",
+        "gate_input_digest": "sha256:gi", "recovered_from": None})
+    obs = contract.Observation(
+        run_id=run_id, attempt_id="0-a", correlation_id=cid, seat=seat, engine="codex",
+        transport="cli", requested_model="codex-model", actual_model="codex-model",
+        prompt_hash="sha256:p", context_hashes=[], usage={"input": 1, "output": 1}, timing_ms=1,
+        queued_ms=0, process={"exit_code": 0, "timed_out": False}, parse_status="ok",
+        parsed_payload=None, raw_capture_path=None, fallback_reason=None,
+        routing_config_digest="sha256:d").to_dict()
+    obs["dispatched_lane"] = {"provider": "openai", "transport": "cli", "auth_mode": "api_key",
+                              "pool": "codex", "credential_ref": None}
+    audit._write_locked({"kind": "observation", "receipt_nonce": nonce,  # pylint: disable=protected-access
+                         "observation": obs})
+
+
 def _collect(tmp_path, reg, mgr, *, run_id="run1", session="sess1",
-             target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None):
+             target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None, seed=True):
     audit = audit or enforce.RoutingAuditLog(tmp_path / "runs", run_id)
+    if seed:  # F7 (#571): a promotion needs an authorized build receipt + verified obs
+        _seed_authorized_audit(audit, run_id=run_id)
     res = er.collect_work_product(
         run_id=run_id, session_name=session, target_ref=target, expected_target_sha=expected,
         kind=kind, registry=reg, manager=mgr, audit=audit,
@@ -2270,6 +2302,26 @@ def test_collect_work_product_expected_marker_survives_derive_failure(tmp_path, 
     assert _wp_records(audit) == []  # no work_product record (derive failed)
 
 
+def test_collect_work_product_refuses_unauthorized(tmp_path):
+    # #571 F7: a completed job with a receipt_nonce but NO passing build receipt + verified
+    # observation in the audit must be refused — a promotion must be authorized, not merely
+    # terminal (another seat's output / a stale-or-forged binding must never be promoted).
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(), seed=False)
+    assert not res["ok"] and res["error"]["code"] == "unauthorized_work_product"
+    assert _wp_records(audit) == [] and _ewp_records(audit) == []
+
+
+def test_atomic_write_json_no_stray_tmp_on_failure(tmp_path):
+    # #571: a mid-write failure must leave NO stray temp (mkstemp in the target dir + finally-unlink),
+    # and must not create the target.
+    import pytest  # noqa: PLC0415
+    target = tmp_path / "sub" / "x.json"
+    with pytest.raises(TypeError):
+        er._atomic_write_json(target, {"k": {1, 2, 3}})  # a set is not JSON-serializable → dumps raises
+    assert not target.exists()
+    assert [p for p in (tmp_path / "sub").iterdir() if p.name.endswith(".tmp")] == []
+
+
 # ---------------------------------------------------------------------------
 # C1 (#559): recover_run — ledgered/receipted recovery relaunch chokepoint
 # ---------------------------------------------------------------------------
@@ -2301,6 +2353,44 @@ def _recover(tmp_path, sup, *, ledger_closed=False):
                          routing=routing, enforce=enforce, ledger_closed=ledger_closed,
                          correlation_id="c1")
     return res, audit
+
+
+def test_recover_run_refuses_foreign_correlation_before_append(tmp_path):
+    # F6 (#571): a recovered observation whose correlation_id != the recovery's is refused BEFORE
+    # append (mirror resume_dispatch's F9) — a foreign envelope never enters the ledger. Uses a
+    # role-less seat so recover_run's gate check_pre passes (a build seat needs a gate attestation
+    # the recovery gate doesn't supply — that refuses earlier, before the append is reached).
+    rec = _completed_record(tmp_path, seat="ship")
+
+    class _ForeignRecoverSup(_RecoverSup):
+        def await_job(self, record, *, timeout_s=3600.0):
+            self.await_calls.append(record.session_name)
+            return "completed", _valid_obs(correlation_id="a-foreign-cid")  # != "orig#resume1"
+
+    res, audit = _recover(tmp_path, _ForeignRecoverSup(rec))
+    assert not res["ok"] and res["exit"] == er.EXIT_ENFORCEMENT
+    assert [r for r in audit.records() if r.get("kind") == "observation"] == []  # never appended
+
+
+def test_recover_run_binds_to_original_target_refuses_if_ineligible(tmp_path):
+    # F5 (#571): recovery binds to the ORIGINAL call's target (from the original receipt), not
+    # eligible_targets[0]. If the original target is no longer eligible under the current snapshot,
+    # gate refuses (None) rather than silently drifting to a different target.
+    rec = _completed_record(tmp_path, seat="build")
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    # the ORIGINAL receipt (correlation_id "orig" == recovered_from, seat build, non-recovery pass)
+    # names a target that no longer exists in the current snapshot's build chain.
+    audit._write_locked({  # pylint: disable=protected-access
+        "kind": "receipt", "nonce": "orig-nonce", "seat": "build", "correlation_id": "orig",
+        "attempt_id": "0", "target_identity": ["gone-model", "anthropic", "native",
+                                               "subscription_oauth", "claude", None, None],
+        "config_digest": "sha256:d", "gate_digest": "sha256:g", "author_provider": None,
+        "verdict": "pass", "violations": [], "role": "build", "gate_outcome": "single",
+        "gate_input_digest": "sha256:gi", "recovered_from": None})
+    res = er.recover_run(run_id="run1", supervisor=_RecoverSup(rec), snapshot=_snapshot(),
+                         audit=audit, routing=routing, enforce=enforce, ledger_closed=False,
+                         correlation_id="c1")
+    assert any("relaunch_refused" in r.get("action", "") for r in res["results"])
 
 
 def test_recover_run_refuses_closed_ledger(tmp_path):

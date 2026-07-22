@@ -1340,10 +1340,24 @@ _APPENDIX_PREFIX: Final[str] = "docs/planning/appendix/"
 
 
 def _atomic_write_json(path: Path, obj) -> None:
-    """Write JSON atomically (tempfile + os.replace) so a crash never leaves a torn intent."""
-    tmp = Path(str(path) + ".tmp")
-    tmp.write_text(json.dumps(obj), encoding="utf-8")
-    os.replace(tmp, path)
+    """Write JSON atomically (tempfile + os.replace) so a crash never leaves a torn intent.
+
+    #571: a UNIQUE mkstemp temp in the target dir + unlink-on-exception (repo hook checklist §5) —
+    replaces the fixed ``str(path)+".tmp"`` (a same-dir collision surface) and guarantees no stray
+    ``*.tmp`` survives a mid-write failure. os.replace still gives a torn-file-free swap."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(obj))
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
@@ -1386,6 +1400,26 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
         return _err(EXIT_MALFORMED, "no_build_receipt",
                     f"collect-work-product: job {session_name!r} has no receipt_nonce to bind",
                     retryable=False, correlation_id=ce)
+    # F7 (#571): a promotion must be AUTHORIZED, not merely terminal — another seat's output or a
+    # stale/forged registry binding must never be promoted. Require exactly ONE audit receipt for
+    # this nonce with verdict==pass AND role=="build" (a gated mutating build seat), plus at least
+    # one VERIFIED completed observation bound to that nonce.
+    from phase_executor.enforce import verify_post as _verify_post  # noqa: PLC0415
+    _recs = audit.records()
+    _pass_build = [r for r in _recs if r.get("kind") == "receipt"
+                   and r.get("nonce") == record.receipt_nonce
+                   and r.get("verdict") == "pass" and r.get("role") == "build"]
+    if len(_pass_build) != 1:
+        return _err(EXIT_ENFORCEMENT, "unauthorized_work_product",
+                    f"collect-work-product: expected exactly 1 passing build receipt for nonce "
+                    f"{record.receipt_nonce!r}, found {len(_pass_build)} — refusing to promote",
+                    retryable=False, correlation_id=ce)
+    if not any(_verify_post(o.get("observation") or {}).verified for o in _recs
+               if o.get("kind") == "observation" and o.get("receipt_nonce") == record.receipt_nonce):
+        return _err(EXIT_ENFORCEMENT, "unauthorized_work_product",
+                    f"collect-work-product: no verified completed observation bound to receipt "
+                    f"{record.receipt_nonce!r} — refusing to promote", retryable=False,
+                    correlation_id=ce)
     handle = handle_from_record(record)
     try:
         evidence = manager.content_evidence(handle)
@@ -1527,13 +1561,32 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
         return _err(EXIT_ENFORCEMENT, "run_closed_recover_refused",
                     f"run {run_id!r} ledger is run_closed — recovery refused (#559)",
                     retryable=False, correlation_id=ce, audit_path=audit_path)
-    nonce_by_sid, lane_by_sid = {}, {}
+    nonce_by_sid, lane_by_sid, corr_by_sid = {}, {}, {}
 
     def gate(*, record, correlation_id, recovered_from):
         targets = routing.eligible_targets(record.identity.seat, snapshot)
         if not targets:
             return None
-        resolved_target = targets[0]
+        # F5 (#571): bind the recovery to the ORIGINAL call's target, re-validated against the
+        # CURRENT snapshot — never eligible_targets[0]. The original receipt (same seat,
+        # correlation_id == recovered_from, a non-recovery pass) carries the target_identity that
+        # created the provider session; resolve THAT identity in the current eligible set. If the
+        # original target is no longer eligible, refuse rather than silently drift to a new target.
+        orig_identity = None
+        if recovered_from is not None:
+            for r in audit.records():
+                if (r.get("kind") == "receipt" and r.get("correlation_id") == recovered_from
+                        and r.get("seat") == record.identity.seat and r.get("verdict") == "pass"
+                        and r.get("recovered_from") is None and r.get("target_identity")):
+                    orig_identity = tuple(r["target_identity"])
+                    break
+        if orig_identity is not None:
+            resolved_target = next(
+                (t for t in targets if enforce.target_identity(t) == orig_identity), None)
+            if resolved_target is None:
+                return None  # original target no longer eligible under the current snapshot
+        else:
+            resolved_target = targets[0]  # no original receipt found (legacy/first attempt) — primary
         receipt = enforce.check_pre(
             record.identity.seat, resolved_target, snapshot, correlation_id=correlation_id,
             attempt_id=f"{record.resume_attempts + 1}-recover", recovered_from=recovered_from)
@@ -1542,6 +1595,7 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
             return None
         nonce_by_sid[record.session_name] = receipt.nonce
         lane_by_sid[record.session_name] = dict(resolved_target["lane"])
+        corr_by_sid[record.session_name] = correlation_id  # F6: for the pre-append correlation check
         return RecoveryAuthorization(receipt.nonce, resolved_target, snapshot.config_digest)
 
     try:
@@ -1561,6 +1615,16 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
             # catches as missing_obs.
             if obs is not None and nonce:
                 stamped = dict(obs)
+                # F6 (#571): refuse a foreign-correlation observation BEFORE appending (mirror
+                # resume_dispatch's F9) — a mismatched child envelope must never enter the ledger.
+                child_cid = stamped.get("correlation_id")
+                exp_cid = corr_by_sid.get(a.record.session_name)
+                if child_cid is not None and exp_cid is not None and child_cid != exp_cid:
+                    entry["verify"] = (f"correlation_mismatch: child {child_cid!r} != recovery "
+                                       f"{exp_cid!r} — foreign observation refused")
+                    worst = max(worst, EXIT_ENFORCEMENT)
+                    results.append(entry)
+                    continue
                 if lane_by_sid.get(a.record.session_name) and not stamped.get("dispatched_lane"):
                     stamped["dispatched_lane"] = lane_by_sid[a.record.session_name]
                 audit.append_observation(stamped, receipt=_types.SimpleNamespace(nonce=nonce))
@@ -2038,7 +2102,10 @@ def _run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt) -> dict:
     except pe.routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=ce, audit_path=str(audit.path))
-    except (ValueError, OSError) as e:
+    # F8 (#571): resume_dispatch's supervisor.launch + wm.create in provision() raise
+    # SupervisorError/WorktreeError; without these a provisioning failure escaped as a bare CLI
+    # traceback instead of the documented structured exit.
+    except (pe.supervisor.SupervisorError, pe.worktree.WorktreeError, ValueError, OSError) as e:
         return _err(EXIT_INTERNAL, "resume_provision_failed", f"{type(e).__name__}: {e}",
                     retryable=False, correlation_id=ce, audit_path=str(audit.path))
 
