@@ -13,11 +13,11 @@ Widen `classify_batch` candidate matching from token-only to **quote-first, toke
 ## File changes
 
 - `hooks/hermes_bridge.py`:
-  - `mint_token()` → 6-digit numeric string (`secrets.randbelow`), collision-checked: existing O_EXCL asks-file create loop retries on collision (already 8 attempts); token rendered as `ref 482913`.
+  - `mint_token()` → `RG-` + 6-digit numeric suffix (`secrets.randbelow`), collision-checked: existing O_EXCL asks-file create loop retries on collision (already 8 attempts); token rendered as `ref RG-482913`. (Amended — owner decision at the Step-4 breaker.)
   - `ask_owner()` → after 2xx send, **sent-GUID self-query**: via existing `_default_transport`, rows where `isFromMe` AND token in text AND `dateCreated >= sent_ts` (small skew allowance), pick the exact-full-text row first, else **EARLIEST dateCreated** (Amendment 8 tie-break) — the ask precedes any gateway ACK echo (live hazard: Darwin ACKs echo the token back as isFromMe; newest-row pick would capture the ACK, probe guids 8768B0BF vs 54016324). Miss/failure → `sent_guid: null`, logged, ask proceeds (quote path inert, token path = Phase-1 behavior).
   - `classify_batch()` → quote-match arm + widened token-match; ambiguity semantics unchanged (two distinct candidates → ambiguous → deliver nothing).
   - `interpret_reply()` → strip token if present (quote-only replies carry none); numeric option parse unchanged.
-  - Message template → `(reply to this message — ref 482913)` / options variant `(reply with the option number — ref 482913)`: no trailing paren adjacent to ref (AC6).
+  - Message template → ref line LAST and BARE: `Reply to this message — ref RG-482913` / options variant `Reply with the option number — ref RG-482913` (AC6; exact strings in Amendment 3).
 - `tests/hooks/test_hermes_bridge.py` → red-first cases per AC (see plan).
 - Version surfaces ×N (grep current version at bump time) + README Changelog.
 

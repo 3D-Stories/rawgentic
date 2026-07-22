@@ -1,9 +1,10 @@
 """Tests for hooks/hermes_bridge.py — #568 Phase 1 two-way owner-reply bridge.
 
 No live BlueBubbles creds: a fake transport (callable) and fake notify (callable)
-are injected. State lives under tmp_path. Covers correlation (token-only, exact),
-the two-store never-lose crash model, fail-safe classifications, untrusted-input
-handling, and secret redaction.
+are injected. State lives under tmp_path. Covers correlation (quote-first via
+replyToGuid == sent_guid, token-fallback — legacy bracketed exact / new RG-NNNNNN
+word-boundary, #584), the sent-GUID self-query, the two-store never-lose crash
+model, fail-safe classifications, untrusted-input handling, and secret redaction.
 """
 import json
 import os
@@ -139,8 +140,14 @@ def _own(guid, text, ts=200, reply_to=None):
     return m
 
 
-def test_spike_fixture_field_names():
-    assert SPIKE_QUOTED_REPLY["replyToGuid"], "BlueBubbles reply-gesture field drifted"
+def test_spike_fixture_row_matches_through_production_path():
+    # Recorded-fixture sanity (adversarial A3): the verbatim live row must quote-match
+    # through classify_batch itself — locks the replyToGuid field NAME as consumed by
+    # the production path, not just as a dict key. (Live drift detection is out of
+    # scope; a server change surfaces when a NEW capture disagrees with this shape.)
+    disp, m = classify_batch([SPIKE_QUOTED_REPLY], "RG-999999", set(), "q?",
+                             sent_guid=SPIKE_QUOTED_REPLY["replyToGuid"])
+    assert disp == "matched" and m["guid"] == SPIKE_QUOTED_REPLY["guid"]
 
 
 def test_classify_quote_match_no_token_free_text():
@@ -185,7 +192,9 @@ def test_classify_quote_match_answered_is_late():
 def test_numeric_token_word_boundary_forms():
     tok = "RG-482913"
     assert classify_batch([_own("g1", "1 RG-482913")], tok, set(), "q?")[0] == "matched"
-    assert classify_batch([_own("g2", "[RG-482913]")], tok, set(), "q?")[0] == "matched"
+    assert classify_batch([_own("g2", "answer [RG-482913]")], tok, set(), "q?")[0] == "matched"
+    # Step-11 R2: a LONE bracketed token is an echo, never an answer (never-wrong-act)
+    assert classify_batch([_own("g5", "[RG-482913]")], tok, set(), "q?")[0] == "echo_or_empty"
     assert classify_batch([_own("g3", "RG-4829139")], tok, set(), "q?")[0] == "unmatched"
     assert classify_batch([_own("g4", "XRG-482913")], tok, set(), "q?")[0] == "unmatched"
 
@@ -308,15 +317,37 @@ def test_ask_owner_captures_sent_guid_exact_text_wins(tmp_path):
     assert calls, "self-query ran"
 
 
-def test_ask_owner_sent_guid_earliest_when_no_exact(tmp_path):
+def test_ask_owner_sent_guid_none_when_only_ack_echoes(tmp_path):
+    # Adversarial A1: token-containing rows that never equal the full ask text are
+    # ACK contamination — NEVER guid evidence; exhaust retries, return None
     def tr(**kw):
-        return [_mk_row("LATER", 500, "echo tok " + tok_holder[0]),
-                _mk_row("EARLY", 200, "other echo " + tok_holder[0])]
+        return [_mk_row("ACK1", 500, "echo tok " + tok_holder[0]),
+                _mk_row("ACK2", 200, "other echo " + tok_holder[0])]
     tok_holder = [""]
     orig_notify = lambda m: (tok_holder.__setitem__(0, m.splitlines()[-1].split()[-1]), "200")[1]
+    calls = []
     rec = ask_owner("go?", "runE", state_dir=tmp_path, notify=orig_notify,
-                    now_ms=lambda: 100, transport=tr, sleep=lambda s: None)
-    assert rec["sent_guid"] == "EARLY"
+                    now_ms=lambda: 100,
+                    transport=lambda **kw: (calls.append(1), tr(**kw))[1],
+                    sleep=lambda s: None)
+    assert rec["sent_guid"] is None
+    assert len(calls) == 3  # kept polling for an exact row
+
+
+def test_ask_owner_sent_guid_exact_appears_on_retry(tmp_path):
+    sent = []
+    state = {"n": 0}
+
+    def tr(**kw):
+        state["n"] += 1
+        if state["n"] < 2:
+            return [_mk_row("ACK", 150, "Received " + sent[0].splitlines()[-1])]
+        return [_mk_row("ASK", 160, sent[0])]
+
+    rec = ask_owner("go?", "runL", state_dir=tmp_path,
+                    notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 100,
+                    transport=tr, sleep=lambda s: None)
+    assert rec["sent_guid"] == "ASK" and state["n"] == 2
 
 
 def test_ask_owner_sent_guid_none_on_miss_with_bounded_retry(tmp_path):
@@ -334,6 +365,23 @@ def test_ask_owner_sent_guid_none_on_transport_failure_ask_still_sent(tmp_path):
         raise BridgeUnreachable("down")
     rec = ask_owner("go?", "runF", state_dir=tmp_path, notify=lambda m: "200",
                     now_ms=lambda: 1, transport=tr, sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+
+
+def test_ask_owner_sent_guid_none_on_unexpected_transport_exception(tmp_path):
+    # Adversarial A2: ANY Exception (not just the anticipated trio) degrades to None
+    def tr(**kw):
+        raise RuntimeError("unexpected")
+    rec = ask_owner("go?", "runU", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=tr, sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+
+
+def test_ask_owner_sent_guid_none_on_sleep_exception(tmp_path):
+    def boom(_s):
+        raise OSError("sleep broke")
+    rec = ask_owner("go?", "runS", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: [], sleep=boom)
     assert rec["status"] == "sent" and rec["sent_guid"] is None
 
 
@@ -407,6 +455,11 @@ def test_classify_late_when_consumed():
     tok = "[RG-ABCDEF012345]"
     disp, _ = classify_batch([_msg("g1", f"yes {tok}")], tok, {"g1"}, "Proceed?")
     assert disp == "late"
+
+
+def test_is_echo_or_empty_lone_bracketed_new_form():
+    # Step-11 R2 red-first: strip must mirror interpret_reply's two-stage form
+    assert is_echo_or_empty("[RG-482913]", "RG-482913", "q?")
 
 
 def test_is_echo_or_empty():

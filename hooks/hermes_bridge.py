@@ -7,8 +7,10 @@ store (idempotent read) rather than rebuilding the Hermes gateway. See
 docs/planning/2026-07-22-568-hermes-reply-bridge-design.md.
 
 Design invariants (the load-bearing ones):
-- Correlation is TOKEN-ONLY, EXACT: a reply matches an open ask iff the exact
-  bracketed token appears in its text. No fuzzy / positional fallback.
+- Correlation is QUOTE-FIRST, TOKEN-FALLBACK (#584): a reply matches an open ask
+  iff it quote-replies the ask's own sent message (replyToGuid == sent_guid, both
+  truthy) OR carries the ask's token (legacy bracketed exact; new RG-NNNNNN at a
+  word boundary, brackets optional). No fuzzy / positional fallback.
 - Never lose: two stores. `observed.jsonl` only prevents re-appending an
   observation; it NEVER gates delivery. `consumed.jsonl` is the sole delivery
   gate and is written AFTER the durable inbox file. A crash before consume →
@@ -92,8 +94,12 @@ def _safe_component(name: str) -> str:
 
 
 def is_echo_or_empty(text: str, token: str, question: str) -> bool:
-    """A reply that is just the token, blank, or the echoed question is not an answer."""
-    rest = text.replace(token, "").strip()
+    """A reply that is just the token, blank, or the echoed question is not an answer.
+
+    Two-stage strip mirrors interpret_reply (#584 Step-11 R2): a lone bracketed
+    new-form token ("[RG-482913]") must strip clean, not leave "[]" and pass as
+    an answer — never-wrong-act."""
+    rest = text.replace(f"[{token}]", "").replace(token, "").strip()
     if not rest:
         return True
     return _norm(rest) == _norm(question or "")
@@ -332,21 +338,23 @@ def _capture_sent_guid(msg_text, token, sent_ts, recipient, transport, sleep):
         try:
             rows = transport(chat_guid=_chat_guid(recipient),
                              since_ms=sent_ts - SELF_QUERY_SKEW_MS, limit=POLL_LIMIT)
-            # isinstance guard + broad except: a malformed row degrades to None — the
-            # self-query must NEVER crash ask_owner after the send landed (8a F1)
-            cands = [r for r in rows or []
+            # EXACT-full-text rows only (adversarial A1): token-containing rows that are
+            # not the ask verbatim are gateway ACK contamination — never guid evidence.
+            # No exact row yet → keep polling; exhausted → None (quote arm stays inert).
+            exact = [r for r in rows or []
                      if isinstance(r, dict)
                      and r.get("isFromMe") and r.get("guid")
-                     and token in (r.get("text") or "")
+                     and (r.get("text") or "") == msg_text
                      and (r.get("dateCreated") or 0) >= sent_ts - SELF_QUERY_SKEW_MS]
-            if cands:
-                exact = [r for r in cands if (r.get("text") or "") == msg_text]
-                pool = exact or cands
-                return min(pool, key=lambda r: ((r.get("dateCreated") or 0), r.get("guid") or ""))["guid"]
-        except (BridgeUnreachable, AttributeError, TypeError):
+            if exact:
+                return min(exact, key=lambda r: ((r.get("dateCreated") or 0), r.get("guid") or ""))["guid"]
+            if attempt < SELF_QUERY_ATTEMPTS - 1:
+                sleep(SELF_QUERY_RETRY_S)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # A2: the self-query must NEVER fail the ask after the send landed —
+            # any Exception (incl. a broken sleep) degrades to None. BaseException
+            # (KeyboardInterrupt/SystemExit) deliberately passes through.
             return None
-        if attempt < SELF_QUERY_ATTEMPTS - 1:
-            sleep(SELF_QUERY_RETRY_S)
     return None
 
 
@@ -357,7 +365,12 @@ def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
     #568 Phase-2: an optional numbered-option set. `options` (list of {id,label}) is validated
     FAIL-CLOSED before anything is minted or sent — a colliding/invalid set raises and no ask is
     created or delivered. `response_mode` ∈ RESPONSE_MODES. Default (no options, free_text) is
-    byte-identical to Phase-1."""
+    byte-identical to Phase-1.
+
+    #584: `transport` (optional) — when provided AND the send lands (2xx), a bounded
+    post-send self-query captures the sent message's own guid into rec["sent_guid"]
+    for quote-match correlation; `sleep` is the injectable retry delay. No transport
+    → no self-query, sent_guid stays None (token path unaffected)."""
     if response_mode not in RESPONSE_MODES:
         raise ValueError(f"response_mode must be one of {RESPONSE_MODES}: {response_mode!r}")
     if options is not None:
