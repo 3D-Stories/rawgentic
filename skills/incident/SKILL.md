@@ -147,7 +147,7 @@ For each service in `config.services[]`:
 2. Log incident start time (UTC).
 3. Classify severity (SEV-1 through SEV-4).
 4. Identify affected services and user impact.
-5. **Create incident tracking issue:** `gh issue create --repo ${capabilities.repo} --title "incident(SEV-X): [brief description]" --body "[initial assessment]" --label incident`. This issue tracks the full incident lifecycle — timeline, root cause, fix, verification, and follow-up items.
+5. **Create incident tracking issue:** first ensure the label exists (`gh label create incident --repo ${capabilities.repo} --color b60205 --description "Active incident" 2>/dev/null || true` — `gh issue create --label` fails on a label the repo lacks), then `gh issue create --repo ${capabilities.repo} --title "incident(SEV-X): [brief description]" --body "[initial assessment]" --label incident`. This issue tracks the full incident lifecycle — timeline, root cause, fix, verification, and follow-up items.
 6. **SEV-1/SEV-2:** Skip confirmation, proceed immediately to diagnosis.
 7. **SEV-3/SEV-4:** Confirm priority with user.
 8. Update `claude_docs/session_notes.md` with: resolved config summary, incident description, severity classification, initial impact assessment, incident issue number.
