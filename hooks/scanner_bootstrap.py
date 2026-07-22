@@ -189,6 +189,28 @@ def _ws_optout(workspace_path):
         return False
 
 
+def _pytest_install_optout(env):
+    """True when running inside a pytest process that has NOT explicitly opted
+    into the installer path.
+
+    #576: a session-start unit test that ran this bootstrap with no opt-out
+    launched a REAL background `pipx install semgrep` (242M) that outlived pytest
+    teardown — orphaning 117G of semgrep-core across /tmp/pytest-of-* and filling
+    the host disk. Several test entry points invoke session-start (conftest
+    run_hook, test_headless's own _run_hook, direct subprocess spawns), so the
+    only leak-proof chokepoint is here in the bootstrap itself: treat "under
+    pytest" (PYTEST_CURRENT_TEST is set by pytest for the duration of each test)
+    as an install opt-out UNLESS a test explicitly drives a (fake) installer via
+    RAWGENTIC_SCANNER_INSTALLER — the e2e installer tests do, and stay unaffected.
+
+    This NEVER fires in production: PYTEST_CURRENT_TEST is set only inside a
+    pytest run, so real Claude Code sessions install exactly as before.
+    """
+    return bool(env.get("PYTEST_CURRENT_TEST")) and not env.get(
+        "RAWGENTIC_SCANNER_INSTALLER"
+    )
+
+
 def _build_status(event, outcome, present, missing, now, log_path,
                   last_attempt=None, error=None):
     st = {
@@ -246,6 +268,9 @@ def main(argv=None):
 
     headless = os.environ.get("RAWGENTIC_HEADLESS") == "1"
     optout_env = os.environ.get("RAWGENTIC_SKIP_SCANNER_INSTALL") == "1"
+    # #576: never launch a real background install from inside the test suite.
+    if _pytest_install_optout(os.environ):
+        optout_env = True
     optout_ws = _ws_optout(args.workspace)
     prev = read_status(status_path) or {}
 

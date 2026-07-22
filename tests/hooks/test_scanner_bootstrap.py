@@ -160,6 +160,27 @@ class TestCheckPresence:
         assert len(present) == 5
 
 
+class TestPytestInstallOptout:
+    """#576: the bootstrap must never launch a real install from inside the test
+    suite. `_pytest_install_optout` is the invariant — under pytest, opt out
+    unless a test explicitly drives an installer. Never fires in production
+    (PYTEST_CURRENT_TEST is unset there)."""
+
+    def test_under_pytest_without_installer_opts_out(self):
+        assert sb._pytest_install_optout({"PYTEST_CURRENT_TEST": "x::test"}) is True
+
+    def test_explicit_installer_yields_install(self):
+        # the e2e installer tests set RAWGENTIC_SCANNER_INSTALLER — must still install
+        assert sb._pytest_install_optout(
+            {"PYTEST_CURRENT_TEST": "x::test",
+             "RAWGENTIC_SCANNER_INSTALLER": "/fake/installer.sh"}) is False
+
+    def test_outside_pytest_does_not_opt_out(self):
+        # production: PYTEST_CURRENT_TEST unset -> install path untouched
+        assert sb._pytest_install_optout({}) is False
+        assert sb._pytest_install_optout({"HOME": "/home/u"}) is False
+
+
 # --------------------------------------------------------------------------
 # main() — end-to-end via subprocess, fake installer, isolated HOME
 # --------------------------------------------------------------------------

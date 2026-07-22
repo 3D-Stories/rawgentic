@@ -198,6 +198,9 @@ def collect(offline: bool) -> dict:
 def build_html(data: dict) -> str:
     payload = json.dumps({"structure": STRUCTURE, "data": data},
                          ensure_ascii=False, separators=(",", ":"))
+    # Escape `<` so an issue body containing `</script>` can't break out of the
+    # embedded <script> block (< decodes back to `<` in the JS object literal).
+    payload = payload.replace("<", "\\u003c")
     # The page: static shell + one embedded JSON blob + DOM-builder renderer (no innerHTML).
     return _TEMPLATE.replace("/*__PAYLOAD__*/", payload)
 
