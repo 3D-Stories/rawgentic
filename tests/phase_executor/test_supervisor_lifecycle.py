@@ -30,6 +30,18 @@ HAS_TMUX = shutil.which("tmux") is not None
 tmux_required = pytest.mark.skipif(not HAS_TMUX, reason="tmux not installed")
 
 
+def _pass_gate(sup):
+    """#559 C1: a fake recovery dispatch_gate returning a canned RecoveryAuthorization bound to the
+    resolved target + the supervisor's snapshot digest — the SAME contract production's gate uses
+    (there is exactly one gated relaunch path; tests never reach an ungated one)."""
+    def gate(*, record, correlation_id, recovered_from):
+        resolved_target = routing.eligible_targets(record.identity.seat, sup._snapshot)[0]
+        return supervisor.RecoveryAuthorization(
+            receipt_nonce="rcpt-" + uuid.uuid4().hex[:8], resolved_target=resolved_target,
+            config_digest=sup._snapshot.config_digest)
+    return gate
+
+
 def _lane(pool="claude"):
     return {"provider": "anthropic", "transport": "native",
             "auth_mode": "subscription_oauth", "credential_ref": None, "pool": pool}
@@ -179,7 +191,7 @@ def test_recover_adopts_live_matching_job(env_factory):
     env = env_factory(mode="ok_then_sleep")
     rec = env.launch()
     try:
-        actions = env.sup.recover(env.identity.run_id)
+        actions = env.sup.recover(env.identity.run_id, dispatch_gate=_pass_gate(env.sup))
         assert len(actions) == 1
         assert actions[0].action == "adopt"
         assert env.registry.get(env.identity).state == "running"
@@ -194,7 +206,7 @@ def test_recover_quarantines_digest_mismatch_kills_and_retains(env_factory):
     # tamper the spec: the recomputed command digest no longer matches the record
     spec_path = Path(env.tmp / "reg" / "specs" / f"{rec.session_name}.json")
     spec_path.write_text(json.dumps({"tampered": True}), encoding="utf-8")
-    actions = env.sup.recover(env.identity.run_id)
+    actions = env.sup.recover(env.identity.run_id, dispatch_gate=_pass_gate(env.sup))
     assert actions[0].action == "quarantine"
     stored = env.registry.get(env.identity)
     assert stored.state == "quarantined"
@@ -216,7 +228,7 @@ def test_recover_relaunches_quota_paused_under_cap(env_factory):
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
     # recovery happens in a SECOND supervisor over the same durable state (post-compaction)
     sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-42"})
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert actions[0].action == "relaunch"
     new = actions[0].record
     assert new.resume_attempts == rec.resume_attempts + 1
@@ -243,7 +255,7 @@ def test_relaunch_records_recovery_provenance(env_factory):
     assert state == "exited_no_sentinel"
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-9")
     sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-9"})
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert actions[0].action == "relaunch"
     new = actions[0].record
     assert new.recovered_from == "554-orig"
@@ -262,7 +274,7 @@ def test_relaunched_job_auto_asserts_resume_identity(env_factory):
     assert state == "exited_no_sentinel"
     env.sup.mark_quota_paused(env.identity, provider_session_id="sess-42")
     sup2 = env.sup_with_mode("resume_ok", extra_env={"RAWGENTIC_STUB_SESSION_ID": "sess-WRONG"})
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert actions[0].action == "relaunch"
     with pytest.raises(SupervisorError):  # no expect_session_id passed — the auto-assert fires
         sup2.await_job(actions[0].record, poll_s=0.2, timeout_s=30)
@@ -426,7 +438,7 @@ def test_recover_fail_at_resume_cap(tmp_path):
                          capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"),
                          registry=reg, run=dead_run)
     sup._identity_matches = lambda r: True  # isolate the CAP rule from spec-file plumbing
-    actions = sup.recover("r1")
+    actions = sup.recover("r1", dispatch_gate=_pass_gate(sup))
     assert actions[0].action == "fail"
     assert reg.get(identity).state == "failed"
 
@@ -485,3 +497,101 @@ def test_reap_retains_dirty_dead_worktree(env_factory):
     env.sup.reap(env.identity.run_id, clean_fn=dirty_clean_fn)
     assert len(env.manager.finalized) == n_finalized
     assert env.registry.get(env.identity).quarantine_reason.startswith("reaped:")
+
+
+# ---------------------------------------------------------------------------
+# H1 (#559): mark_quota_paused KILL-VERIFIES before releasing the permit, and
+# re-reads the sentinel post-kill to catch the check/kill race (design §2.1).
+# Pure tests — _kill_job / _sentinel are stubbed so the outcome (verified-dead,
+# residue, effectful-pre-kill, race) is exact, no tmux needed.
+# ---------------------------------------------------------------------------
+
+
+def _quota_sup(tmp_path):
+    """A supervisor over a real registry with a dead runner (no tmux needed)."""
+    reg = JobRegistry(str(tmp_path / "reg"))
+    sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+                         registry_root=str(tmp_path / "reg"), registry=reg,
+                         run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+    return sup, reg
+
+
+def _pausable_record(identity, tmp_path):
+    cap = tmp_path / "cd"
+    cap.mkdir(parents=True, exist_ok=True)
+    return _make_record(identity, tmp_path, capture_dir=str(cap), state="exited_no_sentinel")
+
+
+def test_mark_quota_paused_kill_verified_releases_permit(tmp_path, monkeypatch):
+    # (a) verified kill → quota_paused + permit released; _kill_job IS invoked (the _live
+    # short-circuit is gone). Return is the terminal state STRING.
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    released, kills = [], []
+    monkeypatch.setattr(sup, "_release_permit", lambda rec: released.append(rec.session_name))
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: (kills.append(1) or True))
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
+    assert kills, "_kill_job must be invoked (no _live short-circuit before permit release)"
+    assert released, "a verified kill releases the permit"
+    stored = reg.get(identity)
+    assert stored.state == "quota_paused"
+    assert stored.provider_session_id == "sess-1"
+
+
+def test_mark_quota_paused_residue_retains_permit(tmp_path, monkeypatch):
+    # (b) kill NOT verified (residue) → completed_with_residue, permit RETAINED, NOT paused
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    released = []
+    monkeypatch.setattr(sup, "_release_permit", lambda rec: released.append(rec.session_name))
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: False)
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "completed_with_residue"
+    assert released == [], "a residue (unverified kill) must NOT release the permit"
+    stored = reg.get(identity)
+    assert stored.state == "completed_with_residue"
+    assert stored.quota_classification["paused"] is False
+    assert stored.quota_classification["refusal"] == "kill_unverified"
+
+
+def test_mark_quota_paused_effectful_never_kills(tmp_path, monkeypatch):
+    # (c) an effectful sentinel present BEFORE the kill → refuse, _kill_job NEVER called,
+    # record untouched
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    kills = []
+    monkeypatch.setattr(sup, "_sentinel", lambda rec: {"parse_status": "ok"})  # effectful
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: (kills.append(1) or True))
+    with pytest.raises(SupervisorError):
+        sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert kills == [], "an effectful job is refused BEFORE any kill"
+    assert reg.get(identity).state == "exited_no_sentinel"
+
+
+def test_mark_quota_paused_post_kill_effectful_is_residue(tmp_path, monkeypatch):
+    # (d) the check/kill RACE: a live child writes an effectful sentinel DURING the kill.
+    # Pre-kill sentinel is non-effectful → proceed → verified kill → post-kill re-read finds
+    # the effect → completed_with_residue (non-success), NEVER quota_paused.
+    sup, reg = _quota_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    reg.upsert(_pausable_record(identity, tmp_path))
+    seen = {"n": 0}
+
+    def racing_sentinel(rec):
+        seen["n"] += 1
+        return None if seen["n"] == 1 else {"parse_status": "ok"}  # effect appears post-kill
+
+    kills = []
+    monkeypatch.setattr(sup, "_sentinel", racing_sentinel)
+    monkeypatch.setattr(sup, "_kill_job", lambda rec, **kw: (kills.append(1) or True))
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "completed_with_residue", "post-kill effect is never a success/pause"
+    assert kills, "the kill ran; the effect is detected by the post-kill re-read"
+    stored = reg.get(identity)
+    assert stored.state == "completed_with_residue"
+    assert stored.quota_classification["paused"] is False
+    assert stored.quota_classification["refusal"] == "effectful_post_kill"

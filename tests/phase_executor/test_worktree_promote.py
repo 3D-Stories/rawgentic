@@ -154,6 +154,53 @@ def test_promote_path_policy_refuses_outside_paths(repo, mgr, tmp_path):
                     message="policed", path_policy=lambda p: p.endswith(".md"))
 
 
+# --- #559 AC1: promote_appendix_only path-policy factory (design §2.6) ---
+
+def test_promote_appendix_only_admits_under_prefix():
+    pol = wt.promote_appendix_only(("docs/planning/appendix/",))
+    assert pol("docs/planning/appendix/2026-07-21-cell1.md") is True
+    assert pol("docs/planning/appendix/nested/x.md") is True
+
+
+def test_promote_appendix_only_component_boundary_not_substring():
+    pol = wt.promote_appendix_only(("docs/planning/appendix/",))
+    assert pol("docs/planning/appendix-evil/x.md") is False   # sibling-prefix confusion
+    assert pol("docs/planning/other.md") is False
+    assert pol("hooks/executor_routing_lib.py") is False
+
+
+def test_promote_appendix_only_rejects_malicious_candidate_paths():
+    pol = wt.promote_appendix_only(("docs/planning/appendix/",))
+    assert pol("../docs/planning/appendix/x") is False        # leading ..
+    assert pol("docs/../secrets/appendix/x") is False         # .. anywhere
+    assert pol("/etc/passwd") is False                         # absolute
+    assert pol("") is False and pol("   ") is False            # empty / whitespace
+    # 8a-F3: a literal backslash is a valid POSIX filename char, NOT a separator — a repo-root file
+    # named "docs\planning\appendix\x.md" must NOT normalize into the appendix prefix (bypass).
+    assert pol("docs\\planning\\appendix\\x.md") is False
+
+
+@pytest.mark.parametrize("bad", [".", "..", "/abs/appendix", "   ", "", "a/../b"])
+def test_promote_appendix_only_factory_rejects_bad_prefixes(bad):
+    with pytest.raises(ValueError):
+        wt.promote_appendix_only((bad,))
+
+
+def test_promote_appendix_only_requires_at_least_one_prefix():
+    with pytest.raises(ValueError):
+        wt.promote_appendix_only(())
+
+
+def test_promote_appendix_only_wires_into_promote_refusal(repo, mgr, tmp_path):
+    # the real factory refuses a changed path outside the appendix prefix at promote()
+    base = _base(repo)
+    h = mgr.create(str(repo), _ident(), base, root=str(tmp_path / "wtroot"))
+    (open(os.path.join(h.path, "secrets.txt"), "w")).write("nope\n")
+    with pytest.raises(wt.WorktreeError):
+        mgr.promote(h, target_ref="refs/heads/integration", expected_target_sha="0" * 40,
+                    message="scoped", path_policy=wt.promote_appendix_only(("docs/planning/appendix/",)))
+
+
 def test_promote_fails_loud_on_unreadable_path(repo, mgr, tmp_path):
     """Fix (CAS-review F1): a child chmod-000 on a tracked file would make `add -A --ignore-errors`
     silently REVERT it to base in the promoted tree. promote uses strict mode and fails loud."""

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#559 Proving-Run Report (H6)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 20:50 MDT</div>
+<h1>#559 Proving-Run Report (H6)</h1>
+
+</header>
+<main>
+<h1>#559 Proving-Run Report — end-to-end proving run: codex mutating cell + account-switch recovery (H6)</h1>
+<p><strong>Issue:</strong> #559 (last child of epic #560, executor-hardening) · <strong>Branch:</strong> <code>feature/559-proving-run</code> · <strong>Design:</strong> [<code>2026-07-21-559-proving-run-design.md</code>](./2026-07-21-559-proving-run-design.md) (r6, Step-4 gate PASSED) · <strong>Date:</strong> 2026-07-21</p>
+<h2>Verdict (first)</h2>
+<ul>
+<li><strong>BUILD — COMPLETE.</strong> Seven security-hardening tasks (H1/H2/H3, F1, the recovery-dispatch chokepoint, the AC1 promote/<code>work_product</code> glue, the AC2a account-identity probe + resume-dispatch) shipped <strong>test-first</strong>. Full suite <strong>4340 → 4396, 0 failing</strong>; both pylint lanes <strong>10.00/10</strong>; a two-reviewer Step-8a wave (independent Opus reviewers, security/correctness + contract/regression lenses) found <strong>no Critical or High defect</strong>.</li>
+<li><strong>OPS (live cells) — DEFERRED, honest partial.</strong> Every paid cell and every account switch is an <strong>owner-gated</strong> durable pause (design §3). The owner is away and pre-directed *&quot;defer per design §0.&quot;* Per the §0 conditionality, this PR ships the hardening code + this report as <strong><code>Part of #559</code> / <code>Part of #560</code></strong>; issues #559 and #560 <strong>stay OPEN</strong> for an owner-attended live pass.</li>
+<li><strong>Net.</strong> The wired executor path&#x27;s <strong>hardening is proven in code</strong> — unit + integration, red-first, independently reviewed. The <strong>live end-to-end proof</strong> (a genuine <code>quota_paused</code> transition and a real cross-account recovery) awaits an owner-attended session; the design anticipated exactly this fork (§0), so a deferral here is a designed outcome, not a failure.</li>
+</ul>
+<h2>1. Scope (design §0)</h2>
+<p>Two natures in one issue: <strong>BUILD</strong> (code, test-first) and <strong>OPS</strong> (live, paid, evidence-producing cells). Binding owner decisions: D-12 (live <code>quota_paused</code> transition + genuine-capture calibration land here), D-13 (codex bound = enforced timeout), D-15 (H3 fix lands once; #449 inherits), cheap-probe-before-burn. <strong>Issue-closure is conditional (§0):</strong> the PR closes #559 + #560 only if *every* mandatory live AC passes; otherwise it ships the code + an honest partial report as &quot;Part of&quot;, posts the owner-gate blocker, and leaves the issues open.</p>
+<h2>2. BUILD results — T1–T7 (all committed + pushed, red-first)</h2>
+<table>
+<thead><tr><th>Task</th><th>Hardens</th><th>Key file:line</th><th>Red-first tests</th><th>Verdict</th></tr></thead>
+<tbody>
+<tr><td>T1 · H1</td><td><code>mark_quota_paused</code> guard order + <strong>post-kill sentinel re-read</strong> (check/kill race → <code>completed_with_residue</code>, never <code>quota_paused</code>); permit released only on verified kill</td><td><code>supervisor.py:610-648</code></td><td>verified-kill / residue / pre-kill-effectful / post-kill-race</td><td>✅ closed (Reviewer A bypass attempt held)</td></tr>
+<tr><td>T2 · H2</td><td><code>_relaunch</code> reads via <code>_verified_spec</code> — the post-<code>_identity_matches</code> <strong>TOCTOU</strong> window; tamper → quarantine, never launch</td><td><code>supervisor.py:1179-1183</code>, <code>_verified_spec:1419</code></td><td>TOCTOU (patch identity True over tampered file) + direct tamper unit</td><td>✅ closed</td></tr>
+<tr><td>T3 · H3</td><td>unknown/seatless competitive seat <strong>fails loud</strong>, no carve-out</td><td><code>engine.py:301-307</code></td><td>flip <code>:448</code> to raise + seatless-table-fails-loud</td><td>✅ closed</td></tr>
+<tr><td>T4 · F1</td><td>behavioral-probe denial-evidence parsed <strong>in memory</strong>, raw ephemeral, <strong>advisory-only</strong> (never flips a verdict), no PII</td><td><code>executor_routing_lib.py:839-869</code></td><td>exec_event vs prose source · negative-echo · silent · PII-seed</td><td>✅ closed</td></tr>
+<tr><td>T5 · AC2a</td><td><code>probe-account</code> identity observation (digest+categories, no PII) + <code>dispatch --resume-session-id</code> (claude-only, non-mutating, session-preservation asserted)</td><td><code>executor_routing_lib.py:872-922</code>, resume dispatch</td><td>status arms · digest stability · no-<code>@</code> · resume compose/refuse/mismatch</td><td>✅ closed</td></tr>
+<tr><td>T6 · AC1</td><td><code>promote_appendix_only</code> path policy (traversal-hardened, component-boundary) + <code>work_product</code> audit kind + <code>collect-work-product</code> two-phase idempotent</td><td><code>worktree.py:103-136</code>, <code>enforce.py</code>, <code>executor_routing_lib.py:1341-1452</code></td><td>factory/candidate malicious-prefix · orphan/duplicate · idempotent double-run</td><td>✅ closed (see §4 L1/L2 for the one binding gap)</td></tr>
+<tr><td>T7 · C1</td><td><strong>recovery-dispatch chokepoint</strong> — <code>recover(*, dispatch_gate)</code> mandatory, prelaunch-before-receipt, mutating refused, <code>RecoveryAuthorization</code> target/digest bound, recovery groups under original key</td><td><code>supervisor.py:1060,1179-1214</code>, <code>enforce.py</code>, <code>executor_routing_lib.py:1455</code></td><td>run-closed · mandatory-gate TypeError · mutating-refused · target-drift · synthetic-obs</td><td>✅ closed</td></tr>
+</tbody>
+</table>
+<p>Commits: <code>0cc0db5</code> (T1) · <code>1423b10</code> (T2) · <code>1d0296d</code> (T3) · <code>e663c7a</code> (T4) · <code>6af24fe</code>/<code>296a2d6</code> (T5) · <code>e03c3c2</code>/<code>1620c26</code>/<code>47d3e84</code> (T6) · <code>2ba866b</code> (T7) · <code>8c94a14</code> (Step-8a remediation).</p>
+<h2>3. Live cells (OPS) — dispositions</h2>
+<p><strong>All DEFERRED.</strong> Design §3&#x27;s hard gate is *no paid exhaust until the full suite is green AND CELL-2 passed*; CELL-2 requires an owner-gated account switch (A→B). Owner away → CELL-2 cannot pass → every downstream paid cell is gated shut. No <code>AskUserQuestion</code>/BlueBubbles interrupt was raised for the switch: the owner <strong>pre-decided</strong> &quot;defer per design §0&quot; (an account switch is not the &quot;genuine Critical&quot; the owner reserved BlueBubbles for).</p>
+<table>
+<thead><tr><th>Cell</th><th>AC</th><th>What it would prove</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td>CELL-1</td><td>AC1</td><td>live codex <strong>mutating</strong> dispatch → <code>collect-work-product</code> → CAS promote → <code>work_product</code> audit</td><td>DEFERRED — paid burn behind the CELL-2 gate</td></tr>
+<tr><td>CELL-2</td><td>AC2a</td><td>seed on A → <strong>switch A→B</strong> → resumed turn echoes the seed nonce; two <code>ok</code> probes&#x27; digests differ</td><td>DEFERRED — <strong>owner-gated</strong> account switch</td></tr>
+<tr><td>CELL-3a/3b</td><td>AC2b</td><td>genuine usage-limit capture → calibrate + <strong>activate</strong> classifier → live <code>quota_paused</code> → cross-account <code>recover-run</code></td><td>DEFERRED — gated behind CELL-2 + paid exhaust</td></tr>
+<tr><td>CELL-4</td><td>AC3</td><td><code>close-run</code> → <code>reconcile --mode final</code>, zero anomalies incl. the recovery group</td><td>DEFERRED — nothing live to reconcile; run-end verb is #420-scoped</td></tr>
+</tbody>
+</table>
+<p><strong>Non-billable evidence gathered this session:</strong> a live <code>probe-account</code> smoke on this host returned <code>{status: ok, logged_in: true, subscription_type: team, auth_method: claude.ai, identity_digest: set}</code> with <strong>no email/orgId/token</strong> in the output — confirming the AC2a identity-probe machinery works live. This is necessary-not-sufficient for AC2a, which requires the *change* between two distinct accounts (the owner-gated switch).</p>
+<h2>4. Step-8a review — findings + dispositions</h2>
+<p>Two independent Opus reviewers, neutral briefs. <strong>No Critical/High.</strong> Five findings, triaged together:</p>
+<table>
+<thead><tr><th>Finding</th><th>Sev</th><th>Disposition</th></tr></thead>
+<tbody>
+<tr><td><strong>L3</strong> — <code>probe_account</code> digest concatenated `email + &quot;\</td><td>&quot; + orgId<code> with an unescaped delimiter (</code>(&quot;a\</td><td>b&quot;,&quot;c&quot;)<code> and </code>(&quot;a&quot;,&quot;b\</td><td>c&quot;)` collide) → a real A→B switch could read &quot;no change&quot;</td><td>Low</td><td><strong>FIXED</strong> (<code>8c94a14</code>) — JSON-encode the pair (injective), prefix <code>v1→v2</code>, red-first collision test</td></tr>
+<tr><td>5× pre-existing T1–T7 <strong>lint errors</strong> (<code>no-name-in-module</code> on sys.path-shimmed <code>phase_executor</code> submodule imports) — never surfaced because the branch was scoped-tested, never full-linted</td><td>—</td><td><strong>FIXED</strong> (<code>8c94a14</code>) — suppressed per the established in-file pattern; lint is a HARD CI gate</td></tr>
+<tr><td><strong>L2 / F-1</strong> — <code>missing_work_product</code> reconcile guard is <strong>dead in the real pipeline</strong> (fires only on an Observation-embedded promotion; <code>collect_work_product</code> writes the audit record instead)</td><td>Med</td><td><strong>Documented + follow-up [#570](https://github.com/3D-Stories/rawgentic/issues/570).</strong> Fix = a new &quot;expected work_product&quot; signal (design addition); zero operational impact this run</td></tr>
+<tr><td><strong>L1</strong> — <code>collect_work_product</code> crash-window (host-loss between <code>promote()</code> update-ref and the <code>new_sha</code> write) loses the record; design F-l&#x27;s live-ref reconstruction is unimplemented</td><td>Low</td><td><strong>Documented + [#570](https://github.com/3D-Stories/rawgentic/issues/570).</strong> Correctness-sensitive two-phase logic; no rushed redesign under owner-away autonomy</td></tr>
+<tr><td><strong>F-2</strong> — no e2e <code>recover_run → reconcile</code> test with original+recovery rows</td><td>Low/Med</td><td><strong>#420-scoped.</strong> <code>enforce.py:498-500</code> states reconcile has no live caller until #420; both seam sides are already unit-covered (<code>recover_run</code> emits <code>recovered_from</code>+obs @ test 2175; grouping reconciles clean @ <code>test_enforce.py:527-538</code>). A hand-wired test fights fake-vs-real target alignment #420 will wire properly</td></tr>
+</tbody>
+</table>
+<p>Out-of-scope one-liners (pre-existing fail-closed posture, not this PR): a *misused* <code>--resume-session-id</code> on a non-claude seat leaves an orphan expected-call; a corrupt <code>routing-audit.jsonl</code> makes <code>collect_work_product</code> raise a bare traceback.</p>
+<h2>4b. Step-11 + 11.5 pre-PR review (independent Opus + cross-model Codex)</h2>
+<ul>
+<li><strong>Step 11 (independent Opus, full pre-PR diff):</strong> no new Critical/High/Medium. Re-ran the whole gate green (suite 4396/16/0, both pylint lanes 10.00/10); confirmed the L3 fix sound + complete and every 8a-cleared hardening holds. One Low (atomic-write convention deviation) → #571.</li>
+<li><strong>Step 11.5 (cross-model, Codex <code>gpt-5.6-sol</code> diff review):</strong> 0 Critical, 7 High + 3 Medium — all confirmed against code, all in OPS-cell-only paths that DEFER this run (zero operational impact now). Report: <code>docs/reviews/559-prepr-diff-2026-07-21.md</code>.</li>
+</ul>
+<p>Fixed in-branch (commit <code>2456513</code>, red-first):</p>
+<table>
+<thead><tr><th>Finding</th><th>Sev</th><th>Fix</th></tr></thead>
+<tbody>
+<tr><td>F3</td><td>High</td><td><code>_norm_rel_components</code> treated <code>\</code> as a path separator → a literal-backslash filename folded into the appendix prefix (policy bypass). Now <strong>rejected</strong> (POSIX filename char, not a separator).</td></tr>
+<tr><td>F9</td><td>Med</td><td><code>resume_dispatch</code> appended a foreign-correlation observation <strong>before</strong> the mismatch check → audit poisoning. Check <strong>moved before append</strong>.</td></tr>
+<tr><td>F10</td><td>Med</td><td><code>_is_exec_event</code> docstring claimed &quot;OS-attested, not spoofable&quot; while admitting the schema is unknown. Softened to &quot;event-shaped, NOT authenticated&quot; (sound only because the field is advisory and never gates a verdict).</td></tr>
+</tbody>
+</table>
+<p>Deferred to <strong>#571</strong> (design-scope / disproportionate test cost, all defer): F5 (recover target binding), F6 (recover obs correlation parity — belt-and-suspenders: <code>await_job</code> already session-id-asserts resumes), F7 (collect preconditions), F8 (<code>_run_resume</code> except breadth), atomic-write hygiene. F1/F2 remain in <strong>#570</strong>.</p>
+<h2>5. AC verdicts</h2>
+<ul>
+<li><strong>AC1</strong> (codex mutating cell): <strong>code shipped + tested</strong>; live CELL-1 deferred → live-UNPROVEN.</li>
+<li><strong>AC2a</strong> (account-switch recovery): probe + resume-dispatch shipped + tested; probe live-smoked on one account; cross-account CHANGE + resumed turn (CELL-2) deferred → live-UNPROVEN.</li>
+<li><strong>AC2b</strong> (genuine capture + calibration + activated cycle): D-12 plumbing shipped + tested; CELL-3a/3b deferred → <strong>allowlist stays EMPTY, classifier stays SHADOW</strong> (§2.8 honesty gate engaged) → live-UNPROVEN.</li>
+<li><strong>AC3</strong> (final reconcile): recovery-group binding tested (unit); run-end verb #420-scoped; CELL-4 not run → live-UNPROVEN.</li>
+<li><strong>AC4</strong> (committed report): <strong>SATISFIED</strong> (this document + its rendered HTML + published Artifact).</li>
+</ul>
+<h2>6. Closure (design §0)</h2>
+<p>Not every mandatory live AC passed → the PR ships as <strong><code>Part of #559</code> / <code>Part of #560</code></strong>. Issues <strong>#559 and #560 stay OPEN</strong>. An owner-gate blocker is posted on #559. A future <strong>owner-attended</strong> session runs the live cells via the repeatability appendix below.</p>
+<h2>7. Repeatability appendix — owner-attended live pass</h2>
+<p>Prereqs: full suite green (✅ 4396/16/0), plugin installed at the merged version, ≥2 (ideally 3) Claude accounts available. Run from <code>projects/rawgentic</code>, run-id <code>wf2-559-&lt;session&gt;</code>.</p>
+<p>1. <strong>CELL-1 (AC1):</strong> <code>dispatch --seat build</code> (supervised codex, canary 0–5) writing one file under <code>docs/planning/appendix/</code> → <code>collect-work-product --run-id &lt;r&gt; --session-name &lt;s&gt; --target-ref refs/heads/integration --expected-target-sha &lt;sha&gt;</code> → <code>verify_post</code> requested==actual. Bounds: D-13 timeout, build <code>max_budget_usd</code> 10.0. 2. <strong>CELL-2 (AC2a):</strong> seed a <code>claude -p --output-format json</code> nonce turn on account A (capture its session id) → <strong>owner switch A→B</strong> (<code>AskUserQuestion</code> + BlueBubbles + <code>owner_prompt_emitted</code> marker, 60-min bound) → <code>probe-account</code> digests differ → <code>dispatch --resume-session-id &lt;sid&gt;</code> on B → assert the resumed envelope&#x27;s <code>session_id</code> == seed id AND the output echoes the nonce. A cross-account <strong>refusal</strong> is a valid negative spike that FAILS AC2a and <strong>closes the paid gate</strong> (skip 3a/3b). 3. <strong>CELL-3a/3b (AC2b):</strong> bounded exhaust the CAPTURE account (20 calls / 30 min / first limit) → sanitize + equivalence-gate + secret-scan → fixture → bump <code>CLASSIFIER_VERSION</code>+<code>RULE_TABLE_DIGEST</code> → add the one <code>(2, digest)</code> pair to <code>CALIBRATED_CLASSIFIERS</code> → <strong>full-suite re-run</strong> → F-i runtime-activation preflight → readiness probe on the RECOVERY account → exhaust the PAUSED account under the activated pair → live <code>quota_paused</code> → <code>recover-run</code> (MAX_RESUME≤2) → verified completion. No genuine capture → honesty gate: allowlist stays EMPTY, closure conditionality applies. 4. <strong>CELL-4 (AC3):</strong> <code>close-run</code> → <code>reconcile --mode final</code> → exit 0, zero anomalies across all buckets incl. the pause/recover correlation group and the <code>work_product</code> bindings.</p>
+<p>Per-cell bounds and owner-gate points are in design §3 (bounds table + choreography).</p>
+<h2>8. Confirmed engine gaps → follow-ups</h2>
+<ul>
+<li><strong>[#570](https://github.com/3D-Stories/rawgentic/issues/570)</strong> (filed): <code>work_product</code> reconcile &quot;missing&quot; guard unreachable + <code>collect_work_product</code> crash-window (8a-L1/L2).</li>
+<li><strong>[#571](https://github.com/3D-Stories/rawgentic/issues/571)</strong> (filed): pre-PR cross-model hardening follow-ups — recover/resume/collect binding + robustness (F5/F6/F7/F8 + atomic-write hygiene).</li>
+<li><strong>F-2 → #420</strong>: the run-end <code>reconcile_run</code> real-record join (<code>enforce.py:498-500</code>).</li>
+<li>The <code>reset.v1/b</code> digit-proximity false-positive (#558 follow-up) can only be re-checked against a <strong>genuine</strong> captured stderr — deferred with CELL-3a.</li>
+</ul>
+<h2>9. What was NOT checked (explicit)</h2>
+<ul>
+<li>Live codex <strong>mutating</strong> dispatch (CELL-1) — no paid burn.</li>
+<li>Live <strong>cross-account</strong> resume + digest *change* (CELL-2) — owner switch required; only a single-account probe was smoked.</li>
+<li>Genuine usage-limit <strong>capture</strong> and the <strong>activated</strong> live <code>quota_paused</code> transition (CELL-3a/3b) — paid, gated.</li>
+<li>Run-end <strong>final reconcile</strong> over real records (CELL-4) — #420-scoped + gated.</li>
+<li>The L3 digest change was verified against <strong>synthetic</strong> identities only; a real second-account digest-difference is exactly what CELL-2 would prove.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-21 20:50 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

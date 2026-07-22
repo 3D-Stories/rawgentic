@@ -57,6 +57,25 @@ class SupervisorError(RuntimeError):
     """Fail-loud supervisor failure (unusable socket, launch failure, spec error)."""
 
 
+class SpecTamperError(SupervisorError):
+    """The pane spec bytes failed digest verification at relaunch (H2 #559): the recovery
+    read them AFTER ``recover``'s identity check, so they sit in the TOCTOU window. A
+    tampered/unverifiable spec is QUARANTINED (kill + retain), never relaunched — distinct
+    from an ordinary relaunch failure (which fails the record) so ``recover`` can route it."""
+
+
+class RecoveryRefused(SupervisorError):
+    """A recovery relaunch was REFUSED before launch (#559 C1, design §2.7) — the gate declined
+    (``gate``) or the record is a mutating/build recovery (``mutating_recovery_unsupported``, R6).
+    The record STAYS quota_paused (no _finish, no launch); ``recover`` reports
+    ``relaunch_refused (<reason>)`` and continues. Distinct from SpecTamperError (quarantine) and
+    an ordinary relaunch failure (fail), so ``recover`` routes it without burning a resume slot."""
+
+    def __init__(self, reason: str):
+        super().__init__(f"relaunch refused: {reason}")
+        self.reason = reason
+
+
 @dataclass(frozen=True)
 class PreflightResult:
     supported: bool
@@ -65,11 +84,23 @@ class PreflightResult:
 
 @dataclass(frozen=True)
 class RecoveryAction:
-    """One recover() verdict: ``action`` ∈ {adopt, quarantine, relaunch, fail};
-    ``record`` is the post-action record (the NEW record for a relaunch)."""
+    """One recover() verdict: ``action`` ∈ {adopt, quarantine, relaunch, fail, yielded,
+    relaunch_refused (...)}; ``record`` is the post-action record (the NEW record for a relaunch)."""
     identity: WorktreeIdentity
     action: str
     record: JobRecord
+
+
+@dataclass(frozen=True)
+class RecoveryAuthorization:
+    """#559 C1 (design §2.7): the typed authorization a recovery ``dispatch_gate`` returns — NOT a
+    bare nonce. ``receipt_nonce`` binds the minted-and-audited pre-receipt; ``resolved_target`` is
+    the concrete target ``check_pre`` bound its identity to (threaded into ``launch`` to prevent
+    re-resolution drift); ``config_digest`` is asserted equal to the relaunch's composed digest
+    before launch (P4-M — validated, not merely carried). A gate returning ``None`` REFUSES."""
+    receipt_nonce: str
+    resolved_target: dict
+    config_digest: str
 
 
 @dataclass(frozen=True)
@@ -553,14 +584,29 @@ class TmuxSupervisor:
         return derive_state(record, sentinel=sentinel, live=live)
 
     def mark_quota_paused(self, identity: WorktreeIdentity,
-                          provider_session_id: Optional[str]) -> JobRecord:
-        """The INJECTED quota classification (owner Q6/W9 owns the discriminator): records
-        quota_paused + the provider session id the relaunch will ``--resume``.
+                          provider_session_id: Optional[str]) -> str:
+        """The INJECTED quota classification (owner Q6/W9 owns the discriminator). H1 (#559,
+        design §2.1) — the REQUIRED guard order, kill-verify BEFORE releasing the permit:
 
-        Fail-closed preconditions (Step-11 codex #7 — a mislabelled pause could relaunch a
-        COMPLETED mutating job and duplicate its side effects, or admit concurrent work
-        while a live provider still runs): the job must be DEAD, have NO valid sentinel,
-        not already be terminal, and carry a non-empty session id."""
+          1. identity / provider-session / terminal-state validations (a completed/terminal
+             record refuses injection before any kill — Step-11 codex #7);
+          2. pre-kill effectful-sentinel reject — an effectful job is NEVER killed by a quota
+             injection (the cheap early exit; the shared ``_sentinel_effectful`` predicate);
+          3. ``_kill_job`` (the two-group + descendant-snapshot primitive) — this REPLACES
+             the old ``_live`` probe: a permit is released only on a VERIFIED kill, closing
+             the release-on-unverified-kill gap;
+          4. post-kill sentinel RE-READ (the check/kill race — a live child can write an
+             effectful sentinel between step 2's read and the verified kill): a post-kill
+             effect makes this an interrupted, uncertain outcome → ``completed_with_residue``
+             (non-success, non-resumable, permit released), NEVER ``quota_paused``;
+          5. verified-dead + no effect → ``quota_paused`` (permit released — free the pool
+             slot NOW, else the relaunch under the same session_name deadlocks a
+             concurrency-1 pool on the job's own permit, 8a R2);
+          6. unverified kill (residue) → ``completed_with_residue``, permit RETAINED (parity
+             with the automatic path's ``kill_unverified`` refusal, ``await_job`` :793-797).
+
+        Returns the terminal state string. Injected-classification evidence rides the
+        ``_finish`` upsert (#558 pass-2 F9)."""
         record = self._registry.get(identity)
         if record is None:
             raise SupervisorError(f"unknown job {identity}")
@@ -570,27 +616,36 @@ class TmuxSupervisor:
             raise SupervisorError(
                 f"mark_quota_paused: record is {record.state!r} — only a non-terminal dead "
                 f"job can be quota-paused")
-        if self._live(record):
-            raise SupervisorError("mark_quota_paused: session is still live — not a quota exit")
-        sent = self._sentinel(record)
-        if self._sentinel_effectful(sent):
-            # Resuming a job that already produced an EFFECTFUL result would duplicate it
-            # (the shared _sentinel_effectful predicate — see its docstring; the
-            # supervisor's own synthetic exited_no_sentinel observation carries
-            # actual_model=None with an availability status, so it correctly does NOT
-            # trip this guard — pause/resume is exactly its designed recovery).
+        # (2) pre-kill effectful reject — refuse an effectful result BEFORE any kill attempt
+        # (the supervisor's own synthetic exited_no_sentinel observation carries
+        # actual_model=None with an availability status, so it correctly does NOT trip this
+        # guard — pause/resume is exactly its designed recovery).
+        if self._sentinel_effectful(self._sentinel(record)):
             raise SupervisorError(
                 "mark_quota_paused: sentinel indicates an effectful result (an "
                 "envelope-producing status or an attested actual_model) — resuming "
                 "would duplicate its effects")
-        # routes through _finish (release_permit=True): the provider exited (usage-limit
-        # exit-1) — free the pool slot NOW, else the relaunch under the same session_name
-        # strands the old permit context manager and deadlocks a concurrency-1 pool on
-        # the job's own permit (8a R2 finding). Injected-classification evidence rides
-        # the same upsert (#558 pass-2 F9).
+        # (3) kill-verify — replaces the _live probe: a live child is killed and the kill is
+        # verified; only a verified-dead job frees its permit.
+        killed = self._kill_job(record)
+        if not killed:
+            # (6) residue: process death UNVERIFIED — retain the permit (Step-11 codex #3 /
+            # await_job kill_unverified parity); not resumable.
+            return self._finish(
+                record, "completed_with_residue", release_permit=False,
+                quota_classification={"injected": True, "paused": False,
+                                      "refusal": "kill_unverified"}).state
+        # (4) post-kill sentinel re-read — the check/kill race: an effect that appeared during
+        # the kill is an interrupted, uncertain outcome, never a "paused"/"success".
+        if self._sentinel_effectful(self._sentinel(record)):
+            return self._finish(
+                record, "completed_with_residue", release_permit=True,
+                quota_classification={"injected": True, "paused": False,
+                                      "refusal": "effectful_post_kill"}).state
+        # (5) verified-dead, no effect → the designed pause/resume recovery.
         return self._finish(record, "quota_paused",
                             provider_session_id=provider_session_id,
-                            quota_classification={"injected": True, "paused": True})
+                            quota_classification={"injected": True, "paused": True}).state
 
     # -- kill (AC-E4, CF-17) ---------------------------------------------------
 
@@ -1002,11 +1057,18 @@ class TmuxSupervisor:
         # the job (recover() yields it), True = this process owns the permit.
         return self._quota.reestablish_permit(pool, record.permit_ref)
 
-    def recover(self, run_id: str) -> list:
+    def recover(self, run_id: str, *, dispatch_gate) -> list:
         """Per non-terminal record: ``classify_recovery`` → adopt (re-attach, nothing to do) /
         quarantine (kill both groups + W3 retain — the untrusted writer never survives) /
         relaunch (``--resume`` from the seat's worktree cwd, capped at MAX_RESUME) / fail.
-        Returns [RecoveryAction], one per record considered."""
+        Returns [RecoveryAction], one per record considered.
+
+        #559 C1 (design §2.7): ``dispatch_gate`` is MANDATORY (no default, no ungated escape hatch,
+        R11/F-a) — a recovery relaunch is now ledgered/receipted like any dispatch. The gate,
+        called only AFTER the prelaunch checks (spec verification, mutating refusal), mints + audits
+        the pre-receipt and returns a ``RecoveryAuthorization`` (or ``None`` to refuse). Tests
+        exercise recovery by passing an explicit fake gate — there is exactly ONE relaunch path and
+        it is always gated."""
         actions = []
         for record in self._registry.by_run(run_id):
             if record.state in ("completed", "completed_with_residue", "failed", "quarantined"):
@@ -1057,8 +1119,26 @@ class TmuxSupervisor:
                 actions.append(RecoveryAction(record.identity, "quarantine", done))
             elif verdict == "relaunch":
                 try:
-                    new = self._relaunch(record)
+                    new = self._relaunch(record, dispatch_gate=dispatch_gate)
                     actions.append(RecoveryAction(record.identity, "relaunch", new))
+                except RecoveryRefused as e:
+                    # #559 C1/R6: the gate declined, or a mutating/build recovery is unsupported.
+                    # The record STAYS quota_paused (no _finish, no launch) — no resume slot burned,
+                    # no receipt minted. Reported so the CLI/report surfaces the refusal honestly.
+                    actions.append(RecoveryAction(
+                        record.identity, f"relaunch_refused ({e.reason})", record))
+                except SpecTamperError:
+                    # H2 (#559): the relaunch spec bytes failed digest verification — the
+                    # post-identity-check TOCTOU window. The untrusted writer never
+                    # relaunches: kill + retain evidence, mirror the adopt-refused arm.
+                    killed = self._kill_job(record)
+                    reason = "relaunch spec unverified (tamper/TOCTOU): refused"
+                    if not killed:
+                        reason += "; kill unverified: residue"
+                    done = self._finish(record, "quarantined", release_permit=killed,
+                                        quarantine_reason=reason)
+                    self._retain(done)
+                    actions.append(RecoveryAction(record.identity, "quarantine", done))
                 except (SupervisorError, routing.RoutingError, QuotaTimeout):
                     # non-claude engine / routing gone / pool full — fail THIS record
                     # without burning a resume slot; recovery of OTHER records continues
@@ -1070,7 +1150,7 @@ class TmuxSupervisor:
                 actions.append(RecoveryAction(record.identity, "fail", done))
         return actions
 
-    def _relaunch(self, record: JobRecord) -> JobRecord:
+    def _relaunch(self, record: JobRecord, *, dispatch_gate) -> JobRecord:
         """Relaunch a quota_paused job: same identity/worktree, a resume-policy profile, the
         persisted provider session id (claude ``--resume``), resume_attempts + 1. The
         resume-identity assert runs at collect time (await_job ``expect_session_id``).
@@ -1079,8 +1159,28 @@ class TmuxSupervisor:
         (``<original>#resume<n>``) plus ``recovered_from`` = the ORIGINAL call's correlation_id
         (the ``recovered_from`` already on this record if it is itself a re-recovery, else the
         original spec's correlation). ``reconcile_run`` groups the recovery under the original
-        expected call via that link — one authorized pause+resume, not an orphan or a new key."""
-        spec = self._read_spec(record)
+        expected call via that link — one authorized pause+resume, not an orphan or a new key.
+
+        H2 (#559, design §2.2): the spec is read via ``_verified_spec`` (digest-gated,
+        read-once) — recover()'s ``_identity_matches`` already digest-checked, but the bytes
+        re-read HERE fall in the time-of-check/time-of-use window; trusting them unverified is
+        the injection vector. ``None`` (missing/malformed/digest-mismatch) → ``SpecTamperError``
+        → recover() quarantines, never relaunches. (``_read_spec`` stays for the
+        synthetic-observation forensic paths only.)
+
+        C1 (#559, design §2.7): the relaunch is RECEIPTED. ALL prelaunch checks (verified spec,
+        claude-only, mutating refusal) run BEFORE the gate — a refused record consumes NO receipt
+        (R2). The gate mints+audits the pre-receipt and returns a ``RecoveryAuthorization``; ``None``
+        → ``RecoveryRefused('gate')`` (record stays quota_paused). Its ``resolved_target`` is
+        threaded into ``launch`` (no re-resolution drift) and its ``config_digest`` is asserted equal
+        to the composed digest (P4-M) before launch. NO ``append_expected`` — the recovery is an
+        attempt under the ORIGINAL expected call, linked by ``recovered_from`` (reconcile groups it,
+        R1)."""
+        spec = self._verified_spec(record)
+        if spec is None:
+            raise SpecTamperError(
+                f"relaunch {record.session_name}: spec bytes failed digest verification "
+                f"(tamper, missing, or malformed) — refusing to relaunch on unverified bytes")
         req = spec.get("request") or {}
         if not req:
             raise SupervisorError(f"relaunch {record.session_name}: spec unreadable")
@@ -1096,9 +1196,24 @@ class TmuxSupervisor:
                 f"relaunch {record.session_name}: resume is claude-only, "
                 f"spec engine {spec.get('engine')!r}")
         prof_d = dict(req.get("profile") or {})
-        prof_d["session_policy"] = "resume"
+        # R6: a mutating/build recovery would need a fresh behavioral canary — refuse it here (the
+        # record STAYS quota_paused, no receipt, no launch); mutating recovery is a named follow-up.
+        if bool(prof_d.get("mutating")):
+            raise RecoveryRefused("mutating_recovery_unsupported")
+        # PRELAUNCH CHECKS DONE — only now is the receipt minted (R2). The gate RESOLVES the target,
+        # mints+audits the pre-receipt bound to it, and returns the authorization (its
+        # resolved_target threaded into launch prevents re-resolution drift); None REFUSES (record
+        # stays quota_paused, no launch).
+        authz = dispatch_gate(record=record, correlation_id=recovery_cid, recovered_from=origin_cid)
+        if authz is None:
+            raise RecoveryRefused("gate")
+        if authz.config_digest != self._snapshot.config_digest:
+            # P4-M: the field is VALIDATED, not merely carried — a drift aborts the relaunch loud
+            raise SupervisorError(
+                f"relaunch {record.session_name}: config_digest drift — authorization "
+                f"{authz.config_digest!r} != composed {self._snapshot.config_digest!r}")
         profile = contract.LaunchProfile(
-            session_policy="resume", mutating=bool(prof_d.get("mutating")),
+            session_policy="resume", mutating=False,
             worktree=prof_d.get("worktree"), tool_grants=tuple(prof_d.get("tool_grants") or ()),
             max_budget_usd=prof_d.get("max_budget_usd"),
             max_tokens=prof_d.get("max_tokens"))
@@ -1109,6 +1224,7 @@ class TmuxSupervisor:
             record.identity.seat, req.get("prompt", ""), identity=record.identity,
             handle=handle, profile=profile, effort=req.get("effort"),
             timeout=float(req.get("timeout", 300.0)),
+            target=authz.resolved_target, receipt_nonce=authz.receipt_nonce,
             resume_session_id=record.provider_session_id,
             resume_attempts=next_attempt,
             correlation_id=recovery_cid, recovered_from=origin_cid,

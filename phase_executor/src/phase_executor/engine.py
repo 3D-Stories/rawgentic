@@ -293,6 +293,18 @@ def run_competitive(
     # inside the pool a raise would soften into a harness_error Observation
     for c in candidates:
         _reject_mutating_manifest(_manifest_for(snapshot, c.seat), c.seat)
+    # seat validation — fail closed on an unknown seat (H3 #559): an unknown seat resolves to
+    # NO manifest (_manifest_for swallows RoutingError → None) and would dispatch UNCAPPED, the
+    # cost-cap bypass. No no-seats carve-out (r3 C4/ADV-2): a table lacking a usable seats
+    # mapping raises the same way for any candidate seat. A seat that EXISTS but declares no
+    # manifest is the one legitimate None (run_seat parity) and is untouched here.
+    for c in candidates:
+        try:
+            snapshot.seat(c.seat)
+        except routing.RoutingError as exc:
+            raise ValueError(
+                f"candidate {c.model!r}: seat {c.seat!r} is not a declared routing seat "
+                f"— an unknown seat would dispatch uncapped ({exc})") from exc
     # pool validation — fail closed on an unknown/unset pool (finding f: ceiling bypass)
     known_pools = set(snapshot.pool_concurrency())
     for c in candidates:

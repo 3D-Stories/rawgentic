@@ -110,6 +110,11 @@ class PreReceipt:
     role: Optional[str] = None
     gate_outcome: Optional[str] = None
     gate_input_digest: Optional[str] = None
+    # #559 C1 (design §2.7): the recovery-provenance join field — the ORIGINAL call's
+    # correlation_id when this receipt is a recovery relaunch, else None. The reader
+    # (_validate_record) already validates str-or-null (#554); reconcile groups a recovery
+    # attempt under the original expected call via ``recovered_from or correlation_id``.
+    recovered_from: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -127,6 +132,7 @@ class PreReceipt:
             "role": self.role,
             "gate_outcome": self.gate_outcome,
             "gate_input_digest": self.gate_input_digest,
+            "recovered_from": self.recovered_from,
         }
 
 
@@ -136,7 +142,8 @@ def _declared_identities(seat_obj: dict) -> set:
 
 
 def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, gate_digest=None,
-              author_provider=None, nonce=None, attestation: "GateAttestation | None" = None) -> PreReceipt:
+              author_provider=None, nonce=None, attestation: "GateAttestation | None" = None,
+              recovered_from: Optional[str] = None) -> PreReceipt:
     """Pre-dispatch enforcement, evaluated against the EXACT snapshot that will serve the call.
 
     Accumulates ALL violations (never short-circuits — the caller sees every problem):
@@ -217,6 +224,7 @@ def check_pre(seat: str, target: dict, snapshot, *, correlation_id, attempt_id, 
         role=role or None,
         gate_outcome=valid_attestation.gate_outcome if valid_attestation is not None else None,
         gate_input_digest=valid_attestation.input_digest if valid_attestation is not None else None,
+        recovered_from=recovered_from,
     )
 
 
@@ -274,6 +282,9 @@ _RECEIPT_REQUIRED = ("kind", "nonce", "seat", "correlation_id", "attempt_id",
                      "target_identity", "config_digest", "verdict")
 _OBS_ENVELOPE_REQUIRED = ("kind", "receipt_nonce", "observation")
 _EPOCH_REQUIRED = ("kind", "seq", "from", "to")
+# #559 AC1 (design §2.6): the audited work_product binding record. candidate_tree_sha + new_sha
+# are REQUIRED (the collect-work-product retry dedup matches on exactly these).
+_WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sha", "work_product")
 _VERDICTS = ("pass", "fail")
 
 
@@ -283,7 +294,8 @@ def _validate_record(obj, lineno: int) -> None:
     if not isinstance(obj, dict):
         raise ValueError(f"audit line {lineno}: not a JSON object")
     kind = obj.get("kind")
-    req = {"receipt": _RECEIPT_REQUIRED, "observation": _OBS_ENVELOPE_REQUIRED, "epoch": _EPOCH_REQUIRED}.get(kind)
+    req = {"receipt": _RECEIPT_REQUIRED, "observation": _OBS_ENVELOPE_REQUIRED,
+           "epoch": _EPOCH_REQUIRED, "work_product": _WORK_PRODUCT_REQUIRED}.get(kind)
     if req is None:
         raise ValueError(f"audit line {lineno}: unknown kind {kind!r}")
     missing = [k for k in req if k not in obj]
@@ -322,6 +334,12 @@ def _validate_record(obj, lineno: int) -> None:
             raise ValueError(f"audit line {lineno}: epoch seq not an int")
         if not isinstance(obj["from"], str) or not isinstance(obj["to"], str):
             raise ValueError(f"audit line {lineno}: epoch from/to not strings")
+    if kind == "work_product":
+        for field in ("receipt_nonce", "candidate_tree_sha", "new_sha"):
+            if not isinstance(obj.get(field), str) or not obj[field]:
+                raise ValueError(f"audit line {lineno}: work_product {field} not a non-empty string")
+        if not isinstance(obj.get("work_product"), dict):
+            raise ValueError(f"audit line {lineno}: work_product record's work_product not an object")
 
 
 class RoutingAuditLog:
@@ -366,6 +384,16 @@ class RoutingAuditLog:
         with self._lock:
             self._seq += 1
             self._write_locked({"kind": "epoch", "seq": self._seq, "from": old_digest, "to": new_digest})
+
+    def append_work_product(self, *, receipt_nonce: str, candidate_tree_sha: str,
+                            new_sha: str, work_product: dict) -> None:
+        """#559 AC1 (design §2.6): bind a promoted work product to its build receipt. candidate_tree_sha
+        + new_sha are recorded so the collect-work-product retry dedup can match on exactly these."""
+        with self._lock:
+            self._write_locked({
+                "kind": "work_product", "receipt_nonce": receipt_nonce,
+                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
+                "work_product": dict(work_product)})
 
     def records(self) -> list:
         """Parse + fail-closed-validate every line. A malformed line raises (never silently dropped)."""
@@ -430,6 +458,10 @@ class Reconcile:
     unverified: tuple = ()
     unaudited_digest: tuple = ()
     orphan: tuple = ()
+    # #559 AC1 (design §2.6): work_product binding anomalies
+    orphan_work_product: tuple = ()
+    duplicate_work_product: tuple = ()
+    missing_work_product: tuple = ()
 
 
 def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: bool = True) -> "Reconcile":
@@ -560,11 +592,38 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
         else:
             missing_receipt.append(key)  # passed receipts all availability-failed: the call was never served
 
+    # #559 AC1 (design §2.6): bind each work_product record to its build receipt, both ways.
+    # unknown receipt_nonce -> orphan_work_product; >1 per receipt -> duplicate_work_product; and a
+    # verified observation that CLAIMS a promotion (embedded work_product.promotion_status ==
+    # "promoted") with NO matching work_product record -> missing_work_product (a promoted-but-
+    # unrecorded work product is an anomaly, not a silent pass).
+    work_products = [r for r in records if r.get("kind") == "work_product"]
+    orphan_work_product, duplicate_work_product, missing_work_product = [], [], []
+    wp_by_nonce = {}
+    for w in work_products:
+        n = w["receipt_nonce"]
+        if n not in by_nonce:
+            orphan_work_product.append(f"work_product:{n}:no-receipt")
+            continue
+        if n in wp_by_nonce:
+            duplicate_work_product.append(n)
+        else:
+            wp_by_nonce[n] = w
+    for o in observations:
+        inner = o.get("observation") or {}
+        wp = inner.get("work_product") or {}
+        if wp.get("promotion_status") == "promoted" and o.get("receipt_nonce") not in wp_by_nonce:
+            missing_work_product.append(f"{o.get('receipt_nonce')}:promoted-but-unrecorded")
+
     ok = not any([missing_receipt, failed_precheck, missing_obs, binding_mismatch,
-                  duplicate_nonce, duplicate, unverified, unaudited_digest, orphan])
+                  duplicate_nonce, duplicate, unverified, unaudited_digest, orphan,
+                  orphan_work_product, duplicate_work_product, missing_work_product])
     return Reconcile(
         ok=ok, missing_receipt=tuple(missing_receipt), failed_precheck=tuple(failed_precheck),
         missing_obs=tuple(missing_obs), binding_mismatch=tuple(binding_mismatch),
         duplicate_nonce=tuple(duplicate_nonce), duplicate=tuple(duplicate),
         unverified=tuple(unverified), unaudited_digest=tuple(unaudited_digest), orphan=tuple(orphan),
+        orphan_work_product=tuple(orphan_work_product),
+        duplicate_work_product=tuple(duplicate_work_product),
+        missing_work_product=tuple(missing_work_product),
     )

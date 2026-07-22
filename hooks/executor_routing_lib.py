@@ -812,6 +812,122 @@ def compose_supervised_argv(adapters, engine: str, model: str, *, effort,
     return adapter.build_command(model, effort=effort, profile=profile)
 
 
+_DENIAL_TOKENS: Final[tuple] = (
+    "EACCES", "EPERM", "Operation not permitted", "Permission denied",
+    "EROFS", "Read-only file system")
+
+
+def _is_exec_event(line: str) -> bool:
+    """True when the line is SHAPED like a structured codex exec event (a JSON object whose ``type``
+    names a command execution/result). NOT authenticated (8a-F10): the exact codex exec-event schema
+    is calibration-pending (verified against real output in #559's CELL-1) and model prose can emit a
+    JSON object carrying such a ``type``, so an ``exec_event`` source label means only "event-shaped",
+    never a proven OS-attested denial. This is sound ONLY because ``denial_evidence`` is ADVISORY
+    calibration data that never gates a verdict (design §2.4 R5); a trusted, schema-validated
+    transport is the named follow-up before this could ever become load-bearing."""
+    s = line.strip()
+    if not (s.startswith("{") and s.endswith("}")):
+        return False
+    try:
+        obj = json.loads(s)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    kind = str(obj.get("type", "")).lower()
+    return "exec" in kind or "command" in kind
+
+
+def parse_denial_evidence(output: Optional[str], *, target: str) -> dict:
+    """ADVISORY-ONLY (#556-F1, design §2.4) calibration parse of a codex child transcript for a
+    DENIED out-of-worktree write. Reads text ALREADY in memory; writes NOTHING to disk. It is
+    NEVER an input to ``outside_blocked``, the canary verdict, or any pass/fail decision — in this
+    PR or by later reuse — it is capture of the real denial SHAPE, not authentication of denial.
+
+    Prose is spoofable: the throwaway target path is disclosed in the probe prompt, so model text
+    can echo ``EACCES <target>`` without any denied syscall. A line that parses as a structured
+    codex exec event is ``source: exec_event``; free prose is ``source: prose``. Returns
+    ``{matched, source, token, target_named, line_sha256, sanitized_line}``; ``sanitized_line``
+    keeps only the denial token and the throwaway target basename (no other transcript bytes)."""
+    empty = {"matched": False, "source": None, "token": None,
+             "target_named": False, "line_sha256": None, "sanitized_line": None}
+    if not output:
+        return empty
+    base = os.path.basename(target.rstrip("/")) if target else ""
+    for line in output.splitlines():
+        token = next((t for t in _DENIAL_TOKENS if t in line), None)
+        if token is None:
+            continue
+        if not (target and (target in line or (base and base in line))):
+            continue  # a denial token that does NOT name the throwaway target is not our evidence
+        source = "exec_event" if _is_exec_event(line) else "prose"
+        return {"matched": True, "source": source, "token": token, "target_named": True,
+                "line_sha256": hashlib.sha256(line.encode("utf-8", "replace")).hexdigest(),
+                "sanitized_line": f"{token} {base}".strip()}
+    return empty
+
+
+_ACCOUNT_DIGEST_PREFIX: Final[str] = "rawgentic-account-identity:v2|"
+
+
+def probe_account(claude_bin: str = "claude", *, runner=subprocess.run, timeout: float = 30.0) -> dict:
+    """AC2a (#559, design §2.5): observe the ACTIVE claude account identity via
+    ``claude auth status --json`` — WITHOUT reading the credential store (only the CLI's own
+    status view). Returns ``{status, logged_in, identity_digest, subscription_type,
+    auth_method}`` with NO raw email/orgId/token in any field: identity is a domain-separated
+    sha256 digest, plus non-identifying categories. Status arms (R12):
+      - rc!=0 / timeout / OSError → ``unavailable`` (a read failure is NEVER an account switch);
+      - non-JSON / not-an-object / non-bool loggedIn / missing identity fields → ``parse_error``;
+      - valid JSON with ``loggedIn: false`` → ``logged_out`` (NO digest computed);
+      - valid + ``loggedIn: true`` + nonempty email+orgId → ``ok`` (digest computed).
+    The digest is RUN EVIDENCE (design R8) — a caller persists it only under the gitignored
+    run dir; the committed report carries opaque labels, never a digest."""
+    def _empty(status: str) -> dict:
+        return {"status": status, "logged_in": False, "identity_digest": None,
+                "subscription_type": None, "auth_method": None}
+    try:
+        proc = runner([claude_bin, "auth", "status", "--json"],
+                      capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return _empty("unavailable")
+    if getattr(proc, "returncode", 1) != 0:
+        return _empty("unavailable")
+    try:
+        data = json.loads(getattr(proc, "stdout", "") or "")
+    except (ValueError, TypeError):
+        return _empty("parse_error")
+    if not isinstance(data, dict):
+        return _empty("parse_error")
+    logged_in = data.get("loggedIn")
+    if logged_in is False:
+        out = _empty("logged_out")
+        out["subscription_type"] = data.get("subscriptionType")
+        out["auth_method"] = data.get("authMethod")
+        return out
+    if logged_in is not True:
+        return _empty("parse_error")  # missing / non-bool loggedIn
+    email, org_id = data.get("email"), data.get("orgId")
+    if not (isinstance(email, str) and email and isinstance(org_id, str) and org_id):
+        return _empty("parse_error")  # authenticated but the identity fields are absent
+    # domain-separate the identity fields unambiguously (8a-L3): a raw ``email + "|" + org_id``
+    # concat collides across distinct identities when a field contains "|" (e.g. ("a|b","c") vs
+    # ("a","b|c")). JSON-encoding the pair makes the boundary injective.
+    digest = hashlib.sha256(
+        (_ACCOUNT_DIGEST_PREFIX
+         + json.dumps([email, org_id], separators=(",", ":"))).encode("utf-8")).hexdigest()
+    return {"status": "ok", "logged_in": True, "identity_digest": digest,
+            "subscription_type": data.get("subscriptionType"),
+            "auth_method": data.get("authMethod")}
+
+
+def account_probe_ok_for_paid(probe: dict) -> bool:
+    """R12 gate: a paid operation (or a digest compare) proceeds ONLY on a fully-authenticated
+    identity — ``status == ok`` AND ``logged_in`` AND a computed digest (which is set only when
+    email+orgId were both nonempty). logged_out/unavailable/parse_error all block identically."""
+    return bool(probe.get("status") == "ok" and probe.get("logged_in") is True
+                and probe.get("identity_digest"))
+
+
 def codex_behavioral_probe(*, adapters, model: str, effort, wt_root: str,
                            runner=subprocess.run) -> dict:
     """#556 H3 — launch the codex MUTATING composition in a THROWAWAY worktree with a probe prompt
@@ -822,14 +938,16 @@ def codex_behavioral_probe(*, adapters, model: str, effort, wt_root: str,
     host without codex the ``runner`` raises FileNotFoundError, which propagates so the caller
     fail-closes (a codex mutating launch cannot pass the behavioral gate without a working sandbox).
 
-    KNOWN LIMITATION (#556 8a review, tracked to #559): ``outside_blocked`` is inferred from the
-    sibling file's ABSENCE, which is necessary but not sufficient — a model that runs the in-worktree
-    touch but SKIPS the out-of-worktree touch also leaves the sibling absent, a false "blocked" IF the
-    sandbox is simultaneously broken. Closing this needs POSITIVE evidence the out-of-worktree write
-    was attempted-and-denied (an EACCES/EPERM token in the captured transcript), which must be
-    calibrated against real codex output — #559's end-to-end proving run (on a real codex host) is
-    where that parse is built and verified. This probe is still strictly stronger than composition
-    validation alone and fail-closes on any probe error."""
+    F1 (#559, design §2.4): the probe now ALSO captures ADVISORY denial evidence. It reads the
+    child transcript IN MEMORY (nothing raw is persisted) and parses (``parse_denial_evidence``)
+    for an OS-denial token that names the out-of-worktree target, discriminating a structured
+    codex exec event (``source: exec_event``, OS-attested) from spoofable free prose
+    (``source: prose``). This is calibration capture of the real denial SHAPE, NOT authentication:
+    ``denial_evidence`` is NEVER an input to ``outside_blocked`` or the canary verdict
+    (``canary.py`` reads only ``inside_written``/``outside_blocked``). ``outside_blocked`` stays
+    absence-based (necessary-not-sufficient). Authenticating denial (a trusted independent syscall
+    check) is a named follow-up; the exact codex exec-event schema is calibrated against real
+    output in #559's CELL-1. This probe fail-closes on any probe error."""
     os.makedirs(wt_root, exist_ok=True)  # #556 8a F2: the worktrees tree may not exist yet on first launch
     probe_root = Path(tempfile.mkdtemp(prefix="rg-behav-", dir=wt_root))
     wt = probe_root / "wt"
@@ -840,11 +958,15 @@ def codex_behavioral_probe(*, adapters, model: str, effort, wt_root: str,
         argv = compose_supervised_argv(
             adapters, "codex", model, effort=effort,
             profile=types.SimpleNamespace(mutating=True), worktree=str(wt), containment_root=str(probe_root))
+        outside_target = f"{sibling}/outside.txt"
         prompt = ("Run exactly these shell commands and report their outcomes: "
-                  f"1) touch inside.txt  2) touch {sibling}/outside.txt")
-        runner(argv, input=prompt, capture_output=True, text=True, timeout=300, check=False)
+                  f"1) touch inside.txt  2) touch {outside_target}")
+        proc = runner(argv, input=prompt, capture_output=True, text=True, timeout=300, check=False)
+        # F1: read the transcript IN MEMORY only (never persisted) and parse ADVISORY evidence.
+        combined = f"{getattr(proc, 'stdout', '') or ''}\n{getattr(proc, 'stderr', '') or ''}"
         return {"inside_written": (wt / "inside.txt").exists(),
-                "outside_blocked": not (sibling / "outside.txt").exists()}
+                "outside_blocked": not (sibling / "outside.txt").exists(),
+                "denial_evidence": parse_denial_evidence(combined, target=outside_target)}
     finally:
         shutil.rmtree(probe_root, ignore_errors=True)
 
@@ -1108,6 +1230,306 @@ def supervised_dispatch(
         "resolution": "primary",
         "observation": obs,
     }
+
+
+def resume_dispatch(
+    *,
+    seat: str,
+    prompt: str,
+    run_id: str,
+    correlation_id: Optional[str],
+    resume_session_id: str,
+    effort: Optional[str],
+    timeout: float,
+    engine: str,
+    profile,
+    target: dict,
+    snapshot,
+    capture_root: str,
+    audit,
+    supervisor,
+    provision: Callable,
+    enforce,
+    await_timeout_s: float = 3600.0,
+    author_provider: Optional[str] = None,
+) -> dict:
+    """#559 AC2a (design §2.5) — resume a claude provider session through the NORMAL chokepoint
+    (check_pre receipt → launch → await → Observation append → verify_post), WITHOUT the mutating
+    canary machinery. Supervised CLAUDE only, NON-mutating only: a non-claude engine or a mutating
+    profile refuses (EXIT_MALFORMED) — a resumed mutating job would need a fresh behavioral canary,
+    out of scope here. The launch composes ``session_policy='resume'`` (carried on ``profile``) +
+    the given session id; ``await_job`` is passed ``expect_session_id`` so the resumed envelope's
+    ``session_id`` MUST equal the seeded id (F-h — a mismatch is a fail-loud enforcement error,
+    never a silent "session preserved"). Provider-touching seams are injected; the live spawn is
+    the RUN_LIVE cell (CELL-2)."""
+    from phase_executor.supervisor import SupervisorError  # noqa: PLC0415
+    ce = correlation_id
+    audit_path = str(audit.path)
+    if engine != "claude":
+        return _err(EXIT_MALFORMED, "resume_engine_unsupported",
+                    f"--resume-session-id is claude-only; seat {seat!r} resolved to engine {engine!r}",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    if getattr(profile, "mutating", False):
+        return _err(EXIT_MALFORMED, "resume_mutating_refused",
+                    f"--resume-session-id refuses a mutating profile on seat {seat!r} "
+                    f"(a resumed mutating job needs a fresh behavioral canary — unsupported here)",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    # per-attempt receipt — a resume is a non-build seat, so attestation=None (byte-identical to
+    # the sync non-build path). Recorded BEFORE launch; a non-pass verdict never launches.
+    receipt = enforce.check_pre(
+        seat, target, snapshot, correlation_id=ce, attempt_id="0-resume",
+        author_provider=author_provider, attestation=None)
+    audit.append_receipt(receipt)
+    if receipt.verdict != "pass":
+        return _err(EXIT_ENFORCEMENT, "pre_check_denied",
+                    "; ".join(receipt.violations) or f"non-pass verdict {receipt.verdict!r}",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    identity, handle = provision()
+    record = supervisor.launch(
+        seat, prompt, identity=identity, handle=handle, profile=profile,
+        effort=effort, timeout=timeout, target=target, author_provider=author_provider,
+        receipt_nonce=receipt.nonce, correlation_id=ce, resume_session_id=resume_session_id)
+    # F-h: the resumed envelope MUST carry the seeded session id — await_job asserts it and
+    # raises on mismatch (fail-loud), never reporting a false "session preserved".
+    try:
+        state, obs = supervisor.await_job(
+            record, timeout_s=await_timeout_s, expect_session_id=resume_session_id)
+    except SupervisorError as e:
+        return _err(EXIT_ENFORCEMENT, "resume_identity_mismatch", str(e),
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    # verdict-independent audit append (mirror the supervised/sync per-attempt rule)
+    if obs is not None:
+        stamped = dict(obs)
+        stamped["dispatched_lane"] = dict(target["lane"])
+        child_cid = stamped.get("correlation_id")
+        if child_cid is not None and child_cid != ce:
+            # 8a-F9: refuse a foreign-correlation observation BEFORE appending — a mismatched child
+            # envelope must never be written to the audit (a post-append refusal poisons the ledger).
+            return _err(EXIT_ENFORCEMENT, "correlation_mismatch",
+                        f"child observation correlation {child_cid!r} != dispatch correlation "
+                        f"{ce!r} on resume seat {seat!r} — foreign observation refused",
+                        retryable=False, correlation_id=ce, audit_path=audit_path)
+        if child_cid is None:
+            stamped["correlation_id"] = ce
+        audit.append_observation(stamped, receipt=receipt)
+    if state != "completed":
+        retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
+        code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
+        return _err(code, f"resume_{state}", f"resume seat {seat!r} ended in state {state!r}",
+                    retryable=retryable, correlation_id=ce, audit_path=audit_path)
+    pc = enforce.verify_post(obs or {})
+    if not pc.ok:
+        return _err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on resume seat {seat!r}",
+                    retryable=pc.retryable, correlation_id=ce, audit_path=audit_path)
+    if not pc.verified:
+        return _err(EXIT_AVAILABILITY, "resume_unverified",
+                    f"resume seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                    retryable=True, correlation_id=ce, audit_path=audit_path)
+    return {
+        "ok": True, "exit": EXIT_OK, "action": "executor_resume", "seat": seat,
+        "state": state, "correlation_id": ce, "audit_path": audit_path,
+        "resume_session_id": resume_session_id,
+        "requested_model": (obs or {}).get("requested_model"),
+        "actual_model": (obs or {}).get("actual_model"),
+        "dispatched_lane": dict(target["lane"]) if target else None,
+        "observation": obs,
+    }
+
+
+_APPENDIX_PREFIX: Final[str] = "docs/planning/appendix/"
+
+
+def _atomic_write_json(path: Path, obj) -> None:
+    """Write JSON atomically (tempfile + os.replace) so a crash never leaves a torn intent."""
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(json.dumps(obj), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
+                         expected_target_sha: str, kind: str,
+                         registry, manager, audit, intent_dir: str,
+                         correlation_id: Optional[str] = None) -> dict:
+    """#559 AC1 (design §2.6) — promote a completed build's appendix work product onto
+    ``target_ref`` and record an audited ``work_product`` binding. TWO-PHASE, crash-recoverable,
+    audit-idempotent:
+
+      phase 1: write a durable INTENT keyed {receipt_nonce, candidate_tree_sha, expected_target_sha}
+               (new_sha UNKNOWN until promote returns — F-b), then the irreversible CAS ``promote``
+               scoped by ``promote_appendix_only((docs/planning/appendix/,))``; on success the
+               intent is updated with the returned new_sha;
+      phase 2: ``derive_work_product`` → audit-SEARCH the run's stream for an existing record
+               matching {receipt_nonce, candidate_tree_sha, new_sha}; append ONLY if absent (a crash
+               after append cannot duplicate on rerun — F-c) → mark the intent consumed.
+
+    Idempotent re-run: a consumed matching intent → no-op; an unconsumed matching intent whose
+    new_sha is already recorded (promote succeeded, finalize crashed) → resume phase 2 only; an
+    absent/non-matching intent with a moved ref refuses loud via promote's CAS. The verb HARD-CODES
+    its sole promotable prefix (docs/planning/appendix/) — the factory's generality is for other
+    callers. Git/registry seams are injected; the live path is CELL-1."""
+    from phase_executor.registry import handle_from_record  # noqa: PLC0415
+    from phase_executor.contract import derive_work_product  # noqa: PLC0415
+    from phase_executor.worktree import promote_appendix_only, PromotionResult, WorktreeError  # noqa: PLC0415
+    ce = correlation_id
+    recs = [r for r in registry.by_run(run_id) if r.session_name == session_name]
+    if not recs:
+        return _err(EXIT_MALFORMED, "unknown_job",
+                    f"collect-work-product: no job {session_name!r} in run {run_id!r}",
+                    retryable=False, correlation_id=ce)
+    record = recs[0]
+    if record.state != "completed":
+        return _err(EXIT_MALFORMED, "job_not_completed",
+                    f"collect-work-product: job {session_name!r} is {record.state!r} — only a "
+                    f"terminal 'completed' build yields a work product", retryable=False,
+                    correlation_id=ce)
+    if not record.receipt_nonce:
+        return _err(EXIT_MALFORMED, "no_build_receipt",
+                    f"collect-work-product: job {session_name!r} has no receipt_nonce to bind",
+                    retryable=False, correlation_id=ce)
+    handle = handle_from_record(record)
+    try:
+        evidence = manager.content_evidence(handle)
+    except Exception as e:  # noqa: BLE001 — a content/git read failure is fail-closed
+        return _err(EXIT_INTERNAL, "content_evidence_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce)
+    candidate_tree_sha = evidence["content_tree_sha"]
+    Path(intent_dir).mkdir(parents=True, exist_ok=True)
+    intent_path = Path(intent_dir) / f"collect-{record.receipt_nonce}.json"
+    intent = None
+    if intent_path.exists():
+        try:
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            intent = None
+    matching = (isinstance(intent, dict)
+                and intent.get("receipt_nonce") == record.receipt_nonce
+                and intent.get("candidate_tree_sha") == candidate_tree_sha
+                and intent.get("expected_target_sha") == expected_target_sha)
+    if matching and intent.get("consumed"):
+        return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
+                "status": "already_recorded", "receipt_nonce": record.receipt_nonce,
+                "new_sha": intent.get("new_sha"), "candidate_tree_sha": candidate_tree_sha,
+                "correlation_id": ce}
+    if matching and intent.get("new_sha"):
+        # promote already succeeded (new_sha recorded only AFTER promote returned) → phase 2 only
+        new_sha = intent["new_sha"]
+        promotion = PromotionResult(
+            promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
+            head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
+    else:
+        # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
+        intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
+                  "expected_target_sha": expected_target_sha, "new_sha": None, "consumed": False}
+        _atomic_write_json(intent_path, intent)
+        try:
+            promotion = manager.promote(
+                handle, target_ref=target_ref, expected_target_sha=expected_target_sha,
+                message=f"collect work product ({kind}) for {record.receipt_nonce}",
+                path_policy=promote_appendix_only((_APPENDIX_PREFIX,)))
+        except WorktreeError as e:
+            return _err(EXIT_ENFORCEMENT, "promote_refused", str(e), retryable=False,
+                        correlation_id=ce)
+        if not promotion.promoted:
+            # a moved ref / stale base: no write happened; refuse loud, record nothing (foreign move)
+            return _err(EXIT_ENFORCEMENT, "promote_not_applied",
+                        f"collect-work-product: promotion not applied ({promotion.reason}) — "
+                        f"no work_product recorded", retryable=False, correlation_id=ce)
+        new_sha = promotion.new_target_sha
+        intent["new_sha"] = new_sha
+        _atomic_write_json(intent_path, intent)  # F-b: record new_sha only AFTER promote returned
+    # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
+    try:
+        wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
+    except Exception as e:  # noqa: BLE001 — a derive/reconcile mismatch is fail-closed
+        return _err(EXIT_INTERNAL, "derive_work_product_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce)
+    already = any(r.get("kind") == "work_product"
+                  and r.get("receipt_nonce") == record.receipt_nonce
+                  and r.get("candidate_tree_sha") == candidate_tree_sha
+                  and r.get("new_sha") == new_sha
+                  for r in audit.records())
+    if not already:
+        audit.append_work_product(receipt_nonce=record.receipt_nonce,
+                                  candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
+                                  work_product=wp)
+    intent["consumed"] = True
+    _atomic_write_json(intent_path, intent)
+    return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
+            "status": "already_recorded" if already else "recorded",
+            "receipt_nonce": record.receipt_nonce, "new_sha": new_sha,
+            "candidate_tree_sha": candidate_tree_sha, "correlation_id": ce}
+
+
+def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
+                ledger_closed: bool, await_timeout_s: float = 3600.0,
+                correlation_id: Optional[str] = None) -> dict:
+    """#559 C1 (design §2.7): the recovery-dispatch chokepoint. Refuses a ``run_closed`` ledger;
+    supplies the recovery gate (resolve target → ``check_pre`` → ``append_receipt`` →
+    ``RecoveryAuthorization`` | ``None``) so every relaunch is RECEIPTED; runs
+    ``supervisor.recover`` (the ONE gated relaunch path); then awaits each relaunched record,
+    appends its Observation bound to the recovery receipt, and ``verify_post``s. NO
+    ``append_expected`` — a recovery is an attempt under the ORIGINAL expected call, linked by
+    ``recovered_from`` (reconcile groups it, R1). Exit taxonomy mirrors ``dispatch``."""
+    import types as _types  # noqa: PLC0415
+    from phase_executor.supervisor import RecoveryAuthorization  # noqa: PLC0415
+    ce = correlation_id
+    audit_path = str(audit.path)
+    if ledger_closed:
+        return _err(EXIT_ENFORCEMENT, "run_closed_recover_refused",
+                    f"run {run_id!r} ledger is run_closed — recovery refused (#559)",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    nonce_by_sid, lane_by_sid = {}, {}
+
+    def gate(*, record, correlation_id, recovered_from):
+        targets = routing.eligible_targets(record.identity.seat, snapshot)
+        if not targets:
+            return None
+        resolved_target = targets[0]
+        receipt = enforce.check_pre(
+            record.identity.seat, resolved_target, snapshot, correlation_id=correlation_id,
+            attempt_id=f"{record.resume_attempts + 1}-recover", recovered_from=recovered_from)
+        audit.append_receipt(receipt)  # recorded BEFORE launch (R2); a fail verdict → refuse (None)
+        if receipt.verdict != "pass":
+            return None
+        nonce_by_sid[record.session_name] = receipt.nonce
+        lane_by_sid[record.session_name] = dict(resolved_target["lane"])
+        return RecoveryAuthorization(receipt.nonce, resolved_target, snapshot.config_digest)
+
+    try:
+        actions = supervisor.recover(run_id, dispatch_gate=gate)
+    except routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=audit_path)
+    results, worst = [], EXIT_OK
+    for a in actions:
+        entry = {"seat": a.identity.seat, "run_id": a.identity.run_id, "action": a.action}
+        if a.action == "relaunch":
+            state, obs = supervisor.await_job(a.record, timeout_s=await_timeout_s)
+            entry["state"] = state
+            nonce = nonce_by_sid.get(a.record.session_name)
+            # every terminal state that HAS an observation binds it to the recovery receipt (R2):
+            # a post-receipt death would otherwise leave an observation-less receipt that reconcile
+            # catches as missing_obs.
+            if obs is not None and nonce:
+                stamped = dict(obs)
+                if lane_by_sid.get(a.record.session_name) and not stamped.get("dispatched_lane"):
+                    stamped["dispatched_lane"] = lane_by_sid[a.record.session_name]
+                audit.append_observation(stamped, receipt=_types.SimpleNamespace(nonce=nonce))
+            if state == "completed":
+                pc = enforce.verify_post(obs or {})
+                if not pc.ok:
+                    entry["verify"] = pc.reason
+                    worst = EXIT_ENFORCEMENT
+                elif not pc.verified:
+                    entry["verify"] = f"unverified: {pc.reason}"
+                    worst = max(worst, EXIT_AVAILABILITY)
+            else:
+                worst = max(worst, EXIT_AVAILABILITY)
+        elif a.action.startswith("relaunch_refused") or a.action in ("fail", "quarantine"):
+            worst = max(worst, EXIT_AVAILABILITY)
+        results.append(entry)
+    return {"ok": worst == EXIT_OK, "exit": worst, "action": "recover_run",
+            "run_id": run_id, "results": results, "audit_path": audit_path, "correlation_id": ce}
 
 
 def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlation_id=None, audit_path=None) -> dict:
@@ -1506,6 +1928,72 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
                     retryable=False, correlation_id=ce, audit_path=str(audit.path))
 
 
+def _run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt) -> dict:
+    """#559 AC2a: provision a fresh worktree + supervisor and resume the given claude provider
+    session via ``resume_dispatch`` (design §2.5). A fresh worktree, a RESUMED provider session
+    (``--resume`` restores the conversation, not the cwd). Provisioning failures fail CLOSED to a
+    structured exit 5. The refusal semantics (claude-only, non-mutating) live in resume_dispatch
+    and are unit-tested there; this is the live-provisioning seam (RUN_LIVE / CELL-2)."""
+    ce = args.correlation_id
+    try:
+        from phase_executor.worktree import planned_path  # noqa: PLC0415
+        targets = pe.routing.eligible_targets(args.seat, snap, author_provider=args.author_provider)
+        if not targets:
+            return _err(EXIT_MALFORMED, "routing_table_invalid",
+                        f"resume seat {args.seat!r}: no eligible target", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        target = targets[0]  # resume the primary; resume_dispatch refuses a non-claude engine
+        lane = target["lane"]
+        engine = pe.PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
+
+        base = Path(repo_root)
+        registry_root = base / ".rawgentic" / "runtime" / "registry"
+        wt_root = base / ".rawgentic" / "runtime" / "worktrees"
+        registry_root.mkdir(parents=True, exist_ok=True)
+        wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+        attempt = f"0-{uuid.uuid4().hex[:8]}"
+        identity = pe.WorktreeIdentity(run_id=args.run_id, seat=args.seat, attempt=attempt)
+        planned_wt = planned_path(str(wt_root), identity)
+        manifest = snap.seat(args.seat).get("manifest") or {}
+        base_profile = pe.contract.profile_from_manifest(manifest, engine=engine, worktree=planned_wt)
+        # resume composition: session_policy=resume; mutating carried through so resume_dispatch
+        # refuses a mutating seat loud (a resumed mutating job needs a fresh behavioral canary).
+        resume_profile = pe.contract.LaunchProfile(
+            session_policy="resume", mutating=bool(base_profile.mutating),
+            worktree=base_profile.worktree, tool_grants=tuple(base_profile.tool_grants or ()),
+            max_budget_usd=base_profile.max_budget_usd, max_tokens=base_profile.max_tokens)
+        object.__setattr__(resume_profile, "effective_grants",
+                           tuple(getattr(base_profile, "effective_grants", ()) or ()))
+
+        rc, out, _t = _git_runner(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+        if rc != 0:
+            return _err(EXIT_INTERNAL, "resume_provision_failed",
+                        "cannot resolve base_sha (git rev-parse HEAD)", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        base_sha = out.strip()
+        supervisor = pe.TmuxSupervisor(
+            snapshot=snap, quota=quota, capture_root=paths["capture_root"],
+            registry_root=str(registry_root), worktree_manager=wm,
+            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+
+        def provision():
+            handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
+            return identity, handle
+
+        return resume_dispatch(
+            seat=args.seat, prompt=prompt, run_id=args.run_id, correlation_id=ce,
+            resume_session_id=args.resume_session_id, effort=args.effort, timeout=args.timeout,
+            engine=engine, profile=resume_profile, target=target, snapshot=snap,
+            capture_root=paths["capture_root"], audit=audit, supervisor=supervisor,
+            provision=provision, enforce=pe.enforce, author_provider=args.author_provider)
+    except pe.routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=str(audit.path))
+    except (ValueError, OSError) as e:
+        return _err(EXIT_INTERNAL, "resume_provision_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce, audit_path=str(audit.path))
+
+
 def _do_dispatch(args) -> int:
     # Guarded import: a stale tree / missing dep fails CLOSED to exit 5 (never a silent inherit).
     try:
@@ -1636,6 +2124,12 @@ def _do_dispatch(args) -> int:
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #559 AC2a resume dispatch: --resume-session-id routes to the leaner claude-only resume
+    # chokepoint (check_pre → launch(session_policy=resume) → await(expect_session_id) →
+    # Observation → verify_post). It is ledgered like any dispatch (append_expected above); the
+    # claude-only + non-mutating refusals live in resume_dispatch.
+    if getattr(args, "resume_session_id", None):
+        return _emit(_run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt))
     # #470 §1 internal routing: inspect the resolved target's staged LaunchProfile. A MUTATING
     # profile routes to the supervised branch (gate-auth → stage-and-bind → phase-1 canary → probe
     # session → require_canary → launch, in-process) INSIDE this same CLI call — there is no second
@@ -1664,6 +2158,103 @@ def _do_dispatch(args) -> int:
     if plan_freshness is not None and isinstance(result, dict):
         result["plan_freshness"] = plan_freshness
     return _emit(result)
+
+
+def _do_probe_account(args) -> int:
+    """#559 AC2a: emit the active claude account identity observation as JSON (digest + categories
+    only — no raw PII). Read-only; never launches or mutates. The digest is run evidence (R8) —
+    the orchestrator persists it under the gitignored run dir, never into a committed report."""
+    return _emit(probe_account(args.claude_bin))
+
+
+def _do_recover_run(args) -> int:
+    """#559 C1: CLI wrapper for the recovery-dispatch chokepoint. The live await/relaunch is the
+    RUN_LIVE seam (CELL-3b); the gate + run_closed refusal + reconcile-provenance logic is
+    unit-tested against recover_run with an injected supervisor."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        snap = resolve_table(repo_root, pe.routing).snapshot
+        paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
+    base = Path(repo_root)
+    registry_root = base / ".rawgentic" / "runtime" / "registry"
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        registry = JobRegistry(str(registry_root))
+        audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
+        ledger_closed = led.is_closed()
+        wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+        supervisor = pe.TmuxSupervisor(
+            snapshot=snap, quota=pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency()),
+            capture_root=paths["capture_root"], registry_root=str(registry_root),
+            registry=registry, worktree_manager=wm,
+            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+    except (OSError, ValueError, RegistryCorrupt) as e:
+        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
+                          retryable=False, correlation_id=args.correlation_id))
+    return _emit(recover_run(
+        run_id=args.run_id, supervisor=supervisor, snapshot=snap, audit=audit,
+        routing=pe.routing, enforce=pe.enforce, ledger_closed=ledger_closed,
+        correlation_id=args.correlation_id))
+
+
+def _do_collect_work_product(args) -> int:
+    """#559 AC1: CLI wrapper — resolve the run's registry/audit + a WorktreeManager, then run the
+    two-phase collect_work_product. The live git/CAS seam (CELL-1); the two-phase + idempotency
+    logic is unit-tested against collect_work_product with injected fakes."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        snap = resolve_table(repo_root, pe.routing).snapshot
+        paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
+    base = Path(repo_root)
+    registry_root = base / ".rawgentic" / "runtime" / "registry"
+    try:
+        registry = JobRegistry(str(registry_root))
+        manager = WorktreeManager(_git_runner, forbid_tmp=True)
+        audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+    except (OSError, ValueError, RegistryCorrupt) as e:
+        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
+                          retryable=False, correlation_id=args.correlation_id))
+    intent_dir = (Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+                  / "work-product-intents")
+    return _emit(collect_work_product(
+        run_id=args.run_id, session_name=args.session_name, target_ref=args.target_ref,
+        expected_target_sha=args.expected_target_sha, kind=args.kind,
+        registry=registry, manager=manager, audit=audit, intent_dir=str(intent_dir),
+        correlation_id=args.correlation_id))
 
 
 def _status_tail(path: Path, limit: int = 200) -> str:
@@ -1885,6 +2476,7 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--plan-file", dest="plan_file")          # #470 §2b: live impl-plan.md; context minted internally
     d.add_argument("--correlation-id", dest="correlation_id")
     d.add_argument("--author-provider", dest="author_provider")
+    d.add_argument("--resume-session-id", dest="resume_session_id")  # #559 AC2a: claude-only resume
     d.add_argument("--effort")
     d.add_argument("--timeout", type=float, default=300.0)
     d.add_argument("--workspace", required=True)
@@ -1897,6 +2489,31 @@ def main(argv: Optional[list] = None) -> int:
     mg.add_argument("--plan-est-lines", required=True, type=int)
     mg.add_argument("--out", required=True)
     mg.set_defaults(fn=_do_mint_gate)
+
+    pa = sub.add_parser("probe-account",
+                        help="#559 AC2a: observe the active claude account identity (digest + categories, no raw PII)")
+    pa.add_argument("--claude-bin", dest="claude_bin", default="claude")
+    pa.set_defaults(fn=_do_probe_account)
+
+    rr = sub.add_parser("recover-run",
+                        help="#559 C1: ledgered/receipted recovery relaunch of quota_paused jobs")
+    rr.add_argument("--run-id", required=True, dest="run_id")
+    rr.add_argument("--correlation-id", dest="correlation_id")
+    rr.add_argument("--workspace", required=True)
+    rr.add_argument("--project", required=True)
+    rr.set_defaults(fn=_do_recover_run)
+
+    cw = sub.add_parser("collect-work-product",
+                        help="#559 AC1: promote a completed build's appendix work product + record an audited binding")
+    cw.add_argument("--run-id", required=True, dest="run_id")
+    cw.add_argument("--session-name", required=True, dest="session_name")
+    cw.add_argument("--target-ref", required=True, dest="target_ref")
+    cw.add_argument("--expected-target-sha", required=True, dest="expected_target_sha")
+    cw.add_argument("--kind", default="docs", choices=["code", "review", "design", "docs"])
+    cw.add_argument("--correlation-id", dest="correlation_id")
+    cw.add_argument("--workspace", required=True)
+    cw.add_argument("--project", required=True)
+    cw.set_defaults(fn=_do_collect_work_product)
 
     su = sub.add_parser("status", help="#471: read-only per-run seat status (registry + capture) as JSON")
     su.add_argument("--workspace", required=True)

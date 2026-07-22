@@ -24,6 +24,20 @@ from phase_executor.registry import JobRegistry, session_name
 from phase_executor.supervisor import SupervisorError, TmuxSupervisor, resolve_socket
 from phase_executor.worktree import WorktreeHandle, WorktreeIdentity
 
+
+def _pass_gate(sup):
+    """#559 C1: a fake recovery dispatch_gate returning a canned RecoveryAuthorization bound to the
+    resolved target + the supervisor's snapshot digest (the same contract production's gate uses)."""
+    import uuid as _uuid  # noqa: PLC0415
+    from phase_executor.supervisor import RecoveryAuthorization  # noqa: PLC0415
+    def gate(*, record, correlation_id, recovered_from):
+        resolved_target = routing.eligible_targets(record.identity.seat, sup._snapshot)[0]
+        return RecoveryAuthorization(receipt_nonce="rcpt-" + _uuid.uuid4().hex[:8],
+                                     resolved_target=resolved_target,
+                                     config_digest=sup._snapshot.config_digest)
+    return gate
+
+
 REPO = Path(__file__).resolve().parents[2]
 PKG_SRC = REPO / "phase_executor" / "src"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -436,9 +450,9 @@ def test_status_quota_paused_only_injected(tmp_path):
     reg.upsert(rec)
     with pytest.raises(SupervisorError):  # empty session id refused
         sup.mark_quota_paused(identity, provider_session_id=None)
-    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
-    assert got.state == "quota_paused"
-    assert got.provider_session_id == "sess-1"
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
+    assert reg.get(identity).provider_session_id == "sess-1"
     assert reg.get(identity).state == "quota_paused"
     with pytest.raises(SupervisorError):  # already terminal-for-recover — refused
         sup.mark_quota_paused(identity, provider_session_id="sess-2")
@@ -475,8 +489,8 @@ def test_mark_quota_paused_sentinel_guard_boundary(tmp_path):
         reason="child exited without sentinel", routing_config_digest="sha256:d",
         correlation_id="c1")
     (cap / "observation.json").write_text(json.dumps(synth), encoding="utf-8")
-    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
-    assert got.state == "quota_paused"
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
     # envelope-producing OK sentinel → still refused (effects would duplicate)
     reg.upsert(rec)  # reset state to exited_no_sentinel
     ok_obs = contract.Observation(
@@ -575,7 +589,7 @@ class _QuotaCollect:
             state="running", created_at=0.0, quarantine_reason=None, spec_digest=digest)
         self.reg.upsert(self.record)
         self.sup = TmuxSupervisor(
-            snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+            snapshot=_snapshot(), quota=None, capture_root=str(tmp_path / "cap"),
             registry_root=str(tmp_path / "reg"), registry=self.reg, run=_dead_run)
 
     def collect(self):
@@ -790,9 +804,8 @@ def test_mark_quota_paused_injects_classification_evidence(tmp_path):
               provider_session_id=None, provider_exit_code=None, resume_attempts=0,
               state="exited_no_sentinel", created_at=0.0, quarantine_reason=None)
     reg.upsert(rec)
-    got = sup.mark_quota_paused(identity, provider_session_id="sess-1")
-    assert got.state == "quota_paused"
-    assert got.quota_classification == {"injected": True, "paused": True}
+    state = sup.mark_quota_paused(identity, provider_session_id="sess-1")
+    assert state == "quota_paused"
     assert reg.get(identity).quota_classification == {"injected": True, "paused": True}
 
 
@@ -810,7 +823,7 @@ def test_relaunch_carries_quota_classification(tmp_path, monkeypatch):
         return paused
 
     monkeypatch.setattr(q.sup, "launch", fake_launch)
-    q.sup._relaunch(paused)
+    q.sup._relaunch(paused, dispatch_gate=_pass_gate(q.sup))
     assert captured["quota_classification"] == paused.quota_classification
     assert captured["resume_session_id"] == "sess-1"
 
@@ -876,7 +889,7 @@ def test_relaunch_profile_rebuild_preserves_max_tokens(tmp_path, monkeypatch):
         return paused
 
     monkeypatch.setattr(q.sup, "launch", fake_launch)
-    q.sup._relaunch(paused)
+    q.sup._relaunch(paused, dispatch_gate=_pass_gate(q.sup))
     assert captured["profile"].max_tokens == 512
 
 

@@ -25,6 +25,20 @@ from phase_executor.registry import JobRegistry
 from phase_executor.supervisor import TmuxSupervisor
 from phase_executor.worktree import WorktreeHandle, WorktreeIdentity
 
+
+def _pass_gate(sup):
+    """#559 C1: a fake recovery dispatch_gate returning a canned RecoveryAuthorization bound to the
+    resolved target + the supervisor's snapshot digest (the same contract production's gate uses)."""
+    import uuid as _uuid  # noqa: PLC0415
+    from phase_executor.supervisor import RecoveryAuthorization  # noqa: PLC0415
+    def gate(*, record, correlation_id, recovered_from):
+        resolved_target = routing.eligible_targets(record.identity.seat, sup._snapshot)[0]
+        return RecoveryAuthorization(receipt_nonce="rcpt-" + _uuid.uuid4().hex[:8],
+                                     resolved_target=resolved_target,
+                                     config_digest=sup._snapshot.config_digest)
+    return gate
+
+
 REPO = Path(__file__).resolve().parents[2]
 PKG_SRC = REPO / "phase_executor" / "src"
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
@@ -233,7 +247,7 @@ def test_recover_adopt_reestablishes_permit_under_adopting_pid(env_factory):
     token.write_text(f"{_dead_pid()}\n0\n", encoding="utf-8")
     try:
         sup2 = env.sup_with_mode("ok_then_sleep")
-        actions = sup2.recover(env.identity.run_id)
+        actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
         assert [a.action for a in actions] == ["adopt"]
         # the permit is re-keyed to the ADOPTING (live) pid — no stale-reap, ceiling holds
         assert int(token.read_text().splitlines()[0].strip()) == os.getpid()
@@ -254,7 +268,7 @@ def test_recover_quarantine_never_repermits(env_factory):
     spec_path = Path(env.tmp / "reg" / "specs" / f"{rec.session_name}.json")
     spec_path.write_text(json.dumps({"tampered": True}), encoding="utf-8")
     sup2 = env.sup_with_mode("provider_sleep")
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert [a.action for a in actions] == ["quarantine"]
     assert env.registry.get(env.identity).state == "quarantined"
     # released, not re-keyed: the permit is gone and the pool is empty (asymmetry vs adopt)
@@ -273,7 +287,7 @@ def test_adopt_permit_oserror_quarantines_and_sweep_continues(env_factory, monke
     sup2 = env.sup_with_mode("ok_then_sleep")
     monkeypatch.setattr(sup2, "_reestablish_adopt_permit",
                         lambda record: (_ for _ in ()).throw(OSError("disk full")))
-    actions = sup2.recover(env.identity.run_id)  # must NOT raise (pre-fix: OSError propagated)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))  # must NOT raise (pre-fix: OSError propagated)
     assert [a.action for a in actions] == ["quarantine"]
 
 
@@ -285,6 +299,204 @@ def test_adopt_race_loser_yields_never_records_adopt(env_factory, monkeypatch):
     monkeypatch.setattr(env.sup.__class__, "_reestablish_adopt_permit",
                         lambda self, record: False)
     sup2 = env.sup_with_mode("ok_then_sleep")
-    actions = sup2.recover(env.identity.run_id)
+    actions = sup2.recover(env.identity.run_id, dispatch_gate=_pass_gate(sup2))
     assert [a.action for a in actions] == ["yielded"]
-    env.sup.cancel(env.registry.get(env.identity))
+
+
+# ---------------------------------------------------------------------------
+# H2 (#559): _relaunch reads via _verified_spec — the post-identity-check TOCTOU
+# window is closed. Pure tests (dead runner, no tmux).
+# ---------------------------------------------------------------------------
+
+
+class _RetainRec:
+    def __init__(self):
+        self.finalized = []
+
+    def finalize(self, handle, observation_status, *, live_identities=()):
+        self.finalized.append((handle.path, observation_status))
+        return None
+
+
+def _paused_record(identity, tmp_path):
+    from phase_executor.registry import JobRecord, session_name
+    return JobRecord(
+        identity=identity, session_name=session_name(identity), run_socket="s",
+        pane_pid=1, pane_pgid=1, provider_pgid=None, pane_start_time="0",
+        worktree_path=str(tmp_path), worktree_base_sha="b", worktree_root=str(tmp_path),
+        worktree_gitdir="g", worktree_repo="rp", capture_dir=str(tmp_path / "cd"),
+        attempt_id="a", permit_ref="unbounded", command_digest="sha256:x",
+        provider_session_id="sess-1", provider_exit_code=1, resume_attempts=0,
+        state="quota_paused", created_at=0.0, quarantine_reason=None, spec_digest="sha256:orig")
+
+
+def _dead_sup(tmp_path, **kw):
+    reg = JobRegistry(str(tmp_path / "reg"))
+    sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+                         registry_root=str(tmp_path / "reg"), registry=reg,
+                         run=lambda cmd, **kw2: subprocess.CompletedProcess(cmd, 1, "", ""), **kw)
+    return sup, reg
+
+
+def _write_tampered_spec(tmp_path, rec):
+    specs = Path(tmp_path / "reg" / "specs")
+    specs.mkdir(parents=True, exist_ok=True)
+    # bytes that will NOT hash to record.spec_digest — the post-check tamper
+    (specs / f"{rec.session_name}.json").write_text(json.dumps({"tampered": True}), encoding="utf-8")
+
+
+def test_recover_toctou_tampered_spec_quarantines_never_relaunches(tmp_path, monkeypatch):
+    # H2: recover()'s _identity_matches digest-checks, but the bytes _relaunch RE-READS after
+    # that check are the TOCTOU window. Simulate the post-check tamper — _identity_matches
+    # returns True while the on-disk spec is already tampered → _relaunch reads via
+    # _verified_spec → None → quarantine (kill + retain), never a launch.
+    manager = _RetainRec()
+    sup, reg = _dead_sup(tmp_path, worktree_manager=manager)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    rec = _paused_record(identity, tmp_path)
+    reg.upsert(rec)
+    _write_tampered_spec(tmp_path, rec)
+    monkeypatch.setattr(sup, "_identity_matches", lambda record: True)  # the check PASSED
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    actions = sup.recover("r1", dispatch_gate=_pass_gate(sup))
+    assert [a.action for a in actions] == ["quarantine"]
+    assert launched == [], "a tampered relaunch spec never reaches launch()"
+    assert reg.get(identity).state == "quarantined"
+    assert manager.finalized, "quarantined evidence is retained (W3)"
+
+
+def test_relaunch_refuses_unverified_spec_bytes(tmp_path, monkeypatch):
+    # direct unit: _relaunch on unverifiable bytes raises SpecTamperError before any launch
+    from phase_executor.supervisor import SpecTamperError
+    sup, reg = _dead_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    rec = _paused_record(identity, tmp_path)
+    reg.upsert(rec)
+    _write_tampered_spec(tmp_path, rec)
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    with pytest.raises(SpecTamperError):
+        sup._relaunch(rec, dispatch_gate=_pass_gate(sup))
+    assert launched == []
+
+
+# --- #559 C1 (design §2.7): recovery-dispatch chokepoint (gated relaunch) ---
+
+def _snap_sup(tmp_path):
+    reg = JobRegistry(str(tmp_path / "reg"))
+    sup = TmuxSupervisor(
+        snapshot=_snapshot(), quota=QuotaCoordinator(str(tmp_path / "q"), {"claude": 1}),
+        capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"), registry=reg,
+        run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+    return sup, reg
+
+
+def _paused_verified(tmp_path, reg, *, mutating=False, engine="claude"):
+    from phase_executor.capture import hash_text  # noqa: PLC0415
+    from phase_executor.registry import JobRecord, session_name  # noqa: PLC0415
+    ident = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    name = session_name(ident)
+    profile = {"session_policy": "fresh", "mutating": mutating, "tool_grants": [], "effective_grants": []}
+    spec = {"engine": engine, "run_id": "r1", "attempt_id": "a",
+            "request": {"seat": "build", "requested_model": "m", "prompt": "p",
+                        "correlation_id": "orig-cid", "profile": profile}}
+    specs = tmp_path / "reg" / "specs"
+    specs.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(spec, indent=2, sort_keys=True)
+    (specs / f"{name}.json").write_text(text, encoding="utf-8")
+    (tmp_path / "wt").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "capd").mkdir(parents=True, exist_ok=True)
+    rec = JobRecord(identity=ident, session_name=name, run_socket="s", pane_pid=1, pane_pgid=1,
+                    provider_pgid=None, pane_start_time="0", worktree_path=str(tmp_path / "wt"),
+                    worktree_base_sha="b", worktree_root=str(tmp_path), worktree_gitdir="g",
+                    worktree_repo="rp", capture_dir=str(tmp_path / "capd"), attempt_id="a",
+                    permit_ref="unbounded", command_digest="sha256:x",
+                    provider_session_id="sess-1", provider_exit_code=1, resume_attempts=0,
+                    state="quota_paused", created_at=0.0, quarantine_reason=None,
+                    spec_digest=hash_text(text))
+    reg.upsert(rec)
+    return rec
+
+
+def test_recover_requires_dispatch_gate_typeerror(tmp_path):
+    # R11/F-a: the gate is MANDATORY — no default, no ungated escape hatch
+    sup, _ = _snap_sup(tmp_path)
+    with pytest.raises(TypeError):
+        sup.recover("r1")  # missing dispatch_gate
+
+
+def test_relaunch_gate_refusal_no_launch_state_preserved(tmp_path, monkeypatch):
+    from phase_executor.supervisor import RecoveryRefused  # noqa: PLC0415
+    sup, reg = _snap_sup(tmp_path)
+    rec = _paused_verified(tmp_path, reg)
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    with pytest.raises(RecoveryRefused) as ei:
+        sup._relaunch(rec, dispatch_gate=lambda **k: None)
+    assert ei.value.reason == "gate"
+    assert launched == []
+    assert reg.get(rec.identity).state == "quota_paused"  # preserved: no _finish
+
+
+def test_relaunch_mutating_recovery_refused_before_gate(tmp_path, monkeypatch):
+    from phase_executor.supervisor import RecoveryRefused  # noqa: PLC0415
+    sup, reg = _snap_sup(tmp_path)
+    rec = _paused_verified(tmp_path, reg, mutating=True)
+    gate_calls, launched = [], []
+
+    def gate(**k):
+        gate_calls.append(1)
+        return None
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    with pytest.raises(RecoveryRefused) as ei:
+        sup._relaunch(rec, dispatch_gate=gate)
+    assert ei.value.reason == "mutating_recovery_unsupported"
+    assert gate_calls == [] and launched == []  # refused BEFORE the gate/receipt (R2/R6)
+
+
+def test_relaunch_config_digest_drift_aborts_loud(tmp_path, monkeypatch):
+    from phase_executor.supervisor import RecoveryAuthorization, SupervisorError  # noqa: PLC0415
+    sup, reg = _snap_sup(tmp_path)
+    rec = _paused_verified(tmp_path, reg)
+    tgt = routing.eligible_targets("build", sup._snapshot)[0]
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    with pytest.raises(SupervisorError):
+        sup._relaunch(rec, dispatch_gate=lambda **k: RecoveryAuthorization("rn", tgt, "sha256:WRONG"))
+    assert launched == []  # P4-M: config_digest drift aborts before launch
+
+
+def test_relaunch_threads_target_and_provenance_into_launch(tmp_path, monkeypatch):
+    from phase_executor.supervisor import RecoveryAuthorization  # noqa: PLC0415
+    sup, reg = _snap_sup(tmp_path)
+    rec = _paused_verified(tmp_path, reg)
+    tgt = routing.eligible_targets("build", sup._snapshot)[0]
+    captured = {}
+    monkeypatch.setattr(sup, "launch", lambda seat, prompt, **kw: captured.update(kw) or "REC")
+
+    def gate(*, record, correlation_id, recovered_from):
+        assert recovered_from == "orig-cid" and correlation_id == "orig-cid#resume1"
+        return RecoveryAuthorization("rcpt-9", tgt, sup._snapshot.config_digest)
+    out = sup._relaunch(rec, dispatch_gate=gate)
+    assert out == "REC"
+    assert captured["target"] == tgt                     # resolved_target threaded (no re-resolution)
+    assert captured["receipt_nonce"] == "rcpt-9"
+    assert captured["recovered_from"] == "orig-cid"      # groups under the ORIGINAL expected call
+    assert captured["correlation_id"] == "orig-cid#resume1"
+    assert captured["resume_session_id"] == "sess-1"
+
+
+def test_recover_routes_gate_refusal_to_relaunch_refused(tmp_path, monkeypatch):
+    # recover() surfaces a gate refusal as 'relaunch_refused (gate)' with the record UNCHANGED
+    # (still quota_paused) — no _finish, no launch. _identity_matches patched True so
+    # classify_recovery reaches the relaunch arm.
+    sup, reg = _snap_sup(tmp_path)
+    rec = _paused_verified(tmp_path, reg)
+    monkeypatch.setattr(sup, "_identity_matches", lambda record: True)
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    actions = sup.recover("r1", dispatch_gate=lambda **k: None)
+    assert len(actions) == 1 and actions[0].action == "relaunch_refused (gate)"
+    assert launched == []
+    assert reg.get(rec.identity).state == "quota_paused"
