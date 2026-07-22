@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#449 — driver-bench live cells (design)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 07:07 MDT</div>
+<h1>#449 — driver-bench live cells (design)</h1>
+
+</header>
+<main>
+<h1>#449 — driver-bench live cells on the wired executor path + session_policy A/B</h1>
+<p>Design r2 · 2026-07-22 · session 3544db7b · issue #449 (W10 of executor-wiring, epic #475) · plugin 3.89.0 → 3.90.0 WF2 resumed from Step 3 (Steps 1-2 done prior session 641a6f27; 2 analysis outputs read). &quot;Part of #475&quot;. r2 delta (folds 5 adversarial findings, gpt-5.6-sol): [1] define the <code>unsupported</code> cell type + how the live-run recognizes it (a caught refusal, report-level — scorers untouched); [2] the session_policy work is OBSERVABILITY (record requested/actual per seat), NOT a fresh-vs-resume A/B comparison — the comparison needs a live resume dispatch and is deferred to #559-class supervised tooling; [3] the live glm-judge feasibility is <code>deferred-to-target</code> (the #138 cell), only the <code>_dispatch_real</code> SIGNATURE compat is verified-via-call-site; [4] removed the review-suppressing &quot;do not re-litigate&quot; phrasing — the #558 A-F1 constraint is stated as a checkable fact; [5] a hard billable-call + budget ceiling (not just a fixture subset + pool cap).</p>
+<h2>§0 Fork resolution (the issue&#x27;s Open Design Decision, settled here at Step 4)</h2>
+<p><strong>Ship (A) Live-executor.</strong> Real per-seat model calls flow through the existing <code>phase_executor</code> adapters (real routing / fallback / enforcement / bake-off judge), fixtures otherwise unchanged. Rejected (B) Live-orchestrator (a real opus/sonnet SESSION driving a constrained dispatch interface, scored vs an expected state-graph): it is a heavier agentic-eval harness, and the engine&#x27;s orchestration is deterministic code (no in-<code>run_seat</code> LLM decision point), so (B) is a separate follow-up. (A) is the recommendation in the issue, is the fast/actionable routing signal the epic needs, and is the only reading consistent with the merged engine + the #558/D-8 constraints below.</p>
+<h2>§1 Problem</h2>
+<p>#430 shipped the bench HARNESS (<code>hooks/driver_bench_lib.py</code>: 7-dim scorer, 12 fixtures, a 72-cell stubbed baseline) but no LIVE path — the stubbed dispatch (<code>_seat_dispatch</code>/<code>_bakeoff_dispatch</code>, <code>:104/:117</code>) returns canned Observations from the fixture, so the baseline is model-independent (all dims 1.0) and there is ZERO real opus-vs-sonnet / routing signal. This issue builds the live dispatch + a runnable entry point + a live report, cost-guarded + fail-closed, RUN_LIVE-gated.</p>
+<h2>§2 Verified facts</h2>
+<ul>
+<li>The dispatch seam is injectable: every scorer calls <code>pe.run_seat(seat, ..., dispatch=&lt;d&gt;)</code> /</li>
+</ul>
+<p>  <code>pe.run_competitive(..., dispatch=&lt;d&gt;)</code> with <code>_seat_dispatch(fx)</code> (canned). A LIVE dispatch is a   drop-in that calls the REAL adapter (<code>phase_executor.engine._dispatch_real(engine, req, ...)</code> —   the same real path WF2/WF3 use). Confirmed by reading <code>driver_bench_lib.py:104-145,256-327</code>.</p>
+<ul>
+<li><code>_dispatch_real(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason)</code></li>
+</ul>
+<p>  is the real adapter entry (engine.py) — same kwargs the stubbed dispatch takes, so the live   dispatch is signature-compatible.</p>
+<ul>
+<li><strong>#558 A-F1 constraint (checkable fact, F4 — verify it, don&#x27;t take it on faith):</strong> the live</li>
+</ul>
+<p>  BUILD/bake-off cell dispatches a MUTATING build seat, which the sync/competitive path REFUSES —   <code>engine._reject_mutating_manifest</code> raises <code>CompositionError</code> for a manifest with edit/bash grants,   and <code>MUTATING_FS_SANDBOXED={codex}</code> (<code>executor_routing_lib.py</code>) confines mutating claude. A   reviewer/implementer SHOULD confirm this still holds against the merged code before relying on it.   Given it holds: the live bench covers READ-ONLY seats (analysis/review/ship/intake/plan) + the   competitive DESIGN judge (read-only glm judge); the build-seat live cell is out of reach — the live   run CATCHES the <code>CompositionError</code> and records a report-level <code>{&quot;cell&quot;: &lt;seat&gt;, &quot;status&quot;:   &quot;unsupported&quot;, &quot;reason&quot;: &quot;mutating build seat refused (#558 A-F1)&quot;}</code> entry (F1 — a typed cell   result, not a scored Observation; the per-dimension SCORERS are the stubbed-baseline path and are   untouched by the live run).</p>
+<ul>
+<li><strong>D-8 session_policy — OBSERVABILITY, not an A/B comparison (F2).</strong> A true fresh-vs-resume A/B</li>
+</ul>
+<p>  needs a live RESUME dispatch, which is sync-unreachable + supervised-claude-refused (prior D-8);   that comparison is DEFERRED to #559-class supervised tooling. #449 ships session_policy   OBSERVABILITY: the live report records, per seat, the <code>session_policy</code> the manifest requested and   the policy actually used (<code>requested</code>/<code>actual</code>) — it does NOT claim to compare fresh vs resumed   outcomes. The honest artifact is &quot;which session_policy each live seat ran under,&quot; a routing input,   not an A/B verdict.</p>
+<ul>
+<li>glm judge credential: live glm via <code>.venv-bench</code> / the <code>glm-judge.env</code> credential</li>
+</ul>
+<p>  (<code>ZHIPUAI_API_KEY</code>), the <code>zhipuai_sdk</code> adapter&#x27;s live path — fail-closed when absent.</p>
+<h2>§3 What ships (AC1-6) — tooling built + CI-tested; live RUN deferred (#138)</h2>
+<p>1. <strong><code>_live_dispatch()</code></strong> (new, <code>driver_bench_lib.py</code>): a dispatch that routes through    <code>_dispatch_real</code> — real per-seat model call, real chain fallback, real enforcement/verify_post.    Injectable exactly like <code>_seat_dispatch</code>, so scorers are unchanged. A read-only seat dispatches;    a mutating build seat returns the legible <code>unsupported</code> skip (never a crash/fabricated score). 2. <strong>Entry point:</strong> <code>driver_bench_lib.py</code> <code>--live</code> flag (+ <code>--fixtures &lt;subset&gt;</code>) on <code>_run_cli</code> /    a <code>run_matrix(..., live=True)</code> path. Writes a LIVE report to <code>docs/measurements/driver-bench/</code>    (separate from the stubbed baseline): per-fixture, per-dimension scores + real usage/cost +    per-seat <code>requested</code>/<code>actual</code> model + fallback-fired + judge-winner + audit-reconciled. 3. <strong>Actionable:</strong> the report surfaces, per seat, the live outcome (routed model served? fallback?    glm judge pick? audit reconcile?) so a routing/seat adjustment is justifiable from data. 4. <strong>Cheap-guarded (F5 — a hard ceiling, not just a small subset):</strong> default = the 3-live-cell    subset (#430) or a named <code>--fixtures</code>; an explicit cost/usage line; AND a configured    max-billable-calls + max-total-budget ceiling that ABORTS the run (typed <code>budget_exceeded</code>)    when exceeded — so a runaway fan-out is impossible, not merely discouraged. 5. <strong>Fail-closed:</strong> missing glm credential / unavailable provider → a legible per-cell skip in the    report (<code>skipped: &lt;reason&gt;</code>), never a crash, never a fabricated score. 6. <strong>RUN_LIVE-gated:</strong> the live path runs only under <code>RUN_LIVE=1</code> + a glm-capable env (mirrors the    adapters&#x27; <code>@pytest.mark.live</code>); CI never runs it. Full suite stays green; the live path is a    documented manual invocation.</p>
+<h2>§4 platform_apis feasibility (#226)</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: phase_executor <code>_dispatch_real</code> real per-seat adapter dispatch (claude/codex/zhipuai) from the bench</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — the same <code>_dispatch_real</code> WF2/WF3 dispatch through (engine.py); the bench&#x27;s stubbed dispatch already has the identical signature (driver_bench_lib.py:108), so the live swap is signature-proven   failure: fail-loud</p>
+<ul>
+<li>api: live glm-5.2 judge via the zhipuai_sdk adapter (.venv-bench / glm-judge.env ZHIPUAI_API_KEY) FROM THE BENCH</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — the zhipuai_sdk adapter&#x27;s live glm path shipped AND ran live in #426/#428 (an exact call site that succeeded: live glm-5.2, requested==actual); the bench reuses that exact adapter path via <code>_dispatch_real</code>. (F3 honesty: only the ADAPTER&#x27;s live path is call-site-verified; the bench-integrated authenticated RUN is NOT exercised here — it is the deferred runtime check below, not a feasibility gap.)   failure: fail-silent   surface: fail-closed per-cell skip in the live report (AC5) — a missing/invalid glm credential yields <code>{&quot;status&quot;:&quot;skipped&quot;,&quot;reason&quot;:&quot;no glm credential&quot;}</code>, never a fabricated score; the bench NEVER runs live in CI (RUN_LIVE gate); the authenticated bench live RUN is the #138 deferred owner-attended cell, target check = RUN_LIVE=1 in a glm-capable env writes a live report with real usage</p>
+<ul>
+<li>api: a hard billable-call + budget ceiling for a live run (F5)</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — the seat manifests already carry <code>bounds.max_budget_usd</code> (routing table) + pool concurrency caps; the live run sums per-cell <code>usage.cost_proxy</code>/reserved budget and ABORTS (typed) when a configured total-call or total-budget ceiling is exceeded   failure: fail-loud   surface: the live report&#x27;s cost line + a <code>budget_exceeded</code> abort record — an unbounded/runaway live fan-out is impossible (not just discouraged by a small subset)</p>
+<ul>
+<li>api: mutating build-seat live dispatch on the sync/competitive path</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — REFUSED by #558 A-F1 (MUTATING_FS_SANDBOXED={codex}); the bench records it as <code>unsupported</code>, does not attempt it   failure: fail-loud</p>
+<h2>§5 Deferred (#138)</h2>
+<p>The authenticated live RUN (RUN_LIVE=1 + real glm + real provider calls producing the opus-vs-sonnet / routing signal) is the owner-attended cell — real cost + auth, never in CI. Local proxy: the <code>_live_dispatch</code> + report-writer + cost-guard + fail-closed unit tests with an INJECTED live-dispatch (a fake <code>_dispatch_real</code> returning representative Observations). Target check: <code>RUN_LIVE=1 python3 hooks/driver_bench_lib.py --live --fixtures &lt;subset&gt;</code> in a glm-capable env → a live report with real usage. This is the #559-shaped pattern: build + CI-test the tooling, defer the paid live run.</p>
+<h2>§6 ACs (this PR) + §7 task sketch</h2>
+<p>AC1-6 as §3. No WF2-spine change → no diagram REV (bench is telemetry tooling). Version ×4 (3.89.0→3.90.0). T1 <code>_live_dispatch</code> + fail-closed skip + injected-dispatch tests (red-first) · T2 <code>--live</code>/<code>run_matrix(live=)</code> entry + live-report writer (<code>docs/measurements/driver-bench/</code>) + cost line + tests · T3 session_policy OBSERVABILITY dimension (record requested/actual session_policy per seat in the report; NOT a fresh-vs-resume comparison — deferred #559-class) + test · T4 RUN_LIVE <code>@live</code> deferred cell + docs (how to run) · T5 versions ×4 + README changelog + design md+html.</p>
+<h2>§8 Step-4 disposition log (adversarial gpt-5.6-sol — all ADOPTED into r2)</h2>
+<ul>
+<li>F1[H] <code>unsupported</code> type undefined → §2: typed report-level cell <code>{status:unsupported,reason}</code> from a caught CompositionError; scorers untouched.</li>
+<li>F2[H] session_policy &quot;A/B&quot; doesn&#x27;t compare → §2/§3/T3: reframed to OBSERVABILITY (record requested/actual); comparison deferred #559-class.</li>
+<li>F3[H] live-glm feasibility overreach → §4: downgraded to deferred-to-target; only _dispatch_real signature compat is verified-call-site.</li>
+<li>F4[H] &quot;do not re-litigate&quot; suppresses review → §2: removed; #558 A-F1 stated as a checkable fact with the code anchors.</li>
+<li>F5[M] no billable ceiling → §3.4/§4/AC4: hard max-calls + budget ceiling that aborts (budget_exceeded).</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-22 07:07 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
