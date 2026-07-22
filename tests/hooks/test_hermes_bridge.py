@@ -16,9 +16,14 @@ import pytest
 HOOKS_DIR = Path(__file__).resolve().parent.parent.parent / "hooks"
 sys.path.insert(0, str(HOOKS_DIR))
 
+import hermes_bridge as hb  # noqa: E402
 from hermes_bridge import (  # noqa: E402
     OWNER_ENV_KEYS,
     BridgeUnreachable,
+    _default_notify_path,
+    _default_transport,
+    _is_owner_inbound,
+    _safe_component,
     ask_owner,
     classify_batch,
     deliver,
@@ -304,3 +309,131 @@ def test_poll_reply_returns_match(tmp_path):
 
 def test_owner_env_keys_declared():
     assert set(OWNER_ENV_KEYS) == {"BB_URL", "BB_RECIPIENT", "BLUEBUBBLES_PASSWORD"}
+
+
+# ===================== Step-8a review fixes =====================
+
+# M1: crash between inbox-write and mark-consumed must still make the guid terminal
+def test_deliver_marks_consumed_even_when_inbox_preexists(tmp_path):
+    import hashlib
+    rec = _ask(tmp_path)
+    reply = _msg("g1", f"yes {rec['token']}", ts=600_000)
+    did = hashlib.sha1(b"g1").hexdigest()[:12]
+    inbox = tmp_path / "inbox" / rec["run_id"]
+    inbox.mkdir(parents=True)
+    (inbox / f"{did}.json").write_text('{"state":"claimed"}')  # simulate crash: written, not consumed
+    deliver(reply, rec, state_dir=tmp_path)
+    assert "g1" in (tmp_path / "consumed.jsonl").read_text()  # now terminal
+    out = poll_once(rec, state_dir=tmp_path, transport=lambda **k: [reply])
+    assert out["disposition"] == "late"  # not matched-forever
+
+
+# L3: a duplicated guid for one real answer classifies matched, not unmatched
+def test_classify_dup_guid_single_answer_matched():
+    tok = "[RG-ABCDEF012345]"
+    m = _msg("g1", f"yes {tok}")
+    disp, res = classify_batch([m, dict(m)], tok, set(), "Proceed?")
+    assert disp == "matched" and res["guid"] == "g1"
+
+
+# L4: a NUL-bearing reply is a non-answer (deliver nothing), never raises
+def test_classify_nul_reply_not_matched():
+    tok = "[RG-ABCDEF012345]"
+    disp, res = classify_batch([_msg("g1", f"yes {tok}\x00evil")], tok, set(), "Proceed?")
+    assert disp == "unmatched" and res is None
+
+
+# L5: a guid-less matched-looking reply is dropped (matches _persist_observed's guard)
+def test_classify_guidless_dropped():
+    tok = "[RG-ABCDEF012345]"
+    m = {"text": f"yes {tok}", "dateCreated": 1, "isFromMe": False, "handle": {"address": OWNER}}
+    disp, res = classify_batch([m], tok, set(), "Proceed?")
+    assert disp == "unmatched" and res is None
+
+
+# S2: owner filter fails CLOSED when recipient unresolved
+def test_is_owner_inbound_fails_closed_on_none_recipient():
+    m = _msg("g1", "hi", ts=1_000_000)
+    assert _is_owner_inbound(m, 0, OWNER) is True
+    assert _is_owner_inbound(m, 0, None) is False
+
+
+# S3: path components rejected against traversal
+def test_safe_component_rejects_traversal():
+    for bad in ["../../x", "a/b", "a\\b", "..", "x\x00y", ""]:
+        with pytest.raises(ValueError):
+            _safe_component(bad)
+    assert _safe_component("[RG-ABCDEF012345]") == "[RG-ABCDEF012345]"
+    assert _safe_component("wf2-568-abc") == "wf2-568-abc"
+
+
+def test_deliver_rejects_traversal_run_id(tmp_path):
+    rec = _ask(tmp_path)
+    rec["run_id"] = "../../escape"
+    with pytest.raises(ValueError):
+        deliver(_msg("g1", f"y {rec['token']}"), rec, state_dir=tmp_path)
+
+
+# S1: the default notify.sh path is the sibling sentinel project (parents[2], not [3])
+def test_default_notify_path_is_repo_sibling():
+    repo_root = Path(hb.__file__).resolve().parents[1]
+    assert _default_notify_path() == repo_root.parent / "sentinel" / "bin" / "notify.sh"
+    assert _default_notify_path().name == "notify.sh"
+
+
+# M2 + S1: real transport secret handling / redaction / unreachable / cleanup
+def _fake_conf(*a, **k):
+    return {"BB_URL": "http://h:1234", "BLUEBUBBLES_PASSWORD": "SEKRET"}
+
+
+def test_default_transport_password_in_kfile_not_argv(monkeypatch):
+    monkeypatch.setattr(hb, "_read_bb_conf", _fake_conf)
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = list(argv)
+        i = argv.index("-K")
+        seen["kfile"] = Path(argv[i + 1]).read_text()
+        seen["kpath"] = argv[i + 1]
+
+        class R:
+            stdout = '{"data":[]}\n__HTTP__200'
+        return R()
+
+    monkeypatch.setattr(hb.subprocess, "run", fake_run)
+    out = _default_transport(chat_guid="iMessage;-;+1", since_ms=0, limit=5)
+    assert out == []
+    assert "SEKRET" not in " ".join(seen["argv"])   # never in argv
+    assert "SEKRET" in seen["kfile"]                 # only in the -K file
+    assert not os.path.exists(seen["kpath"])         # -K file unlinked after
+
+
+def test_default_transport_non2xx_unreachable(monkeypatch):
+    monkeypatch.setattr(hb, "_read_bb_conf", _fake_conf)
+
+    def fake_run(argv, **kw):
+        class R:
+            stdout = 'nope\n__HTTP__500'
+        return R()
+
+    monkeypatch.setattr(hb.subprocess, "run", fake_run)
+    with pytest.raises(BridgeUnreachable):
+        _default_transport(chat_guid="c", since_ms=0, limit=5)
+
+
+def test_default_transport_redacts_password_in_exception(monkeypatch):
+    monkeypatch.setattr(hb, "_read_bb_conf", _fake_conf)
+
+    def boom(argv, **kw):
+        raise OSError("failed http://h:1234/api/v1/message/query?password=SEKRET&x=1")
+
+    monkeypatch.setattr(hb.subprocess, "run", boom)
+    with pytest.raises(BridgeUnreachable) as ei:
+        _default_transport(chat_guid="c", since_ms=0, limit=5)
+    assert "SEKRET" not in str(ei.value)
+
+
+def test_default_transport_missing_conf_unreachable(monkeypatch):
+    monkeypatch.setattr(hb, "_read_bb_conf", lambda *a, **k: {})
+    with pytest.raises(BridgeUnreachable):
+        _default_transport(chat_guid="c", since_ms=0, limit=5)

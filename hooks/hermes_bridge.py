@@ -72,6 +72,14 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+def _safe_component(name: str) -> str:
+    """Reject a path component (run_id / token) that could escape the state dir.
+    Trusted inputs today (CLI/harness), hardened per the repo hook checklist."""
+    if not name or "/" in name or "\\" in name or ".." in name or "\x00" in name:
+        raise ValueError(f"unsafe path component: {name!r}")
+    return name
+
+
 def is_echo_or_empty(text: str, token: str, question: str) -> bool:
     """A reply that is just the token, blank, or the echoed question is not an answer."""
     rest = text.replace(token, "").strip()
@@ -205,11 +213,16 @@ def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None):
     return rec
 
 
+def _default_notify_path() -> Path:
+    """Default outbound sender: the sibling sentinel project's notify.sh.
+    parents[1] is the rawgentic repo root; sentinel is its sibling under projects/,
+    i.e. parents[2]/sentinel. (parents[3] here was the #568 8a-review HIGH bug.)"""
+    return Path(__file__).resolve().parents[2] / "sentinel" / "bin" / "notify.sh"
+
+
 def _default_notify(msg: str) -> str:
     """Shell to sentinel/bin/notify.sh (the one outbound voice). Returns the HTTP code."""
-    notify_sh = os.environ.get("HERMES_NOTIFY_SH") or str(
-        Path(__file__).resolve().parents[3] / "sentinel" / "bin" / "notify.sh"
-    )
+    notify_sh = os.environ.get("HERMES_NOTIFY_SH") or str(_default_notify_path())
     try:
         p = subprocess.run(["bash", notify_sh, msg], capture_output=True, text=True, timeout=30)
         return (p.stdout or "").strip().splitlines()[-1] if p.stdout.strip() else "000"
@@ -225,17 +238,32 @@ def classify_batch(owner_msgs, token, consumed_guids, question):
 
     Returns (disposition, matched_msg_or_None). disposition in
     {matched, ambiguous, echo_or_empty, late, unmatched, none}.
+
+    A candidate answer must carry a guid AND the exact token AND be NUL-free;
+    guid-less, dup-guid (first wins), and NUL-bearing messages are dropped from
+    the answer set (they deliver nothing, never crash) — so the delivery path
+    only ever sees a clean, guid-bearing message.
     """
     if not owner_msgs:
         return ("none", None)
-    tokened = [m for m in owner_msgs if token in (m.get("text") or "")]
+    tokened, seen = [], set()
+    for m in owner_msgs:
+        g = m.get("guid")
+        text = m.get("text") or ""
+        if not g or g in seen or token not in text:
+            continue
+        seen.add(g)
+        if "\x00" in text:  # malformed → never a valid answer (fail-safe: deliver nothing)
+            continue
+        tokened.append(m)
     if not tokened:
         return ("unmatched", None)
-    fresh = [m for m in tokened if m.get("guid") not in consumed_guids]
-    late = [m for m in tokened if m.get("guid") in consumed_guids]
-    if len({m.get("guid") for m in fresh}) >= 2:
+    fresh = [m for m in tokened if m["guid"] not in consumed_guids]
+    late = [m for m in tokened if m["guid"] in consumed_guids]
+    fresh_guids = {m["guid"] for m in fresh}
+    if len(fresh_guids) >= 2:
         return ("ambiguous", None)
-    if len(fresh) == 1:
+    if len(fresh_guids) == 1:
         m = fresh[0]
         if is_echo_or_empty(m.get("text") or "", token, question):
             return ("echo_or_empty", None)
@@ -250,10 +278,11 @@ def _is_owner_inbound(m, since_ms, recipient) -> bool:
         return False
     if (m.get("dateCreated") or 0) <= since_ms:  # at/before the ask
         return False
-    if recipient is not None:  # belt-and-suspenders; isFromMe is load-bearing in a 1:1 DM
-        addr = (m.get("handle") or {}).get("address")
-        if addr != recipient:
-            return False
+    if recipient is None:  # unresolved recipient is a misconfig → fail CLOSED (never accept)
+        return False
+    addr = (m.get("handle") or {}).get("address")
+    if addr != recipient:
+        return False
     return True
 
 
@@ -303,8 +332,7 @@ def _default_transport(*, chat_guid, since_ms, limit):
     kfd, kpath = None, None
     try:
         import tempfile
-        kfd, kpath = tempfile.mkstemp(prefix=".hb-", suffix=".conf")
-        os.fchmod(kfd, 0o600)
+        kfd, kpath = tempfile.mkstemp(prefix=".hb-", suffix=".conf")  # mkstemp is already 0600
         with os.fdopen(kfd, "w") as f:  # password in -K file, NEVER argv
             f.write(f'url = "{url}/api/v1/message/query?password={pw}"\n')
         p = subprocess.run(
@@ -333,11 +361,12 @@ def deliver(reply, ask_record, *, state_dir):
     """Write the canonical inbox file (create-if-absent), then mark consumed. Idempotent."""
     guid = reply["guid"]
     delivery_id = hashlib.sha1(guid.encode()).hexdigest()[:12]
-    run_id = ask_record["run_id"]
+    run_id = _safe_component(ask_record["run_id"])
     inbox_dir = _sd(state_dir) / "inbox" / run_id
     inbox_dir.mkdir(parents=True, exist_ok=True)
     path = inbox_dir / f"{delivery_id}.json"
-    if path.exists():  # create-if-absent: never revert a file the launcher may have claimed
+    if path.exists():  # create-if-absent: never revert a launcher-claimed file...
+        _mark_consumed(state_dir, guid, delivery_id)  # ...but still make the guid terminal
         return str(path)
     doc = {
         "delivery_id": delivery_id, "run_id": run_id, "token": ask_record["token"],
@@ -348,6 +377,7 @@ def deliver(reply, ask_record, *, state_dir):
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
+        _mark_consumed(state_dir, guid, delivery_id)  # concurrent create → still make terminal
         return str(path)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(doc, f)
@@ -437,7 +467,8 @@ def main(argv=None) -> int:
         rec = ask_owner(args.question, args.run_id, state_dir=sd)
         print(json.dumps(rec)); return 0
     if args.cmd == "poll":
-        rec = json.loads((Path(sd) / "asks" / f"{args.token}.json").read_text())
+        tok = _safe_component(args.token)
+        rec = json.loads((Path(sd) / "asks" / f"{tok}.json").read_text())
         out = poll_reply(rec, state_dir=sd, timeout_s=args.timeout)
         if out["disposition"] == "matched":
             print(deliver(out["reply"], rec, state_dir=sd))
