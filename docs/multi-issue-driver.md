@@ -337,19 +337,35 @@ plugin repo — a deferred owner-attended follow-up, mirroring the #568 Phase-1 
 until it lands, fresh-session mode's pre-launch check degrades to single-session, so nothing
 regresses.)
 
-**Exactly-one successor + takeover-failure detection.** The successor session, under the
-launcher's flock singleton, atomically CLAIMS the pending handoff via
-`driver_lib.handoff_claim(state, generation)` (idempotent — a duplicate/early launcher fire
-finds it claimed and exits). A `handoff_pending` whose generation stays unclaimed on a later
-launcher fire means the prior takeover failed; the launcher's existing staleness re-fire is the
-retry, and after a bounded number of unclaimed re-fires it notifies the owner and stops (a
-stranded run surfaces instead of dying silently). A quota pause is not a failure — the next
-post-reset fire claims the still-valid handoff.
+**Generation counter (monotonic).** On a `ready` disposition the driver persists the handoff via
+`driver_lib.open_handoff(state, disposition, now_ts=)`, which bumps the top-level `generation`
+counter AND writes `handoff_pending = {generation, next_issue, written_ts}` atomically — the bump
+is required so a later handoff can never reuse a generation (a reused generation would let a stale
+claim replay).
+
+**Exactly-one successor + takeover-failure detection (lease/ack).** The successor session, under
+the launcher's flock singleton, atomically CLAIMS the pending handoff via
+`driver_lib.handoff_claim(state, generation, claimant=, now_ts=)` — accepted ONLY when the pending
+generation equals the state's current generation (monotonic, non-negative) AND the handoff is
+unclaimed OR its prior claim is reclaimable. After rebuilding durable state and STARTING the child,
+the successor calls `driver_lib.handoff_ack_started(state, generation, claimant)` to mark the claim
+`started`. A claim that never reaches `started` (the successor crashed between claiming and
+starting) is RECLAIMABLE once older than the lease (`driver_lib.handoff_reclaimable`, default
+1800s) — so a crashed takeover does not strand the run: the launcher's staleness re-fire reclaims
+it. A `started` claim is never reclaimed (the takeover succeeded). After a bounded number of
+failed re-fires the launcher notifies the owner and stops (a stranded run surfaces instead of
+dying silently). A quota pause is not a failure — the next post-reset fire finds the still-valid
+handoff (claimed+started → the successor resumes; claimed-unstarted-past-lease → reclaimed).
 
 **Fail-open (never abort).** `driver_lib.fresh_session_available(state, launcher_armed=,
-handoff_writable=)` is the pre-launch check; false → the driver degrades to the single-session
-loop with the visible marker `### epic-run: fresh-session unavailable — single-session
-fallback (<reason>)`. Worst case equals today's behavior.
+handoff_writable=, fresh_launch_supported=)` is the pre-launch check. **`fresh_launch_supported`
+is load-bearing:** an armed launcher is not enough — it must POSITIVELY advertise that it launches
+the successor WITHOUT `--resume` (a resume-first launcher would silently reload the prior context
+and defeat the fresh boundary). False on any of the three → the driver degrades to the
+single-session loop with the visible marker `### epic-run: fresh-session unavailable —
+single-session fallback (<reason>)`. Worst case equals today's behavior. (Until the launcher
+template advertises fresh-launch support — the deferred follow-up — this check returns False, so
+fresh-session mode stays safely inert.)
 
 **Continuity + gates unchanged.** The queue, topo order, merge policy, per-child record, and
 decision log are read from `.driver-state` + `epic-<N>-autorun-log.md` by each new session, not

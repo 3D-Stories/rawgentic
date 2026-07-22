@@ -319,32 +319,84 @@ def fresh_session_handoff(state: dict, *, mode: str) -> dict:
     return {"outcome": "blocked"}
 
 
-def fresh_session_available(state: dict, *, launcher_armed: bool,
-                            handoff_writable: bool) -> tuple[bool, str]:
+def open_handoff(state: dict, disposition: dict, *, now_ts: int) -> dict:
+    """Persist a `ready` disposition as durable handoff state (Step-11 F2 fix — the generation
+    counter MUST advance, else a later handoff reuses it and the claim can't tell a new handoff
+    from a replay). Returns new_state with `generation` bumped AND `handoff_pending` written
+    atomically; the caller persists it. A non-`ready` disposition returns state unchanged."""
+    if disposition.get("outcome") != "ready":
+        return state
+    gen = disposition["generation"]
+    new = dict(state)
+    new["generation"] = gen
+    new["handoff_pending"] = {"generation": gen, "next_issue": disposition["next_issue"],
+                              "written_ts": now_ts}
+    return new
+
+
+def fresh_session_available(state: dict, *, launcher_armed: bool, handoff_writable: bool,
+                            fresh_launch_supported: bool) -> tuple[bool, str]:
     """Pre-launch AC6 check (pure over injected probes): can the process boundary be crossed?
-    Fail-open — a False result means the driver degrades to the single-session loop with a visible
-    marker, never aborts. (Post-end takeover failure is a separate, acknowledged-handoff concern —
-    design §5.)"""
+    **Step-11 F1 (Critical) fix:** an armed launcher is NOT enough — it must POSITIVELY advertise
+    fresh-launch (no-`--resume`) support, else fresh-session mode would falsely activate on the
+    resume-first launcher and SILENTLY defeat AC1 (the successor reloads the prior transcript).
+    Fail-open — a False result degrades to the single-session loop with a visible marker, never
+    aborts. Until the launcher advertises support, this returns False → single-session (safe)."""
     if not launcher_armed:
         return (False, "no durable launcher armed")
+    if not fresh_launch_supported:
+        return (False, "launcher does not advertise fresh-launch (no-resume) support")
     if not handoff_writable:
         return (False, "handoff path not writable")
     return (True, "ok")
 
 
-def handoff_claim(state: dict, generation: int) -> tuple[bool, dict]:
-    """Atomically CLAIM the pending handoff for ``generation`` (the exactly-one-successor
-    singleton, design §5/§6). Pure + idempotent: returns ``(True, new_state)`` only for the FIRST
-    claim of a matching, unclaimed generation; a second claim, a wrong generation, or no pending
-    handoff returns ``(False, state)`` unchanged. The caller persists ``new_state`` under the
-    launcher flock."""
+def handoff_reclaimable(state: dict, *, now_ts: int, lease_s: int) -> bool:
+    """A claimed-but-never-started handoff whose claim is older than the lease is RECLAIMABLE
+    (Step-11 F3 fix — a successor that claimed then crashed before `started` must not strand the
+    run forever). A started claim is never reclaimable (takeover succeeded)."""
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict) or claim.get("started"):
+        return False
+    claimed_at = claim.get("claimed_at")
+    return _is_int(claimed_at) and (now_ts - claimed_at) > lease_s
+
+
+def handoff_claim(state: dict, generation: int, *, claimant: str, now_ts: int,
+                  lease_s: int = 1800) -> tuple[bool, dict]:
+    """Atomically CLAIM the pending handoff for ``generation`` (exactly-one-successor, design §5/§6).
+    Pure. Returns ``(True, new_state)`` only when the claim is legitimate:
+    - a `handoff_pending` exists whose generation == ``generation`` == the state's current
+      `generation` (**F4:** monotonic — reject a stale/`>`/`<` mismatch, and non-negative ints only);
+    - AND it is unclaimed, OR the prior claim is reclaimable (**F3:** crashed pre-`started`, past lease).
+    A wrong/stale generation, a still-in-progress claim, or a started claim returns ``(False, state)``
+    unchanged. The successor calls ``handoff_ack_started`` AFTER rebuilding state + starting the child."""
     pend = state.get("handoff_pending")
-    if not isinstance(pend, dict) or pend.get("generation") != generation:
+    if not isinstance(pend, dict):
         return (False, state)
-    if state.get("handoff_claimed") == generation:
+    cur = state.get("generation")
+    if not (_is_int(generation) and generation >= 0 and _is_int(pend.get("generation"))
+            and _is_int(cur) and pend["generation"] == generation == cur):
+        return (False, state)  # F4: monotonic, current, non-negative — no stale replay
+    claim = state.get("handoff_claim")
+    if isinstance(claim, dict) and claim.get("generation") == generation:
+        if claim.get("started") or not handoff_reclaimable(state, now_ts=now_ts, lease_s=lease_s):
+            return (False, state)  # already taken over, or a live in-progress claim
+    new = dict(state)
+    new["handoff_claim"] = {"generation": generation, "claimant": claimant,
+                            "claimed_at": now_ts, "started": False}
+    return (True, new)
+
+
+def handoff_ack_started(state: dict, generation: int, claimant: str) -> tuple[bool, dict]:
+    """The successor marks its claim `started` AFTER rebuilding durable state + starting the child
+    (Step-11 F3). Only the matching claimant/generation may ack; else ``(False, state)``."""
+    claim = state.get("handoff_claim")
+    if not isinstance(claim, dict) or claim.get("generation") != generation \
+            or claim.get("claimant") != claimant:
         return (False, state)
     new = dict(state)
-    new["handoff_claimed"] = generation
+    new["handoff_claim"] = {**claim, "started": True}
     return (True, new)
 
 

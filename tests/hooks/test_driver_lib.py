@@ -532,38 +532,85 @@ class TestFreshSessionHandoff:
 
 
 class TestFreshSessionAvailable:
-    def test_ok_when_armed_and_writable(self):
-        ok, reason = dl.fresh_session_available(_st([]), launcher_armed=True, handoff_writable=True)
+    def test_ok_when_armed_writable_and_fresh_supported(self):
+        ok, reason = dl.fresh_session_available(
+            _st([]), launcher_armed=True, handoff_writable=True, fresh_launch_supported=True)
         assert ok is True
 
     def test_not_armed_fails(self):
-        ok, reason = dl.fresh_session_available(_st([]), launcher_armed=False, handoff_writable=True)
+        ok, reason = dl.fresh_session_available(
+            _st([]), launcher_armed=False, handoff_writable=True, fresh_launch_supported=True)
         assert ok is False and "launcher" in reason.lower()
 
+    def test_resume_first_launcher_fails_F1(self):
+        # Step-11 F1 (Critical): an armed+writable launcher that does NOT advertise fresh-launch
+        # support must be rejected — else fresh mode silently defeats AC1 on the resume-first launcher.
+        ok, reason = dl.fresh_session_available(
+            _st([]), launcher_armed=True, handoff_writable=True, fresh_launch_supported=False)
+        assert ok is False and "fresh" in reason.lower()
+
     def test_not_writable_fails(self):
-        ok, reason = dl.fresh_session_available(_st([]), launcher_armed=True, handoff_writable=False)
+        ok, reason = dl.fresh_session_available(
+            _st([]), launcher_armed=True, handoff_writable=False, fresh_launch_supported=True)
         assert ok is False and "writ" in reason.lower()
+
+
+def _pending(gen=5, nxt=7):
+    # a ready state: generation counter == the pending generation (F2/F4 monotonic contract).
+    return _st([], generation=gen, extra={"handoff_pending": {"generation": gen, "next_issue": nxt}})
+
+
+class TestOpenHandoff:
+    def test_persists_generation_and_pending_F2(self):
+        s = _st([_iss(1, "merged"), _iss(2, "queued")], mode="fresh-session", generation=4)
+        disp = dl.fresh_session_handoff(s, mode="fresh-session")
+        new = dl.open_handoff(s, disp, now_ts=1000)
+        assert new["generation"] == disp["generation"] == 5  # F2: counter advanced
+        assert new["handoff_pending"] == {"generation": 5, "next_issue": 2, "written_ts": 1000}
+
+    def test_non_ready_unchanged(self):
+        s = _st([_iss(1, "merged")], mode="fresh-session")
+        assert dl.open_handoff(s, {"outcome": "complete"}, now_ts=1) is s
 
 
 class TestHandoffClaim:
     def test_claim_matching_generation(self):
-        s = _st([], extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
-        ok, new = dl.handoff_claim(s, 5)
-        assert ok is True and new["handoff_claimed"] == 5
+        ok, new = dl.handoff_claim(_pending(5), 5, claimant="sess-A", now_ts=100)
+        assert ok is True and new["handoff_claim"]["generation"] == 5
+        assert new["handoff_claim"]["claimant"] == "sess-A" and new["handoff_claim"]["started"] is False
 
-    def test_second_claim_is_idempotent_false(self):
-        s = _st([], extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
-        ok1, s1 = dl.handoff_claim(s, 5)
-        ok2, s2 = dl.handoff_claim(s1, 5)
-        assert ok1 is True and ok2 is False  # exactly-one-successor singleton
+    def test_live_second_claim_rejected_singleton(self):
+        s = _pending(5)
+        ok1, s1 = dl.handoff_claim(s, 5, claimant="A", now_ts=100)
+        ok2, s2 = dl.handoff_claim(s1, 5, claimant="B", now_ts=200)  # within lease, unstarted
+        assert ok1 is True and ok2 is False  # exactly-one-successor
 
-    def test_wrong_generation_not_claimed(self):
-        s = _st([], extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
-        ok, new = dl.handoff_claim(s, 4)
+    def test_started_claim_never_reclaimed(self):
+        s = _pending(5)
+        _, s1 = dl.handoff_claim(s, 5, claimant="A", now_ts=100)
+        _, s2 = dl.handoff_ack_started(s1, 5, "A")
+        ok, _ = dl.handoff_claim(s2, 5, claimant="B", now_ts=100 + 10**9)  # far past lease
+        assert ok is False  # a started (successful) takeover is never reclaimed
+
+    def test_crashed_claim_reclaimable_after_lease_F3(self):
+        s = _pending(5)
+        _, s1 = dl.handoff_claim(s, 5, claimant="A", now_ts=100)  # claimed, never started
+        ok, s2 = dl.handoff_claim(s1, 5, claimant="B", now_ts=100 + 1801)  # past 1800s lease
+        assert ok is True and s2["handoff_claim"]["claimant"] == "B"  # F3: crashed successor reclaimed
+
+    def test_stale_greater_generation_rejected_F4(self):
+        # F4: a corrupt state where handoff_claimed/generation is out of sync must not replay.
+        s = _st([], generation=4, extra={"handoff_pending": {"generation": 5, "next_issue": 7}})
+        ok, _ = dl.handoff_claim(s, 5, claimant="A", now_ts=100)
+        assert ok is False  # pending(5) != current generation(4) → reject
+
+    def test_negative_generation_rejected(self):
+        s = _st([], generation=-1, extra={"handoff_pending": {"generation": -1, "next_issue": 7}})
+        ok, _ = dl.handoff_claim(s, -1, claimant="A", now_ts=100)
         assert ok is False
 
     def test_no_pending_not_claimed(self):
-        ok, new = dl.handoff_claim(_st([]), 1)
+        ok, new = dl.handoff_claim(_st([], generation=1), 1, claimant="A", now_ts=100)
         assert ok is False
 
 

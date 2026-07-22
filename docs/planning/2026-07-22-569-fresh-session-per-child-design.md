@@ -243,3 +243,23 @@ launcher edit; inspect S_2's transcript at child start.
 - F5 [M] TaskList session-scoped → ADOPTED §6/AC4: each session builds its own list from
   `.driver-state`; no cross-session TaskList visibility claimed.
 - F6 [M] no singleton proof → ADOPTED §3/§5: launcher flock + handoff generation claim.
+
+## §12 Step-11 review remediation (2026-07-22 — cross-model Codex diff review, all fixed in-branch)
+
+4 findings (1 Critical + 3 High), all confirmed + fixed:
+- F1 [Critical] `fresh_session_available` only checked launcher existence+writability → fresh mode
+  would falsely activate on the resume-first launcher and SILENTLY defeat AC1. FIXED: added a
+  load-bearing `fresh_launch_supported` capability probe — the launcher must POSITIVELY advertise
+  no-`--resume` launch; until the launcher template does, the check returns False → single-session
+  (safe, and this makes the deferred-launcher story sound).
+- F2 [High] `fresh_session_handoff` computed `generation` but never persisted the counter →
+  generation reuse. FIXED: new `open_handoff(state, disposition, now_ts=)` bumps `generation` AND
+  writes `handoff_pending` atomically; SKILL/docs updated to call it.
+- F3 [High] claim-before-start crash window stranded the run (claimed→crash→never started→no
+  retry). FIXED: lease/ack lifecycle — `handoff_claim` records `{claimant, claimed_at, started:false}`,
+  `handoff_ack_started` marks `started` after the successor rebuilds state + starts the child, and
+  `handoff_reclaimable` (default 1800s lease) lets a crashed-pre-`started` claim be reclaimed; a
+  `started` claim is never reclaimed.
+- F4 [High] `handoff_claim` guarded only `==` → a stale `claimed > generation` could replay. FIXED:
+  require pending generation == state's current generation (monotonic), non-negative ints only.
++9 remediation tests. (Opus Step-11 reviewer dispatched in parallel; its findings folded on return.)
