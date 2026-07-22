@@ -1406,9 +1406,13 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
     # one VERIFIED completed observation bound to that nonce.
     from phase_executor.enforce import verify_post as _verify_post  # noqa: PLC0415
     _recs = audit.records()
+    # Bind the authorizing receipt to THIS record's seat (Step-11 + the issue's run/seat/attempt AC),
+    # not the nonce alone. (Deeper: an immutable work-product identity in the receipt would defeat a
+    # fully-forged registry record — a contract change tracked as a #560 follow-up.)
     _pass_build = [r for r in _recs if r.get("kind") == "receipt"
                    and r.get("nonce") == record.receipt_nonce
-                   and r.get("verdict") == "pass" and r.get("role") == "build"]
+                   and r.get("verdict") == "pass" and r.get("role") == "build"
+                   and r.get("seat") == record.identity.seat]
     if len(_pass_build) != 1:
         return _err(EXIT_ENFORCEMENT, "unauthorized_work_product",
                     f"collect-work-product: expected exactly 1 passing build receipt for nonce "
@@ -1572,21 +1576,32 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
         # correlation_id == recovered_from, a non-recovery pass) carries the target_identity that
         # created the provider session; resolve THAT identity in the current eligible set. If the
         # original target is no longer eligible, refuse rather than silently drift to a new target.
+        # The record's receipt_nonce (JobRecord: the receipt this launch was authorized under) pins
+        # the EXACT session-creating target — robust to a fallback that left sibling pass receipts
+        # under the same correlation_id (Step-11). Legacy records with no nonce fall back to the
+        # first non-recovery pass receipt for this call. A recovery with NO locatable original
+        # receipt is an anomaly → REFUSE, never drift to targets[0] (Step-11 fail-open fix).
+        recs = audit.records()
         orig_identity = None
-        if recovered_from is not None:
-            for r in audit.records():
+        if record.receipt_nonce:
+            for r in recs:
+                if (r.get("kind") == "receipt" and r.get("nonce") == record.receipt_nonce
+                        and r.get("target_identity")):
+                    orig_identity = tuple(r["target_identity"])
+                    break
+        elif recovered_from is not None:
+            for r in recs:  # legacy record (no receipt_nonce): match the original call by correlation
                 if (r.get("kind") == "receipt" and r.get("correlation_id") == recovered_from
                         and r.get("seat") == record.identity.seat and r.get("verdict") == "pass"
                         and r.get("recovered_from") is None and r.get("target_identity")):
                     orig_identity = tuple(r["target_identity"])
                     break
-        if orig_identity is not None:
-            resolved_target = next(
-                (t for t in targets if enforce.target_identity(t) == orig_identity), None)
-            if resolved_target is None:
-                return None  # original target no longer eligible under the current snapshot
-        else:
-            resolved_target = targets[0]  # no original receipt found (legacy/first attempt) — primary
+        if orig_identity is None:
+            return None  # no locatable original receipt — refuse rather than drift to a new target
+        resolved_target = next(
+            (t for t in targets if enforce.target_identity(t) == orig_identity), None)
+        if resolved_target is None:
+            return None  # original target no longer eligible under the current snapshot
         receipt = enforce.check_pre(
             record.identity.seat, resolved_target, snapshot, correlation_id=correlation_id,
             attempt_id=f"{record.resume_attempts + 1}-recover", recovered_from=recovered_from)
@@ -1625,6 +1640,10 @@ def recover_run(*, run_id: str, supervisor, snapshot, audit, routing, enforce,
                     worst = max(worst, EXIT_ENFORCEMENT)
                     results.append(entry)
                     continue
+                if child_cid is None and exp_cid is not None:
+                    # F6 (mirror resume_dispatch's F9): an unlabeled child obs is bound to the
+                    # recovery correlation rather than left unbound in the ledger.
+                    stamped["correlation_id"] = exp_cid
                 if lane_by_sid.get(a.record.session_name) and not stamped.get("dispatched_lane"):
                     stamped["dispatched_lane"] = lane_by_sid[a.record.session_name]
                 audit.append_observation(stamped, receipt=_types.SimpleNamespace(nonce=nonce))
@@ -1686,6 +1705,7 @@ def _import_phase_executor():
     from phase_executor.registry import read_all as registry_read_all  # noqa: PLC0415
     from phase_executor.registry import session_name as registry_session_name  # noqa: PLC0415
     from phase_executor.worktree import WorktreeIdentity, WorktreeManager  # noqa: PLC0415
+    import phase_executor.worktree as worktree_mod  # noqa: PLC0415 — #571 F8: pe.worktree.WorktreeError
     from phase_executor.adapters import ADAPTERS  # noqa: PLC0415
     return types.SimpleNamespace(
         routing=routing, enforce=enforce, run_seat=run_seat,
@@ -1696,7 +1716,8 @@ def _import_phase_executor():
         ledger=ledger, capture=capture,
         registry_read_all=registry_read_all,
         registry_session_name=registry_session_name,
-        WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager, ADAPTERS=ADAPTERS,
+        WorktreeIdentity=WorktreeIdentity, WorktreeManager=WorktreeManager,
+        worktree=worktree_mod, ADAPTERS=ADAPTERS,
     )
 
 

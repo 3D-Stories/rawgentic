@@ -2322,6 +2322,45 @@ def test_atomic_write_json_no_stray_tmp_on_failure(tmp_path):
     assert [p for p in (tmp_path / "sub").iterdir() if p.name.endswith(".tmp")] == []
 
 
+def test_collect_work_product_refuses_receipt_without_verified_observation(tmp_path):
+    # F7 (#571) condition (b): a passing build receipt for the nonce but NO verified observation
+    # bound to it → refuse. Exercises the verify_post half of the gate (the 0-receipt half is
+    # covered by test_collect_work_product_refuses_unauthorized).
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    audit._write_locked({  # pylint: disable=protected-access  # valid pass build receipt, NO obs
+        "kind": "receipt", "nonce": "rn1", "seat": "build", "correlation_id": "c1", "attempt_id": "0-a",
+        "target_identity": ["codex-model", "openai", "cli", "api_key", "codex", None, None],
+        "config_digest": "sha256:d", "gate_digest": "sha256:g", "author_provider": None,
+        "verdict": "pass", "violations": [], "role": "build", "gate_outcome": "single",
+        "gate_input_digest": "sha256:gi", "recovered_from": None})
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(),
+                          audit=audit, seed=False)
+    assert not res["ok"] and res["error"]["code"] == "unauthorized_work_product"
+    assert _wp_records(audit) == []
+
+
+def test_run_resume_maps_exception_to_structured_exit(tmp_path):
+    # #571 F8: an exception in _run_resume's provisioning path maps to a structured
+    # resume_provision_failed, NOT a bare traceback. Regression guard for the pe.worktree namespace
+    # fix — pre-fix, evaluating the broadened except tuple hit AttributeError on pe.worktree and
+    # MASKED the real exception (worse than the origin/main ValueError/OSError handling).
+    import types as _t  # noqa: PLC0415
+    pe = er._import_phase_executor()
+    assert issubclass(pe.worktree.WorktreeError, Exception)  # the namespace exposes the module
+    assert issubclass(pe.supervisor.SupervisorError, Exception)
+    # force a ValueError inside the try (eligible_targets); the broadened except must catch+map it,
+    # not AttributeError on pe.worktree. Preserve RoutingError so the earlier except is well-formed.
+    pe.routing = _t.SimpleNamespace(
+        RoutingError=pe.routing.RoutingError,
+        eligible_targets=lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    args = _t.SimpleNamespace(seat="build", author_provider=None, correlation_id="c1",
+                              run_id="run1", resume_session_id="s", effort=None, timeout=5.0)
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    res = er._run_resume(args, pe, _snapshot(), None, audit,
+                         {"capture_root": str(tmp_path / "runs")}, str(tmp_path), "hi")
+    assert not res["ok"] and res["error"]["code"] == "resume_provision_failed"
+
+
 # ---------------------------------------------------------------------------
 # C1 (#559): recover_run — ledgered/receipted recovery relaunch chokepoint
 # ---------------------------------------------------------------------------
@@ -2347,8 +2386,25 @@ class _RecoverSup:
         return self._await_state, _valid_obs()
 
 
-def _recover(tmp_path, sup, *, ledger_closed=False):
+def _seed_original_receipt(audit, *, nonce, seat, target_identity=None, cid="orig"):
+    """#571 F5: seed the ORIGINAL authorizing receipt (a non-recovery pass) whose nonce == the
+    recovering record's receipt_nonce, so recover_run's gate binds recovery to its target_identity.
+    Defaults to the seat's currently-primary eligible target; pass target_identity for a specific
+    (or gone) target. Role-less by design (no build/review gate fields needed)."""
+    if target_identity is None:
+        target_identity = list(enforce.target_identity(routing.eligible_targets(seat, _snapshot())[0]))
+    audit._write_locked({  # pylint: disable=protected-access
+        "kind": "receipt", "nonce": nonce, "seat": seat, "correlation_id": cid, "attempt_id": "0",
+        "target_identity": list(target_identity), "config_digest": "sha256:d", "gate_digest": None,
+        "author_provider": None, "verdict": "pass", "violations": [], "recovered_from": None})
+    return list(target_identity)
+
+
+def _recover(tmp_path, sup, *, ledger_closed=False, seed_seat=None, seed_target=None,
+             seed_nonce="rn1"):
     audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    if seed_seat is not None:  # F5 (#571): recovery refuses without a locatable original receipt
+        _seed_original_receipt(audit, nonce=seed_nonce, seat=seed_seat, target_identity=seed_target)
     res = er.recover_run(run_id="run1", supervisor=sup, snapshot=_snapshot(), audit=audit,
                          routing=routing, enforce=enforce, ledger_closed=ledger_closed,
                          correlation_id="c1")
@@ -2367,29 +2423,43 @@ def test_recover_run_refuses_foreign_correlation_before_append(tmp_path):
             self.await_calls.append(record.session_name)
             return "completed", _valid_obs(correlation_id="a-foreign-cid")  # != "orig#resume1"
 
-    res, audit = _recover(tmp_path, _ForeignRecoverSup(rec))
+    res, audit = _recover(tmp_path, _ForeignRecoverSup(rec), seed_seat="ship")
     assert not res["ok"] and res["exit"] == er.EXIT_ENFORCEMENT
     assert [r for r in audit.records() if r.get("kind") == "observation"] == []  # never appended
 
 
+def test_recover_run_binds_to_original_target_positive(tmp_path):
+    # F5 (#571): recovery binds to the ORIGINAL call's target from the original receipt (matched by
+    # the record's receipt_nonce), NOT eligible_targets[0]. Seed the original receipt naming a
+    # NON-primary (chain) target that is still eligible; the recovery receipt must carry THAT target
+    # identity — a genuine red-green (pre-F5 the gate used targets[0] = the primary).
+    rec = _completed_record(tmp_path, seat="intake")  # role-less → check_pre passes
+    chain_target = list(enforce.target_identity(routing.eligible_targets("intake", _snapshot())[1]))
+    primary_target = list(enforce.target_identity(routing.eligible_targets("intake", _snapshot())[0]))
+    assert chain_target != primary_target  # the test only distinguishes F5 if they differ
+    res, audit = _recover(tmp_path, _RecoverSup(rec), seed_seat="intake", seed_target=chain_target)
+    assert res["results"][0]["action"] == "relaunch"
+    recovery_receipts = [r for r in audit.records() if r.get("kind") == "receipt"
+                         and r.get("recovered_from") == "orig"]
+    assert len(recovery_receipts) == 1
+    assert recovery_receipts[0]["target_identity"] == chain_target  # bound to the ORIGINAL, not primary
+
+
 def test_recover_run_binds_to_original_target_refuses_if_ineligible(tmp_path):
-    # F5 (#571): recovery binds to the ORIGINAL call's target (from the original receipt), not
-    # eligible_targets[0]. If the original target is no longer eligible under the current snapshot,
-    # gate refuses (None) rather than silently drifting to a different target.
-    rec = _completed_record(tmp_path, seat="build")
-    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
-    # the ORIGINAL receipt (correlation_id "orig" == recovered_from, seat build, non-recovery pass)
-    # names a target that no longer exists in the current snapshot's build chain.
-    audit._write_locked({  # pylint: disable=protected-access
-        "kind": "receipt", "nonce": "orig-nonce", "seat": "build", "correlation_id": "orig",
-        "attempt_id": "0", "target_identity": ["gone-model", "anthropic", "native",
-                                               "subscription_oauth", "claude", None, None],
-        "config_digest": "sha256:d", "gate_digest": "sha256:g", "author_provider": None,
-        "verdict": "pass", "violations": [], "role": "build", "gate_outcome": "single",
-        "gate_input_digest": "sha256:gi", "recovered_from": None})
-    res = er.recover_run(run_id="run1", supervisor=_RecoverSup(rec), snapshot=_snapshot(),
-                         audit=audit, routing=routing, enforce=enforce, ledger_closed=False,
-                         correlation_id="c1")
+    # F5 (#571): if the original target is no longer eligible under the current snapshot, the gate
+    # refuses (None) rather than drifting to a different target. Role-less seat so the refusal is
+    # F5's target resolution, not a build/review check_pre denial.
+    rec = _completed_record(tmp_path, seat="intake")
+    gone = ["gone-model", "anthropic", "native", "subscription_oauth", "claude", None, None]
+    res, audit = _recover(tmp_path, _RecoverSup(rec), seed_seat="intake", seed_target=gone)
+    assert any("relaunch_refused" in r.get("action", "") for r in res["results"])
+
+
+def test_recover_run_refuses_without_original_receipt(tmp_path):
+    # F5 (#571) fail-closed: a recovery with NO locatable original receipt (audit missing the
+    # record's receipt_nonce) refuses rather than drifting to targets[0].
+    rec = _completed_record(tmp_path, seat="intake")
+    res, audit = _recover(tmp_path, _RecoverSup(rec))  # no seed_seat → no original receipt
     assert any("relaunch_refused" in r.get("action", "") for r in res["results"])
 
 
@@ -2401,7 +2471,7 @@ def test_recover_run_refuses_closed_ledger(tmp_path):
 def test_recover_run_relaunch_is_receipted_and_verified(tmp_path):
     rec = _completed_record(tmp_path, seat="intake")
     sup = _RecoverSup(rec)
-    res, audit = _recover(tmp_path, sup)
+    res, audit = _recover(tmp_path, sup, seed_seat="intake")  # F5: original receipt required
     assert res["ok"] and res["exit"] == er.EXIT_OK
     assert res["results"][0]["action"] == "relaunch" and res["results"][0]["state"] == "completed"
     kinds = [r.get("kind") for r in audit.records()]
@@ -2410,9 +2480,11 @@ def test_recover_run_relaunch_is_receipted_and_verified(tmp_path):
 
 
 def test_recover_run_gate_fail_refuses_relaunch(tmp_path):
-    # a review seat with no author_provider fails check_pre → gate returns None → relaunch_refused
+    # a review seat with no author_provider fails check_pre → gate returns None → relaunch_refused.
+    # F5: seed the original receipt so the gate reaches check_pre (else it refuses earlier on the
+    # missing original receipt, and no fail receipt would be minted).
     rec = _completed_record(tmp_path, seat="review")
-    res, audit = _recover(tmp_path, _RecoverSup(rec))
+    res, audit = _recover(tmp_path, _RecoverSup(rec), seed_seat="review")
     assert res["results"][0]["action"] == "relaunch_refused (gate)"
     recs = audit.records()
     assert any(r.get("kind") == "receipt" and r.get("verdict") == "fail" for r in recs)
