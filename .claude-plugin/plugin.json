@@ -1,6 +1,6 @@
 {
   "name": "rawgentic",
-  "version": "3.89.0",
+  "version": "3.90.0",
   "description": "9 SDLC workflow skills + 9 workspace management + 1 planning skill + 2 security skills + hooks for Claude Code: project registration, setup, session binding, requirements interviewing, issue creation, feature implementation, bug fixing, adversarial review, epic auto-run, incident response, peer consultation, post-run workflow self-assessment, epic post-mortem timing analysis, session-history mining with human-gated skill candidates, whole-tree security scanning, security pattern syncing, opt-in operating-charter installation, session-registry housekeeping, org self-hosted runner admission, full-text session-history recall, and dangerous pattern blocking with per-project exceptions.",
   "author": {
     "name": "3D-Stories",
