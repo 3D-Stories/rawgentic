@@ -314,8 +314,35 @@ def _close_ask(state_dir, token: str, guid: str) -> None:
 # --------------------------------------------------------------------------- #
 # outbound ask
 # --------------------------------------------------------------------------- #
+def _capture_sent_guid(msg_text, token, sent_ts, recipient, transport, sleep):
+    """#584 AC1: find our own just-sent ask in the store and return its guid, or None.
+
+    Hazard (live-probed): the gateway persona ACK-echoes the token back as isFromMe,
+    so token-substring alone is contaminated. Pick: exact-full-text row first, else
+    earliest dateCreated (the ask precedes any echo); deterministic (ts, guid) tie-break.
+    Fail-open — any miss/failure returns None (quote arm stays inert; token path intact)."""
+    skew = 5000
+    for attempt in range(3):
+        try:
+            rows = transport(chat_guid=_chat_guid(recipient), since_ms=sent_ts - skew,
+                             limit=POLL_LIMIT)
+        except BridgeUnreachable:
+            return None
+        cands = [r for r in rows or []
+                 if r.get("isFromMe") and r.get("guid")
+                 and token in (r.get("text") or "")
+                 and (r.get("dateCreated") or 0) >= sent_ts - skew]
+        if cands:
+            exact = [r for r in cands if (r.get("text") or "") == msg_text]
+            pool = exact or cands
+            return min(pool, key=lambda r: ((r.get("dateCreated") or 0), r.get("guid") or ""))["guid"]
+        if attempt < 2:
+            sleep(2)
+    return None
+
+
 def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
-              options=None, response_mode="free_text"):
+              options=None, response_mode="free_text", transport=None, sleep=None):
     """Mint a token, record the ask (create-if-absent), send it, return the record.
 
     #568 Phase-2: an optional numbered-option set. `options` (list of {id,label}) is validated
@@ -362,7 +389,14 @@ def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
         msg = f"{question}\nReply to this message — ref {token}"
     code = str(notify(msg))
     rec["status"] = "sent" if _is_2xx(code) else "delivery_unknown"
-    atomic_write_text(str(path), json.dumps(rec))  # overwrite the status only
+    # #584 AC1: capture our sent message's guid so replies can quote-match. Only when a
+    # transport was explicitly provided (never ambient live I/O from a test's default path)
+    # and the send landed (2xx) — otherwise fail-open to null (token path unaffected).
+    rec["sent_guid"] = None
+    if transport is not None and _is_2xx(code):
+        rec["sent_guid"] = _capture_sent_guid(msg, token, now, rec["recipient"],
+                                              transport, sleep or time.sleep)
+    atomic_write_text(str(path), json.dumps(rec))  # overwrite status + sent_guid only
     return rec
 
 
@@ -701,7 +735,7 @@ def main(argv=None) -> int:
         return self_check()
     sd = _default_state_dir()
     if args.cmd == "ask":
-        rec = ask_owner(args.question, args.run_id, state_dir=sd)
+        rec = ask_owner(args.question, args.run_id, state_dir=sd, transport=_default_transport)
         print(json.dumps(rec)); return 0
     if args.cmd == "poll":
         tok = _safe_component(args.token)

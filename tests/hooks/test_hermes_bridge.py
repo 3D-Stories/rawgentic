@@ -119,6 +119,72 @@ def test_ask_owner_options_template_ref_last_bare(tmp_path):
     assert not re.search(re.escape(rec["token"]) + r"[^\s]", sent[0])
 
 
+# ---------- sent-GUID self-query (#584 AC1) ----------
+def _mk_row(guid, ts, text, from_me=True):
+    return {"guid": guid, "dateCreated": ts, "text": text, "isFromMe": from_me,
+            "handle": {"address": OWNER}}
+
+
+def test_ask_owner_captures_sent_guid_exact_text_wins(tmp_path):
+    sent = []
+    calls = []
+
+    def tr(**kw):
+        calls.append(kw)
+        # ACK echo is EARLIER-or-equal and also contains the token; exact-text row must win
+        return [_mk_row("ACK", 111, "Received: " + sent[0].splitlines()[-1]),
+                _mk_row("ASK", 111, sent[0])]
+
+    rec = ask_owner("go?", "runG", state_dir=tmp_path,
+                    notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 111,
+                    transport=tr, sleep=lambda s: None)
+    assert rec["sent_guid"] == "ASK"
+    assert calls, "self-query ran"
+
+
+def test_ask_owner_sent_guid_earliest_when_no_exact(tmp_path):
+    def tr(**kw):
+        return [_mk_row("LATER", 500, "echo tok " + tok_holder[0]),
+                _mk_row("EARLY", 200, "other echo " + tok_holder[0])]
+    tok_holder = [""]
+    orig_notify = lambda m: (tok_holder.__setitem__(0, m.splitlines()[-1].split()[-1]), "200")[1]
+    rec = ask_owner("go?", "runE", state_dir=tmp_path, notify=orig_notify,
+                    now_ms=lambda: 100, transport=tr, sleep=lambda s: None)
+    assert rec["sent_guid"] == "EARLY"
+
+
+def test_ask_owner_sent_guid_none_on_miss_with_bounded_retry(tmp_path):
+    sleeps = []
+    calls = []
+    rec = ask_owner("go?", "runM", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=lambda **kw: (calls.append(1), [])[1],
+                    sleep=lambda s: sleeps.append(s))
+    assert rec["sent_guid"] is None
+    assert len(calls) == 3 and len(sleeps) == 2  # ≤3 polls, sleep between only
+
+
+def test_ask_owner_sent_guid_none_on_transport_failure_ask_still_sent(tmp_path):
+    def tr(**kw):
+        raise BridgeUnreachable("down")
+    rec = ask_owner("go?", "runF", state_dir=tmp_path, notify=lambda m: "200",
+                    now_ms=lambda: 1, transport=tr, sleep=lambda s: None)
+    assert rec["status"] == "sent" and rec["sent_guid"] is None
+
+
+def test_ask_owner_no_self_query_on_send_failure(tmp_path):
+    calls = []
+    rec = ask_owner("go?", "runX", state_dir=tmp_path, notify=lambda m: "000",
+                    now_ms=lambda: 1, transport=lambda **kw: (calls.append(1), [])[1],
+                    sleep=lambda s: None)
+    assert rec["status"] == "delivery_unknown" and rec["sent_guid"] is None
+    assert not calls  # nothing to find — the send never landed
+
+
+def test_ask_owner_no_transport_means_no_self_query(tmp_path):
+    rec = ask_owner("go?", "runN", state_dir=tmp_path, notify=lambda m: "200", now_ms=lambda: 1)
+    assert rec["sent_guid"] is None  # fail-open: quote arm inert, token path unaffected
+
+
 # ---------- classify_batch (pure) ----------
 def test_classify_matched_single_token():
     tok = "[RG-ABCDEF012345]"
