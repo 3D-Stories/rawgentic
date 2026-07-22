@@ -818,11 +818,13 @@ _DENIAL_TOKENS: Final[tuple] = (
 
 
 def _is_exec_event(line: str) -> bool:
-    """True when the line is a structured codex exec event (a JSON object whose ``type`` names a
-    command execution/result) — an OS-attested denial, not spoofable model prose. The exact codex
-    exec-event schema is calibration-pending (verified against real output in #559's CELL-1); this
-    heuristic (``type`` contains ``exec``/``command``) is deliberately permissive because the field
-    is ADVISORY only and never gates a verdict."""
+    """True when the line is SHAPED like a structured codex exec event (a JSON object whose ``type``
+    names a command execution/result). NOT authenticated (8a-F10): the exact codex exec-event schema
+    is calibration-pending (verified against real output in #559's CELL-1) and model prose can emit a
+    JSON object carrying such a ``type``, so an ``exec_event`` source label means only "event-shaped",
+    never a proven OS-attested denial. This is sound ONLY because ``denial_evidence`` is ADVISORY
+    calibration data that never gates a verdict (design §2.4 R5); a trusted, schema-validated
+    transport is the named follow-up before this could ever become load-bearing."""
     s = line.strip()
     if not (s.startswith("{") and s.endswith("}")):
         return False
@@ -1300,14 +1302,16 @@ def resume_dispatch(
         stamped = dict(obs)
         stamped["dispatched_lane"] = dict(target["lane"])
         child_cid = stamped.get("correlation_id")
-        if child_cid is None:
-            stamped["correlation_id"] = ce
-        audit.append_observation(stamped, receipt=receipt)
         if child_cid is not None and child_cid != ce:
+            # 8a-F9: refuse a foreign-correlation observation BEFORE appending — a mismatched child
+            # envelope must never be written to the audit (a post-append refusal poisons the ledger).
             return _err(EXIT_ENFORCEMENT, "correlation_mismatch",
                         f"child observation correlation {child_cid!r} != dispatch correlation "
                         f"{ce!r} on resume seat {seat!r} — foreign observation refused",
                         retryable=False, correlation_id=ce, audit_path=audit_path)
+        if child_cid is None:
+            stamped["correlation_id"] = ce
+        audit.append_observation(stamped, receipt=receipt)
     if state != "completed":
         retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
         code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL

@@ -175,6 +175,9 @@ def test_promote_appendix_only_rejects_malicious_candidate_paths():
     assert pol("docs/../secrets/appendix/x") is False         # .. anywhere
     assert pol("/etc/passwd") is False                         # absolute
     assert pol("") is False and pol("   ") is False            # empty / whitespace
+    # 8a-F3: a literal backslash is a valid POSIX filename char, NOT a separator — a repo-root file
+    # named "docs\planning\appendix\x.md" must NOT normalize into the appendix prefix (bypass).
+    assert pol("docs\\planning\\appendix\\x.md") is False
 
 
 @pytest.mark.parametrize("bad", [".", "..", "/abs/appendix", "   ", "", "a/../b"])

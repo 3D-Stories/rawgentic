@@ -106,7 +106,14 @@ def _norm_rel_components(raw: str, *, what: str) -> tuple:
     BOTH its prefixes (factory time) and each candidate path (call time)."""
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError(f"{what} must be a non-empty path (got {raw!r})")
-    posix = raw.replace("\\", "/")
+    # A backslash is a valid POSIX filename character, NOT a path separator — treating it as one
+    # (raw.replace("\\","/")) would fold a repo-root file literally named "docs\planning\appendix\x"
+    # into the appendix prefix, bypassing the policy (8a-F3). Reject it outright: git tracks paths
+    # with forward slashes, so a legitimate promotable path never contains a backslash.
+    if "\\" in raw:
+        raise ValueError(f"{what} must not contain a backslash (a POSIX filename char, not a "
+                         f"separator) (got {raw!r})")
+    posix = raw
     if posix.startswith("/"):
         raise ValueError(f"{what} must be relative, not absolute (got {raw!r})")
     parts = tuple(c for c in posix.split("/") if c not in ("", "."))

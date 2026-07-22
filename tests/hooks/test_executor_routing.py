@@ -2012,6 +2012,21 @@ def test_resume_dispatch_session_mismatch_fails_loud(tmp_path):
     assert sup.awaited == ["seed-sid"]  # it DID assert against the seeded id
 
 
+class _ForeignCidResumeSup(_ResumeSup):
+    def await_job(self, record, *, timeout_s=3600.0, expect_session_id=None):
+        self.awaited.append(expect_session_id)
+        return "completed", _valid_obs(correlation_id="someone-elses-call")
+
+
+def test_resume_dispatch_foreign_correlation_not_appended(tmp_path):
+    # #559 8a-F9: a resumed envelope carrying a FOREIGN correlation_id must be refused BEFORE the
+    # observation is appended — the audit is never poisoned by an observation from another call.
+    kw = _resume_kw(tmp_path, _ForeignCidResumeSup())
+    res = er.resume_dispatch(**kw)
+    assert res["ok"] is False and res["error"]["code"] == "correlation_mismatch"
+    assert not any(r.get("kind") == "observation" for r in kw["audit"].records())  # never appended
+
+
 # ---------------------------------------------------------------------------
 # AC1 (#559): collect_work_product — two-phase, crash-recoverable, audit-idempotent
 # ---------------------------------------------------------------------------
