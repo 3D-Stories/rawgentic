@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 import bakeoff_policy  # sibling hook
@@ -166,30 +167,30 @@ def _bakeoff_dispatch(fixture):
 
 
 # ---- per-dimension scorers (each returns 0.0..1.0) --------------------------------------------
-def _score_seat_selection(fx, snapshot, quota, capture_root):
+def _score_seat_selection(fx, snapshot, quota, capture_root, dispatch=None):
     pe = _pe()
     seat = fx["primary_seat"]
     obs = pe.run_seat(seat, "p", snapshot=snapshot, quota=quota, capture_root=capture_root,
-                      dispatch=_seat_dispatch(fx))
+                      dispatch=dispatch or _seat_dispatch(fx))
     return 1.0 if obs.actual_model == fx["expected"]["seat_model"] else 0.0
 
 
-def _score_recovery(fx, snapshot, quota, capture_root):
+def _score_recovery(fx, snapshot, quota, capture_root, dispatch=None):
     pe = _pe()
     seat = fx["primary_seat"]
     obs = pe.run_seat(seat, "p", snapshot=snapshot, quota=quota, capture_root=capture_root,
-                      dispatch=_seat_dispatch(fx))
+                      dispatch=dispatch or _seat_dispatch(fx))
     recovered = obs.parse_status == pe.contract.OK and obs.actual_model == fx["expected"]["seat_model"]
     return 1.0 if recovered == fx["expected"]["recovered"] else 0.0
 
 
-def _score_gate(fx, *_):
+def _score_gate(fx, *_, dispatch=None):  # pylint: disable=unused-argument
     gi = fx["gate_inputs"]
     gd = complexity_gate.needs_bakeoff(gi["task"], gi["issue"], gi["plan_est"], cfg=gi.get("cfg"))
     return 1.0 if gd.decision == fx["expected"]["gate"] else 0.0
 
 
-def _score_enforcement(fx, snapshot, quota, capture_root):
+def _score_enforcement(fx, snapshot, quota, capture_root, dispatch=None):  # pylint: disable=unused-argument
     pe = _pe()
     resp = fx["enforcement"]["observation"]
     # build a real Observation, run the REAL verify_post, compare ok-verdict to expected
@@ -212,7 +213,7 @@ class _Draft:
         self.parsed_payload = payload
 
 
-def _score_winner(fx, snapshot, quota, capture_root):
+def _score_winner(fx, snapshot, quota, capture_root, dispatch=None):
     # The judge picks winner_draft (1-based, post-shuffle); make_glm_judge maps it to the original
     # candidate via order[winner_draft-1]. To verify that remap (not just that SOME winner came back),
     # replay the SAME seeded shuffle over the candidates in DESIGN_MODELS order and derive the model
@@ -226,12 +227,12 @@ def _score_winner(fx, snapshot, quota, capture_root):
     winner, _losers, _judge_obs, _record = bakeoff_policy.run_design_round(
         "p", snapshot=snapshot, quota=quota, capture_root=capture_root, headless=True, seed=seed,
         sink_path=capture_root / "bakeoff.jsonl", complete_fn=lambda prompt: (verdict, ""),
-        dispatch=_bakeoff_dispatch(fx))
+        dispatch=dispatch or _bakeoff_dispatch(fx))
     propagates = winner.requested_model == expected_model
     return 1.0 if propagates == fx["expected"].get("winner_propagates", True) else 0.0
 
 
-def _score_audit(fx, snapshot, quota, capture_root):
+def _score_audit(fx, snapshot, quota, capture_root, dispatch=None):
     pe = _pe()
     seat = fx["primary_seat"]
     if seat not in WIRED_SEATS:  # H1: a seat OUTSIDE the executor vocabulary has no audit path; build
@@ -260,7 +261,7 @@ def _score_audit(fx, snapshot, quota, capture_root):
         seat=seat, prompt="p", run_id="run", correlation_id=None, author_provider=None,
         effort=None, timeout=300.0, context=(), snapshot=snapshot, quota=quota, audit=audit,
         capture_root=str(audit_root), routing=pe.routing, enforce=pe.enforce,
-        run_seat=pe.run_seat, dispatch_real=_seat_dispatch(fx), **gate_kwargs)
+        run_seat=pe.run_seat, dispatch_real=dispatch or _seat_dispatch(fx), **gate_kwargs)
     records = audit.records()
     receipts = [r for r in records if r.get("kind") == "receipt"]
     observations = [r for r in records if r.get("kind") == "observation"]
@@ -270,11 +271,11 @@ def _score_audit(fx, snapshot, quota, capture_root):
     return 1.0 if complete == fx["expected"].get("audit_complete", True) else 0.0
 
 
-def _score_token_burn(fx, snapshot, quota, capture_root):
+def _score_token_burn(fx, snapshot, quota, capture_root, dispatch=None):
     pe = _pe()
     seat = fx["primary_seat"]
     obs = pe.run_seat(seat, "p", snapshot=snapshot, quota=quota, capture_root=capture_root,
-                      dispatch=_seat_dispatch(fx))
+                      dispatch=dispatch or _seat_dispatch(fx))
     # M1: an unmeasurable cell fails closed (never a silent 1.0 on Σ=0) — require BOTH token fields,
     # not just a non-empty dict (a usage lacking input/output is not a real measurement).
     if not obs.usage or "input" not in obs.usage or "output" not in obs.usage:
@@ -291,13 +292,66 @@ _SCORERS = {
 
 
 # ---- run + matrix -----------------------------------------------------------------------------
-def run_fixture(fixture, *, snapshot, quota, capture_root) -> dict:
+class _BudgetExceeded(RuntimeError):
+    """#449 T2: the HARD live ceiling (billable calls or reported USD) tripped — the run
+    aborts with a typed partial report, never overruns."""
+
+
+def _guarded_live_dispatch(dispatch, snapshot, *, max_calls=None, max_budget_usd=None):
+    """Wrap a live dispatch with the HARD cost ceiling + per-dispatch observability.
+    Returns (wrapped, state) where state = {"calls", "reported_cost_usd", "dispatches"}.
+    The ceiling checks BEFORE each call (calls) and after (accumulated reported cost) —
+    abort is prompt, never a whole-matrix overrun. Cost accumulates only what the
+    engine REPORTS (usage cost_usd/cost_proxy/spent_usd); unreported cost stays visible
+    as calls-only (the report's cost block names both numbers)."""
+    state = {"calls": 0, "reported_cost_usd": 0.0, "dispatches": []}
+
+    def wrapped(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
+        if max_calls is not None and state["calls"] >= max_calls:
+            raise _BudgetExceeded(f"billable-call ceiling {max_calls} reached")
+        state["calls"] += 1
+        obs = dispatch(engine, req, run_id=run_id, attempt_id=attempt_id, capture_root=capture_root,
+                       digest=digest, queued_ms=queued_ms, fallback_reason=fallback_reason)
+        usage = getattr(obs, "usage", None) or {}
+        cost = next((float(usage[k]) for k in ("cost_usd", "cost_proxy", "spent_usd")
+                     if isinstance(usage.get(k), (int, float))), 0.0)
+        state["reported_cost_usd"] += cost
+        try:
+            requested_policy = (snapshot.seat(req.seat).get("manifest") or {}).get("session_policy")
+        except Exception:  # noqa: BLE001 — observability never kills a live cell
+            requested_policy = None
+        state["dispatches"].append({
+            "seat": req.seat, "requested_model": req.requested_model,
+            "actual_model": getattr(obs, "actual_model", None),
+            "parse_status": getattr(obs, "parse_status", None),
+            "fallback_reason": fallback_reason,
+            "session_policy": {"requested": requested_policy,
+                               "actual": getattr(obs, "session_policy", None)},
+            "usage": usage or None,
+        })
+        if max_budget_usd is not None and state["reported_cost_usd"] > max_budget_usd:
+            raise _BudgetExceeded(
+                f"reported-cost ceiling ${max_budget_usd} exceeded (${state['reported_cost_usd']:.2f})")
+        return obs
+    return wrapped, state
+
+
+def run_fixture(fixture, *, snapshot, quota, capture_root, live=False, dispatch=None) -> dict:
     """Score the dimensions this fixture declares. Returns {dimension: score 0..1}. A scorer that
-    raises (malformed fixture / unrunnable seat) fails closed to 0.0 for that dimension."""
+    raises (malformed fixture / unrunnable seat) fails closed to 0.0 for that dimension.
+    live=True (#449): `dispatch` (a live_dispatch) replaces the fixture's canned dispatch in every
+    dispatching scorer; a glm-judge dimension with no glm credential is a typed SKIP (fail-closed,
+    visible), and a _BudgetExceeded from the ceiling guard propagates (aborts the matrix)."""
     scores = {}
     for dim in fixture["dimensions"]:
+        if live and dim == "winner_propagation" and not glm_credential_present():
+            scores[dim] = {"score": None, "status": "skipped",
+                           "reason": "no glm judge credential (ZHIPUAI_API_KEY/ZHIPU_API_KEY/GLM_API_KEY)"}
+            continue
         try:
-            scores[dim] = _SCORERS[dim](fixture, snapshot, quota, capture_root)
+            scores[dim] = _SCORERS[dim](fixture, snapshot, quota, capture_root, dispatch=dispatch)
+        except _BudgetExceeded:
+            raise  # the matrix-level abort — never absorbed into a 0.0 cell
         except UnsupportedCellError as exc:  # #449: typed capability-absent cell, mean-excluded
             scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
         except Exception as exc:  # noqa: BLE001 — a broken cell scores 0, never a silent pass
@@ -305,17 +359,35 @@ def run_fixture(fixture, *, snapshot, quota, capture_root) -> dict:
     return scores
 
 
-def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus", "sonnet"), reps=3) -> dict:
+def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus", "sonnet"), reps=3,
+               live=False, dispatch=None, max_calls=None, max_budget_usd=None) -> dict:
     """The stubbed baseline matrix: len(fixtures) x models x reps cells. Deterministic + model-
     independent (the code path does not branch on driver model), so this is a reproducibility /
-    regression baseline — the report says so plainly; opus-vs-sonnet signal is the live cells."""
+    regression baseline — the report says so plainly; opus-vs-sonnet signal is the live cells.
+
+    live=True (#449): `dispatch` (a live_dispatch, REQUIRED live) is wrapped in the HARD ceiling
+    guard (max_calls / max_budget_usd) with per-dispatch observability; a tripped ceiling aborts
+    the matrix with `aborted: budget_exceeded` and the partial cells (typed, never an overrun).
+    The stubbed (live=False) path is byte-identical to before."""
+    aborted = None
+    abort_reason = None
+    state = None
+    if live:
+        if dispatch is None:
+            raise FixtureError("run_matrix(live=True) requires an explicit live dispatch")
+        dispatch, state = _guarded_live_dispatch(dispatch, snapshot,
+                                                 max_calls=max_calls, max_budget_usd=max_budget_usd)
     cells = []
-    for model in models:
-        for rep in range(reps):
-            for fx in fixtures:
-                scores = run_fixture(fx, snapshot=snapshot, quota=quota_factory(),
-                                     capture_root=capture_root)
-                cells.append({"fixture": fx["id"], "model": model, "rep": rep, "scores": scores})
+    try:
+        for model in models:
+            for rep in range(reps):
+                for fx in fixtures:
+                    scores = run_fixture(fx, snapshot=snapshot, quota=quota_factory(),
+                                         capture_root=capture_root, live=live, dispatch=dispatch)
+                    cells.append({"fixture": fx["id"], "model": model, "rep": rep, "scores": scores})
+    except _BudgetExceeded as exc:
+        aborted = "budget_exceeded"
+        abort_reason = str(exc)
     # per-dimension mean over numeric scores
     dim_totals: dict = {d: [] for d in DIMENSIONS}
     for cell in cells:
@@ -325,13 +397,28 @@ def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus
                 continue
             dim_totals[dim].append(score)
     dim_means = {d: (sum(v) / len(v) if v else None) for d, v in dim_totals.items()}
-    return {
+    report = {
         "n_cells": len(cells), "n_fixtures": len(fixtures), "models": list(models), "reps": reps,
         "dimension_means": dim_means, "cells": cells,
         "note": ("STUBBED BASELINE — model-independent deterministic code path; the model x rep axes "
                  "replicate the per-fixture result to prove determinism and establish the matrix shape. "
                  "The opus-vs-sonnet signal comes from the 3 live cells (RUN_LIVE), not this matrix."),
     }
+    if live:
+        report["live"] = True
+        report["note"] = ("LIVE CELLS — real per-seat model calls through the phase_executor "
+                          "adapters (routing/fallback/enforcement real); HARD ceilings enforced; "
+                          "unsupported/skipped cells are typed, mean-excluded.")
+        report["dispatches"] = state["dispatches"]
+        report["cost"] = {"billable_calls": state["calls"],
+                          "reported_cost_usd": round(state["reported_cost_usd"], 4),
+                          "max_calls": max_calls, "max_budget_usd": max_budget_usd,
+                          "cost_note": "reported_cost_usd sums only engine-REPORTED usage cost; "
+                                       "calls is the hard billable floor"}
+        if aborted:
+            report["aborted"] = aborted
+            report["abort_reason"] = abort_reason
+    return report
 
 
 def resolve_bench_table(repo_root=_REPO):
@@ -346,18 +433,57 @@ def resolve_bench_table(repo_root=_REPO):
     return _er.resolve_table(Path(repo_root), pe.routing)
 
 
-def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO):
+def write_live_report(report, *, out_dir=DEFAULT_REPORT.parent) -> str:
+    """#449 T2: persist a live run's report to docs/measurements/driver-bench/ (timestamped,
+    never clobbers the stubbed baseline). Returns the written path."""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"live-{int(time.time())}.json"
+    out.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    return str(out)
+
+
+def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO, argv=None):
     # Resolve FIRST: resolve_bench_table guards the phase_executor import (ImportError ->
     # FixtureError); the direct _pe() after it cannot fail once resolution succeeded (diff-DF1).
+    args = list(sys.argv[1:] if argv is None else argv)
+    live = "--live" in args
+
+    def _flag(name, cast):
+        if name in args:
+            return cast(args[args.index(name) + 1])
+        return None
+
+    if live and os.environ.get("RUN_LIVE") != "1":
+        print("--live makes REAL billable model calls: refuse without RUN_LIVE=1 "
+              "(export RUN_LIVE=1 to confirm; see docs/testing.md driver-bench section)",
+              file=sys.stderr)
+        raise SystemExit(2)
     resolved = resolve_bench_table(repo_root)
     snapshot = resolved.snapshot
     pe = _pe()
     tmp = _REPO / ".rawgentic" / "driver-bench-cap"
     shutil.rmtree(tmp, ignore_errors=True)  # hermetic run — never read stale accumulated capture state
     tmp.mkdir(parents=True, exist_ok=True)
+    qf = lambda: pe.QuotaCoordinator(tmp / "permits", snapshot.pool_concurrency())
+    if live:
+        # HARD default ceilings (design r2 F5) — overridable but never absent.
+        report = run_matrix(load_fixtures(fixture_dir), snapshot=snapshot, quota_factory=qf,
+                            capture_root=tmp, models=("live",), reps=1, live=True,
+                            dispatch=live_dispatch(),
+                            max_calls=_flag("--max-calls", int) or 40,
+                            max_budget_usd=_flag("--max-budget-usd", float) or 10.0)
+        out = write_live_report(report)
+        print(f"driver-bench LIVE: {report['n_cells']} cells, "
+              f"{report['cost']['billable_calls']} billable calls, "
+              f"reported ${report['cost']['reported_cost_usd']}"
+              + (f" — ABORTED: {report['abort_reason']}" if report.get("aborted") else ""))
+        for dim, mean in report["dimension_means"].items():
+            print(f"  {dim}: {mean}")
+        print(f"report -> {out}")
+        return
     report = run_matrix(load_fixtures(fixture_dir), snapshot=snapshot,
-                        quota_factory=lambda: pe.QuotaCoordinator(tmp / "permits", snapshot.pool_concurrency()),
-                        capture_root=tmp)
+                        quota_factory=qf, capture_root=tmp)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     Path(out_path).write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     print(f"driver-bench stubbed baseline: {report['n_cells']} cells, dimension means:")

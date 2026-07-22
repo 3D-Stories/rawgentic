@@ -319,3 +319,111 @@ class TestGlmCredential:
     def test_present_credential_detected(self, monkeypatch):
         monkeypatch.setenv("ZHIPUAI_API_KEY", "k")
         assert db.glm_credential_present() is True
+
+
+# ---- #449 T2: live matrix entry + HARD ceilings + live report -----------------------------------
+def _no_glm(monkeypatch):
+    for var in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+
+class TestLiveMatrix:
+    def _live_env(self, env, fx):
+        """A live=True run with the fixture's OWN canned responses injected as the 'real'
+        dispatch — proves the live wiring (threading, ceilings, report) with zero live calls."""
+        canned = db._seat_dispatch(fx)
+
+        def fake_real(engine, req, **kw):
+            return canned(engine, req, **kw)
+        return fake_real
+
+    def test_live_matrix_routes_through_injected_dispatch(self, env, monkeypatch):
+        _no_glm(monkeypatch)
+        fx = _fx("f01-intake-clean")
+        calls = []
+        fake = self._live_env(env, fx)
+
+        def counting(engine, req, **kw):
+            calls.append(req.seat)
+            return fake(engine, req, **kw)
+
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "ql", env["snapshot"].pool_concurrency())
+        r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=counting))
+        assert r["n_cells"] == 1 and calls, "live cells must flow through the injected dispatch"
+        assert r["live"] is True
+        assert "live" in r["note"].lower()
+
+    def test_hard_call_ceiling_aborts(self, env, monkeypatch):
+        _no_glm(monkeypatch)
+        fxs = [_fx("f01-intake-clean"), _fx("f03-ship-recovery")]
+        fake = self._live_env(env, fxs[0])
+        seen = []
+
+        def counting(engine, req, **kw):
+            seen.append(1)
+            # respond from whichever fixture matches the seat
+            for fx in fxs:
+                if req.seat in (fx.get("responses") or {}):
+                    return db._seat_dispatch(fx)(engine, req, **kw)
+            return fake(engine, req, **kw)
+
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qc", env["snapshot"].pool_concurrency())
+        r = db.run_matrix(fxs, snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=counting),
+                          max_calls=1)
+        assert r["aborted"] == "budget_exceeded"
+        assert len(seen) <= 2, "must stop dispatching promptly after the ceiling"
+
+    def test_budget_ceiling_aborts_on_reported_cost(self, env, monkeypatch):
+        _no_glm(monkeypatch)
+        fx = copy.deepcopy(_fx("f01-intake-clean"))
+        # make the canned response carry a reported cost the guard can accumulate
+        fx["responses"]["intake"][0]["usage"] = {"input": 10, "output": 5, "cost_usd": 9.99}
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qb", env["snapshot"].pool_concurrency())
+        r = db.run_matrix([fx, fx], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)),
+                          max_budget_usd=5.0)
+        assert r["aborted"] == "budget_exceeded"
+
+    def test_winner_cells_skip_without_glm_credential(self, env, monkeypatch):
+        _no_glm(monkeypatch)
+        fx = _fx("f09-winner-draft1")
+        cell = db.run_fixture(fx, **env, live=True)["winner_propagation"]
+        assert isinstance(cell, dict) and cell["status"] == "skipped"
+        assert "glm" in cell["reason"].lower()
+
+    def test_live_report_written_with_cost_line(self, env, tmp_path, monkeypatch):
+        _no_glm(monkeypatch)
+        fx = _fx("f01-intake-clean")
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qr", env["snapshot"].pool_concurrency())
+        r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)))
+        out = db.write_live_report(r, out_dir=tmp_path)
+        data = json.loads(Path(out).read_text(encoding="utf-8"))
+        assert data["live"] is True
+        assert "billable_calls" in data["cost"] and "reported_cost_usd" in data["cost"]
+        assert "dispatches" in data  # per-seat requested/actual observability
+
+    def test_live_dispatch_records_observability(self, env, monkeypatch):
+        _no_glm(monkeypatch)
+        fx = _fx("f01-intake-clean")
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qo", env["snapshot"].pool_concurrency())
+        r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)))
+        assert r["dispatches"], "live run must record per-dispatch observability"
+        d0 = r["dispatches"][0]
+        assert {"seat", "requested_model", "actual_model", "session_policy"} <= set(d0)
+
+    def test_cli_live_refuses_without_run_live_env(self):
+        env2 = {**os.environ, "PYTHONPATH": str(HOOKS)}
+        env2.pop("RUN_LIVE", None)
+        proc = subprocess.run([sys.executable, str(HOOKS / "driver_bench_lib.py"), "--live"],
+                              cwd=str(REPO), env=env2, capture_output=True, text=True, timeout=60)
+        assert proc.returncode != 0
+        assert "RUN_LIVE" in (proc.stderr + proc.stdout)
