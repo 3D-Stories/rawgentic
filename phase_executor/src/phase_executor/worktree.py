@@ -20,7 +20,7 @@ import os
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Callable, Iterable, Optional
 
 from . import capture, contract
 
@@ -98,6 +98,42 @@ def PROMOTE_ANY(path: str) -> bool:  # pylint: disable=invalid-name,unused-argum
     ``path_policy`` (fail-closed boundary); a caller that genuinely wants every changed
     path promotable names this instead of omitting the policy."""
     return True
+
+
+def _norm_rel_components(raw: str, *, what: str) -> tuple:
+    """POSIX-normalize a relative path to its component tuple, refusing empty/whitespace,
+    absolute, and any ``..`` component (fail-closed). Shared by ``promote_appendix_only`` for
+    BOTH its prefixes (factory time) and each candidate path (call time)."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"{what} must be a non-empty path (got {raw!r})")
+    posix = raw.replace("\\", "/")
+    if posix.startswith("/"):
+        raise ValueError(f"{what} must be relative, not absolute (got {raw!r})")
+    parts = tuple(c for c in posix.split("/") if c not in ("", "."))
+    if not parts or any(c == ".." for c in parts):
+        raise ValueError(f"{what} must not be empty, '.', or contain '..' (got {raw!r})")
+    return parts
+
+
+def promote_appendix_only(prefixes) -> Callable[[str], bool]:
+    """#559 AC1 (design §2.6): a ``path_policy`` factory admitting ONLY changed paths under one of
+    the given directory ``prefixes`` — the scoped counterpart to ``PROMOTE_ANY``. Both the prefixes
+    (at factory time) and each candidate path (at call time) are POSIX-normalized and rejected if
+    empty, absolute, or containing a ``..`` component; comparison is on COMPONENT boundaries so
+    ``docs/planning/appendix/`` never admits ``docs/planning/appendix-evil/x``. A malformed prefix
+    is a factory-time ``ValueError`` (fail-closed) — a caller cannot construct an over-broad policy;
+    a malformed candidate path at call time is simply not promotable (returns False)."""
+    prefix_tuples = [_norm_rel_components(p, what="prefix") for p in prefixes]
+    if not prefix_tuples:
+        raise ValueError("promote_appendix_only: at least one prefix is required")
+
+    def policy(path: str) -> bool:
+        try:
+            parts = _norm_rel_components(path, what="path")
+        except ValueError:
+            return False  # a malformed candidate path is never promotable (fail-closed)
+        return any(parts[:len(pref)] == pref for pref in prefix_tuples)
+    return policy
 
 
 # ---------------------------------------------------------------------------
