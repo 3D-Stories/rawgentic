@@ -1860,6 +1860,68 @@ def test_probe_denial_evidence_carries_no_pii(tmp_path, monkeypatch):
     assert seed_email not in blob and seed_token not in blob  # no raw transcript / PII in the result
 
 
+# ---------------------------------------------------------------------------
+# AC2a (#559): probe_account — active claude identity observation (digest only, no raw PII)
+# ---------------------------------------------------------------------------
+
+def _fake_auth_runner(rc=0, stdout="", exc=None):
+    import types as _types
+
+    def runner(argv, *, capture_output, text, timeout, check):
+        if exc is not None:
+            raise exc
+        return _types.SimpleNamespace(returncode=rc, stdout=stdout, stderr="")
+    return runner
+
+
+_OK_AUTH_JSON = json.dumps({"loggedIn": True, "authMethod": "oauth", "apiProvider": "anthropic",
+                            "email": "dev@example.com", "orgId": "org-abc",
+                            "orgName": "Acme", "subscriptionType": "team"})
+
+
+def test_probe_account_ok_digest_no_pii():
+    import hashlib as _h
+    p = er.probe_account("claude", runner=_fake_auth_runner(0, _OK_AUTH_JSON))
+    assert p["status"] == "ok" and p["logged_in"] is True
+    assert p["subscription_type"] == "team" and p["auth_method"] == "oauth"
+    assert p["identity_digest"] == _h.sha256(
+        (er._ACCOUNT_DIGEST_PREFIX + "dev@example.com|org-abc").encode("utf-8")).hexdigest()
+    blob = json.dumps(p)
+    assert "dev@example.com" not in blob and "org-abc" not in blob and "@" not in blob
+    assert er.account_probe_ok_for_paid(p) is True
+
+
+def test_probe_account_logged_out_no_digest():
+    out = json.dumps({"loggedIn": False, "authMethod": "oauth", "subscriptionType": None})
+    p = er.probe_account("claude", runner=_fake_auth_runner(0, out))
+    assert p["status"] == "logged_out"
+    assert p["identity_digest"] is None
+    assert er.account_probe_ok_for_paid(p) is False
+
+
+def test_probe_account_unavailable_on_nonzero_and_oserror():
+    assert er.probe_account("claude", runner=_fake_auth_runner(1, ""))["status"] == "unavailable"
+    p = er.probe_account("claude", runner=_fake_auth_runner(exc=FileNotFoundError("no claude")))
+    assert p["status"] == "unavailable"
+    assert er.account_probe_ok_for_paid(p) is False
+
+
+def test_probe_account_parse_error_on_bad_json_and_thin_identity():
+    assert er.probe_account("claude", runner=_fake_auth_runner(0, "not json"))["status"] == "parse_error"
+    # loggedIn true but identity fields absent → parse_error, never a spoofable "ok"
+    thin = json.dumps({"loggedIn": True, "subscriptionType": "team"})
+    assert er.probe_account("claude", runner=_fake_auth_runner(0, thin))["status"] == "parse_error"
+
+
+def test_probe_account_digest_stability_and_separation():
+    j1 = json.dumps({"loggedIn": True, "email": "a@x.com", "orgId": "o1"})
+    j2 = json.dumps({"loggedIn": True, "email": "a@x.com", "orgId": "o2"})
+    d1 = er.probe_account("claude", runner=_fake_auth_runner(0, j1))["identity_digest"]
+    d1b = er.probe_account("claude", runner=_fake_auth_runner(0, j1))["identity_digest"]
+    d2 = er.probe_account("claude", runner=_fake_auth_runner(0, j2))["identity_digest"]
+    assert d1 == d1b and d1 != d2  # stable per identity; changes when orgId changes
+
+
 def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
     """#472 8a R2 + Step-11: an engine with no supervised composition rule must REFUSE with the
     allowlist ValueError BEFORE any adapter lookup — an empty adapters map proves the ordering

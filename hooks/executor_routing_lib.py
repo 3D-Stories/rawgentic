@@ -865,6 +865,63 @@ def parse_denial_evidence(output: Optional[str], *, target: str) -> dict:
     return empty
 
 
+_ACCOUNT_DIGEST_PREFIX: Final[str] = "rawgentic-account-identity:v1|"
+
+
+def probe_account(claude_bin: str = "claude", *, runner=subprocess.run, timeout: float = 30.0) -> dict:
+    """AC2a (#559, design §2.5): observe the ACTIVE claude account identity via
+    ``claude auth status --json`` — WITHOUT reading the credential store (only the CLI's own
+    status view). Returns ``{status, logged_in, identity_digest, subscription_type,
+    auth_method}`` with NO raw email/orgId/token in any field: identity is a domain-separated
+    sha256 digest, plus non-identifying categories. Status arms (R12):
+      - rc!=0 / timeout / OSError → ``unavailable`` (a read failure is NEVER an account switch);
+      - non-JSON / not-an-object / non-bool loggedIn / missing identity fields → ``parse_error``;
+      - valid JSON with ``loggedIn: false`` → ``logged_out`` (NO digest computed);
+      - valid + ``loggedIn: true`` + nonempty email+orgId → ``ok`` (digest computed).
+    The digest is RUN EVIDENCE (design R8) — a caller persists it only under the gitignored
+    run dir; the committed report carries opaque labels, never a digest."""
+    def _empty(status: str) -> dict:
+        return {"status": status, "logged_in": False, "identity_digest": None,
+                "subscription_type": None, "auth_method": None}
+    try:
+        proc = runner([claude_bin, "auth", "status", "--json"],
+                      capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return _empty("unavailable")
+    if getattr(proc, "returncode", 1) != 0:
+        return _empty("unavailable")
+    try:
+        data = json.loads(getattr(proc, "stdout", "") or "")
+    except (ValueError, TypeError):
+        return _empty("parse_error")
+    if not isinstance(data, dict):
+        return _empty("parse_error")
+    logged_in = data.get("loggedIn")
+    if logged_in is False:
+        out = _empty("logged_out")
+        out["subscription_type"] = data.get("subscriptionType")
+        out["auth_method"] = data.get("authMethod")
+        return out
+    if logged_in is not True:
+        return _empty("parse_error")  # missing / non-bool loggedIn
+    email, org_id = data.get("email"), data.get("orgId")
+    if not (isinstance(email, str) and email and isinstance(org_id, str) and org_id):
+        return _empty("parse_error")  # authenticated but the identity fields are absent
+    digest = hashlib.sha256(
+        (_ACCOUNT_DIGEST_PREFIX + email + "|" + org_id).encode("utf-8")).hexdigest()
+    return {"status": "ok", "logged_in": True, "identity_digest": digest,
+            "subscription_type": data.get("subscriptionType"),
+            "auth_method": data.get("authMethod")}
+
+
+def account_probe_ok_for_paid(probe: dict) -> bool:
+    """R12 gate: a paid operation (or a digest compare) proceeds ONLY on a fully-authenticated
+    identity — ``status == ok`` AND ``logged_in`` AND a computed digest (which is set only when
+    email+orgId were both nonempty). logged_out/unavailable/parse_error all block identically."""
+    return bool(probe.get("status") == "ok" and probe.get("logged_in") is True
+                and probe.get("identity_digest"))
+
+
 def codex_behavioral_probe(*, adapters, model: str, effort, wt_root: str,
                            runner=subprocess.run) -> dict:
     """#556 H3 — launch the codex MUTATING composition in a THROWAWAY worktree with a probe prompt
@@ -1725,6 +1782,13 @@ def _do_dispatch(args) -> int:
     return _emit(result)
 
 
+def _do_probe_account(args) -> int:
+    """#559 AC2a: emit the active claude account identity observation as JSON (digest + categories
+    only — no raw PII). Read-only; never launches or mutates. The digest is run evidence (R8) —
+    the orchestrator persists it under the gitignored run dir, never into a committed report."""
+    return _emit(probe_account(args.claude_bin))
+
+
 def _status_tail(path: Path, limit: int = 200) -> str:
     """Last non-empty line of ``path`` (≤ ``limit`` chars) — bounded read, never the whole file."""
     with open(path, "rb") as fh:
@@ -1956,6 +2020,11 @@ def main(argv: Optional[list] = None) -> int:
     mg.add_argument("--plan-est-lines", required=True, type=int)
     mg.add_argument("--out", required=True)
     mg.set_defaults(fn=_do_mint_gate)
+
+    pa = sub.add_parser("probe-account",
+                        help="#559 AC2a: observe the active claude account identity (digest + categories, no raw PII)")
+    pa.add_argument("--claude-bin", dest="claude_bin", default="claude")
+    pa.set_defaults(fn=_do_probe_account)
 
     su = sub.add_parser("status", help="#471: read-only per-run seat status (registry + capture) as JSON")
     su.add_argument("--workspace", required=True)
