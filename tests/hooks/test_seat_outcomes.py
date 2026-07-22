@@ -370,3 +370,126 @@ class TestStorePaths:
         gi = (REPO_ROOT / ".gitignore").read_text()
         assert "seat-outcomes.jsonl.lock" in gi
         assert "seat-outcomes.jsonl.quarantine" in gi
+
+
+# ---------------------------------------------------------------------------
+# T3 — baselines (nearest-rank, closed schema), review baseline, bench anchors
+# ---------------------------------------------------------------------------
+
+def _row(seat="review", model="claude-opus-4-8", timing=None, cost=None, fallback=None,
+         mm=True, run="wf2-x", att="0-a", ts="2026-07-22T12:00:00Z"):
+    r = so.derive_seat_outcome(_obs(seat=seat, requested_model=model, actual_model=model,
+                                    attempt_id=att, run_id=run,
+                                    timing_ms=timing if timing is not None else 100,
+                                    usage={"input": 1, "output": 1, "cached": 0,
+                                           "cost_proxy": cost if cost is not None else 0.1},
+                                    fallback_reason=fallback,
+                                    dispatched_lane={"provider": "anthropic",
+                                                     "transport": "native",
+                                                     "auth_mode": "x", "pool": "claude",
+                                                     "credential_ref": None}),
+                               issue=1, recorded_at=ts)
+    if not mm:
+        r["models_match"] = False
+    r.pop("redacted_fields", None)
+    return r
+
+
+class TestBaselines:
+    def test_insufficient_history_no_percentiles(self):
+        rows = [_row(timing=t, att=f"0-{t}") for t in (10, 20, 30)]
+        b = so.compute_baselines(rows, min_n=5)
+        g = b["groups"]["review|claude-opus-4-8"]["metrics"]["timing_ms"]
+        assert g["status"] == "insufficient_history"
+        assert "p50" not in g and "p90" not in g
+
+    def test_nearest_rank_p50_p90(self):
+        rows = [_row(timing=v, att=f"0-{i}") for i, v in enumerate([10, 20, 30, 40, 50])]
+        g = so.compute_baselines(rows, min_n=5)["groups"]["review|claude-opus-4-8"]
+        t = g["metrics"]["timing_ms"]
+        assert t["status"] == "ok"
+        assert t["p50"] == 30  # median
+        assert t["p90"] == 50  # nearest-rank ceil(0.9*5)-1 = index 4
+
+    def test_unknown_model_count_only(self):
+        rows = [_row(model="-", att=f"0-{i}") for i in range(6)]  # canonicalizes to null
+        b = so.compute_baselines(rows, min_n=5)
+        assert b["unknown_model_rows"] == 6
+        assert not b["groups"]
+
+    def test_fallback_rate_full_denominator(self):
+        rows = ([_row(fallback="fallback from x: timeout", att=f"0-f{i}") for i in range(2)]
+                + [_row(fallback=None, att=f"0-n{i}") for i in range(3)])
+        g = so.compute_baselines(rows, min_n=5)["groups"]["review|claude-opus-4-8"]
+        fr = g["metrics"]["fallback_rate"]
+        assert fr["n"] == 5 and fr["numerator"] == 2  # null = observed "primary served"
+
+    def test_exclude_run_id(self):
+        rows = [_row(run="keep", att=f"0-{i}") for i in range(5)] + \
+               [_row(run="drop", timing=9999, att=f"0-d{i}") for i in range(5)]
+        g = so.compute_baselines(rows, min_n=5, exclude_run_id="drop")
+        t = g["groups"]["review|claude-opus-4-8"]["metrics"]["timing_ms"]
+        assert t["n"] == 5 and t["p90"] == 100
+
+    def test_cost_fallback_to_budget(self):
+        r = _row(att="0-cb")
+        r["usage"]["cost_proxy"] = None
+        r["budget"] = {"reserved_usd": 1.0, "spent_usd": 0.7}
+        rows = [r] + [_row(cost=0.1, att=f"0-{i}") for i in range(4)]
+        g = so.compute_baselines(rows, min_n=5)["groups"]["review|claude-opus-4-8"]
+        assert g["metrics"]["cost"]["n"] == 5  # the budget-fallback row counted
+
+
+class TestReviewBaseline:
+    def _rec(self, run, ch, workflow="implement-feature"):
+        return {"workflow": workflow, "run_id": run,
+                "gates": [{"step": "11", "findings_critical": ch[0], "findings_high": ch[1]}]}
+
+    def test_workflow_filter_and_percentile(self):
+        recs = [self._rec(f"r{i}", (1, i)) for i in range(5)]
+        recs.append(self._rec("other", (9, 9), workflow="fix-bug"))
+        b = so.compute_review_baseline(recs, workflow="implement-feature", min_n=5)
+        assert b["status"] == "ok"
+        assert b["n"] == 5
+
+    def test_dedupe_by_run_id_latest(self):
+        recs = [self._rec("dup", (0, 0)), self._rec("dup", (5, 5))]
+        recs += [self._rec(f"r{i}", (0, 1)) for i in range(4)]
+        b = so.compute_review_baseline(recs, workflow="implement-feature", min_n=5)
+        assert b["n"] == 5  # dup counted once
+
+    def test_records_without_run_id_ineligible(self):
+        recs = [{"workflow": "implement-feature",
+                 "gates": [{"findings_critical": 1, "findings_high": 1}]} for _ in range(6)]
+        b = so.compute_review_baseline(recs, workflow="implement-feature", min_n=5)
+        assert b["status"] == "insufficient_history"
+
+
+class TestBenchAnchors:
+    def test_stubbed_per_model_recompute(self, tmp_path):
+        bench = tmp_path / "driver-bench"
+        bench.mkdir()
+        (bench / "stubbed-baseline.json").write_text(json.dumps({
+            "cells": [{"fixture": "f1", "model": "opus", "rep": 0, "scores": {"acc": 1.0}},
+                      {"fixture": "f1", "model": "opus", "rep": 1, "scores": {"acc": 0.5}}],
+            "models": ["opus"]}))
+        a = so.load_bench_anchors(bench)
+        assert a["stubbed"]["status"] == "ok"
+        assert a["stubbed"]["per_model"]["opus"]["acc"] == 0.75
+
+    def test_live_aborted_is_partial_with_last_completed(self, tmp_path):
+        bench = tmp_path / "driver-bench"
+        bench.mkdir()
+        (bench / "live-20260722T090000.json").write_text(json.dumps(
+            {"cells": [{"fixture": "f", "model": "live", "rep": 0, "scores": {"acc": 0.9}}]}))
+        (bench / "live-20260722T100000.json").write_text(json.dumps(
+            {"aborted": True, "abort_reason": "budget",
+             "cells": [{"fixture": "f", "model": "live", "rep": 0, "scores": {"acc": 0.1}}]}))
+        a = so.load_bench_anchors(bench)
+        assert a["live"]["status"] == "partial"
+        assert a["live"]["last_completed"] is not None
+
+    def test_missing_bench_unavailable(self, tmp_path):
+        a = so.load_bench_anchors(tmp_path / "nope")
+        assert a["stubbed"]["status"] == "unavailable"
+        assert a["live"]["status"] == "unavailable"

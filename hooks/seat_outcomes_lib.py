@@ -543,6 +543,163 @@ def _atomic_write(path, text):
     atomic_write_lib.atomic_write_text(path, text, prefix=".seat-outcomes-", fsync=True)
 
 
+# --- baselines (AC-K2) ---------------------------------------------------------------------
+import math  # noqa: E402
+import statistics  # noqa: E402
+
+DEFAULT_MIN_SAMPLES = 5
+DEFAULT_WINDOW = 30
+
+
+def _nearest_rank_p90(values):
+    return sorted(values)[math.ceil(0.9 * len(values)) - 1]
+
+
+def _percentile_metric(values, min_n):
+    n = len(values)
+    if n < min_n:
+        return {"n": n, "missing": 0, "status": "insufficient_history"}
+    return {"n": n, "missing": 0, "status": "ok",
+            "p50": statistics.median(values), "p90": _nearest_rank_p90(values)}
+
+
+def _row_cost(row):
+    u = row.get("usage") or {}
+    if _num_or_none(u.get("cost_proxy")) is not None:
+        return u["cost_proxy"]
+    b = row.get("budget") or {}
+    return _num_or_none(b.get("spent_usd"))
+
+
+def _window_key(row):
+    return (row.get("recorded_at") or "", row.get("run_id") or "", row.get("attempt_id") or "")
+
+
+def compute_baselines(rows, *, exclude_run_id=None, min_n=DEFAULT_MIN_SAMPLES, window=DEFAULT_WINDOW):
+    """Rolling per-(seat, canonical model) baselines. Closed output schema (design §3.3):
+    exactly four metrics per group; percentile metrics carry {n,missing,status[,p50,p90]},
+    rate metrics {n,missing,status[,numerator,value]}. Null-model rows are counted only."""
+    groups = {}
+    unknown = 0
+    for r in rows:
+        if exclude_run_id is not None and r.get("run_id") == exclude_run_id:
+            continue
+        if r.get("model") is None:
+            unknown += 1
+            continue
+        groups.setdefault((r["seat"], r["model"]), []).append(r)
+
+    out = {"groups": {}, "unknown_model_rows": unknown, "review_findings": None,
+           "bench_anchors": None, "notes": []}
+    for (seat, model) in sorted(groups):
+        grp = sorted(groups[(seat, model)], key=_window_key)[-window:]
+        timings = [r["timing_ms"] for r in grp if _int_or_none(r.get("timing_ms")) is not None]
+        costs = [c for c in (_row_cost(r) for r in grp) if c is not None]
+        n_grp = len(grp)
+        fb_num = sum(1 for r in grp if r.get("fallback") is not None)
+        mm_rows = [r for r in grp if r.get("models_match") is not None]
+        mm_num = sum(1 for r in mm_rows if r.get("models_match") is False)
+
+        def _rate(n, num):
+            if n < min_n:
+                return {"n": n, "missing": 0, "status": "insufficient_history"}
+            return {"n": n, "missing": 0, "status": "ok", "numerator": num, "value": num / n}
+
+        out["groups"][f"{seat}|{model}"] = {"window": window, "metrics": {
+            "timing_ms": {**_percentile_metric(timings, min_n),
+                          "missing": n_grp - len(timings)},
+            "cost": {**_percentile_metric(costs, min_n), "missing": n_grp - len(costs)},
+            "fallback_rate": _rate(n_grp, fb_num),
+            "mismatch_rate": _rate(len(mm_rows), mm_num),
+        }}
+    return out
+
+
+def compute_review_baseline(i2_records, *, workflow, exclude_run_id=None,
+                            min_n=DEFAULT_MIN_SAMPLES, window=DEFAULT_WINDOW):
+    """Baseline of Σ(findings_critical+findings_high) over eligible I2 run-records: same
+    workflow, non-null run_id, BOTH severity fields present, deduped by run_id (last wins),
+    exclude_run_id, latest `window` distinct runs."""
+    by_run = {}
+    for rec in i2_records:
+        if rec.get("workflow") != workflow:
+            continue
+        run = rec.get("run_id")
+        if not isinstance(run, str) or not run or run == exclude_run_id:
+            continue
+        total = 0
+        ok = False
+        for g in rec.get("gates") or []:
+            c, h = g.get("findings_critical"), g.get("findings_high")
+            if isinstance(c, int) and not isinstance(c, bool) and \
+               isinstance(h, int) and not isinstance(h, bool):
+                total += c + h
+                ok = True
+        if ok:
+            by_run[run] = total  # last occurrence wins
+    values = list(by_run.values())[-window:]
+    n = len(values)
+    if n < min_n:
+        return {"n": n, "missing": 0, "status": "insufficient_history"}
+    return {"n": n, "missing": 0, "status": "ok",
+            "p50": statistics.median(values), "p90": _nearest_rank_p90(values)}
+
+
+# --- bench anchors (AC-K2 reference) -------------------------------------------------------
+def _mean_scores(cells):
+    """Per-dimension mean over cells whose scores are finite numbers."""
+    sums, counts = {}, {}
+    for c in cells:
+        for dim, v in (c.get("scores") or {}).items():
+            if _num_or_none(v) is None:
+                continue
+            sums[dim] = sums.get(dim, 0.0) + v
+            counts[dim] = counts.get(dim, 0) + 1
+    return {dim: sums[dim] / counts[dim] for dim in sums}
+
+
+def _load_json(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def load_bench_anchors(bench_dir):
+    """Stubbed (per-model recompute from cells) + live (newest-by-filename-timestamp, aborted →
+    partial + last_completed) driver-bench anchors. Independent statuses; fail-open."""
+    bench_dir = Path(bench_dir)
+    out = {"stubbed": {"status": "unavailable"}, "live": {"status": "unavailable"}}
+
+    stub = _load_json(bench_dir / "stubbed-baseline.json")
+    if isinstance(stub, dict) and isinstance(stub.get("cells"), list):
+        by_model = {}
+        for c in stub["cells"]:
+            by_model.setdefault(c.get("model"), []).append(c)
+        out["stubbed"] = {"status": "ok",
+                          "per_model": {m: _mean_scores(cs) for m, cs in by_model.items()},
+                          "n_cells": len(stub["cells"])}
+
+    live_files = sorted(bench_dir.glob("live-*.json")) if bench_dir.exists() else []
+    if live_files:
+        newest = live_files[-1]  # filename timestamp order (mtime never used)
+        rep = _load_json(newest)
+        if isinstance(rep, dict):
+            if rep.get("aborted"):
+                last = None
+                for f in reversed(live_files):
+                    r = _load_json(f)
+                    if isinstance(r, dict) and not r.get("aborted"):
+                        last = f.name
+                        break
+                out["live"] = {"status": "partial", "report": newest.name,
+                               "abort_reason": rep.get("abort_reason"), "last_completed": last}
+            else:
+                out["live"] = {"status": "ok", "label": "campaign", "report": newest.name,
+                               "dimension_means": _mean_scores(rep.get("cells") or [])}
+    return out
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="seat_outcomes_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
