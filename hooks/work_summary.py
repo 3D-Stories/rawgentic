@@ -30,11 +30,17 @@ import copy
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 1
+
+# #473 (W11): optional additive top-level run_id — the I3 <-> I2 join key linking a run-record
+# to its seat-outcomes sidecar rows. Grammar-bounded (safe component, no spaces/paths) so it
+# never carries free text into committed telemetry. Absent on legacy records (tolerated).
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,120}$")
 
 # The store accumulates one JSON line per workflow run. Env-overridable from v1;
 # default is the project's committed measurements dir (reproducible telemetry).
@@ -242,6 +248,13 @@ def validate_record(record, *, strict=False) -> list:
         if key in record and not (_is_str(record[key]) and record[key].strip()):
             errs.append(f"{key} must be a non-empty string")
 
+    # #473: additive run_id (I3<->I2 join key). Optional; when present it must be a
+    # grammar-bounded safe component (no spaces, no path shapes) so committed telemetry
+    # carries no free text. Legacy records without it are tolerated.
+    if "run_id" in record and not (_is_str(record["run_id"]) and _RUN_ID_RE.match(record["run_id"])):
+        errs.append("run_id must be a grammar-safe component "
+                    "([A-Za-z0-9._-], 1..120) when present")
+
     if "issue" in record:
         issue = record["issue"]
         if not isinstance(issue, dict):
@@ -313,6 +326,21 @@ def validate_record(record, *, strict=False) -> list:
                         f"gates[{i}].status must be one of {sorted(GATE_STATUSES)}")
                 if _is_int(fnd) and _is_int(rsv) and rsv > fnd:
                     errs.append(f"gates[{i}].resolved cannot exceed gates[{i}].findings")
+                # #473: additive per-gate severity split (feeds review_findings_p90). Optional;
+                # BOTH-or-neither, each a non-negative int, and their sum must not exceed
+                # findings. Legacy gates without them are tolerated.
+                crit, high = g.get("findings_critical"), g.get("findings_high")
+                if (crit is None) != (high is None):
+                    errs.append(f"gates[{i}] findings_critical and findings_high are "
+                                f"both-or-neither")
+                else:
+                    for f in ("findings_critical", "findings_high"):
+                        v = g.get(f)
+                        if v is not None and (not _is_int(v) or v < 0):
+                            errs.append(f"gates[{i}].{f} must be a non-negative integer")
+                    if _is_int(crit) and _is_int(high) and _is_int(fnd) and crit + high > fnd:
+                        errs.append(f"gates[{i}] findings_critical+findings_high "
+                                    f"cannot exceed findings")
                 if "reviewer_kind" in g and (not _is_str(g["reviewer_kind"])
                                               or g["reviewer_kind"] not in REVIEWER_KINDS):
                     errs.append(f"gates[{i}].reviewer_kind must be one of "

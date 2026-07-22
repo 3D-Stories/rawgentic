@@ -656,3 +656,57 @@ class TestRunEndCLI:
         res = self._run(["run-end", "--run-id", run_id, "--record-file", str(rec_file),
                          "--project-root", str(tmp_path), "--capture-root", str(cap)], tmp_path)
         assert res.returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# T5 — additive I2 join fields (run_id + per-gate severity counts) in work_summary
+# ---------------------------------------------------------------------------
+
+class TestI2AdditiveFields:
+    def _ws(self):
+        import work_summary  # noqa: PLC0415
+        return work_summary
+
+    def test_run_id_present_valid(self):
+        rec = _valid_record("wf2-473-x", 473)
+        assert self._ws().validate_record(rec, strict=True) == []
+
+    def test_run_id_present_invalid_grammar(self):
+        rec = _valid_record("has space/../x", 473)
+        assert any("run_id" in e for e in self._ws().validate_record(rec, strict=True))
+
+    def test_run_id_absent_legacy_tolerated(self):
+        rec = _valid_record("x", 473)
+        del rec["run_id"]
+        assert self._ws().validate_record(rec, strict=True) == []
+
+    def test_gate_severity_both_or_neither(self):
+        rec = _valid_record("x", 1)
+        rec["gates"][0]["findings_critical"] = 1  # high missing
+        assert any("findings_high" in e or "both" in e.lower()
+                   for e in self._ws().validate_record(rec, strict=True))
+
+    def test_gate_severity_sum_bound(self):
+        rec = _valid_record("x", 1)
+        g = rec["gates"][0]
+        g["findings"] = 2
+        g["findings_critical"], g["findings_high"] = 2, 3  # sum 5 > findings 2
+        assert any("exceed" in e.lower() or "sum" in e.lower()
+                   for e in self._ws().validate_record(rec, strict=True))
+
+    def test_gate_severity_valid(self):
+        rec = _valid_record("x", 1)
+        g = rec["gates"][0]
+        g["findings"], g["resolved"] = 5, 5
+        g["findings_critical"], g["findings_high"] = 2, 3
+        assert self._ws().validate_record(rec, strict=True) == []
+
+    def test_sidecar_record_run_id_join(self, tmp_path):
+        # a sidecar row and an I2 record share the run_id join key
+        run_id = "wf2-473-join"
+        cap = _write_audit(tmp_path, run_id, [_obs(attempt_id="0-a")])
+        store = tmp_path / "seat-outcomes.jsonl"
+        so.harvest(cap, run_id, store, issue=1, now=NOW)
+        row = json.loads(store.read_text().splitlines()[0])
+        rec = _valid_record(run_id, 1)
+        assert row["run_id"] == rec["run_id"]
