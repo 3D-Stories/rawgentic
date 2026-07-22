@@ -565,3 +565,12 @@ class TestHandoffClaim:
     def test_no_pending_not_claimed(self):
         ok, new = dl.handoff_claim(_st([]), 1)
         assert ok is False
+
+
+def test_validate_tolerates_fresh_session_fields():
+    # #569 T2: session_mode/generation/handoff_pending/handoff_claimed are additive optional
+    # top-level fields — a fresh-session state validates unchanged (backward-compatible schema).
+    s = _st([_iss(1, "merged")], mode="fresh-session", generation=2,
+            extra={"handoff_pending": {"generation": 2, "next_issue": 3}, "handoff_claimed": 1})
+    ok, errs = dl.validate_driver_state(s)
+    assert ok is True and errs == []

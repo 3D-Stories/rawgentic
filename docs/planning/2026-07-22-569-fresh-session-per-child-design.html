@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#569 — Fresh Session Per Child (design)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 06:07 MDT</div>
+<h1>#569 — Fresh Session Per Child (design)</h1>
+
+</header>
+<main>
+<h1>#569 — Fresh session per child in the epic auto-run</h1>
+<p>Design r2 · 2026-07-22 · session 3544db7b · issue #569 · plugin 3.88.0 → 3.89.0 WF2 full spine (architectural: process-boundary state handoff; a broken handoff strands a run). r2 delta (folds 6 adversarial findings, gpt-5.6-sol, all verified): [1] fresh-session mode forces the launcher to SKIP <code>--resume</code> (bare <code>-p</code>) — else AC1 fails; [2] handoff returns an explicit disposition {ready|complete|blocked}, never a None sentinel (a blocked-but-incomplete epic must stay OPEN); [3] ACKNOWLEDGED handoff (<code>handoff_pending</code> + generation id, claimed by the successor; takeover-failure detected by the launcher&#x27;s staleness re-fire + escalation) — pre-launch checks alone don&#x27;t detect a post-end launch failure; [4] EVERY terminal child outcome (merged/deferred/ abandoned) ends the session, not just merged; [5] TaskList is session-scoped — a fresh <code>-p</code> session builds its OWN list from <code>.driver-state</code>, progress persisted in state not the list; [6] launcher flock + handoff generation give the exactly-one-successor singleton.</p>
+<h2>§1 Problem</h2>
+<p><code>/rawgentic:epic-run</code> drives WF2 over an epic&#x27;s children sequentially (<code>skills/epic-run/SKILL.md</code> Step 4: &quot;one child at a time, WF2 fresh per child&quot;). But <strong>&quot;fresh WF2&quot; ≠ &quot;fresh session&quot;</strong>: the whole run lives in ONE Claude Code process, driven by the <code>/goal</code> Stop-hook re-injecting into the SAME process. Context accumulates across children — by the Nth child the window carries N children of design→impl→review→CI→merge turns, trimmed only by compaction (which can summarize away detail the current child needs). Cost/attribution is muddied (all children share one session).</p>
+<p>This feature: give the driver a fresh <strong>session</strong> (process) boundary per child. When child N completes (merged+closed, WF2 Step 16 done, epic box ticked), child N+1 starts in a NEW <code>claude</code> process whose context contains NONE of child N&#x27;s turns.</p>
+<h2>§2 Verified facts</h2>
+<ul>
+<li>The continuity substrate ALREADY EXISTS and is durable: <code>claude_docs/.driver-state/&lt;campaign&gt;.json</code></li>
+</ul>
+<p>  (status machine <code>queued→in_progress→{pr_open|merged|deferred|abandoned}</code>, <code>driver_lib.py:41</code>),   <code>driver_lib.next_ready_issue(state, deps_satisfied_by=&quot;merged&quot;)</code> (<code>:232</code> — picks the next child   from state alone), <code>topo_sort_issues</code> (<code>:170</code>), epic checkboxes (one-way state→epic), and the   append-only <code>claude_docs/session_notes/epic-&lt;N&gt;-autorun-log.md</code>. A fresh session rebuilds the   whole run position from these files — no in-context memory needed. (Confirmed by reading   driver_lib.py + epic-run/SKILL.md.)</p>
+<ul>
+<li><strong>Prior art crosses the process boundary already, LIVE:</strong> <code>epic475-resume.sh</code> (the</li>
+</ul>
+<p>  <code>long-run-resume</code> system-crontab launcher) starts <code>claude</code> sessions that re-bind the project,   <code>git fetch</code>, read the goal/decision-log, find the current position, and continue — this very   #569 run is executing under it. The launcher is the proven, durable relaunch vehicle   (<code>.claude/skills/long-run-resume/SKILL.md</code>: system-crontab is the DEFAULT; in-session CronCreate   does NOT survive a quota pause).</p>
+<ul>
+<li><code>epic-run</code> Step 2 ALREADY recommends arming that durable launcher at run start.</li>
+<li>Fresh context requires a FRESH <code>claude -p &quot;&lt;prompt&gt;&quot;</code> (NO <code>--resume</code>): <code>--resume &lt;id&gt;</code> reloads the</li>
+</ul>
+<p>  prior session&#x27;s transcript (full context), defeating AC1. A bare <code>-p</code> run driven by durable state   starts with an empty window. (The launcher currently prefers <code>--resume</code>; #569&#x27;s fresh-session mode   uses the fresh <code>-p</code> variant the launcher already has as its fallback.)</p>
+<h2>§3 Mechanism decision (AC5)</h2>
+<p><strong>The durable system-crontab launcher is the process-boundary vehicle; the driver ends its session after each merged child, and a fresh <code>claude -p</code> (no <code>--resume</code>) session picks up the next child from durable state.</strong> Chosen over the two alternatives:</p>
+<ul>
+<li>*Driver spawns <code>claude -p</code> as an in-session subprocess per child* — rejected: a subprocess parented</li>
+</ul>
+<p>  by the current session dies with it (quota pause / teardown), and it nests processes; the launcher   is external + already the durable survival layer (long-run-resume&#x27;s hard lesson).</p>
+<ul>
+<li>*Keep single-session + rely on compaction* — rejected: that IS the status quo the issue fixes.</li>
+</ul>
+<p>Flow (per child): 1. Session S_n runs child N&#x27;s WF2 to Step 16 and reaches a <strong>terminal</strong> child outcome — <code>merged</code>    (auto-merge mode: verify merge SHA + issue auto-close + tick the epic box) OR <code>deferred</code>/    <code>abandoned</code> (blocker: ERROR comment posted, per AC3). It updates <code>.driver-state</code> (child N → its    terminal status) + the autorun-log. <strong>[4] The session ends on ANY terminal outcome, not only    merged</strong> — a blocked child must not leave its accumulated context to bleed into an independent    ready successor. 2. S_n computes <code>disp = fresh_session_handoff(state, mode)</code> (§4). If <code>disp.outcome == &quot;ready&quot;</code> AND    fresh-session mode is armed AND the boundary is crossable (§5), S_n writes <code>handoff_pending</code>    (generation id + the successor issue) and <strong>ENDS</strong> — it does NOT start the successor. If    <code>disp.outcome == &quot;complete&quot;</code> → S_n does Step 5 wrap-up (close epic). If <code>disp.outcome ==    &quot;blocked&quot;</code> (unmerged children remain but none are ready — all deferred/abandoned/dep-blocked) →    S_n leaves the epic OPEN with an honest summary and ENDS (no relaunch — nothing is runnable;    <strong>[2] never mistaken for &quot;complete&quot;</strong>). 3. The armed durable launcher, seeing <code>session_mode == &quot;fresh-session&quot;</code>, starts a FRESH    <code>claude -p &quot;&lt;prompt&gt;&quot;</code> <strong>with NO <code>--resume</code></strong> (<strong>[1]</strong> — a <code>--resume</code> reloads S_n&#x27;s transcript and    fails AC1) → session S_{n+1}, empty context. Under its flock singleton (<strong>[6]</strong>) S_{n+1}    atomically CLAIMS <code>handoff_pending</code> (matching the generation id; a duplicate/early fire finds it    claimed and exits), then: <code>/rawgentic:switch</code>, <code>git fetch origin</code>, read <code>.driver-state</code> +    autorun-log + epic, <code>next_ready_issue(state)</code> → child N+1, run its WF2 fresh (AC1: none of child    N&#x27;s turns present — verifiable by inspecting S_{n+1}&#x27;s transcript at child start). 4. Repeat until <code>fresh_session_handoff</code> reports <code>complete</code> → Step 5 wrap-up.</p>
+<h2>§4 The fresh-session handoff + arming (new <code>driver_lib</code> surface)</h2>
+<p>New pure helper <code>driver_lib.fresh_session_handoff(state, *, mode) -&gt; dict</code>:</p>
+<ul>
+<li><code>mode != &quot;fresh-session&quot;</code> → <code>{&quot;outcome&quot;: &quot;single_session&quot;}</code> (no boundary; the driver loops</li>
+</ul>
+<p>  in-session exactly as today: <strong>byte-identical default, zero behavior change unless opted in</strong>).</p>
+<ul>
+<li>Else returns an explicit <strong>[2] disposition</strong> (never a bare None):</li>
+<li><code>{&quot;outcome&quot;: &quot;ready&quot;, &quot;next_issue&quot;: n, &quot;generation&quot;: &lt;int&gt;, &quot;resume_prompt&quot;: &lt;str&gt;, &quot;campaign&quot;: &lt;str&gt;}</code></li>
+</ul>
+<p>    when <code>next_ready_issue(state)</code> yields a runnable child. <code>generation</code> is a monotonic counter     persisted in <code>.driver-state</code> (incremented per handoff — the <strong>[6]</strong> claim token). <code>resume_prompt</code>     is the canonical idempotent, state-re-deriving prompt (per SR1: used for the interactive     hand-back + the direct-spawn path; the crontab launcher&#x27;s own prompt conforms to it).</p>
+<ul>
+<li><code>{&quot;outcome&quot;: &quot;complete&quot;}</code> ONLY when EVERY child is <code>merged</code> (or closed) — the sole</li>
+</ul>
+<p>    epic-close trigger.</p>
+<ul>
+<li><code>{&quot;outcome&quot;: &quot;blocked&quot;}</code> when unmerged children remain but none is ready (all</li>
+</ul>
+<p>    <code>deferred</code>/<code>abandoned</code>/dependency-blocked) — the epic stays OPEN, honest summary, no relaunch.     <strong>[2] <code>complete</code> and <code>blocked</code> are distinct; a blocked-incomplete epic is never closed.</strong>   <code>outcome</code> is computed from the status counts (<code>complete</code> = no non-merged/closed children;   <code>ready</code> = a <code>next_ready_issue</code> exists; else <code>blocked</code>).</p>
+<p><strong>Prompt vs launcher (self-review SR1).</strong> Under the chosen crontab-launcher mechanism (§3) the launcher fires its OWN static generic prompt, which ALREADY re-derives the position from durable state (&quot;find the current position … else the first child whose deps are all merged and not yet merged/closed&quot; — exactly the epic475-resume.sh prompt this run uses). So on the crontab path the driver&#x27;s job is only to <strong>write the merged state + END</strong>; the launcher + <code>next_ready_issue</code> drive the next session — the handoff&#x27;s <code>resume_prompt</code> is NOT injected there. <code>resume_prompt</code> is the CANONICAL idempotent prompt for (a) the interactive hand-back (printed for the operator) and (b) a direct <code>claude -p</code> spawn where no static launcher prompt exists; the crontab launcher&#x27;s own prompt is contract-required to CONFORM to it (re-bind, fetch, <code>next_ready_issue</code>, never re-do a merged child, restate the grant). This removes the double-source-of-truth: state is authoritative; the prompt is a conforming driver, not a second position record.</p>
+<p>Arming (<code>mode</code>): fresh-session mode is opt-in per run, set at epic-run Step 2 alongside the merge-policy decision, and recorded in <code>.driver-state</code> as <code>session_mode: &quot;fresh-session&quot; | &quot;single-session&quot;</code> (absent → <code>single-session</code>, the safe default). The durable launcher must be armed (long-run-resume) for fresh-session mode; Step 2 already recommends it.</p>
+<h2>§5 Fail-open (AC6) — the load-bearing safety rule</h2>
+<p><strong>Pre-launch check.</strong> If fresh-session mode is armed but the boundary cannot be crossed — no durable launcher detected (no crontab entry / handoff-path not writable / launch mechanism absent) — the driver DEGRADES to the current single-session loop (continue to child N+1 in the SAME session) and emits ONE visible marker <code>### epic-run: fresh-session unavailable — single-session fallback (&lt;reason&gt;)</code>. Worst case = exactly today&#x27;s behavior. <code>driver_lib.fresh_session_available(state) -&gt; (bool, reason)</code> is pure over injected probes (launcher-armed flag + handoff-path writability), tested.</p>
+<p><strong>[3] Post-end takeover-failure detection (the real gap the pre-launch check misses).</strong> After S_n ends, the launch can still fail (cron removed mid-run, CLI error, timeout) with no in-session component watching. The acknowledged-handoff design closes this: S_n writes <code>handoff_pending = {generation, next_issue, written_ts}</code> to <code>.driver-state</code>; the successor S_{n+1} ATOMICALLY CLAIMS it (sets <code>handoff_claimed = generation</code> under the launcher flock) before running. Takeover failure is then observable durable state: a <code>handoff_pending</code> whose <code>generation</code> is still unclaimed on a later launcher fire ⇒ the prior takeover failed. The launcher&#x27;s existing <strong>staleness re-fire</strong> (every ~20 min on no-transcript-append/no-commit — long-run-resume) IS the retry: it re-launches, which re-claims the pending handoff. Escalation: after <code>HANDOFF_RETRY_CAP</code> (e.g. 3) unclaimed re-fires for the same generation, the launcher notifies the owner (notify-owner) and stops re-firing that generation — a stranded run surfaces instead of silently dying. A quota pause is NOT a failure (expected; the next post-reset fire claims the still-valid pending handoff). This is the long-run-resume durable-layer reliability boundary, inherited — #569 adds the claim/generation + escalation on top. <code>driver_lib</code> exposes <code>handoff_claim(state, generation) -&gt; (ok, state)</code> (pure; idempotent; a second claim of a claimed generation returns <code>ok=False</code>) so the singleton is tested.</p>
+<h2>§6 Continuity invariants preserved across the boundary (AC2/AC3/AC4)</h2>
+<ul>
+<li><strong>AC2:</strong> queue, topo order, merge-policy, per-child running record, and the decision log are read</li>
+</ul>
+<p>  from <code>.driver-state</code> + <code>epic-&lt;N&gt;-autorun-log.md</code> by the new session — never from in-context memory.   <code>validate_driver_state</code> (<code>driver_lib.py:272</code>) gate-checks the state a fresh session loads.</p>
+<ul>
+<li><strong>AC3:</strong> a blocked child still gets its ERROR blocker comment; its state → <code>deferred</code>/<code>abandoned</code>;</li>
+</ul>
+<p>  the fresh session&#x27;s <code>next_ready_issue</code> skips it and continues; the epic stays OPEN with an honest   summary; the run never hangs (the boundary does not change blocker semantics — the next session   just reads <code>deferred</code> and moves on).</p>
+<ul>
+<li><strong>AC4 [5 correction]:</strong> the harness Task tools are <strong>session-scoped</strong> — a fresh <code>-p</code> process does</li>
+</ul>
+<p>  NOT see a prior session&#x27;s TaskList (unverified-and-likely-false to assume otherwise). So the   authoritative run record is <code>.driver-state</code> (statuses) + the autorun-log, NOT the task list. Each   fresh session BUILDS ITS OWN task list from <code>.driver-state</code> at Step 3b (marking already-<code>merged</code>   children completed from state, the active child in_progress) — the &quot;check TaskList first&quot; rule   still prevents a DUPLICATE *within* a session; across the boundary each session&#x27;s list is a   fresh render of the same durable state. No cross-session TaskList visibility is claimed or   required. (Doc-note this in SKILL.md Step 3b; no reliance on carrying a list across the boundary.)</p>
+<ul>
+<li><strong>Driver still cannot weaken a WF2 gate:</strong> each child runs WF2 FRESH to Step 16 in its own session;</li>
+</ul>
+<p>  the driver never reaches into a WF2 step (unchanged contract).</p>
+<h2>§7 platform_apis feasibility (#226)</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: <code>claude -p &quot;&lt;prompt&gt;&quot;</code> fresh headless session launch (no --resume) + system-crontab relaunch</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — <code>epic475-resume.sh:71-80</code> (the running launcher:   <code>timeout &quot;$SESSION_WALL&quot; &quot;$CLAUDE_BIN&quot; --print --permission-mode bypassPermissions --model ... &quot;$PROMPT&quot;</code>,   with the <code>--resume</code>-fails→fresh-<code>-p</code> fallback at :76-80); this #569 run executes under it live 2026-07-22.   failure: fail-loud   surface: the driver&#x27;s §5 fail-open marker + the launcher log line per relaunch decision.</p>
+<p><strong>[1] Launcher contract change (IN this PR as CONTRACT; the .sh wiring is a deferred follow-up).</strong> The evidenced launcher tries <code>--resume</code> FIRST and only reaches the fresh <code>-p</code> on resume-failure — so today it would reload S_n&#x27;s context and fail AC1. The fresh-session contract (documented in <code>docs/multi-issue-driver.md</code> + the <code>long-run-resume</code> skill): <strong>when <code>.driver-state.session_mode == &quot;fresh-session&quot;</code>, the launcher MUST skip the <code>--resume</code> attempt and invoke <code>claude -p</code> with NO session id.</strong> The actual edit to <code>epic475-resume.sh</code> (and the <code>long-run-resume</code> template) lives OUTSIDE this repo — it is a deferred owner-attended follow-up (exactly the #568-Phase-1 precedent where the launcher resume-glue shipped as a documented follow-up). This PR ships the contract + the driver_lib support + the docs; the single-session default path is unaffected, so nothing regresses before the launcher is updated. Until then, fresh-session mode&#x27;s pre-launch check (§5) sees the unmodified launcher and DEGRADES to single-session with the visible marker — safe.</p>
+<h2>§8 Design self-note / risks</h2>
+<ul>
+<li>Risk (issue): a broken handoff strands a run mid-epic. Mitigated by AC6 fail-open to single-session</li>
+</ul>
+<p>  + AC2/AC3 continuity read from validated durable state + tests.</p>
+<ul>
+<li>The fresh-session prompt is the ONLY thing crossing the boundary besides the durable files — it</li>
+</ul>
+<p>  must be idempotent + re-derive state (never carry a child-specific in-context assumption).</p>
+<ul>
+<li>Attention: <code>next_ready_issue</code> uses <code>deps_satisfied_by=&quot;merged&quot;</code> — a fresh session must <code>git fetch</code></li>
+</ul>
+<p>  and confirm the predecessor actually merged on origin/main before treating a dep as satisfied   (the state says merged; the new session verifies against main — the existing between-children   merge-verification rule, SKILL.md:101-104, now spans the boundary).</p>
+<h2>§9 Acceptance criteria (this PR)</h2>
+<p>1. Fresh-session mode: after a merged child, the driver writes the handoff + ends; a fresh <code>-p</code>    session resumes the next child with none of the prior child&#x27;s turns (documented + the handoff    helper unit-tested; the live cross-session transcript check is the owner-attended cell). 2. Continuity from durable state only (helper reads state; <code>validate_driver_state</code> gate). 3. Blocker protocol preserved across the boundary (deferred/abandoned child skipped by next session). 4. Task list refreshed not duplicated (existing rule; doc note for the cross-session path). 5. Mechanism documented in <code>skills/epic-run/SKILL.md</code> + <code>docs/multi-issue-driver.md</code>; driver still    structurally cannot weaken a WF2 gate. 6. Fail-open: unavailable launch mechanism → single-session fallback + visible marker; never aborts. 7. <code>session_mode</code> absent/<code>single-session</code> → byte-identical to today (opt-in; zero default change). 8. Version ×4 + no phase_executor change; README changelog; no WF2-spine change → no diagram REV    (epic-run is the driver, not a WF2 station).</p>
+<h2>§10 Task sketch (Step 5 refines)</h2>
+<p>T1 <code>driver_lib.fresh_session_handoff(state, *, mode)</code> → disposition {single_session|ready|complete|    blocked} + <code>fresh_session_available(state, *, probes)</code> + <code>handoff_claim(state, generation)</code> (all    pure, red-first) + tests (every disposition; complete≠blocked; claim idempotency) · T2 <code>.driver-state</code> fields <code>session_mode</code> + <code>handoff_pending{generation,next_issue,written_ts}</code> +    <code>handoff_claimed</code> + <code>generation</code> counter; <code>validate_driver_state</code> tolerance (schema stays    backward-compatible — absent fields = single-session) + tests · T3 epic-run/SKILL.md Step 2 (arm the launcher + mode choice) + Step 4 (terminal-outcome boundary,    acknowledged handoff, per-session task list, fail-open) prose · T4 docs/multi-issue-driver.md (cross-session lifecycle + the [1] launcher-skip-resume contract +    [3] takeover-failure/escalation + fail-open) · T5 versions ×4 + README changelog + design doc md+html.</p>
+<p>Deferred (#138): (a) the live cross-session transcript check (AC1 &quot;none of prior child&#x27;s turns&quot;) — owner-attended, needs a real ≥2-child epic run under the updated launcher; (b) the actual <code>epic475-resume.sh</code> / <code>long-run-resume</code> template edit to skip <code>--resume</code> in fresh-session mode (outside this repo — #568-Phase-1 launcher-glue precedent). Local proxy for both: the pure handoff/claim/available helpers + their unit tests + the running epic475 launcher as the fresh-<code>-p</code> existence proof. Target check: run a 2-child epic with <code>session_mode=fresh-session</code> after the launcher edit; inspect S_2&#x27;s transcript at child start.</p>
+<h2>§11 Disposition log (Step-4 adversarial, gpt-5.6-sol — all ADOPTED into r2)</h2>
+<ul>
+<li>F1 [H] launcher <code>--resume</code>-first defeats AC1 → ADOPTED §7: contract forces bare <code>-p</code> in</li>
+</ul>
+<p>  fresh-session mode; .sh wiring = deferred follow-up (#568-P1 precedent).</p>
+<ul>
+<li>F2 [H] <code>next_ready_issue</code> None ambiguous → ADOPTED §4: explicit {ready|complete|blocked}; blocked</li>
+</ul>
+<p>  never closes the epic.</p>
+<ul>
+<li>F3 [H] fail-open only pre-launch → ADOPTED §5: acknowledged handoff (generation + claim) +</li>
+</ul>
+<p>  staleness re-fire retry + escalation after HANDOFF_RETRY_CAP.</p>
+<ul>
+<li>F4 [H] boundary only after merged → ADOPTED §3: every terminal outcome (merged/deferred/abandoned)</li>
+</ul>
+<p>  ends the session.</p>
+<ul>
+<li>F5 [M] TaskList session-scoped → ADOPTED §6/AC4: each session builds its own list from</li>
+</ul>
+<p>  <code>.driver-state</code>; no cross-session TaskList visibility claimed.</p>
+<ul>
+<li>F6 [M] no singleton proof → ADOPTED §3/§5: launcher flock + handoff generation claim.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-22 06:07 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

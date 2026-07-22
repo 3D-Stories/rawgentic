@@ -306,3 +306,54 @@ only the outcome and updates its own queue — it owns queue/deferral/anchor/pol
 and **never** a WF2 step, so it is structurally impossible for the driver to
 **weaken** WF2. WF2's per-issue termination (`<termination-rule>`) is a
 precondition the driver relies on, not something it overrides.
+
+## Fresh session per child (#569, opt-in)
+
+By default the whole epic run lives in ONE Claude process (the `/goal` Stop-hook
+re-injects into the same session); "fresh WF2 per child" is NOT a fresh *session*, so
+context accumulates across children. **Fresh-session mode** (`.driver-state`
+`session_mode: "fresh-session"`, opt-in at epic-run Step 2; absent → `single-session`,
+byte-identical to before) gives each child its own process, with continuity carried by
+durable state alone.
+
+**The boundary.** After a child reaches ANY terminal outcome — `merged` or a blocker's
+`deferred`/`abandoned` — the session ENDS (a blocked child's context must not bleed into an
+independent successor). The driver calls `driver_lib.fresh_session_handoff(state, mode=...)`,
+which returns an explicit disposition — never a `None` sentinel:
+
+- `ready` → write `handoff_pending` (`generation` id + `next_issue`) to `.driver-state` and end.
+- `complete` (ONLY when every child is `merged`) → run the wrap-up (close the epic).
+- `blocked` (unmerged children remain but none is ready — all deferred/abandoned/dep-blocked) →
+  leave the epic OPEN with an honest summary and end. **`blocked` is never conflated with
+  `complete`** — a blocked-incomplete epic is never closed.
+
+**The launcher contract (`--resume` must be skipped).** The durable `long-run-resume`
+launcher is the process-boundary vehicle. Its default relaunch tries `--resume <id>` first,
+which reloads the prior session's transcript — that would defeat the whole point. So: **when
+`.driver-state.session_mode == "fresh-session"`, the launcher MUST skip the `--resume` attempt
+and invoke `claude -p` with NO session id**, giving the successor an empty context. (The
+`epic475-resume.sh` / `long-run-resume` template edit that implements this lives outside the
+plugin repo — a deferred owner-attended follow-up, mirroring the #568 Phase-1 launcher glue;
+until it lands, fresh-session mode's pre-launch check degrades to single-session, so nothing
+regresses.)
+
+**Exactly-one successor + takeover-failure detection.** The successor session, under the
+launcher's flock singleton, atomically CLAIMS the pending handoff via
+`driver_lib.handoff_claim(state, generation)` (idempotent — a duplicate/early launcher fire
+finds it claimed and exits). A `handoff_pending` whose generation stays unclaimed on a later
+launcher fire means the prior takeover failed; the launcher's existing staleness re-fire is the
+retry, and after a bounded number of unclaimed re-fires it notifies the owner and stops (a
+stranded run surfaces instead of dying silently). A quota pause is not a failure — the next
+post-reset fire claims the still-valid handoff.
+
+**Fail-open (never abort).** `driver_lib.fresh_session_available(state, launcher_armed=,
+handoff_writable=)` is the pre-launch check; false → the driver degrades to the single-session
+loop with the visible marker `### epic-run: fresh-session unavailable — single-session
+fallback (<reason>)`. Worst case equals today's behavior.
+
+**Continuity + gates unchanged.** The queue, topo order, merge policy, per-child record, and
+decision log are read from `.driver-state` + `epic-<N>-autorun-log.md` by each new session, not
+from in-context memory (`validate_driver_state` gate-checks the loaded state). The harness Task
+tools are session-scoped, so each session builds its OWN Step-3b task list from `.driver-state`
+(no list crosses the boundary). Each child still runs WF2 FRESH to Step 16 with every gate
+intact — the driver still never reaches into a WF2 step.

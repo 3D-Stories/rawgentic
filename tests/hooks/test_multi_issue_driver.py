@@ -124,3 +124,13 @@ def test_doc_defines_the_ledger():
 def test_doc_warns_against_parsing_epic_body():
     text = _doc()
     assert "Never run `parse_depends_on` on the epic body" in text
+
+
+def test_doc_documents_fresh_session_per_child():
+    # #569: the driver doc carries the fresh-session cross-session lifecycle contract.
+    text = _doc() if "_doc" in dir() else __import__("pathlib").Path(
+        __file__).resolve().parents[2].joinpath("docs/multi-issue-driver.md").read_text()
+    assert "Fresh session per child" in text
+    assert "session_mode" in text and "fresh-session" in text
+    assert "skip the `--resume` attempt" in text or "MUST skip the `--resume`" in text
+    assert "handoff_claim" in text and "fail-open" in text.lower()

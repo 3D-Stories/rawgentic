@@ -77,3 +77,21 @@ class TestEpicRunOwnerNotification:
         assert "skipped (notify-owner unavailable)" in s, (
             "notify-at-block must fail open with a visible skip marker (#526)")
         assert "never blocks the run" in s
+
+
+class TestFreshSessionPerChild:
+    """Drift guards for #569: fresh-session-per-child process boundary."""
+
+    def test_step2_offers_fresh_session_mode(self):
+        s = _section(_text(), "## Step 2:", "## Step 3:")
+        assert "fresh-session mode" in s, "Step 2 must offer the #569 session-mode choice"
+        assert "default single-session" in s or "single-session" in s, (
+            "the default must be the byte-identical single-session mode")
+
+    def test_step4_ends_session_on_any_terminal_outcome(self):
+        s = _section(_text(), "## Step 4:", "## Step 5:")
+        assert "Fresh-session boundary" in s
+        assert "with NO `--resume`" in s, (
+            "the fresh successor must launch without --resume (else AC1 fails, #569)")
+        assert "fail-open" in s.lower() and "single-session fallback" in s, (
+            "the boundary must fail-open to single-session (#569 AC6)")

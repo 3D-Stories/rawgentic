@@ -45,6 +45,15 @@ the same stall class (owner-away review verdicts, unattended quota pauses; measu
 basis: epic #509 lever 1, one 56.3-min owner-away gap, ~56 min per comparable attended
 run). Declining is fine and never blocks the run.
 
+**Session-mode choice (#569 — opt-in, default single-session).** Also ask whether to run
+in **fresh-session mode**: each child runs in its OWN Claude process (fresh context, none
+of the prior child's turns) instead of accumulating the whole epic in one session. It
+requires the durable launcher armed (above) and writes `session_mode: "fresh-session"` to
+`.driver-state`. Default (absent / `single-session`) is byte-identical to today — the run
+loops child-by-child in one session. Fresh-session mode hands off across a process boundary
+per Step 4; if the boundary can't be crossed it degrades to single-session (fail-open). The
+contract lives in `docs/multi-issue-driver.md`.
+
 ## Step 3: Draft the /goal condition
 
 Hand the user a block they can paste into `/goal` (you cannot invoke /goal for them —
@@ -102,6 +111,21 @@ put a list up by hand).
   auto-closed, `git fetch origin`, branch the next child from the new main. Use the
   `merge-watch` skill's lane doctrine for CI triage (hard vs advisory lanes; OAuth
   false-red signature).
+- **Fresh-session boundary (#569 — only when `session_mode == "fresh-session"`).** After a
+  child reaches ANY terminal outcome — `merged` OR a blocker's `deferred`/`abandoned` — the
+  session ENDS rather than looping in-process (a blocked child's context must not bleed into
+  an independent successor). Call `driver_lib.fresh_session_handoff(state, mode=...)`: on
+  `ready` write `handoff_pending` (generation id + next child) and end; the durable launcher
+  starts a FRESH `claude -p` **with NO `--resume`** for the successor, which atomically claims
+  the handoff (exactly-one-successor) and rebuilds position from `.driver-state` — never from
+  in-context memory. On `complete` (every child merged) do Step 5; on `blocked` (unmerged
+  children remain but none ready) leave the epic OPEN with an honest summary and end — never
+  conflate `blocked` with `complete`. **Fail-open:** if `driver_lib.fresh_session_available`
+  is false (no launcher / handoff path unwritable), degrade to the single-session loop with
+  the visible marker `### epic-run: fresh-session unavailable — single-session fallback
+  (<reason>)`; the run never aborts for lack of the boundary. Each fresh session builds its
+  OWN Step-3b task list from `.driver-state` (the harness Task tools are session-scoped — no
+  list carries across the boundary). Full contract: `docs/multi-issue-driver.md`.
 - Tick the epic checkbox after each merged child (state flows one-way: run → epic;
   never un-tick a human's edit).
 - Notify the owner at every point the run blocks on human input — a review verdict
