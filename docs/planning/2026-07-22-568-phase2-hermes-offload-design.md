@@ -211,10 +211,15 @@ versioned-fixture parsing). Hop: `ssh charlie` (rocky00717@10.0.17.200) → `ssh
 - **Cross-model invariant interaction:** `cross_model_author` forbidden-combination logic keys on
   engine/provider; `offload` is not an enforced role (`policy.enforced_roles` stays
   `["review","build"]`) — no floor, no role. Enforcement untouched.
-- **Output trust boundary:** the adapter returns Hermes output wrapped in an UNTRUSTED_DATA
-  envelope (same advisory framing as `render_resume_prompt`); orchestrator prose rule: offload
-  results never alter routing, approvals, or gates without independent verification; load-bearing
-  claims get cited or re-verified.
+- **Output trust boundary (Step-11 Codex7 correction).** The adapter returns Hermes output as the
+  Observation `parsed_payload`, exactly like every other seat's model output — there is no
+  special "envelope" in the adapter (the earlier draft overclaimed one). Because the seat has NO
+  operational caller in Phase-2 (F6 — offload dispatch isn't wired into any WF2 phase yet), there
+  is nothing consuming that output to inject into. The untrusted-data treatment is an ORCHESTRATOR
+  prose rule that lands at the Phase-3 wiring point: offload results never alter routing,
+  approvals, or gates without independent verification; load-bearing claims get cited or
+  re-verified. A structured untrusted-data wrapper + an injection-resistance test belong with that
+  wiring (Phase-3), not with an adapter whose output no one reads yet.
 
 ## §5 Strand (ii) — numbered-option asks
 
@@ -448,6 +453,36 @@ concurrent-poller double-resume window (F10) · session affinity w/ explicit ret
 SSE event streaming · idempotent submission (if API grows a key) · adaptive pool sizing from
 measured gateway behavior · TLS termination · usage/cost enrichment when the gateway reports it ·
 WebSocket interactive features · texting Darwin to self-reconfigure.
+
+## §14b Step-11 review remediation (2026-07-22, session 3544db7b)
+
+Cross-model Step-11 (Codex gpt-5.6-sol diff review) + two Opus reviewers (mechanical, architecture)
+triangulated on the SAME real defects — all fixed in-branch (all latent: seat activation-gated +
+unwired, so severity capped at Medium; none Critical, no owner block). Reviewers confirmed CLEAN:
+no key leakage, no false-success classification, both policy invariants structurally guaranteed,
+Phase-1 backward-compat intact, wiring complete. Fixes:
+- **Activation gate → allowlist** (Codex/Opus): `backend_is_sandboxed` now allows ONLY
+  `VERIFIED_SANDBOX_BACKENDS = {docker, podman, gvisor}`; every unknown/`local`/`host`/misspelled
+  value refuses (was a 2-item denylist that opened on any unrecognized backend).
+- **/health identity validated** (Codex6): preflight now requires `status=="ok"` AND
+  `platform=="hermes-agent"` before the constant `actual_model` attestation.
+- **Failure taxonomy → availability** (Opus F1): transient submit (429/5xx), 404/transient poll,
+  and terminal `failed`/`cancelled` all map to AVAILABILITY so `run_seat` falls back to the
+  analysis lane (a failed offload degrades, not breaches); only a definite 4xx submit is a breach.
+- **No uncaught crashes** (Opus F3): `_coerce_usage` guards every int coercion (bad usage →
+  USAGE_UNAVAILABLE); `run()` catches `(ValueError, TypeError, RecursionError)` → availability;
+  `_as_dict` catches `RecursionError` on a hostile nested body.
+- **Env loader wired** (Codex1): `run()` loads the 0600 `hermes.env` when env is unset.
+- **Bounded preflight** (Opus F4): preflight/submit use `_PREFLIGHT_TIMEOUT_S=30`, only the poll
+  loop gets the full seat budget.
+- **Bridge** (Codex5/Opus-mech F1/Codex8): `ask_owner` rejects `option_required` without options;
+  `interpret_reply` uses `isdecimal()` + try/except (a superscript "²" degrades, never crashes);
+  `maybe_send_clarification` marks sent ONLY on a 2xx (a failed send stays retryable).
+- **Live cell** (Codex3): `test_live_offload_dispatch` is RUN_LIVE-guarded (was an unconditional
+  skip that could never run).
+- **UNTRUSTED_DATA envelope** (Codex7): corrected — no adapter envelope; orchestrator prose rule at
+  the Phase-3 wiring point (§4 above).
++16 remediation tests. Suite delta re-measured at Step-12 full re-run.
 
 ## §15 Decision log
 

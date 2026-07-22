@@ -708,3 +708,45 @@ class TestClarificationOnce:
         assert hb.maybe_send_clarification(rec, "matched", state_dir=str(tmp_path),
                                            notify=lambda m: sent.append(m)) is False
         assert not sent
+
+
+# ---- #568 Step-11 review remediation ----
+def test_option_required_without_options_rejected(tmp_path):
+    sent = []
+    with pytest.raises(ValueError):
+        ask_owner("q", "r1", state_dir=str(tmp_path),
+                  notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 1,
+                  response_mode="option_required")  # no options
+    assert not sent
+
+
+def test_interpret_option_required_no_options_is_unmatched():
+    assert hb.interpret_reply("[RG-ABCDEF012345] 1", token="[RG-ABCDEF012345]",
+                              options=None, response_mode="option_required") == ("unmatched_option", None)
+
+
+class TestUnicodeDigitReply:
+    T = "[RG-ABCDEF012345]"
+    OPTS = [{"id": 1, "label": "yes"}, {"id": 2, "label": "no"}]
+
+    def test_superscript_digit_never_crashes(self):
+        # "²" is isdigit() True but int()-unparseable — must degrade to a safe non-selected
+        # disposition, NEVER raise (untrusted owner text). isdecimal() excludes it → not a digit
+        # match → under option_required it lands unmatched_option (also safe).
+        interp, oid = hb.interpret_reply(f"² {self.T}", token=self.T, options=self.OPTS,
+                                         response_mode="option_required")
+        assert interp in ("ambiguous", "unmatched_option") and oid is None
+        # option_or_text: same char is just free text, still no crash
+        interp2, _ = hb.interpret_reply(f"² {self.T}", token=self.T, options=self.OPTS,
+                                        response_mode="option_or_text")
+        assert interp2 in ("ambiguous", "free_text")
+
+
+def test_clarification_not_marked_on_send_failure(tmp_path):
+    rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+    # first send FAILS (000) → not marked → a later 2xx send still goes out
+    n1 = hb.maybe_send_clarification(rec, "unmatched_option", state_dir=str(tmp_path),
+                                     notify=lambda m: "000")
+    n2 = hb.maybe_send_clarification(rec, "unmatched_option", state_dir=str(tmp_path),
+                                     notify=lambda m: "200")
+    assert n1 is False and n2 is True

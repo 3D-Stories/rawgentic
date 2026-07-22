@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 03:24 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 03:49 MDT</div>
 <h1>#568 Phase-2 — Hermes Offload Seat Design</h1>
 
 </header>
@@ -139,9 +139,9 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </ul>
 <p>  engine/provider; <code>offload</code> is not an enforced role (<code>policy.enforced_roles</code> stays   <code>[&quot;review&quot;,&quot;build&quot;]</code>) — no floor, no role. Enforcement untouched.</p>
 <ul>
-<li><strong>Output trust boundary:</strong> the adapter returns Hermes output wrapped in an UNTRUSTED_DATA</li>
+<li><strong>Output trust boundary (Step-11 Codex7 correction).</strong> The adapter returns Hermes output as the</li>
 </ul>
-<p>  envelope (same advisory framing as <code>render_resume_prompt</code>); orchestrator prose rule: offload   results never alter routing, approvals, or gates without independent verification; load-bearing   claims get cited or re-verified.</p>
+<p>  Observation <code>parsed_payload</code>, exactly like every other seat&#x27;s model output — there is no   special &quot;envelope&quot; in the adapter (the earlier draft overclaimed one). Because the seat has NO   operational caller in Phase-2 (F6 — offload dispatch isn&#x27;t wired into any WF2 phase yet), there   is nothing consuming that output to inject into. The untrusted-data treatment is an ORCHESTRATOR   prose rule that lands at the Phase-3 wiring point: offload results never alter routing,   approvals, or gates without independent verification; load-bearing claims get cited or   re-verified. A structured untrusted-data wrapper + an injection-resistance test belong with that   wiring (Phase-3), not with an adapter whose output no one reads yet.</p>
 <h2>§5 Strand (ii) — numbered-option asks</h2>
 <p>Extend <code>hooks/hermes_bridge.py</code> (backward-compatible; Phase-1 invariants untouched):</p>
 <ul>
@@ -274,6 +274,41 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>LAN plain-HTTP capture (accepted, named §7) · darwin version gap (runbook step 1) · orphaned remote run on lost /stop (run_id + stop-ack recorded; no auto-resubmit) · injection via offload output (§4 envelope + no-routing-influence rule) · fallback cost distortion (fallback keeps the original dispatch budget; audit names actual engine) · option-label collisions (fail-closed at creation) · gateway throttling (typed transient availability, bounded retry) · gateway model-backend auth staleness (401s to chatgpt.com/backend-api/codex observed in the pre-restart journal — a submitted run may fail at the MODEL layer even with a healthy API server; surfaces as a failed run status, typed provider failure; owner re-auth is §10-7&#x27;s live cell) · classifier no-credential-transfer constraint on autonomous runs (D-P2-5).</p>
 <h2>§14 Phase-3+ (enumerated, not committed)</h2>
 <p>Operational wiring of the offload seat into WF2 phases (a caller that actually dispatches research subtasks — the F6 deferral) · gateway sandboxed backend (<code>terminal.backend: docker</code>) so the activation gate opens · interprocess per-token CAS claim to close the Phase-1 concurrent-poller double-resume window (F10) · session affinity w/ explicit retention rules · SSE event streaming · idempotent submission (if API grows a key) · adaptive pool sizing from measured gateway behavior · TLS termination · usage/cost enrichment when the gateway reports it · WebSocket interactive features · texting Darwin to self-reconfigure.</p>
+<h2>§14b Step-11 review remediation (2026-07-22, session 3544db7b)</h2>
+<p>Cross-model Step-11 (Codex gpt-5.6-sol diff review) + two Opus reviewers (mechanical, architecture) triangulated on the SAME real defects — all fixed in-branch (all latent: seat activation-gated + unwired, so severity capped at Medium; none Critical, no owner block). Reviewers confirmed CLEAN: no key leakage, no false-success classification, both policy invariants structurally guaranteed, Phase-1 backward-compat intact, wiring complete. Fixes:</p>
+<ul>
+<li><strong>Activation gate → allowlist</strong> (Codex/Opus): <code>backend_is_sandboxed</code> now allows ONLY</li>
+</ul>
+<p>  <code>VERIFIED_SANDBOX_BACKENDS = {docker, podman, gvisor}</code>; every unknown/<code>local</code>/<code>host</code>/misspelled   value refuses (was a 2-item denylist that opened on any unrecognized backend).</p>
+<ul>
+<li><strong>/health identity validated</strong> (Codex6): preflight now requires <code>status==&quot;ok&quot;</code> AND</li>
+</ul>
+<p>  <code>platform==&quot;hermes-agent&quot;</code> before the constant <code>actual_model</code> attestation.</p>
+<ul>
+<li><strong>Failure taxonomy → availability</strong> (Opus F1): transient submit (429/5xx), 404/transient poll,</li>
+</ul>
+<p>  and terminal <code>failed</code>/<code>cancelled</code> all map to AVAILABILITY so <code>run_seat</code> falls back to the   analysis lane (a failed offload degrades, not breaches); only a definite 4xx submit is a breach.</p>
+<ul>
+<li><strong>No uncaught crashes</strong> (Opus F3): <code>_coerce_usage</code> guards every int coercion (bad usage →</li>
+</ul>
+<p>  USAGE_UNAVAILABLE); <code>run()</code> catches <code>(ValueError, TypeError, RecursionError)</code> → availability;   <code>_as_dict</code> catches <code>RecursionError</code> on a hostile nested body.</p>
+<ul>
+<li><strong>Env loader wired</strong> (Codex1): <code>run()</code> loads the 0600 <code>hermes.env</code> when env is unset.</li>
+<li><strong>Bounded preflight</strong> (Opus F4): preflight/submit use <code>_PREFLIGHT_TIMEOUT_S=30</code>, only the poll</li>
+</ul>
+<p>  loop gets the full seat budget.</p>
+<ul>
+<li><strong>Bridge</strong> (Codex5/Opus-mech F1/Codex8): <code>ask_owner</code> rejects <code>option_required</code> without options;</li>
+</ul>
+<p>  <code>interpret_reply</code> uses <code>isdecimal()</code> + try/except (a superscript &quot;²&quot; degrades, never crashes);   <code>maybe_send_clarification</code> marks sent ONLY on a 2xx (a failed send stays retryable).</p>
+<ul>
+<li><strong>Live cell</strong> (Codex3): <code>test_live_offload_dispatch</code> is RUN_LIVE-guarded (was an unconditional</li>
+</ul>
+<p>  skip that could never run).</p>
+<ul>
+<li><strong>UNTRUSTED_DATA envelope</strong> (Codex7): corrected — no adapter envelope; orchestrator prose rule at</li>
+</ul>
+<p>  the Phase-3 wiring point (§4 above). +16 remediation tests. Suite delta re-measured at Step-12 full re-run.</p>
 <h2>§15 Decision log</h2>
 <ul>
 <li>D-P2-1 (owner 2026-07-22): one WF2 run, one PR, all three strands.</li>
@@ -296,7 +331,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <p>  new seat, not analysis-chain lane), fresh-session policy, usage-completeness honesty,   strict option parsing, pure policy module. DIVERGED on: PR decomposition (peer: 3 PRs;   owner D-P2-1: 1 PR — peer&#x27;s isolation preserved at TASK level) and in-chain fallback   (peer allowed configured chain to analysis; this design keeps <code>chain: []</code> + orchestrator-   explicit fallback to avoid silent cross-pool cost semantics — stricter than peer).</p>
 
 </main>
-<footer>Last updated: 2026-07-22 03:24 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-22 03:49 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

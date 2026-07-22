@@ -19,10 +19,14 @@ Design invariants (the load-bearing ones):
 - Usage (F3): absent gateway usage → ``ParsedResult.usage = None`` → the shared
   ``resolve_parse_status`` returns ``USAGE_UNAVAILABLE`` (a real status), never a fabricated
   zero and never a new closed-schema Observation field.
-- Failure taxonomy (F4): mapped to EXISTING statuses — transport/gateway/health/gate failures
-  are AVAILABILITY failures (fall back / honest); a terminal ``failed`` run is a produced
-  envelope with a ``parse_error`` (breach, not availability); ``submission_unknown`` is
-  ``empty_transport`` (availability) and is NEVER auto-retried (no idempotency key).
+- Failure taxonomy (F4): mapped to EXISTING statuses — transport/gateway/health/gate failures,
+  a transient submit (429/5xx), a 404/transient poll, AND a terminal ``failed``/``cancelled`` run
+  all resolve to AVAILABILITY failures so ``run_seat`` falls back to the analysis lane (a failed
+  offload should degrade, not breach). Only a definite 4xx submit (a client/contract error that
+  would fail identically on retry) is a produced-envelope breach. A submit timeout with no run_id
+  raises ``HermesUnreachable`` (availability) and is NEVER auto-retried (no idempotency key). Any
+  response-normalization exception is caught and mapped to an availability failure — never an
+  uncaught crash.
 - Secrets (F9): the key is read by NAME from the process env (loaded from the 0600
   ``~/.config/rawgentic/hermes.env`` at the dispatch boundary); it is placed ONLY in the
   Authorization header, never in argv/logs/Observations/capture; ``redact`` strips it from any
@@ -40,6 +44,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 from .. import contract
@@ -49,9 +54,14 @@ from .base import AdapterRequest, ParsedResult, ProcOutcome, build_observation
 ENGINE = "hermes"
 PLATFORM_IDENTITY = "hermes-agent"          # the routed model id the seat contracts on
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+# Step-11 fix (Codex4/Opus-arch F2): the activation gate is an ALLOWLIST of confirmed-sandboxed
+# gateway backends, never a denylist — an unknown/misspelled backend fails closed (refuse).
+VERIFIED_SANDBOX_BACKENDS = frozenset({"docker", "podman", "gvisor"})
 DEFAULT_MAX_RESP_BYTES = 256 * 1024         # F14 bounded read
 _POLL_MIN_S = 1.0
 _POLL_MAX_S = 8.0
+_PREFLIGHT_TIMEOUT_S = 30.0                 # Step-11 fix (Opus-arch F4): preflight/submit are bounded
+                                            # SHORT; only the poll loop gets the full seat budget.
 
 # env-file the dispatch boundary loads (F9); the adapter reads the values from os.environ.
 ENV_FILE = os.path.expanduser("~/.config/rawgentic/hermes.env")
@@ -78,11 +88,37 @@ def redact(text: str) -> str:
 def _as_dict(body) -> dict:
     if isinstance(body, dict):
         return body
-    try:
+    try:  # RecursionError (a deeply-nested hostile body) is caught too — Step-11 Opus-arch F3b
         d = json.loads(body)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return {}
     return d if isinstance(d, dict) else {}
+
+
+def _is_transient_http(status) -> bool:
+    """429 or any 5xx → a transient gateway condition that should FALL BACK (availability),
+    not a breach (Step-11 Opus-arch F1 / Codex). A definite 4xx (client/contract error) is not
+    transient — it would fail identically on retry."""
+    s = str(status)
+    return s == "429" or (s.isdigit() and 500 <= int(s) <= 599)
+
+
+def _load_env_file(path: Optional[str] = None) -> dict:
+    """Parse the 0600 dispatch-boundary env file (Step-11 Codex1: the design's loader, now
+    wired). ``path`` resolves to the module-global ENV_FILE at CALL time (so it stays overridable).
+    Best-effort — a missing file yields {} and preflight fail-closes with a config error."""
+    path = path or ENV_FILE
+    out: dict = {}
+    try:
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return out
 
 
 def is_terminal(status: str) -> bool:
@@ -92,25 +128,28 @@ def is_terminal(status: str) -> bool:
 
 
 def backend_is_sandboxed(caps: dict) -> bool:
-    """F7 activation gate, FAIL-CLOSED. True only when the gateway plainly reports a
-    non-``local`` terminal backend; an absent/unknown/``local`` backend → False (refuse)."""
+    """F7 activation gate, FAIL-CLOSED via an ALLOWLIST (Step-11 Codex4/Opus-arch F2). True ONLY
+    when the gateway reports a terminal backend in VERIFIED_SANDBOX_BACKENDS; every other value —
+    absent, unknown, misspelled, ``local``, ``host``, ``native``, ``docker-privileged`` — is
+    refused. A denylist would open the gate on any unrecognized (possibly unsafe) backend."""
     if not isinstance(caps, dict):
         return False
     term = caps.get("terminal")
     backend = term.get("backend") if isinstance(term, dict) else caps.get("terminal_backend")
     if not isinstance(backend, str) or not backend:
         return False
-    return backend.strip().lower() not in ("local", "unsandboxed", "")
+    return backend.strip().lower() in VERIFIED_SANDBOX_BACKENDS
 
 
 def parse_submit(http_status, body) -> Tuple[Optional[str], Optional[str]]:
-    """POST /v1/runs → (run_id, error). 202 body is ``{"run_id","status":"started"}``."""
+    """POST /v1/runs → (run_id, error). 202 body is ``{"run_id","status":"started"}``. A run_id in
+    any non-error body is accepted (the gateway ships 202); the transient-vs-breach decision for a
+    NO-run_id response is the caller's, keyed on the HTTP status (Step-11 Opus-mech F4 — the old
+    202-vs-non-202 branch was dead)."""
     d = _as_dict(body)
     if d.get("error"):
         return None, _error_str(d)
     rid = d.get("run_id") or d.get("id")
-    if str(http_status) == "202" and rid:
-        return str(rid), None
     if rid:
         return str(rid), None
     return None, f"submit returned no run_id (HTTP {http_status})"
@@ -138,24 +177,34 @@ def _error_str(d: dict) -> str:
     return str(err)
 
 
+def _coerce_usage(u) -> Optional[dict]:
+    """Gateway usage → {input,output,cached} or None. Guards every coercion (Step-11 F3): any
+    non-int/negative/malformed value yields None (→ USAGE_UNAVAILABLE), never a raised exception
+    and never a fabricated zero."""
+    if not isinstance(u, dict):
+        return None
+    def _nn_int(v):
+        if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+            return None
+        return v
+    inp, out = _nn_int(u.get("input_tokens")), _nn_int(u.get("output_tokens"))
+    if inp is None or out is None:
+        return None
+    cached = _nn_int(u.get("cached_tokens")) or 0
+    return {"input": inp, "output": out, "cached": cached}
+
+
 def run_to_parsed(run_obj: dict, *, requested_model: str) -> ParsedResult:
-    """Terminal run object → ParsedResult. Identity is the platform id (F2); absent usage stays
-    None → USAGE_UNAVAILABLE (F3); a ``failed`` run is a produced envelope with a parse_error."""
-    status = run_obj.get("status")
-    if status == "failed" or run_obj.get("error"):
-        return ParsedResult(actual_model=PLATFORM_IDENTITY,
-                            parse_error=f"hermes run {status or 'error'}: {run_obj.get('error')}")
-    if status == "cancelled":
-        return ParsedResult(actual_model=PLATFORM_IDENTITY, parse_error="hermes run cancelled")
+    """A COMPLETED run object → ParsedResult. Identity is the platform id (F2); absent/partial
+    usage stays None → USAGE_UNAVAILABLE (F3). A non-completed terminal status (failed/cancelled)
+    is NOT a produced-envelope breach — it returns ``empty_transport`` so ``run_seat`` falls back
+    to the analysis lane (Step-11: failed offload should degrade, not breach); ``run`` captures the
+    gateway error string separately."""
+    if run_obj.get("status") != "completed":
+        return ParsedResult(empty_transport=True)
     text = run_obj.get("output") or ""
-    usage = None
-    u = run_obj.get("usage")
-    if isinstance(u, dict):
-        inp, out = u.get("input_tokens"), u.get("output_tokens")
-        if inp is not None and out is not None:
-            usage = {"input": int(inp), "output": int(out),
-                     "cached": int(u.get("cached_tokens", 0) or 0)}
-    return ParsedResult(text=text, actual_model=PLATFORM_IDENTITY, usage=usage, payload=text)
+    return ParsedResult(text=text, actual_model=PLATFORM_IDENTITY,
+                        usage=_coerce_usage(run_obj.get("usage")), payload=text)
 
 
 # --------------------------------------------------------------------------- #
@@ -197,10 +246,15 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root,
     if req.resume_session_id is not None:
         raise contract.CompositionError("hermes launch: resume_session_id is not supported")
     transport = transport or _default_transport
-    env = env if env is not None else dict(os.environ)
+    if env is None:  # Step-11 Codex1: load the 0600 dispatch-boundary env file when unset
+        env = dict(os.environ)
+        if not (env.get(URL_ENV) and env.get(KEY_ENV)):
+            for k, v in _load_env_file().items():
+                env.setdefault(k, v)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = clock()
+    pre_to = min(req.timeout, _PREFLIGHT_TIMEOUT_S)  # short-bound preflight/submit (Opus-arch F4)
     proc = ProcOutcome(returncode=0, stdout="", stderr="", timed_out=False)
     parsed = ParsedResult(empty_transport=True)  # default = availability failure
 
@@ -208,47 +262,55 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root,
         base, key = _resolve_endpoint(env)
         auth = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
-        # --- preflight: health + ACTIVATION GATE (F7) ---
-        hstatus, hbody = transport("GET", f"{base}/health", headers=auth, timeout=req.timeout)
-        if str(hstatus) != "200":
-            raise HermesUnreachable(f"/health HTTP {hstatus}")
-        cstatus, cbody = transport("GET", f"{base}/v1/capabilities", headers=auth, timeout=req.timeout)
+        # --- preflight: VALIDATED /health + ACTIVATION GATE (F7) ---
+        hstatus, hbody = transport("GET", f"{base}/health", headers=auth, timeout=pre_to)
+        hd = _as_dict(hbody)
+        if str(hstatus) != "200" or hd.get("status") != "ok" or hd.get("platform") != PLATFORM_IDENTITY:
+            # Step-11 Codex6: attest the platform identity from the body, not just the status —
+            # a wrong/compatible endpoint must not be reported as a verified Hermes gateway.
+            raise HermesUnreachable(
+                f"/health did not attest a {PLATFORM_IDENTITY} gateway (HTTP {hstatus})")
+        cstatus, cbody = transport("GET", f"{base}/v1/capabilities", headers=auth, timeout=pre_to)
         caps = _as_dict(cbody) if str(cstatus) == "200" else {}
         if not backend_is_sandboxed(caps):
-            raise ActivationRefused("gateway terminal backend is not confirmably sandboxed "
-                                    "(unsandboxed 'local' or unknown) — offload dispatch refused")
+            raise ActivationRefused("gateway terminal backend is not in the verified-sandbox "
+                                    "allowlist (unsandboxed/unknown) — offload dispatch refused")
 
         # --- submit ---
         submit_body = json.dumps({"input": req.prompt, "model": req.requested_model})
         sstatus, sbody = transport("POST", f"{base}/v1/runs", headers=auth,
-                                   body=submit_body, timeout=req.timeout)
+                                   body=submit_body, timeout=pre_to)
         rid, serr = parse_submit(sstatus, sbody)
         if rid is None:
-            # a definite error body → produced envelope (breach); a bare timeout would have
-            # raised HermesUnreachable above (availability). Treat a no-run_id 2xx/4xx as failure.
+            if _is_transient_http(sstatus):  # 429/5xx → availability → fall back (Opus-arch F1)
+                raise HermesUnreachable(f"submit transient HTTP {sstatus}: {serr}")
+            # a definite 4xx/contract error → produced-envelope breach (would fail identically on
+            # retry, so do NOT fall back).
             parsed = ParsedResult(actual_model=PLATFORM_IDENTITY,
-                                  parse_error=f"submission failed: {serr}")
+                                  parse_error=f"submission failed (HTTP {sstatus}): {serr}")
             raise _Done()
-        cap.write_transport(f"run_id={rid}")  # F: persist run_id as soon as it exists
+        cap.write_transport(f"run_id={rid}")  # persist run_id as soon as it exists
 
         # --- poll to deadline ---
         deadline = started + req.timeout
         delay = _POLL_MIN_S
-        last = None
         while True:
             pstatus, pbody = transport("GET", f"{base}/v1/runs/{rid}", headers=auth,
                                        timeout=min(req.timeout, 20))
-            if str(pstatus) == "404":
-                parsed = ParsedResult(actual_model=PLATFORM_IDENTITY,
-                                      parse_error=f"run {rid} not found")
-                break
+            if str(pstatus) == "404" or _is_transient_http(pstatus):
+                # run vanished / transient → availability → fall back (Opus-arch F1)
+                raise HermesUnreachable(f"poll HTTP {pstatus} for run {rid}")
             last = parse_run_object(pbody)
-            if is_terminal(last.get("status")):
+            st = last.get("status")
+            if is_terminal(st):
                 parsed = run_to_parsed(last, requested_model=req.requested_model)
+                if st != "completed":  # failed/cancelled → availability, capture the error string
+                    err = redact(str(last.get("error") or st))
+                    proc = ProcOutcome(returncode=None, stdout="", stderr=err, timed_out=False,
+                                       launch_error=f"hermes run {st}")
                 break
             if clock() >= deadline:
-                # deadline: ONE best-effort stop, then fail-closed availability.
-                try:
+                try:  # deadline: ONE best-effort stop, then fail-closed availability.
                     transport("POST", f"{base}/v1/runs/{rid}/stop", headers=auth, timeout=5)
                 except HermesUnreachable:
                     pass
@@ -267,6 +329,12 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root,
         parsed = ParsedResult(empty_transport=True)
     except _Done:
         pass
+    except (ValueError, TypeError, RecursionError) as e:
+        # Step-11 Opus-arch F3: any response-normalization failure is a typed availability failure,
+        # never an uncaught crash that skips the Observation/capture.
+        proc = ProcOutcome(returncode=None, stdout="", stderr=redact(str(e)),
+                          timed_out=False, launch_error=f"hermes response parse error: {redact(str(e))}")
+        parsed = ParsedResult(empty_transport=True)
 
     timing_ms = int((clock() - started) * 1000)
     cap.write_output(parsed.text)

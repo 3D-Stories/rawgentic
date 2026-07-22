@@ -138,11 +138,17 @@ def interpret_reply(raw: str, *, token: str, options, response_mode: str):
     'unmatched_option'. Label collisions are impossible (blocked at creation)."""
     rest = (raw or "").replace(token, "").strip()
     if not options:
-        return ("free_text", None)
+        # #568 Step-11 Codex5: an option_required ask with no options never silently free-texts.
+        return ("unmatched_option", None) if response_mode == "option_required" else ("free_text", None)
     by_id = {o["id"]: o for o in options}
     norm_label = {_norm(o["label"]): o["id"] for o in options}
-    if rest.isdigit():
-        oid = int(rest)
+    # #568 Step-11 Opus-mech F1: `isdecimal()` (not `isdigit()`) — isdigit accepts superscripts like
+    # "²" that int() rejects; the try/except is belt-and-suspenders on untrusted owner text.
+    if rest.isdecimal():
+        try:
+            oid = int(rest)
+        except ValueError:
+            return ("ambiguous", None)
         return ("selected", oid) if oid in by_id else ("ambiguous", None)
     m = _NLABEL_RE.match(rest)
     if m:
@@ -186,7 +192,11 @@ def maybe_send_clarification(ask_record, disposition, *, state_dir, notify=None)
     opts = ask_record.get("options") or []
     msg = ("Your reply didn't match an option. Reply with the number:\n"
            f"{render_options(opts)}\n(keep ref {token})")
-    notify(msg)
+    # Step-11 Codex8: mark sent ONLY on a 2xx — a failed send stays retryable (the owner never
+    # got it), so a later poll can re-send exactly once when transport recovers.
+    code = str(notify(msg))
+    if not _is_2xx(code):
+        return False
     _mark_clarification_sent(state_dir, token)
     return True
 
@@ -311,6 +321,8 @@ def ask_owner(question, run_id, *, state_dir, notify=None, now_ms=None,
         raise ValueError(f"response_mode must be one of {RESPONSE_MODES}: {response_mode!r}")
     if options is not None:
         validate_options(options)
+    if response_mode == "option_required" and not options:  # Step-11 Codex5: never a bypass gate
+        raise ValueError("response_mode 'option_required' requires a non-empty options list")
     notify = notify or _default_notify
     now = now_ms() if callable(now_ms) else _now_ms()
     asks_dir = _sd(state_dir) / "asks"
