@@ -57,6 +57,13 @@ class SupervisorError(RuntimeError):
     """Fail-loud supervisor failure (unusable socket, launch failure, spec error)."""
 
 
+class SpecTamperError(SupervisorError):
+    """The pane spec bytes failed digest verification at relaunch (H2 #559): the recovery
+    read them AFTER ``recover``'s identity check, so they sit in the TOCTOU window. A
+    tampered/unverifiable spec is QUARANTINED (kill + retain), never relaunched — distinct
+    from an ordinary relaunch failure (which fails the record) so ``recover`` can route it."""
+
+
 @dataclass(frozen=True)
 class PreflightResult:
     supported: bool
@@ -1083,6 +1090,18 @@ class TmuxSupervisor:
                 try:
                     new = self._relaunch(record)
                     actions.append(RecoveryAction(record.identity, "relaunch", new))
+                except SpecTamperError:
+                    # H2 (#559): the relaunch spec bytes failed digest verification — the
+                    # post-identity-check TOCTOU window. The untrusted writer never
+                    # relaunches: kill + retain evidence, mirror the adopt-refused arm.
+                    killed = self._kill_job(record)
+                    reason = "relaunch spec unverified (tamper/TOCTOU): refused"
+                    if not killed:
+                        reason += "; kill unverified: residue"
+                    done = self._finish(record, "quarantined", release_permit=killed,
+                                        quarantine_reason=reason)
+                    self._retain(done)
+                    actions.append(RecoveryAction(record.identity, "quarantine", done))
                 except (SupervisorError, routing.RoutingError, QuotaTimeout):
                     # non-claude engine / routing gone / pool full — fail THIS record
                     # without burning a resume slot; recovery of OTHER records continues
@@ -1103,8 +1122,19 @@ class TmuxSupervisor:
         (``<original>#resume<n>``) plus ``recovered_from`` = the ORIGINAL call's correlation_id
         (the ``recovered_from`` already on this record if it is itself a re-recovery, else the
         original spec's correlation). ``reconcile_run`` groups the recovery under the original
-        expected call via that link — one authorized pause+resume, not an orphan or a new key."""
-        spec = self._read_spec(record)
+        expected call via that link — one authorized pause+resume, not an orphan or a new key.
+
+        H2 (#559, design §2.2): the spec is read via ``_verified_spec`` (digest-gated,
+        read-once) — recover()'s ``_identity_matches`` already digest-checked, but the bytes
+        re-read HERE fall in the time-of-check/time-of-use window; trusting them unverified is
+        the injection vector. ``None`` (missing/malformed/digest-mismatch) → ``SpecTamperError``
+        → recover() quarantines, never relaunches. (``_read_spec`` stays for the
+        synthetic-observation forensic paths only.)"""
+        spec = self._verified_spec(record)
+        if spec is None:
+            raise SpecTamperError(
+                f"relaunch {record.session_name}: spec bytes failed digest verification "
+                f"(tamper, missing, or malformed) — refusing to relaunch on unverified bytes")
         req = spec.get("request") or {}
         if not req:
             raise SupervisorError(f"relaunch {record.session_name}: spec unreadable")

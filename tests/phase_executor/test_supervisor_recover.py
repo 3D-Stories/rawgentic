@@ -287,4 +287,81 @@ def test_adopt_race_loser_yields_never_records_adopt(env_factory, monkeypatch):
     sup2 = env.sup_with_mode("ok_then_sleep")
     actions = sup2.recover(env.identity.run_id)
     assert [a.action for a in actions] == ["yielded"]
-    env.sup.cancel(env.registry.get(env.identity))
+
+
+# ---------------------------------------------------------------------------
+# H2 (#559): _relaunch reads via _verified_spec — the post-identity-check TOCTOU
+# window is closed. Pure tests (dead runner, no tmux).
+# ---------------------------------------------------------------------------
+
+
+class _RetainRec:
+    def __init__(self):
+        self.finalized = []
+
+    def finalize(self, handle, observation_status, *, live_identities=()):
+        self.finalized.append((handle.path, observation_status))
+        return None
+
+
+def _paused_record(identity, tmp_path):
+    from phase_executor.registry import JobRecord, session_name
+    return JobRecord(
+        identity=identity, session_name=session_name(identity), run_socket="s",
+        pane_pid=1, pane_pgid=1, provider_pgid=None, pane_start_time="0",
+        worktree_path=str(tmp_path), worktree_base_sha="b", worktree_root=str(tmp_path),
+        worktree_gitdir="g", worktree_repo="rp", capture_dir=str(tmp_path / "cd"),
+        attempt_id="a", permit_ref="unbounded", command_digest="sha256:x",
+        provider_session_id="sess-1", provider_exit_code=1, resume_attempts=0,
+        state="quota_paused", created_at=0.0, quarantine_reason=None, spec_digest="sha256:orig")
+
+
+def _dead_sup(tmp_path, **kw):
+    reg = JobRegistry(str(tmp_path / "reg"))
+    sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
+                         registry_root=str(tmp_path / "reg"), registry=reg,
+                         run=lambda cmd, **kw2: subprocess.CompletedProcess(cmd, 1, "", ""), **kw)
+    return sup, reg
+
+
+def _write_tampered_spec(tmp_path, rec):
+    specs = Path(tmp_path / "reg" / "specs")
+    specs.mkdir(parents=True, exist_ok=True)
+    # bytes that will NOT hash to record.spec_digest — the post-check tamper
+    (specs / f"{rec.session_name}.json").write_text(json.dumps({"tampered": True}), encoding="utf-8")
+
+
+def test_recover_toctou_tampered_spec_quarantines_never_relaunches(tmp_path, monkeypatch):
+    # H2: recover()'s _identity_matches digest-checks, but the bytes _relaunch RE-READS after
+    # that check are the TOCTOU window. Simulate the post-check tamper — _identity_matches
+    # returns True while the on-disk spec is already tampered → _relaunch reads via
+    # _verified_spec → None → quarantine (kill + retain), never a launch.
+    manager = _RetainRec()
+    sup, reg = _dead_sup(tmp_path, worktree_manager=manager)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    rec = _paused_record(identity, tmp_path)
+    reg.upsert(rec)
+    _write_tampered_spec(tmp_path, rec)
+    monkeypatch.setattr(sup, "_identity_matches", lambda record: True)  # the check PASSED
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    actions = sup.recover("r1")
+    assert [a.action for a in actions] == ["quarantine"]
+    assert launched == [], "a tampered relaunch spec never reaches launch()"
+    assert reg.get(identity).state == "quarantined"
+    assert manager.finalized, "quarantined evidence is retained (W3)"
+
+
+def test_relaunch_refuses_unverified_spec_bytes(tmp_path, monkeypatch):
+    # direct unit: _relaunch on unverifiable bytes raises SpecTamperError before any launch
+    from phase_executor.supervisor import SpecTamperError
+    sup, reg = _dead_sup(tmp_path)
+    identity = WorktreeIdentity(run_id="r1", seat="build", attempt=1)
+    rec = _paused_record(identity, tmp_path)
+    reg.upsert(rec)
+    _write_tampered_spec(tmp_path, rec)
+    launched = []
+    monkeypatch.setattr(sup, "launch", lambda *a, **k: launched.append(1))
+    with pytest.raises(SpecTamperError):
+        sup._relaunch(rec)
+    assert launched == []
