@@ -19,6 +19,7 @@ Per-dimension mechanism (Step-4 rev-2 — each dimension uses the path that actu
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -99,6 +100,43 @@ def _obs_from_response(engine, req, resp, *, run_id, attempt_id, digest):
         process={"exit_code": 0 if status == "ok" else 1, "timed_out": status == "timeout"},
         parse_status=status, parsed_payload=resp.get("payload"), raw_capture_path=None,
         fallback_reason=None, routing_config_digest=digest)
+
+
+class UnsupportedCellError(RuntimeError):
+    """#449 T1: the live path REFUSED the composition (e.g. a mutating manifest on the
+    sync path, #558 A-F1). Not a failure of the thing under test — the capability does
+    not exist on this path — so the report shows a typed `unsupported` cell
+    ({"score": None, "status": "unsupported"}) and the dimension mean EXCLUDES it,
+    instead of a misleading 0.0."""
+
+
+def glm_credential_present() -> bool:
+    """#449 T1 fail-closed skip input: is ANY glm judge credential present? (Same env
+    vocabulary as adversarial_review_lib's glm backend.) Absent ⇒ the live matrix SKIPS
+    glm-judge cells with a typed reason — never a silent pass, never a live call that
+    errors mid-run."""
+    return any(os.environ.get(k) for k in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"))
+
+
+def live_dispatch(*, dispatch_real=None):
+    """#449 T1: the LIVE drop-in for the `dispatch=` seam — same signature as the stubbed
+    `_seat_dispatch(fx)` inner, but routing to the REAL adapter entry
+    (`phase_executor.engine._dispatch_real`, the same path WF2/WF3 dispatches ride).
+    `dispatch_real` is injectable so CI never makes a live call. A CompositionError
+    (engine refusal, e.g. #558 A-F1 mutating-on-sync) translates to UnsupportedCellError
+    (report-level typed cell); every other error propagates untouched (fail-closed 0.0
+    via run_fixture's existing guard)."""
+    if dispatch_real is None:
+        dispatch_real = _pe().engine._dispatch_real  # pylint: disable=protected-access
+
+    def dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
+        try:
+            return dispatch_real(engine, req, run_id=run_id, attempt_id=attempt_id,
+                                 capture_root=capture_root, digest=digest, queued_ms=queued_ms,
+                                 fallback_reason=fallback_reason)
+        except _pe().contract.CompositionError as exc:
+            raise UnsupportedCellError(str(exc)) from exc
+    return dispatch
 
 
 def _seat_dispatch(fixture):
@@ -260,6 +298,8 @@ def run_fixture(fixture, *, snapshot, quota, capture_root) -> dict:
     for dim in fixture["dimensions"]:
         try:
             scores[dim] = _SCORERS[dim](fixture, snapshot, quota, capture_root)
+        except UnsupportedCellError as exc:  # #449: typed capability-absent cell, mean-excluded
+            scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
         except Exception as exc:  # noqa: BLE001 — a broken cell scores 0, never a silent pass
             scores[dim] = {"score": 0.0, "error": f"{type(exc).__name__}: {exc}"[:200]}
     return scores
@@ -280,7 +320,10 @@ def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus
     dim_totals: dict = {d: [] for d in DIMENSIONS}
     for cell in cells:
         for dim, val in cell["scores"].items():
-            dim_totals[dim].append(val if isinstance(val, (int, float)) else val.get("score", 0.0))
+            score = val if isinstance(val, (int, float)) else val.get("score", 0.0)
+            if score is None:  # #449: `unsupported` cells are capability-absent, not failures
+                continue
+            dim_totals[dim].append(score)
     dim_means = {d: (sum(v) / len(v) if v else None) for d, v in dim_totals.items()}
     return {
         "n_cells": len(cells), "n_fixtures": len(fixtures), "models": list(models), "reps": reps,

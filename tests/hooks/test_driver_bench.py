@@ -223,3 +223,99 @@ class TestBenchTableResolution:
 
     def test_module_global_table_constant_retired(self):
         assert not hasattr(db, "TABLE")
+
+
+# ---- #449 T1: live dispatch via the real adapter path ------------------------------------------
+class TestLiveDispatch:
+    def _req(self):
+        # a minimal AdapterRequest-shaped object is NOT needed — the dispatch seam passes req
+        # through opaquely; a stub with the two attrs the seam reads suffices.
+        class R:  # pylint: disable=too-few-public-methods
+            seat = "intake"
+            requested_model = "claude-opus-4-8"
+            transport = "native"
+        return R()
+
+    def test_delegates_to_dispatch_real_with_threaded_kwargs(self):
+        calls = {}
+        sentinel = object()
+
+        def fake_real(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
+            calls.update(engine=engine, req=req, run_id=run_id, attempt_id=attempt_id,
+                         capture_root=capture_root, digest=digest, queued_ms=queued_ms,
+                         fallback_reason=fallback_reason)
+            return sentinel
+
+        d = db.live_dispatch(dispatch_real=fake_real)
+        req = self._req()
+        out = d("claude", req, run_id="r1", attempt_id="0-a", capture_root="/tmp/c",
+                digest="dg", queued_ms=5, fallback_reason=None)
+        assert out is sentinel
+        assert calls["engine"] == "claude" and calls["req"] is req
+        assert calls["run_id"] == "r1" and calls["attempt_id"] == "0-a"
+        assert calls["digest"] == "dg" and calls["queued_ms"] == 5
+
+    def test_composition_refusal_translates_to_unsupported(self):
+        def refusing(engine, req, **kw):
+            raise pe.contract.CompositionError("mutating manifest on sync path (#558 AC2)")
+
+        d = db.live_dispatch(dispatch_real=refusing)
+        with pytest.raises(db.UnsupportedCellError, match="558"):
+            d("claude", self._req(), run_id="r", attempt_id="0-a", capture_root="c",
+              digest="d", queued_ms=0, fallback_reason=None)
+
+    def test_other_errors_are_not_swallowed(self):
+        def broken(engine, req, **kw):
+            raise ValueError("some other failure")
+
+        d = db.live_dispatch(dispatch_real=broken)
+        with pytest.raises(ValueError):
+            d("claude", self._req(), run_id="r", attempt_id="0-a", capture_root="c",
+              digest="d", queued_ms=0, fallback_reason=None)
+
+    def test_unsupported_cell_is_typed_not_zero(self, env):
+        # an UnsupportedCellError inside a scorer becomes a typed report cell
+        # {"score": None, "status": "unsupported"} — distinguishable from a genuine 0.0 failure.
+        fx = copy.deepcopy(_fx("f01-intake-clean"))
+
+        def raise_unsupported(*a, **k):
+            raise db.UnsupportedCellError("build-seat sync dispatch unsupported (#558 A-F1)")
+
+        original = db._SCORERS["seat_selection"]
+        db._SCORERS["seat_selection"] = raise_unsupported
+        try:
+            cell = db.run_fixture(fx, **env)["seat_selection"]
+        finally:
+            db._SCORERS["seat_selection"] = original
+        assert isinstance(cell, dict) and cell["status"] == "unsupported"
+        assert cell["score"] is None and "558" in cell["error"]
+
+    def test_matrix_mean_excludes_unsupported_cells(self, env):
+        # dimension_means must SKIP {"score": None} unsupported cells (a missing capability is
+        # not a failure) while still counting genuine 0.0 error cells.
+        fxs = [_fx("f01-intake-clean")]
+
+        def raise_unsupported(*a, **k):
+            raise db.UnsupportedCellError("unsupported")
+
+        original = db._SCORERS["token_burn"]
+        db._SCORERS["token_burn"] = raise_unsupported
+        try:
+            qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "q2", env["snapshot"].pool_concurrency())
+            r = db.run_matrix(fxs, snapshot=env["snapshot"], quota_factory=qf,
+                              capture_root=env["capture_root"])
+        finally:
+            db._SCORERS["token_burn"] = original
+        assert r["dimension_means"]["token_burn"] is None          # every cell unsupported -> no mean
+        assert r["dimension_means"]["seat_selection"] == 1.0       # untouched dims still score
+
+
+class TestGlmCredential:
+    def test_absent_credential_detected(self, monkeypatch):
+        for var in ("ZHIPUAI_API_KEY", "ZHIPU_API_KEY", "GLM_API_KEY"):
+            monkeypatch.delenv(var, raising=False)
+        assert db.glm_credential_present() is False
+
+    def test_present_credential_detected(self, monkeypatch):
+        monkeypatch.setenv("ZHIPUAI_API_KEY", "k")
+        assert db.glm_credential_present() is True
