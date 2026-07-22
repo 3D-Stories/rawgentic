@@ -20,6 +20,9 @@
     },
     "zhipu": {
       "concurrency": 2
+    },
+    "hermes": {
+      "concurrency": 1
     }
   },
   "seats": {
@@ -349,6 +352,45 @@
         },
         {
           "model": "claude-fable-5",
+          "lane": {
+            "provider": "anthropic",
+            "transport": "native",
+            "auth_mode": "subscription_oauth",
+            "credential_ref": null,
+            "pool": "claude"
+          }
+        }
+      ]
+    },
+    "offload": {
+      "manifest": {
+        "session_policy": "fresh",
+        "tool_grants": [
+          "read"
+        ],
+        "effort": "medium",
+        "confinement": {
+          "nousresearch": "gateway-api-key + activation-gate (unsandboxed-refused); NOT an OS sandbox",
+          "anthropic": "hooks"
+        },
+        "bounds": {
+          "timeout_s": 300,
+          "max_budget_usd": 1.0
+        }
+      },
+      "primary": {
+        "model": "hermes-agent",
+        "lane": {
+          "provider": "nousresearch",
+          "transport": "http",
+          "auth_mode": "api_key",
+          "credential_ref": "HERMES_API_SERVER_KEY",
+          "pool": "hermes"
+        }
+      },
+      "chain": [
+        {
+          "model": "claude-sonnet-5",
           "lane": {
             "provider": "anthropic",
             "transport": "native",

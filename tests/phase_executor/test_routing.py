@@ -167,6 +167,7 @@ _EXPECTED_SEATS_464 = {
     "build": ("claude-sonnet-5", ["claude-opus-4-8", "gpt-5.6-terra"]),
     "review": ("claude-fable-5", ["gpt-5.6-sol", "claude-sonnet-5"]),
     "ship": ("claude-sonnet-5", ["claude-opus-4-8", "claude-fable-5"]),
+    "offload": ("hermes-agent", ["claude-sonnet-5"]),  # #568 Phase-2: Hermes + analysis fallback
 }
 
 

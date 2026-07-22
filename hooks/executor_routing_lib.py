@@ -56,7 +56,7 @@ from model_routing_lib import _ABSENT, _load_block, _load_project_entry
 # each is single-dispatchable. ``COMPETITIVE_ONLY`` seats ARE in the vocabulary but the bake-off owns
 # their dispatch, so they are refused from single-dispatch executorRouting / resolve-seat / dispatch.
 WIRED_SEATS: Final[frozenset[str]] = frozenset(
-    {"intake", "analysis", "design", "plan", "build", "review", "ship"})
+    {"intake", "analysis", "design", "plan", "build", "review", "ship", "offload"})
 COMPETITIVE_ONLY: Final[frozenset[str]] = frozenset({"design"})
 DRIVER_ONLY: Final[frozenset[str]] = frozenset({"merge", "ci_triage", "deploy_verify", "step16"})
 VALID_MODES: Final[frozenset[str]] = frozenset({"inherit", "executor"})

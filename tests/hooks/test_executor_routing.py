@@ -505,11 +505,32 @@ def test_guarded_import_failure_exit5(tmp_path, monkeypatch):
     assert er._do_dispatch(A()) == er.EXIT_INTERNAL
 
 
-# --- #464 §B: WIRED_SEATS is the full 7-seat vocabulary; design is single-dispatch-refused --------
-def test_wired_seats_is_the_full_seven():
+# --- #464 §B / #568: WIRED_SEATS vocabulary; design is single-dispatch-refused -------------------
+def test_wired_seats_vocabulary():
+    # #568 Phase-2 added the read-only `offload` seat (Hermes HTTP gateway).
     assert er.WIRED_SEATS == frozenset(
-        {"intake", "analysis", "design", "plan", "build", "review", "ship"})
+        {"intake", "analysis", "design", "plan", "build", "review", "ship", "offload"})
     assert er.COMPETITIVE_ONLY == frozenset({"design"})
+
+
+def test_offload_is_wired_and_single_dispatchable():
+    # #568: offload is a normal wired seat (not competitive) — it CAN be single-dispatched.
+    assert er.classify_seat("offload") == "wired"
+    assert "offload" not in er.COMPETITIVE_ONLY
+    assert er.parse_executor_routing({"version": 1, "seats": {"offload": "executor"}}) \
+        == {"offload": "executor"}
+
+
+def test_offload_seat_resolves_in_default_table():
+    # The default routing table carries the offload seat on the hermes/nousresearch lane.
+    import pathlib
+    from phase_executor import routing as _routing  # pylint: disable=no-name-in-module
+    rt = er.resolve_table(pathlib.Path("."), _routing)
+    seat = rt.snapshot.seat("offload")
+    assert seat["primary"]["model"] == "hermes-agent"
+    assert seat["primary"]["lane"]["provider"] == "nousresearch"
+    assert seat["manifest"]["tool_grants"] == ["read"]
+    assert "nousresearch" in seat["manifest"]["confinement"]  # F1 confinement coverage
 
 
 def test_parse_design_opt_in_rejected():
@@ -1087,7 +1108,8 @@ class TestShowTable:
         assert out["config_digest"].startswith("sha256:")
         assert out["file"] is None
         seats = {s["seat"]: s for s in out["seats"]}
-        assert set(seats) == {"intake", "analysis", "design", "plan", "build", "review", "ship"}
+        assert set(seats) == {"intake", "analysis", "design", "plan", "build", "review", "ship",
+                              "offload"}  # #568 Phase-2
         assert seats["build"]["role"] == "build"
         assert isinstance(seats["ship"]["primary"], str) and seats["ship"]["chain"]
         # build_bake_off reports the ACTUAL candidate constant, labeled informational.

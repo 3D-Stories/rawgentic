@@ -545,3 +545,208 @@ def test_default_notify_sends_on_stdin(monkeypatch):
     assert hb._default_notify("hello owner") == "200"
     assert "hello owner" not in " ".join(seen["argv"])
     assert seen["input"] == "hello owner"
+
+
+# ======================================================================= #
+# #568 Phase-2 (T4): numbered-option asks — strict parse, gating, back-compat
+# ======================================================================= #
+OPTS = [{"id": 1, "label": "merge"}, {"id": 2, "label": "hold"}]
+
+
+def _ask_opts(state_dir, *, options, response_mode, token="[RG-ABCDEF012345]",
+              sent_ts=500_000, run_id="run1", question="Merge the PR?"):
+    os.makedirs(Path(state_dir) / "asks", exist_ok=True)
+    rec = {"token": token, "run_id": run_id, "question": question, "sent_ts_ms": sent_ts,
+           "status": "sent", "recipient": OWNER, "options": options, "response_mode": response_mode}
+    (Path(state_dir) / "asks" / f"{token}.json").write_text(json.dumps(rec))
+    return rec
+
+
+class TestValidateOptions:
+    def test_valid(self):
+        hb.validate_options(OPTS)  # no raise
+
+    def test_duplicate_normalized_label_rejected(self):
+        with pytest.raises(ValueError):
+            hb.validate_options([{"id": 1, "label": "Merge"}, {"id": 2, "label": "merge "}])
+
+    def test_duplicate_id_rejected(self):
+        with pytest.raises(ValueError):
+            hb.validate_options([{"id": 1, "label": "a"}, {"id": 1, "label": "b"}])
+
+    def test_empty_label_rejected(self):
+        with pytest.raises(ValueError):
+            hb.validate_options([{"id": 1, "label": ""}])
+
+    def test_non_int_id_rejected(self):
+        with pytest.raises(ValueError):
+            hb.validate_options([{"id": "1", "label": "a"}])
+
+
+class TestInterpretReply:
+    T = "[RG-ABCDEF012345]"
+
+    def test_digits_only_selects(self):
+        assert hb.interpret_reply(f"1 {self.T}", token=self.T, options=OPTS,
+                                  response_mode="option_required") == ("selected", 1)
+
+    def test_unknown_digit_ambiguous(self):
+        assert hb.interpret_reply(f"9 {self.T}", token=self.T, options=OPTS,
+                                  response_mode="option_required") == ("ambiguous", None)
+
+    def test_exact_unique_label_selects(self):
+        assert hb.interpret_reply(f"{self.T}hold", token=self.T, options=OPTS,
+                                  response_mode="option_required") == ("selected", 2)
+
+    def test_n_colon_label_agree_selects(self):
+        assert hb.interpret_reply(f"{self.T}2: hold", token=self.T, options=OPTS,
+                                  response_mode="option_required") == ("selected", 2)
+
+    def test_n_dash_label_disagree_ambiguous(self):
+        assert hb.interpret_reply(f"{self.T}1 - hold", token=self.T, options=OPTS,
+                                  response_mode="option_required") == ("ambiguous", None)
+
+    def test_free_text_when_option_required_is_unmatched(self):
+        assert hb.interpret_reply(f"{self.T}maybe later", token=self.T, options=OPTS,
+                                  response_mode="option_required") == ("unmatched_option", None)
+
+    def test_free_text_allowed_in_option_or_text(self):
+        assert hb.interpret_reply(f"{self.T}do the third thing", token=self.T, options=OPTS,
+                                  response_mode="option_or_text") == ("free_text", None)
+
+    def test_no_options_is_free_text(self):
+        assert hb.interpret_reply(f"{self.T}anything", token=self.T, options=None,
+                                  response_mode="free_text") == ("free_text", None)
+
+
+class TestAskOwnerOptions:
+    def test_renders_numbered_options_and_persists(self, tmp_path):
+        sent = []
+        rec = ask_owner("Merge the PR?", "r1", state_dir=str(tmp_path),
+                        notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 1,
+                        options=OPTS, response_mode="option_required")
+        assert rec["options"] == OPTS and rec["response_mode"] == "option_required"
+        assert "1. merge" in sent[0] and "2. hold" in sent[0]
+        assert rec["token"] in sent[0]
+
+    def test_collision_rejected_before_send(self, tmp_path):
+        sent = []
+        with pytest.raises(ValueError):
+            ask_owner("q", "r1", state_dir=str(tmp_path),
+                      notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 1,
+                      options=[{"id": 1, "label": "yes"}, {"id": 2, "label": "YES"}],
+                      response_mode="option_required")
+        assert not sent  # never sent a colliding ask
+
+    def test_optionless_ask_unchanged(self, tmp_path):
+        sent = []
+        rec = ask_owner("Proceed?", "r1", state_dir=str(tmp_path),
+                        notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 1)
+        assert "options" not in rec or not rec.get("options")
+        assert rec["response_mode"] == "free_text" if "response_mode" in rec else True
+
+
+class TestClassifyBatchOptions:
+    def test_digit_reply_matched(self, tmp_path):
+        rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+        m = _msg("g1", f"1 {rec['token']}", ts=600_000)
+        disp, got = classify_batch([m], rec["token"], set(), rec["question"],
+                                   options=OPTS, response_mode="option_required")
+        assert disp == "matched" and got["guid"] == "g1"
+
+    def test_option_required_free_text_is_unmatched_option(self, tmp_path):
+        rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+        m = _msg("g1", f"{rec['token']} nah", ts=600_000)
+        disp, got = classify_batch([m], rec["token"], set(), rec["question"],
+                                   options=OPTS, response_mode="option_required")
+        assert disp == "unmatched_option" and got is None
+
+    def test_unknown_digit_ambiguous_delivers_nothing(self, tmp_path):
+        rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+        m = _msg("g1", f"7 {rec['token']}", ts=600_000)
+        disp, got = classify_batch([m], rec["token"], set(), rec["question"],
+                                   options=OPTS, response_mode="option_required")
+        assert disp == "ambiguous" and got is None
+
+
+class TestDeliverAndResumeOptions:
+    def test_inbox_carries_interpretation_and_resume_names_option(self, tmp_path):
+        rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+        m = _msg("g1", f"2 {rec['token']}", ts=600_000)
+        path = deliver(m, rec, state_dir=str(tmp_path))
+        doc = json.loads(Path(path).read_text())
+        assert doc["reply"]["interpretation"] == "selected"
+        assert doc["reply"]["option_id"] == 2
+        assert doc["reply"]["raw"] == f"2 {rec['token']}"
+        prompt = render_resume_prompt(doc)
+        assert "hold" in prompt and "option 2" in prompt.lower()
+
+    def test_free_text_reply_back_compat_inbox(self, tmp_path):
+        rec = _ask(str(tmp_path))  # optionless
+        m = _msg("g1", f"go ahead {rec['token']}", ts=600_000)
+        path = deliver(m, rec, state_dir=str(tmp_path))
+        doc = json.loads(Path(path).read_text())
+        # optionless: reply present, interpretation free_text, reply_text preserved (Phase-1 field kept)
+        assert doc["reply"]["interpretation"] == "free_text"
+        assert doc["reply_text"].startswith("go ahead")
+
+
+class TestClarificationOnce:
+    def test_at_most_one_clarification(self, tmp_path):
+        rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+        sent = []
+        n1 = hb.maybe_send_clarification(rec, "unmatched_option", state_dir=str(tmp_path),
+                                         notify=lambda m: (sent.append(m), "200")[1])
+        n2 = hb.maybe_send_clarification(rec, "unmatched_option", state_dir=str(tmp_path),
+                                         notify=lambda m: (sent.append(m), "200")[1])
+        assert n1 is True and n2 is False
+        assert len(sent) == 1  # deduplicated — never resent
+
+    def test_no_clarification_for_matched(self, tmp_path):
+        rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+        sent = []
+        assert hb.maybe_send_clarification(rec, "matched", state_dir=str(tmp_path),
+                                           notify=lambda m: sent.append(m)) is False
+        assert not sent
+
+
+# ---- #568 Step-11 review remediation ----
+def test_option_required_without_options_rejected(tmp_path):
+    sent = []
+    with pytest.raises(ValueError):
+        ask_owner("q", "r1", state_dir=str(tmp_path),
+                  notify=lambda m: (sent.append(m), "200")[1], now_ms=lambda: 1,
+                  response_mode="option_required")  # no options
+    assert not sent
+
+
+def test_interpret_option_required_no_options_is_unmatched():
+    assert hb.interpret_reply("[RG-ABCDEF012345] 1", token="[RG-ABCDEF012345]",
+                              options=None, response_mode="option_required") == ("unmatched_option", None)
+
+
+class TestUnicodeDigitReply:
+    T = "[RG-ABCDEF012345]"
+    OPTS = [{"id": 1, "label": "yes"}, {"id": 2, "label": "no"}]
+
+    def test_superscript_digit_never_crashes(self):
+        # "²" is isdigit() True but int()-unparseable — must degrade to a safe non-selected
+        # disposition, NEVER raise (untrusted owner text). isdecimal() excludes it → not a digit
+        # match → under option_required it lands unmatched_option (also safe).
+        interp, oid = hb.interpret_reply(f"² {self.T}", token=self.T, options=self.OPTS,
+                                         response_mode="option_required")
+        assert interp in ("ambiguous", "unmatched_option") and oid is None
+        # option_or_text: same char is just free text, still no crash
+        interp2, _ = hb.interpret_reply(f"² {self.T}", token=self.T, options=self.OPTS,
+                                        response_mode="option_or_text")
+        assert interp2 in ("ambiguous", "free_text")
+
+
+def test_clarification_not_marked_on_send_failure(tmp_path):
+    rec = _ask_opts(str(tmp_path), options=OPTS, response_mode="option_required")
+    # first send FAILS (000) → not marked → a later 2xx send still goes out
+    n1 = hb.maybe_send_clarification(rec, "unmatched_option", state_dir=str(tmp_path),
+                                     notify=lambda m: "000")
+    n2 = hb.maybe_send_clarification(rec, "unmatched_option", state_dir=str(tmp_path),
+                                     notify=lambda m: "200")
+    assert n1 is False and n2 is True

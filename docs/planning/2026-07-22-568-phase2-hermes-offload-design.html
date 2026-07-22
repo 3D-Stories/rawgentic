@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#568 Phase-2 — Hermes Offload Seat Design</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-22 03:49 MDT</div>
+<h1>#568 Phase-2 — Hermes Offload Seat Design</h1>
+
+</header>
+<main>
+<h1>#568 Phase-2 — Hermes offload seat + numbered-option asks + unattended fallback policy</h1>
+<p>Design r3 · 2026-07-22 · session 3544db7b · issue #568 (Phase-2 slice) · plugin 3.87.0 → 3.88.0, phase_executor 0.8.0 → 0.9.0 r3 delta (folds 24 Step-4 findings, gpt-5.6-sol self-review + adversarial, all verified vs code): SCOPE NARROWED — the offload seat ships CONTRACT-CORRECT + CI-tested but ACTIVATION-GATED (preflight REFUSES an unsandboxed gateway backend, F7); operational WF2-phase wiring + live dispatch defer to Phase-3 (F6/F17). Contract fixes: manifest.confinement REQUIRED (F1); identity attestation actual_model=&quot;hermes-agent&quot; from /health platform field, no contract change (F2 dissolved-as-overclaim); use existing USAGE_UNAVAILABLE parse_status not an invented field (F3); map hermes failures to existing parse_status/AVAILABILITY_FAILURES (F4); effort text de-contradicted (adv-F3). Policy inputs completed (F5). Runbook firewall order + negative probe + fail-loud credential (F8/F9). §15 D-P2-6. r2 delta (retained): effort-engine correction; §8 live-spike platform_apis; §10 executed/remaining. Inputs: exa + context7 research (hermes-agent official docs), gpt-5.6-sol peer proposal (<code>docs/reviews/peer-2026-07-22-568-phase2-problem-statement-2026-07-22.md</code>), problem statement (<code>docs/planning/2026-07-22-568-phase2-problem-statement.md</code>), Phase-1 shipped bridge (<code>hooks/hermes_bridge.py</code>, v3.87.0).</p>
+<h2>§0 Closure + conditionality (owner decisions, 2026-07-22)</h2>
+<ul>
+<li><strong>D-P2-1:</strong> ONE WF2 run, ONE PR carrying all three strands. Version bump 3.87.0→3.88.0 (×4</li>
+</ul>
+<p>  surfaces) + phase_executor 0.8.0→0.9.0 (pyproject + <code>__init__</code>).</p>
+<ul>
+<li><strong>D-P2-2:</strong> live verification of the offload seat is <strong>DEFERRED</strong> (darwin API-server enablement</li>
+</ul>
+<p>  is owner-attended; owner away). The PR ships CI-verified with injected transports + the   enablement runbook; live cells run owner-attended later. <strong>PR says &quot;Part of #568&quot;, never   &quot;Closes&quot;</strong> — #568 stays OPEN (Phase-3+ enumerated in §14).</p>
+<ul>
+<li><strong>D-P2-4 (owner, 2026-07-22, supersedes D-P2-2&#x27;s deferral):</strong> &quot;you have permission to merge and</li>
+</ul>
+<p>  do what you need to to smoketest. You can get into darwin through charlie&quot; — merge grant live   for this resumed run; the darwin enablement (§10) is executed BY THE RUN via the charlie→darwin   hop and the live smoke runs in-run. D-P2-2&#x27;s deferral remains the FALLBACK if the hop or   enablement fails (honest partial, runbook still ships). PR stays &quot;Part of #568&quot;.</p>
+<ul>
+<li>Diagram decision: <strong>no WF2-spine change → no diagram REV.</strong> The offload seat is a routing-table</li>
+</ul>
+<p>  + engine addition dispatched via the existing <code>dispatch</code> CLI; no WF2 step semantics change.</p>
+<h2>§1 Problem and goals</h2>
+<p>Phase-1 (shipped) gave unattended runs a one-way-plus-reply owner channel: ask by text, receive the tokened reply into a resumable workflow. Three gaps remain (owner-selected scope, all three):</p>
+<p>1. <strong>(i) Offload seat</strong> — no cheap always-on lane for small read-only research/lookup subtasks;    everything burns main-session (or Claude/codex seat) context and quota. The Hermes gateway on    darwin (10.0.17.204, systemd <code>hermes-gateway.service</code>, gpt-5.5 via openai-codex subscription —    a quota pool the harness does not otherwise touch) is idle capacity. 2. <strong>(ii) Ask ergonomics</strong> — a free-text tokened reply is error-prone on a phone. An ask that    carries numbered options (&quot;1 = merge, 2 = hold&quot;) lets the owner reply <code>1</code>. 3. <strong>(iii) Unattended fallback policy</strong> — when may a text substitute for the terminal, and what    happens when the gateway / BlueBubbles / the bridge is down mid-run? Today: implicit.</p>
+<p><strong>Non-goals:</strong> a second Hermes instance (owner hard constraint); gateway-internal modifications; runtime SSH to darwin (denied + wal-guard-blocked); mutating offload work; session affinity / streaming SSE consumption / adaptive concurrency (Phase-3, §14); replacing the sentinel notify.sh outbound path.</p>
+<h2>§2 Verified facts and probes</h2>
+<p>Confirmed (with evidence):</p>
+<ul>
+<li>Hermes ships an <strong>OpenAI-compatible HTTP API server platform</strong> inside the same gateway process:</li>
+</ul>
+<p>  <code>gateway/platforms/api_server.py</code>; endpoints <code>POST /v1/runs</code> (202 + run_id), <code>GET /v1/runs/{id}</code>,   <code>GET /v1/runs/{id}/events</code> (SSE), <code>POST /v1/runs/{id}/stop</code>, <code>POST /v1/chat/completions</code>,   <code>GET /v1/capabilities</code>, <code>GET /v1/models</code>, <code>GET /health</code>. Auth <code>API_SERVER_KEY</code>; enablement   <code>hermes config set API_SERVER_ENABLED true</code> + <code>API_SERVER_KEY &lt;name&gt;</code>; <code>API_SERVER_HOST/PORT</code>   env. Source: official docs site (hermes-agent.nousresearch.com, programmatic-integration +   api-server pages) + context7 <code>/nousresearch/hermes-agent</code> (config.py source quoted).</p>
+<ul>
+<li>darwin reachable from .205 (ping 0.3 ms); <strong>SSH denied</strong> for root/rocky00717/hermes/admin</li>
+</ul>
+<p>  (live probe 2026-07-22). Runtime path must be HTTP.</p>
+<ul>
+<li>Gateway relays inbound BlueBubbles to gateway-internal skills only</li>
+</ul>
+<p>  (<code>docs/planning/2026-07-22-568-hermes-inbound-investigation.md</code>) — harness-sent BB texts are   <code>isFromMe=true</code> (owner&#x27;s Apple ID), so BlueBubbles-as-RPC is rejected.</p>
+<ul>
+<li>Seat model plug-in surfaces verified in-tree: <code>ADAPTERS</code> (<code>adapters/__init__.py:9</code>),</li>
+</ul>
+<p>  <code>PROVIDER_ENGINE</code> (<code>engine.py:29</code>), routing table   <code>phase_executor/src/phase_executor/routing/rawgentic.routing-table.json</code>, <code>WIRED_SEATS</code>   (<code>hooks/executor_routing_lib.py:58</code>). Read-only seats ride the sync path — no worktree /   canary / <code>MUTATING_FS_SANDBOXED</code> involvement.</p>
+<p><strong>RESOLVED (probed 2026-07-22 via charlie→darwin hop, D-P2-4):</strong> darwin runs <strong>Hermes Agent v0.18.2 (2026.7.7.2)</strong>, gateway active, and <code>api_server.py</code> IS present at <code>/usr/local/lib/hermes-agent/gateway/platforms/api_server.py</code> (ls-confirmed). Remaining deferred-to-target: the live <code>/v1/runs</code> request/response field shapes — probed at enablement (§10 step 4) before the adapter&#x27;s live smoke; the adapter defends regardless (§4 preflight + versioned-fixture parsing). Hop: <code>ssh charlie</code> (rocky00717@10.0.17.200) → <code>ssh root@10.0.17.204</code>.</p>
+<h2>§3 Architecture overview</h2>
+<pre><code>.205 orchestrator                              darwin (10.0.17.204)
+  dispatch --seat offload ──HTTP──▶  hermes-gateway.service (EXISTING, unmodified)
+    hermes engine adapter                └─ api_server platform (one-time enablement)
+      POST /v1/runs (fresh session)      └─ AIAgent core (gpt-5.5, openai-codex quota)
+      poll GET /v1/runs/{id}
+      best-effort /stop on deadline
+      → Observation (usage completeness marked)
+      → output wrapped UNTRUSTED_DATA
+
+  hooks/hermes_bridge.py (Phase-1, extended)   BlueBubbles server 10.0.17.148:1234
+    ask_owner(..., options=[...]) ──text──▶ owner phone
+    poll: strict option/token parse ◀──reply──
+  hooks/hermes_policy.py (NEW, pure)
+    unattended decision table (iii)</code></pre>
+<h2>§4 Strand (i) — offload seat detailed design</h2>
+<p><strong>Engine <code>hermes</code>, provider <code>nousresearch</code>, seat <code>offload</code>, pool <code>hermes</code> (cap 1).</strong></p>
+<ul>
+<li><strong>Adapter</strong> <code>phase_executor/src/phase_executor/adapters/hermes_http.py</code>: pure <code>parse_*</code></li>
+</ul>
+<p>  functions (fixture-tested, no I/O) + <code>run(AdapterRequest)</code> with an <strong>injectable HTTP   transport</strong> (CI never needs a live gateway; mirrors the Phase-1 bridge&#x27;s injectable   transport pattern). Prompt in the request body, never argv. Flow:   1. Resolve credential by NAME (<code>credential_ref</code> → env <code>HERMES_API_SERVER_KEY</code>); never in      argv/logs/Observations; auth header redacted from all diagnostics.   2. Bounded preflight: <code>GET /health</code>, then <code>GET /v1/capabilities</code> (cached briefly). Missing      run capability → typed availability/config error, never a malformed-model error.   3. <code>POST /v1/runs</code> with a <strong>fresh session identity per dispatch</strong> (injection containment;      no session reuse in Phase-2) and a self-contained, bounded, read-only prompt.   4. Persist <code>run_id</code> into capture/audit metadata AS SOON as it exists (traceability).   5. Poll <code>GET /v1/runs/{id}</code> with bounded exponential backoff + jitter until a recognized      terminal status or deadline (manifest <code>timeout_s</code>, default 300). Enforce a max response-body      read (<code>HERMES_MAX_RESP_BYTES</code>, default 256 KiB) and a max output length — a breach returns a      typed failure, never unbounded memory/capture growth (F14).   6. On deadline/cancel: ONE best-effort <code>POST /v1/runs/{id}/stop</code> with its own short timeout;      record whether stop was acknowledged; return without waiting further.   7. Normalize to a <code>ParsedResult</code> and let the SHARED <code>resolve_parse_status</code> (adapters/base.py)      classify (F3 fix — no invented field): <code>actual_model</code> is attested (see identity below), so a      completed run with usage → <code>OK</code>; a completed run whose <code>usage</code> is absent/partial → the EXISTING      <code>USAGE_UNAVAILABLE</code> status with <code>usage: null</code> (verify_post VERIFIES a usage_unavailable call      whose identity matches — enforce.py:256-258). Never a fabricated zero, never a new top-level      Observation key (the v2 object is closed, <code>additionalProperties:false</code>).</p>
+<ul>
+<li><strong>Identity attestation (F2 fix — no contract change).</strong> The seat routes under model id</li>
+</ul>
+<p>  <code>hermes-agent</code>; the adapter sets <code>actual_model = &quot;hermes-agent&quot;</code> from the gateway&#x27;s own   attestation (<code>GET /health</code> → <code>{&quot;platform&quot;:&quot;hermes-agent&quot;,...}</code>, corroborated by the run   object&#x27;s <code>&quot;object&quot;:&quot;hermes.run&quot;</code>). <code>requested==actual</code> → <code>verify_post</code> VERIFIES (enforce.py:272).   The innermost gpt-5.5 is Hermes&#x27;s internal model choice, NOT the seat&#x27;s routed identity — the   seat contracts on the platform, exactly as a codex seat contracts on <code>codex</code>, not on the   server-side model. (The self-review claimed this needs a versioned contract change; verified   false — <code>hermes-agent</code> is a legitimate attested identity.)</p>
+<ul>
+<li><strong>Failure taxonomy → EXISTING statuses/exits (F4 fix).</strong> No custom <code>parse_status</code> values. Map:</li>
+</ul>
+<p>  transport/connect failure + gateway-down + <code>/health</code> fail → <code>NO_RESPONSE</code>/<code>LAUNCH_ERROR</code>   (∈ <code>AVAILABILITY_FAILURES</code> → honest availability, dispatch exit 3); a terminal <code>failed</code>   run (model-layer error) → <code>HARNESS_ERROR</code> with the gateway <code>error</code> string surfaced; missing   run-capability at preflight → availability (config) failure, exit 3; <code>submission_unknown</code>   (POST timeout, no run_id) → <code>NO_RESPONSE</code> with a <code>submission_unknown</code> note in capture metadata,   NEVER auto-retried (no idempotency key). The custom nuance rides capture metadata, not the   enum — so <code>dispatch_seat</code>/<code>run_seat</code> behavior (fallback vs breach) stays contract-correct.</p>
+<ul>
+<li><strong>ACTIVATION GATE (F7 fix — the load-bearing safety change).</strong> Before any <code>POST /v1/runs</code>, the</li>
+</ul>
+<p>  adapter probes the gateway&#x27;s backend disposition (<code>GET /v1/capabilities</code> / <code>/health/detailed</code>);   if the gateway reports an <strong>unsandboxed <code>local</code> terminal backend</strong>, the seat <strong>REFUSES to   dispatch</strong> (typed configuration availability failure, exit 3, logged) — because rawgentic&#x27;s   <code>tool_grants:[&quot;read&quot;]</code> is caller-side capability-selection, NOT a gateway sandbox   (contract.py:311-312), so an unsandboxed gateway could execute injected instructions as the   darwin host user. The seat becomes live ONLY when the gateway runs a sandboxed backend   (<code>terminal.backend: docker</code>) — an owner Phase-3 step. So this PR ships the seat CI-correct but   INERT on the current darwin config; that is the honest, safe posture (it is NOT &quot;read-only   forever&quot; — it is &quot;refuses to run until the gateway can enforce read-only&quot;).</p>
+<ul>
+<li><strong>Submission-ambiguity rule:</strong> (see taxonomy) <code>submission_unknown</code> never auto-retries.</li>
+<li><strong>Registration touchpoints:</strong> <code>ADAPTERS[&quot;hermes&quot;]</code>; <code>PROVIDER_ENGINE[&quot;nousresearch&quot;] = &quot;hermes&quot;</code>;</li>
+</ul>
+<p>  routing table: pool <code>hermes: 1</code>, seat <code>offload</code> <code>{manifest{session_policy: fresh,   tool_grants: [&quot;read&quot;], effort: &quot;medium&quot;, confinement: {&quot;nousresearch&quot;: &quot;gateway-api-key +   activation-gate (unsandboxed-refused)&quot;}, bounds{timeout_s: 300, max_budget_usd: 1.0}},   primary{model: &quot;hermes-agent&quot;, lane{provider: &quot;nousresearch&quot;, transport: &quot;http&quot;,   auth_mode: &quot;api_key&quot;, credential_ref: &quot;HERMES_API_SERVER_KEY&quot;, pool: &quot;hermes&quot;}},   chain: []}</code>; <code>WIRED_SEATS += {&quot;offload&quot;}</code>. <strong><code>manifest.confinement</code> is REQUIRED by   <code>routing-table.schema.json</code> and <code>routing.py:63-70</code> rejects any lane provider it doesn&#x27;t cover   (F1)</strong> — the entry above satisfies it (honest string: the confinement is the API-key + the   activation gate, NOT an OS sandbox). NOT in <code>_MUTATING_ENGINES</code>, NOT in <code>MUTATING_FS_SANDBOXED</code>,   no <code>compose_supervised_argv</code> entry, no canary policy — this seat is non-mutating on the .205   side; a future mutating grant re-opens ALL of those gates by design.</p>
+<ul>
+<li><strong>Effort handling:</strong> the routing schema requires <code>manifest.effort</code> and both</li>
+</ul>
+<p>  <code>contract.resolve_effort</code> (engine.py:143 sync path) and <code>contract.profile_from_manifest</code>   (engine.py:82) fail-closed on engines outside <code>_EFFORT_ENGINES</code>. So: add <code>&quot;hermes&quot;</code> to   <code>_EFFORT_ENGINES</code> (contract.py:371); add <code>SUPPORTED_EFFORT[&quot;hermes-agent&quot;] = (&quot;medium&quot;,)</code>   (model_capabilities.py) — this satisfies the <code>test_registry_covers_shipped_table</code> superset   guard. <strong>CAPABILITY_REVISION is NOT bumped</strong> (correction found in Step-8: a new-engine row is   additive — no existing model&#x27;s capability semantics change — and <code>test_engine.py:308-330</code>   ASSERT the produced <code>capability_revision == 1</code> for unchanged models; the &quot;bump on any edit&quot;   docstring convention targets capability CHANGES, which this is not). No <code>ENGINE_NONE_EFFORT</code>   entry. Manifest pins <code>effort: &quot;medium&quot;</code>. <code>run_seat</code> resolves the   CALLER effort arg, not <code>manifest.effort</code> (engine.py:140-150), so with a bare <code>dispatch</code> (no   <code>--effort</code>) hermes resolves <code>None</code> → identity (passes through); with <code>--effort medium</code> it   resolves medium. EITHER way the adapter ACCEPTS the resolved effort and does NOT forward it to   the gateway (no effort control) — pinned by a test asserting both the no-<code>--effort</code> and   explicit-<code>medium</code> paths dispatch identically. (No <code>effort-omission tolerance</code> — hermes IS in   <code>_EFFORT_ENGINES</code>; the earlier draft&#x27;s contradictory wording is removed, adv-F3.)</p>
+<ul>
+<li>**Live run-object contract (read from the shipped build, darwin v0.18.2 —</li>
+</ul>
+<p>  <code>/usr/local/lib/hermes-agent/gateway/platforms/api_server.py</code>, live read 2026-07-22):**   run object = <code>{&quot;object&quot;: &quot;hermes.run&quot;, &quot;run_id&quot;: &quot;run_&lt;uuid4hex&gt;&quot;, &quot;status&quot;: &lt;str&gt;,   &quot;created_at&quot;: &lt;epoch s&gt;, &quot;updated_at&quot;: &lt;epoch s&gt;, ...}</code> (<code>_set_run_status</code> :4107-4121;   note the key is <code>run_id</code>, NOT <code>id</code>); <code>POST /v1/runs</code> requires <code>input</code> (string or message   array; optional <code>instructions</code>, <code>conversation_history</code>, <code>previous_response_id</code>), returns   202 (<code>_handle_runs</code> :4168+); <code>GET /v1/runs/{run_id}</code> returns the status object verbatim,   404 <code>{&quot;error&quot;:{&quot;code&quot;:&quot;run_not_found&quot;,...}}</code> (<code>_handle_get_run</code> :4479-4493); <code>POST   /v1/runs/{run_id}/stop</code> sets status <code>stopping</code> (<code>_handle_stop_run</code> :4632+). 202 body =   <code>{&quot;run_id&quot;: ..., &quot;status&quot;: &quot;started&quot;}</code> (:4472-4477). Status vocabulary (writers read at   :4380-4430): <code>started</code>, <code>running</code>, <code>stopping</code>, terminal <code>completed</code> (carries <code>output</code> +   <code>usage</code>), <code>failed</code> (carries <code>error</code>), <code>cancelled</code> — the adapter treats the vocabulary as   OPEN: the recognized-terminal set {completed, failed, cancelled} drives completion,   anything unrecognized past deadline fails closed. <code>usage</code> IS reported on completed runs   (:4400-4407) — consumed when present, completeness <code>unknown</code> otherwise. Errors are   OpenAI-shape (<code>invalid_api_key</code> verified live via HTTP 401). A shared concurrency limit   (<code>max_concurrent_runs</code>) can reject submissions — typed transient availability.</p>
+<ul>
+<li><strong>Fallback semantics (Step-8 correction).</strong> offload&#x27;s <code>chain</code> is <code>[claude-sonnet-5 / anthropic]</code></li>
+</ul>
+<p>  — the analysis lane. This is REQUIRED by the repo invariant <code>test_..._every_seat_has_fallback_   chain_426</code> (every seat has ≥1 fallback) AND is what the peer recommended; the earlier r3 draft&#x27;s   <code>chain: []</code> violated the invariant. Any AVAILABILITY failure — gateway down, <code>/health</code> fail, OR   the <strong>activation-gate refusal on an unsandboxed backend</strong> — falls back chain-aware to   claude-sonnet-5. This is NOT silent: <code>run_seat</code> records <code>fallback_reason</code> + the actual   <code>actual_model</code> on the Observation, and the audit names the lane used. Consequence on the current   darwin config (unsandboxed): every offload dispatch degrades to the analysis lane until the owner   sandboxes the gateway (§10-7) — a safe, audited, useful degradation (the same read-only subtask   runs on the cheap analysis lane), strictly better than a bare seat-skip. Routine offload/fallback   NEVER texts the owner. The confinement map covers BOTH <code>nousresearch</code> and <code>anthropic</code> (F1 — every   chain lane provider must be confined).</p>
+<ul>
+<li><strong>Cross-model invariant interaction:</strong> <code>cross_model_author</code> forbidden-combination logic keys on</li>
+</ul>
+<p>  engine/provider; <code>offload</code> is not an enforced role (<code>policy.enforced_roles</code> stays   <code>[&quot;review&quot;,&quot;build&quot;]</code>) — no floor, no role. Enforcement untouched.</p>
+<ul>
+<li><strong>Output trust boundary (Step-11 Codex7 correction).</strong> The adapter returns Hermes output as the</li>
+</ul>
+<p>  Observation <code>parsed_payload</code>, exactly like every other seat&#x27;s model output — there is no   special &quot;envelope&quot; in the adapter (the earlier draft overclaimed one). Because the seat has NO   operational caller in Phase-2 (F6 — offload dispatch isn&#x27;t wired into any WF2 phase yet), there   is nothing consuming that output to inject into. The untrusted-data treatment is an ORCHESTRATOR   prose rule that lands at the Phase-3 wiring point: offload results never alter routing,   approvals, or gates without independent verification; load-bearing claims get cited or   re-verified. A structured untrusted-data wrapper + an injection-resistance test belong with that   wiring (Phase-3), not with an adapter whose output no one reads yet.</p>
+<h2>§5 Strand (ii) — numbered-option asks</h2>
+<p>Extend <code>hooks/hermes_bridge.py</code> (backward-compatible; Phase-1 invariants untouched):</p>
+<ul>
+<li><strong>Ask record additions</strong> (persisted BEFORE send, so parsing never depends on mutable caller</li>
+</ul>
+<p>  state): <code>options: [{id: 1, label: str}, ...]</code> (ordered, stable integer ids, 1-based),   <code>response_mode ∈ {free_text, option_required, option_or_text}</code> (default <code>free_text</code> — an   optionless ask is bit-for-bit today&#x27;s behavior). Label-collision detection at ask creation   (normalized-duplicate labels rejected, fail-closed).</p>
+<ul>
+<li><strong>Outbound rendering:</strong> question + numbered option lines + the existing token line.</li>
+<li><strong>Reply interpretation</strong> (strict, after the existing exact-token gate &amp; owner/dedup filters):</li>
+<li>trimmed digits-only payload → that option id (unknown id → ambiguous);</li>
+<li>exact normalized label match → that option ONLY if unique;</li>
+<li><code>N: label</code> / <code>N - label</code> → selected only when both resolve to the SAME option;</li>
+<li>conflicts / duplicate matches → <code>ambiguous</code> → deliver NOTHING (Phase-1 never-wrong-act);</li>
+<li>any other text → <code>free_text</code> (valid only when response_mode permits; <code>option_required</code> +</li>
+</ul>
+<p>    free text → disposition <code>unmatched_option</code>, delivered nothing, at most one deduplicated     clarification text sent when transport is healthy).</p>
+<ul>
+<li><strong>Inbox doc additions:</strong> <code>reply: {raw, interpretation ∈ {selected, free_text}, option_id?}</code>.</li>
+</ul>
+<p>  Raw text ALWAYS preserved. Only <code>selected</code> may satisfy an <code>option_required</code> gate.</p>
+<ul>
+<li><code>render_resume_prompt</code> gains the selected-option line; DATA envelope unchanged.</li>
+</ul>
+<h2>§6 Strand (iii) — unattended fallback policy</h2>
+<p><strong>New <code>hooks/hermes_policy.py</code></strong> — pure, table-driven, no I/O (decision guide §3 of repo manual: policy that can&#x27;t evaluate → fail-closed). Complete typed input contract (F5/adv-F1 — the earlier draft omitted three predicates the table branches on): <code>{ask_criticality ∈ {critical, advisory}, attendance_mode ∈ {attended, unattended}, delivery_state ∈ {unsent, send_failed, delivery_unknown, delivered}, transport_state ∈ {healthy, bb_read_down, gateway_down}, response_mode ∈ {free_text, option_required, option_or_text}, dispatch_requirement ∈ {optional, hermes_required}, remote_reply_allowed: bool, deadline_state ∈ {within, expired}, has_fallback: bool}</code> → <code>{action ∈ {resume, pause_resumable, seat_skip, fallback_dispatch, error_protocol, wait, clarify_once, continue_safe_branch}, notify ∈ {none, run_status, blocker}, disposition: str}</code>. Output values are ENUMERATED (F12) — a fixed <code>ACTIONS</code>/<code>NOTIFY</code> tuple the tests pin, so callers cannot invent incompatible strings. Any missing or contradictory input combination → fail-closed (<code>pause_resumable</code>, <code>notify=run_status</code>) — never a silent default. Hooks own transport + durable state; this module owns decisions; skill prose only DESCRIBES.</p>
+<p>Decision table (normative; unit-tested row by row):</p>
+<table>
+<thead><tr><th>Situation</th><th>Unattended action</th></tr></thead>
+<tbody>
+<tr><td>Gateway down, offload optional, orchestrator has fallback</td><td>audit availability failure; re-dispatch on fallback seat; note in run summary</td></tr>
+<tr><td>Gateway down, offload optional, no fallback</td><td>visible seat-skip; continue</td></tr>
+<tr><td>Gateway down, dispatch marked hermes-required</td><td>stop at dispatch boundary; persist resumable failure; ERROR protocol</td></tr>
+<tr><td>Ask send fails / delivery unknown</td><td>durable pending-delivery record; bounded retry; critical ask ⇒ pause resumably, NO default action</td></tr>
+<tr><td>Ask delivered, BB read down</td><td>never infer a reply; critical ask waits to deadline then pauses resumably</td></tr>
+<tr><td>Ask delivered, valid reply</td><td>consume once (per-consumer GUID+token dedup, single-poller deployment — see F10 note); resume with structured DATA</td></tr>
+<tr><td>Ask delivered, ambiguous/invalid option</td><td>record disposition; deliver nothing; ≤1 deduplicated clarification</td></tr>
+<tr><td>Non-critical advisory ask unavailable</td><td>record degradation; continue only via caller&#x27;s explicit safe no-response branch</td></tr>
+</tbody>
+</table>
+<p><strong>Terminal-substitution rule:</strong> a text may stand in for terminal input ONLY when the ask is explicitly <code>remote_reply_allowed</code> AND the run is unattended AND outbound delivery is confirmed (2xx accepted); never when sending is uncertain, polling is down, the reply is ambiguous, or an <code>option_required</code> ask got free text. Accepted-by-transport ≠ owner-saw-it: critical gates always wait for a valid reply, never assume visibility. Property test (F5): NO input with <code>remote_reply_allowed == false</code> can yield a <code>resume</code> action from a text reply.</p>
+<p><strong>F10 honesty (pre-existing Phase-1 concurrency).</strong> Phase-1&#x27;s <code>deliver</code> is atomic per-inbox-file (os.link no-clobber) but two CONCURRENT pollers can each read an unanswered ask + empty consumed ledger and both return the same delivery path — a real double-resume window if two launchers race one reply. This is a PRE-EXISTING Phase-1 gap, OUT of Phase-2 scope; Phase-2&#x27;s claim is scoped to the actual single-poller deployment (the cron launcher is flock single-flight — one poller at a time). Filed as a follow-up (interprocess per-token CAS claim); NOT papered over as &quot;atomic&quot; here.</p>
+<h2>§7 Security</h2>
+<ul>
+<li><strong>Key + endpoint resolution (F9 fix — one explicit path).</strong> The dispatch boundary loads</li>
+</ul>
+<p>  <code>~/.config/rawgentic/hermes.env</code> (0600) into the process env, from which the adapter reads   <code>HERMES_API_URL</code> (endpoint) + <code>HERMES_API_SERVER_KEY</code> (secret, via <code>credential_ref</code>). There is   no dotenv magic in phase_executor; the loader is an explicit, tested helper at the executor   dispatch boundary (mirrors the Phase-1 bridge&#x27;s <code>_read_bb_conf</code>). Key referenced by NAME   everywhere; auth headers redacted from every log/traceback/Observation (Phase-1 <code>redact</code>   extended). A missing/empty key or URL → typed configuration availability failure at preflight,   never a dispatch with an empty Authorization header.</p>
+<ul>
+<li><strong>Bind scope:</strong> darwin binds the API server to its LAN address, key required, firewall</li>
+</ul>
+<p>  restricted to source .205 (EXECUTED live 2026-07-22: iptables ACCEPT from 10.0.17.205 +   DROP others on tcp/8710 — runtime rules; persistence is an owner runbook step). Plain HTTP   on the isolated homelab LAN is ACCEPTED risk — same trust level as today&#x27;s BlueBubbles   password over LAN HTTP; named residual: passive capture on the LAN segment. TLS via   owner-managed proxy = Phase-3 option.</p>
+<ul>
+<li><strong>Unsandboxed gateway execution (the api_server&#x27;s OWN startup warning, captured live):</strong></li>
+</ul>
+<p>  &quot;API server is network-accessible (10.0.17.204) AND the terminal backend is &#x27;local&#x27;   (unsandboxed). Agent work dispatched through this endpoint runs as the host user with full   terminal/file access.&quot; The offload seat&#x27;s <code>tool_grants: [&quot;read&quot;]</code> is a rawgentic-side   manifest — the GATEWAY does not enforce it. Mitigations, stated honestly: (a) bearer-key   auth (verified 401), (b) firewall to .205 only (verified), (c) offload briefs are   read-only by POLICY and the orchestrator treats results as UNTRUSTED_DATA, (d) darwin is a   single-purpose homelab VM the gateway already runs on with the same access. <strong>DECISIVE (F7):   the adapter&#x27;s ACTIVATION GATE (§4) REFUSES to dispatch while the gateway reports an unsandboxed   <code>local</code> backend — so this PR cannot send a single offload task to the current darwin config.</strong>   The seat goes live only when the owner sets <code>terminal.backend: docker</code> (or equivalent sandbox)   on the gateway — moved from a Phase-3 aspiration into a Phase-2 hard precondition.</p>
+<ul>
+<li><strong>Prompt-injection surface:</strong> Hermes output is untrusted data (§4); options/labels in asks are</li>
+</ul>
+<p>  caller-owned; reply text remains DATA (Phase-1 envelope).</p>
+<ul>
+<li><strong>No new attack surface on the gateway beyond the platform Hermes itself ships</strong>; zero</li>
+</ul>
+<p>  gateway-code modification.</p>
+<h2>§8 Platform / external dependencies (#226)</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: BlueBubbles POST /api/v1/message/query (paginated read) and message/text send on the BB server 10.0.17.148:1234</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — hooks/hermes_bridge.py:365-420 (_query_page/_default_transport) and sentinel notify.sh path, Phase-1 shipped live v3.87.0   failure: fail-loud</p>
+<ul>
+<li>api: hermes api_server platform enablement + LAN bind on the existing darwin gateway (v0.18.2, systemd hermes-gateway.service)</li>
+</ul>
+<p>  feasibility: verified via spike — enabled live 2026-07-22 via charlie→darwin hop (hermes config set API_SERVER_ENABLED/KEY/HOST/PORT + systemctl restart); ss shows LISTEN 10.0.17.204:8710 pid hermes; journalctl api_server startup line captured   failure: fail-loud</p>
+<ul>
+<li>api: GET /health on http://10.0.17.204:8710 from .205 (cross-host reachability + firewall path)</li>
+</ul>
+<p>  feasibility: verified via spike — live curl from .205 2026-07-22: HTTP 200 {&quot;status&quot;:&quot;ok&quot;,&quot;platform&quot;:&quot;hermes-agent&quot;,&quot;version&quot;:&quot;0.18.2&quot;}   failure: fail-loud</p>
+<ul>
+<li>api: api_server bearer-key auth gate on /v1/* endpoints</li>
+</ul>
+<p>  feasibility: verified via spike — unauthenticated GET /v1/capabilities from .205 2026-07-22: HTTP 401 {&quot;error&quot;:{&quot;code&quot;:&quot;invalid_api_key&quot;}} (auth enforced; OpenAI error shape confirmed live)   failure: fail-loud</p>
+<ul>
+<li>api: POST /v1/runs submit + GET /v1/runs/{run_id} poll + POST /v1/runs/{run_id}/stop lifecycle field shapes</li>
+</ul>
+<p>  feasibility: verified via capabilities-file — /usr/local/lib/hermes-agent/gateway/platforms/api_server.py on the TARGET darwin build, read live 2026-07-22: routes :4805-4809, run object _set_run_status :4107-4121 ({&quot;object&quot;:&quot;hermes.run&quot;,&quot;run_id&quot;,...}), input contract _handle_runs :4168+, get/stop :4479/:4632   failure: fail-silent   surface: adapter normalizes to ParsedResult → shared resolve_parse_status (existing enum, no new field); fail-closes on any unrecognized response shape or unrecognized-terminal status past deadline (typed availability error, never a silent empty result — the Phase-1 BridgeUnreachable pattern); versioned response fixtures (tests/phase_executor/fixtures/hermes/, transcribed from the shipped darwin build) pin the contract in CI; capability preflight (/health + /v1/capabilities) + the unsandboxed-backend ACTIVATION GATE precede every dispatch; the authenticated end-to-end run from .205 is a deferred owner-attended cell (#138 deferral — key custody stayed on darwin per D-P2-5, AND the activation gate blocks it on the current unsandboxed backend regardless)</p>
+<h2>§9 Testing strategy (red-first)</h2>
+<ul>
+<li>Adapter: pure <code>parse_*</code> over versioned response fixtures (success, failure, cancelled,</li>
+</ul>
+<p>  malformed, contradictory-status → fail-closed); <code>run()</code> with injected fake transport covering   the full lifecycle incl. submission_unknown, stop-ack/stop-lost, deadline, usage-absent.</p>
+<ul>
+<li>Routing: table referential integrity, dead-seat assertion, pool cap, provider→engine map,</li>
+</ul>
+<p>  effort-omission tolerance for <code>hermes</code>, <code>offload ∈ WIRED_SEATS</code>, dispatch CLI <code>resolve-seat offload</code>.</p>
+<ul>
+<li>Bridge (ii): option schema validation, collision rejection, every parser row of §5, backward</li>
+</ul>
+<p>  compat (optionless ask byte-identical behavior), ledger round-trip, <code>option_required</code> gating.</p>
+<ul>
+<li>Policy (iii): every decision-table row; property: no input combination yields a</li>
+</ul>
+<p>  default-action on a critical ask.</p>
+<ul>
+<li>Live (<code>@pytest.mark.live</code>, RUN_LIVE=1, skipped in CI): one end-to-end offload dispatch +</li>
+</ul>
+<p>  one live optioned ask — the deferred owner-attended cells.</p>
+<h2>§10 Darwin enablement runbook (one-time; ships in PR) — EXECUTED/REMAINING state, 2026-07-22</h2>
+<p>EXECUTED in-run (D-P2-4, via charlie→darwin hop — <code>ssh charlie</code> then <code>ssh root@10.0.17.204</code>): 1. ✅ Version check: hermes v0.18.2 (2026.7.7.2), <code>api_server.py</code> present. (If ever absent:    <code>hermes update</code> — never <code>hermes gateway install --force</code>, user-unit port flap.) 2. ✅ <code>hermes config set API_SERVER_ENABLED true</code> + <code>API_SERVER_KEY &lt;generated on darwin,    never left the host&gt;</code> + <code>API_SERVER_HOST 10.0.17.204</code> + <code>API_SERVER_PORT 8710</code>;    <code>systemctl restart hermes-gateway.service</code> → active, LISTEN 10.0.17.204:8710. 3. ⚠️ Firewall (runtime, EXECUTED but ORDER-UNVERIFIED — F8): <code>iptables -I INPUT ... -s    10.0.17.205 -j ACCEPT</code> + <code>iptables -A INPUT ... -j DROP</code>. The <code>-A</code> DROP is APPENDED, so any    earlier broad ACCEPT in the INPUT chain wins first-match — the recorded probes proved positive    access from .205 + auth-401, NOT rejection from a third host. Owner MUST re-do per step 5. 4. ✅ Verify from .205: <code>/health</code> HTTP 200 (no auth needed); <code>/v1/capabilities</code> without key    HTTP 401 invalid_api_key (auth enforced).</p>
+<p>REMAINING (owner, one-time — the auto-mode classifier correctly refuses credential transfer off darwin and darwin-firewall edits mid-run; each is a one-liner): 5. On darwin — install an ORDERED, dedicated chain (F8: insert-before-broad-ACCEPT, not append),    allow .205 + darwin-self, DROP the port from all else, then a NEGATIVE probe from a third host,    then persist:</p>
+<pre><code>   iptables -N HERMES8710 2&gt;/dev/null; iptables -F HERMES8710
+   iptables -A HERMES8710 -s 10.0.17.205 -j ACCEPT
+   iptables -A HERMES8710 -s 10.0.17.204 -j ACCEPT   # darwin-local clients (self-source hit the old DROP)
+   iptables -A HERMES8710 -j DROP
+   iptables -C INPUT -p tcp --dport 8710 -j HERMES8710 2&gt;/dev/null || iptables -I INPUT 1 -p tcp --dport 8710 -j HERMES8710
+   # NEGATIVE probe from a non-.205 host (expect timeout/refused):
+   #   ssh &lt;other-lan-host&gt; &#x27;curl -m5 http://10.0.17.204:8710/health&#x27;   # must FAIL
+   netfilter-persistent save        # or the host&#x27;s persistence mechanism — runtime rules vanish on reboot</code></pre>
+<p>6. Copy the key to .205 (owner terminal — FAIL-LOUD, adv-F5: pipefail + non-empty assert + atomic    0600 write + immediate authenticated /v1/capabilities check):</p>
+<pre><code>   set -euo pipefail
+   K=$(ssh charlie &quot;ssh root@10.0.17.204 &#x27;grep -m1 -oiP \&quot;api_server_key[=: ]+\\K[A-Za-z0-9._-]+\&quot; /root/.hermes/.env /root/.hermes/config.yaml&#x27;&quot;)
+   [ -n &quot;$K&quot; ] || { echo &#x27;ABORT: empty key extracted&#x27;; exit 1; }
+   install -m700 -d ~/.config/rawgentic
+   umask 077; printf &#x27;HERMES_API_URL=http://10.0.17.204:8710\nHERMES_API_SERVER_KEY=%s\n&#x27; &quot;$K&quot; &gt; ~/.config/rawgentic/hermes.env
+   curl -fsS -m8 -H &quot;Authorization: Bearer $K&quot; http://10.0.17.204:8710/v1/capabilities &gt;/dev/null &amp;&amp; echo OK-CAPABILITIES</code></pre>
+<p>7. <strong>Gateway sandbox precondition (F7 — REQUIRED before the seat can dispatch):</strong> set a sandboxed    backend on the gateway (<code>hermes config set terminal.backend docker</code> or equivalent) and restart;    until then the adapter&#x27;s activation gate refuses every offload dispatch. Verify:    <code>/v1/capabilities</code> (or <code>/health/detailed</code>) reports a non-<code>local</code> backend. 8. Then the deferred live cell: <code>RUN_LIVE=1 pytest tests/phase_executor/test_hermes_adapter.py -m live</code>    (authenticated .205-originated submit→poll→complete on the SANDBOXED backend; also surfaces    whether the gateway&#x27;s own ChatGPT/codex model auth needs re-login — 401s to    chatgpt.com/backend-api/codex were observed in its pre-restart journal).</p>
+<h2>§11 Acceptance criteria (this PR)</h2>
+<p>1. <code>dispatch --seat offload</code> resolves (confinement satisfied, effort medium, WIRED_SEATS),    preflights, and (with injected transport) completes the full submit→poll→normalize lifecycle    producing a schema-valid Observation (<code>actual_model=&quot;hermes-agent&quot;</code> verified by verify_post;    usage-absent → <code>USAGE_UNAVAILABLE</code>, never a new field); gateway-down / unsandboxed-backend /    submission-unknown each yield a typed availability failure and a visible skip/fallback decision    point — never a hang, never a silent downgrade, never a fabricated success. 2. <strong>Activation gate:</strong> with the gateway reporting an unsandboxed <code>local</code> backend, the seat REFUSES    to dispatch (typed config-availability failure) — proven by an injected-capabilities test. The    seat is live-tested (@live) ONLY against a sandboxed backend; on the current darwin config it is    inert-by-design (F7). 3. Ask with options: rendered, parsed per §5 rules; all dispositions covered by tests; optionless    asks regress nothing (existing Phase-1 suite untouched-green); collision fail-closed at creation. 4. Policy module: §6 table fully implemented + tested with enumerated outputs; property test — no    critical-ask path reaches a default action, and no <code>remote_reply_allowed==false</code> path resumes    from a text reply. 5. Enablement + sandbox-precondition runbook committed (docs/hermes-offload.md); live cells marked    <code>@pytest.mark.live</code> and documented as the deferred owner-attended verification (D-P2-2/§10 5-8). 6. Version ×4 + phase_executor ×2 bumped; README changelog entry (diagram: no REV explicit, +    DATA.seatRouting digest regen note); suite delta stated vs recorded baseline (4447 base).</p>
+<h2>§12 Task decomposition sketch (WF2 Step 5 refines)</h2>
+<p>T1 adapter parse layer + fixtures (red-first) · T2 adapter run() + injected transport + submission_unknown/stop semantics · T3 routing table + registration surfaces + dispatch wiring · T4 bridge options (schema/render/parse/ledger) · T5 policy module + decision-table tests · T6 runbook + docs + versions + changelog. Risk: T2/T3/T4 high (Step 8a wave fires).</p>
+<h2>§13 Risks (adopted from peer + own)</h2>
+<p>LAN plain-HTTP capture (accepted, named §7) · darwin version gap (runbook step 1) · orphaned remote run on lost /stop (run_id + stop-ack recorded; no auto-resubmit) · injection via offload output (§4 envelope + no-routing-influence rule) · fallback cost distortion (fallback keeps the original dispatch budget; audit names actual engine) · option-label collisions (fail-closed at creation) · gateway throttling (typed transient availability, bounded retry) · gateway model-backend auth staleness (401s to chatgpt.com/backend-api/codex observed in the pre-restart journal — a submitted run may fail at the MODEL layer even with a healthy API server; surfaces as a failed run status, typed provider failure; owner re-auth is §10-7&#x27;s live cell) · classifier no-credential-transfer constraint on autonomous runs (D-P2-5).</p>
+<h2>§14 Phase-3+ (enumerated, not committed)</h2>
+<p>Operational wiring of the offload seat into WF2 phases (a caller that actually dispatches research subtasks — the F6 deferral) · gateway sandboxed backend (<code>terminal.backend: docker</code>) so the activation gate opens · interprocess per-token CAS claim to close the Phase-1 concurrent-poller double-resume window (F10) · session affinity w/ explicit retention rules · SSE event streaming · idempotent submission (if API grows a key) · adaptive pool sizing from measured gateway behavior · TLS termination · usage/cost enrichment when the gateway reports it · WebSocket interactive features · texting Darwin to self-reconfigure.</p>
+<h2>§14b Step-11 review remediation (2026-07-22, session 3544db7b)</h2>
+<p>Cross-model Step-11 (Codex gpt-5.6-sol diff review) + two Opus reviewers (mechanical, architecture) triangulated on the SAME real defects — all fixed in-branch (all latent: seat activation-gated + unwired, so severity capped at Medium; none Critical, no owner block). Reviewers confirmed CLEAN: no key leakage, no false-success classification, both policy invariants structurally guaranteed, Phase-1 backward-compat intact, wiring complete. Fixes:</p>
+<ul>
+<li><strong>Activation gate → allowlist</strong> (Codex/Opus): <code>backend_is_sandboxed</code> now allows ONLY</li>
+</ul>
+<p>  <code>VERIFIED_SANDBOX_BACKENDS = {docker, podman, gvisor}</code>; every unknown/<code>local</code>/<code>host</code>/misspelled   value refuses (was a 2-item denylist that opened on any unrecognized backend).</p>
+<ul>
+<li><strong>/health identity validated</strong> (Codex6): preflight now requires <code>status==&quot;ok&quot;</code> AND</li>
+</ul>
+<p>  <code>platform==&quot;hermes-agent&quot;</code> before the constant <code>actual_model</code> attestation.</p>
+<ul>
+<li><strong>Failure taxonomy → availability</strong> (Opus F1): transient submit (429/5xx), 404/transient poll,</li>
+</ul>
+<p>  and terminal <code>failed</code>/<code>cancelled</code> all map to AVAILABILITY so <code>run_seat</code> falls back to the   analysis lane (a failed offload degrades, not breaches); only a definite 4xx submit is a breach.</p>
+<ul>
+<li><strong>No uncaught crashes</strong> (Opus F3): <code>_coerce_usage</code> guards every int coercion (bad usage →</li>
+</ul>
+<p>  USAGE_UNAVAILABLE); <code>run()</code> catches <code>(ValueError, TypeError, RecursionError)</code> → availability;   <code>_as_dict</code> catches <code>RecursionError</code> on a hostile nested body.</p>
+<ul>
+<li><strong>Env loader wired</strong> (Codex1): <code>run()</code> loads the 0600 <code>hermes.env</code> when env is unset.</li>
+<li><strong>Bounded preflight</strong> (Opus F4): preflight/submit use <code>_PREFLIGHT_TIMEOUT_S=30</code>, only the poll</li>
+</ul>
+<p>  loop gets the full seat budget.</p>
+<ul>
+<li><strong>Bridge</strong> (Codex5/Opus-mech F1/Codex8): <code>ask_owner</code> rejects <code>option_required</code> without options;</li>
+</ul>
+<p>  <code>interpret_reply</code> uses <code>isdecimal()</code> + try/except (a superscript &quot;²&quot; degrades, never crashes);   <code>maybe_send_clarification</code> marks sent ONLY on a 2xx (a failed send stays retryable).</p>
+<ul>
+<li><strong>Live cell</strong> (Codex3): <code>test_live_offload_dispatch</code> is RUN_LIVE-guarded (was an unconditional</li>
+</ul>
+<p>  skip that could never run).</p>
+<ul>
+<li><strong>UNTRUSTED_DATA envelope</strong> (Codex7): corrected — no adapter envelope; orchestrator prose rule at</li>
+</ul>
+<p>  the Phase-3 wiring point (§4 above). +16 remediation tests. Suite delta re-measured at Step-12 full re-run.</p>
+<h2>§15 Decision log</h2>
+<ul>
+<li>D-P2-1 (owner 2026-07-22): one WF2 run, one PR, all three strands.</li>
+<li>D-P2-2 (owner 2026-07-22): live smoke deferred; PR &quot;Part of #568&quot;.</li>
+<li>D-P2-3 (owner 2026-07-22): scope = all three strands (i)+(ii)+(iii).</li>
+<li>D-P2-4 (owner 2026-07-22): merge grant + in-run smoketest via charlie→darwin authorized</li>
+</ul>
+<p>  (supersedes D-P2-2 deferral; deferral = fallback).</p>
+<ul>
+<li>D-P2-5 (session 3544db7b, 2026-07-22): the auto-mode permission classifier refused API-key</li>
+</ul>
+<p>  transfer off darwin (both directions, two shapes — not re-attempted per policy). Key custody   stays on darwin; the enablement/bind/auth/reachability spikes completed WITHOUT the key   leaving the host; the authenticated .205-originated end-to-end run is a #138 deferred cell   with the owner one-liners in §10 (5-7). Honest partial per D-P2-2 fallback semantics.</p>
+<ul>
+<li>D-P2-6 (session 3544db7b, 2026-07-22, autonomy — owner asleep, 0 Critical so no BlueBubbles</li>
+</ul>
+<p>  block): Step-4 folded 24 gpt-5.6-sol findings (self-review + adversarial, all verified vs code).   SCOPE NARROWED — (ii) options + (iii) policy ship as operational primitives; (i) offload seat   ships contract-correct + CI-tested but ACTIVATION-GATED (refuses unsandboxed gateway), with live   dispatch + WF2-phase wiring deferred to Phase-3. Contract fixes adopted: confinement (F1),   identity-via-platform-field (F2, reviewer overclaim dissolved), USAGE_UNAVAILABLE (F3), taxonomy   mapping (F4), effort de-contradiction (adv-F3), runbook firewall/credential (F8/F9). F10 named as   a Phase-1 pre-existing gap (follow-up, not scope). One design loop-back consumed (r2→r3).</p>
+<ul>
+<li>Peer consult: gpt-5.6-sol proposal adopted on transport (/v1/runs), seat shape (new engine +</li>
+</ul>
+<p>  new seat, not analysis-chain lane), fresh-session policy, usage-completeness honesty,   strict option parsing, pure policy module. DIVERGED on: PR decomposition (peer: 3 PRs;   owner D-P2-1: 1 PR — peer&#x27;s isolation preserved at TASK level) and in-chain fallback   (peer allowed configured chain to analysis; this design keeps <code>chain: []</code> + orchestrator-   explicit fallback to avoid silent cross-pool cost semantics — stricter than peer).</p>
+
+</main>
+<footer>Last updated: 2026-07-22 03:49 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
