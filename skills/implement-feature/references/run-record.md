@@ -17,8 +17,10 @@ non-negative integers and `resolved` may not exceed `findings`:
   "changes": {"files_changed": N, "insertions": N|null, "deletions": N|null,
               "commits": N},
   "tests": {"added": N, "passing": N|null, "total": N|null},
+  "run_id": "<executor run id, e.g. wf2-<issue>-<session>>",  // #473 additive; the I3<->I2 join key (optional; grammar-safe component)
   "gates": [
     {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path",
+     "findings_critical": N, "findings_high": N,   // #473 additive; both-or-neither, sum <= findings (feeds review_findings_p90)
      "reviewer_kind": "inline|reflexion|builtin_code_review|codex|hand_rolled_multi"},
     {"step": "6",  "name": "Plan Drift",            "findings": N, "resolved": N, "status": "..."},
     {"step": "8a", "name": "Per-task Review",       "findings": N, "resolved": N, "status": "..."},
@@ -92,6 +94,23 @@ with an `extra` note naming the gap rather than presenting it as deduped. Dispos
 "accepted-as-tightening" / "satisfied-by-verification" = applied-class terminal;
 any phrase outside this closed set is UNRESOLVED — the set never reopens; the only
 evidence-based terminal disposition is "refuted with cited evidence" itself.
+
+**Gate severity capture (#473, W11) — a gate-close duty, not a Step-16 reconstruction.** Like
+the `findings`/`resolved` pair above, the additive `findings_critical` / `findings_high` per
+gate are computed AT GATE CLOSE (while the finding text is in context — Step 16 cannot
+reconstruct severity) and persisted in that gate's session-note evidence; Step 16 READS them.
+They are **deduplicated by the same identity test** as `findings` (same location + same required
+change), and a finding whose severity CHANGES across passes counts at its **final severity at
+that gate's close** (the terminal disposition's severity). Both fields are optional and
+**both-or-neither**: a gate that did not stratify severity omits both (legacy-compatible); a
+gate that records one MUST record the other, and `findings_critical + findings_high` may not
+exceed `findings` (`validate_record` enforces). These feed the I3 `review_findings_p90` advisory
+alert (`docs/run-records.md`).
+
+**`run_id` (OPTIONAL, #473):** the executor run id (e.g. `wf2-<issue>-<session>`) — the join
+key linking this run-record to its `seat-outcomes.jsonl` sidecar rows. Grammar-bounded
+(`[A-Za-z0-9._-]`, 1..120) when present; omitted on legacy records (validate_record tolerates
+absence). Set it at assembly (Step 16 item 2e).
 
 **`lane` (OPTIONAL, #135):** `"small-standard"` when the run took the `<small-standard-lane>`,
 `"full"` otherwise. Unlike the required keys above, `lane` may be **omitted** — `validate_record`

@@ -710,3 +710,58 @@ class TestI2AdditiveFields:
         row = json.loads(store.read_text().splitlines()[0])
         rec = _valid_record(run_id, 1)
         assert row["run_id"] == rec["run_id"]
+
+
+# ---------------------------------------------------------------------------
+# T7 — prose wiring (WF2/WF3 Step 16) + config-surface agreement drift guards
+# ---------------------------------------------------------------------------
+
+class TestStep16Wiring:
+    def _steps(self, skill):
+        import re as _re  # noqa: PLC0415  # whitespace-normalize wrapped prose (repo drift-guard convention)
+        raw = (REPO_ROOT / "skills" / skill / "references" / "steps.md").read_text()
+        return _re.sub(r"\s+", " ", raw)
+
+    def test_wf2_wires_run_end_before_summarize(self):
+        t = self._steps("implement-feature")
+        i_re = t.index("seat_outcomes_lib.py run-end")
+        i_sum = t.index("work_summary.py summarize")
+        assert i_re < i_sum, "run-end must be invoked before summarize"
+
+    def test_wf3_wires_run_end_before_summarize(self):
+        t = self._steps("fix-bug")
+        assert "seat_outcomes_lib.py run-end" in t
+        assert t.index("seat_outcomes_lib.py run-end") < t.index("work_summary.py summarize")
+
+    def test_both_workflows_declare_loud_continue(self):
+        for skill in ("implement-feature", "fix-bug"):
+            t = self._steps(skill)
+            assert "loud-log-and-continue" in t and "MUST NOT block" in t
+
+    def test_extra_rows_fold_via_json_not_shell(self):
+        for skill in ("implement-feature", "fix-bug"):
+            t = self._steps(skill)
+            assert "extra_rows" in t and "JSON read-modify-write" in t
+
+
+class TestConfigSurfaceAgreement:
+    def test_template_and_defaults_agree_on_rules(self):
+        tmpl = json.loads((REPO_ROOT / "templates" / "rawgentic-json-schema.json").read_text())
+        tmpl_rules = set(tmpl["telemetryAlerts"]["thresholds"])
+        assert tmpl_rules == set(so.DEFAULT_THRESHOLDS)
+
+    def test_config_reference_documents_the_key(self):
+        cr = (REPO_ROOT / "docs" / "config-reference.md").read_text()
+        assert "telemetryAlerts" in cr
+        for rule in so.DEFAULT_THRESHOLDS:
+            assert rule in cr, f"rule {rule} not documented in config-reference"
+
+    def test_template_defaults_match_code_defaults(self):
+        tmpl = json.loads((REPO_ROOT / "templates" / "rawgentic-json-schema.json").read_text())
+        assert tmpl["telemetryAlerts"]["thresholds"] == so.DEFAULT_THRESHOLDS
+        assert tmpl["telemetryAlerts"]["windowSize"] == so.DEFAULT_WINDOW
+        assert tmpl["telemetryAlerts"]["minSamples"] == so.DEFAULT_MIN_SAMPLES
+
+    def test_setup_step_2j_present(self):
+        s = (REPO_ROOT / "skills" / "setup" / "SKILL.md").read_text()
+        assert "Step 2j" in s and "telemetryAlerts" in s and "validate-config" in s
