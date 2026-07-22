@@ -1429,8 +1429,20 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
                 tip = manager.target_tip(handle, target_ref)
             except Exception:  # noqa: BLE001 — a ref-read failure falls back to promote (CAS-safe)
                 tip = None
+            # STRUCTURAL landed-match (never message text): a genuine landing is promote's own
+            # commit — its tree IS our candidate tree and expected_target_sha is among its parents.
+            # A foreign/crafted tip cannot forge our exact content tree, so it is never mistaken for
+            # ours (a message-substring test would be spoofable). The all-zero expected (ref-create)
+            # case has no prior tip to confuse, so the exact tree match alone authenticates it.
+            # ponytail: reads only the CURRENT tip — a landing buried by a later collect's commit on
+            # the SAME ref (interleaved collects) is missed and stays reconcile-blind. The model is
+            # serialized (orchestrator-only, CELL-1 deferred) so that cannot happen today; upgrade to
+            # an ancestry search (`git log --grep=<nonce> <expected>..<tip>`) if CELL-1 ever interleaves.
+            _zero = "0" * 40
             if (tip and tip.get("sha") and tip["sha"] != expected_target_sha
-                    and record.receipt_nonce in (tip.get("message") or "")):
+                    and tip.get("tree") == candidate_tree_sha
+                    and (expected_target_sha == _zero
+                         or expected_target_sha in (tip.get("parents") or ()))):
                 landed_sha = tip["sha"]
         if landed_sha:
             new_sha = landed_sha
@@ -1461,28 +1473,30 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
             new_sha = promotion.new_target_sha
             intent["new_sha"] = new_sha
             _atomic_write_json(intent_path, intent)  # F-b: record new_sha only AFTER promote returned
+    # #570 L2 (rev per Step-11 finding): write the durable "a promotion LANDED, a work_product MUST
+    # exist" marker IMMEDIATELY after new_sha is established and BEFORE derive_work_product — so a
+    # derive failure on a landed promotion still leaves a marker reconcile can flag, closing the
+    # fail-open missing-record path. Idempotent per (receipt_nonce, candidate_tree_sha, new_sha).
+    existing = audit.records()
+    already_expected = any(r.get("kind") == "expected_work_product"
+                           and r.get("receipt_nonce") == record.receipt_nonce
+                           and r.get("candidate_tree_sha") == candidate_tree_sha
+                           and r.get("new_sha") == new_sha
+                           for r in existing)
+    if not already_expected:
+        audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
+                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha)
     # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
     try:
         wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
     except Exception as e:  # noqa: BLE001 — a derive/reconcile mismatch is fail-closed
         return _err(EXIT_INTERNAL, "derive_work_product_failed", f"{type(e).__name__}: {e}",
                     retryable=False, correlation_id=ce)
-    existing = audit.records()
     already = any(r.get("kind") == "work_product"
                   and r.get("receipt_nonce") == record.receipt_nonce
                   and r.get("candidate_tree_sha") == candidate_tree_sha
                   and r.get("new_sha") == new_sha
                   for r in existing)
-    # #570 L2: durable "a promotion LANDED, a work_product record MUST exist" marker, written just
-    # before the work_product record so reconcile's missing-half is real (a crash/loss between the
-    # two appends leaves expected-without-work_product → reconcile flags it). Idempotent per new_sha.
-    already_expected = any(r.get("kind") == "expected_work_product"
-                           and r.get("receipt_nonce") == record.receipt_nonce
-                           and r.get("new_sha") == new_sha
-                           for r in existing)
-    if not already_expected:
-        audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
-                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha)
     if not already:
         audit.append_work_product(receipt_nonce=record.receipt_nonce,
                                   candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,

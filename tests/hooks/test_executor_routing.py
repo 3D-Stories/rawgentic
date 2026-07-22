@@ -2212,7 +2212,10 @@ def test_collect_work_product_recovers_landed_promotion_after_crash(tmp_path):
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
         "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
-    mgr = _FakeMgr(tip={"sha": "landedsha", "message": "collect work product (docs) for rn1"})
+    # structural landed-match: tip.tree == candidate_tree_sha ("ctree"); expected is all-zero
+    # (ref-create) so parents are not required.
+    mgr = _FakeMgr(tip={"sha": "landedsha", "tree": "ctree", "parents": (),
+                        "message": "collect work product (docs) for rn1"})
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
     assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "landedsha"
     assert mgr.promote_calls == []  # did NOT re-promote
@@ -2234,18 +2237,37 @@ def test_collect_work_product_crash_window_not_landed_still_promotes(tmp_path):
 
 
 def test_collect_work_product_foreign_tip_not_reconstructed(tmp_path):
-    # intent.new_sha None and the ref advanced, but the tip is a FOREIGN commit (message lacks our
-    # receipt_nonce) → must NOT reconstruct; fall through to promote (whose CAS then refuses loud).
+    # intent.new_sha None and the ref advanced, but the tip is a FOREIGN commit — its tree is NOT
+    # our candidate tree (even if a parent matches) → must NOT reconstruct (a message substring can
+    # be spoofed; the content tree cannot). Falls through to promote (whose CAS then refuses loud).
     intents = tmp_path / "intents"
     intents.mkdir(parents=True, exist_ok=True)
     (intents / "collect-rn1.json").write_text(json.dumps({
         "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
         "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
-    mgr = _FakeMgr(promoted=False, tip={"sha": "othersha", "message": "someone else's commit"})
+    mgr = _FakeMgr(promoted=False, tip={"sha": "othersha", "tree": "foreigntree",
+                                        "parents": ("0" * 40,),
+                                        "message": "collect work product (docs) for rn1"})
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
     assert not res["ok"] and res["error"]["code"] == "promote_not_applied"
     assert mgr.promote_calls == [("refs/heads/integration", "0" * 40)]
     assert _wp_records(audit) == [] and _ewp_records(audit) == []
+
+
+def test_collect_work_product_expected_marker_survives_derive_failure(tmp_path, monkeypatch):
+    # #570 Step-11 finding 2: the expected_work_product marker is written BEFORE derive_work_product,
+    # so a derive failure on a LANDED promotion still leaves a marker reconcile can flag (no
+    # fail-open landed-but-unrecorded path).
+    import phase_executor.contract as _contract  # noqa: PLC0415  # pylint: disable=no-name-in-module
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("derive kaboom")
+
+    monkeypatch.setattr(_contract, "derive_work_product", _boom)
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert not res["ok"] and res["error"]["code"] == "derive_work_product_failed"
+    assert len(_ewp_records(audit)) == 1  # marker survived the derive failure
+    assert _wp_records(audit) == []  # no work_product record (derive failed)
 
 
 # ---------------------------------------------------------------------------

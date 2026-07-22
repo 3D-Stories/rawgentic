@@ -632,11 +632,17 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
         else:
             wp_by_nonce[n] = w
     # #570 L2: the REAL "no missing" half — a durable expected_work_product marker (written by
-    # collect_work_product when a promotion landed) with no matching work_product record is a
-    # landed-but-unrecorded product. Keys off what production writes; the Observation-based check
-    # below is retained for back-compat (an Observation that ever carries an embedded work_product).
+    # collect_work_product when a promotion landed) whose EXACT binding has no matching work_product
+    # record is a landed-but-unrecorded product. Match on the full (receipt_nonce, candidate_tree_sha,
+    # new_sha) tuple, not just the nonce (Step-11 finding): a stale/corrupt same-nonce record with
+    # different hashes must NOT satisfy the expectation. Keys off what production writes; the
+    # Observation-based check below is retained for back-compat.
+    wp_tuples = {(w["receipt_nonce"], w.get("candidate_tree_sha"), w.get("new_sha"))
+                 for w in work_products}
     for e in records:
-        if e.get("kind") == "expected_work_product" and e.get("receipt_nonce") not in wp_by_nonce:
+        if e.get("kind") != "expected_work_product":
+            continue
+        if (e.get("receipt_nonce"), e.get("candidate_tree_sha"), e.get("new_sha")) not in wp_tuples:
             missing_work_product.append(f"{e.get('receipt_nonce')}:expected-but-unrecorded")
     for o in observations:
         inner = o.get("observation") or {}

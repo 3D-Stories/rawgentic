@@ -473,6 +473,17 @@ def test_reconcile_expected_work_product_with_record_ok():
     assert res.missing_work_product == ()
 
 
+def test_reconcile_expected_work_product_same_nonce_wrong_hashes_is_missing():
+    # #570 Step-11 finding 1: a work_product sharing the receipt_nonce but with DIFFERENT
+    # candidate_tree_sha/new_sha must NOT satisfy the expectation (else the binding-field guard is
+    # vacuous). The exact-tuple match flags it missing.
+    recs = [_receipt_rec("n1"), _obs_rec("n1"),
+            _expected_wp_rec("n1", tree="sha256:tree1", new="sha256:new1"),
+            _wp_rec("n1", tree="sha256:STALE", new="sha256:STALE")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
 def test_reconcile_promoted_observation_with_record_ok():
     # the same promoted observation WITH its work_product record → bound, no anomaly
     recs = [_receipt_rec("n1"), _obs_rec_wp("n1", "promoted"), _wp_rec("n1")]
