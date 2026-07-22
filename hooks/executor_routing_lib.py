@@ -1417,37 +1417,72 @@ def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
             promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
             head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
     else:
-        # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
-        intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
-                  "expected_target_sha": expected_target_sha, "new_sha": None, "consumed": False}
-        _atomic_write_json(intent_path, intent)
-        try:
-            promotion = manager.promote(
-                handle, target_ref=target_ref, expected_target_sha=expected_target_sha,
-                message=f"collect work product ({kind}) for {record.receipt_nonce}",
-                path_policy=promote_appendix_only((_APPENDIX_PREFIX,)))
-        except WorktreeError as e:
-            return _err(EXIT_ENFORCEMENT, "promote_refused", str(e), retryable=False,
-                        correlation_id=ce)
-        if not promotion.promoted:
-            # a moved ref / stale base: no write happened; refuse loud, record nothing (foreign move)
-            return _err(EXIT_ENFORCEMENT, "promote_not_applied",
-                        f"collect-work-product: promotion not applied ({promotion.reason}) — "
-                        f"no work_product recorded", retryable=False, correlation_id=ce)
-        new_sha = promotion.new_target_sha
-        intent["new_sha"] = new_sha
-        _atomic_write_json(intent_path, intent)  # F-b: record new_sha only AFTER promote returned
+        # #570 L1 (design F-l): a MATCHING intent whose new_sha is still unknown may mean promote's
+        # update-ref LANDED but the finalize crashed before new_sha was recorded. Re-promoting would
+        # CAS-fail against the advanced ref and record NOTHING for a commit that actually landed.
+        # Before promoting, query the LIVE target ref: if it advanced past expected AND its tip is
+        # OURS (its commit message carries the receipt_nonce, which promote embeds), the promotion
+        # landed — reconstruct the result and resume phase 2 instead of re-promoting.
+        landed_sha = None
+        if matching:
+            try:
+                tip = manager.target_tip(handle, target_ref)
+            except Exception:  # noqa: BLE001 — a ref-read failure falls back to promote (CAS-safe)
+                tip = None
+            if (tip and tip.get("sha") and tip["sha"] != expected_target_sha
+                    and record.receipt_nonce in (tip.get("message") or "")):
+                landed_sha = tip["sha"]
+        if landed_sha:
+            new_sha = landed_sha
+            promotion = PromotionResult(
+                promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
+                head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
+            intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
+                      "expected_target_sha": expected_target_sha, "new_sha": new_sha, "consumed": False}
+            _atomic_write_json(intent_path, intent)
+        else:
+            # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
+            intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
+                      "expected_target_sha": expected_target_sha, "new_sha": None, "consumed": False}
+            _atomic_write_json(intent_path, intent)
+            try:
+                promotion = manager.promote(
+                    handle, target_ref=target_ref, expected_target_sha=expected_target_sha,
+                    message=f"collect work product ({kind}) for {record.receipt_nonce}",
+                    path_policy=promote_appendix_only((_APPENDIX_PREFIX,)))
+            except WorktreeError as e:
+                return _err(EXIT_ENFORCEMENT, "promote_refused", str(e), retryable=False,
+                            correlation_id=ce)
+            if not promotion.promoted:
+                # a moved ref / stale base: no write happened; refuse loud, record nothing (foreign move)
+                return _err(EXIT_ENFORCEMENT, "promote_not_applied",
+                            f"collect-work-product: promotion not applied ({promotion.reason}) — "
+                            f"no work_product recorded", retryable=False, correlation_id=ce)
+            new_sha = promotion.new_target_sha
+            intent["new_sha"] = new_sha
+            _atomic_write_json(intent_path, intent)  # F-b: record new_sha only AFTER promote returned
     # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
     try:
         wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
     except Exception as e:  # noqa: BLE001 — a derive/reconcile mismatch is fail-closed
         return _err(EXIT_INTERNAL, "derive_work_product_failed", f"{type(e).__name__}: {e}",
                     retryable=False, correlation_id=ce)
+    existing = audit.records()
     already = any(r.get("kind") == "work_product"
                   and r.get("receipt_nonce") == record.receipt_nonce
                   and r.get("candidate_tree_sha") == candidate_tree_sha
                   and r.get("new_sha") == new_sha
-                  for r in audit.records())
+                  for r in existing)
+    # #570 L2: durable "a promotion LANDED, a work_product record MUST exist" marker, written just
+    # before the work_product record so reconcile's missing-half is real (a crash/loss between the
+    # two appends leaves expected-without-work_product → reconcile flags it). Idempotent per new_sha.
+    already_expected = any(r.get("kind") == "expected_work_product"
+                           and r.get("receipt_nonce") == record.receipt_nonce
+                           and r.get("new_sha") == new_sha
+                           for r in existing)
+    if not already_expected:
+        audit.append_expected_work_product(receipt_nonce=record.receipt_nonce,
+                                           candidate_tree_sha=candidate_tree_sha, new_sha=new_sha)
     if not already:
         audit.append_work_product(receipt_nonce=record.receipt_nonce,
                                   candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,

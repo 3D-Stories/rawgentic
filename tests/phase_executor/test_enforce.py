@@ -451,6 +451,28 @@ def test_reconcile_promoted_observation_without_record_is_missing():
     assert not res.ok and any("n1" in x for x in res.missing_work_product)
 
 
+def _expected_wp_rec(nonce, tree="sha256:tree1", new="sha256:new1"):
+    return {"kind": "expected_work_product", "receipt_nonce": nonce,
+            "candidate_tree_sha": tree, "new_sha": new}
+
+
+def test_reconcile_expected_work_product_without_record_is_missing():
+    # #570 L2: a durable expected_work_product marker (the collect path writes it when a promotion
+    # LANDED) with NO matching work_product record → missing_work_product. This is the real "no
+    # missing" half — it keys off what the production collect path actually writes, unlike the old
+    # check keyed on Observation.work_product (which no production path ever sets).
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _expected_wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert not res.ok and any("n1" in x for x in res.missing_work_product)
+
+
+def test_reconcile_expected_work_product_with_record_ok():
+    recs = [_receipt_rec("n1"), _obs_rec("n1"), _expected_wp_rec("n1"), _wp_rec("n1")]
+    res = enforce.reconcile_run([_EC()], recs, initial_digest="sha256:d")
+    assert res.ok, res
+    assert res.missing_work_product == ()
+
+
 def test_reconcile_promoted_observation_with_record_ok():
     # the same promoted observation WITH its work_product record → bound, no anomaly
     recs = [_receipt_rec("n1"), _obs_rec_wp("n1", "promoted"), _wp_rec("n1")]

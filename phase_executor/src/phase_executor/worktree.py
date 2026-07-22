@@ -605,6 +605,21 @@ class WorktreeManager:
             raise WorktreeError(f"worktree HEAD resolve failed: {err.strip()}")
         return out.strip()
 
+    def target_tip(self, handle: WorktreeHandle, target_ref: str) -> Optional[dict]:
+        """#570 L1: the live target ref's current tip — ``{"sha", "message"}`` — or None when the
+        ref does not resolve. collect_work_product uses this to detect a promotion that LANDED
+        (``promote``'s ``update-ref`` succeeded) but whose finalize crashed before recording
+        ``new_sha``: on re-run the tip has advanced past ``expected_target_sha`` and its commit
+        message carries the receipt_nonce (``promote``'s message embeds it), so the record can be
+        reconstructed instead of re-promoting (which would CAS-fail and lose the landed commit)."""
+        rc, out, _err = self._git(
+            "--git-dir", handle.gitdir, "rev-parse", "--verify", "--quiet", f"{target_ref}^{{commit}}")
+        sha = out.strip()
+        if rc != 0 or not sha:
+            return None
+        rc2, msg, _e2 = self._git("--git-dir", handle.gitdir, "log", "-1", "--format=%B", sha)
+        return {"sha": sha, "message": msg.strip() if rc2 == 0 else ""}
+
     def promote(self, handle: WorktreeHandle, *, target_ref: str, expected_target_sha: str,
                 message: str, path_policy) -> PromotionResult:
         """Promote the worktree's filesystem work product onto ``target_ref`` — orchestrator-only,
