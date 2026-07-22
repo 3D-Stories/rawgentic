@@ -53,6 +53,21 @@ Two independent Opus reviewers, neutral briefs. **No Critical/High.** Five findi
 
 Out-of-scope one-liners (pre-existing fail-closed posture, not this PR): a *misused* `--resume-session-id` on a non-claude seat leaves an orphan expected-call; a corrupt `routing-audit.jsonl` makes `collect_work_product` raise a bare traceback.
 
+## 4b. Step-11 + 11.5 pre-PR review (independent Opus + cross-model Codex)
+
+- **Step 11 (independent Opus, full pre-PR diff):** no new Critical/High/Medium. Re-ran the whole gate green (suite 4396/16/0, both pylint lanes 10.00/10); confirmed the L3 fix sound + complete and every 8a-cleared hardening holds. One Low (atomic-write convention deviation) → #571.
+- **Step 11.5 (cross-model, Codex `gpt-5.6-sol` diff review):** 0 Critical, 7 High + 3 Medium — all confirmed against code, all in OPS-cell-only paths that DEFER this run (zero operational impact now). Report: `docs/reviews/559-prepr-diff-2026-07-21.md`.
+
+Fixed in-branch (commit `2456513`, red-first):
+
+| Finding | Sev | Fix |
+|---|---|---|
+| F3 | High | `_norm_rel_components` treated `\` as a path separator → a literal-backslash filename folded into the appendix prefix (policy bypass). Now **rejected** (POSIX filename char, not a separator). |
+| F9 | Med | `resume_dispatch` appended a foreign-correlation observation **before** the mismatch check → audit poisoning. Check **moved before append**. |
+| F10 | Med | `_is_exec_event` docstring claimed "OS-attested, not spoofable" while admitting the schema is unknown. Softened to "event-shaped, NOT authenticated" (sound only because the field is advisory and never gates a verdict). |
+
+Deferred to **#571** (design-scope / disproportionate test cost, all defer): F5 (recover target binding), F6 (recover obs correlation parity — belt-and-suspenders: `await_job` already session-id-asserts resumes), F7 (collect preconditions), F8 (`_run_resume` except breadth), atomic-write hygiene. F1/F2 remain in **#570**.
+
 ## 5. AC verdicts
 
 - **AC1** (codex mutating cell): **code shipped + tested**; live CELL-1 deferred → live-UNPROVEN.
@@ -79,6 +94,7 @@ Per-cell bounds and owner-gate points are in design §3 (bounds table + choreogr
 ## 8. Confirmed engine gaps → follow-ups
 
 - **[#570](https://github.com/3D-Stories/rawgentic/issues/570)** (filed): `work_product` reconcile "missing" guard unreachable + `collect_work_product` crash-window (8a-L1/L2).
+- **[#571](https://github.com/3D-Stories/rawgentic/issues/571)** (filed): pre-PR cross-model hardening follow-ups — recover/resume/collect binding + robustness (F5/F6/F7/F8 + atomic-write hygiene).
 - **F-2 → #420**: the run-end `reconcile_run` real-record join (`enforce.py:498-500`).
 - The `reset.v1/b` digit-proximity false-positive (#558 follow-up) can only be re-checked against a **genuine** captured stderr — deferred with CELL-3a.
 
