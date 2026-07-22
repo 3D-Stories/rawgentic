@@ -187,6 +187,30 @@ def make_workspace(tmp_path: Path):
     return _factory
 
 
+# Scanner-install opt-out for session-start unit tests (#576).
+# The session-start hook runs hooks/scanner_bootstrap.py, which — absent an
+# opt-out — launches a REAL background `pipx install semgrep` (242M each) that
+# outlives pytest teardown, orphaning gigabytes of `semgrep-core` into
+# /tmp/pytest-of-*/ (measured: 117G, filled the host disk). Every session-start
+# subprocess in the suite routes through run_hook(), so defaulting the opt-out
+# here covers every caller (the _run_session_start helper AND the direct callers
+# that bypass it). A caller that deliberately drives the scanner path — the e2e
+# installer tests set RAWGENTIC_SCANNER_INSTALLER (a fake), or a test sets the
+# flag itself — opts out of this default and is left untouched.
+_SCANNER_TEST_ENV_KEYS = ("RAWGENTIC_SKIP_SCANNER_INSTALL", "RAWGENTIC_SCANNER_INSTALLER")
+
+
+def scanner_test_guard(hook_name: str, env: dict[str, str]) -> dict[str, str]:
+    """Default RAWGENTIC_SKIP_SCANNER_INSTALL=1 for session-start invocations that
+    don't already drive the scanner path. Mutates *env* in place and returns it.
+    Pure (no I/O) so it is unit-testable. See #576."""
+    if hook_name == "session-start" and not any(
+        k in env for k in _SCANNER_TEST_ENV_KEYS
+    ):
+        env["RAWGENTIC_SKIP_SCANNER_INSTALL"] = "1"
+    return env
+
+
 def run_hook(
     hook_name: str,
     stdin_dict: dict[str, Any],
@@ -238,6 +262,8 @@ def run_hook(
     env = dict(os.environ)
     if env_override:
         env.update(env_override)
+    # #576: never let a session-start unit test fire the real scanner install.
+    scanner_test_guard(hook_name, env)
 
     result = subprocess.run(
         cmd,
