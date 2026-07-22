@@ -1999,6 +1999,140 @@ def test_resume_dispatch_session_mismatch_fails_loud(tmp_path):
     assert sup.awaited == ["seed-sid"]  # it DID assert against the seeded id
 
 
+# ---------------------------------------------------------------------------
+# AC1 (#559): collect_work_product — two-phase, crash-recoverable, audit-idempotent
+# ---------------------------------------------------------------------------
+
+def _completed_record(tmp_path, *, receipt_nonce="rn1", session="sess1", state="completed"):
+    from phase_executor.registry import JobRecord  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeIdentity  # noqa: PLC0415
+    ident = WorktreeIdentity(run_id="run1", seat="build", attempt="0-a")
+    return JobRecord(
+        identity=ident, session_name=session, run_socket="s", pane_pid=1, pane_pgid=1,
+        provider_pgid=None, pane_start_time="0", worktree_path=str(tmp_path / "wt"),
+        worktree_base_sha="b", worktree_root=str(tmp_path), worktree_gitdir="g",
+        worktree_repo="rp", capture_dir=str(tmp_path / "cd"), attempt_id="a",
+        permit_ref="unbounded", command_digest="sha256:x", provider_session_id=None,
+        provider_exit_code=0, resume_attempts=0, state=state, created_at=0.0,
+        quarantine_reason=None, receipt_nonce=receipt_nonce)
+
+
+class _FakeReg:
+    def __init__(self, record):
+        self._rec = record
+
+    def by_run(self, run_id):
+        return [self._rec] if self._rec else []
+
+
+class _FakeMgr:
+    _EV = {"base_sha": "b", "head_sha": "h", "content_tree_sha": "ctree",
+           "changed_paths": ["docs/planning/appendix/x.md"]}
+
+    def __init__(self, *, changed=None, promoted=True):
+        self.promote_calls = []
+        self._changed = changed or list(self._EV["changed_paths"])
+        self._promoted = promoted
+
+    def content_evidence(self, handle):
+        ev = dict(self._EV)
+        ev["changed_paths"] = list(self._changed)
+        return ev
+
+    def promote(self, handle, *, target_ref, expected_target_sha, message, path_policy):
+        self.promote_calls.append((target_ref, expected_target_sha))
+        from phase_executor.worktree import WorktreeError, PromotionResult  # noqa: PLC0415
+        outside = [p for p in self._changed if not path_policy(p)]
+        if outside:
+            raise WorktreeError(f"outside policy: {outside}")
+        return PromotionResult(
+            promoted=self._promoted, new_target_sha=("newsha" if self._promoted else None),
+            base_sha="b", head_sha="h", changed_paths=tuple(self._changed),
+            reason="" if self._promoted else "target advanced")
+
+
+def _collect(tmp_path, reg, mgr, *, run_id="run1", session="sess1",
+             target="refs/heads/integration", expected="0" * 40, kind="docs", audit=None):
+    audit = audit or enforce.RoutingAuditLog(tmp_path / "runs", run_id)
+    res = er.collect_work_product(
+        run_id=run_id, session_name=session, target_ref=target, expected_target_sha=expected,
+        kind=kind, registry=reg, manager=mgr, audit=audit,
+        intent_dir=str(tmp_path / "intents"), correlation_id="c1")
+    return res, audit
+
+
+def _wp_records(audit):
+    return [r for r in audit.records() if r.get("kind") == "work_product"]
+
+
+def test_collect_work_product_happy_records_once(tmp_path):
+    mgr = _FakeMgr()
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "newsha"
+    assert mgr.promote_calls == [("refs/heads/integration", "0" * 40)]
+    assert len(_wp_records(audit)) == 1
+
+
+def test_collect_work_product_consumed_intent_is_noop(tmp_path):
+    rec = _completed_record(tmp_path)
+    mgr = _FakeMgr()
+    reg = _FakeReg(rec)
+    _collect(tmp_path, reg, mgr)  # first run consumes the intent + records
+    r2, audit2 = _collect(tmp_path, reg, mgr)  # same intent dir + audit file
+    assert r2["ok"] and r2["status"] == "already_recorded"
+    assert mgr.promote_calls == [("refs/heads/integration", "0" * 40)]  # promote NOT re-run
+    assert len(_wp_records(audit2)) == 1
+
+
+def test_collect_work_product_resumes_phase2_after_promote_crash(tmp_path):
+    # crash AFTER promote (new_sha recorded) BEFORE phase 2 → resume phase 2 only, no re-promote
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": "newsha", "consumed": False}), encoding="utf-8")
+    mgr = _FakeMgr()
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "newsha"
+    assert mgr.promote_calls == []  # promote NOT re-run
+    assert len(_wp_records(audit)) == 1
+
+
+def test_collect_work_product_audit_search_prevents_duplicate(tmp_path):
+    # crash AFTER append BEFORE consume: record already present + an unconsumed intent
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    audit.append_work_product(receipt_nonce="rn1", candidate_tree_sha="ctree", new_sha="newsha",
+                              work_product={"kind": "docs", "promotion_status": "promoted"})
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": "newsha", "consumed": False}), encoding="utf-8")
+    res, _ = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr(), audit=audit)
+    assert res["ok"] and res["status"] == "already_recorded"
+    assert len(_wp_records(audit)) == 1  # audit-search prevented a duplicate
+
+
+def test_collect_work_product_out_of_policy_refuses(tmp_path):
+    mgr = _FakeMgr(changed=["hooks/evil.py"])  # a changed path OUTSIDE the appendix prefix
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert not res["ok"] and res["error"]["code"] == "promote_refused"
+    assert _wp_records(audit) == []
+
+
+def test_collect_work_product_promote_not_applied_records_nothing(tmp_path):
+    mgr = _FakeMgr(promoted=False)  # CAS moved / stale base
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert not res["ok"] and res["error"]["code"] == "promote_not_applied"
+    assert _wp_records(audit) == []
+
+
+def test_collect_work_product_refuses_incomplete_job(tmp_path):
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path, state="running")), _FakeMgr())
+    assert not res["ok"] and res["error"]["code"] == "job_not_completed"
+    assert _wp_records(audit) == []
+
+
 def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
     """#472 8a R2 + Step-11: an engine with no supervised composition rule must REFUSE with the
     allowlist ValueError BEFORE any adapter lookup — an empty adapters map proves the ordering

@@ -1328,6 +1328,130 @@ def resume_dispatch(
     }
 
 
+_APPENDIX_PREFIX: Final[str] = "docs/planning/appendix/"
+
+
+def _atomic_write_json(path: Path, obj) -> None:
+    """Write JSON atomically (tempfile + os.replace) so a crash never leaves a torn intent."""
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(json.dumps(obj), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def collect_work_product(*, run_id: str, session_name: str, target_ref: str,
+                         expected_target_sha: str, kind: str,
+                         registry, manager, audit, intent_dir: str,
+                         correlation_id: Optional[str] = None) -> dict:
+    """#559 AC1 (design §2.6) — promote a completed build's appendix work product onto
+    ``target_ref`` and record an audited ``work_product`` binding. TWO-PHASE, crash-recoverable,
+    audit-idempotent:
+
+      phase 1: write a durable INTENT keyed {receipt_nonce, candidate_tree_sha, expected_target_sha}
+               (new_sha UNKNOWN until promote returns — F-b), then the irreversible CAS ``promote``
+               scoped by ``promote_appendix_only((docs/planning/appendix/,))``; on success the
+               intent is updated with the returned new_sha;
+      phase 2: ``derive_work_product`` → audit-SEARCH the run's stream for an existing record
+               matching {receipt_nonce, candidate_tree_sha, new_sha}; append ONLY if absent (a crash
+               after append cannot duplicate on rerun — F-c) → mark the intent consumed.
+
+    Idempotent re-run: a consumed matching intent → no-op; an unconsumed matching intent whose
+    new_sha is already recorded (promote succeeded, finalize crashed) → resume phase 2 only; an
+    absent/non-matching intent with a moved ref refuses loud via promote's CAS. The verb HARD-CODES
+    its sole promotable prefix (docs/planning/appendix/) — the factory's generality is for other
+    callers. Git/registry seams are injected; the live path is CELL-1."""
+    from phase_executor.registry import handle_from_record  # noqa: PLC0415
+    from phase_executor.contract import derive_work_product  # noqa: PLC0415
+    from phase_executor.worktree import promote_appendix_only, PromotionResult, WorktreeError  # noqa: PLC0415
+    ce = correlation_id
+    recs = [r for r in registry.by_run(run_id) if r.session_name == session_name]
+    if not recs:
+        return _err(EXIT_MALFORMED, "unknown_job",
+                    f"collect-work-product: no job {session_name!r} in run {run_id!r}",
+                    retryable=False, correlation_id=ce)
+    record = recs[0]
+    if record.state != "completed":
+        return _err(EXIT_MALFORMED, "job_not_completed",
+                    f"collect-work-product: job {session_name!r} is {record.state!r} — only a "
+                    f"terminal 'completed' build yields a work product", retryable=False,
+                    correlation_id=ce)
+    if not record.receipt_nonce:
+        return _err(EXIT_MALFORMED, "no_build_receipt",
+                    f"collect-work-product: job {session_name!r} has no receipt_nonce to bind",
+                    retryable=False, correlation_id=ce)
+    handle = handle_from_record(record)
+    try:
+        evidence = manager.content_evidence(handle)
+    except Exception as e:  # noqa: BLE001 — a content/git read failure is fail-closed
+        return _err(EXIT_INTERNAL, "content_evidence_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce)
+    candidate_tree_sha = evidence["content_tree_sha"]
+    Path(intent_dir).mkdir(parents=True, exist_ok=True)
+    intent_path = Path(intent_dir) / f"collect-{record.receipt_nonce}.json"
+    intent = None
+    if intent_path.exists():
+        try:
+            intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            intent = None
+    matching = (isinstance(intent, dict)
+                and intent.get("receipt_nonce") == record.receipt_nonce
+                and intent.get("candidate_tree_sha") == candidate_tree_sha
+                and intent.get("expected_target_sha") == expected_target_sha)
+    if matching and intent.get("consumed"):
+        return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
+                "status": "already_recorded", "receipt_nonce": record.receipt_nonce,
+                "new_sha": intent.get("new_sha"), "candidate_tree_sha": candidate_tree_sha,
+                "correlation_id": ce}
+    if matching and intent.get("new_sha"):
+        # promote already succeeded (new_sha recorded only AFTER promote returned) → phase 2 only
+        new_sha = intent["new_sha"]
+        promotion = PromotionResult(
+            promoted=True, new_target_sha=new_sha, base_sha=evidence["base_sha"],
+            head_sha=evidence["head_sha"], changed_paths=tuple(evidence["changed_paths"]))
+    else:
+        # PHASE 1 — durable intent BEFORE the irreversible CAS (new_sha unknown yet, F-b)
+        intent = {"receipt_nonce": record.receipt_nonce, "candidate_tree_sha": candidate_tree_sha,
+                  "expected_target_sha": expected_target_sha, "new_sha": None, "consumed": False}
+        _atomic_write_json(intent_path, intent)
+        try:
+            promotion = manager.promote(
+                handle, target_ref=target_ref, expected_target_sha=expected_target_sha,
+                message=f"collect work product ({kind}) for {record.receipt_nonce}",
+                path_policy=promote_appendix_only((_APPENDIX_PREFIX,)))
+        except WorktreeError as e:
+            return _err(EXIT_ENFORCEMENT, "promote_refused", str(e), retryable=False,
+                        correlation_id=ce)
+        if not promotion.promoted:
+            # a moved ref / stale base: no write happened; refuse loud, record nothing (foreign move)
+            return _err(EXIT_ENFORCEMENT, "promote_not_applied",
+                        f"collect-work-product: promotion not applied ({promotion.reason}) — "
+                        f"no work_product recorded", retryable=False, correlation_id=ce)
+        new_sha = promotion.new_target_sha
+        intent["new_sha"] = new_sha
+        _atomic_write_json(intent_path, intent)  # F-b: record new_sha only AFTER promote returned
+    # PHASE 2 — derive → audit-search-then-append (idempotent) → mark consumed
+    try:
+        wp = derive_work_product(manager, handle, kind=kind, promotion=promotion)
+    except Exception as e:  # noqa: BLE001 — a derive/reconcile mismatch is fail-closed
+        return _err(EXIT_INTERNAL, "derive_work_product_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce)
+    already = any(r.get("kind") == "work_product"
+                  and r.get("receipt_nonce") == record.receipt_nonce
+                  and r.get("candidate_tree_sha") == candidate_tree_sha
+                  and r.get("new_sha") == new_sha
+                  for r in audit.records())
+    if not already:
+        audit.append_work_product(receipt_nonce=record.receipt_nonce,
+                                  candidate_tree_sha=candidate_tree_sha, new_sha=new_sha,
+                                  work_product=wp)
+    intent["consumed"] = True
+    _atomic_write_json(intent_path, intent)
+    return {"ok": True, "exit": EXIT_OK, "action": "collect_work_product",
+            "status": "already_recorded" if already else "recorded",
+            "receipt_nonce": record.receipt_nonce, "new_sha": new_sha,
+            "candidate_tree_sha": candidate_tree_sha, "correlation_id": ce}
+
+
 def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlation_id=None, audit_path=None) -> dict:
     err = {"code": code, "message": message, "retryable": retryable}
     if correlation_id is not None:
@@ -1963,6 +2087,48 @@ def _do_probe_account(args) -> int:
     return _emit(probe_account(args.claude_bin))
 
 
+def _do_collect_work_product(args) -> int:
+    """#559 AC1: CLI wrapper — resolve the run's registry/audit + a WorktreeManager, then run the
+    two-phase collect_work_product. The live git/CAS seam (CELL-1); the two-phase + idempotency
+    logic is unit-tested against collect_work_product with injected fakes."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    try:
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        snap = resolve_table(repo_root, pe.routing).snapshot
+        paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
+    from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
+    base = Path(repo_root)
+    registry_root = base / ".rawgentic" / "runtime" / "registry"
+    try:
+        registry = JobRegistry(str(registry_root))
+        manager = WorktreeManager(_git_runner, forbid_tmp=True)
+        audit = pe.enforce.RoutingAuditLog(paths["capture_root"], args.run_id)
+    except (OSError, ValueError, RegistryCorrupt) as e:
+        return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
+                          retryable=False, correlation_id=args.correlation_id))
+    intent_dir = (Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+                  / "work-product-intents")
+    return _emit(collect_work_product(
+        run_id=args.run_id, session_name=args.session_name, target_ref=args.target_ref,
+        expected_target_sha=args.expected_target_sha, kind=args.kind,
+        registry=registry, manager=manager, audit=audit, intent_dir=str(intent_dir),
+        correlation_id=args.correlation_id))
+
+
 def _status_tail(path: Path, limit: int = 200) -> str:
     """Last non-empty line of ``path`` (≤ ``limit`` chars) — bounded read, never the whole file."""
     with open(path, "rb") as fh:
@@ -2200,6 +2366,18 @@ def main(argv: Optional[list] = None) -> int:
                         help="#559 AC2a: observe the active claude account identity (digest + categories, no raw PII)")
     pa.add_argument("--claude-bin", dest="claude_bin", default="claude")
     pa.set_defaults(fn=_do_probe_account)
+
+    cw = sub.add_parser("collect-work-product",
+                        help="#559 AC1: promote a completed build's appendix work product + record an audited binding")
+    cw.add_argument("--run-id", required=True, dest="run_id")
+    cw.add_argument("--session-name", required=True, dest="session_name")
+    cw.add_argument("--target-ref", required=True, dest="target_ref")
+    cw.add_argument("--expected-target-sha", required=True, dest="expected_target_sha")
+    cw.add_argument("--kind", default="docs", choices=["code", "review", "design", "docs"])
+    cw.add_argument("--correlation-id", dest="correlation_id")
+    cw.add_argument("--workspace", required=True)
+    cw.add_argument("--project", required=True)
+    cw.set_defaults(fn=_do_collect_work_product)
 
     su = sub.add_parser("status", help="#471: read-only per-run seat status (registry + capture) as JSON")
     su.add_argument("--workspace", required=True)
