@@ -351,6 +351,19 @@ def validate_seat_outcome(row) -> list:
     if fb is not None:
         if not isinstance(fb, dict) or fb.get("kind") not in ("model_fallback", "other"):
             errs.append("fallback must be null or {kind: model_fallback|other, ...}")
+        elif fb["kind"] == "other":
+            if set(fb) != {"kind"}:
+                errs.append("fallback kind 'other' takes no other keys")
+        else:  # model_fallback: exact keys + grammar/enum on the values
+            if set(fb) != {"kind", "from_model", "parse_status"}:
+                errs.append("fallback model_fallback keys must be exactly "
+                            "{kind, from_model, parse_status}")
+            else:
+                if not _ident_ok(fb.get("from_model"), 120, allow_slash=True):
+                    errs.append("fallback.from_model fails grammar/path gate")
+                st = fb.get("parse_status")
+                if st is not None and st not in PARSE_STATUS_ENUM:
+                    errs.append("fallback.parse_status not in enum")
     wp = row.get("work_product_ref")
     if wp is not None:
         if not isinstance(wp, dict):
@@ -941,7 +954,7 @@ def load_thresholds_from_block(block):
     eff = {"enabled": enabled, "windowSize": DEFAULT_WINDOW, "minSamples": DEFAULT_MIN_SAMPLES,
            "thresholds": dict(DEFAULT_THRESHOLDS)}
     if not isinstance(block, dict) or validate_telemetry_alerts(block):
-        if block:  # a present-but-malformed block gets ONE advisory; absent = silent defaults
+        if block is not None:  # any PRESENT-but-malformed block (incl. falsey [] / 0) → advisory
             eff["_advisory"] = "telemetryAlerts malformed — using defaults"
         return eff  # fail-open to defaults (enabled already honored above)
     if isinstance(block.get("windowSize"), int) and not isinstance(block["windowSize"], bool):
@@ -1180,6 +1193,13 @@ def _cmd_run_end(args) -> int:
         print(json.dumps(out))
     else:
         print(out["advisory_block"])
+        # surface the harvest counters + any note in the human path too (not just --json)
+        counts = " ".join(f"{k}={res[k]}" for k in
+                          ("rows_appended", "skipped_malformed", "skipped_invalid_observation",
+                           "skipped_unbound", "quarantined", "passed_through", "redacted_fields"))
+        print(f"telemetry harvest: {counts}")
+        if res.get("note"):
+            print(res["note"])
     return 0
 
 

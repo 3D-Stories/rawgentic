@@ -941,3 +941,34 @@ class TestStep11bResiduals:
         assert res.returncode == 0, res.stderr
         rows = [json.loads(l) for l in store.read_text().splitlines()]
         assert all(r["issue"] is None for r in rows)  # never cross-attributed
+
+
+class TestStep11FinalResiduals:
+    def test_fallback_subvalidation(self):
+        row = so.derive_seat_outcome(_obs(), issue=1)
+        row.pop("redacted_fields", None)
+        row["fallback"] = {"kind": "model_fallback", "from_model": "/root/x",
+                           "parse_status": "ok"}  # planted path in from_model
+        assert so.validate_seat_outcome(row)
+        row["fallback"] = {"kind": "other", "leak": "/root/y"}  # extra key on 'other'
+        assert so.validate_seat_outcome(row)
+
+    def test_fallback_valid_passes(self):
+        row = so.derive_seat_outcome(_obs(fallback_reason="fallback from opus: timeout"), issue=1)
+        row.pop("redacted_fields", None)
+        assert so.validate_seat_outcome(row) == []
+
+    def test_malformed_falsey_config_advisory(self):
+        th = so.load_thresholds_from_block([])  # present-but-malformed falsey block
+        assert th.get("_advisory")
+
+    def test_run_end_human_path_shows_counters(self, tmp_path):
+        run_id = "wf2-473-hc"
+        cap = _write_audit(tmp_path, run_id, [_obs(attempt_id="0-a")])
+        rf = tmp_path / "rec.json"; rf.write_text(json.dumps(_valid_record(run_id, 1)))
+        res = subprocess.run([sys.executable, str(CLI), "run-end", "--run-id", run_id,
+                              "--record-file", str(rf), "--project-root", str(tmp_path),
+                              "--capture-root", str(cap)],
+                             capture_output=True, text=True, cwd=str(tmp_path))
+        assert res.returncode == 0, res.stderr
+        assert "telemetry harvest:" in res.stdout and "rows_appended=1" in res.stdout
