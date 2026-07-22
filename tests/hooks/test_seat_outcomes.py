@@ -325,13 +325,19 @@ class TestBinding:
 
 
 class TestNonDestructiveRewrite:
-    def test_future_version_row_passed_through(self, tmp_path):
+    def test_future_version_row_quarantined_not_recommitted(self, tmp_path):
+        # Step-11 fix: an unknown/future schema_version row could carry un-redacted content;
+        # it is moved to the gitignored quarantine, NOT re-committed to the tracked store.
         store = tmp_path / "seat-outcomes.jsonl"
-        store.write_text(json.dumps({"schema_version": "9", "future": "data"}) + "\n")
+        store.write_text(json.dumps({"schema_version": "9", "leaked": "/root/secret"}) + "\n")
         res, _ = _harvest(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")], store=store, issue=1)
-        lines = store.read_text().splitlines()
-        assert any(json.loads(l).get("schema_version") == "9" for l in lines)
-        assert res["passed_through"] >= 1
+        committed = store.read_text()
+        assert "/root/secret" not in committed  # never re-committed
+        assert not any(json.loads(l).get("schema_version") == "9"
+                       for l in committed.splitlines())
+        assert res["quarantined"] >= 1
+        q = tmp_path / "seat-outcomes.jsonl.quarantine"
+        assert q.exists() and "/root/secret" in q.read_text()  # preserved for diagnosis
 
     def test_invalid_interior_row_quarantined_not_committed(self, tmp_path):
         store = tmp_path / "seat-outcomes.jsonl"
@@ -765,3 +771,135 @@ class TestConfigSurfaceAgreement:
     def test_setup_step_2j_present(self):
         s = (REPO_ROOT / "skills" / "setup" / "SKILL.md").read_text()
         assert "Step 2j" in s and "telemetryAlerts" in s and "validate-config" in s
+
+
+# ---------------------------------------------------------------------------
+# Step-11 remediation regressions (redaction holes, harvest, binding, config)
+# ---------------------------------------------------------------------------
+
+class TestStep11Regressions:
+    def test_model_path_bypass_closed(self):
+        # H1: actual_model="/root/secret" must NOT survive in `model` via canonicalization
+        row = so.derive_seat_outcome(_obs(actual_model="/root/.aws/credentials",
+                                          requested_model="claude-opus-4-8"), issue=1)
+        blob = json.dumps(row)
+        assert "/root" not in blob and "credentials" not in blob
+        assert row["model"] is None and row["actual_model"] is None
+
+    def test_trailing_newline_rejected(self):
+        row = so.derive_seat_outcome(_obs(correlation_id="wf2-x\n"), issue=1)
+        assert row["correlation_id"] is None  # $-vs-\Z fix
+
+    def test_one_slash_path_rejected_on_nonmodel_field(self):
+        # H3: the model single-slash exception must NOT apply to run_id/correlation/seat
+        for evil in ("etc/passwd", "secrets/token", "home/user"):
+            row = so.derive_seat_outcome(_obs(correlation_id=evil), issue=1)
+            assert row["correlation_id"] is None, f"{evil} leaked in correlation_id"
+
+    def test_validator_rejects_stored_row_missing_key(self):
+        row = so.derive_seat_outcome(_obs(), issue=1)
+        row.pop("redacted_fields", None)
+        del row["seat"]
+        assert so.validate_seat_outcome(row)  # complete-key-set check → no KeyError downstream
+
+    def test_validator_rejects_planted_path_in_stored_field(self):
+        row = so.derive_seat_outcome(_obs(), issue=1)
+        row.pop("redacted_fields", None)
+        row["engine"] = "/root/x"  # hand-planted path in a stored row
+        assert so.validate_seat_outcome(row)
+
+    def test_binding_rejects_missing_nonce(self, tmp_path):
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")])
+        audit = cap / "wf2-473-x" / "routing-audit.jsonl"
+        o = _obs(attempt_id="0-nn"); o["run_id"] = "wf2-473-x"
+        # an observation envelope with NO receipt_nonce + a receipt with NO nonce must not match
+        with audit.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"kind": "receipt", "verdict": "pass"}) + "\n")
+            f.write(json.dumps({"kind": "observation", "observation": o}) + "\n")
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 1  # only the well-formed pair
+        assert res["skipped_unbound"] >= 1
+
+    def test_harvest_run_id_traversal_contained(self, tmp_path):
+        # H6: a traversal run_id must not read outside the capture root
+        cap = tmp_path / ".rawgentic" / "runs"
+        cap.mkdir(parents=True)
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "../../../etc", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 0  # sanitized → no such capture dir, no crash/escape
+
+    def test_non_object_json_line_counted_not_fatal(self, tmp_path):
+        cap = _write_audit(tmp_path, "wf2-473-x", [_obs(attempt_id="0-a")])
+        audit = cap / "wf2-473-x" / "routing-audit.jsonl"
+        with audit.open("a", encoding="utf-8") as f:
+            f.write("[1,2,3]\n")   # valid JSON, not an object
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 1 and res["skipped_malformed"] >= 1
+
+    def test_duplicate_observation_nonce_unbound(self, tmp_path):
+        import phase_executor.enforce as enforce  # noqa: PLC0415  # pylint: disable=no-name-in-module
+        cap = tmp_path / ".rawgentic" / "runs"
+        log = enforce.RoutingAuditLog(cap, "wf2-473-x")
+        o = _obs(attempt_id="0-a"); o["run_id"] = "wf2-473-x"
+        lane = o["dispatched_lane"]
+        r = enforce.PreReceipt(nonce="nA", seat=o["seat"], correlation_id=o["correlation_id"],
+                               attempt_id=o["attempt_id"],
+                               target_identity=enforce.target_identity(
+                                   {"model": o["requested_model"], "lane": lane}),
+                               config_digest=o["routing_config_digest"], gate_digest=None,
+                               author_provider="openai", verdict="pass", violations=())
+        log.append_receipt(r)
+        log.append_observation(o, receipt=r)
+        log.append_observation(o, receipt=r)  # SECOND obs referencing the same nonce
+        store = tmp_path / "seat-outcomes.jsonl"
+        res = so.harvest(cap, "wf2-473-x", store, issue=1, now=NOW)
+        assert res["rows_appended"] == 0  # ambiguous → both unbound
+        assert res["skipped_unbound"] >= 2
+
+    def test_config_window_applied_to_baselines(self, tmp_path):
+        # F14: windowSize/minSamples from config must size the baselines (order fix)
+        run_id = "wf2-473-cfg"
+        cap = _write_audit(tmp_path, run_id, [_obs(attempt_id=f"0-{i}") for i in range(3)])
+        (tmp_path / ".rawgentic.json").write_text(json.dumps(
+            {"telemetryAlerts": {"version": 1, "minSamples": 2}}))
+        rec = _valid_record(run_id, 1)
+        rf = tmp_path / "rec.json"; rf.write_text(json.dumps(rec))
+        res = subprocess.run([sys.executable, str(CLI), "run-end", "--run-id", run_id,
+                              "--record-file", str(rf), "--project-root", str(tmp_path),
+                              "--capture-root", str(cap), "--json"],
+                             capture_output=True, text=True, cwd=str(tmp_path))
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        g = compute = out  # baselines are internal; assert the seat group reached n>=minSamples ok
+        # 3 rows, minSamples 2 → timing baseline should be "ok" (would be insufficient at default 5)
+        # re-derive via baselines verb
+        b = subprocess.run([sys.executable, str(CLI), "baselines", "--project-root", str(tmp_path),
+                            "--json"], capture_output=True, text=True, cwd=str(tmp_path))
+        bd = json.loads(b.stdout)
+        grp = bd["groups"].get("review|claude-opus-4-8", {}).get("metrics", {}).get("timing_ms", {})
+        assert grp.get("status") == "ok"
+
+    def test_disabled_rule_clean_result(self):
+        th = so.load_thresholds_from_block({"version": 1, "thresholds": {"model_mismatch": False}})
+        rows = [_row(mm=False, att="0-mm")]  # a mismatch present
+        results = so.evaluate_alerts({"run_id": "r", "workflow": "implement-feature",
+                                      "dispatches": [], "gates": []}, rows,
+                                     _baseline_with_p90(), th)
+        mmr = [r for r in results if r["rule"] == "model_mismatch"][0]
+        assert mmr["status"] == "disabled" and mmr["reason"] == "disabled"
+        assert mmr["observed"] is None and mmr["message"] is None
+
+    def test_msg_strips_html_and_controls(self):
+        out = so._msg("a\tb<script>@x`|*#\n(y)")
+        for bad in ("\t", "<", ">", "@", "`", "|", "*", "#", "\n"):
+            assert bad not in out  # every injection metachar dropped
+        assert "a" in out and "(y)" in out  # safe chars survive
+
+    def test_review_rule_missing_severity_not_evaluated(self):
+        rec = {"run_id": "r", "workflow": "implement-feature", "dispatches": [],
+               "gates": [{"step": "11", "findings": 3, "resolved": 3}]}  # no severity split
+        results = so.evaluate_alerts(rec, [], _baseline_with_p90(), so.DEFAULT_THRESHOLDS)
+        rf = [r for r in results if r["rule"] == "review_findings_p90"][0]
+        assert rf["status"] == "not_evaluated" and rf["reason"] == "missing_input"

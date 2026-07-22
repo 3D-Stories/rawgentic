@@ -56,11 +56,13 @@ CANARY_VERDICT_ENUM = frozenset({"pass", "refuse"})
 
 # Identifier grammar: no spaces / @ / backticks / brackets / quotes. Path-shape rejection
 # (below) runs AFTER this, so a grammar-passing path-shaped value is still redacted.
-_IDENT_RE = re.compile(r"^[A-Za-z0-9._:/-]+$")
-_WIN_DRIVE_RE = re.compile(r"^[A-Za-z]:")
-_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
-_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
-_FALLBACK_RE = re.compile(r"^fallback from (?P<from>[^:]+): (?P<status>.+)$")
+# NOTE: all anchored patterns use \Z (NOT $) — `$` matches before a terminal newline, so
+# "safe\n" would wrongly pass and commit a control character (Step-11 finding).
+_IDENT_RE = re.compile(r"\A[A-Za-z0-9._:/-]+\Z")
+_WIN_DRIVE_RE = re.compile(r"\A[A-Za-z]:")
+_SHA_RE = re.compile(r"\A[0-9a-f]{40,64}\Z")
+_UTC_RE = re.compile(r"\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\Z")
+_FALLBACK_RE = re.compile(r"\Afallback from (?P<from>[^:]+): (?P<status>.+)\Z")
 
 # The row's committed key set (unknown keys rejected for schema_version 1).
 _ROW_KEYS = frozenset({
@@ -76,31 +78,37 @@ _DENYLIST = frozenset({
 
 
 # --- redaction primitives ------------------------------------------------------------------
-def _is_path_shaped(s: str) -> bool:
-    """True if a grammar-passing string looks like a filesystem path (→ must be redacted)."""
+def _is_path_shaped(s: str, *, allow_single_slash: bool) -> bool:
+    """True if a grammar-passing string looks like a filesystem path (→ must be redacted).
+
+    ``allow_single_slash`` is True ONLY for model-id fields (`provider/model`); every other
+    identity field (run_id/attempt_id/correlation_id/seat/engine/lane) rejects ANY slash — a
+    one-slash relative path like ``etc/passwd`` or ``secrets/token`` is NOT legitimate there
+    (Step-11 finding: the model exception was wrongly applied to all fields)."""
     if s.startswith("/") or s.startswith("\\"):
         return True
     if _WIN_DRIVE_RE.match(s):
         return True
-    if s.startswith("//"):  # UNC / posix double-slash
+    if s in (".", ".."):  # bare relative components
         return True
     segs = s.split("/")
     if ".." in segs or "." in segs:  # any relative-path segment (leading or interior)
         return True
     if any(seg == "" for seg in segs[1:]):  # interior empty segment
         return True
-    if len(segs) > 2:  # 2+ separators = path-shaped (one internal slash is legit provider/model)
-        return True
-    return False
+    if not allow_single_slash:
+        return "/" in s  # non-model fields: any slash is path-shaped
+    return len(segs) > 2  # model fields: one internal slash is legit provider/model
 
 
-def _clean_ident(value, cap: int):
-    """Grammar + path-shape gate for a free identity field. Returns (clean|None, redacted)."""
+def _clean_ident(value, cap: int, *, allow_single_slash: bool = False):
+    """Grammar + path-shape gate for a free identity field. Returns (clean|None, redacted).
+    ``allow_single_slash`` (model fields only) permits exactly one internal `/`."""
     if value is None:
         return None, False
     if not isinstance(value, str) or len(value) > cap or not _IDENT_RE.match(value):
         return None, True
-    if _is_path_shaped(value):
+    if _is_path_shaped(value, allow_single_slash=allow_single_slash):
         return None, True
     return value, False
 
@@ -203,15 +211,26 @@ def derive_seat_outcome(obs: dict, *, issue, recorded_at: str = None) -> dict:
     """
     counter = [0]  # mutable redaction tally (path/grammar/enum failures)
 
-    def ident(key, cap):
-        v, red = _clean_ident(obs.get(key), cap)
+    def ident(key, cap, allow_slash=False):
+        v, red = _clean_ident(obs.get(key), cap, allow_single_slash=allow_slash)
         if red:
             counter[0] += 1
         return v
 
     actual = obs.get("actual_model")
-    canon = canonicalize_model_id(actual) if actual is not None else ""
-    model = canon or None
+    # H1 fix: canonicalize the CLEANED actual, then re-gate the canonical result through the
+    # model-field grammar — canonicalizing raw actual would commit an unredacted path/secret
+    # in `model` even when `actual_model` itself was redacted to null.
+    clean_actual, red_actual = _clean_ident(actual, 120, allow_single_slash=True)
+    if red_actual:
+        counter[0] += 1
+    canon = canonicalize_model_id(clean_actual) if clean_actual is not None else ""
+    model = None
+    if canon:
+        model_clean, red_m = _clean_ident(canon, 120, allow_single_slash=True)
+        if red_m:
+            counter[0] += 1
+        model = model_clean
     proc = obs.get("process") or {}
     parse_status, red_ps = _enum(obs.get("parse_status"), PARSE_STATUS_ENUM)
     if red_ps:
@@ -232,8 +251,8 @@ def derive_seat_outcome(obs: dict, *, issue, recorded_at: str = None) -> dict:
         "seat": ident("seat", 64),
         "engine": ident("engine", 64),
         "parse_status": parse_status,
-        "requested_model": ident("requested_model", 120),
-        "actual_model": ident("actual_model", 120),
+        "requested_model": ident("requested_model", 120, allow_slash=True),
+        "actual_model": clean_actual,
         "model": model,
         "models_match": (models_match(obs.get("requested_model"), actual)
                          if actual is not None else None),
@@ -269,24 +288,105 @@ def content_digest(row: dict) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _valid_utc(ra) -> bool:
+    """Strict ISO-8601-UTC AND a real calendar instant (shape-match alone lets 2026-99-99 pass)."""
+    if not isinstance(ra, str) or not _UTC_RE.match(ra):
+        return False
+    from datetime import datetime  # noqa: PLC0415
+    try:
+        datetime.strptime(ra, "%Y-%m-%dT%H:%M:%SZ")
+        return True
+    except ValueError:
+        return False
+
+
+def _ident_ok(v, cap, *, allow_slash=False, nullable=True):
+    if v is None:
+        return nullable
+    return (isinstance(v, str) and 0 < len(v) <= cap and bool(_IDENT_RE.match(v))
+            and not _is_path_shaped(v, allow_single_slash=allow_slash))
+
+
 # --- validator (strict, fail-closed) -------------------------------------------------------
 def validate_seat_outcome(row) -> list:
-    """Return a list of human-readable errors ([] == a valid committed row)."""
+    """Return a list of human-readable errors ([] == a valid committed row).
+
+    COMPLETE closed-schema check (Step-11 finding H4): every documented key must be PRESENT,
+    every string field re-passes its grammar + path-shape gate (so a hand-planted stored row
+    carrying a path/secret in ANY field is rejected on read, not re-committed), nested objects
+    are exact-key-and-type checked, numbers are finite, and recorded_at is a real UTC instant.
+    """
     errs = []
     if not isinstance(row, dict):
         return ["row is not an object"]
     extra = set(row) - _ROW_KEYS - {"redacted_fields"}
     if extra:
         errs.append(f"unknown keys for schema_version 1: {sorted(extra)}")
+    missing = _ROW_KEYS - set(row)
+    if missing:
+        errs.append(f"missing required keys: {sorted(missing)}")
     if row.get("schema_version") != SCHEMA_VERSION:
         errs.append(f"schema_version {row.get('schema_version')!r} != {SCHEMA_VERSION!r}")
+    # idempotency key: non-empty, grammar-safe, no path/slash
     for k in ("run_id", "attempt_id"):
-        if not isinstance(row.get(k), str) or not row.get(k):
-            errs.append(f"{k} must be a non-empty string (idempotency key)")
-    for k in ("timing_ms", "queued_ms"):
+        if not _ident_ok(row.get(k), 120, nullable=False):
+            errs.append(f"{k} must be a non-empty grammar-safe non-path string")
+    if not _ident_ok(row.get("correlation_id"), 128):
+        errs.append("correlation_id fails grammar/path gate")
+    for k in ("seat", "engine"):
+        if not _ident_ok(row.get(k), 64):
+            errs.append(f"{k} fails grammar/path gate")
+    for k in ("requested_model", "actual_model", "model"):
+        if not _ident_ok(row.get(k), 120, allow_slash=True):
+            errs.append(f"{k} fails grammar/path gate")
+    lane = row.get("lane")
+    if lane is not None:
+        if not isinstance(lane, dict) or set(lane) != {"provider", "transport", "auth_mode", "pool"}:
+            errs.append("lane must be null or exactly {provider,transport,auth_mode,pool}")
+        else:
+            for k, v in lane.items():
+                if not _ident_ok(v, 64):
+                    errs.append(f"lane.{k} fails grammar/path gate")
+    fb = row.get("fallback")
+    if fb is not None:
+        if not isinstance(fb, dict) or fb.get("kind") not in ("model_fallback", "other"):
+            errs.append("fallback must be null or {kind: model_fallback|other, ...}")
+    wp = row.get("work_product_ref")
+    if wp is not None:
+        if not isinstance(wp, dict):
+            errs.append("work_product_ref must be null or an object")
+        else:
+            for k in ("content_tree_sha", "base_sha", "head_sha"):
+                v = wp.get(k)
+                if v is not None and not (isinstance(v, str) and _SHA_RE.match(v)):
+                    errs.append(f"work_product_ref.{k} must be a hex sha or null")
+            st = wp.get("promotion_status")
+            if st is not None and st not in PROMOTION_STATUS_ENUM:
+                errs.append("work_product_ref.promotion_status not in enum")
+    usage = row.get("usage")
+    if usage is not None:
+        if not isinstance(usage, dict):
+            errs.append("usage must be null or an object")
+        else:
+            for k in ("input", "output", "cached"):
+                v = usage.get(k)
+                if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+                    errs.append(f"usage.{k} must be a non-negative int or null")
+            if _num_or_none(usage.get("cost_proxy")) is None and usage.get("cost_proxy") is not None:
+                errs.append("usage.cost_proxy must be a finite non-negative number or null")
+    bud = row.get("budget")
+    if bud is not None and not isinstance(bud, dict):
+        errs.append("budget must be null or an object")
+    for k in ("timing_ms", "queued_ms", "hook_denials"):
         v = row.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
             errs.append(f"{k} must be a non-negative int or null")
+    ec = row.get("exit_code")
+    if ec is not None and (isinstance(ec, bool) or not isinstance(ec, int)):
+        errs.append("exit_code must be an int or null")
+    to = row.get("timed_out")
+    if to is not None and not isinstance(to, bool):
+        errs.append("timed_out must be a bool or null")
     ps = row.get("parse_status")
     if ps is not None and ps not in PARSE_STATUS_ENUM:
         errs.append(f"parse_status {ps!r} not in enum")
@@ -294,14 +394,17 @@ def validate_seat_outcome(row) -> list:
     if cv is not None and cv not in CANARY_VERDICT_ENUM:
         errs.append(f"canary_verdict {cv!r} not in enum")
     ra = row.get("recorded_at")
-    if ra is not None and (not isinstance(ra, str) or not _UTC_RE.match(ra)):
-        errs.append("recorded_at must be strict ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ) or null")
+    if ra is not None and not _valid_utc(ra):
+        errs.append("recorded_at must be a real ISO-8601 UTC instant (YYYY-MM-DDTHH:MM:SSZ) or null")
     iss = row.get("issue")
     if iss is not None and (isinstance(iss, bool) or not isinstance(iss, int) or iss <= 0):
         errs.append("issue must be a positive int or null")
     mm = row.get("models_match")
     if mm is not None and not isinstance(mm, bool):
         errs.append("models_match must be bool or null")
+    for k in ("experiment_id", "arm"):
+        if row.get(k) is not None:
+            errs.append(f"{k} must be null (AC-K4 stub)")
     return errs
 
 
@@ -331,17 +434,52 @@ def _target_identity(model, lane):
     return list(target_identity({"model": model, "lane": lane}))
 
 
+def _safe_open_read(path: Path):
+    """Open a file read-only with O_NOFOLLOW and assert it is a regular file on the OPENED fd
+    (TOCTOU-safe — a symlink swapped in for `path` is refused, not followed). Returns the fd."""
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    st = os.fstat(fd)
+    import stat as _stat  # noqa: PLC0415
+    if not _stat.S_ISREG(st.st_mode):
+        os.close(fd)
+        raise HarvestBounds(f"{path}: not a regular file")
+    return fd
+
+
+def _safe_read_text(path: Path) -> str:
+    fd = _safe_open_read(path)
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as f:
+            return f.read()
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
+def _fstat_size(path: Path) -> int:
+    fd = _safe_open_read(path)
+    try:
+        return os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+
+
 def _read_audit(audit_path: Path):
-    """Line-tolerant read of routing-audit.jsonl → (receipts_by_nonce, nonce_counts, obs_list,
-    counters). Duplicate-key JSON is rejected. Malformed/oversize lines are counted, not fatal."""
+    """Line-tolerant read of routing-audit.jsonl → (receipts_by_nonce, receipt_nonce_counts,
+    obs_nonce_counts, obs_list, counters). Duplicate-key JSON is rejected. Malformed/oversize/
+    non-object lines are counted, not fatal. Read via an O_NOFOLLOW-hardened fd."""
     counters = {"skipped_malformed": 0}
     receipts = {}
-    nonce_counts = {}
+    nonce_counts = {}       # receipt nonces
+    obs_nonce_counts = {}   # observation-envelope receipt_nonce references
     obs = []
-    size = audit_path.stat().st_size
+    size = _fstat_size(audit_path)
     if size > AUDIT_MAX_BYTES:
         raise HarvestBounds(f"audit file {size} bytes > {AUDIT_MAX_BYTES}")
-    for raw in audit_path.read_text(encoding="utf-8").splitlines():
+    for raw in _safe_read_text(audit_path).splitlines():
         raw = raw.strip()
         if not raw:
             continue
@@ -353,16 +491,25 @@ def _read_audit(audit_path: Path):
         except (json.JSONDecodeError, ValueError):
             counters["skipped_malformed"] += 1
             continue
+        if not isinstance(rec, dict):  # valid JSON that is not an object → counted, not fatal
+            counters["skipped_malformed"] += 1
+            continue
         kind = rec.get("kind")
         if kind == "receipt":
             n = rec.get("nonce")
+            if not isinstance(n, str) or not n:  # a receipt without a real nonce is unusable
+                counters["skipped_malformed"] += 1
+                continue
             nonce_counts[n] = nonce_counts.get(n, 0) + 1
             receipts[n] = rec
         elif kind == "observation":
+            en = rec.get("receipt_nonce")
+            if isinstance(en, str) and en:
+                obs_nonce_counts[en] = obs_nonce_counts.get(en, 0) + 1
             obs.append(rec)
             if len(obs) > AUDIT_MAX_ENTRIES:
                 raise HarvestBounds(f"audit > {AUDIT_MAX_ENTRIES} observation entries")
-    return receipts, nonce_counts, obs, counters
+    return receipts, nonce_counts, obs_nonce_counts, obs, counters
 
 
 def _no_dup_keys(pairs):
@@ -374,20 +521,31 @@ def _no_dup_keys(pairs):
     return seen
 
 
-def _bind_ok(envelope, receipts, nonce_counts, run_id):
+def _bind_ok(envelope, receipts, nonce_counts, obs_nonce_counts, run_id):
     """Return (True, inner) if the observation is bound to a valid pass-verdict receipt for
-    THIS run, else (False, reason). Honest scope: detects orphan/tamper, NOT hostile forgery."""
+    THIS run, else (False, reason).
+
+    Honest scope (Step-11 narrowing): this proves the observation is linked to exactly one
+    valid pass-verdict receipt whose seat/correlation/attempt/identity/digest agree — i.e. it
+    rejects orphan, drift, failed-verdict, duplicate-nonce, and missing-nonce entries. It does
+    NOT reconcile against the run's expected-call ledger (that is `enforce.reconcile_run`'s job,
+    out of harvest scope) and it is NOT a hostile-forgery boundary (receipts share the same
+    mutable gitignored file; no MAC)."""
     inner = envelope.get("observation")
     if not isinstance(inner, dict):
         return False, "no-inner"
     if inner.get("run_id") != run_id:
         return False, "run-id-mismatch"
     nonce = envelope.get("receipt_nonce")
+    if not isinstance(nonce, str) or not nonce:  # a missing/empty nonce can never bind
+        return False, "no-nonce"
     rec = receipts.get(nonce)
     if rec is None:
         return False, "no-receipt"
     if nonce_counts.get(nonce, 0) != 1:
-        return False, "dup-nonce"
+        return False, "dup-receipt-nonce"
+    if obs_nonce_counts.get(nonce, 0) != 1:  # two observations for one receipt = ambiguous
+        return False, "dup-observation-nonce"
     if rec.get("verdict") != "pass":
         return False, "verdict-not-pass"
     if inner.get("attempt_id") != rec.get("attempt_id"):
@@ -415,37 +573,37 @@ def resolve_store_path(project_root, store) -> Path:
 
 def _read_store(store_path: Path):
     """Stream the committed store → (valid_index {key: (digest,row)}, kept_lines, quarantine,
-    counters). valid v1 rows index + keep; future-version pass through (kept); invalid interior
-    rows → quarantine; a torn terminal fragment → quarantine. Nothing is deleted."""
+    counters). Nothing is deleted: valid v1 rows are indexed + kept; a malformed/non-object/
+    invalid-v1 line, a DUPLICATE (run_id, attempt_id), OR an unknown/future schema_version is
+    moved to quarantine (NOT re-committed) — Step-11: recommitting an unvalidated unknown-version
+    row would bypass the redaction contract, so it is quarantined for diagnosis instead."""
     index = {}
-    kept = []  # verbatim lines to re-commit (valid v1 + future-version)
+    kept = []  # verbatim lines to re-commit (valid v1 only)
     quarantine = []
     counters = {"passed_through": 0, "quarantined": 0}
     if not store_path.exists():
         return index, kept, quarantine, counters
-    lines = store_path.read_text(encoding="utf-8").splitlines()
-    for i, raw in enumerate(lines):
+    for raw in _safe_read_text(store_path).splitlines():
         s = raw.strip()
         if not s:
             continue
-        is_last = (i == len(lines) - 1)
         try:
             rec = json.loads(s, object_pairs_hook=_no_dup_keys)
         except (json.JSONDecodeError, ValueError):
             quarantine.append(raw)  # torn terminal or malformed interior → quarantine
             counters["quarantined"] += 1
             continue
-        sv = rec.get("schema_version")
-        if sv != SCHEMA_VERSION:
-            kept.append(raw)  # forward-compat: pass through byte-verbatim
-            counters["passed_through"] += 1
-            continue
-        if validate_seat_outcome(rec):
-            quarantine.append(raw)  # invalid v1 row → quarantine, never re-committed
+        if not isinstance(rec, dict) or rec.get("schema_version") != SCHEMA_VERSION \
+                or validate_seat_outcome(rec):
+            quarantine.append(raw)  # non-object / unknown-version / invalid v1 → quarantine
             counters["quarantined"] += 1
             continue
         key = (rec.get("run_id"), rec.get("attempt_id"))
-        index[key] = (content_digest(rec), rec)
+        if key in index:
+            quarantine.append(raw)  # a duplicate committed key is an anomaly → quarantine the dupe
+            counters["quarantined"] += 1
+            continue
+        index[key] = (content_digest(rec), raw, rec)
         kept.append(raw)
     return index, kept, quarantine, counters
 
@@ -457,7 +615,10 @@ def harvest(capture_root, run_id, store, *, issue=None, now, project_root=None):
     dict with per-outcome counters. Raises DigestConflict / HarvestBounds (both leave the store
     untouched). ``now`` is the recorded_at stamp (ISO-8601 UTC; the CLI supplies it)."""
     store_path = resolve_store_path(project_root, store) if project_root else Path(store)
-    audit_path = Path(capture_root) / run_id / "routing-audit.jsonl"
+    from phase_executor.capture import sanitize_component  # noqa: PLC0415  # pylint: disable=no-name-in-module
+    # H6 fix: the run_id names a capture SUBDIR — sanitize it the SAME way the writer
+    # (RoutingAuditLog) does, so "../victim" can't escape the capture root at harvest.
+    audit_path = Path(capture_root) / sanitize_component(run_id) / "routing-audit.jsonl"
     res = {"rows_appended": 0, "skipped_malformed": 0, "skipped_invalid_observation": 0,
            "skipped_unbound": 0, "passed_through": 0, "quarantined": 0, "redacted_fields": 0,
            "note": None}
@@ -472,12 +633,12 @@ def harvest(capture_root, run_id, store, *, issue=None, now, project_root=None):
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
 
-        receipts, nonce_counts, obs_envelopes, ac = _read_audit(audit_path)
+        receipts, nonce_counts, obs_nonce_counts, obs_envelopes, ac = _read_audit(audit_path)
         res["skipped_malformed"] = ac["skipped_malformed"]
 
         derived = []
         for env in obs_envelopes:
-            ok, inner = _bind_ok(env, receipts, nonce_counts, run_id)
+            ok, inner = _bind_ok(env, receipts, nonce_counts, obs_nonce_counts, run_id)
             if not ok:
                 res["skipped_unbound"] += 1
                 continue
@@ -499,29 +660,42 @@ def harvest(capture_root, run_id, store, *, issue=None, now, project_root=None):
         res["quarantined"] = sc["quarantined"]
 
         new_lines = []
+        enriched = {}  # key -> new verbatim line, replacing the kept original (issue enrichment)
         for row in derived:
             key = (row["run_id"], row["attempt_id"])
             dig = content_digest(row)
             if key in index:
-                existing_dig, existing_row = index[key]
+                existing_dig, _existing_raw, existing_row = index[key]
                 if existing_dig != dig:
                     raise DigestConflict(f"{key}: existing digest != new (store untouched)")
-                # enrichment: null issue → validated positive
+                # enrichment: null issue → validated positive (digest excludes issue, so this
+                # is not a conflict). A differing NON-null issue keeps the existing value.
                 if existing_row.get("issue") is None and row.get("issue"):
-                    existing_row["issue"] = row["issue"]
-                    kept = [ln for ln in kept
-                            if (json.loads(ln).get("run_id"), json.loads(ln).get("attempt_id")) != key]
-                    kept.append(json.dumps(existing_row, separators=(",", ":")))
+                    merged = dict(existing_row)
+                    merged["issue"] = row["issue"]
+                    enriched[key] = json.dumps(merged, separators=(",", ":"))
                 continue  # idempotent skip
-            index[key] = (dig, row)
+            index[key] = (dig, None, row)
             new_lines.append(json.dumps({k: v for k, v in row.items()}, separators=(",", ":")))
             res["rows_appended"] += 1
 
+        if enriched:  # swap the kept originals for their enriched versions, in place
+            kept = [enriched.get((json.loads(ln).get("run_id"), json.loads(ln).get("attempt_id")), ln)
+                    for ln in kept]
+
         if quarantine:
             q_path = store_path.with_name(store_path.name + ".quarantine")
-            with open(q_path, "a", encoding="utf-8") as f:
-                for ln in quarantine:
-                    f.write(ln + "\n")
+            q_fd = os.open(str(q_path), os.O_CREAT | os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            try:
+                with os.fdopen(q_fd, "a", encoding="utf-8") as f:
+                    for ln in quarantine:
+                        f.write(ln + "\n")
+            except BaseException:
+                try:
+                    os.close(q_fd)
+                except OSError:
+                    pass
+                raise
 
         final = "\n".join(kept + new_lines)
         if final:
@@ -636,7 +810,9 @@ def compute_review_baseline(i2_records, *, workflow, exclude_run_id=None,
                 total += c + h
                 ok = True
         if ok:
-            by_run[run] = total  # last occurrence wins
+            if run in by_run:
+                del by_run[run]  # re-insert so the LATEST occurrence sets the dict order (F15)
+            by_run[run] = total
     values = list(by_run.values())[-window:]
     n = len(values)
     if n < min_n:
@@ -788,9 +964,16 @@ def _result(rule, status, reason, **fields):
     return base
 
 
+_MSG_ALLOWED = re.compile(r"[^A-Za-z0-9 ._:/=+()%-]")
+
+
 def _msg(text):
-    """Fixed-template message: strip anything that could inject into markdown/comments."""
-    return re.sub(r"[`\n\r@\[\]]", "", str(text))[:200]
+    """Fixed-template message. WHITELIST — keep only letters, digits, space, and
+    `. _ : / = + ( ) % -`; everything else (tabs, NUL/Unicode/bidi controls, backticks, @,
+    brackets, braces, `<`, `>`, `*`, `#`, `!`, `|`) is DROPPED, then length-capped. This
+    forecloses markdown/mention/HTML/control injection through any identifier a template
+    interpolates. Templates use the word "over" (never `>`) so comparisons survive the filter."""
+    return _MSG_ALLOWED.sub("", str(text))[:200]
 
 
 def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
@@ -815,7 +998,7 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
         out.append(_result("fallback_fired", "fired" if nfb > fb_cfg else "not_evaluated",
                            "ok" if nfb > fb_cfg else "below_threshold",
                            observed=nfb, threshold=fb_cfg,
-                           message=_msg(f"fallback fired {nfb}x (> {fb_cfg})")))
+                           message=_msg(f"fallback fired {nfb}x (over {fb_cfg})")))
 
     df_cfg = cfg("dispatch_failures")
     if df_cfg is False:
@@ -826,19 +1009,23 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
         out.append(_result("dispatch_failures", "fired" if ndf > df_cfg else "not_evaluated",
                            "ok" if ndf > df_cfg else "below_threshold",
                            observed=ndf, threshold=df_cfg,
-                           message=_msg(f"dispatch failures {ndf} (> {df_cfg}) — broad dispatch failure")))
+                           message=_msg(f"dispatch failures {ndf} (over {df_cfg}) - broad dispatch failure")))
 
-    mm = sum(1 for r in run_rows if r.get("models_match") is False)
-    out.append(_result("model_mismatch", "fired" if (cfg("model_mismatch") and mm) else
-                       ("disabled" if not cfg("model_mismatch") else "not_evaluated"),
-                       "ok" if mm else "below_threshold", observed=mm,
-                       message=_msg(f"requested!=actual model on {mm} dispatch(es)")))
+    if not cfg("model_mismatch"):
+        out.append(_result("model_mismatch", "disabled", "disabled"))
+    else:
+        mm = sum(1 for r in run_rows if r.get("models_match") is False)
+        out.append(_result("model_mismatch", "fired" if mm else "not_evaluated",
+                           "ok" if mm else "below_threshold", observed=mm,
+                           message=_msg(f"requested!=actual model on {mm} dispatch(es)") if mm else None))
 
-    pf = sum(1 for r in run_rows if r.get("parse_status") not in (None, "ok"))
-    out.append(_result("parse_failure", "fired" if (cfg("parse_failure") and pf) else
-                       ("disabled" if not cfg("parse_failure") else "not_evaluated"),
-                       "ok" if pf else "below_threshold", observed=pf,
-                       message=_msg(f"non-ok parse_status on {pf} dispatch(es)")))
+    if not cfg("parse_failure"):
+        out.append(_result("parse_failure", "disabled", "disabled"))
+    else:
+        pf = sum(1 for r in run_rows if r.get("parse_status") not in (None, "ok"))
+        out.append(_result("parse_failure", "fired" if pf else "not_evaluated",
+                           "ok" if pf else "below_threshold", observed=pf,
+                           message=_msg(f"non-ok parse_status on {pf} dispatch(es)") if pf else None))
 
     # --- statistical / row-level (one result per (rule, seat, model)) ---
     groups = baselines.get("groups", {})
@@ -847,14 +1034,19 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
         if not cfg(rule):
             out.append(_result(rule, "disabled", "disabled"))
             return
+        metric = "timing_ms" if rule == "seat_wall_time_p90" else "cost"
         worst = {}  # (seat,model) -> (observed, p90)
+        any_current_group_has_baseline = False
+        current_keys = {f"{r['seat']}|{r['model']}" for r in run_rows if r.get("model") is not None}
+        for key in current_keys:  # baseline availability is PER current-run group, not global (F16)
+            m = groups.get(key, {}).get("metrics", {}).get(metric)
+            if m and m.get("status") == "ok":
+                any_current_group_has_baseline = True
         for r in run_rows:
             if r.get("model") is None:
                 continue
             key = f"{r['seat']}|{r['model']}"
-            g = groups.get(key, {}).get("metrics", {})
-            metric = "timing_ms" if rule == "seat_wall_time_p90" else "cost"
-            m = g.get(metric)
+            m = groups.get(key, {}).get("metrics", {}).get(metric)
             if not m or m.get("status") != "ok":
                 continue
             v = value_fn(r)
@@ -862,9 +1054,7 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
                 cur = worst.get(key)
                 if cur is None or v > cur[0]:
                     worst[key] = (v, m["p90"])
-        if not groups or all(groups[k]["metrics"].get(
-                "timing_ms" if rule == "seat_wall_time_p90" else "cost", {}).get("status")
-                != "ok" for k in groups):
+        if not any_current_group_has_baseline:
             out.append(_result(rule, "not_evaluated", "no_baseline"))
             return
         if not worst:
@@ -875,7 +1065,7 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
             out.append(_result(rule, "fired", "ok", seat=seat, model=model, observed=obs,
                                threshold=p90, baseline_n=groups[key]["metrics"].get(
                                    "timing_ms" if rule == "seat_wall_time_p90" else "cost", {}).get("n"),
-                               message=_msg(f"{seat}/{model} {rule} {obs} > p90 {p90}")))
+                               message=_msg(f"{seat}/{model} {rule} {obs} over p90 {p90}")))
 
     _stat("seat_wall_time_p90", lambda r: _int_or_none(r.get("timing_ms")))
     _stat("seat_cost_p90", _row_cost)
@@ -885,11 +1075,20 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
         out.append(_result("review_findings_p90", "disabled", "disabled"))
     else:
         rb = baselines.get("review_findings")
+        # a gate carries severity input only when BOTH counts are present ints; a legacy record
+        # with review findings but no severity split is MISSING input, not a real zero (F5/F23).
+        gates = record.get("gates") or []
+        have_severity = any(
+            isinstance(g.get("findings_critical"), int) and not isinstance(g.get("findings_critical"), bool)
+            and isinstance(g.get("findings_high"), int) and not isinstance(g.get("findings_high"), bool)
+            for g in gates)
         if not rb or rb.get("status") != "ok":
             out.append(_result("review_findings_p90", "not_evaluated", "no_baseline"))
+        elif not have_severity:
+            out.append(_result("review_findings_p90", "not_evaluated", "missing_input"))
         else:
             total = 0
-            for g in record.get("gates") or []:
+            for g in gates:
                 c, h = g.get("findings_critical"), g.get("findings_high")
                 if isinstance(c, int) and not isinstance(c, bool):
                     total += c
@@ -899,7 +1098,7 @@ def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
             out.append(_result("review_findings_p90", "fired" if fired else "not_evaluated",
                                "ok" if fired else "below_threshold", observed=total,
                                threshold=rb["p90"], baseline_n=rb["n"],
-                               message=_msg(f"review Critical+High {total} > p90 {rb['p90']}")))
+                               message=_msg(f"review Critical+High {total} over p90 {rb['p90']}")))
     return out
 
 
@@ -945,24 +1144,36 @@ def _cmd_run_end(args) -> int:
     if isinstance(rec_run, str) and rec_run and rec_run != args.run_id:
         print(f"run-end: record run_id {rec_run!r} != --run-id {args.run_id!r}", file=sys.stderr)
         return 2
+    # Issue attribution requires the record to POSITIVELY belong to this run: only trust its
+    # issue when its run_id is present AND equals --run-id (F4/F26). A legacy record without a
+    # run_id cannot be cross-attributed — warn and commit issue:null.
     issue = None
-    iss = (record.get("issue") or {}).get("number") if isinstance(record.get("issue"), dict) else None
-    if isinstance(iss, int) and not isinstance(iss, bool) and iss > 0:
-        issue = iss
+    if isinstance(rec_run, str) and rec_run == args.run_id:
+        iss = (record.get("issue") or {}).get("number") if isinstance(record.get("issue"), dict) else None
+        if isinstance(iss, int) and not isinstance(iss, bool) and iss > 0:
+            issue = iss
+    elif not rec_run:
+        print("run-end: --record-file has no run_id — committing issue:null (set run_id at Step 16)",
+              file=sys.stderr)
     now = _now_utc()
     cap = args.capture_root or str(Path(args.project_root) / ".rawgentic" / "runs")
     store = resolve_store_path(args.project_root, args.store)
+    # Load config FIRST — its windowSize/minSamples must size the baselines (F14: previously
+    # loaded after, so operator config never took effect). Surface a present-but-malformed block.
+    th = load_thresholds_from_block(_load_config_block(args.project_root))
+    if th.get("_advisory"):
+        print(f"run-end: {th['_advisory']}", file=sys.stderr)
+    win, mn = th["windowSize"], th["minSamples"]
     try:
         res = harvest(cap, args.run_id, store, issue=issue, now=now)
     except (DigestConflict, HarvestBounds) as e:
         print(f"run-end: harvest aborted (store untouched): {e}", file=sys.stderr)
         return 1
     rows = _read_store_rows(store)
-    baselines = compute_baselines(rows, exclude_run_id=args.run_id)
+    baselines = compute_baselines(rows, exclude_run_id=args.run_id, min_n=mn, window=win)
     baselines["review_findings"] = compute_review_baseline(
         _load_i2_records(args.project_root), workflow=record.get("workflow"),
-        exclude_run_id=args.run_id)
-    th = load_thresholds_from_block(_load_config_block(args.project_root))
+        exclude_run_id=args.run_id, min_n=mn, window=win)
     results = evaluate_alerts(record, [r for r in rows if r.get("run_id") == args.run_id],
                              baselines, th)
     out = {**res, "evaluations": results, "alerts": [r for r in results if r["status"] == "fired"],
@@ -979,7 +1190,7 @@ def _read_store_rows(store_path):
     p = Path(store_path)
     if not p.exists():
         return rows
-    for line in p.read_text(encoding="utf-8").splitlines():
+    for line in _safe_read_text(p).splitlines():
         line = line.strip()
         if not line:
             continue
@@ -987,7 +1198,8 @@ def _read_store_rows(store_path):
             rec = json.loads(line)
         except (json.JSONDecodeError, ValueError):
             continue
-        if rec.get("schema_version") == SCHEMA_VERSION and not validate_seat_outcome(rec):
+        if isinstance(rec, dict) and rec.get("schema_version") == SCHEMA_VERSION \
+                and not validate_seat_outcome(rec):
             rows.append(rec)
     return rows
 
@@ -1009,9 +1221,12 @@ def _load_config_block(project_root):
     if not cfg.exists():
         return None
     try:
-        return json.loads(cfg.read_text(encoding="utf-8")).get("telemetryAlerts")
+        parsed = json.loads(cfg.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+    if not isinstance(parsed, dict):  # a non-object .rawgentic.json can't carry the key
+        return None
+    return parsed.get("telemetryAlerts")
 
 
 def main(argv=None) -> int:
@@ -1082,8 +1297,20 @@ def main(argv=None) -> int:
 
     if args.cmd == "baselines":
         store = resolve_store_path(args.project_root, args.store)
-        b = compute_baselines(_read_store_rows(store))
-        print(json.dumps(b) if args.json else render_advisory_block([]))
+        th = load_thresholds_from_block(_load_config_block(args.project_root))
+        b = compute_baselines(_read_store_rows(store), min_n=th["minSamples"],
+                              window=th["windowSize"])
+        if args.json:
+            print(json.dumps(b))
+        else:  # human summary of the baselines verb — NOT the alert block (F29)
+            print(f"seat-outcome baselines: {len(b['groups'])} group(s), "
+                  f"{b['unknown_model_rows']} unknown-model row(s)")
+            for key, g in sorted(b["groups"].items()):
+                t = g["metrics"]["timing_ms"]
+                st = t.get("status")
+                detail = (f"p50={t['p50']} p90={t['p90']}" if st == "ok"
+                          else f"{st} (n={t['n']})")
+                print(f"  {key}: timing {detail}")
         return 0
     return 2
 
