@@ -41,6 +41,9 @@ VALID_SEATS = frozenset({"intake", "plan", "build", "review", "ship"})
 WIRED_SEATS = _er.WIRED_SEATS  # the full 7-seat executor vocabulary (#464 §B); build now has a GATED audit path
 DIMENSIONS = ("seat_selection", "recovery", "gate", "enforcement", "winner_propagation",
               "audit_completeness", "token_burn")
+# 8a-Step11-H4: the DEFAULT live-cell subset (cost safety) — a small representative set covering
+# a clean seat dispatch, the gate, and enforcement. `--fixtures all` runs the full matrix.
+LIVE_DEFAULT_FIXTURES = ("f01-intake-clean", "f05-gate-bakeoff", "f07-enforcement-ok")
 
 
 class FixtureError(RuntimeError):
@@ -124,20 +127,27 @@ def live_dispatch(*, dispatch_real=None):
     """#449 T1: the LIVE drop-in for the `dispatch=` seam — same signature as the stubbed
     `_seat_dispatch(fx)` inner, but routing to the REAL adapter entry
     (`phase_executor.engine._dispatch_real`, the same path WF2/WF3 dispatches ride).
-    `dispatch_real` is injectable so CI never makes a live call. A CompositionError
-    (engine refusal, e.g. #558 A-F1 mutating-on-sync) translates to UnsupportedCellError
-    (report-level typed cell); every other error propagates untouched (fail-closed 0.0
-    via run_fixture's existing guard)."""
+    `dispatch_real` is injectable so CI never makes a live call.
+
+    8a-Step11-H5: this is a THIN pass-through — it does NOT translate exceptions. All
+    CompositionError discrimination lives at the SCORER boundary (`run_fixture`), because the
+    #558 A-F1 mutating refusal is raised PRE-seam (in run_seat/run_competitive, engine.py:133/:296)
+    and never reaches here anyway; an ADAPTER-raised CompositionError that DOES reach here is a
+    real composition failure, not the mutating carve-out, so blanket-translating it to
+    `unsupported` would hide a broken config. One place decides, on the message."""
     if dispatch_real is None:
+        # 8a-Step11-C3: selecting the REAL adapter (no injected dispatch) is the only path that
+        # makes billable calls — gate it on RUN_LIVE=1 at the library level, so an imported caller
+        # cannot bypass the CLI's authorization check. Injected test dispatches are exempt.
+        if os.environ.get("RUN_LIVE") != "1":
+            raise FixtureError("live_dispatch() with the real adapter requires RUN_LIVE=1 "
+                               "(inject dispatch_real= for tests)")
         dispatch_real = _pe().engine._dispatch_real  # pylint: disable=protected-access
 
     def dispatch(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
-        try:
-            return dispatch_real(engine, req, run_id=run_id, attempt_id=attempt_id,
-                                 capture_root=capture_root, digest=digest, queued_ms=queued_ms,
-                                 fallback_reason=fallback_reason)
-        except _pe().contract.CompositionError as exc:
-            raise UnsupportedCellError(str(exc)) from exc
+        return dispatch_real(engine, req, run_id=run_id, attempt_id=attempt_id,
+                             capture_root=capture_root, digest=digest, queued_ms=queued_ms,
+                             fallback_reason=fallback_reason)
     return dispatch
 
 
@@ -298,6 +308,19 @@ class _BudgetExceeded(RuntimeError):
     aborts with a typed partial report, never overruns."""
 
 
+def _validate_ceilings(max_calls, max_budget_usd) -> None:
+    """8a-Step11-C3/H8: live ceilings are MANDATORY and sane. A missing, non-positive, NaN, or
+    infinite ceiling is rejected — a NaN budget in particular would make every `cost > nan`
+    check False and silently disable the guard."""
+    import math  # noqa: PLC0415 — local: only the live path needs it
+    if not isinstance(max_calls, int) or isinstance(max_calls, bool) or max_calls <= 0:
+        raise FixtureError(f"live run requires max_calls as a positive int (got {max_calls!r})")
+    if (not isinstance(max_budget_usd, (int, float)) or isinstance(max_budget_usd, bool)
+            or not math.isfinite(max_budget_usd) or max_budget_usd <= 0):
+        raise FixtureError(
+            f"live run requires max_budget_usd as a finite positive number (got {max_budget_usd!r})")
+
+
 def _guarded_live_dispatch(dispatch, snapshot, *, max_calls=None, max_budget_usd=None):
     """Wrap a live dispatch with the HARD cost ceiling + per-dispatch observability.
     Returns (wrapped, state) where state = {"calls", "reported_cost_usd", "dispatches"}.
@@ -320,6 +343,15 @@ def _guarded_live_dispatch(dispatch, snapshot, *, max_calls=None, max_budget_usd
         with lock:
             if max_calls is not None and state["calls"] >= max_calls:
                 state["tripped"] = f"billable-call ceiling {max_calls} reached"
+                raise _BudgetExceeded(state["tripped"])
+            # 8a-Step11-C2: check the budget BEFORE the call too (using spend so far), so once the
+            # ceiling is crossed NO further call is made. Bounds total overshoot to at most one
+            # in-flight call's cost beyond max_budget_usd — a hard pre-bound, not a post-spend alarm.
+            # (A true per-call reservation needs a priori per-call cost the gateway does not expose;
+            # the call-count ceiling is the absolute floor, the budget is "stop at the next call".)
+            if max_budget_usd is not None and state["reported_cost_usd"] >= max_budget_usd:
+                state["tripped"] = (f"reported-cost ceiling ${max_budget_usd} reached "
+                                    f"(${state['reported_cost_usd']:.2f}) — no further call")
                 raise _BudgetExceeded(state["tripped"])
             state["calls"] += 1
         obs = dispatch(engine, req, run_id=run_id, attempt_id=attempt_id, capture_root=capture_root,
@@ -363,9 +395,15 @@ def run_fixture(fixture, *, snapshot, quota, capture_root, live=False, dispatch=
         raise FixtureError("run_fixture(live=True) requires an explicit live dispatch")
     scores = {}
     for dim in fixture["dimensions"]:
-        if live and dim == "winner_propagation" and not glm_credential_present():
+        if live and dim == "winner_propagation":
+            # 8a-Step11-C1: the winner cell's judge is glm; this PR does NOT wire a live glm
+            # judge (complete_fn stays canned), so scoring it live would FABRICATE the judge
+            # signal from a fixture verdict. Honest verdict = typed skip, deferred to #138
+            # (the live glm judge). The credential state is reported for the eventual wire-up.
             scores[dim] = {"score": None, "status": "skipped",
-                           "reason": "no glm judge credential (ZHIPUAI_API_KEY/ZHIPU_API_KEY/GLM_API_KEY)"}
+                           "reason": "live glm judge not wired this PR — deferred #138 "
+                                     f"(glm credential {'present' if glm_credential_present() else 'absent'}); "
+                                     "a canned verdict would fabricate the judge signal"}
             continue
         try:
             scores[dim] = _SCORERS[dim](fixture, snapshot, quota, capture_root, dispatch=dispatch)
@@ -373,13 +411,25 @@ def run_fixture(fixture, *, snapshot, quota, capture_root, live=False, dispatch=
             raise  # the matrix-level abort — never absorbed into a 0.0 cell
         except UnsupportedCellError as exc:  # #449: typed capability-absent cell, mean-excluded
             scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
+        except _pe().routing.ChainExhausted as exc:
+            # 8a-Step11-H6: availability failure (all routes/fallbacks exhausted — provider
+            # down / unavailable) is INFRASTRUCTURE, not model-quality. Typed skip, mean-excluded
+            # — never a 0.0 that would misrepresent an outage as a bad model. (Adapter auth
+            # errors that raise a provider-specific type still fall to the failure branch below —
+            # the honest bound: we skip only what we can positively classify as availability.)
+            scores[dim] = {"score": None, "status": "skipped",
+                           "reason": f"availability failure (routes exhausted): {str(exc)[:160]}"}
         except _pe().contract.CompositionError as exc:
-            # 8a-R2-F1: the engine REFUSES pre-seam (run_seat/run_competitive call
-            # _reject_mutating_manifest BEFORE the dispatch callable — engine.py:133/:296),
-            # so the seam-level translation in live_dispatch never sees the #558 A-F1
-            # refusal. The scorer boundary is the level that sees BOTH pre-seam and
-            # adapter-raised CompositionErrors → typed unsupported, never a fake 0.0.
-            scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
+            # 8a-R2-F1 + Step11-H5: ONLY the #558 A-F1 mutating-seat refusal is `unsupported`
+            # (a capability absent on this path); any OTHER CompositionError (malformed manifest,
+            # bad composition) is a real failure — a 0.0 cell, never mean-excluded, so a broken
+            # live config surfaces instead of silently vanishing. The engine refuses pre-seam
+            # (run_seat/run_competitive, engine.py:133/:296) so this catch — at the scorer
+            # boundary — is the level that sees it; live_dispatch's seam catch never does.
+            if "MUTATING manifest" in str(exc):
+                scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
+            else:
+                scores[dim] = {"score": 0.0, "error": f"CompositionError: {exc}"[:200]}
         except Exception as exc:  # noqa: BLE001 — a broken cell scores 0, never a silent pass
             scores[dim] = {"score": 0.0, "error": f"{type(exc).__name__}: {exc}"[:200]}
     return scores
@@ -401,6 +451,11 @@ def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus
     if live:
         if dispatch is None:
             raise FixtureError("run_matrix(live=True) requires an explicit live dispatch")
+        # 8a-Step11-C3+H8: a library caller must not run live with UNBOUNDED spend. BOTH ceilings
+        # are mandatory and validated (positive; finite for the budget — a NaN budget would make
+        # every `cost > nan` comparison False and silently DISABLE the ceiling). Validated here so
+        # non-CLI callers cannot bypass the CLI's own checks.
+        _validate_ceilings(max_calls, max_budget_usd)
         dispatch, state = _guarded_live_dispatch(dispatch, snapshot,
                                                  max_calls=max_calls, max_budget_usd=max_budget_usd)
     cells = []
@@ -514,15 +569,21 @@ def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO, 
         # HARD default ceilings (design r2 F5) — overridable but never absent.
         mc = _flag("--max-calls", int)
         mb = _flag("--max-budget-usd", float)
-        fixtures = load_fixtures(fixture_dir)
-        subset = _flag("--fixtures", str)  # 8a-R1-F6: the design's cost-safety subset selector
-        if subset is not None:
+        all_fixtures = load_fixtures(fixture_dir)
+        by_id = {fx["id"]: fx for fx in all_fixtures}
+        # 8a-Step11-H4: the DEFAULT live selection is the small cost-safety subset (design §3),
+        # NOT all 12 fixtures. `--fixtures all` opts into the full matrix; `--fixtures a,b` names a set.
+        subset = _flag("--fixtures", str)
+        if subset is None:
+            fixtures = [by_id[i] for i in LIVE_DEFAULT_FIXTURES if i in by_id]
+        elif subset.strip() == "all":
+            fixtures = all_fixtures
+        else:
             wanted = [s.strip() for s in subset.split(",") if s.strip()]
-            by_id = {fx["id"]: fx for fx in fixtures}
             missing = [w for w in wanted if w not in by_id]
             if missing or not wanted:
                 print(f"--fixtures: unknown or empty ids {missing or '(none given)'} "
-                      f"(available: {sorted(by_id)})", file=sys.stderr)
+                      f"(available: {sorted(by_id)}, or 'all')", file=sys.stderr)
                 raise SystemExit(2)
             fixtures = [by_id[w] for w in wanted]
         report = run_matrix(fixtures, snapshot=snapshot, quota_factory=qf,
@@ -538,6 +599,10 @@ def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO, 
         for dim, mean in report["dimension_means"].items():
             print(f"  {dim}: {mean}")
         print(f"report -> {out}")
+        # 8a-Step11-H7: a budget-aborted run is NOT a completed campaign — exit nonzero so an
+        # owner-attended wrapper cannot mistake the partial report for a finished benchmark.
+        if report.get("aborted"):
+            raise SystemExit(3)
         return
     report = run_matrix(load_fixtures(fixture_dir), snapshot=snapshot,
                         quota_factory=qf, capture_root=tmp)

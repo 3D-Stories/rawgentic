@@ -255,23 +255,18 @@ class TestLiveDispatch:
         assert calls["run_id"] == "r1" and calls["attempt_id"] == "0-a"
         assert calls["digest"] == "dg" and calls["queued_ms"] == 5
 
-    def test_composition_refusal_translates_to_unsupported(self):
-        def refusing(engine, req, **kw):
-            raise pe.contract.CompositionError("mutating manifest on sync path (#558 AC2)")
-
-        d = db.live_dispatch(dispatch_real=refusing)
-        with pytest.raises(db.UnsupportedCellError, match="558"):
-            d("claude", self._req(), run_id="r", attempt_id="0-a", capture_root="c",
-              digest="d", queued_ms=0, fallback_reason=None)
-
-    def test_other_errors_are_not_swallowed(self):
-        def broken(engine, req, **kw):
-            raise ValueError("some other failure")
-
-        d = db.live_dispatch(dispatch_real=broken)
-        with pytest.raises(ValueError):
-            d("claude", self._req(), run_id="r", attempt_id="0-a", capture_root="c",
-              digest="d", queued_ms=0, fallback_reason=None)
+    def test_live_dispatch_is_thin_passthrough(self):
+        # 8a-Step11-H5: live_dispatch does NOT translate exceptions — CompositionError
+        # discrimination is the scorer boundary's job (TestStep11Hardening covers it).
+        # A raised CompositionError propagates raw; a plain error propagates raw.
+        for exc_type, msg in ((pe.contract.CompositionError, "adapter composition failure"),
+                              (ValueError, "some other failure")):
+            def broken(engine, req, _e=exc_type, _m=msg, **kw):
+                raise _e(_m)
+            d = db.live_dispatch(dispatch_real=broken)
+            with pytest.raises(exc_type):
+                d("claude", self._req(), run_id="r", attempt_id="0-a", capture_root="c",
+                  digest="d", queued_ms=0, fallback_reason=None)
 
     def test_unsupported_cell_is_typed_not_zero(self, env):
         # an UnsupportedCellError inside a scorer becomes a typed report cell
@@ -350,7 +345,8 @@ class TestLiveMatrix:
         qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "ql", env["snapshot"].pool_concurrency())
         r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
                           capture_root=env["capture_root"], models=("live",), reps=1,
-                          live=True, dispatch=db.live_dispatch(dispatch_real=counting))
+                          live=True, dispatch=db.live_dispatch(dispatch_real=counting),
+                          max_calls=20, max_budget_usd=5.0)
         assert r["n_cells"] == 1 and calls, "live cells must flow through the injected dispatch"
         assert r["live"] is True
         assert "live" in r["note"].lower()
@@ -373,7 +369,7 @@ class TestLiveMatrix:
         r = db.run_matrix(fxs, snapshot=env["snapshot"], quota_factory=qf,
                           capture_root=env["capture_root"], models=("live",), reps=1,
                           live=True, dispatch=db.live_dispatch(dispatch_real=counting),
-                          max_calls=1)
+                          max_calls=1, max_budget_usd=100.0)
         assert r["aborted"] == "budget_exceeded"
         # 8a-R1-F7: deterministic — dims iterate in fixture order, only the first dispatch
         # passes the max_calls=1 pre-check; anything >1 is a guard regression.
@@ -388,7 +384,7 @@ class TestLiveMatrix:
         r = db.run_matrix([fx, fx], snapshot=env["snapshot"], quota_factory=qf,
                           capture_root=env["capture_root"], models=("live",), reps=1,
                           live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)),
-                          max_budget_usd=5.0)
+                          max_calls=20, max_budget_usd=5.0)
         assert r["aborted"] == "budget_exceeded"
 
     def test_winner_cells_skip_without_glm_credential(self, env, monkeypatch):
@@ -417,7 +413,7 @@ class TestLiveMatrix:
         r = db.run_matrix([fx, _fx("f01-intake-clean")], snapshot=env["snapshot"], quota_factory=qf,
                           capture_root=env["capture_root"], models=("live",), reps=1,
                           live=True, dispatch=db.live_dispatch(dispatch_real=canned),
-                          max_calls=1)
+                          max_calls=1, max_budget_usd=100.0)
         assert r["aborted"] == "budget_exceeded"
         assert r["n_cells"] == 1, "matrix must stop churning after the tripped fixture"
 
@@ -427,7 +423,8 @@ class TestLiveMatrix:
         qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qr", env["snapshot"].pool_concurrency())
         r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
                           capture_root=env["capture_root"], models=("live",), reps=1,
-                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)))
+                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)),
+                          max_calls=20, max_budget_usd=5.0)
         out = db.write_live_report(r, out_dir=tmp_path)
         data = json.loads(Path(out).read_text(encoding="utf-8"))
         assert data["live"] is True
@@ -440,7 +437,8 @@ class TestLiveMatrix:
         qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qo", env["snapshot"].pool_concurrency())
         r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
                           capture_root=env["capture_root"], models=("live",), reps=1,
-                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)))
+                          live=True, dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)),
+                          max_calls=20, max_budget_usd=5.0)
         assert r["dispatches"], "live run must record per-dispatch observability"
         d0 = r["dispatches"][0]
         assert {"seat", "requested_model", "actual_model", "session_policy"} <= set(d0)
@@ -491,6 +489,105 @@ class TestLiveMatrix:
             db._run_cli(argv=["--live", "--fixtures", "nope-such-fixture"])
         assert ei.value.code == 2
         assert "unknown" in capsys.readouterr().err.lower()
+
+
+class TestStep11Hardening:
+    def test_run_matrix_live_requires_both_ceilings(self, env):
+        # C3: a library caller cannot run live with an unbounded (None) ceiling
+        d = db.live_dispatch(dispatch_real=lambda *a, **k: None)
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qv", env["snapshot"].pool_concurrency())
+        with pytest.raises(db.FixtureError, match="max_calls"):
+            db.run_matrix([_fx("f01-intake-clean")], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=d, max_budget_usd=5.0)   # max_calls missing
+
+    @pytest.mark.parametrize("mc,mb", [(0, 5.0), (-1, 5.0), (5, 0), (5, -1.0),
+                                       (5, float("nan")), (5, float("inf"))])
+    def test_invalid_ceilings_rejected(self, env, mc, mb):
+        # H8: non-positive / NaN / inf ceilings are rejected (a NaN budget would disable the guard)
+        d = db.live_dispatch(dispatch_real=lambda *a, **k: None)
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qi", env["snapshot"].pool_concurrency())
+        with pytest.raises(db.FixtureError):
+            db.run_matrix([_fx("f01-intake-clean")], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=d, max_calls=mc, max_budget_usd=mb)
+
+    def test_live_dispatch_real_adapter_requires_run_live(self, monkeypatch):
+        # C3: the REAL adapter path is RUN_LIVE-gated at the library level (not just the CLI)
+        monkeypatch.delenv("RUN_LIVE", raising=False)
+        with pytest.raises(db.FixtureError, match="RUN_LIVE"):
+            db.live_dispatch()          # no injected dispatch_real -> selects the real adapter
+        # an injected dispatch is exempt (tests never need RUN_LIVE)
+        assert callable(db.live_dispatch(dispatch_real=lambda *a, **k: None))
+
+    def test_budget_ceiling_is_pre_call_bound(self, env, monkeypatch):
+        # C2: once spend crosses the ceiling, NO further call is made (pre-call check).
+        _no_glm(monkeypatch)
+        fx = copy.deepcopy(_fx("f01-intake-clean"))
+        fx["responses"]["intake"][0]["usage"] = {"input": 1, "output": 1, "cost_usd": 6.0}
+        fx["dimensions"] = ["seat_selection", "token_burn"]     # 2 dispatches
+        seen = []
+
+        def counting(engine, req, **kw):
+            seen.append(1)
+            return db._seat_dispatch(fx)(engine, req, **kw)
+
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qp", env["snapshot"].pool_concurrency())
+        r = db.run_matrix([fx], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=counting),
+                          max_calls=99, max_budget_usd=5.0)
+        assert r["aborted"] == "budget_exceeded"
+        assert len(seen) == 1, "the 2nd dispatch must be blocked pre-call once $6 > $5 ceiling"
+
+    def test_availability_failure_is_skipped_not_zero(self, env, monkeypatch):
+        # H6: ChainExhausted (provider unavailable) is a typed skip, not a quality 0.0
+        _no_glm(monkeypatch)
+        fx = copy.deepcopy(_fx("f01-intake-clean"))
+        fx["dimensions"] = ["seat_selection"]
+
+        def boom(engine, req, **kw):
+            raise pe.routing.ChainExhausted("all routes exhausted (provider down)")
+
+        cell = db.run_fixture(fx, snapshot=env["snapshot"], quota=env["quota"],
+                              capture_root=env["capture_root"], live=True,
+                              dispatch=db.live_dispatch(dispatch_real=boom))["seat_selection"]
+        assert isinstance(cell, dict) and cell["status"] == "skipped"
+        assert "availability" in cell["reason"].lower()
+
+    def test_nonmutating_composition_error_is_failure_not_unsupported(self, env, monkeypatch):
+        # H5: only the #558 A-F1 mutating refusal is `unsupported`; other CompositionErrors
+        # are real 0.0 failures (a broken live config must surface, not vanish from the mean)
+        _no_glm(monkeypatch)
+        fx = copy.deepcopy(_fx("f01-intake-clean"))
+        fx["dimensions"] = ["seat_selection"]
+
+        def bad_composition(engine, req, **kw):
+            raise pe.contract.CompositionError("malformed manifest: unknown field")
+
+        cell = db.run_fixture(fx, snapshot=env["snapshot"], quota=env["quota"],
+                              capture_root=env["capture_root"], live=True,
+                              dispatch=db.live_dispatch(dispatch_real=bad_composition))["seat_selection"]
+        assert cell["score"] == 0.0 and "status" not in cell   # a scored failure, not mean-excluded
+
+    def test_cli_aborted_run_exits_nonzero(self, monkeypatch, tmp_path):
+        # H7: a budget-aborted live CLI run exits nonzero (not a "completed benchmark")
+        monkeypatch.setenv("RUN_LIVE", "1")
+        _no_glm(monkeypatch)
+        real_factory = db.live_dispatch          # capture BEFORE patching
+
+        def fake_live_dispatch():
+            def fake_real(engine, req, **kw):
+                fx = db.load_fixture(db.FIXTURE_DIR / "f01-intake-clean.json")
+                return db._seat_dispatch(fx)(engine, req, **kw)
+            return real_factory(dispatch_real=fake_real)
+
+        monkeypatch.setattr(db, "live_dispatch", fake_live_dispatch)
+        with pytest.raises(SystemExit) as ei:
+            db._run_cli(argv=["--live", "--fixtures", "f01-intake-clean", "--max-calls", "1"])
+        assert ei.value.code == 3
+        for f in (REPO / "docs" / "measurements" / "driver-bench").glob("live-*.json"):
+            f.unlink()
 
 
 class TestCompositionRefusalRealPath:
