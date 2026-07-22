@@ -1774,6 +1774,92 @@ def test_supervised_codex_behavioral_probe_raises_refuses(tmp_path):
     assert "behavioral_probe_failed" in res["error"]["message"]
 
 
+# ---------------------------------------------------------------------------
+# F1 (#559): behavioral probe parses ADVISORY denial evidence; raw output ephemeral
+# ---------------------------------------------------------------------------
+
+_TARGET = "/probe/sibling/outside.txt"
+
+
+def test_denial_evidence_exec_event_matched():
+    out = ('{"type":"exec_command_end","stderr":"touch: '
+           + _TARGET + ': EACCES Permission denied"}')
+    ev = er.parse_denial_evidence(out, target=_TARGET)
+    assert ev["matched"] is True
+    assert ev["source"] == "exec_event"
+    assert ev["token"] == "EACCES"
+    assert ev["target_named"] is True
+    assert ev["line_sha256"]
+    assert ev["sanitized_line"] == "EACCES outside.txt"
+
+
+def test_denial_evidence_prose_matched():
+    out = "touch: cannot touch '" + _TARGET + "': EACCES (Operation not permitted)"
+    ev = er.parse_denial_evidence(out, target=_TARGET)
+    assert ev["matched"] is True
+    assert ev["source"] == "prose"
+    assert ev["token"] == "EACCES"
+
+
+def test_denial_evidence_silent_no_match():
+    ev = er.parse_denial_evidence("all commands ran, files created", target=_TARGET)
+    assert ev["matched"] is False
+    assert ev["source"] is None
+
+
+def test_denial_evidence_token_without_target_no_match():
+    # a denial token that does NOT name the throwaway target is not our evidence
+    ev = er.parse_denial_evidence("EACCES on some other unrelated path", target=_TARGET)
+    assert ev["matched"] is False
+
+
+def _probe_with_runner(tmp_path, monkeypatch, fake_runner):
+    monkeypatch.setattr(er, "compose_supervised_argv", lambda *a, **k: ["codex", "exec"])
+    return er.codex_behavioral_probe(adapters={}, model="gpt-5.6-sol", effort=None,
+                                     wt_root=str(tmp_path / "wts"), runner=fake_runner)
+
+
+def test_probe_prose_echo_never_flips_outside_blocked(tmp_path, monkeypatch):
+    # R5 negative echo: a BROKEN sandbox that wrote the sibling AND printed a spurious EACCES
+    # prose line still reports outside_blocked=False — denial_evidence is advisory, never the
+    # verdict. matched=True/source=prose must not launder a broken sandbox into "blocked".
+    import re as _re
+    import types as _types
+
+    def fake_runner(argv, *, input, capture_output, text, timeout, check):
+        outside = _re.search(r"touch (\S+/outside\.txt)", input).group(1)
+        Path(outside).write_text("leaked", encoding="utf-8")          # sandbox broke: sibling written
+        (Path(outside).parent.parent / "wt" / "inside.txt").write_text("x", encoding="utf-8")
+        return _types.SimpleNamespace(
+            stdout=f"touch: cannot touch '{outside}': EACCES (Operation not permitted)\n", stderr="")
+
+    res = _probe_with_runner(tmp_path, monkeypatch, fake_runner)
+    assert res["inside_written"] is True
+    assert res["outside_blocked"] is False            # fs says the sibling WAS written — verdict unmoved
+    assert res["denial_evidence"]["matched"] is True
+    assert res["denial_evidence"]["source"] == "prose"
+
+
+def test_probe_denial_evidence_carries_no_pii(tmp_path, monkeypatch):
+    # C8 PII-seed: email/token-shaped strings in the transcript appear neither in the returned
+    # dict nor anywhere raw (the transcript is read in memory only, never persisted).
+    import re as _re
+    import types as _types
+    seed_email, seed_token = "victim@example.com", "sk-abc123DEF456"
+
+    def fake_runner(argv, *, input, capture_output, text, timeout, check):
+        outside = _re.search(r"touch (\S+/outside\.txt)", input).group(1)
+        out = (f"authenticated as {seed_email} using {seed_token}\n"
+               f'{{"type":"exec_command_end","stderr":"touch: {outside}: EACCES Permission denied"}}\n')
+        return _types.SimpleNamespace(stdout=out, stderr="")
+
+    res = _probe_with_runner(tmp_path, monkeypatch, fake_runner)
+    assert res["denial_evidence"]["matched"] is True
+    assert res["denial_evidence"]["source"] == "exec_event"
+    blob = json.dumps(res)
+    assert seed_email not in blob and seed_token not in blob  # no raw transcript / PII in the result
+
+
 def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
     """#472 8a R2 + Step-11: an engine with no supervised composition rule must REFUSE with the
     allowlist ValueError BEFORE any adapter lookup — an empty adapters map proves the ordering
