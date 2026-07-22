@@ -375,7 +375,9 @@ class TestLiveMatrix:
                           live=True, dispatch=db.live_dispatch(dispatch_real=counting),
                           max_calls=1)
         assert r["aborted"] == "budget_exceeded"
-        assert len(seen) <= 2, "must stop dispatching promptly after the ceiling"
+        # 8a-R1-F7: deterministic — dims iterate in fixture order, only the first dispatch
+        # passes the max_calls=1 pre-check; anything >1 is a guard regression.
+        assert len(seen) == 1, "must stop dispatching immediately at the ceiling"
 
     def test_budget_ceiling_aborts_on_reported_cost(self, env, monkeypatch):
         _no_glm(monkeypatch)
@@ -392,9 +394,32 @@ class TestLiveMatrix:
     def test_winner_cells_skip_without_glm_credential(self, env, monkeypatch):
         _no_glm(monkeypatch)
         fx = _fx("f09-winner-draft1")
-        cell = db.run_fixture(fx, **env, live=True)["winner_propagation"]
+        # a live run always carries a dispatch (8a-R1-F4 guard); the skip fires before it's used
+        poison = db.live_dispatch(dispatch_real=lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not dispatch")))
+        cell = db.run_fixture(fx, **env, live=True, dispatch=poison)["winner_propagation"]
         assert isinstance(cell, dict) and cell["status"] == "skipped"
         assert "glm" in cell["reason"].lower()
+
+    def test_live_fixture_without_dispatch_refused(self, env, monkeypatch):
+        # 8a-R1-F4: live=True with no dispatch would silently replay CANNED responses
+        _no_glm(monkeypatch)
+        with pytest.raises(db.FixtureError, match="explicit live dispatch"):
+            db.run_fixture(_fx("f01-intake-clean"), **env, live=True)
+
+    def test_bakeoff_swallowed_budget_still_aborts_matrix(self, env, monkeypatch):
+        # 8a-R1-F1 (Critical): run_competitive's per-candidate except Exception softens
+        # _BudgetExceeded into a harness_error Observation — the exception never surfaces.
+        # The guard's out-of-band `tripped` flag must still abort the matrix.
+        monkeypatch.setenv("ZHIPUAI_API_KEY", "k")     # don't skip the winner cell
+        fx = _fx("f09-winner-draft1")
+        canned = db._bakeoff_dispatch(fx)
+        qf = lambda: pe.QuotaCoordinator(env["capture_root"] / "qsw", env["snapshot"].pool_concurrency())
+        r = db.run_matrix([fx, _fx("f01-intake-clean")], snapshot=env["snapshot"], quota_factory=qf,
+                          capture_root=env["capture_root"], models=("live",), reps=1,
+                          live=True, dispatch=db.live_dispatch(dispatch_real=canned),
+                          max_calls=1)
+        assert r["aborted"] == "budget_exceeded"
+        assert r["n_cells"] == 1, "matrix must stop churning after the tripped fixture"
 
     def test_live_report_written_with_cost_line(self, env, tmp_path, monkeypatch):
         _no_glm(monkeypatch)
@@ -427,6 +452,64 @@ class TestLiveMatrix:
                               cwd=str(REPO), env=env2, capture_output=True, text=True, timeout=60)
         assert proc.returncode != 0
         assert "RUN_LIVE" in (proc.stderr + proc.stdout)
+
+    def test_cli_rejects_equals_flag_idiom(self, capsys):
+        # 8a-R1-F5c: --max-budget-usd=1.00 would silently fall back to the DEFAULT ceiling
+        with pytest.raises(SystemExit) as ei:
+            db._run_cli(argv=["--live", "--max-budget-usd=1.00"])
+        assert ei.value.code == 2
+        assert "space-separated" in capsys.readouterr().err
+
+    def test_cli_live_fixtures_subset(self, monkeypatch, tmp_path):
+        # 8a-R1-F6: the design's --fixtures cost-safety subset selector, in-process with a
+        # faked live_dispatch (zero real calls)
+        monkeypatch.setenv("RUN_LIVE", "1")
+        _no_glm(monkeypatch)
+        seen_fixture_seats = []
+        real_live_dispatch = db.live_dispatch  # capture BEFORE the patch below shadows it
+
+        def fake_live_dispatch():
+            def fake_real(engine, req, **kw):
+                seen_fixture_seats.append(req.seat)
+                fx = db.load_fixture(db.FIXTURE_DIR / "f01-intake-clean.json")
+                return db._seat_dispatch(fx)(engine, req, **kw)
+            return real_live_dispatch(dispatch_real=fake_real)
+
+        monkeypatch.setattr(db, "live_dispatch", fake_live_dispatch)
+        monkeypatch.setattr(db, "DEFAULT_REPORT", tmp_path / "stub.json")
+        db._run_cli(argv=["--live", "--fixtures", "f01-intake-clean", "--max-calls", "5"])
+        live_reports = sorted((REPO / "docs" / "measurements" / "driver-bench").glob("live-*.json"))
+        assert live_reports, "live report written"
+        data = json.loads(live_reports[-1].read_text(encoding="utf-8"))
+        assert data["n_fixtures"] == 1
+        for f in live_reports:
+            f.unlink()  # keep the tree clean (they're gitignored, but tidy anyway)
+
+    def test_cli_live_fixtures_unknown_id_refused(self, monkeypatch, capsys):
+        monkeypatch.setenv("RUN_LIVE", "1")
+        with pytest.raises(SystemExit) as ei:
+            db._run_cli(argv=["--live", "--fixtures", "nope-such-fixture"])
+        assert ei.value.code == 2
+        assert "unknown" in capsys.readouterr().err.lower()
+
+
+class TestCompositionRefusalRealPath:
+    def test_build_seat_real_refusal_is_unsupported_not_zero(self, env):
+        """8a-R2-F1: drive a REAL build-seat fixture through run_fixture (no injected raiser) —
+        the engine's pre-seam _reject_mutating_manifest refusal (engine.py:133) must surface as
+        the typed unsupported cell, never a fake 0.0. This exercises the real call graph the
+        seam-level translation cannot see."""
+        fx = copy.deepcopy(_fx("f01-intake-clean"))
+        fx["primary_seat"] = "build"                      # mutating manifest -> pre-seam refusal
+        fx["responses"] = {"build": [{"parse_status": "ok", "payload": "x",
+                                      "usage": {"input": 1, "output": 1}}]}
+        fx["dimensions"] = ["seat_selection"]
+        cell = db.run_fixture(fx, **env, live=True,
+                              dispatch=db.live_dispatch(dispatch_real=db._seat_dispatch(fx)))
+        assert isinstance(cell["seat_selection"], dict)
+        assert cell["seat_selection"]["status"] == "unsupported"
+        assert cell["seat_selection"]["score"] is None
+        assert "sync" in cell["seat_selection"]["error"] or "558" in cell["seat_selection"]["error"]
 
 
 # ---- #449 T4: the deferred LIVE cell (#138 — real billable calls, owner-attended) ---------------

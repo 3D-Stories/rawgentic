@@ -50,3 +50,6 @@ claude_docs/
 # untracked ones). docs/measurements/run_records.jsonl stays COMMITTED (#92/#93).
 docs/reviews/
 docs/measurements/bakeoff_results.jsonl
+
+# #449: live driver-bench reports are per-run artifacts (provider error text may echo request detail)
+docs/measurements/driver-bench/live-*.json

@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -304,34 +305,47 @@ def _guarded_live_dispatch(dispatch, snapshot, *, max_calls=None, max_budget_usd
     abort is prompt, never a whole-matrix overrun. Cost accumulates only what the
     engine REPORTS (usage cost_usd/cost_proxy/spent_usd); unreported cost stays visible
     as calls-only (the report's cost block names both numbers)."""
-    state = {"calls": 0, "reported_cost_usd": 0.0, "dispatches": []}
+    state = {"calls": 0, "reported_cost_usd": 0.0, "dispatches": [], "tripped": None}
+    # 8a-R2-F2: run_competitive fans candidates out on a ThreadPoolExecutor, so the ceiling
+    # counters and BOTH ceiling checks are lock-guarded — an unlocked lost update undercounts
+    # spend, which is the WRONG direction for a money-safety ceiling.
+    lock = threading.Lock()
 
     def wrapped(engine, req, *, run_id, attempt_id, capture_root, digest, queued_ms, fallback_reason):
-        if max_calls is not None and state["calls"] >= max_calls:
-            raise _BudgetExceeded(f"billable-call ceiling {max_calls} reached")
-        state["calls"] += 1
+        # 8a-R1-F1: run_competitive's per-candidate failure isolation (engine.py:341) catches
+        # Exception — including _BudgetExceeded — and softens it to a harness_error Observation,
+        # so the exception alone CANNOT be the abort signal on the bake-off path. `tripped` is
+        # the out-of-band flag run_matrix checks after every fixture; the raise still blocks
+        # the individual dispatch (per-call cost stays guarded either way).
+        with lock:
+            if max_calls is not None and state["calls"] >= max_calls:
+                state["tripped"] = f"billable-call ceiling {max_calls} reached"
+                raise _BudgetExceeded(state["tripped"])
+            state["calls"] += 1
         obs = dispatch(engine, req, run_id=run_id, attempt_id=attempt_id, capture_root=capture_root,
                        digest=digest, queued_ms=queued_ms, fallback_reason=fallback_reason)
         usage = getattr(obs, "usage", None) or {}
         cost = next((float(usage[k]) for k in ("cost_usd", "cost_proxy", "spent_usd")
                      if isinstance(usage.get(k), (int, float))), 0.0)
-        state["reported_cost_usd"] += cost
         try:
             requested_policy = (snapshot.seat(req.seat).get("manifest") or {}).get("session_policy")
         except Exception:  # noqa: BLE001 — observability never kills a live cell
             requested_policy = None
-        state["dispatches"].append({
-            "seat": req.seat, "requested_model": req.requested_model,
-            "actual_model": getattr(obs, "actual_model", None),
-            "parse_status": getattr(obs, "parse_status", None),
-            "fallback_reason": fallback_reason,
-            "session_policy": {"requested": requested_policy,
-                               "actual": getattr(obs, "session_policy", None)},
-            "usage": usage or None,
-        })
-        if max_budget_usd is not None and state["reported_cost_usd"] > max_budget_usd:
-            raise _BudgetExceeded(
-                f"reported-cost ceiling ${max_budget_usd} exceeded (${state['reported_cost_usd']:.2f})")
+        with lock:
+            state["reported_cost_usd"] += cost
+            state["dispatches"].append({
+                "seat": req.seat, "requested_model": req.requested_model,
+                "actual_model": getattr(obs, "actual_model", None),
+                "parse_status": getattr(obs, "parse_status", None),
+                "fallback_reason": fallback_reason,
+                "session_policy": {"requested": requested_policy,
+                                   "actual": getattr(obs, "session_policy", None)},
+                "usage": usage or None,
+            })
+            if max_budget_usd is not None and state["reported_cost_usd"] > max_budget_usd:
+                state["tripped"] = (f"reported-cost ceiling ${max_budget_usd} exceeded "
+                                    f"(${state['reported_cost_usd']:.2f})")
+                raise _BudgetExceeded(state["tripped"])
         return obs
     return wrapped, state
 
@@ -342,6 +356,11 @@ def run_fixture(fixture, *, snapshot, quota, capture_root, live=False, dispatch=
     live=True (#449): `dispatch` (a live_dispatch) replaces the fixture's canned dispatch in every
     dispatching scorer; a glm-judge dimension with no glm credential is a typed SKIP (fail-closed,
     visible), and a _BudgetExceeded from the ceiling guard propagates (aborts the matrix)."""
+    if live and dispatch is None:
+        # 8a-R1-F4: without this, a live=True call silently replays the fixture's CANNED
+        # responses (every scorer falls back to _seat_dispatch) and the result is
+        # indistinguishable from a genuine live success. Mirror run_matrix's guard.
+        raise FixtureError("run_fixture(live=True) requires an explicit live dispatch")
     scores = {}
     for dim in fixture["dimensions"]:
         if live and dim == "winner_propagation" and not glm_credential_present():
@@ -353,6 +372,13 @@ def run_fixture(fixture, *, snapshot, quota, capture_root, live=False, dispatch=
         except _BudgetExceeded:
             raise  # the matrix-level abort — never absorbed into a 0.0 cell
         except UnsupportedCellError as exc:  # #449: typed capability-absent cell, mean-excluded
+            scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
+        except _pe().contract.CompositionError as exc:
+            # 8a-R2-F1: the engine REFUSES pre-seam (run_seat/run_competitive call
+            # _reject_mutating_manifest BEFORE the dispatch callable — engine.py:133/:296),
+            # so the seam-level translation in live_dispatch never sees the #558 A-F1
+            # refusal. The scorer boundary is the level that sees BOTH pre-seam and
+            # adapter-raised CompositionErrors → typed unsupported, never a fake 0.0.
             scores[dim] = {"score": None, "status": "unsupported", "error": str(exc)[:200]}
         except Exception as exc:  # noqa: BLE001 — a broken cell scores 0, never a silent pass
             scores[dim] = {"score": 0.0, "error": f"{type(exc).__name__}: {exc}"[:200]}
@@ -385,6 +411,12 @@ def run_matrix(fixtures, *, snapshot, quota_factory, capture_root, models=("opus
                     scores = run_fixture(fx, snapshot=snapshot, quota=quota_factory(),
                                          capture_root=capture_root, live=live, dispatch=dispatch)
                     cells.append({"fixture": fx["id"], "model": model, "rep": rep, "scores": scores})
+                    # 8a-R1-F1: the bake-off path (run_competitive, engine.py:341) softens a
+                    # candidate's _BudgetExceeded into a harness_error Observation (failure
+                    # isolation), so the exception may never surface — the guard's out-of-band
+                    # `tripped` flag is the authoritative abort signal; stop churning NOW.
+                    if live and state["tripped"]:
+                        raise _BudgetExceeded(state["tripped"])
     except _BudgetExceeded as exc:
         aborted = "budget_exceeded"
         abort_reason = str(exc)
@@ -448,10 +480,22 @@ def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO, 
     # FixtureError); the direct _pe() after it cannot fail once resolution succeeded (diff-DF1).
     args = list(sys.argv[1:] if argv is None else argv)
     live = "--live" in args
+    # 8a-R1-F5c: `--flag=value` would silently NOT match the space-separated lookup below and the
+    # run would fall back to the DEFAULT ceiling — reject the idiom loudly instead of ignoring it.
+    for known in ("--max-calls", "--max-budget-usd", "--fixtures", "--live"):
+        bad = next((a for a in args if a.startswith(known + "=")), None)
+        if bad:
+            print(f"use the space-separated form: {known} <value> (got {bad!r})", file=sys.stderr)
+            raise SystemExit(2)
 
     def _flag(name, cast):
+        # 8a-R2-F4: bounds-checked; an explicit 0 is honored (never falsy-or'd into a default).
         if name in args:
-            return cast(args[args.index(name) + 1])
+            idx = args.index(name) + 1
+            if idx >= len(args):
+                print(f"{name} requires a value", file=sys.stderr)
+                raise SystemExit(2)
+            return cast(args[idx])
         return None
 
     if live and os.environ.get("RUN_LIVE") != "1":
@@ -468,11 +512,24 @@ def _run_cli(out_path=DEFAULT_REPORT, fixture_dir=FIXTURE_DIR, repo_root=_REPO, 
     qf = lambda: pe.QuotaCoordinator(tmp / "permits", snapshot.pool_concurrency())
     if live:
         # HARD default ceilings (design r2 F5) — overridable but never absent.
-        report = run_matrix(load_fixtures(fixture_dir), snapshot=snapshot, quota_factory=qf,
+        mc = _flag("--max-calls", int)
+        mb = _flag("--max-budget-usd", float)
+        fixtures = load_fixtures(fixture_dir)
+        subset = _flag("--fixtures", str)  # 8a-R1-F6: the design's cost-safety subset selector
+        if subset is not None:
+            wanted = [s.strip() for s in subset.split(",") if s.strip()]
+            by_id = {fx["id"]: fx for fx in fixtures}
+            missing = [w for w in wanted if w not in by_id]
+            if missing or not wanted:
+                print(f"--fixtures: unknown or empty ids {missing or '(none given)'} "
+                      f"(available: {sorted(by_id)})", file=sys.stderr)
+                raise SystemExit(2)
+            fixtures = [by_id[w] for w in wanted]
+        report = run_matrix(fixtures, snapshot=snapshot, quota_factory=qf,
                             capture_root=tmp, models=("live",), reps=1, live=True,
                             dispatch=live_dispatch(),
-                            max_calls=_flag("--max-calls", int) or 40,
-                            max_budget_usd=_flag("--max-budget-usd", float) or 10.0)
+                            max_calls=mc if mc is not None else 40,
+                            max_budget_usd=mb if mb is not None else 10.0)
         out = write_live_report(report)
         print(f"driver-bench LIVE: {report['n_cells']} cells, "
               f"{report['cost']['billable_calls']} billable calls, "
