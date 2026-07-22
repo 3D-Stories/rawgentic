@@ -18,6 +18,22 @@
     "version": 1,
     "file": "claude_docs/routing/phase-executor-table.json"
   },
+  "telemetryAlerts": {
+    "$comment": "OPTIONAL per-project config for the #473 I3 seat-outcomes advisory alerts (AC-K5). ADVISORY only — no rule here can ever gate/block a run. Absent section (or the answered-defaults sentinel {\"version\": 1}) = all defaults. `enabled: false` disables evaluation (harvest still runs). windowSize (int 1..1000, default 30) + minSamples (int 1..windowSize, default 5) size the rolling baselines. thresholds: COUNT rules (fallback_fired, dispatch_failures) take false|non-negative-int (false disables that rule); TOGGLE rules (model_mismatch, parse_failure, seat_wall_time_p90, seat_cost_p90, review_findings_p90) take a bool. This template is a reference example only — the executable STRICT validation contract lives in hooks/seat_outcomes_lib.py (validate_telemetry_alerts; the `validate-config` CLI verb; setup Step 2j stages it, runtime load_thresholds fails open to these defaults). Seeded/tweaked by /rawgentic:setup Step 2j (#446).",
+    "version": 1,
+    "enabled": true,
+    "windowSize": 30,
+    "minSamples": 5,
+    "thresholds": {
+      "fallback_fired": 0,
+      "dispatch_failures": 0,
+      "model_mismatch": true,
+      "parse_failure": true,
+      "seat_wall_time_p90": true,
+      "seat_cost_p90": true,
+      "review_findings_p90": true
+    }
+  },
   "$comment:techStack": "Languages, frameworks, and infrastructure technologies. Consumed by setup, create-issue, implement-feature, optimize-perf, and update-deps for tooling selection.",
   "techStack": ["typescript", "react", "postgres", "docker"],
   "testing": {

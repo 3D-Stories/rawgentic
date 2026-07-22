@@ -293,3 +293,31 @@ workspace file (Step 8).
    cancel): a fresh-created file is RETAINED and named in a warning to the user (never
    auto-deleted); a re-seed needs no cleanup (the pointer pre-exists unchanged — the
    replace was the commit).
+
+## Step 2j: Telemetry Alerts (#473) Integration
+
+Surfaces the `telemetryAlerts` project-config block (the #473 I3 seat-outcomes advisory alert
+layer). **Advisory only** — no setting here can gate/block a run or change an exit code (AC-K3).
+
+1. **Present** the resolved defaults: `enabled: true`, `windowSize: 30`, `minSamples: 5`,
+   `thresholds` = all rules on (count rules `fallback_fired`/`dispatch_failures` fire above 0;
+   toggle rules `model_mismatch`/`parse_failure`/`seat_wall_time_p90`/`seat_cost_p90`/
+   `review_findings_p90` on). Full semantics: `docs/config-reference.md#telemetryalerts`.
+2. **Offer** keep-defaults / customize / disable. On customize, assemble the candidate block
+   and **validate it STRICTLY before staging**:
+   ```bash
+   python3 hooks/seat_outcomes_lib.py validate-config --json '<candidate telemetryAlerts block>'
+   ```
+   Exit 0 → stage the block. Non-zero → print the stderr errors (unknown key, version ≠ 1,
+   count-rule not `false|int`, toggle-rule not bool, out-of-bounds `windowSize`/`minSamples`)
+   and re-offer edit / defaults / cancel. Never stage an invalid block.
+3. **Stage**:
+   - No `telemetryAlerts` key yet + keep-defaults/decline → stage the answered-defaults
+     sentinel `{"version": 1}` (resolves identical to absent; records the answer).
+   - Disable → stage `{"version": 1, "enabled": false}` (evaluation off; harvest still runs).
+   - Customize → stage the validated block.
+   - Existing key present → keep verbatim on decline; only a customize/disable choice rewrites it.
+   The staged block merges into the Step-3 `.rawgentic.json` draft and is written at Step 6 (a
+   project-config field, never a workspace field — it does not ride Step 8). No file to
+   materialize (unlike `phaseExecutorTable`): the sidecar store is created at run time by
+   `hooks/seat_outcomes_lib.py`, not at setup.

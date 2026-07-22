@@ -116,15 +116,25 @@ note below).
 - **Tiers:** **I2** (per-run) is the orchestrator run-record (`hooks/work_summary.py` /
   `docs/measurements/run_records.jsonl`), which already carries gates, timing, usage, and PR/CI;
   it links to Observations by the join keys above + the `work_product` refs. **I3** (cross-run) is
-  a `seat-outcomes.jsonl` sidecar with baselines/alerts.
+  the `seat-outcomes.jsonl` sidecar with baselines/alerts.
 - **Redaction / retention:** host-specific fields (`work_product.worktree_path`, `tmux_session`,
   and denial *events* — `hook_denials` is only a count here) are redacted/retained on the
   CONSUMING surface (the run-record / the #473 sidecar), NOT on the per-dispatch Observation.
-- **Scope boundary (adversarial H3):** the `seat-outcomes.jsonl` sidecar — its row schema,
-  aggregation, retention, and alerting — is DEFERRED WHOLESALE to **#473** (stable join keys +
-  idempotent aggregation must be defined before rows are written). #469 introduces NO
-  seat-outcomes schema, file, row validator, or append helper; it ships only these documented
-  semantics.
+- **I3 sidecar SHIPPED (#473, W11).** The `seat-outcomes.jsonl` sidecar
+  (`docs/measurements/seat-outcomes.jsonl`, committed) is written by **`hooks/seat_outcomes_lib.py`**
+  — NOT by any code under `phase_executor/src` (the boundary below is permanent). At WF2/WF3 run
+  end it harvests the run's ephemeral `routing-audit.jsonl` observations into durable rows keyed
+  by **`(run_id, attempt_id)`** (idempotent — a re-run appends nothing), consume-time-validates
+  each envelope + inner Observation + receipt binding before inclusion, and applies the redaction
+  contract above (grammar + path-shape allowlists; `credential_ref`/paths/free-text never
+  committed). It then computes rolling per-`(seat, model)` p50/p90 baselines and evaluates
+  advisory alerts (never a gate). Row schema, verbs (`harvest`/`baselines`/`run-end`/
+  `validate-config`), alert rules, and the `telemetryAlerts` config live in `docs/run-records.md`.
+- **Scope boundary (adversarial H3, permanent).** The seat-outcomes writer lives in `hooks/`
+  and #469 introduced NO seat-outcomes schema, file, row validator, or append helper under
+  `phase_executor/src` — that boundary holds after #473 too (the aggregation is host machinery;
+  the package stays extraction-clean for kukakuka). The guards in
+  `tests/phase_executor/test_i3_aggregation_docs.py` enforce it.
 
 ## Tests
 

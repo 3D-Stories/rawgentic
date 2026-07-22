@@ -301,6 +301,45 @@ The official workflow diagram (`docs/workflow-diagram.html`) renders this resolv
 per WF2 phase — seat, default model, fallback chain, routing-mode classification — generated
 from `resolve_table` by `hooks/diagram_seat_data.py` (#447), never hand-hardcoded.
 
+### `telemetryAlerts`
+
+Optional per-project config for the #473 **I3 seat-outcomes advisory alerts** (AC-K5). It
+tunes only the advisory alert layer that runs at WF2/WF3 completion — **no setting here can
+ever gate, block, or change an exit code** (AC-K3: an alert asks the owner to look).
+
+```json
+"telemetryAlerts": { "version": 1, "enabled": true, "windowSize": 30, "minSamples": 5,
+                     "thresholds": { "fallback_fired": 0, "seat_wall_time_p90": true } }
+```
+
+- `enabled` (bool, default `true`) — `false` disables alert *evaluation* entirely (the sidecar
+  still harvests rows). Parsed FIRST and independently, so a valid `enabled: false` beside a
+  malformed sibling key still disables.
+- `windowSize` (int 1..1000, default 30) and `minSamples` (int 1..windowSize, default 5) size
+  the rolling per-`(seat, model)` baselines; a metric with fewer than `minSamples` rows reports
+  `insufficient_history` and its percentile rules report `not_evaluated` (never a fabricated
+  number).
+- `thresholds` — **COUNT rules** (`fallback_fired`, `dispatch_failures`) take
+  `false | a non-negative int` (`false` disables that one rule; the int is the
+  fire-above count, default `0`); **TOGGLE rules** (`model_mismatch`, `parse_failure`,
+  `seat_wall_time_p90`, `seat_cost_p90`, `review_findings_p90`) take a bool (default `true`).
+  No quota-pause rule ships yet (deferred — no producer signal; #559 OPS follow-up).
+
+**Answered-defaults sentinel:** `"telemetryAlerts": { "version": 1 }` records that setup asked
+and the user kept the defaults; it behaves identically to an absent section. Absent section ≡
+all defaults.
+
+**Two validation postures (one shared validator).** Setup Step 2j validates **strictly** via
+`hooks/seat_outcomes_lib.py validate-config` before staging (unknown keys rejected, version must
+be 1, per-rule value contract, bounds). At runtime `load_thresholds` calls the SAME
+`validate_telemetry_alerts` but **fails open** — a malformed block degrades to the documented
+defaults with one loud advisory (a bad config never breaks a run). The full row schema,
+baselines, alert rules, and non-destructive harvest live in
+[`docs/run-records.md`](run-records.md) (the I3 sidecar section). Distinct from
+[`modelRouting`](#modelrouting) (routes prose subagents) and
+[`phaseExecutorTable`](#phaseexecutortable) (which table the executor routes on);
+`telemetryAlerts` only shapes the post-run advisory read of what those dispatches did.
+
 ## Workspace-File Fields
 
 Beyond each project's committed [`.rawgentic.json`](#core-sections), a few settings live in

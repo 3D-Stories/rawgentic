@@ -1753,6 +1753,28 @@ measurable signal — not just a sentence the user reads once.
    `dispatches` key of `/tmp/wf2-run-record-<issue>-<session-id>.json`; the full schema shape lives
    in `references/run-record.md`.
 
+2e. **Telemetry sidecar + advisory alerts (#473, W11) — BEFORE summarize.** The run-record
+   assembled above MUST carry the additive `run_id` (this run's executor run id, e.g.
+   `wf2-<issue>-<session>`) and, on each reviewed gate, the deduplicated `findings_critical` /
+   `findings_high` counts (the I3 join key + the review-anomaly baseline input; both are
+   optional-additive in `validate_record`, absent on legacy records). Then harvest the run's
+   seat Observations into the durable I3 sidecar and fold any FIRED advisory alerts into the
+   record's `extra` — never a gate, never blocking:
+   ```bash
+   python3 hooks/seat_outcomes_lib.py run-end \
+     --run-id <this run's run_id> \
+     --record-file /tmp/wf2-run-record-<issue>-<session-id>.json \
+     --project-root <activeProject.path> --json
+   ```
+   Then, **via a Python JSON read-modify-write** (never shell interpolation into the record),
+   append each object in the verb's `extra_rows` to the record's `extra` list, and append the
+   verb's `advisory_block` to session notes. **Every one of these operations — the `run-end`
+   invocation, the JSON fold, and the session-note append — is loud-log-and-continue on ANY
+   failure:** telemetry is advisory (AC-K3) and MUST NOT block Step 16. A nonzero `run-end`
+   exit, a fold error, or a note-append error is logged and the workflow proceeds to
+   `summarize` unchanged. (The sidecar's own contract — non-destructive locked harvest,
+   redaction, baselines, the `telemetryAlerts` config — lives in `docs/run-records.md`.)
+
 3. **Render + persist.** Carry `activeProject.path` in as a literal (shell vars
    do not persist across Bash tool calls):
    ```bash

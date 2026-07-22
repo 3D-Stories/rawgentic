@@ -694,6 +694,23 @@ read once.
    `skills/implement-feature/references/run-record.md` (WF3 reuses the same
    `dispatches[]` shape).
 
+3b. **Telemetry sidecar + advisory alerts (#473, W11) — BEFORE summarize.** As in WF2 Step 16,
+   set the additive `run_id` on the record and the deduplicated `findings_critical` /
+   `findings_high` counts on each reviewed gate, then harvest the run's seat Observations into
+   the durable I3 sidecar and fold any FIRED advisory alerts into `extra` — never a gate:
+   ```bash
+   python3 hooks/seat_outcomes_lib.py run-end \
+     --run-id <this run's run_id> \
+     --record-file /tmp/wf3-run-record-<issue>-<session-id>.json \
+     --project-root <activeProject.path> --json
+   ```
+   Append each `extra_rows` object to the record's `extra` **via a Python JSON
+   read-modify-write** (never shell interpolation) and append the `advisory_block` to session
+   notes. **The `run-end` invocation, the JSON fold, and the note append are each
+   loud-log-and-continue on ANY failure** — telemetry is advisory (AC-K3) and MUST NOT block
+   completion; on a nonzero exit or error, log and proceed to `summarize` unchanged. Sidecar
+   contract + `telemetryAlerts` config: `docs/run-records.md`.
+
 4. **Render + persist** (carry `activeProject.path` in as a literal — shell vars
    do not persist across Bash tool calls):
    ```bash

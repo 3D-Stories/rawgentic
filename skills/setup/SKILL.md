@@ -260,6 +260,31 @@ happens after the Step-5 confirm, immediately before Step 6.
 
 ---
 
+## Step 2j: Telemetry Alerts (optional, #473)
+
+Runs on **every** setup invocation. Surfaces the #473 I3 seat-outcomes **advisory alert**
+config (`telemetryAlerts`) — the layer that flags per-seat regressions at WF2/WF3 completion.
+State up front that it is **advisory only**: nothing here can gate, block, or change an exit
+code. Offer the defaults (`enabled: true`, `windowSize: 30`, `minSamples: 5`, all rules on with
+count rules firing above 0) or a tweak. **Validate any customized block STRICTLY before
+staging** through the shared validator:
+```bash
+python3 hooks/seat_outcomes_lib.py validate-config --json '<the telemetryAlerts block>'
+```
+(exit 0 = stage it; non-zero = show the stderr errors and re-offer — never stage an invalid
+block). When the config has no `telemetryAlerts` key, declining or accepting the defaults
+**stages the answered-defaults sentinel `"telemetryAlerts": {"version": 1}`** — runtime resolves
+it identically to an absent section (all defaults), and key presence records the answer.
+Declining customization is NOT the same as disabling alerts: to disable, stage
+`{"version": 1, "enabled": false}`. An existing key is kept verbatim on decline — never
+rewritten. This step only COLLECTS: the validated block (or sentinel) is merged into the
+`.rawgentic.json` draft at Step 3 and applied at the Step 6 write (a project-config field, never
+a workspace field).
+
+**Read `references/integrations.md` before executing Step 2j.**
+
+---
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to
