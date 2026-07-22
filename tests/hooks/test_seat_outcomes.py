@@ -493,3 +493,166 @@ class TestBenchAnchors:
         a = so.load_bench_anchors(tmp_path / "nope")
         assert a["stubbed"]["status"] == "unavailable"
         assert a["live"]["status"] == "unavailable"
+
+
+# ---------------------------------------------------------------------------
+# T4 — advisory alert rules, telemetryAlerts config, run-end / validate-config CLI
+# ---------------------------------------------------------------------------
+
+def _valid_record(run_id, issue):
+    """A minimal record that passes work_summary.validate_record(strict=True)."""
+    return {
+        "workflow": "implement-feature", "workflow_version": "3.90.2",
+        "issue": {"number": issue, "type": "feature", "complexity": "standard"},
+        "changes": {"files_changed": 1, "insertions": 1, "deletions": 0, "commits": 1},
+        "tests": {"added": 1, "passing": 1, "total": 1},
+        "gates": [{"step": "11", "name": "Code Review", "findings": 0, "resolved": 0,
+                   "status": "pass", "reviewer_kind": "inline"}],
+        "security_scan": {"ran": True, "blocking_resolved": 0, "advisory": 0, "skipped": []},
+        "loop_backs": {"used": 0, "budget": 3},
+        "outcome": {"pr_number": None, "pr_url": None, "merged": False, "ci": "skipped",
+                    "deploy": "not_applicable"},
+        "run_id": run_id, "dispatches": [],
+    }
+
+
+def _baseline_with_p90(seat="review", model="claude-opus-4-8", timing_p90=100, cost_p90=1.0):
+    return {"groups": {f"{seat}|{model}": {"window": 30, "metrics": {
+        "timing_ms": {"n": 8, "missing": 0, "status": "ok", "p50": 50, "p90": timing_p90},
+        "cost": {"n": 8, "missing": 0, "status": "ok", "p50": 0.5, "p90": cost_p90},
+        "fallback_rate": {"n": 8, "missing": 0, "status": "ok", "numerator": 0, "value": 0.0},
+        "mismatch_rate": {"n": 8, "missing": 0, "status": "ok", "numerator": 0, "value": 0.0},
+    }}}, "review_findings": {"n": 6, "status": "ok", "p50": 2, "p90": 5},
+        "unknown_model_rows": 0, "bench_anchors": None, "notes": []}
+
+
+class TestAlertRules:
+    def test_only_fired_results_have_fired_status(self):
+        rows = [_row(fallback="fallback from x: timeout", att="0-f")]
+        rec = {"run_id": "r", "workflow": "implement-feature", "dispatches": [], "gates": []}
+        results = so.evaluate_alerts(rec, rows, _baseline_with_p90(), so.DEFAULT_THRESHOLDS)
+        fired = [r for r in results if r["status"] == "fired"]
+        assert any(r["rule"] == "fallback_fired" for r in fired)
+        assert all(r.get("advisory") is True for r in results)
+
+    def test_no_quota_rule_shipped(self):
+        assert not any("quota" in k for k in so.DEFAULT_THRESHOLDS)
+
+    def test_statistical_rule_not_evaluated_without_baseline(self):
+        rows = [_row(timing=99999, att="0-slow")]
+        rec = {"run_id": "r", "workflow": "implement-feature", "dispatches": [], "gates": []}
+        empty = {"groups": {}, "review_findings": None, "unknown_model_rows": 0,
+                 "bench_anchors": None, "notes": []}
+        results = so.evaluate_alerts(rec, rows, empty, so.DEFAULT_THRESHOLDS)
+        wt = [r for r in results if r["rule"] == "seat_wall_time_p90"][0]
+        assert wt["status"] == "not_evaluated" and wt["reason"] == "no_baseline"
+
+    def test_seat_wall_time_fires_over_p90(self):
+        rows = [_row(timing=500, att="0-slow")]
+        rec = {"run_id": "r", "workflow": "implement-feature", "dispatches": [], "gates": []}
+        results = so.evaluate_alerts(rec, rows, _baseline_with_p90(timing_p90=100),
+                                    so.DEFAULT_THRESHOLDS)
+        wt = [r for r in results if r["rule"] == "seat_wall_time_p90"][0]
+        assert wt["status"] == "fired" and wt["observed"] == 500
+
+    def test_statistical_cardinality_one_per_group(self):
+        rows = [_row(timing=500, att=f"0-{i}") for i in range(3)]  # 3 slow rows, same group
+        rec = {"run_id": "r", "workflow": "implement-feature", "dispatches": [], "gates": []}
+        results = so.evaluate_alerts(rec, rows, _baseline_with_p90(timing_p90=100),
+                                    so.DEFAULT_THRESHOLDS)
+        wt = [r for r in results if r["rule"] == "seat_wall_time_p90" and r["status"] == "fired"]
+        assert len(wt) == 1  # one result per (rule, seat, model)
+
+    def test_dispatch_failures_record_level(self):
+        rec = {"run_id": "r", "workflow": "implement-feature",
+               "dispatches": [{"outcome": "error"}, {"outcome": "dead"}, {"outcome": "ok"}],
+               "gates": []}
+        results = so.evaluate_alerts(rec, [], _baseline_with_p90(), so.DEFAULT_THRESHOLDS)
+        df = [r for r in results if r["rule"] == "dispatch_failures"][0]
+        assert df["status"] == "fired" and df["seat"] is None
+
+    def test_global_disable_one_result_per_rule(self):
+        th = so.load_thresholds_from_block({"version": 1, "enabled": False})
+        results = so.evaluate_alerts({"run_id": "r", "workflow": "implement-feature",
+                                      "dispatches": [{"outcome": "error"}], "gates": []},
+                                     [_row(att="0-a")], _baseline_with_p90(), th)
+        assert all(r["status"] == "disabled" for r in results)
+        assert len(results) == len(so.DEFAULT_THRESHOLDS)
+
+    def test_message_has_no_free_text_injection(self):
+        rows = [_row(seat="rev/iew", att="0-a", timing=500)]  # seat gets redacted upstream normally
+        rec = {"run_id": "r", "workflow": "implement-feature", "dispatches": [], "gates": []}
+        results = so.evaluate_alerts(rec, rows, _baseline_with_p90(timing_p90=1),
+                                    so.DEFAULT_THRESHOLDS)
+        for r in results:
+            msg = r.get("message") or ""
+            assert "\n" not in msg
+            assert "`" not in msg
+
+
+class TestConfig:
+    def test_defaults_when_absent(self):
+        th = so.load_thresholds_from_block(None)
+        assert th == so.load_thresholds_from_block({"version": 1})
+
+    def test_count_rule_false_disables(self):
+        errs = so.validate_telemetry_alerts({"version": 1, "thresholds": {"fallback_fired": False}})
+        assert errs == []
+
+    def test_count_rule_rejects_bool_true_as_int(self):
+        # a count rule takes false|int; True is not a valid count
+        errs = so.validate_telemetry_alerts({"version": 1, "thresholds": {"fallback_fired": True}})
+        assert errs
+
+    def test_nan_inf_rejected(self):
+        assert so.validate_telemetry_alerts({"version": 1, "thresholds": {"fallback_fired": float("inf")}})
+
+    def test_window_bounds(self):
+        assert so.validate_telemetry_alerts({"version": 1, "windowSize": 0})
+        assert so.validate_telemetry_alerts({"version": 1, "minSamples": 99, "windowSize": 30})
+
+    def test_unknown_key_strict_rejects(self):
+        assert so.validate_telemetry_alerts({"version": 1, "bogus": 1})
+
+    def test_enabled_false_survives_malformed_sibling_runtime(self):
+        # runtime fail-open: a valid enabled:false beside a bad key still disables
+        th = so.load_thresholds_from_block({"version": 1, "enabled": False, "windowSize": "bad"})
+        assert th["enabled"] is False
+
+
+class TestRunEndCLI:
+    def _run(self, args, cwd):
+        return subprocess.run([sys.executable, str(CLI), *args], capture_output=True,
+                              text=True, cwd=str(cwd))
+
+    def test_validate_config_verb(self, tmp_path):
+        ok = self._run(["validate-config", "--json", json.dumps({"version": 1})], tmp_path)
+        assert ok.returncode == 0
+        bad = self._run(["validate-config", "--json", json.dumps({"version": 2})], tmp_path)
+        assert bad.returncode != 0
+
+    def test_run_end_end_to_end(self, tmp_path):
+        run_id = "wf2-473-e2e"
+        cap = _write_audit(tmp_path, run_id, [_obs(attempt_id="0-a"), _obs(attempt_id="0-b")])
+        rec = _valid_record(run_id, 473)
+        rec_file = tmp_path / "rec.json"
+        rec_file.write_text(json.dumps(rec))
+        store = tmp_path / "docs" / "measurements" / "seat-outcomes.jsonl"
+        res = self._run(["run-end", "--run-id", run_id, "--record-file", str(rec_file),
+                         "--project-root", str(tmp_path), "--capture-root", str(cap),
+                         "--json"], tmp_path)
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["rows_appended"] == 2
+        assert store.exists()
+        assert all(json.loads(l)["issue"] == 473 for l in store.read_text().splitlines())
+
+    def test_run_end_run_id_mismatch_usage_error(self, tmp_path):
+        run_id = "wf2-473-mm"
+        cap = _write_audit(tmp_path, run_id, [_obs(attempt_id="0-a")])
+        rec = _valid_record("DIFFERENT", 1)
+        rec_file = tmp_path / "rec.json"
+        rec_file.write_text(json.dumps(rec))
+        res = self._run(["run-end", "--run-id", run_id, "--record-file", str(rec_file),
+                         "--project-root", str(tmp_path), "--capture-root", str(cap)], tmp_path)
+        assert res.returncode == 2

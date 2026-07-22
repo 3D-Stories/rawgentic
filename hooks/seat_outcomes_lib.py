@@ -700,11 +700,391 @@ def load_bench_anchors(bench_dir):
     return out
 
 
+# --- config (AC-K5 / #446): telemetryAlerts --------------------------------------------------
+# Rule classes: COUNT rules take false | non-negative int; TOGGLE rules take bool. No quota rule
+# (deferred — no producer signal; design §3.4). Defaults below ARE the documented defaults (a
+# drift test pins config-reference == these).
+_COUNT_RULES = ("fallback_fired", "dispatch_failures")
+_TOGGLE_RULES = ("model_mismatch", "parse_failure", "seat_wall_time_p90", "seat_cost_p90",
+                 "review_findings_p90")
+DEFAULT_THRESHOLDS = {
+    "fallback_fired": 0, "dispatch_failures": 0,
+    "model_mismatch": True, "parse_failure": True,
+    "seat_wall_time_p90": True, "seat_cost_p90": True, "review_findings_p90": True,
+}
+_CONFIG_KEYS = frozenset({"version", "enabled", "windowSize", "minSamples", "thresholds"})
+
+
+def validate_telemetry_alerts(block) -> list:
+    """STRICT validation (setup Step 2j uses this before staging). [] == valid. Unknown keys
+    rejected, per-rule value contract, bounds. Runtime load_thresholds calls this and fails
+    OPEN (defaults + advisory) instead of raising."""
+    errs = []
+    if block is None:
+        return errs
+    if not isinstance(block, dict):
+        return ["telemetryAlerts must be an object"]
+    extra = set(block) - _CONFIG_KEYS
+    if extra:
+        errs.append(f"unknown telemetryAlerts keys: {sorted(extra)}")
+    if block.get("version") != 1:
+        errs.append(f"version {block.get('version')!r} != 1")
+    if "enabled" in block and not isinstance(block["enabled"], bool):
+        errs.append("enabled must be a bool")
+    ws = block.get("windowSize", DEFAULT_WINDOW)
+    if isinstance(ws, bool) or not isinstance(ws, int) or not 1 <= ws <= 1000:
+        errs.append("windowSize must be an int in 1..1000")
+        ws = DEFAULT_WINDOW
+    ms = block.get("minSamples", DEFAULT_MIN_SAMPLES)
+    if isinstance(ms, bool) or not isinstance(ms, int) or not 1 <= ms <= ws:
+        errs.append("minSamples must be an int in 1..windowSize")
+    th = block.get("thresholds", {})
+    if not isinstance(th, dict):
+        errs.append("thresholds must be an object")
+        th = {}
+    for k, v in th.items():
+        if k in _COUNT_RULES:
+            if v is False:
+                continue
+            if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+                errs.append(f"count rule {k} must be false or a non-negative int")
+        elif k in _TOGGLE_RULES:
+            if not isinstance(v, bool):
+                errs.append(f"toggle rule {k} must be a bool")
+        else:
+            errs.append(f"unknown rule {k!r}")
+    return errs
+
+
+def load_thresholds_from_block(block):
+    """Runtime loader — FAIL-OPEN. Returns an effective config dict
+    {enabled, windowSize, minSamples, thresholds:{rule: value}}. `enabled` is parsed FIRST and
+    independently, so a valid enabled:false beside a malformed sibling still disables. A
+    malformed block otherwise degrades to defaults (caller emits ONE advisory)."""
+    enabled = True
+    if isinstance(block, dict) and isinstance(block.get("enabled"), bool):
+        enabled = block["enabled"]
+    eff = {"enabled": enabled, "windowSize": DEFAULT_WINDOW, "minSamples": DEFAULT_MIN_SAMPLES,
+           "thresholds": dict(DEFAULT_THRESHOLDS)}
+    if not isinstance(block, dict) or validate_telemetry_alerts(block):
+        if block:  # a present-but-malformed block gets ONE advisory; absent = silent defaults
+            eff["_advisory"] = "telemetryAlerts malformed — using defaults"
+        return eff  # fail-open to defaults (enabled already honored above)
+    if isinstance(block.get("windowSize"), int) and not isinstance(block["windowSize"], bool):
+        eff["windowSize"] = block["windowSize"]
+    if isinstance(block.get("minSamples"), int) and not isinstance(block["minSamples"], bool):
+        eff["minSamples"] = block["minSamples"]
+    for k, v in (block.get("thresholds") or {}).items():
+        eff["thresholds"][k] = v
+    return eff
+
+
+# --- alerts (AC-K3) — advisory, never a gate -----------------------------------------------
+def _result(rule, status, reason, **fields):
+    base = {"rule": rule, "status": status, "reason": reason, "advisory": True,
+            "seat": None, "model": None, "observed": None, "threshold": None,
+            "baseline_n": None, "message": None}
+    base.update(fields)
+    return base
+
+
+def _msg(text):
+    """Fixed-template message: strip anything that could inject into markdown/comments."""
+    return re.sub(r"[`\n\r@\[\]]", "", str(text))[:200]
+
+
+def evaluate_alerts(record, run_rows, baselines, thresholds) -> list:
+    """Pure evaluation → closed-schema results. Only status=='fired' renders (§3.4). When the
+    whole subsystem is disabled, return one 'disabled' result per rule."""
+    th = thresholds if isinstance(thresholds, dict) and "thresholds" in thresholds else \
+        {"enabled": True, "thresholds": dict(DEFAULT_THRESHOLDS)}
+    if not th.get("enabled", True):
+        return [_result(r, "disabled", "disabled") for r in DEFAULT_THRESHOLDS]
+    rules = th["thresholds"]
+    out = []
+
+    # --- unconditional / record-level ---
+    def cfg(rule):
+        return rules.get(rule, DEFAULT_THRESHOLDS[rule])
+
+    fb_cfg = cfg("fallback_fired")
+    if fb_cfg is False:
+        out.append(_result("fallback_fired", "disabled", "disabled"))
+    else:
+        nfb = sum(1 for r in run_rows if r.get("fallback") is not None)
+        out.append(_result("fallback_fired", "fired" if nfb > fb_cfg else "not_evaluated",
+                           "ok" if nfb > fb_cfg else "below_threshold",
+                           observed=nfb, threshold=fb_cfg,
+                           message=_msg(f"fallback fired {nfb}x (> {fb_cfg})")))
+
+    df_cfg = cfg("dispatch_failures")
+    if df_cfg is False:
+        out.append(_result("dispatch_failures", "disabled", "disabled"))
+    else:
+        ndf = sum(1 for d in (record.get("dispatches") or [])
+                  if d.get("outcome") in ("error", "dead"))
+        out.append(_result("dispatch_failures", "fired" if ndf > df_cfg else "not_evaluated",
+                           "ok" if ndf > df_cfg else "below_threshold",
+                           observed=ndf, threshold=df_cfg,
+                           message=_msg(f"dispatch failures {ndf} (> {df_cfg}) — broad dispatch failure")))
+
+    mm = sum(1 for r in run_rows if r.get("models_match") is False)
+    out.append(_result("model_mismatch", "fired" if (cfg("model_mismatch") and mm) else
+                       ("disabled" if not cfg("model_mismatch") else "not_evaluated"),
+                       "ok" if mm else "below_threshold", observed=mm,
+                       message=_msg(f"requested!=actual model on {mm} dispatch(es)")))
+
+    pf = sum(1 for r in run_rows if r.get("parse_status") not in (None, "ok"))
+    out.append(_result("parse_failure", "fired" if (cfg("parse_failure") and pf) else
+                       ("disabled" if not cfg("parse_failure") else "not_evaluated"),
+                       "ok" if pf else "below_threshold", observed=pf,
+                       message=_msg(f"non-ok parse_status on {pf} dispatch(es)")))
+
+    # --- statistical / row-level (one result per (rule, seat, model)) ---
+    groups = baselines.get("groups", {})
+
+    def _stat(rule, value_fn):
+        if not cfg(rule):
+            out.append(_result(rule, "disabled", "disabled"))
+            return
+        worst = {}  # (seat,model) -> (observed, p90)
+        for r in run_rows:
+            if r.get("model") is None:
+                continue
+            key = f"{r['seat']}|{r['model']}"
+            g = groups.get(key, {}).get("metrics", {})
+            metric = "timing_ms" if rule == "seat_wall_time_p90" else "cost"
+            m = g.get(metric)
+            if not m or m.get("status") != "ok":
+                continue
+            v = value_fn(r)
+            if v is not None and v > m["p90"]:
+                cur = worst.get(key)
+                if cur is None or v > cur[0]:
+                    worst[key] = (v, m["p90"])
+        if not groups or all(groups[k]["metrics"].get(
+                "timing_ms" if rule == "seat_wall_time_p90" else "cost", {}).get("status")
+                != "ok" for k in groups):
+            out.append(_result(rule, "not_evaluated", "no_baseline"))
+            return
+        if not worst:
+            out.append(_result(rule, "not_evaluated", "below_threshold"))
+            return
+        for key, (obs, p90) in worst.items():
+            seat, model = key.split("|", 1)
+            out.append(_result(rule, "fired", "ok", seat=seat, model=model, observed=obs,
+                               threshold=p90, baseline_n=groups[key]["metrics"].get(
+                                   "timing_ms" if rule == "seat_wall_time_p90" else "cost", {}).get("n"),
+                               message=_msg(f"{seat}/{model} {rule} {obs} > p90 {p90}")))
+
+    _stat("seat_wall_time_p90", lambda r: _int_or_none(r.get("timing_ms")))
+    _stat("seat_cost_p90", _row_cost)
+
+    # review_findings_p90
+    if not cfg("review_findings_p90"):
+        out.append(_result("review_findings_p90", "disabled", "disabled"))
+    else:
+        rb = baselines.get("review_findings")
+        if not rb or rb.get("status") != "ok":
+            out.append(_result("review_findings_p90", "not_evaluated", "no_baseline"))
+        else:
+            total = 0
+            for g in record.get("gates") or []:
+                c, h = g.get("findings_critical"), g.get("findings_high")
+                if isinstance(c, int) and not isinstance(c, bool):
+                    total += c
+                if isinstance(h, int) and not isinstance(h, bool):
+                    total += h
+            fired = total > rb["p90"]
+            out.append(_result("review_findings_p90", "fired" if fired else "not_evaluated",
+                               "ok" if fired else "below_threshold", observed=total,
+                               threshold=rb["p90"], baseline_n=rb["n"],
+                               message=_msg(f"review Critical+High {total} > p90 {rb['p90']}")))
+    return out
+
+
+def extra_rows_for(results) -> list:
+    """The Step-16 fold payload — fired results only, capped 20 + a truncation row."""
+    fired = [r for r in results if r["status"] == "fired"]
+    rows = [{"label": f"telemetry-alert:{r['rule']}", "value": r["message"] or r["rule"]}
+            for r in fired[:20]]
+    if len(fired) > 20:
+        rows.append({"label": "telemetry-alert:truncated",
+                     "value": f"{len(fired) - 20} more fired alerts omitted"})
+    return rows
+
+
+def render_advisory_block(results) -> str:
+    fired = [r for r in results if r["status"] == "fired"]
+    lines = ["## Telemetry alerts (advisory)"]
+    if not fired:
+        lines.append("no alerts")
+    else:
+        lines.extend(f"- {r['rule']}: {r['message']}" for r in fired[:20])
+    return "\n".join(lines)
+
+
+# --- CLI -----------------------------------------------------------------------------------
+def _now_utc():
+    from datetime import datetime, timezone  # noqa: PLC0415
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cmd_run_end(args) -> int:
+    import work_summary  # noqa: PLC0415
+    rec_path = Path(args.record_file)
+    try:
+        record = json.loads(rec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"run-end: cannot read --record-file: {e}", file=sys.stderr)
+        return 2
+    if work_summary.validate_record(record, strict=True):
+        print("run-end: --record-file failed validate_record", file=sys.stderr)
+        return 2
+    rec_run = record.get("run_id")
+    if isinstance(rec_run, str) and rec_run and rec_run != args.run_id:
+        print(f"run-end: record run_id {rec_run!r} != --run-id {args.run_id!r}", file=sys.stderr)
+        return 2
+    issue = None
+    iss = (record.get("issue") or {}).get("number") if isinstance(record.get("issue"), dict) else None
+    if isinstance(iss, int) and not isinstance(iss, bool) and iss > 0:
+        issue = iss
+    now = _now_utc()
+    cap = args.capture_root or str(Path(args.project_root) / ".rawgentic" / "runs")
+    store = resolve_store_path(args.project_root, args.store)
+    try:
+        res = harvest(cap, args.run_id, store, issue=issue, now=now)
+    except (DigestConflict, HarvestBounds) as e:
+        print(f"run-end: harvest aborted (store untouched): {e}", file=sys.stderr)
+        return 1
+    rows = _read_store_rows(store)
+    baselines = compute_baselines(rows, exclude_run_id=args.run_id)
+    baselines["review_findings"] = compute_review_baseline(
+        _load_i2_records(args.project_root), workflow=record.get("workflow"),
+        exclude_run_id=args.run_id)
+    th = load_thresholds_from_block(_load_config_block(args.project_root))
+    results = evaluate_alerts(record, [r for r in rows if r.get("run_id") == args.run_id],
+                             baselines, th)
+    out = {**res, "evaluations": results, "alerts": [r for r in results if r["status"] == "fired"],
+           "extra_rows": extra_rows_for(results), "advisory_block": render_advisory_block(results)}
+    if args.json:
+        print(json.dumps(out))
+    else:
+        print(out["advisory_block"])
+    return 0
+
+
+def _read_store_rows(store_path):
+    rows = []
+    p = Path(store_path)
+    if not p.exists():
+        return rows
+    for line in p.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if rec.get("schema_version") == SCHEMA_VERSION and not validate_seat_outcome(rec):
+            rows.append(rec)
+    return rows
+
+
+def _load_i2_records(project_root):
+    import work_summary  # noqa: PLC0415
+    store = Path(project_root).joinpath("docs", "measurements", "run_records.jsonl")
+    if not store.exists():
+        return []
+    try:
+        records, _ = work_summary.load_store(str(store))
+        return records
+    except Exception:  # pylint: disable=broad-exception-caught
+        return []
+
+
+def _load_config_block(project_root):
+    cfg = Path(project_root) / ".rawgentic.json"
+    if not cfg.exists():
+        return None
+    try:
+        return json.loads(cfg.read_text(encoding="utf-8")).get("telemetryAlerts")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="seat_outcomes_lib")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("noop")  # baselines/alerts/run-end verbs land in T3/T4
-    parser.parse_args(argv)
+
+    ph = sub.add_parser("harvest")
+    ph.add_argument("--run-id", required=True)
+    ph.add_argument("--project-root", required=True)
+    ph.add_argument("--record-file", default=None)
+    ph.add_argument("--store", default=None)
+    ph.add_argument("--capture-root", default=None)
+
+    pb = sub.add_parser("baselines")
+    pb.add_argument("--project-root", required=True)
+    pb.add_argument("--store", default=None)
+    pb.add_argument("--json", action="store_true")
+
+    pr = sub.add_parser("run-end")
+    pr.add_argument("--run-id", required=True)
+    pr.add_argument("--record-file", required=True)
+    pr.add_argument("--project-root", required=True)
+    pr.add_argument("--store", default=None)
+    pr.add_argument("--capture-root", default=None)
+    pr.add_argument("--json", action="store_true")
+
+    pv = sub.add_parser("validate-config")
+    pv.add_argument("--json", required=True, help="the telemetryAlerts block as JSON")
+
+    args = parser.parse_args(argv)
+
+    if args.cmd == "validate-config":
+        try:
+            block = json.loads(args.json)
+        except json.JSONDecodeError as e:
+            print(f"validate-config: bad JSON: {e}", file=sys.stderr)
+            return 2
+        errs = validate_telemetry_alerts(block)
+        if errs:
+            for e in errs:
+                print(e, file=sys.stderr)
+            return 2
+        print("ok")
+        return 0
+
+    if args.cmd == "run-end":
+        return _cmd_run_end(args)
+
+    if args.cmd == "harvest":
+        issue = None
+        if args.record_file:
+            try:
+                rec = json.loads(Path(args.record_file).read_text(encoding="utf-8"))
+                iss = (rec.get("issue") or {}).get("number") if isinstance(rec.get("issue"), dict) else None
+                if isinstance(iss, int) and not isinstance(iss, bool) and iss > 0:
+                    issue = iss
+            except (OSError, json.JSONDecodeError):
+                pass
+        cap = args.capture_root or str(Path(args.project_root) / ".rawgentic" / "runs")
+        store = resolve_store_path(args.project_root, args.store)
+        try:
+            res = harvest(cap, args.run_id, store, issue=issue, now=_now_utc())
+        except (DigestConflict, HarvestBounds) as e:
+            print(f"harvest aborted (store untouched): {e}", file=sys.stderr)
+            return 1
+        print(json.dumps(res))
+        return 0
+
+    if args.cmd == "baselines":
+        store = resolve_store_path(args.project_root, args.store)
+        b = compute_baselines(_read_store_rows(store))
+        print(json.dumps(b) if args.json else render_advisory_block([]))
+        return 0
     return 2
 
 
