@@ -285,6 +285,11 @@ _EPOCH_REQUIRED = ("kind", "seq", "from", "to")
 # #559 AC1 (design §2.6): the audited work_product binding record. candidate_tree_sha + new_sha
 # are REQUIRED (the collect-work-product retry dedup matches on exactly these).
 _WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sha", "work_product")
+# #570 L2: a durable "a promotion LANDED for this receipt; a work_product record MUST exist" marker.
+# collect_work_product writes it when a promotion lands; reconcile flags an expected_work_product
+# whose receipt_nonce has no matching work_product record. It keys off what the production collect
+# path actually writes, unlike Observation.work_product (which no production path ever sets).
+_EXPECTED_WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sha")
 _VERDICTS = ("pass", "fail")
 
 
@@ -295,7 +300,8 @@ def _validate_record(obj, lineno: int) -> None:
         raise ValueError(f"audit line {lineno}: not a JSON object")
     kind = obj.get("kind")
     req = {"receipt": _RECEIPT_REQUIRED, "observation": _OBS_ENVELOPE_REQUIRED,
-           "epoch": _EPOCH_REQUIRED, "work_product": _WORK_PRODUCT_REQUIRED}.get(kind)
+           "epoch": _EPOCH_REQUIRED, "work_product": _WORK_PRODUCT_REQUIRED,
+           "expected_work_product": _EXPECTED_WORK_PRODUCT_REQUIRED}.get(kind)
     if req is None:
         raise ValueError(f"audit line {lineno}: unknown kind {kind!r}")
     missing = [k for k in req if k not in obj]
@@ -340,6 +346,11 @@ def _validate_record(obj, lineno: int) -> None:
                 raise ValueError(f"audit line {lineno}: work_product {field} not a non-empty string")
         if not isinstance(obj.get("work_product"), dict):
             raise ValueError(f"audit line {lineno}: work_product record's work_product not an object")
+    if kind == "expected_work_product":  # #570 L2
+        for field in ("receipt_nonce", "candidate_tree_sha", "new_sha"):
+            if not isinstance(obj.get(field), str) or not obj[field]:
+                raise ValueError(
+                    f"audit line {lineno}: expected_work_product {field} not a non-empty string")
 
 
 class RoutingAuditLog:
@@ -394,6 +405,17 @@ class RoutingAuditLog:
                 "kind": "work_product", "receipt_nonce": receipt_nonce,
                 "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha,
                 "work_product": dict(work_product)})
+
+    def append_expected_work_product(self, *, receipt_nonce: str, candidate_tree_sha: str,
+                                     new_sha: str) -> None:
+        """#570 L2: record that a promotion LANDED for ``receipt_nonce`` so reconcile can flag a
+        landed-but-unrecorded work product (the "no missing" half — keyed off what collect actually
+        writes, not Observation.work_product). collect_work_product writes it just before the
+        work_product record; idempotency (search-then-append) is the caller's responsibility."""
+        with self._lock:
+            self._write_locked({
+                "kind": "expected_work_product", "receipt_nonce": receipt_nonce,
+                "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha})
 
     def records(self) -> list:
         """Parse + fail-closed-validate every line. A malformed line raises (never silently dropped)."""
@@ -609,6 +631,19 @@ def reconcile_run(expected, records, *, initial_digest: str, require_nonempty: b
             duplicate_work_product.append(n)
         else:
             wp_by_nonce[n] = w
+    # #570 L2: the REAL "no missing" half — a durable expected_work_product marker (written by
+    # collect_work_product when a promotion landed) whose EXACT binding has no matching work_product
+    # record is a landed-but-unrecorded product. Match on the full (receipt_nonce, candidate_tree_sha,
+    # new_sha) tuple, not just the nonce (Step-11 finding): a stale/corrupt same-nonce record with
+    # different hashes must NOT satisfy the expectation. Keys off what production writes; the
+    # Observation-based check below is retained for back-compat.
+    wp_tuples = {(w["receipt_nonce"], w.get("candidate_tree_sha"), w.get("new_sha"))
+                 for w in work_products}
+    for e in records:
+        if e.get("kind") != "expected_work_product":
+            continue
+        if (e.get("receipt_nonce"), e.get("candidate_tree_sha"), e.get("new_sha")) not in wp_tuples:
+            missing_work_product.append(f"{e.get('receipt_nonce')}:expected-but-unrecorded")
     for o in observations:
         inner = o.get("observation") or {}
         wp = inner.get("work_product") or {}

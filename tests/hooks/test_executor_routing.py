@@ -2080,15 +2080,19 @@ class _FakeMgr:
     _EV = {"base_sha": "b", "head_sha": "h", "content_tree_sha": "ctree",
            "changed_paths": ["docs/planning/appendix/x.md"]}
 
-    def __init__(self, *, changed=None, promoted=True):
+    def __init__(self, *, changed=None, promoted=True, tip=None):
         self.promote_calls = []
         self._changed = changed or list(self._EV["changed_paths"])
         self._promoted = promoted
+        self._tip = tip  # #570 L1: live target-ref tip {"sha","message"} or None (ref unresolved)
 
     def content_evidence(self, handle):
         ev = dict(self._EV)
         ev["changed_paths"] = list(self._changed)
         return ev
+
+    def target_tip(self, handle, target_ref):  # #570 L1: read the live target ref's tip
+        return self._tip
 
     def promote(self, handle, *, target_ref, expected_target_sha, message, path_policy):
         self.promote_calls.append((target_ref, expected_target_sha))
@@ -2182,6 +2186,88 @@ def test_collect_work_product_refuses_incomplete_job(tmp_path):
     res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path, state="running")), _FakeMgr())
     assert not res["ok"] and res["error"]["code"] == "job_not_completed"
     assert _wp_records(audit) == []
+
+
+def _ewp_records(audit):
+    return [r for r in audit.records() if r.get("kind") == "expected_work_product"]
+
+
+def test_collect_work_product_writes_expected_marker(tmp_path):
+    # #570 L2: a successful collect writes a durable expected_work_product marker (keyed by
+    # receipt_nonce + new_sha) that reconcile keys its "no missing" half off.
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert res["ok"] and res["status"] == "recorded"
+    ex = _ewp_records(audit)
+    assert len(ex) == 1 and ex[0]["receipt_nonce"] == "rn1" and ex[0]["new_sha"] == "newsha"
+    assert len(_wp_records(audit)) == 1
+
+
+def test_collect_work_product_recovers_landed_promotion_after_crash(tmp_path):
+    # #570 L1: crash AFTER promote's update-ref LANDED, BEFORE new_sha was recorded (intent.new_sha
+    # None). Re-run must detect the landed promotion via the live target ref (tip is ours — its
+    # message carries the receipt_nonce) and resume phase 2 — NOT re-promote (which CAS-fails and
+    # loses the record for a commit that actually landed).
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+    # structural landed-match: tip.tree == candidate_tree_sha ("ctree"); expected is all-zero
+    # (ref-create) so parents are not required.
+    mgr = _FakeMgr(tip={"sha": "landedsha", "tree": "ctree", "parents": (),
+                        "message": "collect work product (docs) for rn1"})
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "landedsha"
+    assert mgr.promote_calls == []  # did NOT re-promote
+    assert len(_wp_records(audit)) == 1 and len(_ewp_records(audit)) == 1
+
+
+def test_collect_work_product_crash_window_not_landed_still_promotes(tmp_path):
+    # intent.new_sha None but the target ref did NOT advance (a genuine pre-promote crash: tip is
+    # None / unresolved) → promote normally, do not falsely reconstruct.
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+    mgr = _FakeMgr(tip=None)
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert res["ok"] and res["status"] == "recorded" and res["new_sha"] == "newsha"
+    assert mgr.promote_calls == [("refs/heads/integration", "0" * 40)]  # DID promote
+
+
+def test_collect_work_product_foreign_tip_not_reconstructed(tmp_path):
+    # intent.new_sha None and the ref advanced, but the tip is a FOREIGN commit — its tree is NOT
+    # our candidate tree (even if a parent matches) → must NOT reconstruct (a message substring can
+    # be spoofed; the content tree cannot). Falls through to promote (whose CAS then refuses loud).
+    intents = tmp_path / "intents"
+    intents.mkdir(parents=True, exist_ok=True)
+    (intents / "collect-rn1.json").write_text(json.dumps({
+        "receipt_nonce": "rn1", "candidate_tree_sha": "ctree",
+        "expected_target_sha": "0" * 40, "new_sha": None, "consumed": False}), encoding="utf-8")
+    mgr = _FakeMgr(promoted=False, tip={"sha": "othersha", "tree": "foreigntree",
+                                        "parents": ("0" * 40,),
+                                        "message": "collect work product (docs) for rn1"})
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), mgr)
+    assert not res["ok"] and res["error"]["code"] == "promote_not_applied"
+    assert mgr.promote_calls == [("refs/heads/integration", "0" * 40)]
+    assert _wp_records(audit) == [] and _ewp_records(audit) == []
+
+
+def test_collect_work_product_expected_marker_survives_derive_failure(tmp_path, monkeypatch):
+    # #570 Step-11 finding 2: the expected_work_product marker is written BEFORE derive_work_product,
+    # so a derive failure on a LANDED promotion still leaves a marker reconcile can flag (no
+    # fail-open landed-but-unrecorded path).
+    import phase_executor.contract as _contract  # noqa: PLC0415  # pylint: disable=no-name-in-module
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("derive kaboom")
+
+    monkeypatch.setattr(_contract, "derive_work_product", _boom)
+    res, audit = _collect(tmp_path, _FakeReg(_completed_record(tmp_path)), _FakeMgr())
+    assert not res["ok"] and res["error"]["code"] == "derive_work_product_failed"
+    assert len(_ewp_records(audit)) == 1  # marker survived the derive failure
+    assert _wp_records(audit) == []  # no work_product record (derive failed)
 
 
 # ---------------------------------------------------------------------------

@@ -605,6 +605,29 @@ class WorktreeManager:
             raise WorktreeError(f"worktree HEAD resolve failed: {err.strip()}")
         return out.strip()
 
+    def target_tip(self, handle: WorktreeHandle, target_ref: str) -> Optional[dict]:
+        """#570 L1: the live target ref's current tip — ``{"sha", "tree", "parents", "message"}`` —
+        or None when the ref does not resolve. collect_work_product uses this to detect a promotion
+        that LANDED (``promote``'s ``update-ref`` succeeded) but whose finalize crashed before
+        recording ``new_sha``. The landed commit is identified STRUCTURALLY, not by message text:
+        ``promote`` commits ``tree == candidate_tree_sha`` (== ``content_evidence.content_tree_sha``)
+        parented on ``base_sha`` (== ``expected_target_sha`` for an existing ref, per the CF-1 guard),
+        so a genuine landing has ``tip.tree == candidate_tree_sha`` and ``expected_target_sha`` among
+        its parents — a fingerprint a foreign/crafted commit cannot forge (it would need our exact
+        content tree). ``message`` is returned for diagnostics only, never for authentication."""
+        rc, out, _err = self._git(
+            "--git-dir", handle.gitdir, "rev-parse", "--verify", "--quiet", f"{target_ref}^{{commit}}")
+        sha = out.strip()
+        if rc != 0 or not sha:
+            return None
+        rc_t, tree, _et = self._git("--git-dir", handle.gitdir, "rev-parse", f"{sha}^{{tree}}")
+        rc_p, plist, _ep = self._git("--git-dir", handle.gitdir, "rev-list", "--parents", "-n", "1", sha)
+        # `rev-list --parents -n1 <sha>` prints "<sha> <parent1> <parent2>..." — drop the leading sha.
+        parents = tuple(plist.split()[1:]) if rc_p == 0 else ()
+        rc_m, msg, _em = self._git("--git-dir", handle.gitdir, "log", "-1", "--format=%B", sha)
+        return {"sha": sha, "tree": tree.strip() if rc_t == 0 else "",
+                "parents": parents, "message": msg.strip() if rc_m == 0 else ""}
+
     def promote(self, handle: WorktreeHandle, *, target_ref: str, expected_target_sha: str,
                 message: str, path_policy) -> PromotionResult:
         """Promote the worktree's filesystem work product onto ``target_ref`` — orchestrator-only,
