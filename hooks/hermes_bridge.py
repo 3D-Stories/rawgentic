@@ -32,6 +32,7 @@ import re
 import secrets
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -43,6 +44,7 @@ OWNER_ENV_KEYS = ("BB_URL", "BB_RECIPIENT", "BLUEBUBBLES_PASSWORD")
 TOKEN_RE = re.compile(r"\[RG-[0-9A-F]{12}\]")
 MAX_REPLY = 8000
 POLL_LIMIT = 25
+MAX_POLL_PAGES = 20  # backlog-stop cap; overflow → fail-closed, never a silent "no reply"
 _TRUNC = "…[truncated]"
 _BB_CONF_DEFAULT = os.path.expanduser("~/.config/vm-update-monitor/bluebubbles.env")
 
@@ -178,6 +180,30 @@ def _mark_consumed(state_dir, guid: str, delivery_id: str) -> None:
         f.write(json.dumps({"guid": guid, "delivery_id": delivery_id}) + "\n")
 
 
+def _ask_path(state_dir, token: str) -> Path:
+    return _sd(state_dir) / "asks" / f"{_safe_component(token)}.json"
+
+
+def _ask_answered(state_dir, token: str) -> bool:
+    """Has this ask's TOKEN already been closed by a delivered answer? (never-double-act)"""
+    try:
+        return json.loads(_ask_path(state_dir, token).read_text()).get("status") == "answered"
+    except (OSError, ValueError):
+        return False
+
+
+def _close_ask(state_dir, token: str, guid: str) -> None:
+    """Mark the ask token answered so a later tokened reply classifies `late`, not a 2nd match."""
+    path = _ask_path(state_dir, token)
+    try:
+        rec = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return
+    rec["status"] = "answered"
+    rec["answered_guid"] = guid
+    atomic_write_text(str(path), json.dumps(rec))
+
+
 # --------------------------------------------------------------------------- #
 # outbound ask
 # --------------------------------------------------------------------------- #
@@ -221,19 +247,21 @@ def _default_notify_path() -> Path:
 
 
 def _default_notify(msg: str) -> str:
-    """Shell to sentinel/bin/notify.sh (the one outbound voice). Returns the HTTP code."""
+    """Send via sentinel/bin/notify.sh (the one outbound voice), message on STDIN (the
+    documented `echo msg | notify.sh` contract). Returns the HTTP code notify.sh prints."""
     notify_sh = os.environ.get("HERMES_NOTIFY_SH") or str(_default_notify_path())
     try:
-        p = subprocess.run(["bash", notify_sh, msg], capture_output=True, text=True, timeout=30)
-        return (p.stdout or "").strip().splitlines()[-1] if p.stdout.strip() else "000"
+        p = subprocess.run(["bash", notify_sh], input=msg, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return "000"
+    out = (p.stdout or "").strip()
+    return out.splitlines()[-1] if out else "000"
 
 
 # --------------------------------------------------------------------------- #
 # inbound classify + poll
 # --------------------------------------------------------------------------- #
-def classify_batch(owner_msgs, token, consumed_guids, question):
+def classify_batch(owner_msgs, token, consumed_guids, question, answered=False):
     """Pure classification over already-filtered owner-inbound messages.
 
     Returns (disposition, matched_msg_or_None). disposition in
@@ -243,6 +271,10 @@ def classify_batch(owner_msgs, token, consumed_guids, question):
     guid-less, dup-guid (first wins), and NUL-bearing messages are dropped from
     the answer set (they deliver nothing, never crash) — so the delivery path
     only ever sees a clean, guid-bearing message.
+
+    `answered` = the ask's token has already been closed by a prior delivery
+    (never-double-act, keyed on the ASK TOKEN not the message guid): once True,
+    any further tokened message is `late`, never a second `matched`.
     """
     if not owner_msgs:
         return ("none", None)
@@ -258,6 +290,8 @@ def classify_batch(owner_msgs, token, consumed_guids, question):
         tokened.append(m)
     if not tokened:
         return ("unmatched", None)
+    if answered:  # token closed by a prior delivery → any further tokened reply is late
+        return ("late", None)
     fresh = [m for m in tokened if m["guid"] not in consumed_guids]
     late = [m for m in tokened if m["guid"] in consumed_guids]
     fresh_guids = {m["guid"] for m in fresh}
@@ -299,7 +333,9 @@ def poll_once(ask_record, *, state_dir, transport=None, now_ms=None):  # pylint:
     owner_msgs = [m for m in (msgs or []) if _is_owner_inbound(m, since, recipient)]
     _persist_observed(state_dir, owner_msgs)  # persist BEFORE classify
     consumed = _load_consumed(state_dir)
-    disp, m = classify_batch(owner_msgs, token, consumed, ask_record.get("question", ""))
+    answered = _ask_answered(state_dir, token)  # token-closure → never a 2nd match
+    disp, m = classify_batch(owner_msgs, token, consumed,
+                             ask_record.get("question", ""), answered=answered)
     return {"disposition": disp, "reply": m}
 
 
@@ -307,32 +343,33 @@ def poll_reply(ask_record, *, state_dir, transport=None, timeout_s, interval_s=1
                sleep=time.sleep, clock=None, now_ms=None):
     """Loop poll_once until a terminal outcome or timeout.
 
-    Terminal disposition in {matched, ambiguous, unreachable, timeout}.
+    Terminal disposition in {matched, ambiguous, unreachable, late, timeout}.
+    `late` is terminal so re-polling an already-answered ask short-circuits
+    instead of spinning to timeout. On timeout the return carries `last` (the
+    final non-terminal disposition) so a caller can tell "owner replied without
+    the token" (unmatched) from "owner never replied" (none).
     """
     clock = clock or time.monotonic
     start = clock()
+    last = "none"
     while True:
         out = poll_once(ask_record, state_dir=state_dir, transport=transport, now_ms=now_ms)
-        if out["disposition"] in ("matched", "ambiguous", "unreachable"):
+        last = out["disposition"]
+        if last in ("matched", "ambiguous", "unreachable", "late"):
             return out
         if clock() - start >= timeout_s:
-            return {"disposition": "timeout", "reply": None}
+            return {"disposition": "timeout", "reply": None, "last": last}
         sleep(interval_s)
 
 
-def _default_transport(*, chat_guid, since_ms, limit):
-    """Real BlueBubbles read: POST /api/v1/message/query with password in a curl -K file."""
-    conf = _read_bb_conf()
-    url = conf.get("BB_URL")
-    pw = conf.get("BLUEBUBBLES_PASSWORD")
-    if not url or not pw:
-        raise BridgeUnreachable("bluebubbles.env missing BB_URL/BLUEBUBBLES_PASSWORD")
-    body = json.dumps({"chatGuid": chat_guid, "limit": limit, "offset": 0,
+def _query_page(url, pw, chat_guid, limit, offset):
+    """One POST /api/v1/message/query page (password in a curl -K file, never argv).
+    Fail-closed: any transport / non-2xx / parse / unexpected-shape error raises
+    BridgeUnreachable (never a silent empty result)."""
+    body = json.dumps({"chatGuid": chat_guid, "limit": limit, "offset": offset,
                        "with": ["chat", "handle"], "sort": "DESC"})
-    kfd, kpath = None, None
+    kfd, kpath = tempfile.mkstemp(prefix=".hb-", suffix=".conf")  # mkstemp is already 0600
     try:
-        import tempfile
-        kfd, kpath = tempfile.mkstemp(prefix=".hb-", suffix=".conf")  # mkstemp is already 0600
         with os.fdopen(kfd, "w") as f:  # password in -K file, NEVER argv
             f.write(f'url = "{url}/api/v1/message/query?password={pw}"\n')
         p = subprocess.run(
@@ -346,43 +383,90 @@ def _default_transport(*, chat_guid, since_ms, limit):
         if not _is_2xx(code.strip()):
             raise BridgeUnreachable(f"message/query HTTP {code.strip() or '000'}")
         data = json.loads(payload)
-        return data.get("data") or []
-    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        if not isinstance(data, dict):  # M8: unexpected top-level shape → fail-closed
+            raise BridgeUnreachable("message/query: response is not a JSON object")
+        rows = data.get("data")
+        if rows is None:
+            return []
+        if not isinstance(rows, list):
+            raise BridgeUnreachable("message/query: data is not a list")
+        return rows
+    except (OSError, subprocess.SubprocessError, ValueError, AttributeError, TypeError) as e:
         raise BridgeUnreachable(redact(str(e))) from None
     finally:
-        if kpath and os.path.exists(kpath):
+        if os.path.exists(kpath):
             os.unlink(kpath)
+
+
+def _default_transport(*, chat_guid, since_ms, limit):
+    """Real BlueBubbles read, PAGINATED (H4 / backlog-stop): walk newest→older pages until a
+    message at/older than since_ms is seen (post-ask window fully covered) or a short page
+    ends the chat. A page cap reached WITHOUT covering the window raises BridgeUnreachable
+    (overflow — fail-closed, never a silent 'no reply'). poll_once does the owner/token filter."""
+    conf = _read_bb_conf()
+    url = conf.get("BB_URL")
+    pw = conf.get("BLUEBUBBLES_PASSWORD")
+    if not url or not pw:
+        raise BridgeUnreachable("bluebubbles.env missing BB_URL/BLUEBUBBLES_PASSWORD")
+    out = []
+    for page in range(MAX_POLL_PAGES):
+        rows = _query_page(url, pw, chat_guid, limit, page * limit)
+        out.extend(rows)
+        if any((r.get("dateCreated") or 0) <= since_ms for r in rows):  # covered the window
+            return out
+        if len(rows) < limit:  # end of chat
+            return out
+    raise BridgeUnreachable(
+        f"message/query pagination cap ({MAX_POLL_PAGES}) reached before the since-ts boundary")
 
 
 # --------------------------------------------------------------------------- #
 # deliver + resume prompt
 # --------------------------------------------------------------------------- #
 def deliver(reply, ask_record, *, state_dir):
-    """Write the canonical inbox file (create-if-absent), then mark consumed. Idempotent."""
+    """Atomically install the canonical inbox file, then mark the guid consumed AND close
+    the ask token. Idempotent: a pre-existing final path means a COMPLETE prior delivery
+    (files are installed atomically), so it is never overwritten or reverted."""
     guid = reply["guid"]
     delivery_id = hashlib.sha1(guid.encode()).hexdigest()[:12]
     run_id = _safe_component(ask_record["run_id"])
+    token = ask_record["token"]
     inbox_dir = _sd(state_dir) / "inbox" / run_id
     inbox_dir.mkdir(parents=True, exist_ok=True)
     path = inbox_dir / f"{delivery_id}.json"
-    if path.exists():  # create-if-absent: never revert a launcher-claimed file...
-        _mark_consumed(state_dir, guid, delivery_id)  # ...but still make the guid terminal
+
+    def _terminal():
+        _mark_consumed(state_dir, guid, delivery_id)  # guid dedup
+        _close_ask(state_dir, token, guid)            # token-closure → never a 2nd match
         return str(path)
+
+    if path.exists():  # final path exists ⟺ a COMPLETE prior delivery (atomic install)
+        return _terminal()
     doc = {
-        "delivery_id": delivery_id, "run_id": run_id, "token": ask_record["token"],
+        "delivery_id": delivery_id, "run_id": run_id, "token": token,
         "guid": guid, "dateCreated": reply.get("dateCreated"),
         "question": ask_record.get("question", ""),
         "reply_text": sanitize_reply_text(reply.get("text") or ""), "state": "ready",
     }
+    # Atomic no-clobber install: write+fsync a temp, then os.link (atomic; fails if the final
+    # path exists). A crash before the link leaves only the temp (final absent) → the next poll
+    # re-delivers; there is never a partial/empty file at the final path (the #568 Step-11 C2 fix).
+    tfd, tpath = tempfile.mkstemp(dir=str(inbox_dir), prefix=".hb-", suffix=".tmp")
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except FileExistsError:
-        _mark_consumed(state_dir, guid, delivery_id)  # concurrent create → still make terminal
-        return str(path)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(doc, f)
-    _mark_consumed(state_dir, guid, delivery_id)  # ONLY after the inbox file is durable
-    return str(path)
+        with os.fdopen(tfd, "w", encoding="utf-8") as f:
+            json.dump(doc, f)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tpath, path)  # atomic no-clobber install
+        except FileExistsError:
+            pass  # a concurrent deliver already completed it — never revert a claimed file
+    finally:
+        try:
+            os.unlink(tpath)
+        except OSError:
+            pass
+    return _terminal()  # path now exists ⟺ complete; mark consumed + close the token
 
 
 def render_resume_prompt(inbox_doc) -> str:

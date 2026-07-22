@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>#568 Phase 1 — Hermes two-way owner-reply bridge (design rev-2)</title>
+<title>#568 Phase 1 — Hermes owner-reply bridge (design rev-3)</title>
 <style>
 :root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
 --line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
@@ -37,8 +37,8 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 22:05 MDT</div>
-<h1>#568 Phase 1 — Hermes two-way owner-reply bridge (design rev-2)</h1>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-21 22:53 MDT</div>
+<h1>#568 Phase 1 — Hermes owner-reply bridge (design rev-3)</h1>
 
 </header>
 <main>
@@ -49,7 +49,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li><strong>Rev 2</strong> — revised after Step-4 pass-1 critique (Codex adversarial + opus self-review): token-only correlation, two-store crash model, single canonical inbox, <code>atomic_write_lib</code>, advisory-envelope. See &quot;Review synthesis&quot;.</li>
 </ul>
 <h2>Problem</h2>
-<p>Unattended/overnight harness runs (<code>claude -p --resume</code> sessions) can text the owner (outbound, <code>sentinel/bin/notify.sh</code>) but cannot receive the <strong>reply</strong>. Phase 1 closes the inbound half so a run can ask by text and receive the answer by text.</p>
+<p>Unattended/overnight harness runs (<code>claude -p --resume</code> sessions) can text the owner (outbound, <code>sentinel/bin/notify.sh</code>) but cannot receive the <strong>reply</strong>. Phase 1 closes the inbound-CAPTURE half: it captures, correlates, and records the owner&#x27;s reply in a durable inbox + exposes <code>render_resume_prompt</code>. The final step that feeds that inbox into <code>claude -p --resume</code> lives in a workspace launcher OUTSIDE this repo and is a documented follow-up (see AC-deferral) — so Phase-1 is not, by itself, an end-to-end unattended resume.</p>
 <h2>Investigation result (AC1 — tap, don&#x27;t rebuild)</h2>
 <p>The Hermes gateway on darwin <strong>already relays inbound</strong> (BlueBubbles → gateway <strong>webhook</strong> <code>webhook_port: 8645</code> → <code>channel_skill_bindings</code> → gateway-internal Hermes skill; proven by sentinel reboot-by-text). <strong>But it routes to gateway-internal skills, not to any sink a separate <code>claude -p</code> harness session can read.</strong> Intercepting it needs a darwin skill deploy + cross-host sink — owner-gated, blocked while owner away. <strong>Decision:</strong> the harness <strong>taps the same BlueBubbles message store via its read API</strong> (idempotent query — reads don&#x27;t consume), reusing the existing credential; no gateway rebuild, no conflict (handle-once is per-consumer). Full note: <code>docs/planning/2026-07-22-568-hermes-inbound-investigation.md</code>.</p>
 <h2>Approaches</h2>
@@ -98,7 +98,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <li>Secrets by NAME: <code>BLUEBUBBLES_PASSWORD</code> via the curl <code>-K</code> file on BOTH send (notify.sh) and the new read path — never argv, never logs; <code>?password=</code> redacted from ALL logs AND exception/traceback strings. Reuse <code>~/.config/vm-update-monitor/bluebubbles.env</code>.</li>
 <li>Owner-only: strict <code>BB_RECIPIENT</code> + <code>isFromMe:false</code>; group chats / other handles ignored.</li>
 <li><strong>Untrusted-input enforcement (advisory envelope is NOT the boundary):</strong> the &quot;treat as DATA&quot; banner prepended to the resume prompt is <strong>advisory framing</strong>, not an enforcement control — an LLM can be steered past a banner. The ENFORCED bound: (1) inbox content populates ONLY the recorded question&#x27;s answer; (2) an owner text reply must NOT, by itself, unlock auto-approval of any destructive/new-scope action — the harness permission classifier / owner gate stays active on a reply-triggered resume; (3) embedded directives in a reply are surfaced, never executed. Since the source chat is owner-only, third-party injection is not the threat; the residual risk is the owner&#x27;s own reply being over-interpreted as broad authority — the permission gate is what actually bounds it.</li>
-<li><strong>Transport (accepted LAN exception):</strong> <code>message/query</code> and <code>message/text</code> go over plaintext HTTP on the homelab LAN (<code>.205</code>↔<code>.148</code>, same-L2). Password + message contents are exposed to an on-path LAN observer. Accepted threat-model exception — consistent with the existing production <code>notify.sh</code> (same plaintext <code>http://</code> bridge); the endpoint is LAN-internal, the credential least-privilege. HTTPS/tunnel is out of Phase-1 scope (would touch the shared BlueBubbles server config).</li>
+<li><strong>Transport (accepted LAN exception — confidentiality, integrity AND authentication):</strong> <code>message/query</code>/<code>message/text</code> go over plaintext HTTP on the homelab LAN (<code>.205</code>↔<code>.148</code>, same-L2). An on-path LAN actor can (a) read the password + message contents (confidentiality), (b) alter a query response (integrity), and (c) — having read the outbound token off the plaintext channel — forge a message with the owner handle carrying that token (authentication), which token-only correlation would match. <strong>The residual is bounded, not eliminated:</strong> a matched reply is delivered as untrusted DATA answering ONLY the recorded question, and the harness permission gate stays active on the reply-triggered resume — so a forged answer cannot itself unlock a destructive/new-scope action (that still hits the gate). Accepted threat-model exception, consistent with the whole homelab&#x27;s plaintext-LAN BlueBubbles bridge (reboot-by-text mitigates the same channel with TOTP); HTTPS/tunnel is out of Phase-1 scope (touches the shared server config). Future hardening: sign/verify the correlation token or move to an authenticated channel.</li>
 </ul>
 <h2>Platform / external dependencies</h2>
 <p>platform_apis:</p>
@@ -137,7 +137,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 </ul>
 
 </main>
-<footer>Last updated: 2026-07-21 22:05 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-21 22:53 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

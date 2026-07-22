@@ -437,3 +437,111 @@ def test_default_transport_missing_conf_unreachable(monkeypatch):
     monkeypatch.setattr(hb, "_read_bb_conf", lambda *a, **k: {})
     with pytest.raises(BridgeUnreachable):
         _default_transport(chat_guid="c", since_ms=0, limit=5)
+
+
+# ===================== Step-11 review fixes =====================
+
+# C3: token-closure — a second tokened reply (new guid) after delivery is `late`, never a 2nd match
+def test_no_double_act_second_tokened_reply_is_late(tmp_path):
+    rec = _ask(tmp_path)
+    tok = rec["token"]
+    deliver(_msg("g1", f"yes {tok}", ts=600_000), rec, state_dir=tmp_path)  # closes the token
+    out = poll_once(rec, state_dir=tmp_path,
+                    transport=lambda **k: [_msg("g2", f"no {tok}", ts=600_500)])
+    assert out["disposition"] == "late" and out["reply"] is None
+
+
+# C2: inbox is installed atomically — the final file is always complete, no .tmp leftover
+def test_deliver_atomic_complete_no_temp_leftover(tmp_path):
+    rec = _ask(tmp_path)
+    p = Path(deliver(_msg("g1", f"yes {rec['token']}", ts=1), rec, state_dir=tmp_path))
+    assert json.loads(p.read_text())["state"] == "ready"  # complete, parseable (not partial)
+    assert list((tmp_path / "inbox" / rec["run_id"]).glob(".hb-*.tmp")) == []
+
+
+# H4: pagination walks to the since-ts boundary, then stops
+def test_default_transport_paginates_to_since_boundary(monkeypatch):
+    monkeypatch.setattr(hb, "_read_bb_conf", _fake_conf)
+    pages = {
+        0: [{"guid": f"a{i}", "dateCreated": 900} for i in range(25)],  # all newer, full page
+        1: [{"guid": "b", "dateCreated": 400}],                          # crosses since=500
+    }
+    calls = []
+
+    def fake_query(url, pw, chat_guid, limit, offset):
+        calls.append(offset)
+        return pages.get(offset // limit, [])
+
+    monkeypatch.setattr(hb, "_query_page", fake_query)
+    out = _default_transport(chat_guid="c", since_ms=500, limit=25)
+    assert calls == [0, 25] and len(out) == 26
+
+
+# H4: a never-covered window (cap reached) fails CLOSED, not silent no-reply
+def test_default_transport_overflow_fail_closed(monkeypatch):
+    monkeypatch.setattr(hb, "_read_bb_conf", _fake_conf)
+    monkeypatch.setattr(hb, "_query_page",
+                        lambda *a: [{"guid": "x", "dateCreated": 999} for _ in range(25)])
+    with pytest.raises(BridgeUnreachable):
+        _default_transport(chat_guid="c", since_ms=1, limit=25)
+
+
+# M8: a JSON-200 whose top level is not an object fails CLOSED (no AttributeError crash)
+def test_query_page_non_dict_fail_closed(monkeypatch):
+    def fake_run(argv, **kw):
+        class R:
+            stdout = '["not","a","dict"]\n__HTTP__200'
+        return R()
+
+    monkeypatch.setattr(hb.subprocess, "run", fake_run)
+    with pytest.raises(BridgeUnreachable):
+        hb._query_page("http://h", "pw", "c", 25, 0)
+
+
+# M7 / L1: poll_reply treats late/unreachable/ambiguous as terminal (no spin), timeout carries last
+def test_poll_reply_terminal_on_late(tmp_path):
+    rec = _ask(tmp_path)  # sent_ts=500_000
+    deliver(_msg("g1", f"y {rec['token']}", ts=600_000), rec, state_dir=tmp_path)  # close token
+    out = poll_reply(rec, state_dir=tmp_path,
+                     transport=lambda **k: [_msg("g2", f"y {rec['token']}", ts=600_500)],
+                     timeout_s=100, interval_s=10, sleep=lambda s: None, clock=lambda: 0)
+    assert out["disposition"] == "late"
+
+
+def test_poll_reply_terminal_on_unreachable(tmp_path):
+    rec = _ask(tmp_path)
+
+    def boom(**k):
+        raise BridgeUnreachable("x")
+
+    out = poll_reply(rec, state_dir=tmp_path, transport=boom,
+                     timeout_s=100, interval_s=10, sleep=lambda s: None, clock=lambda: 0)
+    assert out["disposition"] == "unreachable"
+
+
+def test_poll_reply_timeout_carries_last_disposition(tmp_path):
+    rec = _ask(tmp_path)
+    transport = lambda **k: [_msg("g1", "yes-but-no-token", ts=600_000)]  # unmatched (nonterminal)
+    ticks = iter([0, 5, 10, 15, 20, 25])
+    out = poll_reply(rec, state_dir=tmp_path, transport=transport,
+                     timeout_s=12, interval_s=5, sleep=lambda s: None, clock=lambda: next(ticks))
+    assert out["disposition"] == "timeout" and out["last"] == "unmatched"
+
+
+# H5: outbound sends the message on STDIN (documented pattern), never as an argv element
+def test_default_notify_sends_on_stdin(monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen["argv"] = list(argv)
+        seen["input"] = kw.get("input")
+
+        class R:
+            stdout = "200\n"
+            returncode = 0
+        return R()
+
+    monkeypatch.setattr(hb.subprocess, "run", fake_run)
+    assert hb._default_notify("hello owner") == "200"
+    assert "hello owner" not in " ".join(seen["argv"])
+    assert seen["input"] == "hello owner"
