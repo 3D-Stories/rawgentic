@@ -1226,6 +1226,108 @@ def supervised_dispatch(
     }
 
 
+def resume_dispatch(
+    *,
+    seat: str,
+    prompt: str,
+    run_id: str,
+    correlation_id: Optional[str],
+    resume_session_id: str,
+    effort: Optional[str],
+    timeout: float,
+    engine: str,
+    profile,
+    target: dict,
+    snapshot,
+    capture_root: str,
+    audit,
+    supervisor,
+    provision: Callable,
+    enforce,
+    await_timeout_s: float = 3600.0,
+    author_provider: Optional[str] = None,
+) -> dict:
+    """#559 AC2a (design §2.5) — resume a claude provider session through the NORMAL chokepoint
+    (check_pre receipt → launch → await → Observation append → verify_post), WITHOUT the mutating
+    canary machinery. Supervised CLAUDE only, NON-mutating only: a non-claude engine or a mutating
+    profile refuses (EXIT_MALFORMED) — a resumed mutating job would need a fresh behavioral canary,
+    out of scope here. The launch composes ``session_policy='resume'`` (carried on ``profile``) +
+    the given session id; ``await_job`` is passed ``expect_session_id`` so the resumed envelope's
+    ``session_id`` MUST equal the seeded id (F-h — a mismatch is a fail-loud enforcement error,
+    never a silent "session preserved"). Provider-touching seams are injected; the live spawn is
+    the RUN_LIVE cell (CELL-2)."""
+    from phase_executor.supervisor import SupervisorError  # noqa: PLC0415
+    ce = correlation_id
+    audit_path = str(audit.path)
+    if engine != "claude":
+        return _err(EXIT_MALFORMED, "resume_engine_unsupported",
+                    f"--resume-session-id is claude-only; seat {seat!r} resolved to engine {engine!r}",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    if getattr(profile, "mutating", False):
+        return _err(EXIT_MALFORMED, "resume_mutating_refused",
+                    f"--resume-session-id refuses a mutating profile on seat {seat!r} "
+                    f"(a resumed mutating job needs a fresh behavioral canary — unsupported here)",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    # per-attempt receipt — a resume is a non-build seat, so attestation=None (byte-identical to
+    # the sync non-build path). Recorded BEFORE launch; a non-pass verdict never launches.
+    receipt = enforce.check_pre(
+        seat, target, snapshot, correlation_id=ce, attempt_id="0-resume",
+        author_provider=author_provider, attestation=None)
+    audit.append_receipt(receipt)
+    if receipt.verdict != "pass":
+        return _err(EXIT_ENFORCEMENT, "pre_check_denied",
+                    "; ".join(receipt.violations) or f"non-pass verdict {receipt.verdict!r}",
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    identity, handle = provision()
+    record = supervisor.launch(
+        seat, prompt, identity=identity, handle=handle, profile=profile,
+        effort=effort, timeout=timeout, target=target, author_provider=author_provider,
+        receipt_nonce=receipt.nonce, correlation_id=ce, resume_session_id=resume_session_id)
+    # F-h: the resumed envelope MUST carry the seeded session id — await_job asserts it and
+    # raises on mismatch (fail-loud), never reporting a false "session preserved".
+    try:
+        state, obs = supervisor.await_job(
+            record, timeout_s=await_timeout_s, expect_session_id=resume_session_id)
+    except SupervisorError as e:
+        return _err(EXIT_ENFORCEMENT, "resume_identity_mismatch", str(e),
+                    retryable=False, correlation_id=ce, audit_path=audit_path)
+    # verdict-independent audit append (mirror the supervised/sync per-attempt rule)
+    if obs is not None:
+        stamped = dict(obs)
+        stamped["dispatched_lane"] = dict(target["lane"])
+        child_cid = stamped.get("correlation_id")
+        if child_cid is None:
+            stamped["correlation_id"] = ce
+        audit.append_observation(stamped, receipt=receipt)
+        if child_cid is not None and child_cid != ce:
+            return _err(EXIT_ENFORCEMENT, "correlation_mismatch",
+                        f"child observation correlation {child_cid!r} != dispatch correlation "
+                        f"{ce!r} on resume seat {seat!r} — foreign observation refused",
+                        retryable=False, correlation_id=ce, audit_path=audit_path)
+    if state != "completed":
+        retryable = state in ("timed_out", "exited_no_sentinel", "quota_paused")
+        code = EXIT_AVAILABILITY if retryable else EXIT_INTERNAL
+        return _err(code, f"resume_{state}", f"resume seat {seat!r} ended in state {state!r}",
+                    retryable=retryable, correlation_id=ce, audit_path=audit_path)
+    pc = enforce.verify_post(obs or {})
+    if not pc.ok:
+        return _err(EXIT_ENFORCEMENT, pc.reason, f"identity breach on resume seat {seat!r}",
+                    retryable=pc.retryable, correlation_id=ce, audit_path=audit_path)
+    if not pc.verified:
+        return _err(EXIT_AVAILABILITY, "resume_unverified",
+                    f"resume seat {seat!r} produced no verifiable envelope ({pc.reason})",
+                    retryable=True, correlation_id=ce, audit_path=audit_path)
+    return {
+        "ok": True, "exit": EXIT_OK, "action": "executor_resume", "seat": seat,
+        "state": state, "correlation_id": ce, "audit_path": audit_path,
+        "resume_session_id": resume_session_id,
+        "requested_model": (obs or {}).get("requested_model"),
+        "actual_model": (obs or {}).get("actual_model"),
+        "dispatched_lane": dict(target["lane"]) if target else None,
+        "observation": obs,
+    }
+
+
 def _err(exit_code: int, code: str, message: str, *, retryable: bool, correlation_id=None, audit_path=None) -> dict:
     err = {"code": code, "message": message, "retryable": retryable}
     if correlation_id is not None:
@@ -1622,6 +1724,72 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
                     retryable=False, correlation_id=ce, audit_path=str(audit.path))
 
 
+def _run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt) -> dict:
+    """#559 AC2a: provision a fresh worktree + supervisor and resume the given claude provider
+    session via ``resume_dispatch`` (design §2.5). A fresh worktree, a RESUMED provider session
+    (``--resume`` restores the conversation, not the cwd). Provisioning failures fail CLOSED to a
+    structured exit 5. The refusal semantics (claude-only, non-mutating) live in resume_dispatch
+    and are unit-tested there; this is the live-provisioning seam (RUN_LIVE / CELL-2)."""
+    ce = args.correlation_id
+    try:
+        from phase_executor.worktree import planned_path  # noqa: PLC0415
+        targets = pe.routing.eligible_targets(args.seat, snap, author_provider=args.author_provider)
+        if not targets:
+            return _err(EXIT_MALFORMED, "routing_table_invalid",
+                        f"resume seat {args.seat!r}: no eligible target", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        target = targets[0]  # resume the primary; resume_dispatch refuses a non-claude engine
+        lane = target["lane"]
+        engine = pe.PROVIDER_ENGINE.get(lane["provider"], lane["provider"])
+
+        base = Path(repo_root)
+        registry_root = base / ".rawgentic" / "runtime" / "registry"
+        wt_root = base / ".rawgentic" / "runtime" / "worktrees"
+        registry_root.mkdir(parents=True, exist_ok=True)
+        wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+        attempt = f"0-{uuid.uuid4().hex[:8]}"
+        identity = pe.WorktreeIdentity(run_id=args.run_id, seat=args.seat, attempt=attempt)
+        planned_wt = planned_path(str(wt_root), identity)
+        manifest = snap.seat(args.seat).get("manifest") or {}
+        base_profile = pe.contract.profile_from_manifest(manifest, engine=engine, worktree=planned_wt)
+        # resume composition: session_policy=resume; mutating carried through so resume_dispatch
+        # refuses a mutating seat loud (a resumed mutating job needs a fresh behavioral canary).
+        resume_profile = pe.contract.LaunchProfile(
+            session_policy="resume", mutating=bool(base_profile.mutating),
+            worktree=base_profile.worktree, tool_grants=tuple(base_profile.tool_grants or ()),
+            max_budget_usd=base_profile.max_budget_usd, max_tokens=base_profile.max_tokens)
+        object.__setattr__(resume_profile, "effective_grants",
+                           tuple(getattr(base_profile, "effective_grants", ()) or ()))
+
+        rc, out, _t = _git_runner(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+        if rc != 0:
+            return _err(EXIT_INTERNAL, "resume_provision_failed",
+                        "cannot resolve base_sha (git rev-parse HEAD)", retryable=False,
+                        correlation_id=ce, audit_path=str(audit.path))
+        base_sha = out.strip()
+        supervisor = pe.TmuxSupervisor(
+            snapshot=snap, quota=quota, capture_root=paths["capture_root"],
+            registry_root=str(registry_root), worktree_manager=wm,
+            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+
+        def provision():
+            handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
+            return identity, handle
+
+        return resume_dispatch(
+            seat=args.seat, prompt=prompt, run_id=args.run_id, correlation_id=ce,
+            resume_session_id=args.resume_session_id, effort=args.effort, timeout=args.timeout,
+            engine=engine, profile=resume_profile, target=target, snapshot=snap,
+            capture_root=paths["capture_root"], audit=audit, supervisor=supervisor,
+            provision=provision, enforce=pe.enforce, author_provider=args.author_provider)
+    except pe.routing.RoutingError as e:
+        return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
+                    correlation_id=ce, audit_path=str(audit.path))
+    except (ValueError, OSError) as e:
+        return _err(EXIT_INTERNAL, "resume_provision_failed", f"{type(e).__name__}: {e}",
+                    retryable=False, correlation_id=ce, audit_path=str(audit.path))
+
+
 def _do_dispatch(args) -> int:
     # Guarded import: a stale tree / missing dep fails CLOSED to exit 5 (never a silent inherit).
     try:
@@ -1752,6 +1920,12 @@ def _do_dispatch(args) -> int:
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #559 AC2a resume dispatch: --resume-session-id routes to the leaner claude-only resume
+    # chokepoint (check_pre → launch(session_policy=resume) → await(expect_session_id) →
+    # Observation → verify_post). It is ledgered like any dispatch (append_expected above); the
+    # claude-only + non-mutating refusals live in resume_dispatch.
+    if getattr(args, "resume_session_id", None):
+        return _emit(_run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt))
     # #470 §1 internal routing: inspect the resolved target's staged LaunchProfile. A MUTATING
     # profile routes to the supervised branch (gate-auth → stage-and-bind → phase-1 canary → probe
     # session → require_canary → launch, in-process) INSIDE this same CLI call — there is no second
@@ -2008,6 +2182,7 @@ def main(argv: Optional[list] = None) -> int:
     d.add_argument("--plan-file", dest="plan_file")          # #470 §2b: live impl-plan.md; context minted internally
     d.add_argument("--correlation-id", dest="correlation_id")
     d.add_argument("--author-provider", dest="author_provider")
+    d.add_argument("--resume-session-id", dest="resume_session_id")  # #559 AC2a: claude-only resume
     d.add_argument("--effort")
     d.add_argument("--timeout", type=float, default=300.0)
     d.add_argument("--workspace", required=True)

@@ -1922,6 +1922,83 @@ def test_probe_account_digest_stability_and_separation():
     assert d1 == d1b and d1 != d2  # stable per identity; changes when orgId changes
 
 
+# ---------------------------------------------------------------------------
+# AC2a (#559): resume_dispatch — claude-only resumed session through the chokepoint
+# ---------------------------------------------------------------------------
+
+class _ResumeSup:
+    def __init__(self, *, mismatch=False, state="completed"):
+        self.launched, self.awaited = [], []
+        self._mismatch, self._state = mismatch, state
+
+    def launch(self, seat, prompt, **kw):
+        self.launched.append((seat, kw))
+        return {"seat": seat, "kw": kw}
+
+    def await_job(self, record, *, timeout_s=3600.0, expect_session_id=None):
+        self.awaited.append(expect_session_id)
+        if self._mismatch:
+            from phase_executor.supervisor import SupervisorError  # noqa: PLC0415
+            raise SupervisorError(
+                f"resume identity mismatch: transport session_id 'other' != {expect_session_id!r}")
+        return self._state, _valid_obs()
+
+
+def _resume_kw(tmp_path, sup, *, seat="intake", engine="claude", mutating=False):
+    import types as _types
+    snap = _snapshot()
+    audit = enforce.RoutingAuditLog(tmp_path / "runs", "run1")
+    target = routing.eligible_targets(seat, snap)[0]
+    prof = _contract.LaunchProfile(session_policy="resume", mutating=mutating)
+
+    def provision():
+        return _types.SimpleNamespace(), _types.SimpleNamespace()
+
+    return dict(seat=seat, prompt="hi", run_id="run1", correlation_id="wf2:resume",
+                resume_session_id="seed-sid", effort=None, timeout=5.0, engine=engine,
+                profile=prof, target=target, snapshot=snap,
+                capture_root=str(tmp_path / "runs"), audit=audit, supervisor=sup,
+                provision=provision, enforce=enforce)
+
+
+def test_resume_dispatch_composes_resume_launch(tmp_path):
+    sup = _ResumeSup()
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["ok"] is True and res["exit"] == er.EXIT_OK
+    assert res["action"] == "executor_resume"
+    assert len(sup.launched) == 1
+    _, kw = sup.launched[0]
+    assert kw["resume_session_id"] == "seed-sid"
+    assert kw["profile"].session_policy == "resume"
+    assert sup.awaited == ["seed-sid"]  # F-h: await_job gets the seeded id to assert against
+
+
+def test_resume_dispatch_refuses_non_claude(tmp_path):
+    sup = _ResumeSup()
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup, engine="codex"))
+    assert res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "resume_engine_unsupported"
+    assert sup.launched == []  # refused before any launch
+
+
+def test_resume_dispatch_refuses_mutating(tmp_path):
+    sup = _ResumeSup()
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup, mutating=True))
+    assert res["exit"] == er.EXIT_MALFORMED
+    assert res["error"]["code"] == "resume_mutating_refused"
+    assert sup.launched == []
+
+
+def test_resume_dispatch_session_mismatch_fails_loud(tmp_path):
+    # F-h: a resumed envelope whose session_id != seeded id fails loud, never "session preserved"
+    sup = _ResumeSup(mismatch=True)
+    res = er.resume_dispatch(**_resume_kw(tmp_path, sup))
+    assert res["ok"] is False
+    assert res["exit"] == er.EXIT_ENFORCEMENT
+    assert res["error"]["code"] == "resume_identity_mismatch"
+    assert sup.awaited == ["seed-sid"]  # it DID assert against the seeded id
+
+
 def test_compose_supervised_argv_unknown_engine_refuses(tmp_path):
     """#472 8a R2 + Step-11: an engine with no supervised composition rule must REFUSE with the
     allowlist ValueError BEFORE any adapter lookup — an empty adapters map proves the ordering
