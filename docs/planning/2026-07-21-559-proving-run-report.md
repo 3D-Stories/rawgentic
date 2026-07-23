@@ -105,3 +105,20 @@ Per-cell bounds and owner-gate points are in design §3 (bounds table + choreogr
 - Genuine usage-limit **capture** and the **activated** live `quota_paused` transition (CELL-3a/3b) — paid, gated.
 - Run-end **final reconcile** over real records (CELL-4) — #420-scoped + gated.
 - The L3 digest change was verified against **synthetic** identities only; a real second-account digest-difference is exactly what CELL-2 would prove.
+
+## 10. Live pass update — owner-attended, 2026-07-22 (session bff150dc)
+
+An owner-attended live pass ran the cells. The proving did exactly its job: it proved the account-switch capability AND surfaced a real wired-path defect, which was fixed and re-verified live.
+
+**Defect found + fixed (the headline result):** the supervised tmux pane runs `python -m phase_executor.pane_runner`, but `_run_resume`/`_do_dispatch`/`_do_recover_run` set the pane `PYTHONPATH` to `hooks/` instead of `phase_executor/src`. The pane died on `No module named phase_executor` before writing `observation.json`, which the supervisor read as `exited_no_sentinel` — a false availability failure affecting every supervised resume/recovery relaunch. CI missed it (stub adapter / in-process sync path; the real pane import is a live-only path). Fixed via `_pane_pythonpath()` wired into all three sites — **[PR #604](https://github.com/3D-Stories/rawgentic/pull/604), v3.92.4** — and re-verified live.
+
+**Live verdicts:**
+
+| AC | Cell | Verdict |
+| --- | --- | --- |
+| AC2a | CELL-2 | **PASS (live).** Account A digest `a1d68ef2…` → B `d2ee9b5d…` (real 2nd account); the executor cross-account `resume-dispatch` completed and echoed the seeded nonce with the F-h session-id assertion passing (after the pane fix). |
+| AC1 | CELL-1 | **PASS (live).** Codex mutating `dispatch --seat build` (gpt-5.6-terra, single gate) → wrote an appendix doc → `collect-work-product` promoted it onto `refs/heads/integration` (`new_sha 14b3fc10`) with an audited `work_product` binding; verify_post requested==actual. Codex used ~3.86M input (3.6M cached) + 24K output with no subscription limit hit. |
+| AC3 | CELL-4 (partial) | **PASS (live) for the CELL-1 run.** `close-run` → `reconcile --mode final` → `reconciled: true, anomalies: {}` — the `work_product` binding + build receipt/observation reconcile clean (validates #570/#571 live). Full-run reconcile incl. the pause/recover group awaits CELL-3. |
+| AC2b | CELL-3a/3b | **DEFERRED (owner decision, bank-the-wins).** The bounded-exhaust + calibrate + activated `quota_paused` + cross-account `recover-run` cycle is a later attended session. The recovery relaunch it exercises uses the now-fixed resume-dispatch path. |
+
+**Closure:** AC1, AC2a, AC3 (CELL-1 run) proven live; the load-bearing account-switch-recovery question is answered (a run recovers gracefully across an owner account switch). AC2b remains, so per §0 conditionality this stays `Part of #559 / Part of #560` — **#559 and #560 stay OPEN** for the CELL-3 exhaust cycle. The allowlist stays EMPTY / classifier SHADOW (no genuine capture yet).
