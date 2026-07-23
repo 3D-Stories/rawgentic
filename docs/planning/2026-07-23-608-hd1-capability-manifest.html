@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HD1.0 herdr platform qualification — capability manifest (#608)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-23 14:46 MDT</div>
+<h1>HD1.0 herdr platform qualification — capability manifest (#608)</h1>
+
+</header>
+<main>
+<h1>#608 (HD1.0) — herdr platform qualification — capability manifest</h1>
+<p>No-code qualification of the pinned herdr binary under this host&#x27;s real permissions and environment. Per AC7, every Phase-A-assumed call in <code>docs/planning/2026-07-21-herdr-console-plan.md</code> §1/§4.4 is proven live below — a failure BLOCKS HD1.2–HD1.4 (gate semantics, not documentation).</p>
+<h2>Binary / config / socket facts (confirmed live, this host)</h2>
+<table>
+<thead><tr><th>Fact</th><th>Value</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>Version</td><td><code>herdr 0.7.5</code></td><td><code>herdr --version</code></td></tr>
+<tr><td>Protocol</td><td><code>17</code></td><td><code>ping</code> response <code>protocol</code> field</td></tr>
+<tr><td>Config path</td><td><code>~/.config/herdr/config.toml</code></td><td><code>herdr --help</code> &quot;Config:&quot; line</td></tr>
+<tr><td>Socket path</td><td><code>~/.config/herdr/herdr.sock</code></td><td><code>herdr --help</code> &quot;Env:&quot; section; confirmed fixed (see AC1)</td></tr>
+<tr><td>Socket permissions</td><td><code>srw-------</code> (0600, same-user)</td><td><code>ls -la ~/.config/herdr/herdr.sock</code></td></tr>
+<tr><td>Logs</td><td><code>herdr.log</code>, <code>herdr-client.log</code>, <code>herdr-server.log</code>, same dir</td><td><code>herdr --help</code> &quot;Logs:&quot; line</td></tr>
+<tr><td>Production server</td><td>PID 2877272, up 2d02h10m at check time, started 2026-07-21 12:35:30</td><td><code>ps -o pid,lstart,etime,cmd -p 2877272</code></td></tr>
+<tr><td><code>HERDR_ENV</code> nested-launch guard</td><td>Advisory prose only — enforced against nested TUI launches, not a security boundary</td><td>Live-reproduced: a plain nested <code>herdr</code> inside this pane fails fast (&quot;nested herdr is disabled by default&quot;)</td></tr>
+</tbody>
+</table>
+<h2>AC1 — Headless server start under the real cron environment: <strong>PARTIALLY QUALIFIED</strong></h2>
+<p>Two independent, real blockers prevented the strict &quot;under actual crond&quot; form of this AC. Both require owner action to close; neither was worked around.</p>
+<p>1. <strong>crontab write denied.</strong> Installing a sentinel-guarded one-shot probe line (fires once,    attempts a headless named-session start, logs the result, self-disarms) was blocked outright    by the Claude Code auto-mode permission classifier. Verified afterward: <code>crontab -l</code> is    byte-identical to the pre-attempt backup — all 9 pre-existing entries intact, nothing to roll    back. <strong>Owner handoff, if they want this closed under literal crond:</strong></p>
+<pre><code>   crontab /tmp/claude-1000/-home-rocky00717-rawgentic/4e05f335-c9d3-4b4c-b474-41e728ccc53c/scratchpad/hd10/crontab-new.txt</code></pre>
+<p>   (appends one <code>* * * * *</code> line calling the sentinel-guarded probe script at    <code>scratchpad/hd10/cron-probe.sh</code>; self-disarms after first fire; check    <code>scratchpad/hd10/cron-probe-result.log</code> a minute later, then <code>crontab</code> the original backup    file back to remove the line.)</p>
+<p>2. <strong><code>herdr server</code> is a host-wide singleton with no isolated-instance escape hatch.</strong> Pointed    <code>HERDR_CONFIG_PATH</code> at a scratch directory specifically to start a SECOND, isolated instance    for a clean-start trial (so the live production daemon backing this very session would not be    touched). It refused immediately: <code>error: herdr server is already running / api socket:    /home/rocky00717/.config/herdr/herdr.sock</code> — the singleton lock keys off a FIXED path, not    <code>HERDR_CONFIG_PATH</code>. Did not stop the live server (PID 2877272; backs this pane and 3 others)    to force a cold-start trial — that is a destructive action on shared live infrastructure with    no owner authorization. <strong>Owner handoff, if they want this closed via a real cold start:</strong>    authorize a bounce of the live server during a maintenance window (<code>herdr server stop</code> then    <code>herdr server</code>), observed for a clean start with no other panes active.</p>
+<p><strong>Evidence gathered anyway (honest proxy, not literal crond):</strong> ran the sentinel-guarded probe directly under <code>env -i</code> (clearing all inherited session vars including <code>HERDR_ENV</code>) + <code>setsid</code> (detaching from the controlling terminal) — the properties a real cron child actually has, without touching crontab. Under that clean environment, the bare <code>herdr --session &lt;name&gt;</code> form (the CLI&#x27;s default create-or-attach) <strong>panicked</strong> on TUI init:</p>
+<pre><code>thread &#x27;main&#x27; panicked at .../ratatui-0.30.0/src/init.rs:299:
+failed to initialize terminal: Os { code: 6, kind: Uncategorized, message: &quot;No such device or address&quot; }</code></pre>
+<p>Despite the panic, the underlying session registered and showed <code>running</code> (with its own real socket) in <code>herdr session list</code> — the backing session survives the front-end crash, but this is clearly <strong>not</strong> the intended headless entry point. That is <code>herdr server</code> (the &quot;Advanced commands&quot; entry, &quot;Run as headless server&quot;), which is the one gated by finding 2 above.</p>
+<p><strong>Verdict:</strong> AC1 not fully proven this run. Recorded honestly rather than fudged; both gaps are independently closeable by the owner (one command each) and don&#x27;t require code changes.</p>
+<h2>AC2 — Named-session routing: <strong>PROVEN</strong></h2>
+<p><code>herdr --session hd1-0-qual-test</code> created a session with its own directory and socket, distinct from the default session&#x27;s:</p>
+<pre><code>hd1-0-qual-test   running   ~/.config/herdr/sessions/hd1-0-qual-test   .../hd1-0-qual-test/herdr.sock</code></pre>
+<p><code>herdr session list</code> showed it; <code>herdr session stop hd1-0-qual-test</code> then <code>herdr session delete hd1-0-qual-test</code> cleanly tore it down (confirmed absent afterward). Routing by name to a dedicated socket/directory works as Phase A assumed. (<code>session attach</code>&#x27;s interactive experience was not separately probed — same TTY dependency as AC1&#x27;s panic; the routing mechanism itself, which is what Phase A depends on, is proven.)</p>
+<h2>AC3 — <code>agent start -- &lt;argv&gt;</code>: <strong>PROVEN</strong></h2>
+<p>Created an isolated tab/pane (<code>herdr tab create --workspace w1 --label &quot;hd1.0-qual-probe (safe to close)&quot; --no-focus</code>) so the probe would not touch any of the 4 pre-existing live panes in this workspace (three of which are other concurrent sessions, one of which is this very run).</p>
+<pre><code>herdr agent start hd10-probe --kind claude --pane w1:pN --timeout 20000
+→ {&quot;type&quot;:&quot;agent_started&quot;,&quot;agent&quot;:{...,&quot;interactive_ready&quot;:true},&quot;argv&quot;:[&quot;claude&quot;]}</code></pre>
+<p>Real argv (<code>[&quot;claude&quot;]</code>) reached a real pane and was detected ready for input. Torn down via <code>herdr tab close</code> immediately after observing success; pane count confirmed back to 4.</p>
+<h2>AC4 — Event-subscriber reconnect: <strong>PROVEN — with a load-bearing real finding</strong></h2>
+<p>Socket API framing confirmed live: JSON request/response, <strong>one request per connection</strong> (a second <code>send</code> on an already-answered connection gets <code>BrokenPipeError</code> — confirmed directly). <code>events.subscribe</code> is the one method meant to keep its connection open afterward, streaming pushed event lines with no further request needed.</p>
+<p><strong>Real finding (directly relevant to HD1.4&#x27;s notify-owner bridge design):</strong> a brand-new <code>events.subscribe</code> call does <strong>not</strong> only deliver events from that point forward — it replays a backlog of matching historical events first. Isolated proof: opened a fresh subscription, drained <strong>7</strong> already-queued <code>tab.created</code>/<code>tab.closed</code> events (all from this session&#x27;s own earlier probe activity, going back to the very first AC3 test) before creating any new tab; only after fully draining the backlog did a freshly-created, uniquely-labeled tab&#x27;s event arrive and match. Retention window/size not established (not needed for this qualification; open question for HD1.4&#x27;s implementer).</p>
+<p><strong>This directly validates a risk the plan already carried</strong> (&quot;Missed socket events across disconnects → Reconnect always starts <code>session.snapshot</code> + registry reconciliation&quot; — plan §5 risk table): a consumer that reacts to the first event off a fresh/reconnected subscription without reconciling against <code>session.snapshot</code> risks acting on stale, already-resolved state (e.g., a blocked→notify-owner watcher could fire a notification for a block that was already handled). HD1.4 must not skip the snapshot-reconciliation step — this is now evidenced, not just assumed.</p>
+<p><strong>Reconnect cycle proven:</strong> disconnect (socket close) → <code>session.snapshot</code> (real reconcile call, succeeded) → re-<code>events.subscribe</code> on a fresh connection → confirmed the reconnected subscriber receives new live events (created a second uniquely-labeled tab; the reconnected subscriber&#x27;s next event matched it after its own backlog drained).</p>
+<h2>AC5 — notify-owner transport reachability from a herdr context: <strong>PROVEN</strong></h2>
+<p>Distinguished two different checks:</p>
+<ul>
+<li><code>python3 hooks/hermes_bridge.py --self-check</code> — passes (11/11), but is entirely mocked</li>
+</ul>
+<p>  (injected <code>notify</code>/<code>transport</code> callables) — proves the bridge&#x27;s Python logic runs correctly in   this herdr-managed pane&#x27;s process environment, <strong>not</strong> real network reachability.</p>
+<ul>
+<li><strong>Real transport probe</strong> (this run): called <code>hermes_bridge._default_transport</code> directly with a</li>
+</ul>
+<p>  60-second-old <code>since_ms</code> window and the real configured recipient/chat_guid — a genuine   read-only HTTP round-trip to the live BlueBubbles server, no message sent to the owner. Result:   succeeded, 5 rows returned, no <code>BridgeUnreachable</code>. Confirms the notify-owner/ask-owner   transport is reachable from a process running inside a herdr-managed pane, with a real network   call rather than a mock.</p>
+<h2>AC6 — This document</h2>
+<p>Checked in at <code>docs/planning/2026-07-23-608-hd1-capability-manifest.md</code> (+ rendered <code>.html</code>), per scope.</p>
+<h2>AC7 — Gate semantics</h2>
+<p>Per the issue&#x27;s own AC7 wording, an unproven call BLOCKS HD1.2–HD1.4, not just documents the gap. <strong>AC1 is that unproven call.</strong> HD1.2–HD1.4 stay blocked until the owner closes one of the two named AC1 sub-blockers (run the crontab one-liner above, or authorize a live-server bounce). AC2–AC5 are fully proven and impose no additional block. HD1.1 (install formalization) and HD2.0 (executor-path qualification) are explicitly out of this issue&#x27;s scope regardless.</p>
+<h2>What was NOT checked</h2>
+<ul>
+<li><code>session attach</code>&#x27;s interactive experience (TTY-dependent, same class as AC1&#x27;s panic — not</li>
+</ul>
+<p>  needed to prove the routing mechanism Phase A depends on).</p>
+<ul>
+<li><code>events.subscribe</code> backlog retention window/size (bounded by count? by time? — open question,</li>
+</ul>
+<p>  not load-bearing for this qualification; named for HD1.4&#x27;s implementer).</p>
+<ul>
+<li>A live install/update cycle, sounds/mouse config, or anything HD1.1-scoped.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-23 14:46 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
