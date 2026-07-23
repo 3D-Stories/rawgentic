@@ -632,6 +632,7 @@ read once.
    {
      "workflow": "fix-bug",
      "workflow_version": "<.claude-plugin/plugin.json version>",
+     "architecture": "executor|legacy",  // #474 REQUIRED at >= 3.93.0: the run's declared dispatch architecture
      "issue": {"number": <bug issue #>, "type": "bug",
                "complexity": "trivial|standard|complex|null"},
      "changes": {"files_changed": N, "insertions": N|null, "deletions": N|null,

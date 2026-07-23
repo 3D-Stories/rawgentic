@@ -18,6 +18,7 @@ non-negative integers and `resolved` may not exceed `findings`:
               "commits": N},
   "tests": {"added": N, "passing": N|null, "total": N|null},
   "run_id": "<executor run id, e.g. wf2-<issue>-<session>>",  // #473 additive; the I3<->I2 join key (optional; grammar-safe component)
+  "architecture": "executor|legacy",  // #474 REQUIRED at workflow_version >= 3.93.0: the run's declared dispatch architecture (from begin-run / the workspace defaultArchitecture)
   "gates": [
     {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path",
      "findings_critical": N, "findings_high": N,   // #473 additive; both-or-neither, sum <= findings (feeds review_findings_p90)
