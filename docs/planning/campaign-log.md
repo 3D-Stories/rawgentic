@@ -14,6 +14,54 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Standalone — #535: rev-diagram snapshot script — fullPage dual-theme capture + gate · v3.94.0
+
+**First WF2 run under the executor architecture (owner-ordered smoke, small-standard
+lane).** New `skills/rev-diagram/scripts/snapshot.sh`: serves `docs/` locally, drives
+the pinned `npx playwright@1.61.1 screenshot --full-page --viewport-size=1440,900`
+CLI at both themes — forced via a new `?theme=light|dark` URL query-param bootstrap
+read in `docs/workflow-diagram.html` (no custom Playwright library script; no
+committed npm project — `require('playwright')` does not resolve standalone, only the
+CLI binary does, verified live) — writes the two fixed asset paths atomically
+(temp-capture, backup-then-promote, restore-on-gate-failure), then runs
+`tests/test_workflow_diagram.py -q` and propagates its exit code. Hard-codes
+`--full-page`, the 1440 viewport, and both paths — the actual prevention mechanism for
+the documented viewport-clip failure mode.
+
+**What shipped.** The script; the theme-bootstrap read; a new dependency-free
+PNG-header height drift guard (`tests/test_workflow_diagram.py`) plus a
+byte-identical-snapshots guard; `tests/test_rev_diagram_snapshot.py` pinning the
+pinned invocation and the light/dark mapping end-to-end (var → tmp → capture call →
+promotion rename); `docs/workflow-diagram.md`'s recipe now leads with the script,
+manual recipe kept as fallback.
+
+**Reviews.** Step-4 design self-review (executor `review` seat; `cross_model_author`
+enforcement routed it to gpt-5.6-sol since the author is Claude/anthropic) found 1
+High + 2 Medium — all independently re-verified against primary sources before being
+applied, not accepted on the reviewer's word: an untested `--device-scale-factor` flag
+that doesn't exist in 1.61.1 (design cited a spike that didn't match its own shipped
+invocation — pinned the version, dropped the flag); an overclaim that the existing
+snapshot test already caught a viewport clip (it only checked existence + a size
+floor); a buffered-stdout port-parse race in the naive `http.server 0` design. Step-11
+pre-PR review (single lane reviewer, security/strong seat) found 2 more Medium, both
+confirmed and fixed: the script wrote directly to the committed PNG paths with no
+atomic promote (a mid-run failure could leave them half-overwritten despite reporting
+rejection); the theme-param test never asserted the actual `setAttribute` call, only
+that the read preceded render(). Fixing the atomic-promote finding surfaced a THIRD,
+previously-undiscovered bug caught by the implementer's own mandatory live re-run (not
+a reviewer): `mktemp`'s random suffix broke Playwright's extension-based mime-type
+detection ("unsupported mime type null") — fixed by preserving the `.png` extension in
+the temp filename. Adversarial diff review: gated off, no security-surface path in
+this diff. Security scan: clean (0 findings).
+
+**Status.** PR + CI + merge SHA + telemetry filled by the next slot's pass
+(established convention — this slot's PR is still open as of this section being
+written). Two reusable gotchas memorized to mempalace (executor-dispatch timeout/
+author-provider/correlation-id semantics; Playwright-CLI/`http.server` buffering) —
+see `claude_docs/session_notes.md` "WF2 Step 10" for this issue.
+
+---
+
 ## Standalone — #552: bare skill `name:` frontmatter — un-double the slash commands · v3.79.1
 
 **Interrupt fix, owner-ordered mid-epic-475-pause (2026-07-20).** New Claude Code builds

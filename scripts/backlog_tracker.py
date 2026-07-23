@@ -125,6 +125,46 @@ STRUCTURE = {
              (484, "LOW", "M", "bake-off candidate sets as project config (intake-gate after #475)"),
              (450, "LOW", "L", "interoperate with ultracode / Workflow tool (deferred; intake-gate)"),
          ]},
+        # --- herdr program (filed 2026-07-23 from the 07-21 console plan §4.1/§4.4; owner-
+        # decided queue: flip smokes → HD1.0+HD2.0 gates → benefit-series → HD build-out) ---
+        {"key": "HD1", "num": 614, "title": "herdr console adoption (Phase A)",
+         "hue": "#7c3aed", "benefit": "MED-HIGH",
+         "why": "herdr as the owner's daily console; HD1.0 qualification gate runs early "
+                "(right after the flip smokes), build-out after the benefit series.",
+         "exit": "One full epic auto-run driven and observed through herdr; runbook committed.",
+         "children": [
+             (608, "HIGH", "M", "HD1.0 platform qualification (no code) — gates HD1.2–HD1.4"),
+             (609, "MED", "M", "HD1.1 vet + pinned install + config baseline"),
+             (610, "MED", "S", "HD1.2 Claude Code integration install, reviewed"),
+             (611, "MED", "M", "HD1.3 epic-launcher herdr variant (cron→headless proven)"),
+             (612, "MED", "L", "HD1.4 blocked→notify-owner bridge (real-screen AC)"),
+             (613, "MED", "S", "HD1.5 runbook + workspace conventions"),
+         ]},
+        {"key": "HD2", "num": 621, "title": "herdr executor runtime (Phase B)",
+         "hue": "#6d28d9", "benefit": "MED-HIGH",
+         "why": "Executor children in herdr panes behind a TerminalRuntime seam; entry criteria "
+                "ALL MET at filing; owner committed to full swap — HD2.0/HD2.1 early, parallel HD1.",
+         "exit": "#559-class proving cell green on herdr runtime; soak passed; flip + rollback "
+                 "documented; tmux fallback kept tested (dual-backend fixture).",
+         "children": [
+             (615, "HIGH", "M", "HD2.0 qualification gate + compat manifest — NO-GO stops epic"),
+             (616, "HIGH", "L", "HD2.1 TerminalRuntime seam — tmux extract + preflight wired"),
+             (617, "MED", "L", "HD2.2 herdr runtime impl (argv-spawn/env red-first)"),
+             (618, "MED", "L", "HD2.3 recovery/adoption mapping (native resume off)"),
+             (619, "MED", "M", "HD2.4 events-driven liveness (advisory; #557 clause)"),
+             (620, "MED", "L", "HD2.5 A/B + flip decision + dual-backend fixture"),
+         ]},
+        {"key": "HD3", "num": 626, "title": "herdr agent-skill + console UX (Phase C)",
+         "hue": "#a855f7", "benefit": "MED",
+         "why": "Orchestrator uses herdr as a tool; console UX complete. Post-HD3 review "
+                "revisits herdr-native orchestration (owner Q1, 2026-07-23).",
+         "exit": "Adapted HERDR_ENV-gated skill shipped + reviewed; triage recipes + bench cell.",
+         "children": [
+             (622, "MED", "M", "HD3.1 herdr agent skill (adapted, HERDR_ENV-gated)"),
+             (623, "MED", "S", "HD3.2 stall-triage recipes on the console"),
+             (624, "MED", "M", "HD3.3 driver-bench cell on herdr runtime"),
+             (625, "LOW", "S", "HD3.4 dashboard/notification polish (placeholder)"),
+         ]},
     ],
     "finishing": {
         "title": "Finishing tracks — executor epics (outside the series; let them complete)",
@@ -143,6 +183,7 @@ STRUCTURE = {
         ],
     },
     "closed_this_pass": [
+        (333, "epic: dispatch-observability — all 10 children closed"),
         (408, "epic: GLM backend follow-ups — all 4 children merged"),
         (457, "epic: executor spikes — all 5 children closed"),
         (578, "goal_guard enum — already shipped (deferred in enum since #191)"),

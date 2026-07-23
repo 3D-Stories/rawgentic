@@ -8,6 +8,7 @@ theme completeness, and the README embed that renders it on the repo main page.
 """
 
 import re
+import struct
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -102,6 +103,49 @@ def test_both_themes_and_reduced_motion():
     assert "prefers-reduced-motion" in text
 
 
+def test_theme_query_param_forces_initial_theme():
+    """#535: a `?theme=light|dark` URL query param must force the initial
+    data-theme attribute (before the first render), so a headless capture
+    script can force each theme without a custom Playwright library script —
+    the bare `npx playwright screenshot` CLI has no page.evaluate hook.
+
+    Revised after #535 Step-11 review Finding #2 (confirmed live: the
+    original version of this test only checked that the query param was
+    READ before render() -- deleting the setAttribute call entirely would
+    have left it green while the actual theme-forcing behavior silently
+    broke). Now asserts the allowlisted light|dark check AND the
+    setAttribute call itself both exist and precede render()."""
+    text = _html()
+    assert "URLSearchParams(location.search)" in text
+    assert ".get('theme')" in text or '.get("theme")' in text
+    assert "_qTheme === 'light'" in text or '_qTheme === "light"' in text
+    assert "_qTheme === 'dark'" in text or '_qTheme === "dark"' in text
+    assert "setAttribute('data-theme', _qTheme)" in text or \
+           'setAttribute("data-theme", _qTheme)' in text
+    # the read AND the assignment must happen before the bootstrap render()
+    # call, not after
+    param_idx = text.index("URLSearchParams(location.search)")
+    set_idx = text.index("setAttribute('data-theme', _qTheme)") if \
+        "setAttribute('data-theme', _qTheme)" in text else \
+        text.index('setAttribute("data-theme", _qTheme)')
+    render_idx = text.rindex("\nrender();")
+    assert param_idx < render_idx, (
+        "theme query-param read must run before the bootstrap render() call"
+    )
+    assert set_idx < render_idx, (
+        "theme data-theme assignment must run before the bootstrap render() call"
+    )
+
+
+def test_light_and_dark_snapshots_are_not_byte_identical():
+    """#535 Step-11 review Finding #2's second half: without this, a
+    regression that broke theme-forcing (both captures rendering the same
+    default theme) would still pass every other snapshot test."""
+    light = (REPO_ROOT / "docs" / "assets" / "workflow-diagram-light.png").read_bytes()
+    dark = (REPO_ROOT / "docs" / "assets" / "workflow-diagram-dark.png").read_bytes()
+    assert light != dark, "light and dark snapshots must not be byte-identical"
+
+
 def test_font_license_attribution_present():
     """Vendored OFL fonts (IBM Plex, Big Shoulders) must carry attribution."""
     text = _html()
@@ -150,6 +194,60 @@ def test_snapshot_assets_committed():
         f = REPO_ROOT / "docs" / "assets" / p
         assert f.exists(), f"missing snapshot asset {p}"
         assert f.stat().st_size > 20_000, f"{p} suspiciously small"
+
+
+# #535 Step-4 review Finding #2: the size-floor check above does NOT catch a
+# viewport-only capture (a ~900-1200px-tall clip can easily still exceed
+# 20KB) -- it neither checks height nor discriminates a clip from a full
+# capture. This adds the actual geometry guard, dependency-free (stdlib
+# struct parses the PNG IHDR chunk directly -- no new library).
+SNAPSHOT_HEIGHT_FLOOR = 1800  # well above any single ~900-1200px viewport clip
+
+
+def _png_dimensions(path):
+    with open(path, "rb") as f:
+        header = f.read(24)
+    assert header[:8] == b"\x89PNG\r\n\x1a\n", f"not a PNG signature: {path}"
+    assert header[12:16] == b"IHDR", f"expected IHDR chunk: {path}"
+    width, height = struct.unpack(">II", header[16:24])
+    return width, height
+
+
+def _write_minimal_png(path, *, width, height):
+    """Signature + IHDR only -- not a renderable image, just enough bytes at
+    the right offsets for `_png_dimensions` to parse. Used to prove the
+    height assertion below actually discriminates a clip from a full
+    capture, without ever needing to break the real committed assets."""
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    length = struct.pack(">I", len(ihdr_data))
+    path.write_bytes(sig + length + b"IHDR" + ihdr_data)
+
+
+def test_snapshot_pngs_are_full_page_not_viewport_clipped():
+    """The real committed assets must clear a height floor well above any
+    single-viewport clip -- this is the actual "prevents recurrence"
+    mechanism for the documented viewport-clip failure mode; the pre-#535
+    test_snapshot_assets_committed size-floor check alone does not catch it."""
+    for p in ("workflow-diagram-light.png", "workflow-diagram-dark.png"):
+        f = REPO_ROOT / "docs" / "assets" / p
+        _, height = _png_dimensions(f)
+        assert height > SNAPSHOT_HEIGHT_FLOOR, (
+            f"{p} height={height} <= {SNAPSHOT_HEIGHT_FLOOR} -- looks like a "
+            "viewport-only clip, not a full-page capture"
+        )
+
+
+def test_snapshot_height_floor_actually_discriminates_a_clip(tmp_path):
+    """Proof the assertion above isn't vacuous: a synthetic PNG at a
+    viewport-clip-sized height must fail the same floor check."""
+    clipped = tmp_path / "clipped.png"
+    _write_minimal_png(clipped, width=1440, height=1200)
+    _, height = _png_dimensions(clipped)
+    assert height == 1200
+    assert not (height > SNAPSHOT_HEIGHT_FLOOR), (
+        "fixture must be BELOW the floor to prove discrimination"
+    )
 
 
 def test_station_drilldown_is_a_modal_not_a_full_page_swap():

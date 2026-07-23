@@ -1629,6 +1629,14 @@ themer.addEventListener('click', function(){
   themer.textContent = m.toUpperCase()+' ◐';
 });
 
+/* #535: force the initial theme from ?theme=light|dark for scripted capture
+   (the bare `npx playwright screenshot` CLI has no page.evaluate hook) —
+   the button-driven theme cycle above is unaffected, this only sets the
+   INITIAL attribute before first render, exactly like the hash sets the
+   initial station/rev. */
+var _qTheme = new URLSearchParams(location.search).get('theme');
+if(_qTheme === 'light' || _qTheme === 'dark') document.documentElement.setAttribute('data-theme', _qTheme);
+
 if(!location.hash) location.replace(href('wf2', DATA.workflows.wf2.revs[0], null));
 render();
 </script>
