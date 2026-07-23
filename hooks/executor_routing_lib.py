@@ -2249,7 +2249,7 @@ def _do_dispatch(args) -> int:
         led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
         if led.read().initial_digest is None:
             try:
-                led.append_initial(snap.config_digest)
+                led.append_initial(snap.config_digest, architecture="executor")
             except pe.ledger.LedgerError:
                 # a concurrent first dispatch seeded the same initial_digest — benign
                 if led.read().initial_digest is None:
@@ -2535,7 +2535,7 @@ def _do_close_run(args) -> int:
         # a run closed with ZERO dispatches never seeded its initial record — seed it (the first
         # record MUST be 'initial') so the closed ledger is well-formed and reconcile-readable.
         if led.read().initial_digest is None:
-            led.append_initial(snap.config_digest)
+            led.append_initial(snap.config_digest, architecture="executor")
         led.append_run_closed()
     except pe.ledger.LedgerError as e:
         return _emit(_err(EXIT_MALFORMED, "ledger_refused", str(e), retryable=False))

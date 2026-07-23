@@ -2788,7 +2788,7 @@ def test_cli_reconcile_final_refuses_open_ledger(tmp_path, capsys):
     # #555 AC3: final requires run_closed last.
     ws, repo = _analysis_project(tmp_path)
     lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("analysis", "c1")
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
@@ -2799,7 +2799,7 @@ def test_cli_reconcile_provisional_tolerates_in_flight(tmp_path, capsys):
     # #555 AC3: provisional tolerates an open ledger with a not-yet-observed (in-flight) call.
     ws, repo = _analysis_project(tmp_path)
     lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("analysis", "c1")   # no audit obs yet → missing_receipt, tolerated
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "provisional", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
@@ -2816,7 +2816,7 @@ def test_cli_reconcile_final_clean_reconciles_ok(tmp_path, capsys):
     ws, repo = _analysis_project(tmp_path)
     rd = _run_dir(repo)
     lg = ledger.ExpectedCallLedger(rd, "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("analysis", "c1")
     lg.append_run_closed()
     lane = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
@@ -2846,7 +2846,7 @@ def test_cli_reconcile_final_zero_expected_refuses(tmp_path, capsys):
     # (require_nonempty — a wiring bug that dropped the expected-set cannot ship vacuously).
     ws, repo = _analysis_project(tmp_path)
     lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_run_closed()
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
@@ -2859,7 +2859,7 @@ def test_cli_reconcile_provisional_fails_on_hard_anomaly(tmp_path, capsys):
     ws, repo = _analysis_project(tmp_path)
     rd = _run_dir(repo)
     lg = ledger.ExpectedCallLedger(rd, "run1")
-    lg.append_initial("sha256:cfg")   # zero expected calls
+    lg.append_initial("sha256:cfg", architecture="executor")   # zero expected calls
     # an orphan receipt in the audit: (seat, cid) not in the (empty) expected set
     orphan_receipt = {"kind": "receipt", "nonce": "n1", "seat": "analysis", "correlation_id": "ghost",
                       "attempt_id": "0", "target_identity": ["m", "anthropic", "native",
