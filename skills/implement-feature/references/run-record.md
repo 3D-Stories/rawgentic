@@ -182,7 +182,7 @@ caught the same way a bad writer output would be.
 **`dispatches` (OPTIONAL, #330):** a **structured list** of per-dispatch telemetry, one entry
 per canonical `DISPATCH` audit line (`shared/blocks/model-routing-resolve.md`)
 emitted this run. The producer of each line is the executor result dict on the primary tier
-(`resolution=primary`) or the fallback (legacy) Agent-tool subagent (`resolution=fallback`) — the
+(`resolution=primary`) or — legacy architecture only — the Agent-tool subagent (`resolution=fallback`) — the
 line grammar and the six schema fields are unchanged either way (#470). It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
 (NOT the unvalidated-passthrough pattern of `lane`): **absent** is fine — old records stay valid, no
 schema version bump — but **present is strict**: each entry must carry all six fields

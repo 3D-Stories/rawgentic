@@ -286,27 +286,25 @@ class TestExecutorDispatchContractWF3:
         corpus = _norm(_text())
         assert ("The producer is the executor result dict (`type=executor:review`, "
                 "`model=<actual_model>`, `resolution=primary`) on the primary tier, "
-                "or the fallback (legacy) Agent-tool dispatch (`resolution=fallback`) "
-                "as today.") in corpus, (
-            "the WF3 DISPATCH producer sentence (executor result dict vs fallback "
-            "Agent-tool) must be present (#470)")
+                "or — under the LEGACY architecture only — the Agent-tool dispatch "
+                "(`resolution=fallback`).") in corpus, (
+            "the WF3 DISPATCH producer sentence (executor result dict vs "
+            "legacy-architecture Agent-tool) must be present (#474)")
 
     def test_per_run_tier_selection_present(self):
         corpus = _norm(_text())
-        assert "Tier selection is per-RUN, at run start, never mixed." in corpus
-        assert "never an automatic, silent per-dispatch downgrade to the Agent tool" in corpus
-        assert ("TERMINATES the current run" in corpus
-                and "starts a NEW run_id on the other tier" in corpus), (
-            "the WF3 tier-switch semantics (terminate + new linked run_id, never a "
-            "silent mid-run downgrade) must be present (#470)")
+        assert "Architecture selection is per-RUN, declared at run start via `begin-run`, never mixed (#474)." in corpus
+        assert "NEVER a downgrade to the Agent tool: there is no runtime fallback tier" in corpus, (
+            "the WF3 no-runtime-fallback semantics (#474 flip) must be present")
 
     def test_fallback_legacy_tier_present(self):
         corpus = _norm(_text())
-        assert "**Bundled agent dispatch (#164) — the FALLBACK (legacy) tier.**" in corpus
-        assert ("Until the W12 flip (#474) this tier remains a working, declared "
-                "fallback") in corpus, (
-            "the WF3 fallback (legacy) tier — Agent-tool rawgentic:rawgentic-reviewer, "
-            "resolution=fallback, retained until W12/#474 — must be present (#470)")
+        assert "**Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474).**" in corpus
+        assert "Since the W12 flip (#474) the executor IS the architecture everywhere by default" in corpus, (
+            "the WF3 legacy-architecture framing (post-#474 flip) must be present")
+        assert "Until the W12 flip" not in corpus  # the pre-flip clause must be gone
+        assert "Under the LEGACY architecture" in corpus, (
+            "WF3 legacy dispatch instructions must be conditioned on the declared-legacy branch (#474)")
 
     def test_gate_preservation_sentences_present(self):
         # The two #470 gate-preservation sentences carried VERBATIM into the WF3
@@ -318,10 +316,10 @@ class TestExecutorDispatchContractWF3:
                 "dispatch requires the authenticated gate decision plus the internally "
                 "minted plan context.") in corpus, (
             "WF3 corpus must carry the #470 gate-bypass invariant sentence verbatim")
-        assert ("WF2/WF3 prose runs the complexity-gate step before any fallback-tier "
+        assert ("WF2/WF3 prose runs the complexity-gate step before any legacy-architecture "
                 "build dispatch.") in corpus, (
-            "WF3 corpus must carry the #470 complexity-gate-before-fallback-build "
-            "sentence verbatim")
+            "WF3 corpus must carry the complexity-gate-before-legacy-build "
+            "sentence verbatim (#474)")
 
 
 # --- #330: dispatches[] assembly instruction at WF3 Step 14 ---

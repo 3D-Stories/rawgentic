@@ -71,18 +71,21 @@ def test_mutating_engine_allowlist_fact_in_shared_source():
 
 
 def test_per_run_tier_selection_in_shared_source():
+    # #474: architecture selection is per-run, begin-run-declared, never mixed
     norm = _norm(SHARED.read_text(encoding="utf-8"))
-    assert "Tier selection is per-RUN, at run start, never mixed." in norm
-    # tier-switch terminates the run and starts a new linked run_id — never a silent mid-run downgrade
-    assert "never an automatic, silent per-dispatch downgrade to the Agent tool" in norm
-    assert "TERMINATES the current run" in norm and "starts a NEW run_id on the other tier" in norm
+    assert "Architecture selection is per-RUN, declared at run start via `begin-run`, never mixed (#474)." in norm
+    assert "NEVER a downgrade to the Agent tool: there is no runtime fallback tier" in norm
+    assert "a deliberate JOINT config change" in norm
 
 
 def test_fallback_legacy_tier_named_in_shared_source():
     norm = _norm(SHARED.read_text(encoding="utf-8"))
-    assert "Bundled agent dispatch (#164) — the FALLBACK (legacy) tier." in norm
+    assert "Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474)." in norm
     assert "carries `resolution=fallback` on the DISPATCH line" in norm
-    assert "Until the W12 flip (#474) this tier remains a working, declared fallback" in norm
+    assert "Since the W12 flip (#474) the executor IS the architecture everywhere by default" in norm
+    assert "Until the W12 flip" not in norm  # the pre-flip clause must be gone
+    # legacy dispatch instructions are conditioned on the declared-legacy branch
+    assert "Under the LEGACY architecture" in norm
 
 
 def test_gate_preservation_sentences_in_shared_source():
@@ -94,7 +97,7 @@ def test_gate_preservation_sentences_in_shared_source():
             "tier dispatches its model calls, and every EXECUTOR-tier build-seat "
             "dispatch requires the authenticated gate decision plus the internally "
             "minted plan context.") in norm
-    assert ("WF2/WF3 prose runs the complexity-gate step before any fallback-tier "
+    assert ("WF2/WF3 prose runs the complexity-gate step before any legacy-architecture "
             "build dispatch.") in norm
 
 
@@ -113,3 +116,18 @@ def test_agent_definitions_carry_architecture_self_check():
         assert ("ARCHITECTURE SELF-CHECK (#474): before any other work, walk up from your "
                 "working directory to find `.rawgentic_workspace.json`") in body, name
         assert 'unless that file exists, is readable, and its top-level `defaultArchitecture` is exactly `"legacy"`' in body, name
+
+
+def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
+    """#474: every Agent-tool dispatch instruction in both workflow corpora is conditioned on
+    the declared LEGACY architecture — no unconditional 'via the Agent tool' instruction
+    survives the flip. Paragraph-scoped (a wrapped continuation line inherits its paragraph's
+    condition), per the repo's anchored-guard convention."""
+    for skill in ("implement-feature", "fix-bug"):
+        for f in sorted((REPO / "skills" / skill).rglob("*.md")):
+            paragraphs = re.split(r"\n\s*\n", f.read_text(encoding="utf-8"))
+            for para in paragraphs:
+                if "via the Agent tool" in para:
+                    norm = _norm(para)
+                    assert "LEGACY architecture" in norm, (
+                        f"{f}: unconditioned Agent-tool dispatch instruction:\n{norm[:200]}")

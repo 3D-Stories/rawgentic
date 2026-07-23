@@ -33,7 +33,7 @@ GATE_SENTENCE = (
     "decision plus the internally minted plan context."
 )
 FALLBACK_SENTENCE = (
-    "WF2/WF3 prose runs the complexity-gate step before any fallback-tier build dispatch."
+    "WF2/WF3 prose runs the complexity-gate step before any legacy-architecture build dispatch."
 )
 
 
