@@ -111,12 +111,16 @@ def _dispatch(seat, tmp_path, **kw):
     ), audit
 
 
-def _ws(tmp_path, executor_routing="__none__", project="rawgentic", path="."):
+def _ws(tmp_path, executor_routing="__none__", project="rawgentic", path=".",
+        default_architecture="__none__"):
     entry = {"name": project, "path": path, "modelRouting": {"analysis": "sonnet"}}
     if executor_routing != "__none__":
         entry["executorRouting"] = executor_routing
+    top = {"projects": [entry]}
+    if default_architecture != "__none__":
+        top["defaultArchitecture"] = default_architecture
     p = tmp_path / "ws.json"
-    p.write_text(json.dumps({"projects": [entry]}), encoding="utf-8")
+    p.write_text(json.dumps(top), encoding="utf-8")
     return str(p)
 
 
@@ -191,13 +195,15 @@ def test_parse_valid():
 
 
 # --- resolve-seat action -----------------------------------------------------------------------
-def test_resolve_absent_block_is_inherit(tmp_path):
-    assert er.resolve_seat_action("ship", _ws(tmp_path), "rawgentic")[0] == "inherit"
+def test_resolve_absent_block_is_executor_default(tmp_path):
+    # #474 guard (a): no defaultArchitecture, no executorRouting → EXECUTOR is the default
+    assert er.resolve_seat_action("ship", _ws(tmp_path), "rawgentic")[0] == "executor"
 
 
-def test_resolve_seat_not_in_config_is_inherit(tmp_path):
+def test_resolve_seat_not_in_config_is_executor_default(tmp_path):
+    # #474: a seat absent from an agreeing executorRouting block still defaults executor
     ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}})
-    assert er.resolve_seat_action("plan", ws, "rawgentic")[0] == "inherit"
+    assert er.resolve_seat_action("plan", ws, "rawgentic")[0] == "executor"
 
 
 def test_resolve_executor_mode(tmp_path):
@@ -319,9 +325,9 @@ def test_dispatch_audit_write_failure_exit5(tmp_path):
     assert res["error"]["retryable"] is False and res["error"].get("correlation_id") == "wf2:step5"
 
 
-# --- INHERIT path: executor never fires; prior behavior (model_routing) unchanged --------------
+# --- INHERIT path (#474: now the LEGACY architecture): executor never fires; model_routing unchanged
 def test_inherit_path_does_not_dispatch_and_model_routing_unchanged(tmp_path):
-    ws = _ws(tmp_path)  # no executorRouting -> inherit
+    ws = _ws(tmp_path, default_architecture="legacy")  # #474: inherit = declared legacy rollback
     assert er.resolve_seat_action("ship", ws, "rawgentic")[0] == "inherit"
     # no-touch guard: #427 does not edit model_routing role resolution
     assert mr.resolve(ws, "rawgentic", "analysis") == ("sonnet", None)
@@ -337,7 +343,9 @@ def _run_cli(*args):
 
 
 def test_cli_resolve_inherit(tmp_path):
-    r = _run_cli("resolve-seat", "--seat", "ship", "--workspace", _ws(tmp_path), "--project", "rawgentic")
+    # #474: the inherit action is produced by the declared legacy rollback, not by absence
+    r = _run_cli("resolve-seat", "--seat", "ship", "--workspace",
+                 _ws(tmp_path, default_architecture="legacy"), "--project", "rawgentic")
     assert r.returncode == 0
     assert json.loads(r.stdout)["action"] == "inherit"
 
@@ -447,10 +455,11 @@ def test_resolve_corrupt_workspace_fails_closed(tmp_path):
         er.resolve_seat_action("ship", str(corrupt), "rawgentic")
 
 
-def test_resolve_absent_workspace_is_inherit_not_error(tmp_path):
-    # A genuinely-absent workspace is "not configured" → inherit (NOT a read-error fail-closed).
+def test_resolve_absent_workspace_is_executor_not_error(tmp_path):
+    # #474 AC2: a genuinely-absent workspace is "not configured" → EXECUTOR default (non-error;
+    # corrupt stays fail-closed — absent != corrupt).
     missing = str(tmp_path / "does-not-exist.json")
-    assert er.resolve_seat_action("ship", missing, "rawgentic")[0] == "inherit"
+    assert er.resolve_seat_action("ship", missing, "rawgentic")[0] == "executor"
 
 
 def test_model_routing_stays_fail_open_on_corrupt_workspace(tmp_path):
@@ -2886,3 +2895,113 @@ def test_supervised_await_deadline_clamped_to_effective_timeout(tmp_path, monkey
     res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch)
     assert res["exit"] == er.EXIT_OK, res
     assert seen["timeout_s"] == 5.0  # min(await default 3600, effective min(5.0, manifest))
+
+
+# --- #474: defaultArchitecture — the flip -------------------------------------------------------
+
+def test_resolve_architecture_absent_key_is_executor(tmp_path):
+    assert er.resolve_architecture(_ws(tmp_path)) == "executor"
+
+
+def test_resolve_architecture_explicit_values(tmp_path):
+    assert er.resolve_architecture(_ws(tmp_path, default_architecture="executor")) == "executor"
+    assert er.resolve_architecture(_ws(tmp_path, default_architecture="legacy")) == "legacy"
+
+
+def test_resolve_architecture_absent_workspace_is_executor(tmp_path):
+    assert er.resolve_architecture(str(tmp_path / "missing.json")) == "executor"
+
+
+@pytest.mark.parametrize("bad", ["Executor", "LEGACY", "agent-tool", 1, True, None, ["legacy"]])
+def test_resolve_architecture_invalid_value_fails_closed(tmp_path, bad):
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_architecture(_ws(tmp_path, default_architecture=bad))
+
+
+def test_resolve_architecture_corrupt_workspace_fails_closed(tmp_path):
+    corrupt = tmp_path / "ws.json"
+    corrupt.write_text('{"defaultArch TRUNCATED', encoding="utf-8")
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_architecture(str(corrupt))
+
+
+def test_resolve_legacy_architecture_routes_back(tmp_path):
+    # #474 guard (c): the manual joint rollback — legacy → inherit (the Agent-tool path)
+    ws = _ws(tmp_path, default_architecture="legacy")
+    action, reason = er.resolve_seat_action("ship", ws, "rawgentic")
+    assert action == "inherit"
+    assert "legacy" in reason and "#474" in reason
+
+
+def test_resolve_executor_reason_names_the_flip(tmp_path):
+    action, reason = er.resolve_seat_action("ship", _ws(tmp_path), "rawgentic")
+    assert action == "executor" and "#474" in reason
+
+
+def test_mixed_config_inherit_seat_under_executor_refused(tmp_path):
+    # #474 guard (d) config half: an explicit inherit seat contradicts the executor architecture
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "inherit"}})
+    with pytest.raises(er.MalformedConfig) as ei:
+        er.resolve_seat_action("ship", ws, "rawgentic")
+    msg = str(ei.value)
+    assert "ship" in msg and "inherit" in msg  # names the offending seat + mode
+
+
+def test_mixed_config_executor_seat_under_legacy_refused(tmp_path):
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}},
+             default_architecture="legacy")
+    with pytest.raises(er.MalformedConfig) as ei:
+        er.resolve_seat_action("ship", ws, "rawgentic")
+    msg = str(ei.value)
+    assert "ship" in msg and "executor" in msg
+
+
+def test_agreeing_executor_seat_under_executor_is_noop_valid(tmp_path):
+    # the live rawgentic all-executor block stays valid as a redundant no-op
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}})
+    assert er.resolve_seat_action("ship", ws, "rawgentic")[0] == "executor"
+
+
+def test_agreeing_inherit_seat_under_legacy_is_noop_valid(tmp_path):
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "inherit"}},
+             default_architecture="legacy")
+    assert er.resolve_seat_action("ship", ws, "rawgentic")[0] == "inherit"
+
+
+def test_driver_only_seats_unaffected_by_architecture(tmp_path):
+    for arch in ("executor", "legacy"):
+        ws = _ws(tmp_path, default_architecture=arch)
+        assert er.resolve_seat_action("merge", ws, "rawgentic")[0] == "driver_only"
+
+
+def test_malformed_executor_routing_still_refused_under_flip(tmp_path):
+    # parse_executor_routing validation unchanged — malformed block refuses even though modes
+    # no longer select the tier
+    ws = _ws(tmp_path, {"version": 99, "seats": {}})
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_seat_action("ship", ws, "rawgentic")
+
+
+def test_single_snapshot_read(tmp_path, monkeypatch):
+    # S3-TOCTOU: one json.load per resolution — architecture + entry + block from one snapshot
+    calls = []
+    real_load = er.json.load
+    def counting_load(fh, *a, **k):
+        calls.append(getattr(fh, "name", "?"))
+        return real_load(fh, *a, **k)
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}})
+    monkeypatch.setattr(er.json, "load", counting_load)
+    er.resolve_seat_action("ship", ws, "rawgentic")
+    ws_reads = [c for c in calls if c.endswith("ws.json")]
+    assert len(ws_reads) <= 1, f"workspace read {len(ws_reads)} times: {ws_reads}"
+
+
+def test_legacy_rollback_target_definitions_exist():
+    # #474 guard (c) proxy: the bundled legacy agent definitions stay in-tree as the rollback
+    # target (frontmatter-shaped: leading --- block with a name: line)
+    repo = Path(__file__).resolve().parents[2]
+    for name in ("rawgentic-implementer", "rawgentic-reviewer"):
+        p = repo / "agents" / f"{name}.md"
+        assert p.is_file(), f"rollback target missing: {p}"
+        head = p.read_text(encoding="utf-8").split("---")
+        assert len(head) >= 3 and "name:" in head[1], f"frontmatter malformed: {p}"

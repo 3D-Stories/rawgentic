@@ -184,12 +184,76 @@ def classify_seat(seat: str) -> str:
     raise MalformedConfig(f"unknown seat {seat!r} (wired: {sorted(WIRED_SEATS)}; driver-only: {sorted(DRIVER_ONLY)})")
 
 
+_WS_ABSENT: Final[object] = object()  # sentinel: workspace file genuinely absent (#474)
+
+
+def _load_workspace_snapshot(workspace_path: str) -> object:
+    """ONE ``json.load`` of the workspace per resolution (#474 S3-TOCTOU: architecture, project
+    entry, and ``executorRouting`` block are all read from this single in-memory snapshot — the
+    load is the configuration linearization point).
+
+    Returns the parsed top-level dict, or ``_WS_ABSENT`` when the file genuinely does not exist
+    ("not configured" — under #474 that means the EXECUTOR default, not an error). A
+    present-but-corrupt/unreadable/non-object workspace raises ``MalformedConfig`` (fail-CLOSED:
+    an enforcement boundary that cannot evaluate DENIES — Step-11 D3/A3 discipline)."""
+    try:
+        with open(workspace_path, encoding="utf-8") as f:
+            ws = json.load(f)
+    except FileNotFoundError:
+        return _WS_ABSENT
+    except (OSError, ValueError) as exc:
+        raise MalformedConfig(
+            f"workspace unreadable/corrupt — cannot evaluate architecture (fail-closed): {exc}") from exc
+    if not isinstance(ws, dict):
+        raise MalformedConfig(
+            f"workspace top level is {type(ws).__name__}, not an object (fail-closed)")
+    return ws
+
+
+def resolve_architecture_from_snapshot(ws: object) -> str:
+    """#474: the dispatch-architecture selector. ``ws`` is a ``_load_workspace_snapshot`` result.
+
+    - Workspace absent, or ``defaultArchitecture`` key absent -> ``"executor"`` — THE flip (AC2):
+      no config anywhere means executor.
+    - Exact strings ``"executor"`` / ``"legacy"`` -> as declared.
+    - Any other value/type -> ``MalformedConfig`` (a typo'd architecture must never silently pick
+      a side — the ``parse_executor_routing`` false-cutover discipline, both directions).
+    """
+    if ws is _WS_ABSENT:
+        return "executor"
+    arch = ws.get("defaultArchitecture", "executor")
+    if arch not in ("executor", "legacy"):
+        raise MalformedConfig(
+            f"defaultArchitecture must be 'executor' or 'legacy' (got {arch!r}) — "
+            f"refusing to guess an architecture (fail-closed, #474)")
+    return arch
+
+
+def resolve_architecture(workspace_path: str) -> str:
+    """#474: file-path convenience over ``resolve_architecture_from_snapshot`` (same rules)."""
+    return resolve_architecture_from_snapshot(_load_workspace_snapshot(workspace_path))
+
+
+def _entry_from_snapshot(ws: object, project: str) -> dict | None:
+    if ws is _WS_ABSENT:
+        return None
+    projects = ws.get("projects")
+    if not isinstance(projects, list):
+        return None
+    return next((p for p in projects if isinstance(p, dict) and p.get("name") == project), None)
+
+
 def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[str, str]:
     """Return ``(action, reason)`` where action is ``inherit`` | ``executor`` | ``driver_only``.
 
-    Raises ``MalformedConfig`` on an unknown seat or a present-but-malformed config (-> exit 2).
-    Does NOT compute the primary model (that needs the routing snapshot — the CLI adds it for the
-    ``executor`` action) and never restates a legacy model for the ``inherit`` branch."""
+    #474: the workspace-level ``defaultArchitecture`` selects the tier (absent -> executor — the
+    flip). ``executorRouting`` seat modes are still VALIDATED but no longer select; an explicit
+    mode contradicting the architecture is refused naming the offending seat (the config-level
+    third of AC1 "mixed run impossible"). ``inherit`` still means the legacy Agent-tool path, so
+    all consumers keep their contract.
+
+    Raises ``MalformedConfig`` on an unknown seat, a present-but-malformed config, an invalid
+    architecture value, or a mixed-architecture conflict (-> exit 2)."""
     kind = classify_seat(seat)  # raises on unknown
     if kind == "driver_only":
         return "driver_only", "driver-only stage, never a seat"
@@ -200,21 +264,28 @@ def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[s
         raise MalformedConfig(
             f"seat {seat!r} is competitive-only (bake-off owns its dispatch) — "
             f"cannot single-dispatch it through the executor")
-    # Fail CLOSED on a corrupt/unreadable workspace (strict_read=True): a config this
-    # enforcement boundary cannot evaluate must DENY (exit 2), not collapse into the same
-    # _ABSENT→inherit as a clean absence — else an executor-intended seat silently reverts to the
-    # legacy path on a mid-edit/corrupt workspace (a false cutover; Step-11 D3/A3). A genuinely
-    # absent workspace/entry still returns _ABSENT→inherit (that is "not configured", not "cannot
-    # evaluate"). model_routing keeps its fail-OPEN read (strict_read default False).
-    try:
-        raw = _load_block(workspace_path, project, key="executorRouting", missing=_ABSENT, strict_read=True)
-    except (OSError, ValueError) as exc:
-        raise MalformedConfig(f"workspace unreadable/corrupt — cannot evaluate executorRouting (fail-closed): {exc}") from exc
-    modes = parse_executor_routing(raw)
-    mode = modes.get(seat, "inherit")
-    if mode == "executor":
-        return "executor", "seat routed through the executor"
-    return "inherit", "seat not opted into the executor (prior behavior)"
+    ws = _load_workspace_snapshot(workspace_path)  # fail-closed on corrupt; absent → executor
+    arch = resolve_architecture_from_snapshot(ws)
+    entry = _entry_from_snapshot(ws, project)
+    raw = _ABSENT if entry is None else entry.get("executorRouting", _ABSENT)
+    modes = parse_executor_routing(raw)  # validation unchanged; malformed still refuses
+    mode = modes.get(seat)
+    # Mixed-architecture config refusal (#474): an explicit seat mode that contradicts the
+    # architecture is a config conflict, named so the operator sees exactly which seat blocks
+    # the flip/rollback — never silently resolved either way.
+    if mode == "inherit" and arch == "executor":
+        raise MalformedConfig(
+            f"mixed-architecture config refused: seat {seat!r} declares mode 'inherit' but the "
+            f"workspace architecture is 'executor' (#474) — remove the seat mode or set "
+            f"defaultArchitecture: legacy (joint rollback)")
+    if mode == "executor" and arch == "legacy":
+        raise MalformedConfig(
+            f"mixed-architecture config refused: seat {seat!r} declares mode 'executor' but the "
+            f"workspace architecture is 'legacy' (#474) — remove the seat mode or set "
+            f"defaultArchitecture: executor")
+    if arch == "executor":
+        return "executor", "executor architecture (default since #474)"
+    return "inherit", "legacy architecture (defaultArchitecture: legacy — manual rollback, #474)"
 
 
 def _safe_component(name: str, label: str) -> str:
