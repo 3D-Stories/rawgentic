@@ -188,6 +188,48 @@ absent stays valid. This replaces hand-parsing session transcripts for step
 markers — the reconstruction the epic #493 timing profile did by hand, measured
 ~2× off against real wall-clocks.
 
+### Auto-embed fallback + wall_clock_s derive + coverage warning (#589)
+
+`timing` shipped (#506) as a manually-embedded field — the orchestrator runs
+`step_state.py timing` and pastes its stdout into the record before calling
+`summarize`. In practice this manual step was widely skipped (confirmed: every
+sampled real record across two projects had NO `timing` key at all, not a
+populated-but-empty one — `validate_record`'s own strict object check on the key
+means a hand-set `"timing": null` would have FAILED validation, so an absent key
+is the only way a valid record gets there). `summarize` now closes this gap
+itself: `_auto_embed_timing` computes `timing` from the per-run history file
+(the same `step_state.compute_timing()` the CLI uses) whenever the incoming
+record lacks the key, running BEFORE validation so the auto-computed object is
+checked exactly like a hand-supplied one. It never overwrites an
+orchestrator-supplied `timing` key, and fails open (no mutation) if the
+issue/project/history can't be resolved — the field simply stays absent, exactly
+as before this fix.
+
+This does NOT fix the underlying step-state hook's own detection sparsity (its
+marker/signature coverage is real but incomplete — see
+`hooks/step_state_post.py`'s docstring); a run whose history has few captured
+events will still auto-embed a `partial` (or even `absent`, if the history file
+itself doesn't exist) `timing` object — just no longer an OMITTED one. Two
+companion mechanisms cover that residual:
+
+- **`usage.wall_clock_s` auto-derive** (`work_summary.derive_wall_clock_s`):
+  fills a null `wall_clock_s` from `timing.total_s`, but ONLY when
+  `timing.status == "complete"` — `total_s` is an entry-interval sum with an
+  explicitly open-ended final event, and "complete" only requires reaching
+  PR-creation, not CI/merge/deploy/wrap-up, so even at its best this is a
+  **best-available proxy for time-to-PR, not true full-run wall-clock**. Never
+  overwrites an existing non-null value.
+- **Coverage/drift warning** (`work_summary.timing_coverage_warning`): an
+  ADVISORY line to stderr (never gates persistence) when a full-lane run (a real
+  PR exists) has `timing.status` in `{"absent", "partial"}` — surfacing the
+  residual detection gap loudly instead of leaving it silent.
+
+**Named follow-up, not actioned here:** the only way to guarantee every WF2/WF3
+step is captured is promoting the already-existing-but-OPTIONAL manual
+`step_state.py write` call (see each skill's `<step-tracking>` block) from
+"belt-and-suspenders" to mandatory — a skill-prose change spanning multiple
+files, a separate, larger-blast-radius decision than this fix's scope.
+
 ## dispatches (#329)
 
 `dispatches` is optional structured telemetry for individual subagent dispatches

@@ -2678,3 +2678,72 @@ class TestTimingCoverageWarning:
         rec["outcome"]["pr_number"] = 627
         rec.pop("timing", None)
         assert timing_coverage_warning(rec) == []
+
+    def test_malformed_timing_key_no_crash(self):
+        from work_summary import timing_coverage_warning
+        rec = _valid_record()
+        rec["outcome"]["pr_number"] = 627
+        rec["timing"] = "not-an-object"
+        assert timing_coverage_warning(rec) == []
+
+
+class TestTimingEndToEnd:
+    """Task 6: the whole chain in one CLI invocation, not just units."""
+
+    def test_full_chain_complete_history_plus_pr_no_stale_warning(self, tmp_path, capsys):
+        import subprocess
+        proj_root = tmp_path / "demo"
+        proj_root.mkdir()
+        _write_history(proj_root, "demo", 589, _history_events(589))
+        rec = _valid_record()
+        rec["issue"]["number"] = 589
+        rec["usage"] = {"input_tokens": 100, "output_tokens": 50,
+                         "cost_estimate_usd": 0.01, "wall_clock_s": None,
+                         "model_mix": None, "capture_status": "captured"}
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        store = tmp_path / "store.jsonl"
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(proj_root), "--store", str(store), "--json"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        # timing auto-embedded, complete
+        assert out["timing"]["status"] == "complete"
+        # wall_clock_s derived from it (complete-gated)
+        assert out["usage"]["wall_clock_s"] == 1800
+        # status=complete -> no coverage warning on stderr
+        assert "advisory (#589)" not in r.stderr
+        assert store.exists() and store.read_text().strip()
+
+    def test_full_chain_partial_history_plus_pr_warns(self, tmp_path):
+        import subprocess
+        proj_root = tmp_path / "demo"
+        proj_root.mkdir()
+        # only step 8 (mid-workflow), no terminal step -> partial, not complete
+        _write_history(proj_root, "demo", 589, [
+            {"schema_version": 1, "project": "demo", "workflow": "wf2", "step": "8",
+             "step_title": "Implementation", "issue": 589, "session_id": "s",
+             "entered_at": "2026-07-23T18:00:00Z"},
+            {"schema_version": 1, "project": "demo", "workflow": "wf2", "step": "8",
+             "step_title": "Implementation done", "issue": 589, "session_id": "s",
+             "entered_at": "2026-07-23T18:10:00Z"},
+        ])
+        rec = _valid_record()
+        rec["issue"]["number"] = 589
+        rec["usage"] = {"input_tokens": 100, "output_tokens": 50,
+                         "cost_estimate_usd": 0.01, "wall_clock_s": None,
+                         "model_mix": None, "capture_status": "captured"}
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        store = tmp_path / "store.jsonl"
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(proj_root), "--store", str(store), "--json"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        assert out["timing"]["status"] == "partial"
+        assert out["usage"]["wall_clock_s"] is None  # never derived from partial
+        assert "advisory (#589)" in r.stderr and "partial" in r.stderr
