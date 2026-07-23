@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HD2.0 herdr executor qualification — compatibility manifest (#615, NO-GO)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-23 15:01 MDT</div>
+<h1>HD2.0 herdr executor qualification — compatibility manifest (#615, NO-GO)</h1>
+
+</header>
+<main>
+<h1>#615 (HD2.0) — herdr executor qualification gate — compatibility manifest</h1>
+<p>Isolated pinned-binary qualification per Phase B.0 (plan §2.1b/§4.4). No runtime code (HD2.2 scope) — probes + manifest only. <strong>Verdict: NO-GO.</strong> Per AC3 and epic #621&#x27;s own owner-baked-in decision (&quot;HD2.0 NO-GO verdict stops this epic&quot;), this result stops epic #621 — recorded on the epic, not softened.</p>
+<h2>Compatibility manifest (AC1)</h2>
+<table>
+<thead><tr><th>Field</th><th>Value</th></tr></thead>
+<tbody>
+<tr><td>Binary version</td><td><code>herdr 0.7.5</code></td></tr>
+<tr><td>Protocol version</td><td><code>17</code></td></tr>
+<tr><td>Schema digest (sha256 of <code>herdr api schema --json</code> stdout)</td><td><code>1ef4eb9ec655cb0c89726895f437d8654bdde13a22e591fda06a9015d03d88c7</code></td></tr>
+<tr><td>Required methods (socket API surface, full set)</td><td>89 methods across <code>agent.*</code>, <code>client.window_title.*</code>, <code>events.*</code>, <code>integration.*</code>, <code>layout.*</code>, <code>notification.*</code>, <code>pane.*</code>, <code>plugin.*</code>, <code>popup.*</code>, <code>server.*</code>, <code>session.*</code>, <code>tab.*</code>, <code>workspace.*</code>, <code>worktree.*</code> — full enumeration in <code>herdr api schema --json</code>; anti-drift anchor per plan §1 (&quot;the installed binary prints its own versioned protocol schema... the anti-drift anchor any integration should pin against&quot;)</td></tr>
+<tr><td>Config invariants required for future executor sessions (HD2.2, not yet wired — recorded here for that implementer)</td><td><code>resume_agents_on_restore=false</code>, <code>manifest_check=false</code>, <code>pane_history=false</code></td></tr>
+</tbody>
+</table>
+<p>Socket framing (confirmed live, relevant to any future client): JSON request/response, newline-delimited, <strong>one request per connection</strong> — a second <code>send</code> on an already-answered connection gets <code>BrokenPipeError</code>. <code>events.subscribe</code> is the one method meant to keep its connection open afterward for the push stream (see #608&#x27;s manifest for the full reconnect finding).</p>
+<h2>AC2 — Red-first probes</h2>
+<h3>Env-injection: <strong>VERIFIED</strong> (citing 2026-07-23 filing evidence + a fresh live re-confirmation this run)</h3>
+<p><code>pane split --pane &lt;id&gt; --direction right --env KEY=VALUE</code> genuinely injects a real environment variable into the launched pane&#x27;s shell process — re-confirmed live:</p>
+<pre><code>herdr pane split --pane w1:pT --direction right --env HD2_ENV_PROBE=confirmed-live --no-focus
+→ new pane w1:pV
+(inside w1:pV) $ echo HD2_ENV_PROBE=[$HD2_ENV_PROBE]
+HD2_ENV_PROBE=[confirmed-live]</code></pre>
+<h3>Argv-as-initial-process spawn for a generic (non-agent) pane: <strong>NO-GO — fresh live probe</strong></h3>
+<p><strong>Structural finding (from every creation-time CLI surface):</strong> <code>pane split</code>, <code>tab create</code>, and <code>workspace create</code> accept only <code>--cwd</code>/<code>--env</code>/<code>--label</code>/<code>--focus</code> — none accepts an argv/command override. Every new pane&#x27;s initial process is always the configured default shell (<code>$SHELL</code>/<code>/bin/sh</code>). The only two &quot;run a command&quot; mechanisms are <code>pane run &lt;PANE_ID&gt; &lt;COMMAND&gt;...</code> (generic) and <code>agent start --kind &lt;fixed-enum&gt; --pane &lt;ID&gt;</code> (agent-kind-scoped, already proven live for #608 AC3) — <strong>both explicitly require an existing pane already at its interactive shell prompt</strong> (<code>agent start --help</code>: &quot;The pane must be at its interactive shell prompt&quot;). Neither is a creation-time argv substitution.</p>
+<p><strong>Empirical confirmation — this pane&#x27;s own scrollback, read directly after <code>pane run</code>:</strong></p>
+<pre><code>rocky00717@claude-code:~/rawgentic$ touch /tmp/.../argv-test-marker.txt
+rocky00717@claude-code:~/rawgentic$</code></pre>
+<p>The command appears as literal typed text at an already-live shell prompt, followed by the prompt reappearing — this is keystroke-style text injection into a persistent shell process, <strong>not</strong> a replacement of the pane&#x27;s controlling/initial process. <code>herdr pane process-info</code> confirms the same <code>shell_pid</code> (bash) before and after the command runs.</p>
+<p>This is the exact behavior the plan flagged as the risk for 0.7.4&#x27;s <code>pane run</code> (&quot;text+Enter&quot;), now confirmed unchanged on the currently pinned 0.7.5. Per plan §2.1b&#x27;s F7-equivalent rule (&quot;If argv-as-initial-process spawn is unavailable, executor adoption STOPS — text injection (<code>pane run</code>) is not an acceptable substitute&quot;), this is a hard NO-GO on the one required capability Phase B&#x27;s TerminalRuntime seam depends on for a clean <code>start(argv, env, cwd, label)</code> primitive.</p>
+<h2>AC3 — Gate outcome</h2>
+<p><strong>NO-GO.</strong> Per the issue&#x27;s own AC3 and epic #621&#x27;s owner-baked-in decision, this STOPS epic #621 (the herdr executor runtime, Phase B) — HD2.1 (<code>TerminalRuntime</code> seam extraction) and HD2.2 (herdr runtime impl) do not proceed on the current 0.7.5 binary. Not softened: the env-injection half being verified does not offset the missing argv-spawn primitive, which the plan treats as the harder, non-negotiable requirement.</p>
+<p>Nothing here blocks HD1 (console qualification, #608 and its children) — HD1 is explicitly independent of the executor-runtime swap per plan §4.3&#x27;s sequencing table (&quot;HD1 console — independent of engine work&quot;). This NO-GO is scoped to epic #621 only.</p>
+<h2>What was NOT checked</h2>
+<ul>
+<li>Whether a future herdr release adds an explicit argv-as-initial-process flag (out of scope —</li>
+</ul>
+<p>  this qualifies the currently pinned 0.7.5 binary only; re-qualification is required on any   version bump per the plan&#x27;s own anti-drift anchor).</p>
+<ul>
+<li>Any HD2.2 runtime-implementation work — explicitly out of this issue&#x27;s scope.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-07-23 15:01 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
