@@ -102,6 +102,22 @@ def test_both_themes_and_reduced_motion():
     assert "prefers-reduced-motion" in text
 
 
+def test_theme_query_param_forces_initial_theme():
+    """#535: a `?theme=light|dark` URL query param must force the initial
+    data-theme attribute (before the first render), so a headless capture
+    script can force each theme without a custom Playwright library script —
+    the bare `npx playwright screenshot` CLI has no page.evaluate hook."""
+    text = _html()
+    assert "URLSearchParams(location.search)" in text
+    assert ".get('theme')" in text or '.get("theme")' in text
+    # the read must happen before the bootstrap render() call, not after
+    param_idx = text.index("URLSearchParams(location.search)")
+    render_idx = text.rindex("\nrender();")
+    assert param_idx < render_idx, (
+        "theme query-param read must run before the bootstrap render() call"
+    )
+
+
 def test_font_license_attribution_present():
     """Vendored OFL fonts (IBM Plex, Big Shoulders) must carry attribution."""
     text = _html()
