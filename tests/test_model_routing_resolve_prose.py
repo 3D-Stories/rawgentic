@@ -103,3 +103,13 @@ def test_executor_contract_shipped_into_wf2_corpus():
     norm = _norm(skill_corpus("implement-feature"))
     assert "Executor-dispatch contract (#470) — the PRIMARY tier." in norm
     assert "An executor seat is never a gate bypass" in norm
+
+
+def test_agent_definitions_carry_architecture_self_check():
+    """#474: both bundled legacy agent definitions carry the first-instruction architecture
+    SELF-CHECK (the interim Agent-side control while the mechanical interceptor is #606)."""
+    for name in ("rawgentic-implementer", "rawgentic-reviewer"):
+        body = _norm((REPO / "agents" / f"{name}.md").read_text(encoding="utf-8"))
+        assert ("ARCHITECTURE SELF-CHECK (#474): before any other work, walk up from your "
+                "working directory to find `.rawgentic_workspace.json`") in body, name
+        assert 'unless that file exists, is readable, and its top-level `defaultArchitecture` is exactly `"legacy"`' in body, name
