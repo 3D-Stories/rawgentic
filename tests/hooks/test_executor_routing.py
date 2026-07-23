@@ -2760,6 +2760,8 @@ def test_cli_chokepoint_refuses_dispatch_after_run_closed(tmp_path, capsys):
     # #555 AC2: once the ledger is run_closed, a NEW dispatch is refused at the choke-point
     # (before any spawn), exit 4. Uses close-run to close, then dispatches.
     ws, repo = _analysis_project(tmp_path)
+    # #474: declare first (close-run no longer seeds an undeclared run)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
     assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
     capsys.readouterr()
     a = _dispatch_args(ws)
@@ -2774,6 +2776,9 @@ def test_cli_chokepoint_refuses_keyless_dispatch(tmp_path, capsys):
     # #555 AC2 (8a F2): a dispatch with no correlation_id would be an uninstrumented spawn (no
     # ledger record) — the choke-point refuses it (exit 2) rather than spawning by convention.
     ws, repo = _analysis_project(tmp_path)
+    # #474: declare first so the keyless refusal (not run_not_declared) is what fires
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
     a = _dispatch_args(ws, cid=None)
     a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
     rc = er._do_dispatch(a)
@@ -2786,8 +2791,10 @@ def test_cli_chokepoint_refuses_keyless_dispatch(tmp_path, capsys):
 
 def test_cli_close_run_then_double_close_refused(tmp_path, capsys):
     ws, _ = _analysis_project(tmp_path)
+    # #474: declare first (close-run no longer seeds)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
     assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
-    assert json.loads(capsys.readouterr().out)["run_closed"] is True
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["run_closed"] is True
     rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
     assert rc == er.EXIT_MALFORMED
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "ledger_refused"
@@ -3005,3 +3012,173 @@ def test_legacy_rollback_target_definitions_exist():
         assert p.is_file(), f"rollback target missing: {p}"
         head = p.read_text(encoding="utf-8").split("---")
         assert len(head) >= 3 and "name:" in head[1], f"frontmatter malformed: {p}"
+
+
+# --- #474 T3: begin-run + entry-point architecture enforcement ---------------------------------
+
+def _begin(ws, run_id="run1"):
+    return er.main(["begin-run", "--run-id", run_id, "--workspace", ws, "--project", "rawgentic"])
+
+
+def test_cli_begin_run_declares_executor(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    out = json.loads(capsys.readouterr().out)
+    assert out["run_id"] == "run1" and out["architecture"] == "executor"
+    st = ledger.ExpectedCallLedger(_run_dir(repo), "run1").read()
+    assert st.architecture == "executor" and st.initial_digest
+
+
+def test_cli_begin_run_refuses_under_legacy(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    raw = json.loads(Path(ws).read_text(encoding="utf-8"))
+    raw["defaultArchitecture"] = "legacy"
+    raw["projects"][0].pop("executorRouting")  # avoid the mixed-config refusal masking this one
+    Path(ws).write_text(json.dumps(raw), encoding="utf-8")
+    rc = _begin(ws)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "legacy_architecture_begin_refused"
+    assert not (_run_dir(repo) / "expected-calls.jsonl").exists()  # nothing written
+
+
+def test_cli_begin_run_idempotent_same_digest(tmp_path, capsys):
+    ws, _ = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    assert _begin(ws) == er.EXIT_OK  # same (architecture, config_digest) → benign noop
+    out = json.loads(capsys.readouterr().out)
+    assert out.get("already_declared") is True
+
+
+def test_cli_begin_run_digest_mismatch_refused(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    lg = ledger.ExpectedCallLedger(rd, "run1")
+    lg.append_initial("sha256:DIFFERENT", architecture="executor")
+    rc = _begin(ws)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "begin_run_digest_conflict"
+
+
+def test_cli_dispatch_requires_declaration(tmp_path, capsys):
+    # #474: the lazy seed is GONE — dispatch on an undeclared run refuses run_not_declared
+    ws, repo = _analysis_project(tmp_path)
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_not_declared"
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    assert lg.read().initial_digest is None  # consume-never-seed
+
+
+def test_cli_dispatch_refuses_legacy_pinned_ledger(tmp_path, capsys):
+    # guard (d) ledger half: an executor dispatch against a legacy-declared run is mixed — refuse
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="legacy")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"
+
+
+def test_cli_dispatch_none_architecture_ledger_proceeds(tmp_path, capsys):
+    # pre-flip in-flight run (initial exists, no architecture) keeps dispatching (bounded compat)
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text(
+        json.dumps({"kind": "initial", "run_id": "run1", "initial_digest": "sha256:pre"}) + "\n",
+        encoding="utf-8")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    # proceeds past the declaration gate: whatever the (stubless) dispatch fails on later, it is
+    # NOT the declaration/mixing refusals
+    assert out.get("error", {}).get("code") not in ("run_not_declared", "mixed_architecture_run_refused")
+    assert rc != er.EXIT_ENFORCEMENT or out["error"]["code"] not in (
+        "run_not_declared", "mixed_architecture_run_refused")
+
+
+def test_cli_dispatch_refuses_after_midrun_rollback(tmp_path, capsys):
+    # mid-run flip: declared-executor run + workspace edited to legacy → next dispatch refuses
+    # LOUD at the config level (legacy architecture has no executor seats; exit 2)
+    ws, repo = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    raw = json.loads(Path(ws).read_text(encoding="utf-8"))
+    raw["defaultArchitecture"] = "legacy"
+    raw["projects"][0].pop("executorRouting")
+    Path(ws).write_text(json.dumps(raw), encoding="utf-8")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED and "inherit" in out["error"]["message"]
+
+
+def test_cli_recover_refuses_under_legacy_workspace(tmp_path, capsys):
+    # rollback stops recovery relaunches too ("lever takes effect" on every spawn path)
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    raw = json.loads(Path(ws).read_text(encoding="utf-8"))
+    raw["defaultArchitecture"] = "legacy"
+    raw["projects"][0].pop("executorRouting")
+    Path(ws).write_text(json.dumps(raw), encoding="utf-8")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "legacy_architecture_recover_refused"
+
+
+def test_cli_recover_refuses_legacy_pinned_ledger(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="legacy")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"
+
+
+def test_cli_recover_refuses_corrupt_ledger_prelaunch(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text("{corrupt\n", encoding="utf-8")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "ledger_refused"
+
+
+def test_cli_close_run_requires_declaration(tmp_path, capsys):
+    # #474: the zero-dispatch close seed is GONE — closing a never-declared run refuses
+    ws, _ = _analysis_project(tmp_path)
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_not_declared"
+
+
+def test_cli_close_run_none_architecture_proceeds(tmp_path, capsys):
+    # pre-flip in-flight run closes fine (advisory)
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text(
+        json.dumps({"kind": "initial", "run_id": "run1", "initial_digest": "sha256:pre"}) + "\n",
+        encoding="utf-8")
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_OK and out["run_closed"] is True
+
+
+def test_cli_close_run_refuses_legacy_pinned_ledger(tmp_path, capsys):
+    # a legacy-in-ledger state is unreachable via begin-run — defended against hand-crafted files
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="legacy")
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"

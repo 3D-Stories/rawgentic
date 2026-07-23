@@ -2318,14 +2318,25 @@ def _do_dispatch(args) -> int:
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
-        if led.read().initial_digest is None:
-            try:
-                led.append_initial(snap.config_digest, architecture="executor")
-            except pe.ledger.LedgerError:
-                # a concurrent first dispatch seeded the same initial_digest — benign
-                if led.read().initial_digest is None:
-                    raise
-        if led.is_closed():
+        state = led.read()
+        # #474: dispatch CONSUMES the run declaration, never seeds it (the pre-flip lazy seed is
+        # gone — begin-run is the one producer). An undeclared run refuses; a pre-3.93 initial
+        # (architecture None) proceeds with an advisory (bounded compat — every ≤3.92 ledger is
+        # an executor run's by construction); a legacy-pinned ledger is a mixed run — refuse.
+        if state.initial_digest is None:
+            return _emit(_err(EXIT_ENFORCEMENT, "run_not_declared",
+                              f"run {args.run_id!r} has no architecture declaration — run "
+                              f"`begin-run --run-id {args.run_id}` first (#474)",
+                              retryable=False, correlation_id=args.correlation_id))
+        if state.architecture == "legacy":
+            return _emit(_err(EXIT_ENFORCEMENT, "mixed_architecture_run_refused",
+                              f"run {args.run_id!r} is pinned architecture 'legacy' — executor "
+                              f"dispatch into a legacy run is a mixed run (#474)",
+                              retryable=False, correlation_id=args.correlation_id))
+        if state.architecture is None:
+            print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
+                  f"treated as executor (bounded compat, #474)", file=sys.stderr)
+        if state.closed:
             return _emit(_err(EXIT_ENFORCEMENT, "run_closed_dispatch_refused",
                               f"run {args.run_id!r} ledger is run_closed — new dispatch refused (#555)",
                               retryable=False, correlation_id=args.correlation_id))
@@ -2336,7 +2347,9 @@ def _do_dispatch(args) -> int:
             return _emit(_err(EXIT_MALFORMED, "correlation_id_required",
                               "dispatch requires --correlation-id (the ledger/reconcile join key)",
                               retryable=False, correlation_id=None))
-        led.append_expected(args.seat, args.correlation_id)  # append-before-dispatch (dup → fail closed)
+        # append-before-dispatch (dup → fail closed); the architecture assertion re-checks the
+        # pin UNDER the same flock that appends (#474 — no read-then-append window)
+        led.append_expected(args.seat, args.correlation_id, expected_architecture="executor")
     except pe.ledger.LedgerError as e:
         return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused", str(e), retryable=False,
                           correlation_id=args.correlation_id))
@@ -2408,6 +2421,40 @@ def _do_recover_run(args) -> int:
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
                           correlation_id=args.correlation_id))
+    # #474: the architecture gate runs BEFORE supervisor construction — rollback stops recovery
+    # relaunches too ("lever takes effect" on every spawn path). Workspace architecture must be
+    # executor; the ledger pin must be executor (or a pre-3.93 None on a VALID existing initial —
+    # an absent/deleted/corrupt/symlinked ledger refuses pre-launch, never conflated with compat).
+    try:
+        arch = resolve_architecture(args.workspace)
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    if arch != "executor":
+        return _emit(_err(EXIT_ENFORCEMENT, "legacy_architecture_recover_refused",
+                          "legacy architecture — executor recovery refused; the joint rollback "
+                          "stops recovery relaunches too (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
+    run_dir_gate = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        gate_state = pe.ledger.ExpectedCallLedger(run_dir_gate, args.run_id).read()
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused",
+                          f"recover-run: ledger unreadable/invalid — refusing before any launch "
+                          f"({e})", retryable=False, correlation_id=args.correlation_id))
+    if gate_state.initial_digest is None:
+        return _emit(_err(EXIT_ENFORCEMENT, "run_not_declared",
+                          f"run {args.run_id!r} has no valid architecture declaration — recovery "
+                          f"refused before launch (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
+    if gate_state.architecture == "legacy":
+        return _emit(_err(EXIT_ENFORCEMENT, "mixed_architecture_run_refused",
+                          f"run {args.run_id!r} is pinned architecture 'legacy' — executor "
+                          f"recovery into a legacy run is a mixed run (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
+    if gate_state.architecture is None:
+        print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
+              f"treated as executor (bounded compat, #474)", file=sys.stderr)
     from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
     from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
     base = Path(repo_root)
@@ -2603,16 +2650,84 @@ def _do_close_run(args) -> int:
     except pe.routing.RoutingError as e:
         return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
     try:
-        # a run closed with ZERO dispatches never seeded its initial record — seed it (the first
-        # record MUST be 'initial') so the closed ledger is well-formed and reconcile-readable.
-        if led.read().initial_digest is None:
-            led.append_initial(snap.config_digest, architecture="executor")
+        # #474: close-run CONSUMES the run declaration exactly like dispatch — the zero-dispatch
+        # close seed is gone (closing a never-declared run is meaningless; begin-run declares).
+        state = led.read()
+        if state.initial_digest is None:
+            return _emit(_err(EXIT_ENFORCEMENT, "run_not_declared",
+                              f"run {args.run_id!r} has no architecture declaration — nothing to "
+                              f"close; `begin-run` declares a run (#474)", retryable=False))
+        if state.architecture == "legacy":
+            return _emit(_err(EXIT_ENFORCEMENT, "mixed_architecture_run_refused",
+                              f"run {args.run_id!r} ledger is pinned 'legacy' — an unreachable "
+                              f"state (legacy runs write no ledger, #474); refusing to close",
+                              retryable=False))
+        if state.architecture is None:
+            print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
+                  f"treated as executor (bounded compat, #474)", file=sys.stderr)
         led.append_run_closed()
     except pe.ledger.LedgerError as e:
         return _emit(_err(EXIT_MALFORMED, "ledger_refused", str(e), retryable=False))
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False))
     return _emit({"run_id": args.run_id, "run_closed": True, "exit": EXIT_OK})
+
+
+def _do_begin_run(args) -> int:
+    """#474: the run-start architecture declaration — the ONE producer of the ledger ``initial``
+    record. Executor architecture only (a legacy run writes no ledger; its declaration is the
+    run-record + session notes). Idempotence is keyed on BOTH (architecture, config_digest):
+    a matching duplicate is a benign noop; a digest mismatch is a declared-state conflict."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        arch = resolve_architecture(args.workspace)
+        repo_root = resolve_repo_root(args.workspace, args.project)
+        snap = resolve_table(repo_root, pe.routing).snapshot
+        paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+    if arch != "executor":
+        return _emit(_err(EXIT_ENFORCEMENT, "legacy_architecture_begin_refused",
+                          "legacy architecture — executor run machinery unused; legacy runs are "
+                          "declared in session notes + the run-record architecture field (#474)",
+                          retryable=False))
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
+        state = led.read()
+        if state.initial_digest is not None:
+            if state.architecture in ("executor", None) and state.initial_digest == snap.config_digest:
+                return _emit({"run_id": args.run_id, "architecture": "executor",
+                              "already_declared": True, "exit": EXIT_OK})
+            return _emit(_err(EXIT_ENFORCEMENT, "begin_run_digest_conflict",
+                              f"run {args.run_id!r} already declared (architecture="
+                              f"{state.architecture!r}, digest {state.initial_digest!r}) — "
+                              f"conflicts with the current config digest {snap.config_digest!r}; "
+                              f"a routing-table change mid-run is a declared-state conflict (#474)",
+                              retryable=False))
+        try:
+            led.append_initial(snap.config_digest, architecture="executor")
+        except pe.ledger.LedgerError:
+            # a concurrent begin-run seeded it — benign iff it seeded the SAME declaration
+            state = led.read()
+            if state.initial_digest != snap.config_digest or state.architecture not in ("executor", None):
+                raise
+            return _emit({"run_id": args.run_id, "architecture": "executor",
+                          "already_declared": True, "exit": EXIT_OK})
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False))
+    return _emit({"run_id": args.run_id, "architecture": "executor",
+                  "config_digest": snap.config_digest, "exit": EXIT_OK})
 
 
 # reconcile-verb anomaly buckets that a PROVISIONAL (mid-run) check tolerates as in-flight
@@ -2756,6 +2871,14 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--validate-only", action="store_true", dest="validate_only")
     ap.add_argument("--reset-to-default", action="store_true", dest="reset_to_default")
     ap.set_defaults(fn=_do_apply)
+
+    br = sub.add_parser("begin-run",
+                        help="#474: declare the run's architecture at run start (the one "
+                             "producer of the ledger initial record; executor only)")
+    br.add_argument("--run-id", required=True, dest="run_id")
+    br.add_argument("--workspace", required=True)
+    br.add_argument("--project", required=True)
+    br.set_defaults(fn=_do_begin_run)
 
     cr = sub.add_parser("close-run", help="#555: append the terminal run_closed ledger marker")
     cr.add_argument("--run-id", required=True, dest="run_id")
