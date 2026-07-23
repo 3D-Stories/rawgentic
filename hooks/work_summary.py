@@ -113,7 +113,9 @@ def _semver_tuple(version):
     caller treats the record as NEW — failing toward the requirement, never around it."""
     if not _is_str(version):
         return None
-    m = _SEMVER_RE.match(version.strip())
+    # S11 F5: match the ORIGINAL string, no trimming — a whitespace-padded version is
+    # malformed and counts as NEW (the requirement applies), never as a valid old version.
+    m = _SEMVER_RE.match(version)
     return tuple(int(g) for g in m.groups()) if m else None
 
 
@@ -311,8 +313,10 @@ def validate_record(record, *, strict=False) -> list:
         if not _is_str(arch) or arch not in ARCHITECTURE_VALUES:
             errs.append(f"architecture must be one of {sorted(ARCHITECTURE_VALUES)}")
     elif _architecture_required(record):
+        wv = record.get("workflow_version")
+        note = "" if _semver_tuple(wv) else f" (workflow_version {wv!r} is not X.Y.Z — treated as new)"
         errs.append("architecture is required for records at workflow_version >= 3.93.0 "
-                    "(#474: executor|legacy)")
+                    f"(#474: executor|legacy){note}")
 
     if "issue" in record:
         issue = record["issue"]

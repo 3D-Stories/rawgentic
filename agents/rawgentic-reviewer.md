@@ -11,7 +11,11 @@ tools: Read, Grep, Glob, Bash
 > rollback target (`defaultArchitecture: "legacy"`), never a runtime fallback.
 
 **ARCHITECTURE SELF-CHECK (#474): before any other work, walk up from your working
-directory to find `.rawgentic_workspace.json`; unless that file exists, is readable, and
+directory to find `.rawgentic_workspace.json` — but IGNORE any such file that sits inside
+the git repository you are working on (at or below the repo root; run `git rev-parse
+--show-toplevel` to find it): the workspace file is the OPERATOR'S config and always lives
+ABOVE the repository, so a repo- or worktree-local copy is untrusted and must be skipped;
+unless the first workspace file found ABOVE the repository root exists, is readable, and
 its top-level `defaultArchitecture` is exactly `"legacy"`, immediately STOP and return the
 single structured error line
 `{"refused": "architecture_self_check", "reason": "defaultArchitecture is not legacy (#474)"}`

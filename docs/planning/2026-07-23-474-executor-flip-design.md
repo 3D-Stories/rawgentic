@@ -204,31 +204,33 @@ python3 hooks/executor_routing_lib.py begin-run --run-id <id> \
   Agent-tool dispatch inside an executor run, independent of any hook. Advisory by design: the
   DISPATCH stream has no run-ID join key, so sequential legacy+executor runs of one issue can
   false-positive (named; run-keyed telemetry is #606 AC3). Rides the T6 run-record work.
-- **DISPATCH audit vocab UNCHANGED (r2 disposition of A2 — declined, root cause closed
-  elsewhere):** with the PreToolUse gate (§2.2b) a `resolution=fallback` line is UNPRODUCIBLE in
-  an executor-architecture run (the dispatch is denied before the agent exists), and the
-  run-record `architecture` field gives consumers the per-run ground truth. Adding a seventh
-  DISPATCH field would churn the pinned regex, validator, and every consumer for a state the
-  guard makes unreachable.
+- **DISPATCH audit vocab UNCHANGED (A2 disposition, r6-updated after the descope):** the
+  `resolution=primary|fallback|generic` tokens stay (schema'd in run-records). With the
+  interceptor descoped to #606, a `fallback`/`generic` Agent-tool line inside an executor run
+  is DETECTABLE, not unreachable: the run-record `architecture` field + the Step-16 detective
+  warn above are the #474 mechanisms; prose conditioning + the agent self-check are the
+  preventive layers; mechanical unreachability arrives with #606. Adding a seventh DISPATCH
+  field would churn the pinned regex, validator, and every consumer for no #474 gain.
 
 ### 2.5 Rollback procedure (guard c) — documented + tested
 
 Documented in `docs/config-reference.md` (new `defaultArchitecture` entry) and the PR body:
 
-1. Owner + operator together set `"defaultArchitecture": "legacy"` at the top level of
+1. CLOSE (or `recover-run` + `close-run`) in-flight executor runs FIRST — after the edit,
+   `recover-run` refuses (the lever stops recovery too, §2.3), so the orderly recover+close
+   window is BEFORE the edit; runs left open stop loudly at their next dispatch/recovery.
+2. Owner + operator together set `"defaultArchitecture": "legacy"` at the top level of
    `.rawgentic_workspace.json`.
-2. Remove (or set to `"inherit"`) any per-project `executorRouting` seat modes that say
-   `"executor"` — a contradicting explicit mode is refused (§2.2), by design. Operationally:
-   CLOSE (or recover + close) any in-flight executor runs first — they stop loudly at their
-   next dispatch/recovery anyway (§2.3), but an orderly close keeps ledgers reconciled.
+3. Remove (or set to `"inherit"`) any per-project `executorRouting` seat modes that say
+   `"executor"` — a contradicting explicit mode is refused (§2.2), by design.
    **Migration preflight (r2, A6):** at flip time the LIVE workspace holds exactly one `executorRouting`
    block (rawgentic, all-executor — verified 2026-07-23) and zero explicit `"inherit"` modes, so
    no deployed config becomes malformed at upgrade; the config-reference entry carries a
    one-line preflight (`grep -n executorRouting .rawgentic_workspace.json` + fix guidance) for
    any future workspace.
-3. In-flight executor runs stop loudly at their next dispatch/recovery; restart as fresh legacy
-   runs. The bundled agents and legacy dispatch prose are in-tree and functional.
-4. Roll-forward is the same edit in reverse. Rollback anchor: pre-flip main
+4. Restart in-flight work as fresh legacy runs. The bundled agents and legacy dispatch prose
+   are in-tree and functional.
+5. Roll-forward is the same edit in reverse. Rollback anchor: pre-flip main
    `081fd163e7041220452fb3c219b01f219a2867a4` (v3.92.4) — reverting the #474 PR restores
    pre-flip defaults wholesale.
 

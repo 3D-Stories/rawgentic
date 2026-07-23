@@ -2476,3 +2476,9 @@ class TestArchitectureField:
         rec["architecture"] = "legacy"
         rec["dispatches"][0]["resolution"] = "fallback"
         assert architecture_dispatch_warnings(rec) == []
+
+    def test_whitespace_padded_version_is_malformed_treated_as_new(self):
+        from work_summary import validate_record
+        errs = validate_record(self._rec(version=" 3.92.4 "))
+        assert any("architecture" in e for e in errs)
+        assert any("not X.Y.Z" in e for e in errs)

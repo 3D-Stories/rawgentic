@@ -115,7 +115,9 @@ def test_agent_definitions_carry_architecture_self_check():
         body = _norm((REPO / "agents" / f"{name}.md").read_text(encoding="utf-8"))
         assert ("ARCHITECTURE SELF-CHECK (#474): before any other work, walk up from your "
                 "working directory to find `.rawgentic_workspace.json`") in body, name
-        assert 'unless that file exists, is readable, and its top-level `defaultArchitecture` is exactly `"legacy"`' in body, name
+        # S11 F4: repo-local workspace files are untrusted — the containment clause is pinned too
+        assert "IGNORE any such file that sits inside the git repository" in body, name
+        assert 'its top-level `defaultArchitecture` is exactly `"legacy"`' in body, name
 
 
 def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
@@ -126,8 +128,14 @@ def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
     for skill in ("implement-feature", "fix-bug"):
         for f in sorted((REPO / "skills" / skill).rglob("*.md")):
             paragraphs = re.split(r"\n\s*\n", f.read_text(encoding="utf-8"))
+            # S11: broader trigger set — any operative Agent-tool dispatch wording, not just
+            # the one literal phrase (R2-1: "Agent tool calls" and bare bundled-agent commands
+            # slipped the earlier single-phrase predicate)
+            triggers = ("via the Agent tool", "Agent tool calls",
+                        "Dispatch one `rawgentic:rawgentic-implementer`",
+                        "Dispatch ONE build-subagent** (`rawgentic:rawgentic-implementer`)")
             for para in paragraphs:
-                if "via the Agent tool" in para:
+                if any(trig in para for trig in triggers):
                     norm = _norm(para)
                     assert "LEGACY architecture" in norm, (
                         f"{f}: unconditioned Agent-tool dispatch instruction:\n{norm[:200]}")

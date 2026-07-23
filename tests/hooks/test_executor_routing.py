@@ -3256,3 +3256,40 @@ def test_cli_recover_single_workspace_read(tmp_path, capsys, monkeypatch):
     er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
     capsys.readouterr()
     assert len(opens) == 1, f"recover-run read the workspace {len(opens)} times"
+
+
+def test_cli_dispatch_refuses_run_digest_conflict(tmp_path, capsys):
+    # S11 F1: a routing-table change after begin-run is a declared-state conflict at CONSUME time
+    ws, repo = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    table = repo / "claude_docs" / "routing" / "phase-executor-table.json"
+    raw = json.loads(table.read_text(encoding="utf-8"))
+    raw["pools"]["claude"]["concurrency"] = raw["pools"]["claude"]["concurrency"] + 1
+    table.write_text(json.dumps(raw), encoding="utf-8")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_digest_conflict"
+
+
+def test_cli_recover_refuses_closed_ledger_at_preflight(tmp_path, capsys):
+    # S11 F5: run_closed refuses at the preflight, before supervisor construction
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    lg.append_run_closed()
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_closed_recover_refused"
+
+
+def test_cli_recover_refuses_run_digest_conflict(tmp_path, capsys):
+    # S11 R2-2: recovery consumes the declared epoch too
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:NOT-THE-TABLE", architecture="executor")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_digest_conflict"

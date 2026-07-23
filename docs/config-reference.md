@@ -372,9 +372,11 @@ to any project repo — and are set by `/rawgentic:setup`.
 
 **Since #474 the executor IS the dispatch architecture everywhere by default** — an absent
 key, an absent workspace, an unconfigured project all mean `executor`. A run is 100% executor
-or 100% legacy, never mixed: WF2/WF3 declare each run at Step 2 via
+or 100% legacy, never mixed: under the EXECUTOR architecture WF2/WF3 declare each run at Step 2 via
 `python3 hooks/executor_routing_lib.py begin-run --run-id <id> --workspace <ws> --project <n>`
-(the one producer of the run ledger's `initial` record), and every executor entry point
+(the one producer of the run ledger's `initial` record; begin-run is executor-only —
+under legacy it refuses, and a legacy run declares via session note + the run-record
+`architecture` field instead), and every executor entry point
 (`dispatch`, `recover-run`, `close-run`) consumes that pin — an undeclared run refuses
 (`run_not_declared`, exit 4), a mixed dispatch refuses (`mixed_architecture_run_refused`,
 exit 4). An executor failure follows the ERROR protocol; there is NO runtime fallback to the
@@ -383,12 +385,14 @@ run-record `architecture` field.
 
 **Rollback — a deliberate JOINT config change (owner + operator together), never automatic:**
 
-1. Set `"defaultArchitecture": "legacy"` at the top level of `.rawgentic_workspace.json`.
-2. Remove (or set to `"inherit"`) any per-project `executorRouting` seat modes saying
+1. Close (or `recover-run` + `close-run`) in-flight executor runs FIRST — after the
+   architecture edit, `recover-run` refuses (the lever stops recovery too), so the orderly
+   recover+close window is BEFORE the edit; runs left open simply stop loudly at their next
+   dispatch/recovery.
+2. Set `"defaultArchitecture": "legacy"` at the top level of `.rawgentic_workspace.json`.
+3. Remove (or set to `"inherit"`) any per-project `executorRouting` seat modes saying
    `"executor"` — a contradicting explicit mode is refused by design (the error names the
    seat). Preflight: `grep -n executorRouting .rawgentic_workspace.json`.
-3. Close (or `recover-run` + `close-run`) in-flight executor runs — they stop loudly at their
-   next dispatch/recovery anyway, but an orderly close keeps ledgers reconciled.
 4. New runs now resolve `inherit` (the Agent-tool path). The bundled agent definitions
    (`agents/rawgentic-implementer.md`, `agents/rawgentic-reviewer.md`) remain in-tree as the
    rollback target; their first-instruction architecture SELF-CHECK allows them to run only

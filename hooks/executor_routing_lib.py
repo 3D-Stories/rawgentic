@@ -1831,7 +1831,8 @@ def _emit(obj: dict) -> int:
 
 def _do_resolve(args) -> int:
     try:
-        action, reason = resolve_seat_action(args.seat, args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (S11 F4)
+        action, reason = resolve_seat_action_from_snapshot(args.seat, ws_snapshot, args.project)
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
     out = {"seat": args.seat, "action": action, "primary_model": None, "reason": reason, "exit": EXIT_OK}
@@ -1842,7 +1843,7 @@ def _do_resolve(args) -> int:
         except ImportError as e:
             return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
         try:
-            repo_root = resolve_repo_root(args.workspace, args.project)
+            repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
             rt = resolve_table(repo_root, pe.routing)
             targets = pe.routing.eligible_targets(args.seat, rt.snapshot)
             out["primary_model"] = targets[0]["model"] if targets else None
@@ -2356,6 +2357,16 @@ def _do_dispatch(args) -> int:
         if state.architecture is None:
             print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
                   f"treated as executor (bounded compat, #474)", file=sys.stderr)
+        # S11 F1: the run pinned its config epoch at declaration — a routing-table change
+        # mid-run must refuse (the begin-run idempotence rule enforced at CONSUME time too;
+        # otherwise dispatch would resolve targets from a snapshot the run never declared).
+        if state.initial_digest != snap.config_digest:
+            return _emit(_err(EXIT_ENFORCEMENT, "run_digest_conflict",
+                              f"run {args.run_id!r} declared config digest "
+                              f"{state.initial_digest!r} but the current snapshot is "
+                              f"{snap.config_digest!r} — a routing-table change mid-run is a "
+                              f"declared-state conflict (#474)", retryable=False,
+                              correlation_id=args.correlation_id))
         if state.closed:
             return _emit(_err(EXIT_ENFORCEMENT, "run_closed_dispatch_refused",
                               f"run {args.run_id!r} ledger is run_closed — new dispatch refused (#555)",
@@ -2472,6 +2483,20 @@ def _do_recover_run(args) -> int:
     if gate_state.architecture is None:
         print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
               f"treated as executor (bounded compat, #474)", file=sys.stderr)
+    if gate_state.closed:
+        # S11 F5: refuse a run_closed ledger AT the preflight, before supervisor construction —
+        # terminal state wins over any epoch comparison; recover_run's own refusal is the backstop.
+        return _emit(_err(EXIT_ENFORCEMENT, "run_closed_recover_refused",
+                          f"run {args.run_id!r} ledger is run_closed — recovery refused (#559)",
+                          retryable=False, correlation_id=args.correlation_id))
+    if gate_state.initial_digest != snap.config_digest:
+        # S11 R2-2: recovery must relaunch on the EPOCH the run declared — a routing-table
+        # change mid-run is a declared-state conflict at every consume site, recovery included.
+        return _emit(_err(EXIT_ENFORCEMENT, "run_digest_conflict",
+                          f"run {args.run_id!r} declared config digest "
+                          f"{gate_state.initial_digest!r} but the current snapshot is "
+                          f"{snap.config_digest!r} — recovery refused (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
     from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
     from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
     base = Path(repo_root)
