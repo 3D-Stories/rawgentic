@@ -84,11 +84,20 @@ between-sentinels slice is pure JSON).
 
 ## Regenerating the README snapshots
 
-Serve the file over localhost (browsers block `file:` in headless tooling), render at
-a 1440px-wide viewport, and take a **full-page** screenshot (not viewport-only — a
-1200px-tall viewport capture clips the sheet after ~6 stations and still passes CI) of
-the WF2 overview once per theme (the theme is forced
-by stamping `data-theme` on `<html>`):
+**Primary path (#535):** `skills/rev-diagram/scripts/snapshot.sh` — serves `docs/`
+locally, drives the pinned `npx playwright@1.61.1 screenshot --full-page` CLI at both
+themes (forced via the page's own `?theme=light|dark` URL query-param bootstrap, no
+custom Playwright script needed), writes the two fixed asset paths, then runs
+`pytest tests/test_workflow_diagram.py -q` and propagates its exit code. Requires a
+one-time host prerequisite if not already present: `npx playwright@1.61.1 install
+chromium`.
+
+**Manual fallback** (no Playwright/chromium on the host, or eyeballing a single ad-hoc
+capture): serve the file over localhost (browsers block `file:` in headless tooling),
+render at a 1440px-wide viewport, and take a **full-page** screenshot (not
+viewport-only — a 1200px-tall viewport capture clips the sheet after ~6 stations and
+still passes CI) of the WF2 overview once per theme (the theme is forced by stamping
+`data-theme` on `<html>`):
 
 ```
 python3 -m http.server 8478 --bind 127.0.0.1   # from a dir containing the html
@@ -98,7 +107,9 @@ python3 -m http.server 8478 --bind 127.0.0.1   # from a dir containing the html
 #   documentElement.setAttribute('data-theme','dark')   → screenshot docs/assets/workflow-diagram-dark.png
 ```
 
-Screenshot at device scale (2×) for crisp README rendering.
+Screenshot at device scale (2×) for crisp README rendering (the automated script ships
+at 1x — `npx playwright screenshot`'s CLI has no device-scale-factor flag; the manual
+fallback can still hit 2x via a real browser's devtools/context options).
 
 ## Design notes
 
