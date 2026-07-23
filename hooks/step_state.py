@@ -360,6 +360,33 @@ def cmd_read(args) -> int:
     return 0
 
 
+def read_history(state_dir: str, project: str, issue: int) -> "tuple[list, int] | None":
+    """#589: public read of a per-run history file — the ONE place that parses
+    it, reused by both `cmd_timing` and `work_summary._auto_embed_timing` (was
+    duplicated inline in both; Step-9 review caught the drift risk). Returns
+    `(events, skipped_lines)`, or `None` if the file doesn't exist / can't be
+    read (the caller decides what "no history" means for its own output shape;
+    this function never fabricates one)."""
+    events, skipped = [], 0
+    try:
+        with open(_history_path(state_dir, project, issue), encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    skipped += 1
+                    continue
+                if isinstance(ev, dict):
+                    events.append(ev)
+                else:
+                    skipped += 1
+    except OSError:
+        return None
+    return events, skipped
+
+
 def cmd_timing(args) -> int:
     """Print the #506 timing object computed from the per-run history file.
     Always returns 0 (fail-open telemetry): no/unreadable history prints the
@@ -382,24 +409,11 @@ def cmd_timing(args) -> int:
     if not state_dir:
         print(json.dumps(absent))
         return 0
-    events, skipped = [], 0
-    try:
-        with open(_history_path(state_dir, project, issue), encoding="utf-8") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    skipped += 1
-                    continue
-                if isinstance(ev, dict):
-                    events.append(ev)
-                else:
-                    skipped += 1
-    except OSError:
+    read = read_history(state_dir, project, issue)
+    if read is None:
         print(json.dumps(absent))
         return 0
+    events, skipped = read
     timing = compute_timing(events, idle_threshold_s=args.idle_threshold_s)
     timing["skipped_lines"] = skipped
     print(json.dumps(timing))

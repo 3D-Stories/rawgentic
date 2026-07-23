@@ -143,6 +143,42 @@ def architecture_dispatch_warnings(record) -> list:
                 f"executor-architecture run — possible Agent-tool dispatch in an executor run "
                 f"(false-positive possible across sequential runs of one issue)")
     return warns
+def _resolve_project_name(project_root: str, step_state_mod) -> "str | None":
+    """#589 (Step-9 review, both reviewers independently caught this): the
+    history writer (`step_state_post.py`'s `resolve_project`) keys off the
+    REGISTERED project name from `claude_docs/session_registry.jsonl` /
+    `.rawgentic_workspace.json`'s `name` field — NOT the directory basename.
+    Mirrors `_resolve_worker_models`'s walk-up-for-workspace-file lookup, but
+    returns the matched entry's own `name` field (closing the gap a
+    differently-named-than-its-directory project would hit); falls back to
+    the basename only when no workspace file / no matching entry is found."""
+    root = os.path.abspath(project_root)
+    basename = os.path.basename(root)
+    d = root
+    try:
+        for _ in range(5):
+            ws = os.path.join(d, ".rawgentic_workspace.json")
+            if os.path.isfile(ws):
+                with open(ws, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                for proj in data.get("projects", []):
+                    if not isinstance(proj, dict):
+                        continue
+                    ppath = str(proj.get("path", ""))
+                    if proj.get("name") == basename or os.path.basename(ppath.rstrip("/")) == basename:
+                        name = proj.get("name")
+                        basename = name if isinstance(name, str) and name else basename
+                        break
+                break
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    except (OSError, ValueError):
+        pass  # fall through to the basename below — fail-open, not fail-crash
+    return step_state_mod.sanitize_project(basename)
+
+
 def _auto_embed_timing(raw: dict, project_root: str) -> None:
     """#589 (Gap B): compute `timing` from the per-run history file and embed it
     when the incoming record LACKS the key entirely -- Step 16's own instructions
@@ -152,9 +188,16 @@ def _auto_embed_timing(raw: dict, project_root: str) -> None:
     This makes summarize compute it itself as a fallback, never a bypass -- the
     auto-computed object is still validated identically to a hand-supplied one,
     since this runs BEFORE validate_record. Never overwrites an orchestrator-
-    supplied `timing` key. Fails open (no mutation) on any resolution problem —
-    unresolvable issue number, missing history file, an unimportable step_state
-    module — mirroring step_state.py's own fail-open contract exactly."""
+    supplied `timing` key.
+
+    Step-9 review (both reviewers independently): when project+issue ARE
+    resolvable but no history exists (no state dir, no history file), this
+    must still embed an HONEST 'absent' object -- not leave the key unset --
+    exactly like `step_state.py timing`'s own CLI behavior (and exactly what
+    `docs/run-records.md` already documented), so `timing_coverage_warning`
+    can actually see and report it. Only a genuinely unresolvable
+    issue/project/step_state-import leaves the key untouched (the one case
+    with truly nothing to embed)."""
     if "timing" in raw:
         return
     issue = raw.get("issue")
@@ -168,30 +211,18 @@ def _auto_embed_timing(raw: dict, project_root: str) -> None:
         import step_state  # local import: optional dependency, fail-open if absent
     except ImportError:
         return
-    project = step_state.sanitize_project(os.path.basename(os.path.normpath(project_root)))
+    project = _resolve_project_name(project_root, step_state)
     if project is None:
         return
     state_dir = step_state.find_state_dir(project_root)
     if not state_dir:
+        raw["timing"] = step_state.compute_timing([])  # honest absent object
         return
-    history_path = step_state._history_path(state_dir, project, issue_no)  # pylint: disable=protected-access
-    events, skipped = [], 0
-    try:
-        with open(history_path, encoding="utf-8") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    skipped += 1
-                    continue
-                if isinstance(ev, dict):
-                    events.append(ev)
-                else:
-                    skipped += 1
-    except OSError:
+    read = step_state.read_history(state_dir, project, issue_no)
+    if read is None:
+        raw["timing"] = step_state.compute_timing([])  # honest absent object
         return
+    events, skipped = read
     timing = step_state.compute_timing(events)
     timing["skipped_lines"] = skipped
     raw["timing"] = timing
@@ -199,16 +230,25 @@ def _auto_embed_timing(raw: dict, project_root: str) -> None:
 
 def timing_coverage_warning(record) -> list:
     """#589: ADVISORY warning (never a validation error) when a full-lane run
-    (a real PR exists) has incomplete step-timing coverage. Widened to cover
-    BOTH 'absent' and 'partial' -- an absent-only check misses exactly the
-    'partial' case this bug's own live reproduction demonstrated."""
+    (a real PR exists) has incomplete step-timing coverage. Covers THREE cases
+    now (Step-9 review: the original absent/partial-only check missed the
+    'timing key entirely absent' case, which is exactly the reported bug's own
+    symptom): no `timing` key at all, `status == 'absent'`, `status ==
+    'partial'`."""
     warns = []
     outcome = record.get("outcome")
     pr_number = outcome.get("pr_number") if isinstance(outcome, dict) else None
     if pr_number is None:
         return warns
     timing = record.get("timing")
-    status = timing.get("status") if isinstance(timing, dict) else None
+    if timing is None:
+        warns.append(
+            f"advisory (#589): no `timing` key at all on a full-lane run "
+            f"(PR #{pr_number}) — per-step timing coverage is completely missing")
+        return warns
+    if not isinstance(timing, dict):
+        return warns  # malformed shape is validate_record's concern, not this one
+    status = timing.get("status")
     if status in ("absent", "partial"):
         warns.append(
             f"advisory (#589): timing.status={status!r} on a full-lane run "
@@ -225,7 +265,21 @@ def derive_wall_clock_s(record) -> "int | float | None":
     best-available proxy, gated conservatively per two independent Step-4
     reviews. Returns the value to use (never mutates); callers wire it in
     exactly where `worker_token_share` already does its post-validation
-    derived-field assignment. Never overwrites a real existing value."""
+    derived-field assignment. Never overwrites a real existing value.
+
+    Step-9 review (silent-failure-hunter, confirmed by reading
+    step_state.compute_timing's arithmetic directly: `total += dur` uses the
+    RAW, uncapped interval even across an idle-gap-flagged step): the
+    project+issue-keyed history file has no run/session boundary, so a LATER
+    rerun of the same issue can combine stale + current events into one
+    `total_s` that silently spans both runs' calendar gap. An idle-gap-flagged
+    step is the one signal already present on the timing object that such a
+    gap occurred (normal in-run step durations are minutes, not the 1800s
+    default threshold) -- withhold derivation rather than persist a
+    plausible-looking but potentially wildly-wrong number. (The full fix --
+    proper run/session-boundary tracking in step_state.py's own history model
+    -- is a separate, deeper change, named as a follow-up, not attempted here.)
+    """
     usage = record.get("usage")
     if not isinstance(usage, dict):
         return None
@@ -234,6 +288,10 @@ def derive_wall_clock_s(record) -> "int | float | None":
         return existing
     timing = record.get("timing")
     if not isinstance(timing, dict) or timing.get("status") != "complete":
+        return None
+    steps = timing.get("steps")
+    if isinstance(steps, list) and any(
+            isinstance(s, dict) and s.get("idle_gap") is True for s in steps):
         return None
     total = timing.get("total_s")
     if isinstance(total, bool) or not isinstance(total, (int, float)) or total < 0:

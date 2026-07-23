@@ -2547,7 +2547,10 @@ class TestAutoEmbedTimingReproduction:
         assert out["timing"]["status"] == "complete"
         assert out["timing"]["total_s"] == 1800  # 30 min between the 2 events
 
-    def test_no_history_file_stays_absent_no_crash(self, tmp_path):
+    def test_no_history_file_embeds_honest_absent_object(self, tmp_path):
+        """#589 Step-9 review: no history must still embed an HONEST 'absent'
+        object (matching step_state.py timing's own CLI behavior), not leave
+        the key unset — otherwise timing_coverage_warning can never see it."""
         import subprocess
         proj_root = tmp_path / "demo"
         proj_root.mkdir()
@@ -2561,7 +2564,52 @@ class TestAutoEmbedTimingReproduction:
              "--project-root", str(proj_root), "--no-persist", "--json"],
             capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
-        assert json.loads(r.stdout).get("timing") is None
+        timing = json.loads(r.stdout).get("timing")
+        assert timing is not None and timing["status"] == "absent"
+        assert timing["total_s"] is None and timing["steps"] == []
+
+    def test_no_state_dir_anywhere_embeds_absent_not_untouched(self, tmp_path):
+        """No .rawgentic_workspace.json anywhere up the tree AND no
+        pre-existing claude_docs/wal -- find_state_dir itself returns None.
+        Per the corrected design (Step-9 review) this STILL embeds an honest
+        absent object, exactly like the no-history-file case; it does NOT
+        leave the key untouched (there is no remaining "untouched" case once
+        issue/project/step_state-import all resolve)."""
+        from work_summary import _auto_embed_timing
+        rec = _valid_record()
+        rec["issue"]["number"] = 589
+        isolated = tmp_path / "no_workspace_anywhere"
+        isolated.mkdir()
+        _auto_embed_timing(rec, str(isolated))
+        assert rec["timing"]["status"] == "absent"
+
+    def test_project_name_resolved_via_workspace_not_just_basename(self, tmp_path):
+        """#589 Step-9 review (both reviewers independently): the directory
+        basename can differ from the registered project `name` — resolve via
+        .rawgentic_workspace.json when present, matching the history WRITER's
+        own project-name source. Mirrors the REAL topology: the workspace
+        marker + claude_docs/wal live at the WORKSPACE root; project_root is a
+        subdirectory (projects/<name>) — find_state_dir walks UP from
+        project_root to the marker's own directory, so the history fixture
+        must live there too, not under project_root itself."""
+        import subprocess
+        ws_root = tmp_path  # workspace root: marker + claude_docs/wal live here
+        proj_root = ws_root / "projects" / "some-other-dir-name"
+        proj_root.mkdir(parents=True)
+        (ws_root / ".rawgentic_workspace.json").write_text(json.dumps({"projects": [
+            {"name": "demo", "path": "./projects/some-other-dir-name", "active": True}]}),
+            encoding="utf-8")
+        _write_history(ws_root, "demo", 589, _history_events(589))
+        rec = _valid_record()
+        rec["issue"]["number"] = 589
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(proj_root), "--no-persist", "--json"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["timing"]["status"] == "complete"
 
     def test_orchestrator_supplied_timing_is_never_overwritten(self, tmp_path):
         import subprocess
@@ -2640,6 +2688,34 @@ class TestDeriveWallClockS:
         rec["timing"]["total_s"] = -5
         assert derive_wall_clock_s(rec) is None
 
+    def test_withholds_when_any_step_has_idle_gap(self):
+        """#589 Step-9 review (silent-failure-hunter, confirmed by reading
+        compute_timing's own arithmetic: `total += dur` is uncapped even
+        across an idle-gap-flagged interval): a project+issue-keyed history
+        file has no run boundary, so a stale rerun could inflate total_s
+        across a multi-month gap and still read 'complete'. An idle_gap-
+        flagged step is the signal already available to withhold derivation
+        rather than persist a plausible-looking but possibly-wrong number."""
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=None)
+        rec["timing"] = {
+            "status": "complete", "total_s": 99999999,
+            "steps": [
+                {"step": "1", "duration_s": 30, "idle_gap": False},
+                {"step": "16", "duration_s": 1800, "idle_gap": True},
+            ],
+        }
+        assert derive_wall_clock_s(rec) is None
+
+    def test_fills_when_no_idle_gap_present(self):
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=None)
+        rec["timing"] = {
+            "status": "complete", "total_s": 1800,
+            "steps": [{"step": "1", "duration_s": 1800, "idle_gap": False}],
+        }
+        assert derive_wall_clock_s(rec) == 1800
+
 
 class TestTimingCoverageWarning:
     def test_warns_on_pr_plus_absent(self):
@@ -2672,12 +2748,17 @@ class TestTimingCoverageWarning:
         rec["timing"] = {"status": "complete"}
         assert timing_coverage_warning(rec) == []
 
-    def test_silent_when_no_timing_key(self):
+    def test_warns_when_timing_key_entirely_missing(self):
+        """#589 Step-9 review: the ORIGINAL bug's own reported symptom is a
+        missing `timing` key entirely — this must warn on a full-lane run,
+        not stay silent (the pre-review version of this test asserted the
+        opposite; that was itself the gap the reviewers caught)."""
         from work_summary import timing_coverage_warning
         rec = _valid_record()
         rec["outcome"]["pr_number"] = 627
         rec.pop("timing", None)
-        assert timing_coverage_warning(rec) == []
+        warns = timing_coverage_warning(rec)
+        assert warns and "no `timing` key at all" in warns[0]
 
     def test_malformed_timing_key_no_crash(self):
         from work_summary import timing_coverage_warning
