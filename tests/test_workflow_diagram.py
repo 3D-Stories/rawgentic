@@ -107,16 +107,43 @@ def test_theme_query_param_forces_initial_theme():
     """#535: a `?theme=light|dark` URL query param must force the initial
     data-theme attribute (before the first render), so a headless capture
     script can force each theme without a custom Playwright library script —
-    the bare `npx playwright screenshot` CLI has no page.evaluate hook."""
+    the bare `npx playwright screenshot` CLI has no page.evaluate hook.
+
+    Revised after #535 Step-11 review Finding #2 (confirmed live: the
+    original version of this test only checked that the query param was
+    READ before render() -- deleting the setAttribute call entirely would
+    have left it green while the actual theme-forcing behavior silently
+    broke). Now asserts the allowlisted light|dark check AND the
+    setAttribute call itself both exist and precede render()."""
     text = _html()
     assert "URLSearchParams(location.search)" in text
     assert ".get('theme')" in text or '.get("theme")' in text
-    # the read must happen before the bootstrap render() call, not after
+    assert "_qTheme === 'light'" in text or '_qTheme === "light"' in text
+    assert "_qTheme === 'dark'" in text or '_qTheme === "dark"' in text
+    assert "setAttribute('data-theme', _qTheme)" in text or \
+           'setAttribute("data-theme", _qTheme)' in text
+    # the read AND the assignment must happen before the bootstrap render()
+    # call, not after
     param_idx = text.index("URLSearchParams(location.search)")
+    set_idx = text.index("setAttribute('data-theme', _qTheme)") if \
+        "setAttribute('data-theme', _qTheme)" in text else \
+        text.index('setAttribute("data-theme", _qTheme)')
     render_idx = text.rindex("\nrender();")
     assert param_idx < render_idx, (
         "theme query-param read must run before the bootstrap render() call"
     )
+    assert set_idx < render_idx, (
+        "theme data-theme assignment must run before the bootstrap render() call"
+    )
+
+
+def test_light_and_dark_snapshots_are_not_byte_identical():
+    """#535 Step-11 review Finding #2's second half: without this, a
+    regression that broke theme-forcing (both captures rendering the same
+    default theme) would still pass every other snapshot test."""
+    light = (REPO_ROOT / "docs" / "assets" / "workflow-diagram-light.png").read_bytes()
+    dark = (REPO_ROOT / "docs" / "assets" / "workflow-diagram-dark.png").read_bytes()
+    assert light != dark, "light and dark snapshots must not be byte-identical"
 
 
 def test_font_license_attribution_present():

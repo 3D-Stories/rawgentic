@@ -59,21 +59,43 @@ def test_full_page_and_viewport_hardcoded():
 
 
 def test_light_dark_url_and_output_mapping():
-    """Not bare token presence — each theme's call site must map ITS OWN theme
-    value to ITS OWN exact output path (#535 Step-4 review Finding #2). The
-    script uses a shared `capture()` function (theme + output as call-site
-    args, not string-templated per theme), so the mapping evidence is the two
-    call-site lines, not a literal `?theme=light` substring."""
+    """Not bare token presence — each theme's OWN value must map through to its
+    OWN exact output path, end to end (#535 Step-4 review Finding #2 + #535
+    Step-11 review Finding #1's atomic-promote rewrite changed the chain to
+    var-definition -> tmp-derivation -> capture call -> promotion rename;
+    each link is checked so the mapping can't silently cross-wire)."""
     text = _source()
     assert "?theme=${theme}" in text or "?theme=$theme" in text, (
         "expected a parameterized theme query build in the capture helper"
     )
-    assert "docs/assets/workflow-diagram-light.png" in text
-    assert "docs/assets/workflow-diagram-dark.png" in text
-    light_call = "capture light docs/assets/workflow-diagram-light.png"
-    dark_call = "capture dark docs/assets/workflow-diagram-dark.png"
-    assert light_call in text, f"expected exact call site: {light_call!r}"
-    assert dark_call in text, f"expected exact call site: {dark_call!r}"
+    assert 'LIGHT_OUT="$REPO_ROOT/docs/assets/workflow-diagram-light.png"' in text
+    assert 'DARK_OUT="$REPO_ROOT/docs/assets/workflow-diagram-dark.png"' in text
+    # tmp names must PRESERVE the .png extension (Playwright's screenshot CLI
+    # infers output mime type from the extension; a bare random suffix broke
+    # this live -- "unsupported mime type null" -- caught by the mandatory
+    # live run, not a static check)
+    assert 'LIGHT_TMP="$(mktemp "${LIGHT_OUT%.png}.XXXXXX.png")"' in text
+    assert 'DARK_TMP="$(mktemp "${DARK_OUT%.png}.XXXXXX.png")"' in text
+    assert 'capture light "$LIGHT_TMP"' in text
+    assert 'capture dark "$DARK_TMP"' in text
+    assert 'mv "$LIGHT_TMP" "$LIGHT_OUT"' in text
+    assert 'mv "$DARK_TMP" "$DARK_OUT"' in text
+
+
+def test_promotes_atomically_with_rollback_on_gate_failure():
+    """#535 Step-11 review Finding #1 (confirmed live: the original script
+    captured directly into the committed paths, so a failure after the first
+    successful capture left it partially overwritten despite the script
+    reporting rejection). The script must capture to temp files, back up the
+    prior committed pair, promote via rename, and restore the backup if the
+    post-promotion pytest gate fails."""
+    text = _source()
+    assert "LIGHT_BACKUP" in text and "DARK_BACKUP" in text
+    assert "cp \"$LIGHT_OUT\" \"$LIGHT_BACKUP\"" in text
+    assert "cp \"$DARK_OUT\" \"$DARK_BACKUP\"" in text
+    gate_idx = text.index("pytest tests/test_workflow_diagram.py -q")
+    restore_idx = text.index("cp \"$LIGHT_BACKUP\" \"$LIGHT_OUT\"")
+    assert restore_idx > gate_idx, "restore-on-failure must come AFTER the gate runs"
 
 
 def test_diagram_pytest_gate_runs_last_and_controls_exit():
