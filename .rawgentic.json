@@ -32,5 +32,7 @@
     "primaryFiles": ["README.md", "docs/", "LICENSE"],
     "format": "markdown"
   },
+  "phaseExecutorTable": {"version": 1, "file": null},
+  "telemetryAlerts": {"version": 1},
   "custom": {}
 }
