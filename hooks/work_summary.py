@@ -143,6 +143,104 @@ def architecture_dispatch_warnings(record) -> list:
                 f"executor-architecture run — possible Agent-tool dispatch in an executor run "
                 f"(false-positive possible across sequential runs of one issue)")
     return warns
+def _auto_embed_timing(raw: dict, project_root: str) -> None:
+    """#589 (Gap B): compute `timing` from the per-run history file and embed it
+    when the incoming record LACKS the key entirely -- Step 16's own instructions
+    require the orchestrator to separately run `step_state.py timing` and embed its
+    stdout by hand before calling summarize, and that manual step is easy to skip
+    (confirmed: it apparently was skipped on every sampled real saystory record).
+    This makes summarize compute it itself as a fallback, never a bypass -- the
+    auto-computed object is still validated identically to a hand-supplied one,
+    since this runs BEFORE validate_record. Never overwrites an orchestrator-
+    supplied `timing` key. Fails open (no mutation) on any resolution problem —
+    unresolvable issue number, missing history file, an unimportable step_state
+    module — mirroring step_state.py's own fail-open contract exactly."""
+    if "timing" in raw:
+        return
+    issue = raw.get("issue")
+    issue_no = issue.get("number") if isinstance(issue, dict) else None
+    if not isinstance(issue_no, int) or isinstance(issue_no, bool):
+        return
+    hooks_dir = os.path.dirname(os.path.abspath(__file__))
+    if hooks_dir not in sys.path:
+        sys.path.insert(0, hooks_dir)
+    try:
+        import step_state  # local import: optional dependency, fail-open if absent
+    except ImportError:
+        return
+    project = step_state.sanitize_project(os.path.basename(os.path.normpath(project_root)))
+    if project is None:
+        return
+    state_dir = step_state.find_state_dir(project_root)
+    if not state_dir:
+        return
+    history_path = step_state._history_path(state_dir, project, issue_no)  # pylint: disable=protected-access
+    events, skipped = [], 0
+    try:
+        with open(history_path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    skipped += 1
+                    continue
+                if isinstance(ev, dict):
+                    events.append(ev)
+                else:
+                    skipped += 1
+    except OSError:
+        return
+    timing = step_state.compute_timing(events)
+    timing["skipped_lines"] = skipped
+    raw["timing"] = timing
+
+
+def timing_coverage_warning(record) -> list:
+    """#589: ADVISORY warning (never a validation error) when a full-lane run
+    (a real PR exists) has incomplete step-timing coverage. Widened to cover
+    BOTH 'absent' and 'partial' -- an absent-only check misses exactly the
+    'partial' case this bug's own live reproduction demonstrated."""
+    warns = []
+    outcome = record.get("outcome")
+    pr_number = outcome.get("pr_number") if isinstance(outcome, dict) else None
+    if pr_number is None:
+        return warns
+    timing = record.get("timing")
+    status = timing.get("status") if isinstance(timing, dict) else None
+    if status in ("absent", "partial"):
+        warns.append(
+            f"advisory (#589): timing.status={status!r} on a full-lane run "
+            f"(PR #{pr_number}) — per-step timing coverage is incomplete")
+    return warns
+
+
+def derive_wall_clock_s(record) -> "int | float | None":
+    """#589: fill `usage.wall_clock_s` from `timing.total_s` ONLY when the
+    existing value is null/missing AND `timing.status == 'complete'` — NOT a
+    true full-run wall-clock even then (total_s is an entry-interval sum with
+    an explicitly open-ended final event, and 'complete' only requires
+    reaching PR-creation, not CI/merge/deploy/wrap-up), so this is a
+    best-available proxy, gated conservatively per two independent Step-4
+    reviews. Returns the value to use (never mutates); callers wire it in
+    exactly where `worker_token_share` already does its post-validation
+    derived-field assignment. Never overwrites a real existing value."""
+    usage = record.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    existing = usage.get("wall_clock_s")
+    if existing is not None:
+        return existing
+    timing = record.get("timing")
+    if not isinstance(timing, dict) or timing.get("status") != "complete":
+        return None
+    total = timing.get("total_s")
+    if isinstance(total, bool) or not isinstance(total, (int, float)) or total < 0:
+        return None
+    return total
+
+
 # `usage.capture_status` (#189) — how the token/cost numbers were obtained.
 # `captured` = live-parsed from the session log (REQUIRES real non-null tokens
 # summing > 0 — the schema-level backstop against the #155 null-forever state);
@@ -1448,9 +1546,18 @@ def main(argv=None) -> int:
 
         workers = _resolve_worker_models(args.project_root)
 
+        # #589 (Gap B): compute `timing` from the per-run history BEFORE validation
+        # when the incoming record lacks the key — never overwrites a supplied one,
+        # and the auto-computed object is validated identically to a hand-supplied
+        # one (no special-casing).
+        _auto_embed_timing(raw, args.project_root)
+
         errors = validate_record(raw, strict=True)  # #116: new writes must use the controlled vocab
         # #474 detective surface: advisory only — printed, never gates persistence.
         for w in architecture_dispatch_warnings(raw):
+            print(w, file=sys.stderr)
+        # #589: advisory only — printed, never gates persistence.
+        for w in timing_coverage_warning(raw):
             print(w, file=sys.stderr)
         # #512: cross-check loop_backs against the persisted counters state —
         # a schema-valid record hand-populated from in-context memory can be
@@ -1482,6 +1589,11 @@ def main(argv=None) -> int:
             share = worker_token_share(usage.get("model_mix"), workers)
             if share is not None:
                 usage["worker_token_share"] = round(share, 4)
+            # #589: derived field — present-optional, same post-validation pattern
+            # as worker_token_share; never overwrites a real existing value.
+            derived_wall_clock = derive_wall_clock_s(record)
+            if derived_wall_clock is not None:
+                usage["wall_clock_s"] = derived_wall_clock
         print(json.dumps(record, separators=(",", ":")) if args.json
               else render_summary(record, worker_models=workers))
         if not args.no_persist:

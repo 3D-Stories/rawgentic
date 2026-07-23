@@ -2482,3 +2482,199 @@ class TestArchitectureField:
         errs = validate_record(self._rec(version=" 3.92.4 "))
         assert any("architecture" in e for e in errs)
         assert any("not X.Y.Z" in e for e in errs)
+
+
+# --- #589: timing never auto-populates -----------------------------------
+# Gap B (confirmed via Step-4 reflect + verified against source): summarize
+# never computes `timing` itself -- an absent-timing record persists exactly
+# as-is today. These tests reproduce that gap FIRST (red), then the fix
+# (`_auto_embed_timing`) makes them green.
+
+def _write_history(root: Path, project: str, issue: int, events: list) -> Path:
+    """Write a per-run history fixture at the path `step_state.py` itself
+    resolves to, given `root` as the starting walk-up point (mirrors the
+    fallback branch of `find_state_dir`: `<root>/claude_docs/wal` must
+    already exist for the no-workspace-marker fallback to apply)."""
+    hist_dir = root / "claude_docs" / "wal" / "history"
+    hist_dir.mkdir(parents=True, exist_ok=True)
+    path = hist_dir / f"{project}-issue-{issue}.history.jsonl"
+    path.write_text("\n".join(json.dumps(e) for e in events) + "\n", encoding="utf-8")
+    return path
+
+
+def _history_events(issue: int, session_id: str = "sess-1") -> list:
+    """A real, terminal WF2-shaped event set (steps 1 and 16 present) so
+    `compute_timing` reports status='complete' over it."""
+    return [
+        {"schema_version": 1, "project": "demo", "workflow": "wf2", "step": "1",
+         "step_title": "Receive Issue", "issue": issue, "session_id": session_id,
+         "entered_at": "2026-07-23T18:00:00Z"},
+        {"schema_version": 1, "project": "demo", "workflow": "wf2", "step": "16",
+         "step_title": "Completion Summary", "issue": issue, "session_id": session_id,
+         "entered_at": "2026-07-23T18:30:00Z"},
+    ]
+
+
+class TestAutoEmbedTimingReproduction:
+    """Task 1 (RED->GREEN across task 2): the fix must auto-compute `timing`
+    at summarize-assembly time when the incoming record lacks it, so a real,
+    complete history file for this issue actually shows up in the output."""
+
+    def test_absent_timing_gets_auto_embedded_from_real_history(self, tmp_path):
+        import subprocess
+        # project_root's own basename is the project-name key `_auto_embed_timing`
+        # resolves against — use a controlled subdirectory name, not tmp_path's
+        # own (opaque, pytest-generated) basename.
+        proj_root = tmp_path / "demo"
+        proj_root.mkdir()
+        rec = _valid_record()
+        rec["issue"]["number"] = 589
+        assert "timing" not in rec
+        _write_history(proj_root, "demo", 589, _history_events(589))
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        store = tmp_path / "store.jsonl"
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(proj_root), "--store", str(store), "--json"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        out = json.loads(r.stdout)
+        # Confirmed RED pre-fix: this assertion fails today (`out["timing"]`
+        # is None) -- proving the exact reported gap before any fix code
+        # exists. Task 2 makes it pass.
+        assert out.get("timing") is not None, "timing was not auto-embedded"
+        assert out["timing"]["status"] == "complete"
+        assert out["timing"]["total_s"] == 1800  # 30 min between the 2 events
+
+    def test_no_history_file_stays_absent_no_crash(self, tmp_path):
+        import subprocess
+        proj_root = tmp_path / "demo"
+        proj_root.mkdir()
+        (proj_root / "claude_docs" / "wal").mkdir(parents=True)  # exists, but empty
+        rec = _valid_record()
+        rec["issue"]["number"] = 12345  # no history file for this issue
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(proj_root), "--no-persist", "--json"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout).get("timing") is None
+
+    def test_orchestrator_supplied_timing_is_never_overwritten(self, tmp_path):
+        import subprocess
+        proj_root = tmp_path / "demo"
+        proj_root.mkdir()
+        _write_history(proj_root, "demo", 589, _history_events(589))
+        rec = _valid_record()
+        rec["issue"]["number"] = 589
+        rec["timing"] = {"status": "partial", "idle_gap_threshold_s": 1800,
+                          "steps": [], "phases": {}, "total_s": None}
+        rf = tmp_path / "rec.json"
+        rf.write_text(json.dumps(rec), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SUMMARY_CLI), "summarize", "--record-file", str(rf),
+             "--project-root", str(proj_root), "--no-persist", "--json"],
+            capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        assert json.loads(r.stdout)["timing"]["status"] == "partial"  # untouched
+
+    def test_null_issue_number_no_crash(self, tmp_path):
+        from work_summary import _auto_embed_timing
+        rec = _valid_record()
+        rec["issue"]["number"] = None
+        assert "timing" not in rec
+        _auto_embed_timing(rec, str(tmp_path))
+        assert "timing" not in rec
+
+
+def _rec_with_usage(wall_clock_s=None) -> dict:
+    rec = _valid_record()
+    rec["usage"] = {"input_tokens": 100, "output_tokens": 50,
+                     "cost_estimate_usd": 0.01, "wall_clock_s": wall_clock_s,
+                     "model_mix": None, "capture_status": "captured" if wall_clock_s
+                     is None else "captured"}
+    return rec
+
+
+class TestDeriveWallClockS:
+    def test_fills_from_complete_timing_when_null(self):
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=None)
+        rec["timing"] = {"status": "complete", "total_s": 1800}
+        assert derive_wall_clock_s(rec) == 1800
+
+    def test_never_fills_from_partial_or_absent(self):
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=None)
+        for status in ("partial", "absent"):
+            rec["timing"] = {"status": status, "total_s": 1800}
+            assert derive_wall_clock_s(rec) is None, status
+
+    def test_never_overwrites_existing_value(self):
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=42)
+        rec["timing"] = {"status": "complete", "total_s": 1800}
+        assert derive_wall_clock_s(rec) == 42
+
+    def test_no_usage_key_no_crash(self):
+        from work_summary import derive_wall_clock_s
+        rec = _valid_record()
+        assert "usage" not in rec
+        rec["timing"] = {"status": "complete", "total_s": 1800}
+        assert derive_wall_clock_s(rec) is None
+
+    def test_no_timing_key_no_crash(self):
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=None)
+        assert "timing" not in rec
+        assert derive_wall_clock_s(rec) is None
+
+    def test_malformed_total_s_no_crash(self):
+        from work_summary import derive_wall_clock_s
+        rec = _rec_with_usage(wall_clock_s=None)
+        rec["timing"] = {"status": "complete", "total_s": "not-a-number"}
+        assert derive_wall_clock_s(rec) is None
+        rec["timing"]["total_s"] = -5
+        assert derive_wall_clock_s(rec) is None
+
+
+class TestTimingCoverageWarning:
+    def test_warns_on_pr_plus_absent(self):
+        from work_summary import timing_coverage_warning
+        rec = _valid_record()
+        rec["outcome"]["pr_number"] = 627
+        rec["timing"] = {"status": "absent"}
+        warns = timing_coverage_warning(rec)
+        assert warns and "absent" in warns[0]
+
+    def test_warns_on_pr_plus_partial(self):
+        from work_summary import timing_coverage_warning
+        rec = _valid_record()
+        rec["outcome"]["pr_number"] = 627
+        rec["timing"] = {"status": "partial"}
+        warns = timing_coverage_warning(rec)
+        assert warns and "partial" in warns[0]
+
+    def test_silent_on_no_pr(self):
+        from work_summary import timing_coverage_warning
+        rec = _valid_record()
+        rec["outcome"]["pr_number"] = None
+        rec["timing"] = {"status": "absent"}
+        assert timing_coverage_warning(rec) == []
+
+    def test_silent_on_complete(self):
+        from work_summary import timing_coverage_warning
+        rec = _valid_record()
+        rec["outcome"]["pr_number"] = 627
+        rec["timing"] = {"status": "complete"}
+        assert timing_coverage_warning(rec) == []
+
+    def test_silent_when_no_timing_key(self):
+        from work_summary import timing_coverage_warning
+        rec = _valid_record()
+        rec["outcome"]["pr_number"] = 627
+        rec.pop("timing", None)
+        assert timing_coverage_warning(rec) == []
