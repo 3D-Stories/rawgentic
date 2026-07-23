@@ -353,7 +353,7 @@ to any project repo — and are set by `/rawgentic:setup`.
 | `critiqueMethod` | `string` | **Deprecated / ignored (#205).** Formerly selected the critique tool; the external reflexion dependency was removed and quality gates now use the in-repo quality-bar rubric. A leftover value in a workspace file is inert. |
 | `adversarialReview` | `object` \| `bool` | Opt-in cross-model adversarial review (WF5) at workflow quality gates. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"], "backend"?: "gpt" \| "glm" \| "both" }`. Default disabled; `backend` absent → `gpt`. A present-but-INVALID `backend` value refuses at run time (exit 2, no egress) rather than silently defaulting (#403). Bool shorthand `true` enables the standalone skill mindset but lists no workflows (embedded gates stay off). Fail-closed: missing/malformed → disabled. See [Adversarial Review Data Handling](#adversarial-review-data-handling). |
 | `modelRouting` | `object` | Opt-in per-role subagent model routing (`review`/`analysis`/`implementation` → `opus`/`sonnet`/`haiku`/`fable`, or a `{model, effort}` object; string shorthand ≡ `{model, effort: null}`). Absent or absent-role = `inherit` (session model). Fail-open: malformed/unknown model or effort values warn and resolve to `inherit`/`null`, never block. See [`modelRouting`](#modelrouting). |
-| `executorRouting` | `object` | Opt-in per-seat routing of executor seats THROUGH the deterministic phase-execution engine (#427, E4; vocabulary extended to the full 7-seat set by #464/W1). Shape: `{ "version": 1, "seats": { "ship"\|"intake"\|"plan"\|"analysis"\|"build"\|"review": "inherit" \| "executor" } }`. `design` is **competitive-only** (the bake-off owns its dispatch, #428) — declaring it here refuses at run time (exit 2), as does any unknown seat key. An **absent** block, or a seat **absent** from `seats`, is `inherit` (prior behavior — the executor is off, so merge changes nothing until a seat is opted in). A **present-but-malformed** block (non-object value, unsupported `version`, unknown/competitive-only seat key, or a mode outside `{inherit, executor}`) refuses at run time (exit 2), NOT a silent inherit — an enforcement/verification boundary fails closed, not open (contrast `modelRouting`). A `build`-role dispatch additionally requires an authenticated launch-bound gate (`--gate-file` + `--plan-file`, from which the dispatch mints the canonical plan context INTERNALLY and refuses `gate_stale_for_plan` on live-plan drift — #464 §E as hardened by #470; no caller-assembled context input exists). Consumed by `hooks/executor_routing_lib.py` (`resolve-seat` / `dispatch`); the WF2/WF3 prose that calls it shipped in #470 (the real #417). See [`executorRouting`](#executorrouting). |
+| `executorRouting` | `object` | Opt-in per-seat routing of executor seats THROUGH the deterministic phase-execution engine (#427, E4; vocabulary extended to the full 7-seat set by #464/W1). Shape: `{ "version": 1, "seats": { "ship"\|"intake"\|"plan"\|"analysis"\|"build"\|"review": "inherit" \| "executor" } }`. `design` is **competitive-only** (the bake-off owns its dispatch, #428) — declaring it here refuses at run time (exit 2), as does any unknown seat key. Since #474 the seat modes NO LONGER select the tier — [`defaultArchitecture`](#defaultarchitecture-and-the-legacy-rollback) does (absent = executor). A declared mode must AGREE with the architecture (a contradicting mode refuses at run time naming the seat); an absent block or absent seat simply follows the architecture. A **present-but-malformed** block (non-object value, unsupported `version`, unknown/competitive-only seat key, or a mode outside `{inherit, executor}`) refuses at run time (exit 2), NOT a silent inherit — an enforcement/verification boundary fails closed, not open (contrast `modelRouting`). A `build`-role dispatch additionally requires an authenticated launch-bound gate (`--gate-file` + `--plan-file`, from which the dispatch mints the canonical plan context INTERNALLY and refuses `gate_stale_for_plan` on live-plan drift — #464 §E as hardened by #470; no caller-assembled context input exists). Consumed by `hooks/executor_routing_lib.py` (`resolve-seat` / `dispatch`); the WF2/WF3 prose that calls it shipped in #470 (the real #417). See [`executorRouting`](#executorrouting). |
 | `peerConsult` | `object` \| `bool` | Opt-in cross-model peer design consult (WF13) at the WF2 design step. Shape: `{ "enabled": bool, "workflows": ["implement-feature"], "backend"?: "gpt" \| "glm" \| "both" }` — mirrors `adversarialReview` incl. the #403 backend field. Default disabled. Fail-closed: missing/malformed → disabled. See [`peerConsult`](#peerconsult). |
 | `runFeedback` | `object` \| `bool` | Opt-in embedded post-run self-assessment (WF14, `/rawgentic:run-feedback`) at workflow completion. Shape: `{ "enabled": bool, "workflows": ["implement-feature", "fix-bug"] }` — same loader and fail-closed semantics as `peerConsult` (`load_adversarial_review_config(..., key="runFeedback")`). Default disabled. Wired at WF2 Step 16 / WF3 Step 14 (rawgentic #338); the standalone skill always works regardless. |
 | `wholeIssueDelegation` | `object` \| `bool` | Opt-in whole-issue delegated build mode (WF2 Step 8): one build-subagent implements all plan tasks and returns a receipt the orchestrator validates before re-running every gate against the real tree. Shape: `{ "enabled": bool, "workflows": ["implement-feature"] }` — mirrors `adversarialReview`. Default disabled. Fail-closed: missing/malformed → disabled. See [`wholeIssueDelegation`](#wholeissuedelegation). |
@@ -365,7 +365,39 @@ to any project repo — and are set by `/rawgentic:setup`.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `defaultArchitecture` | `string` | **#474 — the dispatch architecture selector.** `"executor"` (the DEFAULT when absent — no config anywhere means executor) or `"legacy"` (the manual joint rollback: every seat resolves back to the Agent-tool path). Any other value/type refuses at run time (exit 2) — a typo'd architecture never silently picks a side; a corrupt/unreadable workspace fails CLOSED at every executor entry point. Per-project `executorRouting` seat modes no longer select the tier: an explicit mode CONTRADICTING the architecture (an `"inherit"` seat under executor, an `"executor"` seat under legacy) refuses naming the offending seat; agreeing modes are a valid no-op. See [`defaultArchitecture` + rollback](#defaultarchitecture-and-the-legacy-rollback). |
 | `crossProjectAllowedPaths` | `string[]` | **Opt-in (#49).** Glob patterns that relax the `wal-bind-guard` **Gate 2** (bound-session cross-project guard) for SPECIFIC paths in *other active projects* — e.g. `["docs/**", "CLAUDE.md"]` lets a bound session Read/Write those paths in a sibling project (the headless-retrospective case: writing findings to several projects' `docs/`). **Missing or empty → deny-all preserved** (current behavior). The pattern is matched (bash glob) against the file's path **relative to the target project root**; a `docs/**` pattern never matches `docs-extra/…` because the pattern's own `docs/` prefix anchors it. **A bare `*` or `**` matches everything — it grants full cross-project Read/Write (source code included), defeating the code-vs-docs distinction; keep patterns specific.** **Realpath-hardened:** the file is canonicalized and must still resolve *under* the target project's directory, so a symlink or `../` cannot escape it. Allowed ops log a stderr warning. Gate 1 (unbound sessions) is unaffected. |
+
+### `defaultArchitecture` and the legacy rollback
+
+**Since #474 the executor IS the dispatch architecture everywhere by default** — an absent
+key, an absent workspace, an unconfigured project all mean `executor`. A run is 100% executor
+or 100% legacy, never mixed: WF2/WF3 declare each run at Step 2 via
+`python3 hooks/executor_routing_lib.py begin-run --run-id <id> --workspace <ws> --project <n>`
+(the one producer of the run ledger's `initial` record), and every executor entry point
+(`dispatch`, `recover-run`, `close-run`) consumes that pin — an undeclared run refuses
+(`run_not_declared`, exit 4), a mixed dispatch refuses (`mixed_architecture_run_refused`,
+exit 4). An executor failure follows the ERROR protocol; there is NO runtime fallback to the
+Agent tool. Legacy runs write no ledger; their declaration is the session-note line plus the
+run-record `architecture` field.
+
+**Rollback — a deliberate JOINT config change (owner + operator together), never automatic:**
+
+1. Set `"defaultArchitecture": "legacy"` at the top level of `.rawgentic_workspace.json`.
+2. Remove (or set to `"inherit"`) any per-project `executorRouting` seat modes saying
+   `"executor"` — a contradicting explicit mode is refused by design (the error names the
+   seat). Preflight: `grep -n executorRouting .rawgentic_workspace.json`.
+3. Close (or `recover-run` + `close-run`) in-flight executor runs — they stop loudly at their
+   next dispatch/recovery anyway, but an orderly close keeps ledgers reconciled.
+4. New runs now resolve `inherit` (the Agent-tool path). The bundled agent definitions
+   (`agents/rawgentic-implementer.md`, `agents/rawgentic-reviewer.md`) remain in-tree as the
+   rollback target; their first-instruction architecture SELF-CHECK allows them to run only
+   under a declared-legacy workspace. Roll-forward is the same edit in reverse.
+
+Pre-3.93 ledgers (an `initial` record with no `architecture` field) are treated as executor
+with a stderr advisory — every ≤3.92 ledger producer was an executor CLI path, so the
+inference is by construction; the tolerance is bounded to the 3.93.x line. The mechanical
+Agent-tool interceptor (PreToolUse guard + session-run binding) is tracked in #606.
 
 ### `critiqueMethod`
 
@@ -638,25 +670,27 @@ Shape:
 "executorRouting": { "version": 1, "seats": { "ship": "inherit", "intake": "inherit", "plan": "inherit" } }
 ```
 
-Semantics (consumed by `hooks/executor_routing_lib.py`):
+Semantics (consumed by `hooks/executor_routing_lib.py`) — **rewritten by #474: the seat modes no
+longer select the tier;** [`defaultArchitecture`](#defaultarchitecture-and-the-legacy-rollback)
+does (absent = executor). The block is still VALIDATED, and a declared mode must AGREE with the
+architecture:
 
-- **`inherit`** (a seat's mode, the DEFAULT for an absent block or absent seat) — prior behavior:
-  the WF does the work inline / via the existing `modelRouting` Agent-tool dispatch. The executor
-  is off, so merging #427 changes NO live workflow until a seat is opted in ("seats cut over one at
-  a time").
+- **`inherit`** (a seat's mode) — the legacy Agent-tool path. Valid ONLY under
+  `defaultArchitecture: "legacy"` (an `"inherit"` seat under the executor architecture is a
+  mixed-architecture config and refuses at run time, exit 2, naming the seat).
 - **`executor`** — the seat is dispatched through `run_seat`, which runs the routed model as a real
   subprocess, verifies the provider-reported `actual_model` (`verify_post`), and appends a receipt +
-  observation to a per-run routing-audit log. There is **no driver-inline fallback** for a
-  seat in `executor` mode: it either returns a verified routed observation or fails loud (the
-  orchestrator runs the ERROR protocol). `inherit` is a rollout state decided BEFORE dispatch, never
-  a runtime fallback.
+  observation to a per-run routing-audit log. There is **no driver-inline fallback**: it either
+  returns a verified routed observation or fails loud (the orchestrator runs the ERROR protocol).
+  Valid ONLY under the executor architecture (the default); a redundant declaration is a no-op.
 
 **Absence vs invalidity — fail-CLOSED on invalidity** (unlike `modelRouting`'s fail-open): an absent
-block / absent seat is the legitimate `inherit` default, but a PRESENT-but-malformed block (a
-non-object value, an unsupported `version`, an unknown seat key, or a mode outside
-`{inherit, executor}`) makes `resolve-seat` / `dispatch` return **exit 2** — a typo'd `executor` must
-fail loud, never silently run the legacy path (a false cutover). Executor routing is an
-enforcement/verification choke point, so a config it cannot evaluate denies rather than degrades.
+block / absent seat simply follows the architecture (executor by default since #474), but a
+PRESENT-but-malformed block (a non-object value, an unsupported `version`, an unknown seat key, a
+mode outside `{inherit, executor}`, or a mode contradicting the architecture) makes `resolve-seat`
+/ `dispatch` return **exit 2** — a typo'd value must fail loud, never silently pick a side (a false
+cutover, either direction). Executor routing is an enforcement/verification choke point, so a
+config it cannot evaluate denies rather than degrades.
 
 Seat ↔ WF-step mapping (the prose wiring lands in #417): `intake` → WF2 Step 2 (analyze),
 `plan` → Step 5 (plan), `ship` → Step 12 (README/changelog/version/docs). Driver-only stages
