@@ -154,11 +154,15 @@ class ExpectedCallLedger:
                 if not isinstance(digest, str) or not digest:
                     raise LedgerError(f"ledger {self.path} line 1: missing initial_digest")
                 initial_digest = digest
-                arch = rec.get("architecture")  # absent on ≤3.92 ledgers → None (compat)
-                if arch is not None and arch not in ARCHITECTURES:
-                    raise LedgerError(
-                        f"ledger {self.path} line 1: architecture {arch!r} not in {sorted(ARCHITECTURES)}")
-                architecture = arch
+                # Presence-sensitive (#474 8a): only a genuinely ABSENT field is the ≤3.92
+                # compat (None); an explicit null, non-string, or off-vocab value is malformed.
+                if "architecture" in rec:
+                    arch = rec["architecture"]
+                    if not isinstance(arch, str) or arch not in ARCHITECTURES:
+                        raise LedgerError(
+                            f"ledger {self.path} line 1: architecture {arch!r} not in "
+                            f"{sorted(ARCHITECTURES)}")
+                    architecture = arch
                 continue
             if kind == "initial":
                 raise LedgerError(f"ledger {self.path} line {i}: a second 'initial' record")
@@ -220,7 +224,7 @@ class ExpectedCallLedger:
         this record exists to remove)."""
         if not isinstance(initial_digest, str) or not initial_digest:
             raise LedgerError("append_initial: initial_digest must be a non-empty string")
-        if architecture not in ARCHITECTURES:
+        if not isinstance(architecture, str) or architecture not in ARCHITECTURES:
             raise LedgerError(
                 f"append_initial: architecture {architecture!r} not in {sorted(ARCHITECTURES)}")
 

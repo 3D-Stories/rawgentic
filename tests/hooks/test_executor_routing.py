@@ -2,6 +2,7 @@
 no live provider call), CLI contract, guarded import. Asserts the ACTUAL executing model on BOTH
 paths (executor -> routed model; inherit -> prior behavior untouched)."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -3182,3 +3183,76 @@ def test_cli_close_run_refuses_legacy_pinned_ledger(tmp_path, capsys):
     rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
     assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"
+
+
+# --- #474 8a remediation: snapshot linearization + symlink + begin-run strictness ---------------
+
+def test_dangling_workspace_symlink_fails_closed(tmp_path):
+    # 8a F4: a dangling symlink is present-but-unreadable — MalformedConfig, never executor
+    link = tmp_path / "ws.json"
+    os.symlink(tmp_path / "gone.json", link)
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_architecture(str(link))
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_seat_action("ship", str(link), "rawgentic")
+
+
+def test_cli_begin_run_refuses_unpinned_prior_ledger(tmp_path, capsys):
+    # 8a F3: a pre-3.93 (architecture-less) initial is NOT an executor declaration — begin-run
+    # must not certify it as already_declared; consumers keep their None compat
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text(
+        json.dumps({"kind": "initial", "run_id": "run1", "initial_digest": "sha256:pre"}) + "\n",
+        encoding="utf-8")
+    rc = _begin(ws)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "begin_run_unpinned_ledger"
+
+
+def test_cli_dispatch_single_workspace_read(tmp_path, capsys, monkeypatch):
+    # 8a F1: the WHOLE dispatch entry point does ONE workspace read — architecture, seat
+    # decision, and repo root all come from one snapshot (linearization at the CLI level)
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    opens = []
+    real_open = er._load_workspace_snapshot
+    def counting(path):
+        opens.append(path)
+        return real_open(path)
+    monkeypatch.setattr(er, "_load_workspace_snapshot", counting)
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    er._do_dispatch(a)
+    capsys.readouterr()
+    assert len(opens) == 1, f"dispatch read the workspace {len(opens)} times"
+
+
+def test_cli_begin_run_single_workspace_read(tmp_path, capsys, monkeypatch):
+    ws, _ = _analysis_project(tmp_path)
+    opens = []
+    real_open = er._load_workspace_snapshot
+    def counting(path):
+        opens.append(path)
+        return real_open(path)
+    monkeypatch.setattr(er, "_load_workspace_snapshot", counting)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    assert len(opens) == 1, f"begin-run read the workspace {len(opens)} times"
+
+
+def test_cli_recover_single_workspace_read(tmp_path, capsys, monkeypatch):
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    opens = []
+    real_open = er._load_workspace_snapshot
+    def counting(path):
+        opens.append(path)
+        return real_open(path)
+    monkeypatch.setattr(er, "_load_workspace_snapshot", counting)
+    er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    capsys.readouterr()
+    assert len(opens) == 1, f"recover-run read the workspace {len(opens)} times"

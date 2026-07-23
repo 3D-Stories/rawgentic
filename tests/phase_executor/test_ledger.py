@@ -249,3 +249,30 @@ def test_append_expected_without_assertion_unchanged(tmp_path):
     lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("review", "c1")
     assert len(lg.read().expected) == 1
+
+
+def test_explicit_null_architecture_in_file_refused(tmp_path):
+    # 8a F2: explicit JSON null is NOT the pre-3.93 absent-field compat — it is malformed
+    lg = _new(tmp_path)
+    with open(lg.path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"kind": "initial", "run_id": "r1", "initial_digest": "sha256:c",
+                             "architecture": None}) + "\n")
+    with pytest.raises(L.LedgerError):
+        lg.read()
+
+
+@pytest.mark.parametrize("bad", [["executor"], {"v": "executor"}, 7, True])
+def test_non_string_architecture_in_file_is_ledger_error_not_typeerror(tmp_path, bad):
+    lg = _new(tmp_path)
+    with open(lg.path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"kind": "initial", "run_id": "r1", "initial_digest": "sha256:c",
+                             "architecture": bad}) + "\n")
+    with pytest.raises(L.LedgerError):
+        lg.read()
+
+
+@pytest.mark.parametrize("bad", [None, ["executor"], {"v": 1}, 7, True])
+def test_append_initial_non_string_architecture_is_ledger_error(tmp_path, bad):
+    lg = _new(tmp_path)
+    with pytest.raises(L.LedgerError):
+        lg.append_initial("sha256:cfg", architecture=bad)

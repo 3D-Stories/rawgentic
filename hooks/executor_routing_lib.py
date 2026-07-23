@@ -200,6 +200,13 @@ def _load_workspace_snapshot(workspace_path: str) -> object:
         with open(workspace_path, encoding="utf-8") as f:
             ws = json.load(f)
     except FileNotFoundError:
+        # 8a F4: a DANGLING SYMLINK also raises FileNotFoundError on open, but it is a
+        # present-but-unreadable entry — fail CLOSED, never the executor default. Only a
+        # genuinely absent directory entry (lexists False) is "not configured".
+        if os.path.lexists(workspace_path):
+            raise MalformedConfig(
+                f"workspace {workspace_path!r} is a dangling symlink — cannot evaluate "
+                f"architecture (fail-closed)") from None
         return _WS_ABSENT
     except (OSError, ValueError) as exc:
         raise MalformedConfig(
@@ -244,13 +251,20 @@ def _entry_from_snapshot(ws: object, project: str) -> dict | None:
 
 
 def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[str, str]:
+    """File-path convenience over ``resolve_seat_action_from_snapshot`` (one load)."""
+    return resolve_seat_action_from_snapshot(seat, _load_workspace_snapshot(workspace_path), project)
+
+
+def resolve_seat_action_from_snapshot(seat: str, ws: object, project: str) -> tuple[str, str]:
     """Return ``(action, reason)`` where action is ``inherit`` | ``executor`` | ``driver_only``.
 
     #474: the workspace-level ``defaultArchitecture`` selects the tier (absent -> executor — the
     flip). ``executorRouting`` seat modes are still VALIDATED but no longer select; an explicit
     mode contradicting the architecture is refused naming the offending seat (the config-level
     third of AC1 "mixed run impossible"). ``inherit`` still means the legacy Agent-tool path, so
-    all consumers keep their contract.
+    all consumers keep their contract. ``ws`` is a ``_load_workspace_snapshot`` result — CLI
+    entry points load ONCE and thread the snapshot everywhere (8a F1: the linearization point
+    is the entry-point load, not each helper's own read).
 
     Raises ``MalformedConfig`` on an unknown seat, a present-but-malformed config, an invalid
     architecture value, or a mixed-architecture conflict (-> exit 2)."""
@@ -264,7 +278,6 @@ def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[s
         raise MalformedConfig(
             f"seat {seat!r} is competitive-only (bake-off owns its dispatch) — "
             f"cannot single-dispatch it through the executor")
-    ws = _load_workspace_snapshot(workspace_path)  # fail-closed on corrupt; absent → executor
     arch = resolve_architecture_from_snapshot(ws)
     entry = _entry_from_snapshot(ws, project)
     raw = _ABSENT if entry is None else entry.get("executorRouting", _ABSENT)
@@ -300,7 +313,13 @@ def resolve_repo_root(workspace_path: str, project: str) -> Path:
     """Resolve the project REPO root (base for capture/permit dirs) from the workspace config's
     ``project.path`` — NOT the workspace root (which is not a git repo, so dirs there would escape
     every ``.gitignore``; finding V1). Raises ``MalformedConfig`` if the entry/path is missing."""
-    entry = _load_project_entry(workspace_path, project)
+    return repo_root_from_snapshot(_load_workspace_snapshot(workspace_path), workspace_path, project)
+
+
+def repo_root_from_snapshot(ws: object, workspace_path: str, project: str) -> Path:
+    """Snapshot variant of ``resolve_repo_root`` (8a F1: entry points load the workspace ONCE
+    and derive architecture + entry + repo root from that one object)."""
+    entry = _entry_from_snapshot(ws, project)
     if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
         raise MalformedConfig(f"cannot resolve repo root for project {project!r} (missing entry/path)")
     ws_dir = Path(workspace_path).resolve().parent
@@ -2221,10 +2240,11 @@ def _do_dispatch(args) -> int:
         return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
     try:
-        action, _ = resolve_seat_action(args.seat, args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (8a F1)
+        action, _ = resolve_seat_action_from_snapshot(args.seat, ws_snapshot, args.project)
         if action != "executor":
             raise MalformedConfig(f"dispatch called on a {action!r} seat {args.seat!r} — dispatch is only valid for an executor-mode seat")
-        repo_root = resolve_repo_root(args.workspace, args.project)
+        repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
                           correlation_id=args.correlation_id))
@@ -2409,7 +2429,9 @@ def _do_recover_run(args) -> int:
         return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
     try:
-        repo_root = resolve_repo_root(args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (8a F1)
+        arch = resolve_architecture_from_snapshot(ws_snapshot)
+        repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
         snap = resolve_table(repo_root, pe.routing).snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
@@ -2425,11 +2447,6 @@ def _do_recover_run(args) -> int:
     # relaunches too ("lever takes effect" on every spawn path). Workspace architecture must be
     # executor; the ledger pin must be executor (or a pre-3.93 None on a VALID existing initial —
     # an absent/deleted/corrupt/symlinked ledger refuses pre-launch, never conflated with compat).
-    try:
-        arch = resolve_architecture(args.workspace)
-    except MalformedConfig as e:
-        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
-                          correlation_id=args.correlation_id))
     if arch != "executor":
         return _emit(_err(EXIT_ENFORCEMENT, "legacy_architecture_recover_refused",
                           "legacy architecture — executor recovery refused; the joint rollback "
@@ -2683,8 +2700,9 @@ def _do_begin_run(args) -> int:
     except ImportError as e:
         return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
     try:
-        arch = resolve_architecture(args.workspace)
-        repo_root = resolve_repo_root(args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (8a F1)
+        arch = resolve_architecture_from_snapshot(ws_snapshot)
+        repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
         snap = resolve_table(repo_root, pe.routing).snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
@@ -2704,7 +2722,15 @@ def _do_begin_run(args) -> int:
         led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
         state = led.read()
         if state.initial_digest is not None:
-            if state.architecture in ("executor", None) and state.initial_digest == snap.config_digest:
+            # 8a F3: idempotence requires BOTH fields to match EXACTLY — a pre-3.93 unpinned
+            # (architecture-less) initial is NOT an executor declaration; begin-run must never
+            # certify it (consumers keep their None compat; the producer stays strict).
+            if state.architecture is None:
+                return _emit(_err(EXIT_ENFORCEMENT, "begin_run_unpinned_ledger",
+                                  f"run {args.run_id!r} has a pre-3.93 ledger with no architecture "
+                                  f"pin — begin-run cannot re-declare it; dispatch/recover/close "
+                                  f"keep their bounded compat (#474)", retryable=False))
+            if state.architecture == "executor" and state.initial_digest == snap.config_digest:
                 return _emit({"run_id": args.run_id, "architecture": "executor",
                               "already_declared": True, "exit": EXIT_OK})
             return _emit(_err(EXIT_ENFORCEMENT, "begin_run_digest_conflict",
@@ -2718,7 +2744,7 @@ def _do_begin_run(args) -> int:
         except pe.ledger.LedgerError:
             # a concurrent begin-run seeded it — benign iff it seeded the SAME declaration
             state = led.read()
-            if state.initial_digest != snap.config_digest or state.architecture not in ("executor", None):
+            if state.initial_digest != snap.config_digest or state.architecture != "executor":
                 raise
             return _emit({"run_id": args.run_id, "architecture": "executor",
                           "already_declared": True, "exit": EXIT_OK})
