@@ -2361,6 +2361,22 @@ def test_run_resume_maps_exception_to_structured_exit(tmp_path):
     assert not res["ok"] and res["error"]["code"] == "resume_provision_failed"
 
 
+def test_pane_pythonpath_imports_phase_executor():
+    # #559 live-proving fix: a supervised tmux pane runs `python -m phase_executor.pane_runner`,
+    # so its PYTHONPATH MUST import the package. The pre-fix pane_env used the hooks/ dir →
+    # ModuleNotFoundError → the pane died before writing observation.json → exited_no_sentinel.
+    import subprocess as _sp, sys as _sys, os as _os  # noqa: PLC0415
+    from tests.hooks.conftest import HOOKS_DIR  # noqa: PLC0415
+    good = _sp.run([_sys.executable, "-c", "import phase_executor.pane_runner"],
+                   env={**_os.environ, "PYTHONPATH": er._pane_pythonpath()},
+                   capture_output=True, text=True)
+    assert good.returncode == 0, good.stderr
+    bad = _sp.run([_sys.executable, "-c", "import phase_executor.pane_runner"],
+                  env={**_os.environ, "PYTHONPATH": str(HOOKS_DIR)},
+                  capture_output=True, text=True)
+    assert bad.returncode != 0 and "phase_executor" in bad.stderr  # the pre-fix regression
+
+
 # ---------------------------------------------------------------------------
 # C1 (#559): recover_run — ledgered/receipted recovery relaunch chokepoint
 # ---------------------------------------------------------------------------

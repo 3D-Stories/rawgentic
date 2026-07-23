@@ -1683,6 +1683,17 @@ def _ensure_pe_importable() -> None:
         sys.path.insert(0, src)
 
 
+def _pane_pythonpath() -> str:
+    """PYTHONPATH for a supervised tmux pane, which runs ``python -m phase_executor.pane_runner``.
+    It MUST include ``phase_executor/src`` (pane_runner imports ONLY the package, never hooks/) —
+    a hooks/ PYTHONPATH made the pane die on ``No module named phase_executor`` before writing its
+    observation.json, which the supervisor read as ``exited_no_sentinel`` (#559 live-proving find).
+    phase_executor/src is PREPENDED to any inherited PYTHONPATH rather than clobbering it."""
+    src = str(Path(__file__).resolve().parent.parent / "phase_executor" / "src")
+    existing = os.environ.get("PYTHONPATH", "")
+    return os.pathsep.join([src, existing]) if existing else src
+
+
 def _import_phase_executor():
     """Guarded ``phase_executor`` import — returns a namespace of the pieces the CLI needs, or
     raises ImportError. Called INSIDE the subcommands (never at module top level) so a stale tree /
@@ -2011,7 +2022,7 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
         supervisor = pe.TmuxSupervisor(
             snapshot=snap, quota=quota, capture_root=paths["capture_root"],
             registry_root=str(registry_root), worktree_manager=wm,
-            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+            pane_env={"PYTHONPATH": _pane_pythonpath()})
 
         pool = lane["pool"]
         account = lane.get("credential_ref") or "default"
@@ -2108,7 +2119,7 @@ def _run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt) -> dict:
         supervisor = pe.TmuxSupervisor(
             snapshot=snap, quota=quota, capture_root=paths["capture_root"],
             registry_root=str(registry_root), worktree_manager=wm,
-            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+            pane_env={"PYTHONPATH": _pane_pythonpath()})
 
         def provision():
             handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
@@ -2342,7 +2353,7 @@ def _do_recover_run(args) -> int:
             snapshot=snap, quota=pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency()),
             capture_root=paths["capture_root"], registry_root=str(registry_root),
             registry=registry, worktree_manager=wm,
-            pane_env={"PYTHONPATH": str(Path(__file__).resolve().parent)})
+            pane_env={"PYTHONPATH": _pane_pythonpath()})
     except (OSError, ValueError, RegistryCorrupt) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
                           retryable=False, correlation_id=args.correlation_id))
