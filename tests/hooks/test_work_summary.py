@@ -2414,3 +2414,71 @@ class TestFindSubcommand:
             capture_output=True, text=True, timeout=15)
         assert r.returncode == 0, r.stderr
         assert json.loads(r.stdout)["issue"]["number"] == 91
+
+
+# --- #474: run architecture field (version-gated) + non-primary dispatch warn -------------------
+
+class TestArchitectureField:
+    def _rec(self, version="3.93.0", architecture="__none__"):
+        rec = _valid_record()
+        rec["workflow_version"] = version
+        if architecture != "__none__":
+            rec["architecture"] = architecture
+        return rec
+
+    def test_new_record_requires_architecture(self):
+        from work_summary import validate_record
+        errs = validate_record(self._rec())
+        assert any("architecture" in e for e in errs)
+
+    def test_new_record_with_architecture_valid(self):
+        from work_summary import validate_record
+        for arch in ("executor", "legacy"):
+            assert validate_record(self._rec(architecture=arch)) == []
+
+    def test_old_record_without_architecture_valid(self):
+        from work_summary import validate_record
+        assert validate_record(self._rec(version="3.92.4")) == []
+
+    def test_off_vocab_rejected_at_any_version(self):
+        from work_summary import validate_record
+        for version in ("2.33.0", "3.93.0"):
+            errs = validate_record(self._rec(version=version, architecture="hybrid"))
+            assert any("architecture" in e for e in errs), version
+
+    def test_semver_compare_is_tuple_not_lexical(self):
+        from work_summary import validate_record
+        # lexical would call "3.100.0" < "3.93.0" — tuple compare must require the field
+        errs = validate_record(self._rec(version="3.100.0"))
+        assert any("architecture" in e for e in errs)
+
+    def test_malformed_version_treated_as_new(self):
+        from work_summary import validate_record
+        errs = validate_record(self._rec(version="not-a-version"))
+        assert any("architecture" in e for e in errs)
+
+    def test_detective_warns_on_non_primary_dispatch_in_executor_run(self, capsys):
+        from work_summary import validate_record, architecture_dispatch_warnings
+        rec = self._rec(architecture="executor")
+        for resolution in ("fallback", "generic"):
+            rec["dispatches"] = [{"role": "review", "subagent_type": "x", "model": None,
+                                  "effort": None, "outcome": "ok", "resolution": resolution}]
+            assert validate_record(rec) == []          # a warn, never an error
+            warns = architecture_dispatch_warnings(rec)
+            assert warns and "advisory" in warns[0], resolution
+
+    def test_detective_silent_on_primary_or_legacy(self):
+        from work_summary import architecture_dispatch_warnings
+        rec = self._rec(architecture="executor")
+        rec["dispatches"] = [{"role": "review", "subagent_type": "x", "model": None,
+                              "effort": None, "outcome": "ok", "resolution": "primary"}]
+        assert architecture_dispatch_warnings(rec) == []
+        rec["architecture"] = "legacy"
+        rec["dispatches"][0]["resolution"] = "fallback"
+        assert architecture_dispatch_warnings(rec) == []
+
+    def test_whitespace_padded_version_is_malformed_treated_as_new(self):
+        from work_summary import validate_record
+        errs = validate_record(self._rec(version=" 3.92.4 "))
+        assert any("architecture" in e for e in errs)
+        assert any("not X.Y.Z" in e for e in errs)

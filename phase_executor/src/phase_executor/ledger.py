@@ -45,6 +45,9 @@ MAX_LEDGER_RECORDS = 100_000
 
 _KINDS = frozenset({"initial", "expected", "run_closed"})
 _LEDGER_NAME = "expected-calls.jsonl"
+# #474: the run-level architecture vocabulary. Two-valued for forward-compat even though the
+# begin-run producer only ever writes "executor" (legacy runs have no ledger).
+ARCHITECTURES = frozenset({"executor", "legacy"})
 
 
 class LedgerError(RuntimeError):
@@ -70,6 +73,11 @@ class LedgerState:
     initial_digest: Optional[str] = None
     expected: List[LedgerExpected] = field(default_factory=list)
     closed: bool = False
+    # #474: the run's pinned architecture. None = a pre-3.93 ledger (compat: every ≤3.92
+    # producer was an executor CLI path — the legacy path writes no ledger — so None is
+    # establishable as executor BY CONSTRUCTION; consumers treat it as executor + advisory,
+    # bounded to the 3.93.x line).
+    architecture: Optional[str] = None
 
 
 class ExpectedCallLedger:
@@ -120,6 +128,7 @@ class ExpectedCallLedger:
             raise LedgerError(
                 f"ledger {self.path}: {len(lines)} records exceeds cap {MAX_LEDGER_RECORDS}")
         initial_digest: Optional[str] = None
+        architecture: Optional[str] = None
         expected: List[LedgerExpected] = []
         seen_keys = set()
         closed = False
@@ -145,6 +154,15 @@ class ExpectedCallLedger:
                 if not isinstance(digest, str) or not digest:
                     raise LedgerError(f"ledger {self.path} line 1: missing initial_digest")
                 initial_digest = digest
+                # Presence-sensitive (#474 8a): only a genuinely ABSENT field is the ≤3.92
+                # compat (None); an explicit null, non-string, or off-vocab value is malformed.
+                if "architecture" in rec:
+                    arch = rec["architecture"]
+                    if not isinstance(arch, str) or arch not in ARCHITECTURES:
+                        raise LedgerError(
+                            f"ledger {self.path} line 1: architecture {arch!r} not in "
+                            f"{sorted(ARCHITECTURES)}")
+                    architecture = arch
                 continue
             if kind == "initial":
                 raise LedgerError(f"ledger {self.path} line {i}: a second 'initial' record")
@@ -163,7 +181,8 @@ class ExpectedCallLedger:
                 raise LedgerError(f"ledger {self.path} line {i}: duplicate expected call {key}")
             seen_keys.add(key)
             expected.append(LedgerExpected(seat, cid, rf))
-        return LedgerState(initial_digest=initial_digest, expected=expected, closed=closed)
+        return LedgerState(initial_digest=initial_digest, expected=expected, closed=closed,
+                           architecture=architecture)
 
     # -- appending -----------------------------------------------------------
 
@@ -199,20 +218,36 @@ class ExpectedCallLedger:
         finally:
             os.close(fd)  # releases the flock
 
-    def append_initial(self, initial_digest: str) -> None:
+    def append_initial(self, initial_digest: str, *, architecture: str) -> None:
+        """#474: the initial record pins the run's architecture (BREAKING: the kwarg is
+        required — a declaration without an architecture is exactly the pre-flip ambiguity
+        this record exists to remove)."""
         if not isinstance(initial_digest, str) or not initial_digest:
             raise LedgerError("append_initial: initial_digest must be a non-empty string")
+        if not isinstance(architecture, str) or architecture not in ARCHITECTURES:
+            raise LedgerError(
+                f"append_initial: architecture {architecture!r} not in {sorted(ARCHITECTURES)}")
 
         def _check(st: LedgerState) -> None:
             if st.initial_digest is not None or st.expected or st.closed:
                 raise LedgerError(f"ledger {self.path}: initial must be the first and only 'initial'")
-        self._locked_append({"kind": "initial", "initial_digest": initial_digest}, _check)
+        self._locked_append({"kind": "initial", "initial_digest": initial_digest,
+                             "architecture": architecture}, _check)
 
     def append_expected(self, seat: str, correlation_id: str,
-                        recovered_from: Optional[str] = None) -> None:
+                        recovered_from: Optional[str] = None,
+                        *, expected_architecture: Optional[str] = None) -> None:
+        """``expected_architecture`` (#474, optional): assert the run's pinned architecture
+        UNDER the same flock that appends — no read-then-append window. A ``None`` pinned
+        architecture (pre-3.93 ledger) passes the assertion (bounded compat window)."""
         def _check(st: LedgerState) -> None:
             if st.initial_digest is None:
                 raise LedgerError(f"ledger {self.path}: append_expected before append_initial")
+            if (expected_architecture is not None and st.architecture is not None
+                    and st.architecture != expected_architecture):
+                raise LedgerError(
+                    f"ledger {self.path}: run architecture {st.architecture!r} != expected "
+                    f"{expected_architecture!r} — mixed-architecture dispatch refused (#474)")
             if st.closed:
                 raise LedgerError(f"ledger {self.path}: run_closed — dispatch refused (#555 AC2)")
             if any(e.seat == seat and e.correlation_id == correlation_id for e in st.expected):

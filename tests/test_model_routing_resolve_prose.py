@@ -71,18 +71,21 @@ def test_mutating_engine_allowlist_fact_in_shared_source():
 
 
 def test_per_run_tier_selection_in_shared_source():
+    # #474: architecture selection is per-run, begin-run-declared, never mixed
     norm = _norm(SHARED.read_text(encoding="utf-8"))
-    assert "Tier selection is per-RUN, at run start, never mixed." in norm
-    # tier-switch terminates the run and starts a new linked run_id — never a silent mid-run downgrade
-    assert "never an automatic, silent per-dispatch downgrade to the Agent tool" in norm
-    assert "TERMINATES the current run" in norm and "starts a NEW run_id on the other tier" in norm
+    assert "Architecture selection is per-RUN, declared at run start via `begin-run`, never mixed (#474)." in norm
+    assert "NEVER a downgrade to the Agent tool: there is no runtime fallback tier" in norm
+    assert "a deliberate JOINT config change" in norm
 
 
 def test_fallback_legacy_tier_named_in_shared_source():
     norm = _norm(SHARED.read_text(encoding="utf-8"))
-    assert "Bundled agent dispatch (#164) — the FALLBACK (legacy) tier." in norm
+    assert "Bundled agent dispatch (#164) — the LEGACY architecture (manual rollback target, #474)." in norm
     assert "carries `resolution=fallback` on the DISPATCH line" in norm
-    assert "Until the W12 flip (#474) this tier remains a working, declared fallback" in norm
+    assert "Since the W12 flip (#474) the executor IS the architecture everywhere by default" in norm
+    assert "Until the W12 flip" not in norm  # the pre-flip clause must be gone
+    # legacy dispatch instructions are conditioned on the declared-legacy branch
+    assert "Under the LEGACY architecture" in norm
 
 
 def test_gate_preservation_sentences_in_shared_source():
@@ -94,7 +97,7 @@ def test_gate_preservation_sentences_in_shared_source():
             "tier dispatches its model calls, and every EXECUTOR-tier build-seat "
             "dispatch requires the authenticated gate decision plus the internally "
             "minted plan context.") in norm
-    assert ("WF2/WF3 prose runs the complexity-gate step before any fallback-tier "
+    assert ("WF2/WF3 prose runs the complexity-gate step before any legacy-architecture "
             "build dispatch.") in norm
 
 
@@ -103,3 +106,36 @@ def test_executor_contract_shipped_into_wf2_corpus():
     norm = _norm(skill_corpus("implement-feature"))
     assert "Executor-dispatch contract (#470) — the PRIMARY tier." in norm
     assert "An executor seat is never a gate bypass" in norm
+
+
+def test_agent_definitions_carry_architecture_self_check():
+    """#474: both bundled legacy agent definitions carry the first-instruction architecture
+    SELF-CHECK (the interim Agent-side control while the mechanical interceptor is #606)."""
+    for name in ("rawgentic-implementer", "rawgentic-reviewer"):
+        body = _norm((REPO / "agents" / f"{name}.md").read_text(encoding="utf-8"))
+        assert ("ARCHITECTURE SELF-CHECK (#474): before any other work, walk up from your "
+                "working directory to find `.rawgentic_workspace.json`") in body, name
+        # S11 F4: repo-local workspace files are untrusted — the containment clause is pinned too
+        assert "IGNORE any such file that sits inside the git repository" in body, name
+        assert 'its top-level `defaultArchitecture` is exactly `"legacy"`' in body, name
+
+
+def test_agent_tool_dispatch_instructions_are_legacy_conditioned():
+    """#474: every Agent-tool dispatch instruction in both workflow corpora is conditioned on
+    the declared LEGACY architecture — no unconditional 'via the Agent tool' instruction
+    survives the flip. Paragraph-scoped (a wrapped continuation line inherits its paragraph's
+    condition), per the repo's anchored-guard convention."""
+    for skill in ("implement-feature", "fix-bug"):
+        for f in sorted((REPO / "skills" / skill).rglob("*.md")):
+            paragraphs = re.split(r"\n\s*\n", f.read_text(encoding="utf-8"))
+            # S11: broader trigger set — any operative Agent-tool dispatch wording, not just
+            # the one literal phrase (R2-1: "Agent tool calls" and bare bundled-agent commands
+            # slipped the earlier single-phrase predicate)
+            triggers = ("via the Agent tool", "Agent tool calls",
+                        "Dispatch one `rawgentic:rawgentic-implementer`",
+                        "Dispatch ONE build-subagent** (`rawgentic:rawgentic-implementer`)")
+            for para in paragraphs:
+                if any(trig in para for trig in triggers):
+                    norm = _norm(para)
+                    assert "LEGACY architecture" in norm, (
+                        f"{f}: unconditioned Agent-tool dispatch instruction:\n{norm[:200]}")

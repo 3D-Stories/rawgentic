@@ -2,6 +2,7 @@
 no live provider call), CLI contract, guarded import. Asserts the ACTUAL executing model on BOTH
 paths (executor -> routed model; inherit -> prior behavior untouched)."""
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -111,12 +112,16 @@ def _dispatch(seat, tmp_path, **kw):
     ), audit
 
 
-def _ws(tmp_path, executor_routing="__none__", project="rawgentic", path="."):
+def _ws(tmp_path, executor_routing="__none__", project="rawgentic", path=".",
+        default_architecture="__none__"):
     entry = {"name": project, "path": path, "modelRouting": {"analysis": "sonnet"}}
     if executor_routing != "__none__":
         entry["executorRouting"] = executor_routing
+    top = {"projects": [entry]}
+    if default_architecture != "__none__":
+        top["defaultArchitecture"] = default_architecture
     p = tmp_path / "ws.json"
-    p.write_text(json.dumps({"projects": [entry]}), encoding="utf-8")
+    p.write_text(json.dumps(top), encoding="utf-8")
     return str(p)
 
 
@@ -191,13 +196,15 @@ def test_parse_valid():
 
 
 # --- resolve-seat action -----------------------------------------------------------------------
-def test_resolve_absent_block_is_inherit(tmp_path):
-    assert er.resolve_seat_action("ship", _ws(tmp_path), "rawgentic")[0] == "inherit"
+def test_resolve_absent_block_is_executor_default(tmp_path):
+    # #474 guard (a): no defaultArchitecture, no executorRouting → EXECUTOR is the default
+    assert er.resolve_seat_action("ship", _ws(tmp_path), "rawgentic")[0] == "executor"
 
 
-def test_resolve_seat_not_in_config_is_inherit(tmp_path):
+def test_resolve_seat_not_in_config_is_executor_default(tmp_path):
+    # #474: a seat absent from an agreeing executorRouting block still defaults executor
     ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}})
-    assert er.resolve_seat_action("plan", ws, "rawgentic")[0] == "inherit"
+    assert er.resolve_seat_action("plan", ws, "rawgentic")[0] == "executor"
 
 
 def test_resolve_executor_mode(tmp_path):
@@ -319,9 +326,9 @@ def test_dispatch_audit_write_failure_exit5(tmp_path):
     assert res["error"]["retryable"] is False and res["error"].get("correlation_id") == "wf2:step5"
 
 
-# --- INHERIT path: executor never fires; prior behavior (model_routing) unchanged --------------
+# --- INHERIT path (#474: now the LEGACY architecture): executor never fires; model_routing unchanged
 def test_inherit_path_does_not_dispatch_and_model_routing_unchanged(tmp_path):
-    ws = _ws(tmp_path)  # no executorRouting -> inherit
+    ws = _ws(tmp_path, default_architecture="legacy")  # #474: inherit = declared legacy rollback
     assert er.resolve_seat_action("ship", ws, "rawgentic")[0] == "inherit"
     # no-touch guard: #427 does not edit model_routing role resolution
     assert mr.resolve(ws, "rawgentic", "analysis") == ("sonnet", None)
@@ -337,7 +344,9 @@ def _run_cli(*args):
 
 
 def test_cli_resolve_inherit(tmp_path):
-    r = _run_cli("resolve-seat", "--seat", "ship", "--workspace", _ws(tmp_path), "--project", "rawgentic")
+    # #474: the inherit action is produced by the declared legacy rollback, not by absence
+    r = _run_cli("resolve-seat", "--seat", "ship", "--workspace",
+                 _ws(tmp_path, default_architecture="legacy"), "--project", "rawgentic")
     assert r.returncode == 0
     assert json.loads(r.stdout)["action"] == "inherit"
 
@@ -447,10 +456,11 @@ def test_resolve_corrupt_workspace_fails_closed(tmp_path):
         er.resolve_seat_action("ship", str(corrupt), "rawgentic")
 
 
-def test_resolve_absent_workspace_is_inherit_not_error(tmp_path):
-    # A genuinely-absent workspace is "not configured" → inherit (NOT a read-error fail-closed).
+def test_resolve_absent_workspace_is_executor_not_error(tmp_path):
+    # #474 AC2: a genuinely-absent workspace is "not configured" → EXECUTOR default (non-error;
+    # corrupt stays fail-closed — absent != corrupt).
     missing = str(tmp_path / "does-not-exist.json")
-    assert er.resolve_seat_action("ship", missing, "rawgentic")[0] == "inherit"
+    assert er.resolve_seat_action("ship", missing, "rawgentic")[0] == "executor"
 
 
 def test_model_routing_stays_fail_open_on_corrupt_workspace(tmp_path):
@@ -2751,6 +2761,8 @@ def test_cli_chokepoint_refuses_dispatch_after_run_closed(tmp_path, capsys):
     # #555 AC2: once the ledger is run_closed, a NEW dispatch is refused at the choke-point
     # (before any spawn), exit 4. Uses close-run to close, then dispatches.
     ws, repo = _analysis_project(tmp_path)
+    # #474: declare first (close-run no longer seeds an undeclared run)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
     assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
     capsys.readouterr()
     a = _dispatch_args(ws)
@@ -2765,6 +2777,9 @@ def test_cli_chokepoint_refuses_keyless_dispatch(tmp_path, capsys):
     # #555 AC2 (8a F2): a dispatch with no correlation_id would be an uninstrumented spawn (no
     # ledger record) — the choke-point refuses it (exit 2) rather than spawning by convention.
     ws, repo = _analysis_project(tmp_path)
+    # #474: declare first so the keyless refusal (not run_not_declared) is what fires
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
     a = _dispatch_args(ws, cid=None)
     a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
     rc = er._do_dispatch(a)
@@ -2777,8 +2792,10 @@ def test_cli_chokepoint_refuses_keyless_dispatch(tmp_path, capsys):
 
 def test_cli_close_run_then_double_close_refused(tmp_path, capsys):
     ws, _ = _analysis_project(tmp_path)
+    # #474: declare first (close-run no longer seeds)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
     assert er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
-    assert json.loads(capsys.readouterr().out)["run_closed"] is True
+    assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["run_closed"] is True
     rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
     assert rc == er.EXIT_MALFORMED
     assert json.loads(capsys.readouterr().out)["error"]["code"] == "ledger_refused"
@@ -2788,7 +2805,7 @@ def test_cli_reconcile_final_refuses_open_ledger(tmp_path, capsys):
     # #555 AC3: final requires run_closed last.
     ws, repo = _analysis_project(tmp_path)
     lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("analysis", "c1")
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
@@ -2799,7 +2816,7 @@ def test_cli_reconcile_provisional_tolerates_in_flight(tmp_path, capsys):
     # #555 AC3: provisional tolerates an open ledger with a not-yet-observed (in-flight) call.
     ws, repo = _analysis_project(tmp_path)
     lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("analysis", "c1")   # no audit obs yet → missing_receipt, tolerated
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "provisional", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
@@ -2816,7 +2833,7 @@ def test_cli_reconcile_final_clean_reconciles_ok(tmp_path, capsys):
     ws, repo = _analysis_project(tmp_path)
     rd = _run_dir(repo)
     lg = ledger.ExpectedCallLedger(rd, "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_expected("analysis", "c1")
     lg.append_run_closed()
     lane = {"provider": "anthropic", "transport": "native", "auth_mode": "subscription_oauth",
@@ -2846,7 +2863,7 @@ def test_cli_reconcile_final_zero_expected_refuses(tmp_path, capsys):
     # (require_nonempty — a wiring bug that dropped the expected-set cannot ship vacuously).
     ws, repo = _analysis_project(tmp_path)
     lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
-    lg.append_initial("sha256:cfg")
+    lg.append_initial("sha256:cfg", architecture="executor")
     lg.append_run_closed()
     rc = er.main(["reconcile", "--run-id", "run1", "--mode", "final", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out)
@@ -2859,7 +2876,7 @@ def test_cli_reconcile_provisional_fails_on_hard_anomaly(tmp_path, capsys):
     ws, repo = _analysis_project(tmp_path)
     rd = _run_dir(repo)
     lg = ledger.ExpectedCallLedger(rd, "run1")
-    lg.append_initial("sha256:cfg")   # zero expected calls
+    lg.append_initial("sha256:cfg", architecture="executor")   # zero expected calls
     # an orphan receipt in the audit: (seat, cid) not in the (empty) expected set
     orphan_receipt = {"kind": "receipt", "nonce": "n1", "seat": "analysis", "correlation_id": "ghost",
                       "attempt_id": "0", "target_identity": ["m", "anthropic", "native",
@@ -2886,3 +2903,393 @@ def test_supervised_await_deadline_clamped_to_effective_timeout(tmp_path, monkey
     res, _sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch)
     assert res["exit"] == er.EXIT_OK, res
     assert seen["timeout_s"] == 5.0  # min(await default 3600, effective min(5.0, manifest))
+
+
+# --- #474: defaultArchitecture — the flip -------------------------------------------------------
+
+def test_resolve_architecture_absent_key_is_executor(tmp_path):
+    assert er.resolve_architecture(_ws(tmp_path)) == "executor"
+
+
+def test_resolve_architecture_explicit_values(tmp_path):
+    assert er.resolve_architecture(_ws(tmp_path, default_architecture="executor")) == "executor"
+    assert er.resolve_architecture(_ws(tmp_path, default_architecture="legacy")) == "legacy"
+
+
+def test_resolve_architecture_absent_workspace_is_executor(tmp_path):
+    assert er.resolve_architecture(str(tmp_path / "missing.json")) == "executor"
+
+
+@pytest.mark.parametrize("bad", ["Executor", "LEGACY", "agent-tool", 1, True, None, ["legacy"]])
+def test_resolve_architecture_invalid_value_fails_closed(tmp_path, bad):
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_architecture(_ws(tmp_path, default_architecture=bad))
+
+
+def test_resolve_architecture_corrupt_workspace_fails_closed(tmp_path):
+    corrupt = tmp_path / "ws.json"
+    corrupt.write_text('{"defaultArch TRUNCATED', encoding="utf-8")
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_architecture(str(corrupt))
+
+
+def test_resolve_legacy_architecture_routes_back(tmp_path):
+    # #474 guard (c): the manual joint rollback — legacy → inherit (the Agent-tool path)
+    ws = _ws(tmp_path, default_architecture="legacy")
+    action, reason = er.resolve_seat_action("ship", ws, "rawgentic")
+    assert action == "inherit"
+    assert "legacy" in reason and "#474" in reason
+
+
+def test_resolve_executor_reason_names_the_flip(tmp_path):
+    action, reason = er.resolve_seat_action("ship", _ws(tmp_path), "rawgentic")
+    assert action == "executor" and "#474" in reason
+
+
+def test_mixed_config_inherit_seat_under_executor_refused(tmp_path):
+    # #474 guard (d) config half: an explicit inherit seat contradicts the executor architecture
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "inherit"}})
+    with pytest.raises(er.MalformedConfig) as ei:
+        er.resolve_seat_action("ship", ws, "rawgentic")
+    msg = str(ei.value)
+    assert "ship" in msg and "inherit" in msg  # names the offending seat + mode
+
+
+def test_mixed_config_executor_seat_under_legacy_refused(tmp_path):
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}},
+             default_architecture="legacy")
+    with pytest.raises(er.MalformedConfig) as ei:
+        er.resolve_seat_action("ship", ws, "rawgentic")
+    msg = str(ei.value)
+    assert "ship" in msg and "executor" in msg
+
+
+def test_agreeing_executor_seat_under_executor_is_noop_valid(tmp_path):
+    # the live rawgentic all-executor block stays valid as a redundant no-op
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}})
+    assert er.resolve_seat_action("ship", ws, "rawgentic")[0] == "executor"
+
+
+def test_agreeing_inherit_seat_under_legacy_is_noop_valid(tmp_path):
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "inherit"}},
+             default_architecture="legacy")
+    assert er.resolve_seat_action("ship", ws, "rawgentic")[0] == "inherit"
+
+
+def test_driver_only_seats_unaffected_by_architecture(tmp_path):
+    for arch in ("executor", "legacy"):
+        ws = _ws(tmp_path, default_architecture=arch)
+        assert er.resolve_seat_action("merge", ws, "rawgentic")[0] == "driver_only"
+
+
+def test_malformed_executor_routing_still_refused_under_flip(tmp_path):
+    # parse_executor_routing validation unchanged — malformed block refuses even though modes
+    # no longer select the tier
+    ws = _ws(tmp_path, {"version": 99, "seats": {}})
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_seat_action("ship", ws, "rawgentic")
+
+
+def test_single_snapshot_read(tmp_path, monkeypatch):
+    # S3-TOCTOU: one json.load per resolution — architecture + entry + block from one snapshot
+    calls = []
+    real_load = er.json.load
+    def counting_load(fh, *a, **k):
+        calls.append(getattr(fh, "name", "?"))
+        return real_load(fh, *a, **k)
+    ws = _ws(tmp_path, {"version": 1, "seats": {"ship": "executor"}})
+    monkeypatch.setattr(er.json, "load", counting_load)
+    er.resolve_seat_action("ship", ws, "rawgentic")
+    ws_reads = [c for c in calls if c.endswith("ws.json")]
+    assert len(ws_reads) <= 1, f"workspace read {len(ws_reads)} times: {ws_reads}"
+
+
+def test_legacy_rollback_target_definitions_exist():
+    # #474 guard (c) proxy: the bundled legacy agent definitions stay in-tree as the rollback
+    # target (frontmatter-shaped: leading --- block with a name: line)
+    repo = Path(__file__).resolve().parents[2]
+    for name in ("rawgentic-implementer", "rawgentic-reviewer"):
+        p = repo / "agents" / f"{name}.md"
+        assert p.is_file(), f"rollback target missing: {p}"
+        head = p.read_text(encoding="utf-8").split("---")
+        assert len(head) >= 3 and "name:" in head[1], f"frontmatter malformed: {p}"
+
+
+# --- #474 T3: begin-run + entry-point architecture enforcement ---------------------------------
+
+def _begin(ws, run_id="run1"):
+    return er.main(["begin-run", "--run-id", run_id, "--workspace", ws, "--project", "rawgentic"])
+
+
+def test_cli_begin_run_declares_executor(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    out = json.loads(capsys.readouterr().out)
+    assert out["run_id"] == "run1" and out["architecture"] == "executor"
+    st = ledger.ExpectedCallLedger(_run_dir(repo), "run1").read()
+    assert st.architecture == "executor" and st.initial_digest
+
+
+def test_cli_begin_run_refuses_under_legacy(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    raw = json.loads(Path(ws).read_text(encoding="utf-8"))
+    raw["defaultArchitecture"] = "legacy"
+    raw["projects"][0].pop("executorRouting")  # avoid the mixed-config refusal masking this one
+    Path(ws).write_text(json.dumps(raw), encoding="utf-8")
+    rc = _begin(ws)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "legacy_architecture_begin_refused"
+    assert not (_run_dir(repo) / "expected-calls.jsonl").exists()  # nothing written
+
+
+def test_cli_begin_run_idempotent_same_digest(tmp_path, capsys):
+    ws, _ = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    assert _begin(ws) == er.EXIT_OK  # same (architecture, config_digest) → benign noop
+    out = json.loads(capsys.readouterr().out)
+    assert out.get("already_declared") is True
+
+
+def test_cli_begin_run_digest_mismatch_refused(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    lg = ledger.ExpectedCallLedger(rd, "run1")
+    lg.append_initial("sha256:DIFFERENT", architecture="executor")
+    rc = _begin(ws)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "begin_run_digest_conflict"
+
+
+def test_cli_dispatch_requires_declaration(tmp_path, capsys):
+    # #474: the lazy seed is GONE — dispatch on an undeclared run refuses run_not_declared
+    ws, repo = _analysis_project(tmp_path)
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_not_declared"
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    assert lg.read().initial_digest is None  # consume-never-seed
+
+
+def test_cli_dispatch_refuses_legacy_pinned_ledger(tmp_path, capsys):
+    # guard (d) ledger half: an executor dispatch against a legacy-declared run is mixed — refuse
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="legacy")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"
+
+
+def test_cli_dispatch_none_architecture_ledger_proceeds(tmp_path, capsys):
+    # pre-flip in-flight run (initial exists, no architecture) keeps dispatching (bounded compat)
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text(
+        json.dumps({"kind": "initial", "run_id": "run1", "initial_digest": "sha256:pre"}) + "\n",
+        encoding="utf-8")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    # proceeds past the declaration gate: whatever the (stubless) dispatch fails on later, it is
+    # NOT the declaration/mixing refusals
+    assert out.get("error", {}).get("code") not in ("run_not_declared", "mixed_architecture_run_refused")
+    assert rc != er.EXIT_ENFORCEMENT or out["error"]["code"] not in (
+        "run_not_declared", "mixed_architecture_run_refused")
+
+
+def test_cli_dispatch_refuses_after_midrun_rollback(tmp_path, capsys):
+    # mid-run flip: declared-executor run + workspace edited to legacy → next dispatch refuses
+    # LOUD at the config level (legacy architecture has no executor seats; exit 2)
+    ws, repo = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    raw = json.loads(Path(ws).read_text(encoding="utf-8"))
+    raw["defaultArchitecture"] = "legacy"
+    raw["projects"][0].pop("executorRouting")
+    Path(ws).write_text(json.dumps(raw), encoding="utf-8")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_MALFORMED and "inherit" in out["error"]["message"]
+
+
+def test_cli_recover_refuses_under_legacy_workspace(tmp_path, capsys):
+    # rollback stops recovery relaunches too ("lever takes effect" on every spawn path)
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    raw = json.loads(Path(ws).read_text(encoding="utf-8"))
+    raw["defaultArchitecture"] = "legacy"
+    raw["projects"][0].pop("executorRouting")
+    Path(ws).write_text(json.dumps(raw), encoding="utf-8")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "legacy_architecture_recover_refused"
+
+
+def test_cli_recover_refuses_legacy_pinned_ledger(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="legacy")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"
+
+
+def test_cli_recover_refuses_corrupt_ledger_prelaunch(tmp_path, capsys):
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text("{corrupt\n", encoding="utf-8")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "ledger_refused"
+
+
+def test_cli_close_run_requires_declaration(tmp_path, capsys):
+    # #474: the zero-dispatch close seed is GONE — closing a never-declared run refuses
+    ws, _ = _analysis_project(tmp_path)
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_not_declared"
+
+
+def test_cli_close_run_none_architecture_proceeds(tmp_path, capsys):
+    # pre-flip in-flight run closes fine (advisory)
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text(
+        json.dumps({"kind": "initial", "run_id": "run1", "initial_digest": "sha256:pre"}) + "\n",
+        encoding="utf-8")
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_OK and out["run_closed"] is True
+
+
+def test_cli_close_run_refuses_legacy_pinned_ledger(tmp_path, capsys):
+    # a legacy-in-ledger state is unreachable via begin-run — defended against hand-crafted files
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="legacy")
+    rc = er.main(["close-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "mixed_architecture_run_refused"
+
+
+# --- #474 8a remediation: snapshot linearization + symlink + begin-run strictness ---------------
+
+def test_dangling_workspace_symlink_fails_closed(tmp_path):
+    # 8a F4: a dangling symlink is present-but-unreadable — MalformedConfig, never executor
+    link = tmp_path / "ws.json"
+    os.symlink(tmp_path / "gone.json", link)
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_architecture(str(link))
+    with pytest.raises(er.MalformedConfig):
+        er.resolve_seat_action("ship", str(link), "rawgentic")
+
+
+def test_cli_begin_run_refuses_unpinned_prior_ledger(tmp_path, capsys):
+    # 8a F3: a pre-3.93 (architecture-less) initial is NOT an executor declaration — begin-run
+    # must not certify it as already_declared; consumers keep their None compat
+    ws, repo = _analysis_project(tmp_path)
+    rd = _run_dir(repo)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "expected-calls.jsonl").write_text(
+        json.dumps({"kind": "initial", "run_id": "run1", "initial_digest": "sha256:pre"}) + "\n",
+        encoding="utf-8")
+    rc = _begin(ws)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "begin_run_unpinned_ledger"
+
+
+def test_cli_dispatch_single_workspace_read(tmp_path, capsys, monkeypatch):
+    # 8a F1: the WHOLE dispatch entry point does ONE workspace read — architecture, seat
+    # decision, and repo root all come from one snapshot (linearization at the CLI level)
+    ws, repo = _analysis_project(tmp_path)
+    assert er.main(["begin-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"]) == er.EXIT_OK
+    capsys.readouterr()
+    opens = []
+    real_open = er._load_workspace_snapshot
+    def counting(path):
+        opens.append(path)
+        return real_open(path)
+    monkeypatch.setattr(er, "_load_workspace_snapshot", counting)
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    er._do_dispatch(a)
+    capsys.readouterr()
+    assert len(opens) == 1, f"dispatch read the workspace {len(opens)} times"
+
+
+def test_cli_begin_run_single_workspace_read(tmp_path, capsys, monkeypatch):
+    ws, _ = _analysis_project(tmp_path)
+    opens = []
+    real_open = er._load_workspace_snapshot
+    def counting(path):
+        opens.append(path)
+        return real_open(path)
+    monkeypatch.setattr(er, "_load_workspace_snapshot", counting)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    assert len(opens) == 1, f"begin-run read the workspace {len(opens)} times"
+
+
+def test_cli_recover_single_workspace_read(tmp_path, capsys, monkeypatch):
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    opens = []
+    real_open = er._load_workspace_snapshot
+    def counting(path):
+        opens.append(path)
+        return real_open(path)
+    monkeypatch.setattr(er, "_load_workspace_snapshot", counting)
+    er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    capsys.readouterr()
+    assert len(opens) == 1, f"recover-run read the workspace {len(opens)} times"
+
+
+def test_cli_dispatch_refuses_run_digest_conflict(tmp_path, capsys):
+    # S11 F1: a routing-table change after begin-run is a declared-state conflict at CONSUME time
+    ws, repo = _analysis_project(tmp_path)
+    assert _begin(ws) == er.EXIT_OK
+    capsys.readouterr()
+    table = repo / "claude_docs" / "routing" / "phase-executor-table.json"
+    raw = json.loads(table.read_text(encoding="utf-8"))
+    raw["pools"]["claude"]["concurrency"] = raw["pools"]["claude"]["concurrency"] + 1
+    table.write_text(json.dumps(raw), encoding="utf-8")
+    a = _dispatch_args(ws)
+    a.prompt_file = str(tmp_path / "p.txt"); (tmp_path / "p.txt").write_text("hi", encoding="utf-8")
+    rc = er._do_dispatch(a)
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_digest_conflict"
+
+
+def test_cli_recover_refuses_closed_ledger_at_preflight(tmp_path, capsys):
+    # S11 F5: run_closed refuses at the preflight, before supervisor construction
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:cfg", architecture="executor")
+    lg.append_run_closed()
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_closed_recover_refused"
+
+
+def test_cli_recover_refuses_run_digest_conflict(tmp_path, capsys):
+    # S11 R2-2: recovery consumes the declared epoch too
+    ws, repo = _analysis_project(tmp_path)
+    lg = ledger.ExpectedCallLedger(_run_dir(repo), "run1")
+    lg.append_initial("sha256:NOT-THE-TABLE", architecture="executor")
+    rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_digest_conflict"

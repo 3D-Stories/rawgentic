@@ -826,8 +826,8 @@ class TestDispatchGrammar:
         producer = (
             "The producer is the executor result dict "
             "(`type=executor:<seat>`, `model=<actual_model>`, `resolution=primary`) "
-            "on the primary tier, or the fallback (legacy) Agent-tool dispatch "
-            "(`resolution=fallback`) as today.")
+            "on the primary tier, or — under the LEGACY architecture only — "
+            "the Agent-tool dispatch (`resolution=fallback`).")
         assert producer in corpus, (
             "the #470 DISPATCH producer sentence must be present in the "
             "implement-feature corpus")

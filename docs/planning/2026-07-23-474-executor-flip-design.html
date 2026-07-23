@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>#474 Executor Migration Flip — Design r6</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-23 01:01 MDT</div>
+<h1>#474 Executor Migration Flip — Design r6</h1>
+
+</header>
+<main>
+<h1>Design — #474 executor migration flip (W12, closes epic #475) — r6 (FINAL, gate closed)</h1>
+<p><strong>Issue:</strong> #474 <code>feat(executor): migration flip + legacy retirement (W12, closes epic)</code> <strong>Date:</strong> 2026-07-23 · <strong>Session:</strong> 0ef46985 · <strong>Base:</strong> origin/main <code>081fd16</code> (v3.92.4, phase_executor 0.10.0) <strong>Blast:</strong> HIGH — changes the default dispatch architecture for every project and seat. <strong>Owner ratification:</strong> 2026-07-22 (the U-3 ratification; verbatim in mempalace <code>rawgentic/decisions</code>): flip the default to executor, run-level enforced, <strong>no runtime auto-fallback</strong>, rollback = a deliberate JOINT config change; <strong>keep the legacy Agent-tool path + bundled agent definitions in-tree as the rollback target</strong> (the one deviation from the issue&#x27;s AC3 &quot;removed&quot;). <strong>Pre-flip rollback anchor:</strong> main <code>081fd163e7041220452fb3c219b01f219a2867a4</code>. <strong>Revision:</strong> r6 FINAL — owner descope decision (2026-07-23, in-session AskUserQuestion after the incremental verifier returned NOT VERIFIED on the guard/binding subsystem): the PreToolUse guard + session→run binding subsystem is DESCOPED to <strong>#606</strong> (which carries r5 §2.2b/§2.2c and the verifier findings as its starting spec). #474 ships the core flip, verified clean since pass 3. Fold ledgers: §9-§12; descope ledger §13. Counters: <code>claude_docs/.wf2-state/474/loopback_counters.json</code>.</p>
+<h2>0. Scope contract (what &quot;flip&quot; means here)</h2>
+<p>1. <strong>AC1 — run-level architecture version, enforced.</strong> A run is 100% executor or 100% legacy,    never mixed. EXECUTOR runs are declared mechanically at run start (<code>begin-run</code> ledger pin,    §2.3) and enforced at every executor entry point (dispatch/recover/close refuse mixed or    undeclared runs). The AGENT-TOOL side is controlled in #474 by three interim layers —    architecture-conditioned skill prose + corpus drift pins (§2.4), a workspace self-check    inside both bundled agent definitions (§2.2b), and a detective run-record warn (§2.4) —    with the MECHANICAL Agent-tool interceptor descoped to <strong>#606</strong> (owner decision 2026-07-23,    §13). Stated honestly: until #606 ships, Agent-side enforcement is prose- and    detection-level, not a harness interceptor. 2. <strong>AC2 — default flips to executor for ALL projects/seats.</strong> Absent config now means executor.    The prior per-project <code>executorRouting</code> opt-in stops selecting the tier. 3. <strong>No runtime auto-fallback.</strong> An executor dispatch failure fails loud via the ERROR protocol    (exit taxonomy unchanged); it never routes to the Agent-tool path mid-run. Extends #417&#x27;s    no-silent-downgrade to an absolute. 4. <strong>Rollback = deliberate joint config change.</strong> <code>defaultArchitecture: &quot;legacy&quot;</code> at the    workspace top level routes every seat back to the legacy Agent-tool path (kept in-tree:    <code>agents/rawgentic-implementer.md</code>, <code>agents/rawgentic-reviewer.md</code> — retained as the rollback    target, gaining ONLY an additive architecture self-check paragraph, §2.2b). Documented and    tested; never automatic, never per-run. 5. <strong>#450 re-evaluated post-flip (noted, NOT actioned):</strong> #450 proposes ultracode/Workflow-tool    interop for the Agent-tool fan-out. Post-flip that premise is legacy-architecture-only; an    interop design would have to route through executor dispatch (or be legacy-scoped). Stays open,    unchanged, re-scoped by the owner separately.</p>
+<h2>1. Approaches considered</h2>
+<ul>
+<li><strong>A (chosen) — workspace-level architecture key + run-start ledger pin + Agent-tool guard.</strong></li>
+</ul>
+<p>  One new top-level workspace key selects the architecture; a mandatory run-start declaration   pins it in the per-run expected-call ledger; every executor entry point (dispatch, recover,   close) enforces the pin; a PreToolUse hook gates the legacy Agent-tool entry. (r2: run-start   declaration and the hook were added by the pass-1 fold — three independent cross-model voices   converged on declare-at-run-start, and the ungated Agent-tool entry was pass-1&#x27;s Critical.)</p>
+<ul>
+<li><strong>B (rejected) — per-project <code>architecture</code> override on each workspace entry.</strong> Finer-grained</li>
+</ul>
+<p>  rollback, but contradicts the ratified rollback model (ONE joint lever); multiplies mixed-config   states for granularity nobody asked for.</p>
+<ul>
+<li><strong>C (rejected) — encode the architecture in the phase-executor routing table.</strong> Wrong layer:</li>
+</ul>
+<p>  the table maps seats to models/chains (#445); tier selection is a workspace policy.</p>
+<h2>2. Design (approach A, r6)</h2>
+<h3>2.1 Config surface — <code>defaultArchitecture</code> (workspace top level)</h3>
+<p>New OPTIONAL top-level key in <code>.rawgentic_workspace.json</code> (precedent for a top-level key read: <code>defaultProtectionLevel</code>, <code>hooks/security_guard_lib.py:252</code>):</p>
+<pre><code>{ &quot;defaultArchitecture&quot;: &quot;executor&quot; }</code></pre>
+<p>New pure function in <code>hooks/executor_routing_lib.py</code>:</p>
+<pre><code>resolve_architecture(workspace_path: str) -&gt; str            # &quot;executor&quot; | &quot;legacy&quot;
+resolve_architecture_from_snapshot(ws: dict) -&gt; str          # same rules, pre-loaded snapshot (§2.3 TOCTOU)</code></pre>
+<ul>
+<li>Key ABSENT → <code>&quot;executor&quot;</code> — <strong>this is the flip</strong> (AC2). No config anywhere = executor.</li>
+<li><code>&quot;executor&quot;</code> / <code>&quot;legacy&quot;</code> (exact strings) → as declared.</li>
+<li>Any other value/type → <code>MalformedConfig</code> (CLI exit 2) — a typo&#x27;d architecture must never</li>
+</ul>
+<p>  silently pick a side (the <code>parse_executor_routing</code> false-cutover discipline, both directions).</p>
+<ul>
+<li>Unreadable/corrupt workspace → <code>MalformedConfig</code> (fail-CLOSED, matching <code>resolve_seat_action</code>&#x27;s</li>
+</ul>
+<p>  <code>strict_read=True</code> rationale: an enforcement boundary that cannot evaluate DENIES).</p>
+<h3>2.2 <code>resolve_seat_action</code> rewrite — architecture selects the tier</h3>
+<p>1. <code>classify_seat</code> unchanged (driver_only / competitive-only refusal unchanged). 2. <strong>One workspace snapshot per resolution (r2, S3-TOCTOU):</strong> the workspace file is <code>json.load</code>ed    ONCE per CLI invocation; <code>resolve_architecture_from_snapshot</code>, the project entry, and the    <code>executorRouting</code> block are all read from that single in-memory snapshot — the load is the    configuration linearization point. (<code>resolve_repo_root</code> participates in the same snapshot at    the dispatch call site.) 3. <code>executorRouting</code> still validated (<code>parse_executor_routing</code> unchanged); its seat modes NO    LONGER select the tier. <strong>Conflict refusal (config-level third of AC1):</strong> an explicit seat    mode contradicting the architecture — <code>&quot;inherit&quot;</code> under executor, <code>&quot;executor&quot;</code> under legacy —    raises <code>MalformedConfig</code> (&quot;mixed-architecture config refused&quot;), the message NAMING the    offending seat and mode. Agreeing modes stay valid as a redundant no-op (the live rawgentic    all-executor block). 4. executor → <code>(&quot;executor&quot;, &quot;executor architecture (default since #474)&quot;)</code>. 5. legacy → <code>(&quot;inherit&quot;, &quot;legacy architecture (defaultArchitecture: legacy — manual rollback, #474)&quot;)</code>.    Action vocabulary unchanged (<code>inherit</code> = the legacy Agent-tool path).</p>
+<h3>2.2b Bundled-agent self-check (interim Agent-side control; guard descoped to #606)</h3>
+<p>The r2-r5 PreToolUse guard + session→run binding subsystem is NOT part of #474 (owner descope, §13; design history preserved in §9-§12 and in #606&#x27;s body). #474 ships one cheap, stateless Agent-side control: <strong>both bundled agent definitions (<code>agents/rawgentic-implementer.md</code>, <code>agents/rawgentic-reviewer.md</code>) gain an additive first-instruction SELF-CHECK</strong> — the agent walks up from its cwd to find <code>.rawgentic_workspace.json</code> and REFUSES with a structured error unless <code>defaultArchitecture</code> is <code>&quot;legacy&quot;</code> (absent key = executor = refuse). Properties:</p>
+<ul>
+<li>In-band: lives inside the dispatched agent&#x27;s own instructions — no hook execution required,</li>
+</ul>
+<p>  no session identity, no state files; works in worktree isolation (cwd-walk).</p>
+<ul>
+<li>Fail direction: cannot find the workspace → refuse (these agents are meaningless outside a</li>
+</ul>
+<p>  rawgentic workspace); corrupt/unreadable → refuse.</p>
+<ul>
+<li>A corpus drift pin asserts the self-check sentence exists in both definitions.</li>
+<li>Honest bound: an instruction-level control — an agent that ignores its own system prompt is</li>
+</ul>
+<p>  the same trust class as an orchestrator that ignores its prose (the named residual, accepted   by the descope decision; #606 replaces this class with a harness interceptor).</p>
+<h3>2.3 Run-start architecture declaration + ledger pin (r6 — executor-side, binding-free)</h3>
+<p><strong>Executor runs declare at run START via a new CLI verb (never a lazy seed):</strong></p>
+<pre><code>python3 hooks/executor_routing_lib.py begin-run --run-id &lt;id&gt; \
+  --workspace &lt;ws&gt; --project &lt;name&gt;</code></pre>
+<ul>
+<li>Resolves the architecture from ONE workspace snapshot (§2.2), resolves the routing table, and</li>
+</ul>
+<p>  atomically writes the ledger <code>initial</code> record — <code>append_initial(config_digest,   architecture=&quot;executor&quot;)</code> — under the existing ledger flock. Under a LEGACY workspace   architecture, begin-run REFUSES (exit 4, &quot;legacy architecture — executor run machinery   unused&quot;): legacy runs have no ledger; their declaration is the session-note line plus the   run-record <code>architecture</code> field (§2.4). (The r4/r5 both-architecture session-binding   declaration moved to #606 with the binding itself.)</p>
+<ul>
+<li><strong>Idempotence keyed on BOTH fields:</strong> a duplicate begin-run is benign-noop ONLY when the</li>
+</ul>
+<p>  existing initial matches the architecture AND the current <code>config_digest</code>; any mismatch   refuses under the ledger lock (a routing-table change mid-run is a declared-state conflict,   never a silent re-pin).</p>
+<ul>
+<li>WF2/WF3 prose: Step 2&#x27;s executor tier probe is followed by <code>begin-run</code> — executor runs are</li>
+</ul>
+<p>  declared mechanically at run start, zero-dispatch runs included.</p>
+<ul>
+<li><code>ledger.py</code> changes: <code>LedgerState.architecture: Optional[str]</code>;</li>
+</ul>
+<p>  <code>append_initial(initial_digest, architecture)</code> (required kwarg, validated   <code>in {&quot;executor&quot;,&quot;legacy&quot;}</code> — the vocabulary stays two-valued for #606 forward-compat even   though #474 only ever writes &quot;executor&quot;); <code>_parse</code> reads/validates (absent → <code>None</code> compat;   present-but-invalid → <code>LedgerError</code>); <code>append_expected(expected_architecture=...)</code> asserts   under the flock (no read-then-append window). <strong>BREAKING signature</strong> (callers, grep-verified:   executor_routing_lib.py dispatch :2250 + close-run :2537, tests, ledger.py itself; kukakuka   consumes the contract SCHEMA, not ledger.py&#x27;s Python API). phase_executor 0.10.0 → 0.11.0.</p>
+<ul>
+<li><strong>Executor entry points CONSUME the declaration (never seed):</strong></li>
+<li><code>dispatch</code>: requires an existing <code>initial</code> — absent → <code>run_not_declared</code> (exit 4, message</li>
+</ul>
+<p>    names begin-run). Ledger architecture <code>&quot;legacy&quot;</code> → <code>mixed_architecture_run_refused</code>     (exit 4). The architecture assertion lives INSIDE the flock-held <code>append_expected</code>     precheck.</p>
+<ul>
+<li><code>recover-run</code>: before supervisor construction, assert workspace architecture == executor</li>
+</ul>
+<p>    AND ledger architecture ∈ {&quot;executor&quot;, None-compat}; <code>None</code> accepted ONLY on an existing     VALID initial (non-empty <code>initial_digest</code>); absent/deleted/corrupt/symlinked ledger refuses     BEFORE any launch.</p>
+<ul>
+<li><code>close-run</code>: requires the declaration exactly like dispatch — NO initial →</li>
+</ul>
+<p>    <code>run_not_declared</code>; <code>architecture: None</code> initial (pre-flip in-flight) → proceed + advisory;     <code>architecture: legacy</code> in a ledger → refuse (unreachable state defended). <code>reconcile</code>     consumes the record unchanged.</p>
+<ul>
+<li><strong>Mid-run rollback edit — refuse-loud:</strong> after the joint edit to legacy, every executor entry</li>
+</ul>
+<p>  point (dispatch, recover) refuses at its next call; the run cannot continue mixed; the   operator restarts fresh legacy runs.</p>
+<ul>
+<li><strong>Compat (<code>architecture: None</code> ledgers) — bounded window with a PROVEN invariant:</strong></li>
+</ul>
+<p>  <code>append_initial</code> was called ONLY from the two executor CLI paths (dispatch :2250, close-run   :2537) plus tests in ≤3.92; the legacy path writes no ledger. Every pre-3.93 ledger is an   executor run&#x27;s BY CONSTRUCTION. <code>None</code> → executor with an advisory, bounded to the 3.93.x   line. In-flight pre-flip runs keep dispatching; <code>run_not_declared</code> applies only to runs with   NO initial.</p>
+<h3>2.4 Fail-loud prose + audit legibility (r2 additions)</h3>
+<ul>
+<li><code>shared/blocks/model-routing-resolve.md</code> (SYNCED → <code>skills/implement-feature/SKILL.md</code>; edit</li>
+</ul>
+<p>  source, run <code>scripts/sync_shared_blocks.py</code>): the &quot;FALLBACK (legacy) tier&quot; framing is   rewritten to <strong>&quot;LEGACY architecture — manual joint-config rollback target&quot;</strong>; &quot;Until the W12   flip (#474)…&quot; becomes &quot;Since the W12 flip (#474) the executor IS the architecture everywhere by   default; the Agent-tool path remains in-tree ONLY as the legacy architecture, reachable solely   via the deliberate joint rollback (<code>defaultArchitecture: &quot;legacy&quot;</code>), NEVER via runtime   fallback — an executor failure is surfaced via the ERROR protocol.&quot;</p>
+<ul>
+<li><strong>Architecture-conditioned dispatch prose (r2, S2):</strong> the legacy dispatch instructions in both</li>
+</ul>
+<p>  skills (implement-feature <code>references/steps.md</code> — the Agent-tool/<code>rawgentic:rawgentic-implementer</code>   /reviewer dispatch sentences at ~:498/:995/:1016/:1092 — and fix-bug <code>references/steps.md:394</code>,   plus both SKILL.md blocks) are made explicitly conditional: each names the declared-legacy   branch as its ONLY entry (&quot;Under the LEGACY architecture (declared, <code>defaultArchitecture:   legacy</code>) dispatch via …&quot;), and the executor branch names only executor entry points. A corpus   drift-guard (anchored single-sentence pins per file, per the repo&#x27;s guard conventions — no   whole-corpus regex) asserts the legacy-branch conditioning sentence exists and the   unconditional forms are gone.</p>
+<ul>
+<li><code>skills/fix-bug/SKILL.md</code> bespoke copy hand-edited to match.</li>
+<li><strong>Run-record architecture field (r2, S4; r3 hardened, SR2-7):</strong> <code>work_summary.py</code> schema gains</li>
+</ul>
+<p>  <code>architecture: &quot;executor&quot; | &quot;legacy&quot;</code> — <strong>REQUIRED when the record&#x27;s <code>workflow_version</code> is   ≥ 3.93.0</strong>, optional/lenient below (records carry <code>workflow_version</code>, so compatibility and   new-record enforcement are mechanically distinguishable; a new record omitting it is REJECTED,   keeping the durable-ground-truth claim honest). <strong>Version comparison (r5, SR4-9):</strong> strict   grammar <code>^\d+\.\d+\.\d+$</code> parsed to an int 3-tuple and tuple-compared — never lexical; a   malformed <code>workflow_version</code> is treated as NEW (architecture required), failing toward the   requirement, with the malformed value named in the validator message. Validator + <code>docs/run-records.md</code> §fields   updated; WF2/WF3 Step-16 prose populates it from the run&#x27;s declaration. Both architectures now   leave a durable machine-readable per-run record (executor: ledger + run-record; legacy:   run-record).</p>
+<ul>
+<li><strong>Step-16 detective surface (r6 — V4-widened):</strong> <code>work_summary.py</code> validation WARNS (visible,</li>
+</ul>
+<p>  non-fatal) when a run-record carries <code>architecture: &quot;executor&quot;</code> while ANY of its DISPATCH   lines carries a NON-<code>primary</code> resolution (<code>fallback</code> OR <code>generic</code>) — post-hoc detection of   Agent-tool dispatch inside an executor run, independent of any hook. Advisory by design: the   DISPATCH stream has no run-ID join key, so sequential legacy+executor runs of one issue can   false-positive (named; run-keyed telemetry is #606 AC3). Rides the T6 run-record work.</p>
+<ul>
+<li><strong>DISPATCH audit vocab UNCHANGED (A2 disposition, r6-updated after the descope):</strong> the</li>
+</ul>
+<p>  <code>resolution=primary|fallback|generic</code> tokens stay (schema&#x27;d in run-records). With the   interceptor descoped to #606, a <code>fallback</code>/<code>generic</code> Agent-tool line inside an executor run   is DETECTABLE, not unreachable: the run-record <code>architecture</code> field + the Step-16 detective   warn above are the #474 mechanisms; prose conditioning + the agent self-check are the   preventive layers; mechanical unreachability arrives with #606. Adding a seventh DISPATCH   field would churn the pinned regex, validator, and every consumer for no #474 gain.</p>
+<h3>2.5 Rollback procedure (guard c) — documented + tested</h3>
+<p>Documented in <code>docs/config-reference.md</code> (new <code>defaultArchitecture</code> entry) and the PR body:</p>
+<p>1. Owner + operator together set <code>&quot;defaultArchitecture&quot;: &quot;legacy&quot;</code> at the top level of    <code>.rawgentic_workspace.json</code>. 2. Remove (or set to <code>&quot;inherit&quot;</code>) any per-project <code>executorRouting</code> seat modes that say    <code>&quot;executor&quot;</code> — a contradicting explicit mode is refused (§2.2), by design. Operationally:    CLOSE (or recover + close) any in-flight executor runs first — they stop loudly at their    next dispatch/recovery anyway (§2.3), but an orderly close keeps ledgers reconciled.    <strong>Migration preflight (r2, A6):</strong> at flip time the LIVE workspace holds exactly one <code>executorRouting</code>    block (rawgentic, all-executor — verified 2026-07-23) and zero explicit <code>&quot;inherit&quot;</code> modes, so    no deployed config becomes malformed at upgrade; the config-reference entry carries a    one-line preflight (<code>grep -n executorRouting .rawgentic_workspace.json</code> + fix guidance) for    any future workspace. 3. In-flight executor runs stop loudly at their next dispatch/recovery; restart as fresh legacy    runs. The bundled agents and legacy dispatch prose are in-tree and functional. 4. Roll-forward is the same edit in reverse. Rollback anchor: pre-flip main    <code>081fd163e7041220452fb3c219b01f219a2867a4</code> (v3.92.4) — reverting the #474 PR restores    pre-flip defaults wholesale.</p>
+<h3>2.6 Out of scope / exempt</h3>
+<ul>
+<li><code>hooks/driver_bench_lib.py</code> (:520) consumes <code>resolve_table</code> (seat→model), which carries no</li>
+</ul>
+<p>  architecture gate — nothing to exempt (r2: peer&#x27;s <code>context=bench</code> param declined on this   ground).</p>
+<ul>
+<li>Epic driver <code>hooks/driver_lib.py</code>: zero executor/Agent-tool surface (Step 2 confirmed).</li>
+<li><code>skills/setup</code> Step 2i seat table (<code>phaseExecutorTable</code>): different config surface, untouched.</li>
+<li>The bake-off (<code>competitive</code>) seat AC1 carve-out from #470 unchanged.</li>
+</ul>
+<h2>3. File changes (r2)</h2>
+<table>
+<thead><tr><th>#</th><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>hooks/executor_routing_lib.py</code></td><td><code>resolve_architecture</code> (+<code>_from_snapshot</code>); <code>resolve_seat_action</code> rewrite; <code>begin-run</code> verb (executor ledger declaration, (arch,digest) idempotence, refuses under legacy); dispatch consume+refuse (<code>run_not_declared</code>, <code>mixed_architecture_run_refused</code>); recover-run gate (valid-initial predicate); close-run consume (no seed); single-snapshot workspace read</td></tr>
+<tr><td>2</td><td><code>phase_executor/src/phase_executor/ledger.py</code></td><td><code>LedgerState.architecture</code>; <code>append_initial(..., architecture)</code> (BREAKING signature — callers enumerated §2.3); <code>append_expected(expected_architecture=...)</code> flock-held assertion; tolerant parse</td></tr>
+<tr><td>3</td><td><code>phase_executor/pyproject.toml</code> + <code>src/phase_executor/__init__.py</code></td><td>0.10.0 → 0.11.0</td></tr>
+<tr><td>4</td><td><code>agents/rawgentic-implementer.md</code> + <code>agents/rawgentic-reviewer.md</code></td><td>additive architecture SELF-CHECK first-instruction paragraph (interim Agent-side control, §2.2b; the PreToolUse guard itself is #606)</td></tr>
+<tr><td>5</td><td><code>tests/hooks/test_executor_routing.py</code></td><td>red-first flips (:194,:198,:450) + guards (a)–(d) + conflict/mid-run/recover/None-compat/begin-run tests</td></tr>
+<tr><td>6</td><td><code>tests/phase_executor/test_ledger.py</code></td><td>signature, architecture validation, None-compat, flock-held assertion</td></tr>
+<tr><td>8</td><td><code>tests/test_model_routing_resolve_prose.py</code> + <code>tests/test_wf3_clarity.py</code></td><td>post-flip prose pins + legacy-branch conditioning pins</td></tr>
+<tr><td>9</td><td><code>shared/blocks/model-routing-resolve.md</code> + synced <code>skills/implement-feature/SKILL.md</code></td><td>§2.4 rewrite (source + sync)</td></tr>
+<tr><td>10</td><td><code>skills/fix-bug/SKILL.md</code> + both skills&#x27; <code>references/steps.md</code></td><td>bespoke prose flip + architecture-conditioned dispatch sentences</td></tr>
+<tr><td>11</td><td><code>hooks/work_summary.py</code> + <code>docs/run-records.md</code> + its tests</td><td><code>architecture</code> run-record field — REQUIRED at <code>workflow_version</code> ≥ 3.93.0, lenient below (§2.4)</td></tr>
+<tr><td>12</td><td><code>docs/config-reference.md</code></td><td><code>defaultArchitecture</code> entry + rollback procedure + preflight</td></tr>
+<tr><td>13</td><td><code>docs/planning/2026-07-17-orchestrator-executor-acceptance-criteria.md</code></td><td>U-3 marked owner-ratified 2026-07-22 (keep-legacy deviation named)</td></tr>
+<tr><td>14</td><td><code>README.md</code></td><td>changelog entry (diagram decision + Suite old→new)</td></tr>
+<tr><td>15</td><td><code>docs/workflow-diagram.html</code> + <code>docs/assets/</code></td><td>REV 3.93.0 (dispatch-tier station delta)</td></tr>
+<tr><td>16</td><td>version ×4</td><td>plugin surfaces → 3.93.0</td></tr>
+<tr><td>17</td><td>this design doc <code>.md</code> + <code>.html</code></td><td>committed on the branch</td></tr>
+</tbody>
+</table>
+<h2>4. Test plan (red first, r6)</h2>
+<p><strong>Break set:</strong> <code>test_resolve_absent_block_is_inherit</code> (:194), <code>test_resolve_seat_not_in_config_is_inherit</code> (:198), <code>test_resolve_absent_workspace_is_inherit_not_error</code> (:450 — absent workspace file stays non-error and resolves EXECUTOR; corrupt stays fail-closed deny), prose pins.</p>
+<p><strong>The four contract guards:</strong></p>
+<ul>
+<li>(a) <code>test_no_config_defaults_to_executor</code> — no <code>defaultArchitecture</code>, no <code>executorRouting</code> →</li>
+</ul>
+<p>  executor (lib + CLI).</p>
+<ul>
+<li>(b) <code>test_executor_failure_never_reaches_agent_tool</code> — failing dispatch (availability stub /</li>
+</ul>
+<p>  malformed / enforcement) → non-zero exit, NO <code>inherit</code> in output, <code>resolve_seat_action</code>   unchanged after; prose pin: the failure path names the ERROR protocol and contains no   route-to-Agent-tool instruction; corpus pin: both agent self-check sentences present.</p>
+<ul>
+<li>(c) <code>test_default_architecture_legacy_routes_back</code> — legacy workspace → <code>inherit</code> + legacy</li>
+</ul>
+<p>  reason; dispatch/begin-run refuse under legacy; agent definitions present, frontmatter-valid,   self-check paragraph present (packaged-cache layout via existing packaging tests). Honest   bound: live harness Agent invocation is not CI-exercisable — formal deferral (below).</p>
+<ul>
+<li>(d) <code>test_mixed_architecture_refused</code> — config conflict both directions (exit 2, seat named);</li>
+</ul>
+<p>  ledger <code>architecture: legacy</code> + executor dispatch → exit 4; ledger present-but-invalid value →   LedgerError; <code>architecture: None</code> (pre-flip, valid initial) → dispatch proceeds + advisory;   NO initial → <code>run_not_declared</code> exit 4.</p>
+<p><strong>Executor-side enforcement:</strong> begin-run idempotence on (architecture, config_digest) — same both → noop, digest mismatch → refuse under lock; begin-run refuses under legacy workspace; mid-run flip (executor ledger + workspace edited legacy) → dispatch AND recover-run refuse exit 4; recover-run: absent/deleted/corrupt/symlinked ledger refuse pre-launch, <code>None</code> only with valid non-empty <code>initial_digest</code>; close-run: no initial → <code>run_not_declared</code>, None-initial → proceed + advisory; flock-held <code>append_expected</code> architecture assertion (deterministic seam test); concurrent first-begin-run cannot double-seed (flock).</p>
+<p><strong>Prose/telemetry:</strong> corpus-derived Agent-producer pins — every Agent-tool dispatch instruction in both skills&#x27; corpora carries the legacy-branch condition (per-file anchored sentences, no whole-corpus regex); &quot;Until the W12 flip&quot; gone everywhere; work_summary <code>architecture</code> REQUIRED at <code>workflow_version</code> ≥ 3.93.0 (strict 3-tuple semver compare; malformed → treated as new), lenient below, off-vocab rejected at any version; detective WARN on any non-<code>primary</code> DISPATCH resolution in an executor run-record (fallback AND generic cases tested; advisory); DISPATCH regex/vocab tests unchanged-by-assertion.</p>
+<p><strong>Formal deferred-to-target verification (#138; carried through Step 9 list, Step 12 <code>## Deferred verification</code> PR section, Step 16 run-record):</strong></p>
+<ul>
+<li><code>deferred-1</code> live harness invocation of the bundled legacy agents under a legacy-configured</li>
+</ul>
+<p>  workspace (incl. the self-check allowing execution). local_proxy: frontmatter validity +   packaging tests + self-check corpus pin. target_check: owner-attended rollback drill   (scratch workspace set legacy, dispatch <code>rawgentic-reviewer</code> once, observe it run).</p>
+<p><strong>Full gate:</strong> whole suite vs baseline <strong>4799 passed / 17 skipped / 0 failed</strong> (Step 2, main @ 081fd16); both pylint lanes; scoped iteration per <code>&lt;test-run-discipline&gt;</code>.</p>
+<h2>5. Error handling / security / platform</h2>
+<p><strong>Error handling:</strong> structured CLI errors on the existing exit taxonomy (2 malformed/conflict; 4 enforcement: <code>run_not_declared</code>, <code>mixed_architecture_run_refused</code>, recover-gate refusals). Fail modes per repo convention: corrupt workspace denies; absent workspace defaults executor (AC2); the bundled-agent self-check refuses unless a readable workspace positively declares <code>legacy</code> (§2.2b) (non-rawgentic projects), deny on corrupt (§2.2b).</p>
+<p><strong>Security implications:</strong> no new hook or state file ships in #474 (the interceptor is #606). New surfaces: the <code>defaultArchitecture</code> key (strictly validated, fail-closed on corrupt); the ledger <code>architecture</code> field (validated under the existing flock/O_NOFOLLOW hardening); the agent self-check (instruction-level, refuse-by-default). Single-snapshot reads close the config TOCTOU (S3); the flock-held architecture assertion closes the ledger TOCTOU. Interim Agent-side residual (no mechanical interceptor until #606) is owner-ratified (§13).</p>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis:</p>
+<ul>
+<li>api: fcntl.flock exclusive lock + os.open(O_NOFOLLOW|O_CREAT) on the run-ledger leaf</li>
+</ul>
+<p>  feasibility: verified via existing-call-site — phase_executor/src/phase_executor/ledger.py:89 (O_NOFOLLOW read), :181 (O_NOFOLLOW|O_CREAT append), :185 (flock LOCK_EX), exercised by tests/phase_executor/test_ledger.py on this project&#x27;s CI (ubuntu) and locally   failure: fail-loud</p>
+<p>(The PreToolUse-hook platform block from r3-r5 — incl. the LIVE Task|Agent WAL-probe evidence of 2026-07-23 — moved to #606 with the guard; no hook ships in #474.)</p>
+<h2>6. Diagram decision (Step 12 input)</h2>
+<p>Dispatch-tier spine changes (primary/fallback tiers → single default architecture + manual legacy rollback + run-start declaration) → <strong>workflow-diagram REV required</strong> at plugin 3.93.0 (dispatch/tier station delta), via the <code>rev-diagram</code> recipe.</p>
+<h2>7. Multi-PR assessment</h2>
+<p>Single PR (atomic flip — a partial flip IS the mixed state AC1 forbids). PR says <strong>&quot;Closes #475&quot;</strong> and carries the rollback anchor + procedure.</p>
+<h2>8. Peer-consult provenance (backend gpt / gpt-5.6-sol, blind both ways)</h2>
+<p>Own draft first; proposal read after. Convergent: top-level key, absent→executor, fail-closed invalids; run pinned at declaration; legacy → <code>inherit</code> + dispatch refusal; no auto-fallback; agents kept; DISPATCH vocab unchanged; conflict refusal. Adopted: seat-naming diagnostics; mid-run-flip semantics made explicit; bounded None-compat; tests (e)–(g). <strong>r2 update:</strong> the peer&#x27;s declare-at-run-start (initially declined as lazy-seed-sufficient) was ADOPTED after both pass-1 reviewers independently demanded it — begin-run is the r2 §2.3 rework. Still declined: versioned key values (owner contract pins the names); separate <code>architecture.jsonl</code> (the ledger initial record is the single authority); exit-6 remap (canary semantics); <code>context=bench</code> param (no gate on <code>resolve_table</code> to exempt). Divergence retained: refuse-loud on mid-run rollback vs peer&#x27;s pinned continuation (§2.3 rationale).</p>
+<h2>9. Revision ledger — pass-1 volume loop-back fold (r1 → r2)</h2>
+<p>Merged pass-1 findings: self-review (executor review seat, gpt-5.6-sol) 4 High + 1 Medium; adversarial (gpt-5.6-sol) 1 Critical + 4 High + 3 Medium. Volume loop-back (High 8 ≥ 5), full design source consumed (design 1/2, global 1/3). All Critical/High applied as ONE constraint set:</p>
+<table>
+<thead><tr><th>#</th><th>Pass-1 finding</th><th>Disposition in r2</th></tr></thead>
+<tbody>
+<tr><td>A1</td><td><strong>Critical</strong> — Agent-tool entry ungated; mixed run reachable</td><td>ADOPTED §2.2b: PreToolUse Task-matcher guard hook (precedent verified: wal-pre matches Task)</td></tr>
+<tr><td>A2</td><td>High — <code>resolution=fallback</code> ambiguity in executor runs</td><td>DECLINED with mechanism: §2.2b guard makes the state unreachable + §2.4 run-record architecture field gives ground truth; schema churn avoided</td></tr>
+<tr><td>A3</td><td>High (amb) — None-ledger invariant unproven</td><td>ADOPTED §2.3: exhaustive producer inventory cited (grep-verified: dispatch :2250 + close-run :2537 + tests only)</td></tr>
+<tr><td>A4</td><td>High (amb) — rollback invocability unproven</td><td>ADOPTED-reduced §4(c): frontmatter-validity + packaging + prose-token proxies committed; live-harness remainder named as the honest bound</td></tr>
+<tr><td>A5</td><td>High — lazy seeding ≠ run start</td><td>ADOPTED §2.3: begin-run run-start declaration; entry points consume, never seed</td></tr>
+<tr><td>A6</td><td>Medium (amb) — explicit-inherit migration</td><td>ADOPTED-cheap §2.5: live-workspace fact (zero inherit modes) + preflight line + seat-naming errors</td></tr>
+<tr><td>A7</td><td>Medium — append_initial breaking mislabeled</td><td>ADOPTED §2.3: relabeled BREAKING, callers enumerated, kukakuka scope clarified (schema consumer, not Python API)</td></tr>
+<tr><td>A8</td><td>Medium (amb) — flock/O_NOFOLLOW undeclared</td><td>ADOPTED §5: platform_apis blocks with existing-call-site evidence</td></tr>
+<tr><td>S1</td><td>High — recover-run bypasses the gate (verified :2318-2363)</td><td>ADOPTED §2.3: recover-run architecture gate, exit 4</td></tr>
+<tr><td>S2</td><td>High — prose still directs Agent-tool unconditionally</td><td>ADOPTED §2.4: architecture-conditioned legacy branch + corpus pins; §2.2b closes it mechanically</td></tr>
+<tr><td>S3</td><td>High — TOCTOU (multi-read snapshot; check outside flock)</td><td>ADOPTED §2.2/§2.3: single-snapshot linearization + flock-held <code>append_expected</code> architecture assertion</td></tr>
+<tr><td>S4</td><td>High — zero-dispatch runs undeclared; run-record lacks architecture</td><td>ADOPTED §2.3 (begin-run) + §2.4 (run-record field)</td></tr>
+<tr><td>S5</td><td>Medium (amb) — kukakuka compatibility unknown</td><td>ADOPTED §2.3: kukakuka consumes the contract schema (Rust producer), not ledger.py — no downstream Python caller; release-noted</td></tr>
+</tbody>
+</table>
+<p>Ambiguity flags (A3, A4, A6, A8, S5) were evidence-gaps, each resolved by verifiable in-repo facts recorded above — no product/risk fork required owner adjudication; the pass-2 gate re-reviews the resolutions.</p>
+<h2>10. Revision ledger — pass-2 volume loop-back fold (r2 → r3)</h2>
+<p>Pass-2 merged findings: adversarial 2 Critical + 3 High + 2 Medium (all REOPENS with legible deltas); self-review 2 Critical + 2 High + 3 Medium. Volume loop-back #2 (High 5 ≥ 5), design source consumed (design 2/2 EXHAUSTED, global 2/3). All applied as ONE constraint set:</p>
+<table>
+<thead><tr><th>#</th><th>Pass-2 finding</th><th>Disposition in r3</th></tr></thead>
+<tbody>
+<tr><td>P2-1</td><td><strong>Crit</strong> (REOPENS A1) — guard consults mutable workspace, not the run pin</td><td>ADOPTED §2.2b/§2.2c: session→run binding written by begin-run governs the guard; the pin outlives a mid-run flip</td></tr>
+<tr><td>P2-2</td><td><strong>Crit</strong> (REOPENS A1) — fail-open guard error bypasses the interceptor</td><td>ADOPTED §2.2b: fully fail-CLOSED for the two gated types; only a positive legacy determination allows; type check precedes all I/O so other types cannot be bricked</td></tr>
+<tr><td>P2-3</td><td>High (REOPENS A4) — proxies ≠ harness invocability</td><td>ADOPTED §4: formal #138 deferral (deferred-1, owner rollback drill) with named local proxies</td></tr>
+<tr><td>P2-4</td><td>High — subprocess test ≠ live matcher registration</td><td>ADOPTED §4/§5: hooks.json registration pin + dual matcher + live WAL probe + deferred-2 post-reinstall check</td></tr>
+<tr><td>P2-5</td><td>High (REOPENS S4) — close-run does not enforce the pin</td><td>ADOPTED §2.3: close-run requires the declaration; r2 compat-seed REMOVED</td></tr>
+<tr><td>P2-6</td><td>Med (amb) — idempotence ignores config_digest</td><td>ADOPTED §2.3: (architecture, config_digest) both must match; mismatch refuses under lock</td></tr>
+<tr><td>P2-7</td><td>Med (REOPENS S4) — legacy begin-run contradiction</td><td>ADOPTED §2.3 (r3 form: executor-only — SUPERSEDED r4: begin-run declares both architectures; legacy = binding-only, still never a ledger)</td></tr>
+<tr><td>SR2-1</td><td><strong>Crit</strong> — guard scope excludes generic/toolkit producers</td><td>ADOPTED-scoped §2.2b: gating ALL Agent use would brick legitimate non-workflow dispatch; producers closed by conditioned prose + NEW corpus-derived Agent-producer pins + DISPATCH audit; prose-violating orchestrator = same trust as mislabeled type (named threat model)</td></tr>
+<tr><td>SR2-2</td><td><strong>Crit</strong> — mutable-workspace evaluation + discovery divergence</td><td>ADOPTED §2.2c: trusted binding carries canonical workspace identity; cleared at run terminal; unbound/corrupt states deny</td></tr>
+<tr><td>SR2-3</td><td>High — Task vs Agent matcher unproven</td><td>ADOPTED §5: live spike evidence (Agent events through a Task matcher, last 2026-07-20) + dual matcher + deferred-2</td></tr>
+<tr><td>SR2-4</td><td>High — recover conflates absent ledger with pre-flip initial</td><td>ADOPTED §2.3: valid non-empty initial required; absent/deleted/corrupt/symlinked refuse pre-launch</td></tr>
+<tr><td>SR2-5</td><td>Med — close-run seeding contradiction</td><td>ADOPTED §2.3 (with P2-5)</td></tr>
+<tr><td>SR2-6</td><td>Med — idempotence digest</td><td>ADOPTED §2.3 (with P2-6)</td></tr>
+<tr><td>SR2-7</td><td>Med — run-record field optional forever</td><td>ADOPTED §2.4: REQUIRED at workflow_version ≥ 3.93.0, lenient below</td></tr>
+</tbody>
+</table>
+<p>Ambiguity flags: P2-6 only — resolved by the (arch, digest) spec above (a wording/spec fix, no product fork). Budget note: design source exhausted; a pass-3 Critical/High escalates to the owner via the Hermes bridge per the ERROR protocol.</p>
+<h2>11. Revision ledger — pass-3 fold under the owner&#x27;s +1 grant (r3 → r4)</h2>
+<p>Pass-3 merged: adversarial 1 Critical + 5 High; self-review 3 Critical + 3 High + 1 Medium + 1 Low. Volume threshold met with the design source exhausted → owner escalation (issue comment 5054205521 + Hermes RG-809678); owner granted +1 design loop-back in-session 2026-07-23 (counters file carries the <code>budget_override</code> annotation). All findings applied as ONE set:</p>
+<table>
+<thead><tr><th>#</th><th>Pass-3 finding</th><th>Disposition in r4</th></tr></thead>
+<tbody>
+<tr><td>P3-1/SR3-1</td><td><strong>Crit</strong> — legacy runs lack a mechanical run-start pin; same-run-id re-declaration reachable</td><td>ADOPTED §2.3: begin-run declares BOTH architectures (legacy = binding-only pin); re-declaration under another architecture refused</td></tr>
+<tr><td>SR3-2</td><td><strong>Crit</strong> (REOPENS SR2-1) — generic/toolkit producers pass during executor runs</td><td>ADOPTED §2.2b: deny ALL Agent-tool dispatch while an executor run is open (exactly U-3); structural classification = open binding, not allow-by-type</td></tr>
+<tr><td>P3-2/SR3-3</td><td><strong>Crit/High</strong> — binding atomicity/serialization unspecified</td><td>ADOPTED §2.2c: per-session flock transactions; pending→open commit order; duplicate begin-run verifies+repairs; crash-injection tests</td></tr>
+<tr><td>SR3-4</td><td>High (REOPENS P2-2/P2-4) — platform hook fail-open window</td><td>ADOPTED §2.2b/§0: claim reworded to &quot;mechanically gated with named failure windows&quot;; agent-definition self-check backstop added; residual window named</td></tr>
+<tr><td>P3-3/SR3-5</td><td>High — binding root/identity lookup contract</td><td>ADOPTED §2.2c: fixed XDG state root, zero guard-side workspace discovery; REQUIRED --session-id from $CLAUDE_CODE_SESSION_ID (switch-skill printenv precedent); identity spike</td></tr>
+<tr><td>SR3-6</td><td>High — binding read hardening absent</td><td>ADOPTED §2.2c: ledger-grade hardening (validator, O_NOFOLLOW, regular-file, caps, per-field validation)</td></tr>
+<tr><td>P3-4</td><td>High — session-id source unproven</td><td>ADOPTED with P3-3/SR3-5 (same mechanism)</td></tr>
+<tr><td>P3-5/SR3-7</td><td>High/Med — stale §5 fail-open sentence</td><td>ADOPTED §5: replaced with the reviewer-worded fail-closed rule</td></tr>
+<tr><td>P3-6</td><td>High — review-constraining header sentence</td><td>ADOPTED header: neutral budget facts only; brief template fixed (neutral framing, no classification pressure)</td></tr>
+<tr><td>SR3-8</td><td>Low — stale table row (optional architecture field)</td><td>ADOPTED §3: version-gated requirement stated</td></tr>
+</tbody>
+</table>
+<h2>12. Revision ledger — pass-4 fold under owner grant #2 (r4 → r5)</h2>
+<p>Pass-4 merged: adversarial 1 Critical + 5 High + 2 Medium; self-review 7 High + 3 Medium. Zero REOPENS of the core flip — every finding targets the guard/binding subsystem added at r2-r4 or doc self-consistency. Owner grant #2 (in-session AskUserQuestion, option A): fold + ONE incremental verifier over the changed sections (owner-sanctioned close; not a fifth full wave). All applied:</p>
+<table>
+<thead><tr><th>#</th><th>Pass-4 finding</th><th>Disposition in r5</th></tr></thead>
+<tbody>
+<tr><td>P4-1/SR4-1</td><td><strong>Crit</strong>/High — stale r3 &quot;executor-only&quot; leftovers contradict r4 §2.3</td><td>ADOPTED: three stale lines swept; §10 P2-7 row annotated superseded</td></tr>
+<tr><td>P4-2/SR4-2</td><td>High — flock on a replaced inode does not serialize</td><td>ADOPTED §2.2c: separate never-replaced <code>&lt;session_id&gt;.lock</code> held across read-validate-replace</td></tr>
+<tr><td>P4-3</td><td>High — re-declaration refusal session-scoped, not run-scoped</td><td>ADOPTED §2.3: run-id/session contract enforced (run_id must embed --session-id); cross-session reuse refuses</td></tr>
+<tr><td>P4-4/SR4-7</td><td>High — one session mixing executor+legacy open runs</td><td>ADOPTED §2.3: one architecture per session at a time; §2.5 rollback gains close-before-legacy step</td></tr>
+<tr><td>P4-5/SR4-5</td><td>High — §5 stale two-type boundary / pass-before-I/O contradiction</td><td>ADOPTED §5 + §2.2b: deny-all semantics stated; every invocation reads the binding; unreadable store denies all</td></tr>
+<tr><td>P4-6/SR4-6</td><td>High — hook silent non-execution undetected post-deploy</td><td>ADOPTED §2.4: Step-16 detective warn (executor run-record + any fallback-resolution DISPATCH line), hook-independent</td></tr>
+<tr><td>P4-7/SR4-3</td><td>Med/High — terminal verbs lack session lookup</td><td>ADOPTED §2.3: --session-id on close-run/reconcile, default derived per the run-id contract</td></tr>
+<tr><td>P4-8</td><td>Med — session-id source evidence</td><td>ADOPTED §2.2c: live call-site cited (this session&#x27;s registry bind, 2026-07-23T03:09:22Z)</td></tr>
+<tr><td>SR4-4</td><td>High — terminal cross-file commit order</td><td>ADOPTED §2.3: run_closed FIRST, binding removal second; crash direction safe; orphan repair idempotent</td></tr>
+<tr><td>SR4-6</td><td>High — XDG_STATE_HOME spoof blinds the guard</td><td>ADOPTED §2.2c: root pinned via pwd.getpwuid, env deliberately not honored; missing-binding residual named</td></tr>
+<tr><td>SR4-8</td><td>Med — parent-dir symlink verification</td><td>ADOPTED §2.2c: each parent component 0700 + lstat non-symlink + uid-owned</td></tr>
+<tr><td>SR4-9</td><td>Med — semver comparison grammar</td><td>ADOPTED §2.4: strict 3-tuple grammar; malformed → treated as new (fails toward the requirement)</td></tr>
+<tr><td>SR4-10</td><td>Med — agent self-check assumes parent-session access</td><td>ADOPTED §2.2b: scope reduced to workspace defaultArchitecture (cwd-walk); run-pin stays with hook + entry points</td></tr>
+</tbody>
+</table>
+<p>Close protocol per owner grant #2: one incremental verifier over the changed sections (§0/§2.2b/§2.2c/§2.3/§2.4/§2.5/§5), then the gate closes. A new Critical/High from the verifier escalates back to the owner — no further self-granted passes.</p>
+<h2>13. Descope ledger — gate close (r5 → r6 FINAL)</h2>
+<p>The owner-sanctioned incremental verifier over r5&#x27;s changed sections returned <strong>NOT VERIFIED</strong>: 5 §12 rows resolved, 8 findings remaining (6 High, no new Critical) — every one inside the PreToolUse-guard + session→run-binding subsystem, which the gate itself introduced at r2 and which diverged under four review rounds (each fold surfaced a deeper hardening layer). Full verdict: <code>claude_docs/.wf2-state/474/step4-verifier.md</code>.</p>
+<p><strong>Owner decision (AskUserQuestion, 2026-07-23, session 0ef46985): DESCOPE the guard.</strong> The subsystem moved to <strong>#606</strong> carrying r5 §2.2b/§2.2c + all verifier findings as its starting spec. Dispositions 474-v-1..8 in the ledger: V4 ADOPTED here (detective warn widened to any non-primary resolution); V3 DISSOLVED (contradictory sections removed with the subsystem); V1/V2/V5/V6/V7/V8 DEFERRED-to-#606.</p>
+<p><strong>What #474 ships (verified clean since pass 3):</strong> defaultArchitecture flip (absent=executor, fail-closed invalids), begin-run ledger declaration + (arch,digest) idempotence, entry-point enforcement (dispatch/recover/close), fail-loud with no runtime fallback, conflict refusal naming the seat, architecture-conditioned prose + corpus pins, bundled-agent self-check, run-record architecture field (version-gated, strict semver) + widened detective warn, documented+tested rollback, None-ledger bounded compat.</p>
+<p><strong>Owner-ratified interim residual:</strong> until #606, Agent-side mixed-run control is prose + self-check + detection — no harness interceptor. Gate CLOSED on this decision; the breaker ran each pass; loop-back counters final: design 4 (2 base + 2 owner grants), global 4.</p>
+
+</main>
+<footer>Last updated: 2026-07-23 01:01 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

@@ -100,6 +100,49 @@ SCANNER_KINDS = {"secrets", "sca", "sast", "iac"}
 # already-active epic-level campaign goal (RAWGENTIC_EPIC_GOAL set) rather than
 # emitting one that would clobber it.
 GOAL_GUARD_VALUES = {"set", "skipped", "fired", "deferred"}
+# #474: the run's dispatch architecture. REQUIRED for records at workflow_version >= this
+# threshold (the flip release); optional/lenient below so historical records stay readable.
+ARCHITECTURE_VALUES = {"executor", "legacy"}
+_ARCHITECTURE_REQUIRED_FROM = (3, 93, 0)
+_SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+
+
+def _semver_tuple(version):
+    """Strict ``X.Y.Z`` -> int 3-tuple, else None. NEVER lexical (#474 SR4-9: a lexical
+    compare would classify 3.100.0 < 3.93.0). A malformed version returns None and the
+    caller treats the record as NEW — failing toward the requirement, never around it."""
+    if not _is_str(version):
+        return None
+    # S11 F5: match the ORIGINAL string, no trimming — a whitespace-padded version is
+    # malformed and counts as NEW (the requirement applies), never as a valid old version.
+    m = _SEMVER_RE.match(version)
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def _architecture_required(record) -> bool:
+    v = _semver_tuple(record.get("workflow_version"))
+    return v is None or v >= _ARCHITECTURE_REQUIRED_FROM
+
+
+def architecture_dispatch_warnings(record) -> list:
+    """#474 detective surface: ADVISORY warnings (never validation errors) when an
+    executor-architecture run-record carries any non-``primary`` dispatch resolution —
+    post-hoc detection of Agent-tool dispatch inside an executor run, independent of any
+    hook. Advisory by design: DISPATCH lines carry no run-ID join key, so sequential
+    legacy+executor runs of one issue can false-positive (run-keyed telemetry is #606)."""
+    warns = []
+    if record.get("architecture") != "executor":
+        return warns
+    dispatches = record.get("dispatches")
+    if not isinstance(dispatches, list):
+        return warns
+    for i, item in enumerate(dispatches):
+        if isinstance(item, dict) and item.get("resolution") in ("fallback", "generic"):
+            warns.append(
+                f"advisory (#474): dispatches[{i}] resolution={item['resolution']!r} inside an "
+                f"executor-architecture run — possible Agent-tool dispatch in an executor run "
+                f"(false-positive possible across sequential runs of one issue)")
+    return warns
 # `usage.capture_status` (#189) — how the token/cost numbers were obtained.
 # `captured` = live-parsed from the session log (REQUIRES real non-null tokens
 # summing > 0 — the schema-level backstop against the #155 null-forever state);
@@ -260,6 +303,20 @@ def validate_record(record, *, strict=False) -> list:
     if "run_id" in record and not _run_id_ok(record["run_id"]):
         errs.append("run_id must be a grammar-safe non-all-dot component "
                     "([A-Za-z0-9._-], 1..120) when present")
+
+    # #474: the run's dispatch architecture. Off-vocab rejected at ANY version; the field is
+    # REQUIRED once workflow_version >= 3.93.0 (strict semver 3-tuple compare; a malformed
+    # version counts as new — fails toward the requirement), lenient/optional below so
+    # pre-flip records stay readable.
+    if "architecture" in record:
+        arch = record["architecture"]
+        if not _is_str(arch) or arch not in ARCHITECTURE_VALUES:
+            errs.append(f"architecture must be one of {sorted(ARCHITECTURE_VALUES)}")
+    elif _architecture_required(record):
+        wv = record.get("workflow_version")
+        note = "" if _semver_tuple(wv) else f" (workflow_version {wv!r} is not X.Y.Z — treated as new)"
+        errs.append("architecture is required for records at workflow_version >= 3.93.0 "
+                    f"(#474: executor|legacy){note}")
 
     if "issue" in record:
         issue = record["issue"]
@@ -1392,6 +1449,9 @@ def main(argv=None) -> int:
         workers = _resolve_worker_models(args.project_root)
 
         errors = validate_record(raw, strict=True)  # #116: new writes must use the controlled vocab
+        # #474 detective surface: advisory only — printed, never gates persistence.
+        for w in architecture_dispatch_warnings(raw):
+            print(w, file=sys.stderr)
         # #512: cross-check loop_backs against the persisted counters state —
         # a schema-valid record hand-populated from in-context memory can be
         # semantically wrong; the counters file is the source of truth.

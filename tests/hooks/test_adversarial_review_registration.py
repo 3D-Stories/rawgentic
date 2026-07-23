@@ -39,7 +39,7 @@ def test_marketplace_registers_skill():
 
 def test_plugin_version_bumped():
     plugin = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())
-    assert plugin["version"] == "3.92.4"
+    assert plugin["version"] == "3.93.0"
 
 
 def test_descriptions_consistent_count():

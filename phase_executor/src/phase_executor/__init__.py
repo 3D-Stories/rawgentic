@@ -53,7 +53,7 @@ from .enforce import (
     verify_post,
 )
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 __all__ = [
     "Observation", "canonicalize_model_id", "models_match", "observation_schema",

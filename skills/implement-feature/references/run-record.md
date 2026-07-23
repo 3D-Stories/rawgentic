@@ -18,6 +18,7 @@ non-negative integers and `resolved` may not exceed `findings`:
               "commits": N},
   "tests": {"added": N, "passing": N|null, "total": N|null},
   "run_id": "<executor run id, e.g. wf2-<issue>-<session>>",  // #473 additive; the I3<->I2 join key (optional; grammar-safe component)
+  "architecture": "executor|legacy",  // #474 REQUIRED at workflow_version >= 3.93.0: the run's declared dispatch architecture (from begin-run / the workspace defaultArchitecture)
   "gates": [
     {"step": "4",  "name": "Design Critique",       "findings": N, "resolved": N, "status": "pass|fail|skipped|fast_path",
      "findings_critical": N, "findings_high": N,   // #473 additive; both-or-neither, sum <= findings (feeds review_findings_p90)
@@ -182,7 +183,7 @@ caught the same way a bad writer output would be.
 **`dispatches` (OPTIONAL, #330):** a **structured list** of per-dispatch telemetry, one entry
 per canonical `DISPATCH` audit line (`shared/blocks/model-routing-resolve.md`)
 emitted this run. The producer of each line is the executor result dict on the primary tier
-(`resolution=primary`) or the fallback (legacy) Agent-tool subagent (`resolution=fallback`) — the
+(`resolution=primary`) or — legacy architecture only — the Agent-tool subagent (`resolution=fallback`) — the
 line grammar and the six schema fields are unchanged either way (#470). It follows the same *validated-optional* pattern as `usage`/`verification_deferred`
 (NOT the unvalidated-passthrough pattern of `lane`): **absent** is fine — old records stay valid, no
 schema version bump — but **present is strict**: each entry must carry all six fields

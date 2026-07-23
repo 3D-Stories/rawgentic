@@ -184,12 +184,90 @@ def classify_seat(seat: str) -> str:
     raise MalformedConfig(f"unknown seat {seat!r} (wired: {sorted(WIRED_SEATS)}; driver-only: {sorted(DRIVER_ONLY)})")
 
 
+_WS_ABSENT: Final[object] = object()  # sentinel: workspace file genuinely absent (#474)
+
+
+def _load_workspace_snapshot(workspace_path: str) -> object:
+    """ONE ``json.load`` of the workspace per resolution (#474 S3-TOCTOU: architecture, project
+    entry, and ``executorRouting`` block are all read from this single in-memory snapshot — the
+    load is the configuration linearization point).
+
+    Returns the parsed top-level dict, or ``_WS_ABSENT`` when the file genuinely does not exist
+    ("not configured" — under #474 that means the EXECUTOR default, not an error). A
+    present-but-corrupt/unreadable/non-object workspace raises ``MalformedConfig`` (fail-CLOSED:
+    an enforcement boundary that cannot evaluate DENIES — Step-11 D3/A3 discipline)."""
+    try:
+        with open(workspace_path, encoding="utf-8") as f:
+            ws = json.load(f)
+    except FileNotFoundError:
+        # 8a F4: a DANGLING SYMLINK also raises FileNotFoundError on open, but it is a
+        # present-but-unreadable entry — fail CLOSED, never the executor default. Only a
+        # genuinely absent directory entry (lexists False) is "not configured".
+        if os.path.lexists(workspace_path):
+            raise MalformedConfig(
+                f"workspace {workspace_path!r} is a dangling symlink — cannot evaluate "
+                f"architecture (fail-closed)") from None
+        return _WS_ABSENT
+    except (OSError, ValueError) as exc:
+        raise MalformedConfig(
+            f"workspace unreadable/corrupt — cannot evaluate architecture (fail-closed): {exc}") from exc
+    if not isinstance(ws, dict):
+        raise MalformedConfig(
+            f"workspace top level is {type(ws).__name__}, not an object (fail-closed)")
+    return ws
+
+
+def resolve_architecture_from_snapshot(ws: object) -> str:
+    """#474: the dispatch-architecture selector. ``ws`` is a ``_load_workspace_snapshot`` result.
+
+    - Workspace absent, or ``defaultArchitecture`` key absent -> ``"executor"`` — THE flip (AC2):
+      no config anywhere means executor.
+    - Exact strings ``"executor"`` / ``"legacy"`` -> as declared.
+    - Any other value/type -> ``MalformedConfig`` (a typo'd architecture must never silently pick
+      a side — the ``parse_executor_routing`` false-cutover discipline, both directions).
+    """
+    if ws is _WS_ABSENT:
+        return "executor"
+    arch = ws.get("defaultArchitecture", "executor")
+    if arch not in ("executor", "legacy"):
+        raise MalformedConfig(
+            f"defaultArchitecture must be 'executor' or 'legacy' (got {arch!r}) — "
+            f"refusing to guess an architecture (fail-closed, #474)")
+    return arch
+
+
+def resolve_architecture(workspace_path: str) -> str:
+    """#474: file-path convenience over ``resolve_architecture_from_snapshot`` (same rules)."""
+    return resolve_architecture_from_snapshot(_load_workspace_snapshot(workspace_path))
+
+
+def _entry_from_snapshot(ws: object, project: str) -> dict | None:
+    if ws is _WS_ABSENT:
+        return None
+    projects = ws.get("projects")
+    if not isinstance(projects, list):
+        return None
+    return next((p for p in projects if isinstance(p, dict) and p.get("name") == project), None)
+
+
 def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[str, str]:
+    """File-path convenience over ``resolve_seat_action_from_snapshot`` (one load)."""
+    return resolve_seat_action_from_snapshot(seat, _load_workspace_snapshot(workspace_path), project)
+
+
+def resolve_seat_action_from_snapshot(seat: str, ws: object, project: str) -> tuple[str, str]:
     """Return ``(action, reason)`` where action is ``inherit`` | ``executor`` | ``driver_only``.
 
-    Raises ``MalformedConfig`` on an unknown seat or a present-but-malformed config (-> exit 2).
-    Does NOT compute the primary model (that needs the routing snapshot — the CLI adds it for the
-    ``executor`` action) and never restates a legacy model for the ``inherit`` branch."""
+    #474: the workspace-level ``defaultArchitecture`` selects the tier (absent -> executor — the
+    flip). ``executorRouting`` seat modes are still VALIDATED but no longer select; an explicit
+    mode contradicting the architecture is refused naming the offending seat (the config-level
+    third of AC1 "mixed run impossible"). ``inherit`` still means the legacy Agent-tool path, so
+    all consumers keep their contract. ``ws`` is a ``_load_workspace_snapshot`` result — CLI
+    entry points load ONCE and thread the snapshot everywhere (8a F1: the linearization point
+    is the entry-point load, not each helper's own read).
+
+    Raises ``MalformedConfig`` on an unknown seat, a present-but-malformed config, an invalid
+    architecture value, or a mixed-architecture conflict (-> exit 2)."""
     kind = classify_seat(seat)  # raises on unknown
     if kind == "driver_only":
         return "driver_only", "driver-only stage, never a seat"
@@ -200,21 +278,27 @@ def resolve_seat_action(seat: str, workspace_path: str, project: str) -> tuple[s
         raise MalformedConfig(
             f"seat {seat!r} is competitive-only (bake-off owns its dispatch) — "
             f"cannot single-dispatch it through the executor")
-    # Fail CLOSED on a corrupt/unreadable workspace (strict_read=True): a config this
-    # enforcement boundary cannot evaluate must DENY (exit 2), not collapse into the same
-    # _ABSENT→inherit as a clean absence — else an executor-intended seat silently reverts to the
-    # legacy path on a mid-edit/corrupt workspace (a false cutover; Step-11 D3/A3). A genuinely
-    # absent workspace/entry still returns _ABSENT→inherit (that is "not configured", not "cannot
-    # evaluate"). model_routing keeps its fail-OPEN read (strict_read default False).
-    try:
-        raw = _load_block(workspace_path, project, key="executorRouting", missing=_ABSENT, strict_read=True)
-    except (OSError, ValueError) as exc:
-        raise MalformedConfig(f"workspace unreadable/corrupt — cannot evaluate executorRouting (fail-closed): {exc}") from exc
-    modes = parse_executor_routing(raw)
-    mode = modes.get(seat, "inherit")
-    if mode == "executor":
-        return "executor", "seat routed through the executor"
-    return "inherit", "seat not opted into the executor (prior behavior)"
+    arch = resolve_architecture_from_snapshot(ws)
+    entry = _entry_from_snapshot(ws, project)
+    raw = _ABSENT if entry is None else entry.get("executorRouting", _ABSENT)
+    modes = parse_executor_routing(raw)  # validation unchanged; malformed still refuses
+    mode = modes.get(seat)
+    # Mixed-architecture config refusal (#474): an explicit seat mode that contradicts the
+    # architecture is a config conflict, named so the operator sees exactly which seat blocks
+    # the flip/rollback — never silently resolved either way.
+    if mode == "inherit" and arch == "executor":
+        raise MalformedConfig(
+            f"mixed-architecture config refused: seat {seat!r} declares mode 'inherit' but the "
+            f"workspace architecture is 'executor' (#474) — remove the seat mode or set "
+            f"defaultArchitecture: legacy (joint rollback)")
+    if mode == "executor" and arch == "legacy":
+        raise MalformedConfig(
+            f"mixed-architecture config refused: seat {seat!r} declares mode 'executor' but the "
+            f"workspace architecture is 'legacy' (#474) — remove the seat mode or set "
+            f"defaultArchitecture: executor")
+    if arch == "executor":
+        return "executor", "executor architecture (default since #474)"
+    return "inherit", "legacy architecture (defaultArchitecture: legacy — manual rollback, #474)"
 
 
 def _safe_component(name: str, label: str) -> str:
@@ -229,7 +313,13 @@ def resolve_repo_root(workspace_path: str, project: str) -> Path:
     """Resolve the project REPO root (base for capture/permit dirs) from the workspace config's
     ``project.path`` — NOT the workspace root (which is not a git repo, so dirs there would escape
     every ``.gitignore``; finding V1). Raises ``MalformedConfig`` if the entry/path is missing."""
-    entry = _load_project_entry(workspace_path, project)
+    return repo_root_from_snapshot(_load_workspace_snapshot(workspace_path), workspace_path, project)
+
+
+def repo_root_from_snapshot(ws: object, workspace_path: str, project: str) -> Path:
+    """Snapshot variant of ``resolve_repo_root`` (8a F1: entry points load the workspace ONCE
+    and derive architecture + entry + repo root from that one object)."""
+    entry = _entry_from_snapshot(ws, project)
     if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
         raise MalformedConfig(f"cannot resolve repo root for project {project!r} (missing entry/path)")
     ws_dir = Path(workspace_path).resolve().parent
@@ -1741,7 +1831,8 @@ def _emit(obj: dict) -> int:
 
 def _do_resolve(args) -> int:
     try:
-        action, reason = resolve_seat_action(args.seat, args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (S11 F4)
+        action, reason = resolve_seat_action_from_snapshot(args.seat, ws_snapshot, args.project)
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
     out = {"seat": args.seat, "action": action, "primary_model": None, "reason": reason, "exit": EXIT_OK}
@@ -1752,7 +1843,7 @@ def _do_resolve(args) -> int:
         except ImportError as e:
             return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
         try:
-            repo_root = resolve_repo_root(args.workspace, args.project)
+            repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
             rt = resolve_table(repo_root, pe.routing)
             targets = pe.routing.eligible_targets(args.seat, rt.snapshot)
             out["primary_model"] = targets[0]["model"] if targets else None
@@ -2150,10 +2241,11 @@ def _do_dispatch(args) -> int:
         return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
     try:
-        action, _ = resolve_seat_action(args.seat, args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (8a F1)
+        action, _ = resolve_seat_action_from_snapshot(args.seat, ws_snapshot, args.project)
         if action != "executor":
             raise MalformedConfig(f"dispatch called on a {action!r} seat {args.seat!r} — dispatch is only valid for an executor-mode seat")
-        repo_root = resolve_repo_root(args.workspace, args.project)
+        repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
     except MalformedConfig as e:
         return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False,
                           correlation_id=args.correlation_id))
@@ -2247,14 +2339,35 @@ def _do_dispatch(args) -> int:
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
         led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
-        if led.read().initial_digest is None:
-            try:
-                led.append_initial(snap.config_digest)
-            except pe.ledger.LedgerError:
-                # a concurrent first dispatch seeded the same initial_digest — benign
-                if led.read().initial_digest is None:
-                    raise
-        if led.is_closed():
+        state = led.read()
+        # #474: dispatch CONSUMES the run declaration, never seeds it (the pre-flip lazy seed is
+        # gone — begin-run is the one producer). An undeclared run refuses; a pre-3.93 initial
+        # (architecture None) proceeds with an advisory (bounded compat — every ≤3.92 ledger is
+        # an executor run's by construction); a legacy-pinned ledger is a mixed run — refuse.
+        if state.initial_digest is None:
+            return _emit(_err(EXIT_ENFORCEMENT, "run_not_declared",
+                              f"run {args.run_id!r} has no architecture declaration — run "
+                              f"`begin-run --run-id {args.run_id}` first (#474)",
+                              retryable=False, correlation_id=args.correlation_id))
+        if state.architecture == "legacy":
+            return _emit(_err(EXIT_ENFORCEMENT, "mixed_architecture_run_refused",
+                              f"run {args.run_id!r} is pinned architecture 'legacy' — executor "
+                              f"dispatch into a legacy run is a mixed run (#474)",
+                              retryable=False, correlation_id=args.correlation_id))
+        if state.architecture is None:
+            print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
+                  f"treated as executor (bounded compat, #474)", file=sys.stderr)
+        # S11 F1: the run pinned its config epoch at declaration — a routing-table change
+        # mid-run must refuse (the begin-run idempotence rule enforced at CONSUME time too;
+        # otherwise dispatch would resolve targets from a snapshot the run never declared).
+        if state.initial_digest != snap.config_digest:
+            return _emit(_err(EXIT_ENFORCEMENT, "run_digest_conflict",
+                              f"run {args.run_id!r} declared config digest "
+                              f"{state.initial_digest!r} but the current snapshot is "
+                              f"{snap.config_digest!r} — a routing-table change mid-run is a "
+                              f"declared-state conflict (#474)", retryable=False,
+                              correlation_id=args.correlation_id))
+        if state.closed:
             return _emit(_err(EXIT_ENFORCEMENT, "run_closed_dispatch_refused",
                               f"run {args.run_id!r} ledger is run_closed — new dispatch refused (#555)",
                               retryable=False, correlation_id=args.correlation_id))
@@ -2265,7 +2378,9 @@ def _do_dispatch(args) -> int:
             return _emit(_err(EXIT_MALFORMED, "correlation_id_required",
                               "dispatch requires --correlation-id (the ledger/reconcile join key)",
                               retryable=False, correlation_id=None))
-        led.append_expected(args.seat, args.correlation_id)  # append-before-dispatch (dup → fail closed)
+        # append-before-dispatch (dup → fail closed); the architecture assertion re-checks the
+        # pin UNDER the same flock that appends (#474 — no read-then-append window)
+        led.append_expected(args.seat, args.correlation_id, expected_architecture="executor")
     except pe.ledger.LedgerError as e:
         return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused", str(e), retryable=False,
                           correlation_id=args.correlation_id))
@@ -2325,7 +2440,9 @@ def _do_recover_run(args) -> int:
         return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False,
                           correlation_id=args.correlation_id))
     try:
-        repo_root = resolve_repo_root(args.workspace, args.project)
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (8a F1)
+        arch = resolve_architecture_from_snapshot(ws_snapshot)
+        repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
         snap = resolve_table(repo_root, pe.routing).snapshot
         paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
     except MalformedConfig as e:
@@ -2336,6 +2453,49 @@ def _do_recover_run(args) -> int:
                           correlation_id=args.correlation_id))
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False,
+                          correlation_id=args.correlation_id))
+    # #474: the architecture gate runs BEFORE supervisor construction — rollback stops recovery
+    # relaunches too ("lever takes effect" on every spawn path). Workspace architecture must be
+    # executor; the ledger pin must be executor (or a pre-3.93 None on a VALID existing initial —
+    # an absent/deleted/corrupt/symlinked ledger refuses pre-launch, never conflated with compat).
+    if arch != "executor":
+        return _emit(_err(EXIT_ENFORCEMENT, "legacy_architecture_recover_refused",
+                          "legacy architecture — executor recovery refused; the joint rollback "
+                          "stops recovery relaunches too (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
+    run_dir_gate = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        gate_state = pe.ledger.ExpectedCallLedger(run_dir_gate, args.run_id).read()
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused",
+                          f"recover-run: ledger unreadable/invalid — refusing before any launch "
+                          f"({e})", retryable=False, correlation_id=args.correlation_id))
+    if gate_state.initial_digest is None:
+        return _emit(_err(EXIT_ENFORCEMENT, "run_not_declared",
+                          f"run {args.run_id!r} has no valid architecture declaration — recovery "
+                          f"refused before launch (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
+    if gate_state.architecture == "legacy":
+        return _emit(_err(EXIT_ENFORCEMENT, "mixed_architecture_run_refused",
+                          f"run {args.run_id!r} is pinned architecture 'legacy' — executor "
+                          f"recovery into a legacy run is a mixed run (#474)", retryable=False,
+                          correlation_id=args.correlation_id))
+    if gate_state.architecture is None:
+        print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
+              f"treated as executor (bounded compat, #474)", file=sys.stderr)
+    if gate_state.closed:
+        # S11 F5: refuse a run_closed ledger AT the preflight, before supervisor construction —
+        # terminal state wins over any epoch comparison; recover_run's own refusal is the backstop.
+        return _emit(_err(EXIT_ENFORCEMENT, "run_closed_recover_refused",
+                          f"run {args.run_id!r} ledger is run_closed — recovery refused (#559)",
+                          retryable=False, correlation_id=args.correlation_id))
+    if gate_state.initial_digest != snap.config_digest:
+        # S11 R2-2: recovery must relaunch on the EPOCH the run declared — a routing-table
+        # change mid-run is a declared-state conflict at every consume site, recovery included.
+        return _emit(_err(EXIT_ENFORCEMENT, "run_digest_conflict",
+                          f"run {args.run_id!r} declared config digest "
+                          f"{gate_state.initial_digest!r} but the current snapshot is "
+                          f"{snap.config_digest!r} — recovery refused (#474)", retryable=False,
                           correlation_id=args.correlation_id))
     from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
     from phase_executor.worktree import WorktreeManager  # noqa: PLC0415
@@ -2532,16 +2692,93 @@ def _do_close_run(args) -> int:
     except pe.routing.RoutingError as e:
         return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
     try:
-        # a run closed with ZERO dispatches never seeded its initial record — seed it (the first
-        # record MUST be 'initial') so the closed ledger is well-formed and reconcile-readable.
-        if led.read().initial_digest is None:
-            led.append_initial(snap.config_digest)
+        # #474: close-run CONSUMES the run declaration exactly like dispatch — the zero-dispatch
+        # close seed is gone (closing a never-declared run is meaningless; begin-run declares).
+        state = led.read()
+        if state.initial_digest is None:
+            return _emit(_err(EXIT_ENFORCEMENT, "run_not_declared",
+                              f"run {args.run_id!r} has no architecture declaration — nothing to "
+                              f"close; `begin-run` declares a run (#474)", retryable=False))
+        if state.architecture == "legacy":
+            return _emit(_err(EXIT_ENFORCEMENT, "mixed_architecture_run_refused",
+                              f"run {args.run_id!r} ledger is pinned 'legacy' — an unreachable "
+                              f"state (legacy runs write no ledger, #474); refusing to close",
+                              retryable=False))
+        if state.architecture is None:
+            print(f"advisory: run {args.run_id!r} has a pre-3.93 ledger (no architecture) — "
+                  f"treated as executor (bounded compat, #474)", file=sys.stderr)
         led.append_run_closed()
     except pe.ledger.LedgerError as e:
         return _emit(_err(EXIT_MALFORMED, "ledger_refused", str(e), retryable=False))
     except OSError as e:
         return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False))
     return _emit({"run_id": args.run_id, "run_closed": True, "exit": EXIT_OK})
+
+
+def _do_begin_run(args) -> int:
+    """#474: the run-start architecture declaration — the ONE producer of the ledger ``initial``
+    record. Executor architecture only (a legacy run writes no ledger; its declaration is the
+    run-record + session notes). Idempotence is keyed on BOTH (architecture, config_digest):
+    a matching duplicate is a benign noop; a digest mismatch is a declared-state conflict."""
+    try:
+        pe = _import_phase_executor()
+    except ImportError as e:
+        return _emit(_err(EXIT_INTERNAL, "phase_executor_import_failed", str(e), retryable=False))
+    try:
+        ws_snapshot = _load_workspace_snapshot(args.workspace)  # ONE read per invocation (8a F1)
+        arch = resolve_architecture_from_snapshot(ws_snapshot)
+        repo_root = repo_root_from_snapshot(ws_snapshot, args.workspace, args.project)
+        snap = resolve_table(repo_root, pe.routing).snapshot
+        paths = derive_paths(repo_root, args.project, args.run_id, snap.pool_concurrency())
+    except MalformedConfig as e:
+        return _emit(_err(EXIT_MALFORMED, "malformed_config", str(e), retryable=False))
+    except pe.routing.RoutingError as e:
+        return _emit(_err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "routing_table_unreadable", str(e), retryable=False))
+    if arch != "executor":
+        return _emit(_err(EXIT_ENFORCEMENT, "legacy_architecture_begin_refused",
+                          "legacy architecture — executor run machinery unused; legacy runs are "
+                          "declared in session notes + the run-record architecture field (#474)",
+                          retryable=False))
+    run_dir = Path(paths["capture_root"]) / pe.capture.sanitize_component(args.run_id)
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
+        state = led.read()
+        if state.initial_digest is not None:
+            # 8a F3: idempotence requires BOTH fields to match EXACTLY — a pre-3.93 unpinned
+            # (architecture-less) initial is NOT an executor declaration; begin-run must never
+            # certify it (consumers keep their None compat; the producer stays strict).
+            if state.architecture is None:
+                return _emit(_err(EXIT_ENFORCEMENT, "begin_run_unpinned_ledger",
+                                  f"run {args.run_id!r} has a pre-3.93 ledger with no architecture "
+                                  f"pin — begin-run cannot re-declare it; dispatch/recover/close "
+                                  f"keep their bounded compat (#474)", retryable=False))
+            if state.architecture == "executor" and state.initial_digest == snap.config_digest:
+                return _emit({"run_id": args.run_id, "architecture": "executor",
+                              "already_declared": True, "exit": EXIT_OK})
+            return _emit(_err(EXIT_ENFORCEMENT, "begin_run_digest_conflict",
+                              f"run {args.run_id!r} already declared (architecture="
+                              f"{state.architecture!r}, digest {state.initial_digest!r}) — "
+                              f"conflicts with the current config digest {snap.config_digest!r}; "
+                              f"a routing-table change mid-run is a declared-state conflict (#474)",
+                              retryable=False))
+        try:
+            led.append_initial(snap.config_digest, architecture="executor")
+        except pe.ledger.LedgerError:
+            # a concurrent begin-run seeded it — benign iff it seeded the SAME declaration
+            state = led.read()
+            if state.initial_digest != snap.config_digest or state.architecture != "executor":
+                raise
+            return _emit({"run_id": args.run_id, "architecture": "executor",
+                          "already_declared": True, "exit": EXIT_OK})
+    except pe.ledger.LedgerError as e:
+        return _emit(_err(EXIT_ENFORCEMENT, "ledger_refused", str(e), retryable=False))
+    except OSError as e:
+        return _emit(_err(EXIT_INTERNAL, "ledger_unavailable", str(e), retryable=False))
+    return _emit({"run_id": args.run_id, "architecture": "executor",
+                  "config_digest": snap.config_digest, "exit": EXIT_OK})
 
 
 # reconcile-verb anomaly buckets that a PROVISIONAL (mid-run) check tolerates as in-flight
@@ -2685,6 +2922,14 @@ def main(argv: Optional[list] = None) -> int:
     ap.add_argument("--validate-only", action="store_true", dest="validate_only")
     ap.add_argument("--reset-to-default", action="store_true", dest="reset_to_default")
     ap.set_defaults(fn=_do_apply)
+
+    br = sub.add_parser("begin-run",
+                        help="#474: declare the run's architecture at run start (the one "
+                             "producer of the ledger initial record; executor only)")
+    br.add_argument("--run-id", required=True, dest="run_id")
+    br.add_argument("--workspace", required=True)
+    br.add_argument("--project", required=True)
+    br.set_defaults(fn=_do_begin_run)
 
     cr = sub.add_parser("close-run", help="#555: append the terminal run_closed ledger marker")
     cr.add_argument("--run-id", required=True, dest="run_id")
