@@ -98,6 +98,15 @@ class Capture:
     def write_observation(self, obs: dict) -> Path:
         return self._write("observation.json", json.dumps(obs, indent=2, sort_keys=True))
 
+    def write_dispatch_claim(self, **audit_fields: Any) -> Path:
+        """#640: a provenance marker for ``hooks/wal-bind-guard``'s executor-dispatch fallback.
+        Written inside THIS capture dir (already 0700, already rooted under the dispatching
+        project's own ``.rawgentic/runs/`` tree by construction), so its mere existence at a
+        path under a given project's tree IS the provenance — the guard trusts path
+        containment, never the content. ``audit_fields`` (project/run_id/seat/…) are recorded
+        for human debugging only; the guard does not parse them."""
+        return self._write("dispatch-claim.json", json.dumps(audit_fields, sort_keys=True))
+
     def finalize(self) -> None:
         marker = self.path / INCOMPLETE
         try:

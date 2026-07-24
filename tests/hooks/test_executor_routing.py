@@ -109,7 +109,6 @@ def _dispatch(seat, tmp_path, **kw):
         snapshot=_snapshot(), quota=qc, audit=audit, capture_root=str(tmp_path / "runs"),
         routing=routing, enforce=enforce, run_seat=run_seat,
         dispatch_real=kw.pop("dispatch_real", _stub()),
-        project=kw.pop("project", None),
     ), audit
 
 
@@ -265,28 +264,6 @@ def test_dispatch_actual_model_is_routed_primary(tmp_path, seat, expect):
     assert res["actual_model"] == expect and res["verified"] is True
     kinds = [r["kind"] for r in audit.records()]
     assert "receipt" in kinds and "observation" in kinds
-
-
-def test_dispatch_threads_project_to_request(tmp_path):
-    # #640: dispatch_seat's optional `project` reaches the AdapterRequest the stub dispatch
-    # receives, so the claude adapter can set RAWGENTIC_DISPATCH_PROJECT for wal-bind-guard.
-    reqs = []
-    def dispatch_real(engine_name, req, **kw):
-        reqs.append(req)
-        return _obs(req)
-    res, _audit = _dispatch("ship", tmp_path, dispatch_real=dispatch_real, project="rawgentic")
-    assert res["ok"] is True
-    assert reqs[0].project == "rawgentic"
-
-
-def test_dispatch_no_project_defaults_none(tmp_path):
-    reqs = []
-    def dispatch_real(engine_name, req, **kw):
-        reqs.append(req)
-        return _obs(req)
-    res, _audit = _dispatch("ship", tmp_path, dispatch_real=dispatch_real)
-    assert res["ok"] is True
-    assert reqs[0].project is None
 
 
 def test_dispatch_chain_fallback_selects_second_target(tmp_path):

@@ -120,29 +120,6 @@ def test_run_seat_does_not_fall_back_on_identity_failure(tmp_path):
     assert len(calls) == 1  # model responded (wrong id) -> no availability fallback
 
 
-def test_run_seat_threads_project_into_request(tmp_path):
-    # #640: run_seat's optional `project` reaches the AdapterRequest the dispatch receives,
-    # so the claude adapter can set RAWGENTIC_DISPATCH_PROJECT for wal-bind-guard.
-    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
-    reqs = []
-    def dispatch(engine_name, req, **kw):
-        reqs.append(req)
-        return _obs(req)
-    run_seat("review", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
-             project="rawgentic", dispatch=dispatch)
-    assert reqs[0].project == "rawgentic"
-
-
-def test_run_seat_no_project_defaults_none(tmp_path):
-    qc = QuotaCoordinator(tmp_path / "q", {"claude": 2, "codex": 4})
-    reqs = []
-    def dispatch(engine_name, req, **kw):
-        reqs.append(req)
-        return _obs(req)
-    run_seat("review", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path, dispatch=dispatch)
-    assert reqs[0].project is None
-
-
 def test_run_seat_chain_exhausted(tmp_path):
     qc = QuotaCoordinator(tmp_path / "q", {"claude": 2})
     with pytest.raises(routing.ChainExhausted):

@@ -116,15 +116,9 @@ def run_seat(
     run_id: Optional[str] = None,
     effort: Optional[str] = None,
     timeout: float = 300.0,
-    project: Optional[str] = None,
     dispatch: Callable[..., contract.Observation] = _dispatch_real,
 ) -> contract.Observation:
     """Run a seat to an Observation, with chain-aware fallback on availability failures.
-
-    ``project`` (#640) is threaded into every ``AdapterRequest`` so the claude adapter can
-    set ``RAWGENTIC_DISPATCH_PROJECT`` — the dispatching project's own name, letting
-    ``wal-bind-guard`` bind an otherwise-unregistered dispatched subprocess. Default None
-    keeps every existing caller byte-identical.
 
     For a REVIEW seat, pass ``author_provider`` (the authored artifact's engine) so the D9
     cross_model_author rule skips same-engine targets; omitting it leaves the rule inert (correct
@@ -153,7 +147,7 @@ def run_seat(
         req = AdapterRequest(
             seat=seat, requested_model=target["model"], prompt=prompt, transport=lane["transport"],
             context=tuple(context), correlation_id=correlation_id, effort=eff.native,
-            timeout=eff_timeout, credential_ref=lane.get("credential_ref"), project=project, **req_kw,
+            timeout=eff_timeout, credential_ref=lane.get("credential_ref"), **req_kw,
         )
         attempt_id = f"{i}-{uuid.uuid4().hex[:8]}"
         fallback_reason = None if i == 0 else f"fallback from {primary_model}: {last.parse_status if last else 'unknown'}"
