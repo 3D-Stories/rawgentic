@@ -243,6 +243,102 @@ class TestUnboundSession:
         assert _decision(stdout) == "allow"
 
 
+# ── Executor-dispatch env fallback (#640) ────────────────────────────────
+
+
+class TestExecutorDispatchEnvFallback:
+    """#640: an executor-dispatched subprocess (hooks/executor_routing_lib.py
+    dispatch -> phase_executor's claude_cli adapter) is a fresh, unregistered
+    `claude --print --no-session-persistence` session — it can never appear in
+    session_registry.jsonl, so Gate 1 denies it in any workspace with >1 active
+    project. The dispatch sets RAWGENTIC_DISPATCH_PROJECT to the project it was
+    invoked for; wal-bind-guard accepts it as a fallback bound-project ONLY when
+    it names a real ACTIVE project, and Gate 2's cross-project check still
+    applies using that name.
+    """
+
+    def test_env_var_binds_unregistered_session_same_project_allows(
+        self, make_workspace
+    ) -> None:
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_PROJECT": "alpha"}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "allow"
+
+    def test_env_var_still_denies_cross_project(self, make_workspace) -> None:
+        """Bound via the env fallback to alpha; touching beta still denies —
+        the fallback must feed Gate 2, not bypass it."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        file_path = str(ws.root / "projects" / "beta" / "lib" / "utils.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_PROJECT": "alpha"}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_env_var_naming_nonexistent_project_denies(self, make_workspace) -> None:
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_PROJECT": "nope"}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_env_var_naming_inactive_project_denies(self, make_workspace) -> None:
+        """A project name that exists but is active:false must not be trusted —
+        the fallback validates active:true, same bar as a real registry bind.
+        Isolated against an ACTIVE project's file (alpha), not the inactive
+        project's own file: an inactive project's OWN files fall through Gate
+        1's separate "not under any active project" exception regardless of
+        BOUND_PROJECT (a pre-existing quirk, tracked separately, out of scope
+        here — see #640 PR notes) — that would validate this test even if the
+        env fallback wrongly bound to the inactive name, so it can't isolate
+        this behavior. Pointing at alpha's file (a real active project) means
+        an incorrect bind to "gamma" would wrongly ALLOW; the correct
+        behavior (BOUND_PROJECT stays empty since gamma isn't active) DENIES
+        via the normal unbound-in-multi-active path, same as no env var at
+        all."""
+        inactive = {
+            "name": "gamma", "path": "./projects/gamma", "active": False,
+            "configured": True, "lastUsed": "2026-03-08T00:00:00Z",
+        }
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT, inactive])
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_PROJECT": "gamma"}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_registry_binding_takes_precedence_over_env_var(self, make_workspace) -> None:
+        """A session ALREADY bound via the registry must not be re-bound by a
+        (possibly stale/conflicting) env var — the env fallback only fires
+        when the registry lookup is empty."""
+        ws: Workspace = make_workspace(
+            projects=[ALPHA_PROJECT, BETA_PROJECT],
+            registry_entries=[
+                {"session_id": "s1", "project": "alpha", "ts": "2026-03-08T00:00:00Z"},
+            ],
+        )
+        file_path = str(ws.root / "projects" / "beta" / "lib" / "utils.py")
+        stdin = _make_stdin("Read", "s1", str(ws.root), {"file_path": file_path})
+        # Env var claims beta, but the registry already bound this exact session to alpha —
+        # the registry must win, so a beta file still denies.
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_PROJECT": "beta"}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+
 # ── Fail-open tests ─────────────────────────────────────────────────────
 
 

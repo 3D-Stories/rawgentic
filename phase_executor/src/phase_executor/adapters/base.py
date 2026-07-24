@@ -38,6 +38,10 @@ class AdapterRequest:
     # claude composes `--resume <id>` (requires profile.session_policy == "resume");
     # codex/zhipuai refuse fail-loud. Default None keeps every existing caller byte-identical.
     resume_session_id: Optional[str] = None
+    # #640: the project this dispatch was invoked for — the claude adapter threads it into
+    # RAWGENTIC_DISPATCH_PROJECT so wal-bind-guard can bind an otherwise-unregistered
+    # dispatched subprocess. Default None keeps every existing caller byte-identical.
+    project: Optional[str] = None
 
 
 @dataclass

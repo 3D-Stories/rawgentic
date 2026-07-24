@@ -63,6 +63,25 @@ CLAUDE_DOCS="$WAL_CLAUDE_DOCS"
 wal_resolve_project
 BOUND_PROJECT="$WAL_PROJECT"
 
+# --- Executor-dispatch env fallback (#640) ---
+# A subprocess spawned by hooks/executor_routing_lib.py's executor-seat dispatch
+# (phase_executor's claude_cli adapter) is a fresh, unregistered
+# `claude --print --no-session-persistence` session — it can never appear in
+# session_registry.jsonl, so the registry lookup above always returns empty and
+# Gate 1 denies it in any workspace with >1 active project, including reads of
+# its OWN project's files. The dispatch code sets RAWGENTIC_DISPATCH_PROJECT to
+# the project it was invoked for; accept it ONLY when the registry lookup found
+# nothing (never override a real binding) AND it names a real ACTIVE project
+# (never trust an arbitrary env value blindly) — so a legitimate same-project
+# dispatch is bound exactly as if the registry had resolved it, while Gate 2
+# still enforces the cross-project boundary using that same name.
+if [ -z "$BOUND_PROJECT" ] && [ -n "${RAWGENTIC_DISPATCH_PROJECT:-}" ]; then
+    if "$JQ" -e --arg p "$RAWGENTIC_DISPATCH_PROJECT" \
+        '.projects[] | select(.name == $p and .active == true)' "$WORKSPACE_FILE" >/dev/null 2>&1; then
+        BOUND_PROJECT="$RAWGENTIC_DISPATCH_PROJECT"
+    fi
+fi
+
 # --- Gate 1: Unbound session check ---
 if [ -z "$BOUND_PROJECT" ]; then
     ACTIVE_COUNT=$("$JQ" '[.projects[] | select(.active == true)] | length' "$WORKSPACE_FILE" 2>/dev/null || echo "0")

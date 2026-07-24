@@ -119,14 +119,21 @@ def parse_claude(raw: Union[str, dict], *, requested_model: str) -> ParsedResult
     )
 
 
-def _claude_env(credential_ref: Optional[str]) -> Optional[dict]:
+def _claude_env(credential_ref: Optional[str], project: Optional[str] = None) -> Optional[dict]:
     """#431: a lane's ``credential_ref`` names an isolated Claude config dir → set
-    ``CLAUDE_CONFIG_DIR`` so this invocation uses that account's independent quota pool. A missing /
-    empty ``credential_ref`` returns None (env inherited unchanged — the single-account default).
+    ``CLAUDE_CONFIG_DIR`` so this invocation uses that account's independent quota pool.
+    #640: ``project`` (the dispatch's own project name) → set
+    ``RAWGENTIC_DISPATCH_PROJECT`` so ``hooks/wal-bind-guard`` can bind this otherwise-
+    unregistered ``--no-session-persistence`` subprocess to its own project in a
+    multi-active-project workspace, instead of denying every Read/Edit/Write it attempts.
+    Neither set → None (env inherited unchanged — byte-identical to pre-#640 behavior).
     Claude-only: codex has its own ``CODEX_HOME``, zhipu its own key."""
+    env: dict = {}
     if isinstance(credential_ref, str) and credential_ref:
-        return {"CLAUDE_CONFIG_DIR": credential_ref}
-    return None
+        env["CLAUDE_CONFIG_DIR"] = credential_ref
+    if isinstance(project, str) and project:
+        env["RAWGENTIC_DISPATCH_PROJECT"] = project
+    return env or None
 
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
@@ -145,7 +152,8 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
     started = time.monotonic()
-    proc = run_subprocess(cmd, req.prompt, req.timeout, env=_claude_env(req.credential_ref), cwd=cwd)
+    proc = run_subprocess(cmd, req.prompt, req.timeout,
+                         env=_claude_env(req.credential_ref, req.project), cwd=cwd)
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)

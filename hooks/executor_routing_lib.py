@@ -703,10 +703,17 @@ def dispatch_seat(
     gate_decision=None,
     plan_context=None,
     quota_timeout=(),
+    project: Optional[str] = None,
 ) -> dict:
     """Run ``seat`` through the executor with per-attempt enforcement, returning a result dict with
     an ``exit`` code (see the exit taxonomy). ``phase_executor`` pieces are injected so tests drive a
     stub ``dispatch_real`` — no live provider call.
+
+    ``project`` (#640) is threaded into ``run_seat`` so the claude adapter can set
+    ``RAWGENTIC_DISPATCH_PROJECT`` on the spawned subprocess — letting ``wal-bind-guard`` bind
+    an otherwise-unregistered ``--no-session-persistence`` dispatch to its own project instead
+    of denying every Read/Edit/Write in a multi-active-project workspace. Default None keeps
+    every existing caller byte-identical.
 
     The dispatch decorator closes over the SAME ordered ``eligible_targets`` list run_seat iterates
     (finding S1: never reconstruct the full lane from the AdapterRequest, which lacks
@@ -811,7 +818,7 @@ def dispatch_seat(
         final_obs = run_seat(
             seat, prompt, snapshot=snapshot, quota=quota, capture_root=capture_root,
             context=context, correlation_id=correlation_id, author_provider=author_provider,
-            run_id=run_id, effort=effort, timeout=timeout, dispatch=wrapped_dispatch,
+            run_id=run_id, effort=effort, timeout=timeout, project=project, dispatch=wrapped_dispatch,
         )
     except PreCheckDenied as d:
         return _err(EXIT_ENFORCEMENT, "pre_check_denied", "; ".join(d.violations), retryable=False,
@@ -2413,7 +2420,7 @@ def _do_dispatch(args) -> int:
         snapshot=snap, quota=quota, audit=audit, capture_root=paths["capture_root"],
         routing=pe.routing, enforce=pe.enforce, run_seat=pe.run_seat, dispatch_real=pe.dispatch_real,
         gate_decision=gate_decision, plan_context=plan_context,
-        quota_timeout=pe.QuotaTimeout,
+        quota_timeout=pe.QuotaTimeout, project=args.project,
     )
     # #470 §2b audit trail: record the plan-freshness binding (gate policy_digest, live plan digest,
     # run_id, correlation_id) alongside the dispatch result. Attached to the emitted structured

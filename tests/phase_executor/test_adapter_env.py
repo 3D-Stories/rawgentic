@@ -44,6 +44,30 @@ def test_claude_env_non_string_is_none():
     assert _claude_env(123) is None
 
 
+# --- #640: RAWGENTIC_DISPATCH_PROJECT (wal-bind-guard executor-dispatch fallback) ---
+
+
+def test_claude_env_sets_dispatch_project():
+    assert _claude_env(None, "rawgentic") == {"RAWGENTIC_DISPATCH_PROJECT": "rawgentic"}
+
+
+def test_claude_env_project_and_credential_ref_both_set():
+    assert _claude_env("/home/u/.claude-acct2", "rawgentic") == {
+        "CLAUDE_CONFIG_DIR": "/home/u/.claude-acct2",
+        "RAWGENTIC_DISPATCH_PROJECT": "rawgentic",
+    }
+
+
+def test_claude_env_no_project_no_credential_is_none():
+    assert _claude_env(None, None) is None
+    assert _claude_env(None, "") is None
+
+
+def test_claude_env_non_string_project_is_ignored():
+    # defensive: a non-string project (schema drift) must not build a bogus env
+    assert _claude_env(None, 123) is None
+
+
 # --- #465 T3: claude launch profile composition ---
 
 from phase_executor import contract as _c
