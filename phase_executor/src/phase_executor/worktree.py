@@ -77,21 +77,27 @@ class ParkRecord:
     would use/used, so a caller can log it for the audit trail even when ``parked`` is
     False (a complete record of the loop-back happening, not just the eventful case).
 
-    ``stash_oid`` (Step-8a review finding, hardened again at Step 11) is the ACTUAL
+    ``stash_oid`` (Step-8a review finding, hardened twice more at Step 11) is the ACTUAL
     stash commit this call created — resolved by searching the ``refs/stash`` REFLOG for
-    the most recent entry whose message is our own ``stash_name``, never inferred from a
-    before/after comparison of the ref's TIP. ``refs/stash`` is a repository-GLOBAL ref
-    shared by EVERY linked worktree of one canonical repo (empirically confirmed: two
+    the most recent entry matching a message unique to THIS WORKTREE, never inferred
+    from a before/after comparison of the ref's TIP. ``refs/stash`` is a repository-GLOBAL
+    ref shared by EVERY linked worktree of one canonical repo (empirically confirmed: two
     ``git worktree add`` checkouts of the same repo share one ``refs/stash``), so a
     before/after TIP comparison is racy across worktrees, not just within one — another
     worktree's concurrent park can advance the ref between this call's push and its own
     read, misattributing a foreign OID as this call's own. Searching by MESSAGE instead
-    of POSITION sidesteps that: ``stash_name`` is unique to this run/design/task, so the
-    most recent reflog entry matching it is unambiguously ours regardless of how many
-    foreign entries race in before or after our own push. ``None`` when ``parked`` is
-    False. Two loop-backs sharing the same ``run_id``/``design_version``/``task_id``
-    produce identical ``stash_name``s but DISTINCT ``stash_oid``s — the OID, not the
-    name, is the collision-proof recovery identity (``git stash apply <oid>``)."""
+    of POSITION sidesteps that TIP race — but ``stash_name`` alone (run_id + design_version
+    + task_id) is NOT guaranteed unique per WORKTREE: a competitive/bake-off dispatch can
+    run several attempts of the same task under the same run concurrently, each in its OWN
+    worktree, sharing an identical ``stash_name`` (a second Step-11 finding on the message-
+    search hardening itself). The actual git push message therefore folds in
+    ``handle.identity.attempt`` — already a globally-unique id minted per worktree — so the
+    reflog search key is unique per CALLER, not merely per task; ``stash_name`` itself (the
+    audit-facing value returned here and passed to ``append_park``) is untouched and stays
+    a prefix of the real message. ``None`` when ``parked`` is False. Two loop-backs on the
+    SAME worktree sharing the same ``run_id``/``design_version``/``task_id`` produce
+    identical ``stash_name``s but DISTINCT ``stash_oid``s — the OID, not the name, is the
+    collision-proof recovery identity (``git stash apply <oid>``)."""
 
     stash_name: str
     parked: bool
@@ -600,6 +606,19 @@ class WorktreeManager:
         parked = False
         stash_oid = None
         if inspection.dirty:
+            # Codex Step-11 finding: `stash_name` alone (run_id+design_version+task_id)
+            # is NOT guaranteed unique per WORKTREE — a competitive/bake-off dispatch can
+            # run several attempts of the SAME task under the SAME run concurrently
+            # (different `handle.identity.attempt`, identical run/design/task), so two
+            # DIFFERENT worktrees could push the identical message and make a message-only
+            # reflog search ambiguous between them. `handle.identity.attempt` is already a
+            # globally-unique id (engine.py mints it as f"{i}-{uuid4().hex[:8]}" per
+            # WorktreeIdentity's docstring), so fold it into the ACTUAL git message used
+            # for push+search — `stash_name` itself (the audit-facing, human-readable
+            # identifier recorded in ParkRecord/append_park) is untouched, and remains a
+            # prefix of the real message, so every existing substring check on it still
+            # holds.
+            push_message = f"{stash_name}:{handle.identity.attempt}"
             # `stash push` (not `stash create`): `create` silently produces NO commit
             # for an untracked-only dirty tree even with `-u` (confirmed empirically —
             # a real git limitation, not a version quirk) even though `push` handles
@@ -607,20 +626,21 @@ class WorktreeManager:
             # well-tested path.
             rc, _out, err = self._git(
                 "--git-dir", handle.gitdir, "--work-tree", handle.path,
-                "stash", "push", "-u", "-m", stash_name,
+                "stash", "push", "-u", "-m", push_message,
             )
             if rc != 0:
                 raise WorktreeError(f"park failed (stash push): {err.strip()}")
             # Resolve OUR OWN entry by REFLOG MESSAGE, not ref position: `refs/stash`
             # is a repository-GLOBAL ref (shared by every linked worktree of the
             # canonical repo), so its TIP can be advanced by a foreign worktree's
-            # concurrent push between our push and this read. Our stash_name is unique
-            # to this run/design/task, so the most recent (`-n 1`) reflog entry whose
-            # message matches it is unambiguously the one we just created, regardless
-            # of how many foreign entries race in before or after.
+            # concurrent push between our push and this read. `push_message` is unique
+            # to this WORKTREE (not just this run/design/task), so the most recent
+            # (`-n 1`) reflog entry matching it is unambiguously the one we just
+            # created, regardless of how many foreign entries — including same-task
+            # foreign attempts — race in before or after.
             rc, out, err = self._git(
                 "--git-dir", handle.gitdir, "--work-tree", handle.path,
-                "log", "-g", "--grep", stash_name, "-F", "--format=%H", "-n", "1", "refs/stash",
+                "log", "-g", "--grep", push_message, "-F", "--format=%H", "-n", "1", "refs/stash",
             )
             resolved_oid = out.strip() if rc == 0 else ""
             if not resolved_oid:

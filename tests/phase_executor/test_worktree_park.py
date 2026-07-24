@@ -251,6 +251,47 @@ def test_park_and_reset_stash_oid_immune_to_foreign_worktree_race(repo, mgr, tmp
     assert open(os.path.join(h_a.path, "a.txt")).read() == "hello\n"
 
 
+def test_park_and_reset_immune_to_shared_stash_name_across_worktrees(repo, mgr, tmp_path, monkeypatch):
+    # Codex Step-11 finding ON THE MESSAGE-SEARCH HARDENING ITSELF: `stash_name` alone
+    # (run_id + design_version + task_id) is NOT guaranteed unique per WORKTREE -- a
+    # competitive/bake-off dispatch can run several attempts of the SAME task under the
+    # SAME run concurrently, each in its OWN worktree, sharing an otherwise-identical
+    # stash_name. Prove worktree A still records ITS OWN correct OID even when worktree
+    # B -- a DIFFERENT worktree sharing the IDENTICAL run_id/design_version/task_id --
+    # races in and fully parks between A's push and A's reflog read.
+    h_a = _handle(repo, mgr, tmp_path, attempt="0-aaaa1111")
+    h_b = _handle(repo, mgr, tmp_path, attempt="1-bbbb2222")
+    open(os.path.join(h_a.path, "a.txt"), "w").write("A's change\n")
+    open(os.path.join(h_b.path, "a.txt"), "w").write("B's change\n")
+    real_git = mgr._git  # noqa: SLF001
+
+    def foreign_same_task_park_after_a_pushes(*args, env=None):
+        result = real_git(*args, env=env)
+        if "stash" in args and "push" in args and h_a.path in args:
+            # Worktree B -- a DIFFERENT worktree, the SAME run_id/design_version/task_id
+            # -- fully parks BETWEEN A's own `stash push` and A's reflog read.
+            mgr.park_and_reset(h_b, run_id="run1", design_version="v2", task_id="t1")
+        return result
+
+    monkeypatch.setattr(mgr, "_git", foreign_same_task_park_after_a_pushes)
+    rec_a = mgr.park_and_reset(h_a, run_id="run1", design_version="v2", task_id="t1")
+    assert rec_a.parked is True
+    # A's recorded OID resolves to A's OWN content, not B's, despite an identical
+    # audit-facing stash_name.
+    rc, show, _err = real_git(
+        "--git-dir", h_a.gitdir, "--work-tree", h_a.path, "show", f"{rec_a.stash_oid}:a.txt")
+    assert show == "A's change\n"
+    # the two pushed reflog messages genuinely differ (attempt-suffixed) despite
+    # sharing the identical stash_name prefix -- confirms disambiguation, not luck.
+    rc, log_out, _err = real_git(
+        "--git-dir", h_a.gitdir, "--work-tree", h_a.path,
+        "log", "-g", "--format=%gs", "refs/stash")
+    messages = [ln for ln in log_out.splitlines() if "rawgentic-parked:run1:v2:t1" in ln]
+    assert len(messages) == 2
+    assert messages[0] != messages[1]
+    assert open(os.path.join(h_a.path, "a.txt")).read() == "hello\n"
+
+
 def test_park_and_reset_reset_failure_carries_park_record(repo, mgr, tmp_path, monkeypatch):
     h = _handle(repo, mgr, tmp_path)
     open(os.path.join(h.path, "a.txt"), "w").write("changed\n")
