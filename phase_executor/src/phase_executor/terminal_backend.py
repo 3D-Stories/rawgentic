@@ -13,6 +13,21 @@ a socket path at all — e.g. herdr's is workspace+pane ids, not a per-run priva
 (epic #635 child #638's own grounding). The supervisor treats the return value as an
 OPAQUE backend-specific identifier: it never interprets its contents, only passes it back
 to this SAME backend's other methods.
+
+**Name ownership contract (Step-11 review finding, #636).** ``name`` (the pane/session
+identifier passed to ``new_session`` and echoed to every later call) is CALLER-CHOSEN —
+the supervisor picks it once via ``registry.session_name(identity)`` and expects every
+later ``pane_pid``/``has_session``/``kill_session`` call for that job to address the SAME
+pane using that SAME string. tmux's ``new-session -s NAME`` natively supports this (the
+caller's name IS the tmux session name). A future backend whose native primitive instead
+ASSIGNS its own opaque identifier at creation time (e.g. herdr's ``pane split``, which
+returns a herdr-assigned pane id rather than accepting a caller-chosen one — confirmed
+live, `docs/planning/2026-07-23-633-herdr-build-seat-launch-backend-design.md` AC3) MUST
+maintain its own internal ``name -> native-id`` mapping (e.g. tag/rename the pane to
+``name`` immediately after creation if the runtime supports it, or keep a private dict)
+so every subsequent call using ``name`` still resolves to the correct underlying pane —
+this backend-internal translation is deliberately NOT part of the protocol surface (kept
+minimal) and is each backend implementation's own responsibility, never the supervisor's.
 """
 from __future__ import annotations
 
@@ -23,7 +38,10 @@ from typing import Optional, Protocol
 class TerminalBackend(Protocol):
     """The primitives that differ between terminal runtimes. Every method's ``endpoint``
     parameter is the opaque identifier ``resolve_endpoint`` returned — never constructed
-    or interpreted by the caller."""
+    or interpreted by the caller. Every method's ``name`` parameter is the CALLER-CHOSEN
+    identifier from ``new_session`` — see the module docstring's "Name ownership contract"
+    for what a backend whose native primitive assigns its own id (not the caller's) must
+    do internally to honor it."""
 
     def preflight(self, endpoint: str) -> "PreflightResultLike": ...
 
