@@ -560,13 +560,30 @@ class TmuxSupervisor:
         except BaseException:
             # a post-spawn failure (unreadable pane_pid, registry write error) must not
             # leak a LIVE unregistered pane outside the ceiling (Step-11 R1/codex #5):
-            # kill the session first, then release the permit
+            # kill the session first, then release the permit.
+            #
+            # #638 Step-11 finding (pass 5): the permit release was UNCONDITIONAL and the
+            # kill's own result was ignored, so an unconfirmed teardown (nonzero close, or a
+            # runner timeout) released the slot while a possibly-live, unregistered process
+            # kept running — letting the pool over-admit past its ceiling. Same class as the
+            # pass-4 orphan finding. Release ONLY on a CONFIRMED teardown; otherwise hold the
+            # slot, exactly as `_finish(release_permit=False)` does for every other
+            # death-not-verified path. The permit stays in `self._permits` under this
+            # session name so a later `_release_permit` for that record reclaims it, and
+            # QuotaCoordinator's stale-reap (dead holder pid) remains the leak backstop.
+            # The possibly-live pane itself is surfaced by reap()'s CF-11 unknown-session
+            # reporting (live on the endpoint, absent from the registry) — never blind-killed.
+            teardown_confirmed = not spawned  # nothing spawned ⇒ nothing to tear down
             if spawned:
                 try:
-                    resolved_backend.kill_session(sock, name)
+                    kres = resolved_backend.kill_session(sock, name)
+                    teardown_confirmed = kres.returncode == 0
                 except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
-                    pass
-            cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
+                    teardown_confirmed = False
+            if teardown_confirmed:
+                cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
+            else:
+                self._permits[name] = cm
             raise
 
     # -- status / sentinel ----------------------------------------------------

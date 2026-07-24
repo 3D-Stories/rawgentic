@@ -43,7 +43,8 @@ class StubBackend:
     result by default (THIS test process's own pid, so downstream /proc reads succeed)."""
 
     def __init__(self, name, *, raise_has_session=False, raise_list_sessions=False,
-                 list_sessions_returncode=0, raise_list_sessions_for_endpoints=frozenset()):
+                 list_sessions_returncode=0, raise_list_sessions_for_endpoints=frozenset(),
+                 pane_pid_returncode=0, kill_session_returncode=0):
         self.name = name
         self.calls = []
         # #638 Step-11 finding (round 2): a PROPERLY CONFIGURED backend whose underlying
@@ -57,6 +58,10 @@ class StubBackend:
         # serving two DIFFERENT endpoints (e.g. two herdr workspaces under one run) must not
         # let a failure on one endpoint silently swallow the other's real records.
         self._raise_list_sessions_for_endpoints = raise_list_sessions_for_endpoints
+        # Step-11 pass 5: drive the launch teardown path -- a failing pane_pid raises inside
+        # launch(), and an UNCONFIRMED kill_session must then leave the quota permit HELD.
+        self._pane_pid_returncode = pane_pid_returncode
+        self._kill_session_returncode = kill_session_returncode
 
     def resolve_endpoint(self, run_id):
         self.calls.append(("resolve_endpoint", run_id))
@@ -73,6 +78,8 @@ class StubBackend:
 
     def pane_pid(self, endpoint, name, timeout=30):
         self.calls.append(("pane_pid", endpoint, name))
+        if self._pane_pid_returncode != 0:
+            return subprocess.CompletedProcess([], self._pane_pid_returncode, "", "pane_pid boom")
         return subprocess.CompletedProcess([], 0, str(os.getpid()), "")
 
     def has_session(self, endpoint, name, timeout=30):
@@ -89,7 +96,8 @@ class StubBackend:
 
     def kill_session(self, endpoint, name, timeout=30):
         self.calls.append(("kill_session", endpoint, name))
-        return subprocess.CompletedProcess([], 0, "", "")
+        return subprocess.CompletedProcess([], self._kill_session_returncode, "",
+                                           "close failed" if self._kill_session_returncode else "")
 
     def teardown_endpoint(self, endpoint, timeout=30):
         self.calls.append(("teardown_endpoint", endpoint))
@@ -441,3 +449,86 @@ def test_resolve_socket_terminal_backend_param_delegates_to_herdr(tmp_path):
     sup = _sup(tmp_path, herdr=herdr)
     endpoint = sup.resolve_socket("run1", terminal_backend="herdr")
     assert endpoint == "herdr-endpoint"
+
+
+# ---- Step-11 pass 5: an UNCONFIRMED launch teardown must not release the quota permit ----
+
+def _permit_held(sup, name):
+    return name in sup._permits  # noqa: SLF001
+
+
+def test_launch_failure_with_confirmed_teardown_releases_the_permit(tmp_path):
+    # baseline: pane_pid fails (so launch raises), kill_session CONFIRMS teardown (rc 0) --
+    # nothing can still be alive, so the slot must be returned as it always was (AC-E5).
+    be = StubBackend("herdr", pane_pid_returncode=1, kill_session_returncode=0)
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    with pytest.raises(SupervisorError):
+        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
+                   terminal_backend="herdr")
+    assert any(c[0] == "kill_session" for c in be.calls)
+    names = [c[2] for c in be.calls if c[0] == "kill_session"]
+    assert not any(_permit_held(sup, n) for n in names), "confirmed teardown must free the slot"
+
+
+def test_launch_failure_with_unconfirmed_teardown_holds_the_permit(tmp_path):
+    # THE finding (High, pass 5): the permit release was UNCONDITIONAL and kill_session's own
+    # result was ignored, so an unconfirmed teardown freed the slot while a possibly-live,
+    # unregistered process kept running -- letting the pool over-admit past its ceiling. The
+    # slot must stay HELD, matching _finish(release_permit=False) for every other
+    # death-not-verified path.
+    be = StubBackend("herdr", pane_pid_returncode=1, kill_session_returncode=1)
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    with pytest.raises(SupervisorError):
+        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
+                   terminal_backend="herdr")
+    names = [c[2] for c in be.calls if c[0] == "kill_session"]
+    assert names, "teardown was never attempted"
+    assert all(_permit_held(sup, n) for n in names), \
+        "unconfirmed teardown must HOLD the slot (possibly-live unregistered process)"
+
+
+def test_launch_prespawn_failure_still_releases_the_permit(tmp_path):
+    # Guard the other side: a failure BEFORE anything spawned has nothing to tear down, so
+    # the permit must still be freed -- holding it here would leak a slot on every ordinary
+    # pre-spawn error.
+    class NoSpawn(StubBackend):
+        def new_session(self, endpoint, name, cwd, argv, timeout=30):
+            self.calls.append(("new_session", endpoint, name, cwd, tuple(argv)))
+            return subprocess.CompletedProcess([], 1, "", "new_session refused")
+
+    be = NoSpawn("herdr")
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    with pytest.raises(SupervisorError):
+        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
+                   terminal_backend="herdr")
+    assert not any(c[0] == "kill_session" for c in be.calls)  # nothing spawned, nothing killed
+    assert sup._permits == {}, "a pre-spawn failure must not hold a slot"  # noqa: SLF001
+
+
+# ---- Step-11 pass 5 (Medium): await_job's indeterminate-probe policy had no test ----
+
+def test_await_job_indeterminate_probe_does_not_abort_and_is_bounded(tmp_path):
+    # The pass-4 fix made _live() raise SupervisorError on an indeterminate probe; the pass-4
+    # REGRESSION was that await_job() let it propagate, aborting a healthy dispatch with its
+    # permit held. An indeterminate probe must mean "not known dead" -> keep polling to the
+    # EXISTING deadline, then take the ordinary timeout path (never an uncaught raise).
+    be = StubBackend("herdr", raise_has_session=True)
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    rec = JobRecord(
+        identity=identity, session_name="rg-h", run_socket="herdr-endpoint",
+        pane_pid=os.getpid(), pane_pgid=os.getpid(), provider_pgid=None, pane_start_time="0",
+        worktree_path=str(tmp_path), worktree_base_sha="0" * 40, worktree_root=str(tmp_path),
+        worktree_gitdir="/g", worktree_repo="/r", capture_dir=str(tmp_path / "cap"),
+        attempt_id="0-a", permit_ref="unbounded", command_digest="d",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0, state="running",
+        created_at=1.0, quarantine_reason=None, terminal_backend="herdr")
+    sup._registry.upsert(rec)  # noqa: SLF001
+    # must NOT raise, and must terminate on its own deadline rather than spinning forever
+    state, obs = sup.await_job(rec, poll_s=0.01, timeout_s=0.05)
+    assert state == "timed_out", state
+    assert obs is not None
+    assert any(c[0] == "has_session" for c in be.calls), "the probe was never attempted"

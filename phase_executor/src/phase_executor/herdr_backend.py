@@ -128,6 +128,11 @@ class HerdrBackend:
         # 2026-07-24: host-local + ephemeral only).
         self._pane_env = pane_env or {}
         self._direction = direction
+        # Step-11 pass 5 breadcrumb: whether the LAST orphan-cleanup `close` confirmed the
+        # pane is gone. None = no cleanup has run. The supervisor does not read this (its own
+        # `kill_session` result is the load-bearing safety signal); it exists so an
+        # unconfirmed cleanup is inspectable rather than silently swallowed.
+        self._last_cleanup_confirmed: Optional[bool] = None
 
     def _herdr(self, *args, timeout: float = 30) -> subprocess.CompletedProcess:
         return self._run(["herdr", "pane", *args], env=self._env, timeout=timeout)
@@ -295,6 +300,16 @@ class HerdrBackend:
                 raise _PaneListError(
                     f"herdr pane list returned a pane whose 'label' is present but not a "
                     f"string ({type(label).__name__}): {pane!r}")
+            # Step-11 finding (pass 5): a present-but-BLANK label (`""`, `"   "`, newline-only)
+            # passed the isinstance check and then vanished exactly like the non-string case —
+            # it compares unequal in `_resolve_pane_id` (definitive not-found for a live job),
+            # is falsey so `list_sessions` drops it, and `reap()` strips whitespace and drops it
+            # too. Per this module's own contract, ONLY absent/None is a legitimate unlabeled
+            # pane; a present blank label is corrupted data and fails closed.
+            if isinstance(label, str) and not label.strip():
+                raise _PaneListError(
+                    f"herdr pane list returned a pane whose 'label' is present but blank "
+                    f"({label!r}): only an ABSENT/null label denotes an unmanaged pane: {pane!r}")
         return panes
 
     def _resolve_pane_id(self, endpoint: str, name: str) -> Optional[str]:
@@ -377,10 +392,26 @@ class HerdrBackend:
                 # timeout on close itself) would replace whatever `return` is pending from
                 # the try/except above (Python `finally`-exception semantics) — masking the
                 # real failure with an unrelated cleanup error. Cleanup is best-effort only.
+                #
+                # Step-11 pass 5: it is best-effort but no longer SILENT. A cleanup that
+                # cannot confirm the pane is gone means a possibly-live payload, so record
+                # that on the returned result — the supervisor's own launch teardown makes
+                # the load-bearing safety call (it holds the quota permit unless
+                # `kill_session` CONFIRMS teardown), and this note is the operator-visible
+                # breadcrumb for the pane itself.
+                self._last_cleanup_confirmed = False
                 try:
-                    self._herdr("close", pane_id, timeout=timeout)
+                    close_res = self._herdr("close", pane_id, timeout=timeout)
+                    self._last_cleanup_confirmed = close_res.returncode == 0
+                    if close_res.returncode != 0:
+                        err = self._parse_json(close_res) or {}
+                        code = (err.get("error") or {}).get("code") \
+                            if isinstance(err.get("error"), dict) else None
+                        # an already-gone pane IS a clean outcome (#633: the exec'd process
+                        # auto-closes its own pane on exit)
+                        self._last_cleanup_confirmed = code == "pane_not_found"
                 except Exception:  # noqa: BLE001 — never let cleanup mask the real result
-                    pass
+                    self._last_cleanup_confirmed = False
 
     def pane_pid(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:
         try:

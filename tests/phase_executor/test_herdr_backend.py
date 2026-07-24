@@ -678,3 +678,56 @@ def test_list_panes_absent_or_none_label_stays_legitimate():
         be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
         res = be.has_session("w1", "sess1")
         assert res.returncode != 0  # confirmed not-found, and did NOT raise
+
+
+# ---- Step-11 pass 5: a present-but-BLANK label is corruption, not "unmanaged" ----
+
+def test_list_panes_present_but_blank_label_raises():
+    # THE finding (High): `""` / `"   "` / newline-only passed the isinstance check and then
+    # vanished exactly like a non-string -- unequal in _resolve_pane_id (definitive not-found
+    # for a LIVE job), falsey so list_sessions drops it, and reap() strips whitespace and
+    # drops it too. Only an ABSENT/None label denotes an unmanaged pane.
+    for blank in ("", "   ", "\n", "\t "):
+        calls = []
+        responses = [_list_response([{"pane_id": "w1:p9", "label": blank}])]
+        be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+        with pytest.raises(_PaneListError):
+            be.has_session("w1", "sess1")
+
+
+def test_list_sessions_blank_label_raises_rather_than_dropping():
+    calls = []
+    responses = [_list_response([{"pane_id": "w1:p9", "label": "   "}])]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.list_sessions("w1")
+
+
+def test_new_session_records_unconfirmed_cleanup():
+    # Step-11 pass 5: orphan cleanup stays best-effort, but an UNCONFIRMED close must not be
+    # silently swallowed -- it means a possibly-live payload.
+    calls = []
+    responses = [
+        _split_ok(),                                              # split ok
+        _json_err(None, code="internal_error", message="boom"),   # rename fails
+        _json_err(None, code="internal_error", message="close failed"),  # cleanup close fails
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode != 0
+    assert be._last_cleanup_confirmed is False   # noqa: SLF001
+
+
+def test_new_session_pane_not_found_on_cleanup_counts_as_confirmed():
+    # #633: the exec'd process auto-closes its own pane on exit, so pane_not_found on the
+    # cleanup close is an already-clean outcome, not an unconfirmed teardown.
+    calls = []
+    responses = [
+        _split_ok(),
+        _json_err(None, code="internal_error", message="boom"),   # rename fails
+        _json_err(None, code="pane_not_found", message="already gone"),  # close: already gone
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode != 0
+    assert be._last_cleanup_confirmed is True    # noqa: SLF001
