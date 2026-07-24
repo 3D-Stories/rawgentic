@@ -281,7 +281,7 @@ def test_park_and_reset_immune_to_shared_stash_name_across_worktrees(repo, mgr, 
     rc, show, _err = real_git(
         "--git-dir", h_a.gitdir, "--work-tree", h_a.path, "show", f"{rec_a.stash_oid}:a.txt")
     assert show == "A's change\n"
-    # the two pushed reflog messages genuinely differ (attempt-suffixed) despite
+    # the two pushed reflog messages genuinely differ (gitdir-hash-suffixed) despite
     # sharing the identical stash_name prefix -- confirms disambiguation, not luck.
     rc, log_out, _err = real_git(
         "--git-dir", h_a.gitdir, "--work-tree", h_a.path,
@@ -289,6 +289,43 @@ def test_park_and_reset_immune_to_shared_stash_name_across_worktrees(repo, mgr, 
     messages = [ln for ln in log_out.splitlines() if "rawgentic-parked:run1:v2:t1" in ln]
     assert len(messages) == 2
     assert messages[0] != messages[1]
+    assert open(os.path.join(h_a.path, "a.txt")).read() == "hello\n"
+
+
+def test_park_and_reset_immune_to_shared_attempt_across_worktrees(repo, mgr, tmp_path, monkeypatch):
+    # Codex Step-11 finding (round 3, on the ATTEMPT-based fix): `handle.identity.attempt`
+    # is NOT a safe disambiguator -- it's a plain caller-supplied string with no enforced
+    # uniqueness invariant (the one production minting call site happens to use uuid4(),
+    # but nothing in WorktreeIdentity or this method's contract stops two DIFFERENT
+    # worktrees from sharing an attempt value, e.g. under different seats). Prove
+    # disambiguation holds via `handle.gitdir` -- git's OWN linked-worktree admin-dir
+    # invariant -- even when two worktrees share the IDENTICAL attempt (differing only in
+    # seat, so their planned paths still don't collide at create() time).
+    root = tmp_path / "wtroot"
+    base = _base(repo)
+    ident_a = wt.WorktreeIdentity(run_id="run1", seat="build", attempt="0-shared")
+    ident_b = wt.WorktreeIdentity(run_id="run1", seat="review", attempt="0-shared")
+    h_a = mgr.create(str(repo), ident_a, base, root=str(root))
+    h_b = mgr.create(str(repo), ident_b, base, root=str(root))
+    assert h_a.gitdir != h_b.gitdir  # git's own invariant, independent of the shared attempt
+    open(os.path.join(h_a.path, "a.txt"), "w").write("A's change\n")
+    open(os.path.join(h_b.path, "a.txt"), "w").write("B's change\n")
+    real_git = mgr._git  # noqa: SLF001
+
+    def foreign_same_task_same_attempt_park(*args, env=None):
+        result = real_git(*args, env=env)
+        if "stash" in args and "push" in args and h_a.path in args:
+            # Worktree B -- same run_id/design_version/task_id AND same attempt as A --
+            # fully parks BETWEEN A's own `stash push` and A's reflog read.
+            mgr.park_and_reset(h_b, run_id="run1", design_version="v2", task_id="t1")
+        return result
+
+    monkeypatch.setattr(mgr, "_git", foreign_same_task_same_attempt_park)
+    rec_a = mgr.park_and_reset(h_a, run_id="run1", design_version="v2", task_id="t1")
+    assert rec_a.parked is True
+    rc, show, _err = real_git(
+        "--git-dir", h_a.gitdir, "--work-tree", h_a.path, "show", f"{rec_a.stash_oid}:a.txt")
+    assert show == "A's change\n"
     assert open(os.path.join(h_a.path, "a.txt")).read() == "hello\n"
 
 

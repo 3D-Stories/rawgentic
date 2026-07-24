@@ -77,22 +77,27 @@ class ParkRecord:
     would use/used, so a caller can log it for the audit trail even when ``parked`` is
     False (a complete record of the loop-back happening, not just the eventful case).
 
-    ``stash_oid`` (Step-8a review finding, hardened twice more at Step 11) is the ACTUAL
-    stash commit this call created — resolved by searching the ``refs/stash`` REFLOG for
-    the most recent entry matching a message unique to THIS WORKTREE, never inferred
-    from a before/after comparison of the ref's TIP. ``refs/stash`` is a repository-GLOBAL
-    ref shared by EVERY linked worktree of one canonical repo (empirically confirmed: two
-    ``git worktree add`` checkouts of the same repo share one ``refs/stash``), so a
-    before/after TIP comparison is racy across worktrees, not just within one — another
-    worktree's concurrent park can advance the ref between this call's push and its own
-    read, misattributing a foreign OID as this call's own. Searching by MESSAGE instead
-    of POSITION sidesteps that TIP race — but ``stash_name`` alone (run_id + design_version
-    + task_id) is NOT guaranteed unique per WORKTREE: a competitive/bake-off dispatch can
-    run several attempts of the same task under the same run concurrently, each in its OWN
-    worktree, sharing an identical ``stash_name`` (a second Step-11 finding on the message-
-    search hardening itself). The actual git push message therefore folds in
-    ``handle.identity.attempt`` — already a globally-unique id minted per worktree — so the
-    reflog search key is unique per CALLER, not merely per task; ``stash_name`` itself (the
+    ``stash_oid`` (Step-8a review finding, hardened three times more at Step 11) is the
+    ACTUAL stash commit this call created — resolved by searching the ``refs/stash``
+    REFLOG for the most recent entry matching a message unique to THIS WORKTREE, never
+    inferred from a before/after comparison of the ref's TIP. ``refs/stash`` is a
+    repository-GLOBAL ref shared by EVERY linked worktree of one canonical repo
+    (empirically confirmed: two ``git worktree add`` checkouts of the same repo share one
+    ``refs/stash``), so a before/after TIP comparison is racy across worktrees, not just
+    within one — another worktree's concurrent park can advance the ref between this
+    call's push and its own read, misattributing a foreign OID as this call's own.
+    Searching by MESSAGE instead of POSITION sidesteps that TIP race — but ``stash_name``
+    alone (run_id + design_version + task_id) is NOT guaranteed unique per WORKTREE: a
+    competitive/bake-off dispatch can run several attempts of the same task under the same
+    run concurrently, each in its OWN worktree, sharing an identical ``stash_name`` (a
+    second Step-11 finding on the message-search hardening itself). A first fix attempt
+    folded in ``handle.identity.attempt``, but that field is only unique BY CONVENTION at
+    its one current minting call site (``uuid4()``-based) — nothing in ``WorktreeIdentity``
+    enforces it, so a third Step-11 finding correctly rejected it as a safety anchor. The
+    actual git push message therefore folds in a hash of ``handle.gitdir`` instead — git's
+    OWN linked-worktree admin-dir path, which git itself guarantees is distinct for every
+    linked worktree of one canonical repo (an invariant enforced by ``git worktree add``,
+    not by any caller convention this method has to trust). ``stash_name`` itself (the
     audit-facing value returned here and passed to ``append_park``) is untouched and stays
     a prefix of the real message. ``None`` when ``parked`` is False. Two loop-backs on the
     SAME worktree sharing the same ``run_id``/``design_version``/``task_id`` produce
@@ -606,19 +611,26 @@ class WorktreeManager:
         parked = False
         stash_oid = None
         if inspection.dirty:
-            # Codex Step-11 finding: `stash_name` alone (run_id+design_version+task_id)
-            # is NOT guaranteed unique per WORKTREE — a competitive/bake-off dispatch can
-            # run several attempts of the SAME task under the SAME run concurrently
-            # (different `handle.identity.attempt`, identical run/design/task), so two
-            # DIFFERENT worktrees could push the identical message and make a message-only
-            # reflog search ambiguous between them. `handle.identity.attempt` is already a
-            # globally-unique id (engine.py mints it as f"{i}-{uuid4().hex[:8]}" per
-            # WorktreeIdentity's docstring), so fold it into the ACTUAL git message used
-            # for push+search — `stash_name` itself (the audit-facing, human-readable
-            # identifier recorded in ParkRecord/append_park) is untouched, and remains a
-            # prefix of the real message, so every existing substring check on it still
-            # holds.
-            push_message = f"{stash_name}:{handle.identity.attempt}"
+            # Codex Step-11 finding (round 1): `stash_name` alone (run_id+design_version+
+            # task_id) is NOT guaranteed unique per WORKTREE — a competitive/bake-off
+            # dispatch can run several attempts of the SAME task under the SAME run
+            # concurrently, so two DIFFERENT worktrees could push the identical message
+            # and make a message-only reflog search ambiguous between them.
+            #
+            # Codex Step-11 finding (round 2, on the FIRST fix): `handle.identity.attempt`
+            # is NOT a safe disambiguator either — it is a plain caller-supplied string
+            # with no enforced uniqueness invariant; the one production caller happens to
+            # mint it via `uuid4()`, but nothing in `WorktreeIdentity`'s type or this
+            # method's contract stops two different worktrees (e.g. under different
+            # seats) from sharing an `attempt` value.
+            #
+            # `handle.gitdir` is airtight where `attempt` is not: it is git's OWN linked-
+            # worktree admin-dir path (`_discover_gitdir`), and git itself guarantees no
+            # two linked worktrees of one canonical repo ever share an admin dir — that
+            # invariant is enforced by `git worktree add` itself, not by any caller
+            # convention this method has to trust. Hash it (never embed a raw filesystem
+            # path into a git commit message) to build the disambiguator.
+            push_message = f"{stash_name}:{hashlib.sha256(handle.gitdir.encode('utf-8')).hexdigest()[:12]}"
             # `stash push` (not `stash create`): `create` silently produces NO commit
             # for an untracked-only dirty tree even with `-u` (confirmed empirically —
             # a real git limitation, not a version quirk) even though `push` handles
