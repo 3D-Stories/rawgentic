@@ -70,6 +70,22 @@ class WorktreeInspection:
 
 
 @dataclass(frozen=True)
+class ParkRecord:
+    """#637 (epic #635 C4) — the result of ``WorktreeManager.park_and_reset``. ``parked``
+    is False when the worktree was already clean (nothing to stash) — a valid, non-error
+    outcome, not a failure. ``stash_name`` is always the deterministic name this call
+    would use/used, so a caller can log it for the audit trail even when ``parked`` is
+    False (a complete record of the loop-back happening, not just the eventful case)."""
+
+    stash_name: str
+    parked: bool
+    run_id: str
+    design_version: str
+    task_id: str
+    worktree_path: str
+
+
+@dataclass(frozen=True)
 class RetentionRecord:
     path: str
     identity: WorktreeIdentity
@@ -506,6 +522,63 @@ class WorktreeManager:
         if rc != 0:
             raise WorktreeError(f"base tree resolve failed: {err.strip()}")
         return out.strip()
+
+    # -- park_and_reset (#637, epic #635 C4) ------------------------------
+
+    def park_and_reset(self, handle: WorktreeHandle, *, run_id: str, design_version: str,
+                       task_id: str) -> ParkRecord:
+        """Park this worktree's OWN current diff (tracked + untracked) recoverably, then
+        reset it clean to ``handle.base_sha`` — the WF2/WF3 design-level loop-back
+        contract (Step 4->3 / Step 8->3): a build seat's worktree may carry uncommitted
+        work coupled to a now-invalidated design, and it must never be destroyed without
+        a named, recoverable stash first.
+
+        PRECONDITION (caller's responsibility, not enforced here): the prior build-seat
+        process for this worktree must already be terminated/reaped before calling this
+        — a still-running process writing to the worktree between the internal
+        ``inspect()`` and the stash push is a real (low-severity) TOCTOU window this
+        method cannot close on its own.
+
+        Ordering is the safety invariant: park is attempted and its success CONFIRMED
+        before reset/clean ever runs. A park failure raises immediately and reset is
+        NEVER attempted (the dirty diff is left exactly as-is — the caller can retry).
+        A reset or clean failure AFTER a successful (or not-needed) park raises
+        independently, naming which step failed — the parked diff (if any) stays
+        recoverable via the named stash regardless of what happens to reset/clean.
+
+        Never touches the shared main checkout — every git call here uses ONLY this
+        worktree's own trusted ``--git-dir``/``--work-tree`` (never the canonical repo).
+
+        Returns a ``ParkRecord`` even when nothing needed parking (``parked=False``) —
+        idempotent on an already-clean worktree, and a complete audit trail either way.
+        """
+        stash_name = f"rawgentic-parked:{run_id}:{design_version}:{task_id}"
+        inspection = self.inspect(handle)
+        parked = False
+        if inspection.dirty:
+            rc, _out, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path,
+                "stash", "push", "-u", "-m", stash_name,
+            )
+            if rc != 0:
+                raise WorktreeError(f"park failed (stash push): {err.strip()}")
+            parked = True
+        rc, _out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "reset", "--hard", handle.base_sha,
+        )
+        if rc != 0:
+            raise WorktreeError(f"reset failed after park (parked={parked}): {err.strip()}")
+        rc, _out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "clean", "-fd",
+        )
+        if rc != 0:
+            raise WorktreeError(f"clean failed after reset (parked={parked}): {err.strip()}")
+        return ParkRecord(
+            stash_name=stash_name, parked=parked, run_id=run_id,
+            design_version=design_version, task_id=task_id, worktree_path=handle.path,
+        )
 
     def _candidate_tree(self, handle: WorktreeHandle, *, strict: bool = False) -> str:
         """Build the immutable candidate tree capturing the whole filesystem work product
