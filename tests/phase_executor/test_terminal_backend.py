@@ -112,6 +112,19 @@ def test_preflight_stops_on_first_verb_failure(tmp_path):
     assert "has-session" in result.reason
 
 
+def test_preflight_runner_raises_returns_unsupported(tmp_path):
+    # Step-8a review finding (both mechanical + security-lens reviewers, independently):
+    # preflight's `except Exception` catch-all was only exercised via a nonzero-returncode
+    # CompletedProcess, never an actual raise from the injected run= callable itself.
+    def raising_run(cmd, *, env=None, timeout=30):
+        raise OSError("stub: tmux binary vanished mid-probe")
+    be = TmuxBackend(run=raising_run)
+    result = be.preflight(str(tmp_path / "run" / "rg-x.sock"))
+    assert result.supported is False
+    assert "preflight error" in result.reason
+    assert "vanished mid-probe" in result.reason
+
+
 def test_preflight_version_floor_enforced():
     def run(cmd, *, env=None, timeout=30):
         if cmd[:2] == ["tmux", "-V"]:
