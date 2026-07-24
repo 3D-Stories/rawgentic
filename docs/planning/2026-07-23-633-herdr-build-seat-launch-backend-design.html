@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>herdr build-seat launch backend — design doc (#633)</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-23 18:13 MDT</div>
+<h1>herdr build-seat launch backend — design doc (#633)</h1>
+
+</header>
+<main>
+<h1>#633 — herdr build-seat launch backend investigation — design doc</h1>
+<p>Investigation-shaped (issue&#x27;s own framing): gathering data, no runtime code changes. <strong>Verdict: GO</strong> for an alternate/additional <code>build</code>-seat launch backend on <code>herdr pane run &lt;pane&gt; exec &lt;argv&gt;</code>, with the primitive mapping and context-reuse policy below. All four gating ACs (1-4) resolved; AC5 (terminal action) is the follow-up implementation issue filed against this doc&#x27;s findings.</p>
+<h2>AC1 — PID-identity qualification: GO (40/40)</h2>
+<p>Protocol fixed before running (<code>docs/planning</code> companion scratch — see Related below), against pinned <code>herdr 0.7.5</code>. Worker: a python sentinel that writes <code>observation.json</code> twice (<code>started</code> then <code>completed</code>, with its own <code>os.getpid()</code>) instead of <code>sleep</code> — closer to <code>pane_runner</code>&#x27;s real shape.</p>
+<table>
+<thead><tr><th>Condition</th><th>Reps</th><th>Passed</th><th>Failures</th></tr></thead>
+<tbody>
+<tr><td>cold (fresh-split pane, immediate exec)</td><td>20</td><td>20</td><td>0</td></tr>
+<tr><td>reused (pane warmed by one plain non-exec command first, then exec)</td><td>20</td><td>20</td><td>0</td></tr>
+</tbody>
+</table>
+<p>Success criteria per rep: shell PID before <code>exec</code> == PID inside the sentinel == PID at mid-run check; <code>cmdline</code> changed from <code>/bin/bash</code> to the sentinel invocation; sentinel reached <code>phase: completed, exit_code: 0</code> on disk. GO threshold (fixed before running): 0/20 failures in both conditions. Both conditions hit that exactly — no HYBRID/NO-GO branch triggered.</p>
+<p><strong>New finding, not in the original live demo:</strong> the pane auto-closes the instant the exec&#x27;d process exits (normal exit or external kill) — there is no shell left once <code>exec</code> replaces it, so nothing survives to keep the pane open. Confirmed both for a clean <code>sys.exit(0)</code> and for an external <code>SIGTERM</code> to the process group. Cross-checked against <code>supervisor.py</code>: this matches its EXISTING tmux design exactly — <code>new-session -d -s &lt;name&gt; -c &lt;cwd&gt; -- &lt;argv&gt;</code> already runs <code>argv</code> directly as the session&#x27;s sole process (no shell wrapper either), and completion status is read from <code>read_sentinel()</code> (<code>supervisor.py:262</code>, disk-based <code>observation.json</code> under <code>record.capture_dir</code>) rather than from tmux/herdr state. So the auto-close-on-exit behavior is not a new constraint the herdr backend introduces — it is already how the tmux backend behaves today; supervisor.py never depended on the session outliving the worker.</p>
+<p>&quot;Reused-pane (reused slot)&quot; reading: a pane cannot host two sequential <code>exec</code>s (the first exit kills the pane) so this condition means prior non-exec shell activity in the same pane before the one exec call, not two execs in one pane. Documented as the deliberate interpretation, not an evasion of the AC&#x27;s intent — the alternative reading is physically impossible given the first finding.</p>
+<h2>Primitive selection: <code>pane run &lt;pane&gt; exec &lt;argv&gt;</code> (raw), not <code>agent start</code>/<code>agent prompt</code></h2>
+<p><code>agent start --kind claude|codex|pi|opencode|omp</code> and its status detection (<code>agent_status</code>: idle/working/blocked/done, <code>wait agent-status</code>) are built for interactive coding-agent TUIs. The <code>build</code>-seat worker is <code>python -m phase_executor.pane_runner &lt;spec&gt; &lt;digest&gt;</code> — a headless batch subprocess, not one of herdr&#x27;s recognized agent kinds; <code>agent_status</code> on every pane we launched this way read <code>unknown</code> throughout, confirming herdr&#x27;s agent-detection layer doesn&#x27;t even attempt to classify it. AC1 already qualified the raw-<code>exec</code> primitive directly (40/40). There is no reason to route through the agent subsystem for this seat.</p>
+<h2>AC2 — <code>agent_prompt_stalled</code> workaround: <strong>N/A</strong></h2>
+<p>Per the issue&#x27;s own conditional framing (load-bearing only if <code>agent start</code>/<code>agent prompt</code> is selected). It is not — see primitive selection above. No further testing needed; citing this decision satisfies the AC.</p>
+<h2>AC3 — executable tmux -&gt; herdr primitive mapping</h2>
+<p>All five mappings executed live (not paper-only) against pinned <code>herdr 0.7.5</code>, end-to-end launch -&gt; identify -&gt; enumerate -&gt; liveness-check -&gt; terminate, using the AC1 sentinel workers.</p>
+<table>
+<thead><tr><th><code>supervisor.py</code> tmux call</th><th>herdr equivalent</th><th>Executable result</th></tr></thead>
+<tbody>
+<tr><td><code>new-session -d -s NAME -c CWD -- ARGV</code></td><td><code>pane split</code> (create) + <code>pane run PANE &quot;exec ARGV&quot;</code> (launch)</td><td>Works, but is TWO calls where tmux has ONE atomic call — see risk below</td></tr>
+<tr><td><code>display-message -p -t NAME &quot;#{pane_pid}&quot;</code></td><td><code>pane process-info --pane PANE</code> -&gt; <code>result.process_info.shell_pid</code></td><td>Confirmed stable pre- and post-exec across all 40 AC1 reps</td></tr>
+<tr><td><code>has-session -t NAME</code></td><td><code>pane get --pane PANE</code> (or <code>process-info</code>): success = alive, <code>{&quot;error&quot;:{&quot;code&quot;:&quot;pane_not_found&quot;}}</code> = dead</td><td>Tested live pane (success) and gone pane (clean structured error, exit 1)</td></tr>
+<tr><td><code>list-sessions -F &quot;#{session_name}&quot;</code></td><td><code>pane list --workspace WORKSPACE_ID</code>, enumerate <code>pane_id</code></td><td>Confirmed; scoped to one workspace — the supervisor&#x27;s own control-plane instance operates within exactly one, same scope as its own single tmux-server/registry-root today, not a gap</td></tr>
+<tr><td><code>kill-session -t NAME</code></td><td><code>pane close PANE</code></td><td><strong>Confirmed it actually terminates the live underlying process</strong> (not just a UI/bookkeeping close) — tested against a still-running 120s-sleep worker; process gone within 1s. Idempotent: calling it again, or against a never-existed pane ID, returns the same clean <code>pane_not_found</code> error both times — compatible with <code>supervisor.py</code>&#x27;s existing swallow-and-continue teardown pattern (<code>except Exception: pass</code> around its own <code>kill-session</code> calls)</td></tr>
+</tbody>
+</table>
+<p><strong>Kill semantics finding, load-bearing for design:</strong> <code>supervisor.py</code>&#x27;s real termination path (<code>os.killpg(record.pane_pgid, SIGTERM/SIGKILL)</code>, <code>supervisor.py:708-738</code>) does not depend on tmux&#x27;s <code>kill-session</code> to actually stop the worker — <code>kill-session</code> there is only post-mortem bookkeeping, called after the process group is already confirmed dead by PID-level checks. The herdr backend inherits this for free: the AC1 finding that a pane auto-closes on ANY process exit (normal or killed) means the pane already reaps itself once <code>killpg</code> does its job — a supervisor built on herdr does not need to call <code>pane close</code> in the kill path at all. <code>pane close</code> remains available as a direct backstop kill (confirmed above) if ever needed.</p>
+<p><strong>Status/completion source is unaffected by primitive choice.</strong> <code>read_sentinel()</code> (<code>supervisor.py:262</code>) reads <code>observation.json</code> from <code>record.capture_dir</code> on disk, independent of tmux or herdr entirely — this does not change under either backend.</p>
+<p><strong>Known herdr liveness gaps do not carry over.</strong> The issue asked to fold in <code>ogulcancelik/herdr</code> #198 (agent-status can latch on <code>working</code>), #1435 (<code>not_implemented</code> on CLI/server protocol mismatch, fixed in 0.7.5), #1439 (<code>wait agent-status</code> hangs on mid-wait pane close, fixed in 0.7.5) as known risk. All three are specific to the <code>agent_status</code>/<code>wait agent-status</code> subsystem. This design&#x27;s liveness check is pane-existence via <code>pane get</code>/<code>process-info</code>, not agent-status — a deliberately different code path in herdr, unaffected by any of the three. Not a dismissal of the research (the citation is fair per herdr&#x27;s own tracker), just a scope note: none of the three are inherited risk for this specific mapping.</p>
+<p><strong>Named risk (real, not blocking):</strong> the create+launch split (two herdr calls vs tmux&#x27;s one atomic call) opens a window between <code>pane split</code> and <code>pane run</code> where nothing else is racing it today — the calling orchestrator is the only actor touching that pane ID. Safe as long as this stays single-threaded per spawn (don&#x27;t parallelize split+run against the same target pane from two callers); worth a comment at the call site if this ships.</p>
+<h2>AC4 — GO/NO-GO/hybrid design decision</h2>
+<p><strong>Pane lifecycle — spawn timing: lazy.</strong> Spawn a pane on a seat&#x27;s first actual dispatch in the run, not pre-spawn-all-at-plan-build. A seat that never fires (e.g. <code>review</code>, when no high-risk task exists) pays no idle-pane cost. (Restates the issue&#x27;s own AC4 design point — adopted as-is, no new evidence needed.)</p>
+<p><strong>Context-reuse policy, per seat</strong> (pane/slot reuse is a separate axis from conversation reuse):</p>
+<ul>
+<li><strong>review</strong>: reuse the pane/slot across repeated calls (Step 4/8a/11) for observability</li>
+</ul>
+<p>  continuity, but relaunch a FRESH session each time. Evidence: arxiv 2603.12123 — fresh-session   review F1=28.6% vs. same-session self-review 24.6% (p=0.008) vs. repeated same-session review   21.7% (p&lt;0.001); a second same-session pass is not significantly better than one (p=0.107).   Follow-up arxiv 2603.16244: even fresh-context review degrades past round 1 on a FIXED   artifact; independent parallel reviews beat sequential iterative ones. Applicability   boundary: WF2&#x27;s Step 4/8a/11 review different, evolving artifacts (design, then per-task   commits, then the final diff) — the degrades-past-round-1 finding is about re-reviewing the   SAME artifact repeatedly, so it doesn&#x27;t indict that pattern directly. It does validate WF2&#x27;s   existing parallel multi-reviewer dispatch, and it is a direct caution for any loop-back that   re-reviews the SAME fixed artifact after a point-fix — keep those bounded (existing loop-back   budgets already do this).</p>
+<ul>
+<li><strong>design loop-back</strong> (Step 4 fail -&gt; Step 3): reuse — bounded self-refine against named</li>
+</ul>
+<p>  findings, already capped at <code>MAX_DESIGN_LOOPBACK_ITERATIONS=2</code>. Same-context iteration is the   evidenced-helpful case here since the goal is patching flagged issues, not catching new ones.</p>
+<ul>
+<li><strong>build</strong>: reuse within a single design version (sequential plan tasks; Step 9 drift-gate fix</li>
+</ul>
+<p>  cycles against the same design); reset fresh across a design-level loop-back (build hits   something forcing a return to Step 3) so implementation doesn&#x27;t defend choices against a   design it hasn&#x27;t seen change.</p>
+<p><strong>Worktree-diff contract — resolved (hard precondition for GO, now satisfied):</strong></p>
+<p>Build&#x27;s context-continuity is coupled to real uncommitted state in its isolated git worktree, not just conversation history — a design-level reset must decide what happens to that diff. Contract:</p>
+<p>1. <strong>Park, don&#x27;t destroy.</strong> Before resetting for a design-level loop-back, the orchestrator    snapshots the current worktree diff — <code>git -C &lt;worktree&gt; diff</code> and untracked files — to a    named, recorded artifact (a <code>git stash push -u -m &quot;rawgentic-parked:&lt;run_id&gt;:&lt;design_version&gt;:&lt;task_id&gt;&quot;</code>    entry, or an equivalent patch file under the run&#x27;s own <code>.rawgentic/</code> state), referenced in    the run&#x27;s audit/registry record. This follows this workspace&#x27;s own established git-safety    convention (never <code>reset --hard</code>/<code>clean -f</code> without a recovery path). 2. <strong>Reset the worktree</strong> to clean, matching the new design&#x27;s starting point — inside that    task&#x27;s OWN isolated worktree only (the existing per-task worktree-isolation model already    used for parallel task dispatch), never the shared main tree. 3. <strong>Ownership:</strong> the orchestrator (executor routing / WF2 driver), not the build-seat agent    itself, performs park-then-reset atomically before the fresh build-seat context is spawned    against the new design — the build agent never observes a half-reset state. 4. <strong>Recovery:</strong> the parked entry is retained for the life of the run and named in the audit    log; a human or later task can <code>git stash apply</code>/<code>git apply</code> it if some of the discarded    work still holds against the new design. Not auto-deleted.</p>
+<p>Rationale for park-then-reset over preserve-in-place: the whole point of resetting context across a design change is that the build agent should not defend stale choices. Handing a fresh context agent a dirty worktree it didn&#x27;t write recreates the exact same &quot;defend past decisions&quot; risk through git state instead of chat history — so the worktree, like the conversation, resets clean; the diff survives only in a recoverable, out-of-band form.</p>
+<p>This resolves the issue&#x27;s hard precondition — a safe contract was found, so the &quot;NO-GO if no safe contract can be selected&quot; branch does not trigger.</p>
+<h2>Named risks carried into the follow-up issue (not blocking GO, must not be dropped)</h2>
+<p>1. <code>exec</code>-injection is not herdr-vendor-documented/endorsed (its own <code>SKILL.md</code> recommends the    plain non-<code>exec</code> form) — a real, silent regression risk on a future herdr upgrade. The AC1    protocol + runner used for this qualification should be re-run (not re-derived) against any    herdr version bump before trusting this backend again. 2. The two-call create+launch (vs tmux&#x27;s one atomic call) — safe today, single-threaded per    spawn only; don&#x27;t parallelize split+run against one target pane. 3. herdr is a host-wide singleton daemon (per #608/HD1.0) — any herdr upgrade affects every    pane on the host across every session; version pinning + coordinated maintenance window    required, same constraint #608 already recorded.</p>
+<h2>Related</h2>
+<p>#608 (HD1.0 capability manifest), #615 (HD2.0 NO-GO, epic #621 — this design does not reopen that general TerminalRuntime-seam verdict; scoped narrowly to the <code>build</code> seat&#x27;s launch backend per #633&#x27;s own scope note), #611 (separate, already-filed, different launcher path — the Agent-tool&#x27;s own parallel fan-out, not touched here). Codex (gpt-5.6-sol) adversarial review of the originating issue plan: <code>docs/reviews/2026-07-23-633-herdr-build-seat-poc-plan-md-unknown-date.md</code> (run-local, gitignored per repo convention).</p>
+
+</main>
+<footer>Last updated: 2026-07-23 18:13 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
