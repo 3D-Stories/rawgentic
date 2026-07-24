@@ -1060,11 +1060,18 @@ original failure lived — a mid-UAT fix that never went back through Step 3/4.
   prior build-seat process is terminated: call
   `WorktreeManager.park_and_reset(handle, run_id=..., design_version=..., task_id=...)`
   (`phase_executor/src/phase_executor/worktree.py`) — it stashes the current diff
-  recoverably (`git stash push -u -m "rawgentic-parked:<run_id>:<design_version>:<task_id>"`)
-  BEFORE resetting the worktree clean to its base, never the reverse. Then append
-  `RoutingAuditLog.append_park(...)` (`phase_executor/src/phase_executor/enforce.py`) with
-  the returned `ParkRecord` so the parked stash is discoverable from the run's audit log,
-  and log the stash name in session notes. Then loop back to Step 3 with the flaw
+  recoverably (`git stash push -u -m "rawgentic-parked:<run_id>:<design_version>:<task_id>"`,
+  verified against a `refs/stash` OID change, never a bare `rc == 0`) BEFORE resetting
+  the worktree clean to its base, never the reverse. Then append
+  `RoutingAuditLog.append_park(...)` (`phase_executor/src/phase_executor/enforce.py`)
+  with the returned `ParkRecord` (including its `stash_oid` — the collision-proof
+  recovery identity, since two loop-backs on the same run/task share the same
+  human-readable name) so the parked stash is discoverable from the run's audit log, and
+  log the stash name + OID in session notes. **On a `ParkThenResetError`** (the reset or
+  clean step failed AFTER a confirmed park): still append the audit record from
+  `err.park_record` before propagating the failure — the parked diff is genuinely
+  recoverable via its `stash_oid` even though the reset/clean itself didn't complete;
+  never let a reset/clean failure silently drop the park's own audit reference. Then loop back to Step 3 with the flaw
   identified — the fresh build-seat context never observes a half-reset worktree.
 - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with design flaw description + loop-back history, add rawgentic:ai-error label, exit.]**
 

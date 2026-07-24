@@ -289,11 +289,12 @@ def test_append_park_and_records_roundtrip(tmp_path):
     log = enforce.RoutingAuditLog(tmp_path, "run-1")
     log.append_park(run_id="run1", task_id="t1", design_version="v2",
                     stash_name="rawgentic-parked:run1:v2:t1", worktree_path="/wt/path",
-                    parked=True)
+                    parked=True, stash_oid="abc123")
     recs = log.records()
     assert recs[0]["kind"] == "park"
     assert recs[0]["stash_name"] == "rawgentic-parked:run1:v2:t1"
     assert recs[0]["parked"] is True
+    assert recs[0]["stash_oid"] == "abc123"
 
 
 def test_append_park_recorded_even_when_nothing_parked(tmp_path):
@@ -303,6 +304,16 @@ def test_append_park_recorded_even_when_nothing_parked(tmp_path):
                     parked=False)
     recs = log.records()
     assert recs[0]["parked"] is False
+    assert recs[0]["stash_oid"] is None
+
+
+def test_records_fail_closed_park_bad_stash_oid_type(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text(
+        '{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2",'
+        '"stash_name":"s","worktree_path":"/wt","parked":true,"stash_oid":123}\n')
+    with pytest.raises(ValueError, match="stash_oid"):
+        log.records()
 
 
 def test_records_fail_closed_park_missing_field(tmp_path):

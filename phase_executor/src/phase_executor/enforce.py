@@ -361,6 +361,10 @@ def _validate_record(obj, lineno: int) -> None:
                 raise ValueError(f"audit line {lineno}: park {field} not a non-empty string")
         if not isinstance(obj.get("parked"), bool):
             raise ValueError(f"audit line {lineno}: park 'parked' not a bool")
+        # stash_oid is optional (None when parked=False) — str-or-null, same precedent as
+        # the receipt's recovered_from field just above.
+        if "stash_oid" in obj and not (obj["stash_oid"] is None or isinstance(obj["stash_oid"], str)):
+            raise ValueError(f"audit line {lineno}: park 'stash_oid' not a string-or-null")
 
 
 class RoutingAuditLog:
@@ -428,19 +432,25 @@ class RoutingAuditLog:
                 "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha})
 
     def append_park(self, *, run_id: str, task_id: str, design_version: str, stash_name: str,
-                    worktree_path: str, parked: bool) -> None:
+                    worktree_path: str, parked: bool, stash_oid: Optional[str] = None) -> None:
         """#637 (epic #635 C4): record a WF2/WF3 design-level loop-back's
         ``WorktreeManager.park_and_reset`` call — the orchestrator/executor-routing layer
-        appends this immediately after the call returns (never inside ``WorktreeManager``
-        itself; ``worktree.py`` does not import this module). Recorded even when
-        ``parked`` is False (nothing needed parking) — a complete audit trail of the
-        loop-back happening, not just the eventful case; the stash's own recoverability
-        is independently verifiable via ``git stash list`` on the worktree regardless."""
+        appends this immediately after the call returns (or, on a
+        ``ParkThenResetError``, from its ``.park_record``) — never inside
+        ``WorktreeManager`` itself; ``worktree.py`` does not import this module.
+        Recorded even when ``parked`` is False (nothing needed parking) — a complete
+        audit trail of the loop-back happening, not just the eventful case.
+
+        ``stash_oid`` (Step-8a review finding) is the COLLISION-PROOF recovery identity
+        — two loop-backs sharing the same ``run_id``/``design_version``/``task_id``
+        produce an identical ``stash_name`` but DISTINCT ``stash_oid``s, so the OID
+        (``git stash apply <oid>``), not the name, is what a human should actually use
+        to recover a specific parked diff. ``None`` when ``parked`` is False."""
         with self._lock:
             self._write_locked({
                 "kind": "park", "run_id": run_id, "task_id": task_id,
                 "design_version": design_version, "stash_name": stash_name,
-                "worktree_path": worktree_path, "parked": parked})
+                "worktree_path": worktree_path, "parked": parked, "stash_oid": stash_oid})
 
     def records(self) -> list:
         """Parse + fail-closed-validate every line. A malformed line raises (never silently dropped)."""

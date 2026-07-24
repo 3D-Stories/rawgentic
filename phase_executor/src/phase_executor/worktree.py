@@ -75,7 +75,15 @@ class ParkRecord:
     is False when the worktree was already clean (nothing to stash) — a valid, non-error
     outcome, not a failure. ``stash_name`` is always the deterministic name this call
     would use/used, so a caller can log it for the audit trail even when ``parked`` is
-    False (a complete record of the loop-back happening, not just the eventful case)."""
+    False (a complete record of the loop-back happening, not just the eventful case).
+
+    ``stash_oid`` (Step-8a review finding) is the ACTUAL ``refs/stash`` commit this call
+    created — captured and verified against a before/after read, never inferred from a
+    bare ``rc == 0`` (a concurrent park on the same handle, or a git version quirk, can
+    return success on a push that stashed nothing new). ``None`` when ``parked`` is
+    False. Two loop-backs sharing the same ``run_id``/``design_version``/``task_id``
+    produce identical ``stash_name``s but DISTINCT ``stash_oid``s — the OID, not the
+    name, is the collision-proof recovery identity (``git stash apply <oid>``)."""
 
     stash_name: str
     parked: bool
@@ -83,6 +91,7 @@ class ParkRecord:
     design_version: str
     task_id: str
     worktree_path: str
+    stash_oid: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -319,6 +328,20 @@ class WorktreeError(RuntimeError):
     """A worktree lifecycle operation that must fail loud (create/inspect/promote)."""
 
 
+class ParkThenResetError(WorktreeError):
+    """#637 Step-8a review finding: a reset or clean failure AFTER a successful (or
+    not-needed) park must not lose the park's own audit reference. ``park_record``
+    carries whatever ``park_and_reset`` had already confirmed (``parked``/``stash_oid``)
+    at the moment reset/clean failed, so the caller can still call
+    ``RoutingAuditLog.append_park(...)`` before propagating the failure — the parked
+    diff (if any) is genuinely recoverable via ``park_record.stash_oid`` regardless of
+    what happened to reset/clean."""
+
+    def __init__(self, message: str, park_record: "ParkRecord"):
+        super().__init__(message)
+        self.park_record = park_record
+
+
 def _identity_dict(identity: WorktreeIdentity) -> dict:
     return {"run_id": identity.run_id, "seat": identity.seat, "attempt": identity.attempt}
 
@@ -525,6 +548,15 @@ class WorktreeManager:
 
     # -- park_and_reset (#637, epic #635 C4) ------------------------------
 
+    def _stash_oid(self, handle: WorktreeHandle) -> Optional[str]:
+        """The current ``refs/stash`` commit, or None if no stash exists yet on this
+        worktree. ``-q`` + explicit rc check (never truthy-string-matches stderr)."""
+        rc, out, _err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "rev-parse", "--verify", "-q", "refs/stash",
+        )
+        return out.strip() if rc == 0 else None
+
     def park_and_reset(self, handle: WorktreeHandle, *, run_id: str, design_version: str,
                        task_id: str) -> ParkRecord:
         """Park this worktree's OWN current diff (tracked + untracked) recoverably, then
@@ -540,45 +572,65 @@ class WorktreeManager:
         method cannot close on its own.
 
         Ordering is the safety invariant: park is attempted and its success CONFIRMED
-        before reset/clean ever runs. A park failure raises immediately and reset is
-        NEVER attempted (the dirty diff is left exactly as-is — the caller can retry).
+        before reset/clean ever runs. Success is confirmed by a ``refs/stash`` OID
+        change (Step-8a review finding), never by a bare ``rc == 0`` — a concurrent park
+        on the same handle, or a "nothing to stash" no-op, can return success without
+        creating a new entry; that case raises here rather than silently claiming
+        ``parked=True`` for a stash that doesn't exist. A park failure (real or
+        not-actually-created) raises immediately and reset is NEVER attempted (the dirty
+        diff is left exactly as-is — the caller can retry).
+
         A reset or clean failure AFTER a successful (or not-needed) park raises
-        independently, naming which step failed — the parked diff (if any) stays
-        recoverable via the named stash regardless of what happens to reset/clean.
+        ``ParkThenResetError`` (carrying the already-confirmed ``ParkRecord``, including
+        ``stash_oid``) rather than a bare ``WorktreeError`` — the parked diff (if any)
+        stays recoverable via that OID regardless of what happens to reset/clean, and
+        the caller can still audit-log it before propagating the failure.
 
         Never touches the shared main checkout — every git call here uses ONLY this
         worktree's own trusted ``--git-dir``/``--work-tree`` (never the canonical repo).
 
-        Returns a ``ParkRecord`` even when nothing needed parking (``parked=False``) —
-        idempotent on an already-clean worktree, and a complete audit trail either way.
+        Returns a ``ParkRecord`` even when nothing needed parking (``parked=False``,
+        ``stash_oid=None``) — idempotent on an already-clean worktree, and a complete
+        audit trail either way.
         """
         stash_name = f"rawgentic-parked:{run_id}:{design_version}:{task_id}"
         inspection = self.inspect(handle)
         parked = False
+        stash_oid = None
         if inspection.dirty:
+            oid_before = self._stash_oid(handle)
             rc, _out, err = self._git(
                 "--git-dir", handle.gitdir, "--work-tree", handle.path,
                 "stash", "push", "-u", "-m", stash_name,
             )
             if rc != 0:
                 raise WorktreeError(f"park failed (stash push): {err.strip()}")
+            oid_after = self._stash_oid(handle)
+            if oid_after is None or oid_after == oid_before:
+                raise WorktreeError(
+                    "park claimed success (stash push rc=0) but no new refs/stash entry "
+                    "was created — a concurrent park on this same handle, or a "
+                    "no-op push; refusing to reset without a confirmed-real park")
             parked = True
+            stash_oid = oid_after
+        record = ParkRecord(
+            stash_name=stash_name, parked=parked, run_id=run_id,
+            design_version=design_version, task_id=task_id, worktree_path=handle.path,
+            stash_oid=stash_oid,
+        )
         rc, _out, err = self._git(
             "--git-dir", handle.gitdir, "--work-tree", handle.path,
             "reset", "--hard", handle.base_sha,
         )
         if rc != 0:
-            raise WorktreeError(f"reset failed after park (parked={parked}): {err.strip()}")
+            raise ParkThenResetError(f"reset failed after park (parked={parked}): {err.strip()}", record)
         rc, _out, err = self._git(
             "--git-dir", handle.gitdir, "--work-tree", handle.path,
             "clean", "-fd",
         )
         if rc != 0:
-            raise WorktreeError(f"clean failed after reset (parked={parked}): {err.strip()}")
-        return ParkRecord(
-            stash_name=stash_name, parked=parked, run_id=run_id,
-            design_version=design_version, task_id=task_id, worktree_path=handle.path,
-        )
+            raise ParkThenResetError(f"clean failed after reset (parked={parked}): {err.strip()}", record)
+        return record
 
     def _candidate_tree(self, handle: WorktreeHandle, *, strict: bool = False) -> str:
         """Build the immutable candidate tree capturing the whole filesystem work product
