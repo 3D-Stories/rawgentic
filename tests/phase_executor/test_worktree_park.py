@@ -185,24 +185,70 @@ def test_park_and_reset_repeated_identifiers_produce_distinct_stash_oid(repo, mg
     assert out.count("rawgentic-parked:run1:v2:t1") == 2
 
 
-def test_park_and_reset_detects_no_new_stash_despite_rc_zero(repo, mgr, tmp_path, monkeypatch):
-    # Simulates the Step-8a mechanical-reviewer race: stash push returns rc=0 (e.g. a
-    # concurrent park already stashed the same changes, or a "no local changes" no-op)
-    # but refs/stash never actually changed -- must raise, never silently claim parked=True.
+def test_park_and_reset_detects_no_reflog_match_despite_successful_push(repo, mgr, tmp_path, monkeypatch):
+    # If 'git stash push' claims success (rc=0) but our own stash_name never turns up
+    # in the refs/stash reflog search right after -- must raise, never silently claim
+    # parked=True for a stash entry we can't actually prove exists.
     h = _handle(repo, mgr, tmp_path)
     open(os.path.join(h.path, "a.txt"), "w").write("changed\n")
     real_git = mgr._git  # noqa: SLF001
 
-    def noop_stash_push(*args, env=None):
-        if "stash" in args and "push" in args:
-            return (0, "No local changes to save\n", "")  # claims success, stashes nothing
+    def blind_reflog_search(*args, env=None):
+        if "log" in args and "-g" in args and "--grep" in args:
+            return (0, "", "")  # claims success, no matching reflog entry
         return real_git(*args, env=env)
 
-    monkeypatch.setattr(mgr, "_git", noop_stash_push)
-    with pytest.raises(wt.WorktreeError, match="no new refs/stash entry"):
+    monkeypatch.setattr(mgr, "_git", blind_reflog_search)
+    with pytest.raises(wt.WorktreeError, match="no matching refs/stash reflog entry"):
         mgr.park_and_reset(h, run_id="run1", design_version="v2", task_id="t1")
-    # reset must never have been attempted -- the dirty file is still there
-    assert open(os.path.join(h.path, "a.txt")).read() == "changed\n"
+    # the real `stash push` genuinely succeeded (the diff is NOT lost) -- only our own
+    # reflog identification of it was blinded here; it's still recoverable via the
+    # real stash list even though we raised rather than report an (unconfirmed) OID.
+    rc, out, _err = real_git(
+        "--git-dir", h.gitdir, "--work-tree", h.path, "stash", "list")
+    assert "rawgentic-parked:run1:v2:t1" in out
+
+
+def test_park_and_reset_stash_oid_immune_to_foreign_worktree_race(repo, mgr, tmp_path, monkeypatch):
+    # Step-11 regression: refs/stash is a repository-GLOBAL ref shared by every linked
+    # worktree of one canonical repo (empirically confirmed: two `git worktree add`
+    # checkouts of the same repo share one refs/stash). The OLD implementation captured
+    # the "parked" OID by comparing refs/stash before/after `stash push` -- a worktree B
+    # pushing its own stash in that window would advance refs/stash to B's commit, and A
+    # would misattribute B's OID as its own. The fix resolves A's own commit by searching
+    # the reflog for A's own (unique) stash_name rather than reading the ref's tip, so a
+    # foreign worktree's concurrent push landing in between cannot alter what A records.
+    h_a = _handle(repo, mgr, tmp_path, attempt="0-aaaa1111")
+    h_b = _handle(repo, mgr, tmp_path, attempt="0-bbbb2222")
+    open(os.path.join(h_a.path, "a.txt"), "w").write("A's change\n")
+    open(os.path.join(h_b.path, "a.txt"), "w").write("B's change\n")
+    real_git = mgr._git  # noqa: SLF001
+
+    def foreign_push_after_a_pushes(*args, env=None):
+        result = real_git(*args, env=env)
+        if "stash" in args and "push" in args and h_a.path in args:
+            # Worktree B concurrently parks BETWEEN A's own `stash push` and A's
+            # reflog read -- exactly the race window the OLD before/after-TIP-read
+            # design sampled and could misattribute.
+            real_git("--git-dir", h_b.gitdir, "--work-tree", h_b.path,
+                      "stash", "push", "-u", "-m", "b-concurrent-park")
+        return result
+
+    monkeypatch.setattr(mgr, "_git", foreign_push_after_a_pushes)
+    rec_a = mgr.park_and_reset(h_a, run_id="run1", design_version="v2", task_id="t1")
+    assert rec_a.parked is True
+    # refs/stash's shared TIP is now B's push (it raced in after A's) -- proving the
+    # OLD before/after-tip-read design would have misattributed it to A.
+    rc, shared_tip, _err = real_git(
+        "--git-dir", h_a.gitdir, "--work-tree", h_a.path, "rev-parse", "refs/stash")
+    assert shared_tip.strip() != rec_a.stash_oid, (
+        "test setup did not actually race the shared ref -- rewrite the race window")
+    # A's recorded OID resolves to A's OWN content, not B's, regardless of the race.
+    rc, show, _err = real_git(
+        "--git-dir", h_a.gitdir, "--work-tree", h_a.path, "show", f"{rec_a.stash_oid}:a.txt")
+    assert show == "A's change\n"
+    # A's own worktree still cleanly reset to base despite the interleaved foreign push.
+    assert open(os.path.join(h_a.path, "a.txt")).read() == "hello\n"
 
 
 def test_park_and_reset_reset_failure_carries_park_record(repo, mgr, tmp_path, monkeypatch):

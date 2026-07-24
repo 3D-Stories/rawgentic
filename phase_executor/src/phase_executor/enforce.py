@@ -445,7 +445,24 @@ class RoutingAuditLog:
         — two loop-backs sharing the same ``run_id``/``design_version``/``task_id``
         produce an identical ``stash_name`` but DISTINCT ``stash_oid``s, so the OID
         (``git stash apply <oid>``), not the name, is what a human should actually use
-        to recover a specific parked diff. ``None`` when ``parked`` is False."""
+        to recover a specific parked diff. ``None`` when ``parked`` is False.
+
+        Step-11 review finding: ``parked``/``stash_oid`` consistency is enforced HERE,
+        at the writer, not just read-checked by ``_validate_record`` — this integration
+        is prose-orchestrated (a human/future-session calls ``park_and_reset`` then this
+        method), so a permissive writer that accepted ``parked=True`` with no OID (or
+        ``parked=False`` with a stray OID) would be a real footgun, not just a
+        theoretical one. The reader stays backward-compatible with pre-existing records
+        that predate this field."""
+        if parked and not stash_oid:
+            raise ValueError(
+                "append_park: parked=True requires a non-empty stash_oid — "
+                "WorktreeManager.park_and_reset always returns one when parked is True; "
+                "a caller passing parked=True with no OID has a bug upstream")
+        if not parked and stash_oid is not None:
+            raise ValueError(
+                "append_park: parked=False must carry stash_oid=None — a non-null OID "
+                "here would record a stash that this call didn't actually create")
         with self._lock:
             self._write_locked({
                 "kind": "park", "run_id": run_id, "task_id": task_id,
