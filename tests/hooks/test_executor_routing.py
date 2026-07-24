@@ -926,6 +926,71 @@ class TestResolveTable:
         with pytest.raises(er.MalformedConfig, match="missing.json"):
             er.resolve_table(repo, routing)
 
+
+class TestResolveTerminalBackend:
+    """#638: resolve_terminal_backend mirrors resolve_table's config-read pattern (absent
+    config/section -> "tmux"; present-but-malformed fails closed, never a silent tmux)."""
+
+    def test_absent_config_file_resolves_tmux(self, tmp_path):
+        repo = tmp_path / "noconfig"
+        repo.mkdir()
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+    def test_absent_section_resolves_tmux(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo)  # complete config, no executorTerminalBackend
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+    def test_valid_herdr_descriptor_resolves_herdr(self, tmp_path):
+        repo = tmp_path / "p"
+        cfg_path = _cfg(repo)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["executorTerminalBackend"] = {"version": 1, "build": "herdr"}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        assert er.resolve_terminal_backend(repo) == "herdr"
+
+    def test_valid_tmux_descriptor_resolves_tmux(self, tmp_path):
+        repo = tmp_path / "p"
+        cfg_path = _cfg(repo)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["executorTerminalBackend"] = {"version": 1, "build": "tmux"}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+    def test_malformed_section_never_falls_back_silently(self, tmp_path):
+        repo = tmp_path / "p"
+        cfg_path = _cfg(repo)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["executorTerminalBackend"] = {"version": 1, "build": "not-a-backend"}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(er.MalformedConfig):
+            er.resolve_terminal_backend(repo)
+
+    def test_real_repo_resolves_tmux(self):
+        # rawgentic's own .rawgentic.json declares no executorTerminalBackend -> package default.
+        repo = Path(er.__file__).resolve().parent.parent
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+
+class TestSelectLaunchTerminalBackend:
+    """#638 AC4: the build-seat-only gate decision, tested directly (not just its two
+    ingredients) so a bug in the COMBINING logic — a swapped condition, wrong role string —
+    can't slip through untested."""
+
+    def test_build_seat_herdr_configured_selects_herdr(self):
+        assert er.select_launch_terminal_backend("build", "herdr") == "herdr"
+
+    def test_build_seat_tmux_configured_selects_tmux(self):
+        assert er.select_launch_terminal_backend("build", "tmux") == "tmux"
+
+    def test_non_build_seat_never_selects_herdr_even_if_configured(self):
+        assert er.select_launch_terminal_backend("review", "herdr") == "tmux"
+        assert er.select_launch_terminal_backend("analysis", "herdr") == "tmux"
+
+    def test_none_role_never_selects_herdr(self):
+        # no snapshot / unresolvable seat role -> never herdr, regardless of config
+        assert er.select_launch_terminal_backend(None, "herdr") == "tmux"
+
     def test_pointer_names_a_directory(self, tmp_path):
         repo = tmp_path / "p"
         _cfg(repo, pointer="somedir")
@@ -1420,7 +1485,8 @@ class _StubSupervisor:
 
 
 def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
-                probe_raises=False, provision_calls=None, monkeypatch=None):
+                probe_raises=False, provision_calls=None, monkeypatch=None,
+                terminal_backend="tmux"):
     # The rich claude_mutating machinery (probes, init event) stays unit-tested even though
     # production refuses mutating-claude (STEP 0, MUTATING_FS_SANDBOXED): tests widen the module
     # constant — a monkeypatch of module state, NOT a caller input; production has no such knob.
@@ -1454,7 +1520,8 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
         canary=_canary, canary_evidence=_cev, supervisor=sup, probe_session=probe_session,
         provision=provision, gate_decision=gd, plan_context=ctx,
         target=tgt, snapshot=snap, enforce=enforce,
-        mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}")
+        mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}",
+        terminal_backend=terminal_backend)
     return res, sup, qc, calls
 
 
@@ -1468,6 +1535,19 @@ def test_supervised_happy_path_launches_after_canary(tmp_path, monkeypatch):
     assert len(sup.launched) == 1 and calls == [True]
     # the staged snapshot digest reached launch (TOCTOU binding)
     assert sup.launched[0][1]["snapshot_digest"] == _canary.compute_registration_digest(str(REPO_ROOT))
+
+
+def test_supervised_default_terminal_backend_is_tmux(tmp_path, monkeypatch):
+    _res, sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch)
+    assert sup.launched[0][1]["terminal_backend"] == "tmux"
+
+
+def test_supervised_threads_herdr_terminal_backend_into_launch(tmp_path, monkeypatch):
+    # #638: supervised_dispatch's own terminal_backend param reaches supervisor.launch() —
+    # the caller (_run_supervised, the seat+config-gate check) decides this before calling.
+    _res, sup, _qc, _calls = _supervised(
+        tmp_path, monkeypatch=monkeypatch, terminal_backend="herdr")
+    assert sup.launched[0][1]["terminal_backend"] == "herdr"
 
 
 def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path, monkeypatch):
