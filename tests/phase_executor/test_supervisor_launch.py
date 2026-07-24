@@ -145,6 +145,42 @@ def test_preflight_fail_closed_on_unusable_socket_dir(tmp_path):
         ro.chmod(0o700)
 
 
+def test_launch_pane_pid_unreadable_kills_session_releases_permit_reraises(tmp_path):
+    # Step-8a review finding (both mechanical + security-lens reviewers, independently):
+    # the post-spawn failure path (new-session succeeds, pane_pid unreadable) must kill
+    # the just-spawned session, release the quota permit, and re-raise -- untested by any
+    # existing test (all pre-#636 launch-failure tests fail BEFORE spawn: unknown seat,
+    # full quota pool). This exercises supervisor.py's `except BaseException` handler in
+    # `launch()` through the real (now-delegated) TmuxBackend call path.
+    calls = []
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        if "new-session" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if "display-message" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "not-a-pid\n", "")  # triggers unreadable
+        if "kill-session" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    quota = QuotaCoordinator(str(tmp_path / "quota"), {"claude": 2})
+    registry = JobRegistry(str(tmp_path / "reg"))
+    identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
+    wt = tmp_path / "wt"
+    wt.mkdir(parents=True)
+    handle = WorktreeHandle(path=str(wt), identity=identity, base_sha="deadbeef",
+                           root=str(tmp_path), gitdir=str(tmp_path / "g"), repo=str(tmp_path))
+    sup = TmuxSupervisor(snapshot=_snapshot(), quota=quota, capture_root=str(tmp_path / "cap"),
+                        registry_root=str(tmp_path / "reg"), registry=registry, run=run)
+
+    with pytest.raises(SupervisorError, match="pane_pid unreadable"):
+        sup.launch("build", "hello", identity=identity, handle=handle)
+
+    kill_calls = [c for c in calls if "kill-session" in c]
+    assert len(kill_calls) == 1, f"expected exactly one kill-session cleanup call, got {calls}"
+    assert quota.live_permits("claude") == 0, "permit must be released on post-spawn failure"
+
+
 @tmux_required
 def test_preflight_positive_real_tmux(tmp_path):
     sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
