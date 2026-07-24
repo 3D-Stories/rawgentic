@@ -896,7 +896,19 @@ class TmuxSupervisor:
                 self._finish(record, state, release_permit=killed,
                              provider_exit_code=_exit_code_of(obs), **extra)
                 return state, obs
-            if not self._live(record):
+            # #638 Step-11 finding (pass 4): `_live()` now RAISES SupervisorError when the
+            # backend's liveness probe is genuinely indeterminate (a herdr list/get failure,
+            # as opposed to a confirmed "not found"). That must NOT abort an otherwise healthy
+            # supervised dispatch — doing so left the record running with its permit held.
+            # An unknown probe is treated as "not known dead": keep polling to the EXISTING
+            # deadline, which still bounds the wait, and let the on-disk sentinel (the
+            # authoritative completion signal) or the deadline decide. Only a DEFINITIVE
+            # not-live answer takes the death path below.
+            try:
+                definitely_dead = not self._live(record)
+            except SupervisorError:
+                definitely_dead = False
+            if definitely_dead:
                 obs = self._sentinel(record)  # one post-exit re-check (write vs exit race)
                 if obs is not None:
                     continue

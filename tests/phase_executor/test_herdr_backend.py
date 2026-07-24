@@ -22,6 +22,15 @@ def _json_err(cmd, code="pane_not_found", message="not found"):
         cmd, 1, "", json.dumps({"error": {"code": code, "message": message}}))
 
 
+def _split_ok(pane_id="w1:p9", workspace_id="w1"):
+    """A faithful `pane split` success body. Real herdr ALWAYS includes `workspace_id` in
+    `result.pane` (confirmed live against the pinned binary), and since the Step-11 pass-4
+    workspace-mismatch fix `new_session`/`preflight` verify it against the endpoint -- so a
+    fixture omitting it is not a realistic response."""
+    return _json_ok(None, {"result": {"pane": {"pane_id": pane_id,
+                                               "workspace_id": workspace_id}}})
+
+
 def _capturing_run(calls, responses):
     """`responses` is a list of CompletedProcess to return in call order."""
     def run(cmd, *, env=None, timeout=30):
@@ -35,7 +44,7 @@ def _capturing_run(calls, responses):
 def test_new_session_split_rename_run_in_order():
     calls = []
     responses = [
-        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _split_ok(),  # split
         _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "sess1"}}}),  # rename
         subprocess.CompletedProcess(None, 0, "", ""),  # run
     ]
@@ -54,7 +63,7 @@ def test_new_session_split_rename_run_in_order():
 def test_new_session_threads_pane_env_into_split():
     calls = []
     responses = [
-        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _split_ok(),  # split
         _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "sess1"}}}),  # rename
         subprocess.CompletedProcess(None, 0, "", ""),  # run
     ]
@@ -83,7 +92,7 @@ def test_new_session_exception_from_rename_still_closes_orphan():
     def run(cmd, *, env=None, timeout=30):
         calls.append(list(cmd))
         if cmd[2] == "split":
-            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:p9"}}})
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:p9", "workspace_id": "w1"}}})
         if cmd[2] == "rename":
             raise TimeoutError("stub: rename timed out")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -99,7 +108,7 @@ def test_new_session_success_never_closes_the_pane():
     # would immediately kill the just-launched process on the SUCCESS path too.
     calls = []
     responses = [
-        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _split_ok(),  # split
         _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "sess1"}}}),  # rename
         subprocess.CompletedProcess(None, 0, "", ""),  # run succeeds
     ]
@@ -121,7 +130,7 @@ def test_new_session_split_failure_returns_failure_no_further_calls():
 def test_new_session_rename_failure_closes_orphan_pane():
     calls = []
     responses = [
-        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _split_ok(),  # split
         _json_err(None, message="rename failed"),  # rename fails
         subprocess.CompletedProcess(None, 0, "", ""),  # close (cleanup)
     ]
@@ -134,7 +143,7 @@ def test_new_session_rename_failure_closes_orphan_pane():
 def test_new_session_run_failure_closes_orphan_pane():
     calls = []
     responses = [
-        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _split_ok(),  # split
         _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "sess1"}}}),  # rename
         subprocess.CompletedProcess(None, 1, "", "exec failed"),  # run fails
         subprocess.CompletedProcess(None, 0, "", ""),  # close (cleanup)
@@ -187,7 +196,7 @@ def test_has_session_resolves_then_get():
     calls = []
     responses = [
         _list_response([{"pane_id": "w1:p9", "label": "sess1"}]),
-        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),
+        _split_ok(),
     ]
     be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
     res = be.has_session("w1", "sess1")
@@ -392,23 +401,42 @@ def test_teardown_endpoint_is_a_documented_noop():
 
 # ---- preflight ---------------------------------------------------------------
 
+def _preflight_run(*, calls=None, close_result=None):
+    """Faithful preflight runner: echoes the rename label back through `pane list` so the
+    Step-11 pass-4 probe-visibility assertion sees the probe pane (real herdr does exactly
+    this). A bare `{}` catch-all is NOT a realistic list body -- the strict `_list_panes`
+    shape check rejects it, which is the point of that check."""
+    state = {"label": None}
+
+    def run(cmd, *, env=None, timeout=30):
+        if calls is not None:
+            calls.append(list(cmd))
+        if cmd[:2] == ["herdr", "--version"]:
+            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
+        verb = cmd[2]
+        if verb == "split":
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe",
+                                                      "workspace_id": "w1"}}})
+        if verb == "rename":
+            state["label"] = cmd[4]
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
+        if verb == "list":
+            return _json_ok(cmd, {"result": {"panes": [{"pane_id": "w1:pprobe",
+                                                        "label": state["label"]}]}})
+        if verb == "close":
+            return (close_result(cmd) if callable(close_result)
+                    else subprocess.CompletedProcess(cmd, 0, "", ""))
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+    return run
+
+
 def test_preflight_with_injected_run_ignores_missing_real_binary(monkeypatch):
     # CI regression: preflight must mirror TmuxBackend's identity check -- a mocked run=
     # (as EVERY test in this file uses) must never be blocked by shutil.which finding no
     # real herdr binary. This is the exact bug that passed locally on a dev machine with a
     # real herdr installed and failed in CI (no herdr binary at all).
     monkeypatch.setattr("shutil.which", lambda _: None)
-
-    def run(cmd, *, env=None, timeout=30):
-        if cmd[:2] == ["herdr", "--version"]:
-            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
-        if cmd[2] == "split":
-            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
-        if cmd[2] == "close":
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        return subprocess.CompletedProcess(cmd, 0, "{}", "")
-
-    be = HerdrBackend(run=run, workspace_id="w1")
+    be = HerdrBackend(run=_preflight_run(), workspace_id="w1")
     result = be.preflight("w1")
     assert result.supported is True, result.reason
 
@@ -428,20 +456,9 @@ def test_preflight_bare_construction_checks_real_binary(monkeypatch):
 
 def test_preflight_all_verbs_pass():
     calls = []
-
-    def run(cmd, *, env=None, timeout=30):
-        calls.append(list(cmd))
-        if cmd[:2] == ["herdr", "--version"]:
-            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
-        if cmd[2] == "split":
-            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
-        if cmd[2] == "close":
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        return subprocess.CompletedProcess(cmd, 0, "{}", "")
-
-    be = HerdrBackend(run=run, workspace_id="w1")
+    be = HerdrBackend(run=_preflight_run(calls=calls), workspace_id="w1")
     result = be.preflight("w1")
-    assert result.supported is True
+    assert result.supported is True, result.reason
     verbs = [c[2] for c in calls if c[0] == "herdr" and c[1] == "pane"]
     assert verbs == ["split", "rename", "run", "get", "process-info", "list", "close"]
 
@@ -451,7 +468,7 @@ def test_preflight_stops_on_first_verb_failure():
         if cmd[:2] == ["herdr", "--version"]:
             return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
         if cmd[2] == "split":
-            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe", "workspace_id": "w1"}}})
         if cmd[2] == "rename":
             return _json_err(cmd, message="rename failed")
         return subprocess.CompletedProcess(cmd, 0, "", "")
@@ -486,16 +503,10 @@ def test_preflight_version_floor_enforced():
 def test_preflight_tolerates_pane_not_found_on_probe_cleanup():
     # #633's own confirmed finding: the exec'd probe process auto-closes its pane on exit --
     # a pane_not_found on the FINAL close is an already-clean outcome, not a failure.
-    def run(cmd, *, env=None, timeout=30):
-        if cmd[:2] == ["herdr", "--version"]:
-            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
-        if cmd[2] == "split":
-            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
-        if cmd[2] == "close":
-            return _json_err(cmd, code="pane_not_found", message="already gone")
-        return subprocess.CompletedProcess(cmd, 0, "{}", "")
-
-    be = HerdrBackend(run=run, workspace_id="w1")
+    be = HerdrBackend(
+        run=_preflight_run(close_result=lambda cmd: _json_err(
+            cmd, code="pane_not_found", message="already gone")),
+        workspace_id="w1")
     result = be.preflight("w1")
     assert result.supported is True
 
@@ -505,7 +516,7 @@ def test_preflight_probe_cleanup_genuine_failure_is_reported():
         if cmd[:2] == ["herdr", "--version"]:
             return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
         if cmd[2] == "split":
-            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe", "workspace_id": "w1"}}})
         if cmd[2] == "close":
             return _json_err(cmd, code="internal_error", message="daemon crashed")
         return subprocess.CompletedProcess(cmd, 0, "{}", "")
@@ -538,3 +549,132 @@ def test_env_none_default_passthrough():
     be = HerdrBackend(run=run, workspace_id="w1")  # no env= -> defaults to None
     be.has_session("w1", "ghost")
     assert seen_envs == [None]
+
+
+# ---- Step-11 pass 4: workspace mismatch must never orphan a live pane -------
+
+def test_new_session_refuses_when_split_lands_in_a_different_workspace():
+    # THE finding (High): `--current` splits into the CALLING pane's workspace, which is not
+    # necessarily `endpoint`. On a mismatch the pane is created in A while pane_pid /
+    # has_session / kill_session all search B -- so launch cleanup's kill_session against B
+    # finds B empty, reports IDEMPOTENT SUCCESS, and the process in A stays alive,
+    # unregistered, with its permit released. Must fail closed instead.
+    calls = []
+    responses = [
+        _split_ok(pane_id="wOTHER:p3", workspace_id="wOTHER"),  # split landed elsewhere
+        subprocess.CompletedProcess(None, 0, "", ""),           # close (cleanup)
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode != 0
+    assert "wOTHER" in res.stderr and "w1" in res.stderr
+    # never ran the payload into a pane it cannot later address...
+    assert not any(len(c) > 2 and c[2] == "run" for c in calls)
+    # ...and cleaned up the pane it did create (it HAS the id on this path)
+    assert calls[1] == ["herdr", "pane", "close", "wOTHER:p3"]
+
+
+def test_new_session_refuses_when_split_omits_workspace_id():
+    # A response with no workspace_id cannot be proven to be in `endpoint` -- fail closed
+    # rather than assume membership (real herdr always sends it, confirmed live).
+    calls = []
+    responses = [
+        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # no workspace_id
+        subprocess.CompletedProcess(None, 0, "", ""),                # close (cleanup)
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode != 0
+    assert not any(len(c) > 2 and c[2] == "run" for c in calls)
+
+
+def test_preflight_fails_on_workspace_mismatch():
+    calls = []
+
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        if cmd[1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5", "")
+        if cmd[2] == "split":
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "wOTHER:p3",
+                                                      "workspace_id": "wOTHER"}}})
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    pf = be.preflight("w1")
+    assert pf.supported is False
+    assert "wOTHER" in pf.reason
+
+
+def test_preflight_fails_when_probe_pane_absent_from_the_listing():
+    # Step-11 pass 4: preflight previously checked only `rc == 0` on the list call, so an
+    # empty SUCCESSFUL listing of the wrong workspace passed. The probe pane must actually
+    # be visible under `endpoint` -- that is the round-trip every _resolve_pane_id depends on.
+    calls = []
+
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        if cmd[1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5", "")
+        if cmd[2] == "split":
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe",
+                                                      "workspace_id": "w1"}}})
+        if cmd[2] == "list":
+            return _json_ok(cmd, {"result": {"panes": []}})  # rc=0 but probe not there
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    pf = be.preflight("w1")
+    assert pf.supported is False
+    assert "does not show the probe pane" in pf.reason
+
+
+def test_preflight_passes_when_probe_pane_is_listed():
+    calls = []
+    state = {"label": None}
+
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        if cmd[1] == "--version":
+            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5", "")
+        if cmd[2] == "split":
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe",
+                                                      "workspace_id": "w1"}}})
+        if cmd[2] == "rename":
+            state["label"] = cmd[4]
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
+        if cmd[2] == "list":
+            return _json_ok(cmd, {"result": {"panes": [{"pane_id": "w1:pprobe",
+                                                        "label": state["label"]}]}})
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    pf = be.preflight("w1")
+    assert pf.supported is True, pf.reason
+
+
+# ---- Step-11 pass 4: a present-but-malformed `label` must raise -------------
+
+def test_list_panes_present_but_non_string_label_raises():
+    # THE finding (High): validating only pane_id let {"pane_id": "w1:p9", "label": []}
+    # through; the malformed label compares unequal, so _resolve_pane_id returns a
+    # DEFINITIVE "not found" for a job that is actually alive -> healthy record quarantined
+    # and killed. A falsey malformed label is likewise dropped by list_sessions, letting
+    # reap() route the live process into kill_tree.
+    for bad in ([], {}, 42, True):
+        calls = []
+        responses = [_list_response([{"pane_id": "w1:p9", "label": bad}])]
+        be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+        with pytest.raises(_PaneListError):
+            be.has_session("w1", "sess1")
+
+
+def test_list_panes_absent_or_none_label_stays_legitimate():
+    # An unmanaged pane (a human's own terminal tab) legitimately has no label -- that must
+    # keep reading as "not one of ours", never as corruption.
+    for panes in ([{"pane_id": "w1:p9"}], [{"pane_id": "w1:p9", "label": None}]):
+        calls = []
+        responses = [_list_response(panes)]
+        be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+        res = be.has_session("w1", "sess1")
+        assert res.returncode != 0  # confirmed not-found, and did NOT raise

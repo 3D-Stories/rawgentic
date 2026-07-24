@@ -190,21 +190,51 @@ class HerdrBackend:
                 return PreflightResult(False, f"herdr pane split failed: {(split_res.stderr or '').strip()}")
             if not split_obj:
                 return PreflightResult(False, "herdr pane split: unparseable/empty response")
-            pane_id = split_obj.get("result", {}).get("pane", {}).get("pane_id")
+            probe_pane = split_obj.get("result", {}).get("pane", {})
+            pane_id = probe_pane.get("pane_id") if isinstance(probe_pane, dict) else None
             if not pane_id:
                 return PreflightResult(False, "herdr pane split: no pane_id in result")
+            # Step-11 finding (pass 4, HIGH): the same workspace-mismatch hole new_session had.
+            # `--current` splits into the CALLING pane's workspace; if that is not `endpoint`,
+            # every later name-resolution call is blind to this pane. Preflight must FAIL here,
+            # because its whole job is to prove this backend can address what it creates.
+            probe_ws = probe_pane.get("workspace_id")
+            if probe_ws != endpoint:
+                try:
+                    self._herdr("close", pane_id)
+                except Exception:  # noqa: BLE001 — best-effort; the mismatch is the finding
+                    pass
+                return PreflightResult(
+                    False,
+                    f"herdr pane split created its probe pane in workspace {probe_ws!r} but this "
+                    f"backend is scoped to {endpoint!r} — panes it creates would not be "
+                    f"addressable by later calls")
             try:
                 steps = (
                     ("rename", ("rename", pane_id, probe_label)),
                     ("run", ("run", pane_id, "exec", "sleep", "5")),
                     ("get", ("get", pane_id)),
                     ("process-info", ("process-info", "--pane", pane_id)),
-                    ("list", ("list", "--workspace", endpoint)),
                 )
                 for verb, args in steps:
                     res = self._herdr(*args)
                     if res.returncode != 0:
                         return PreflightResult(False, f"herdr {verb} failed: {(res.stderr or '').strip()}")
+                # ...and the list step must prove the probe pane is actually VISIBLE under
+                # `endpoint` (Step-11 pass 4: checking only `rc == 0` let an empty successful
+                # listing of the wrong workspace pass, which is exactly the mismatch case).
+                # This also proves the rename->list label round-trip every later
+                # `_resolve_pane_id` call depends on.
+                try:
+                    labels = [p.get("label") for p in self._list_panes(endpoint)]
+                except _PaneListError as exc:
+                    return PreflightResult(False, f"herdr list failed: {exc}")
+                if probe_label not in labels:
+                    return PreflightResult(
+                        False,
+                        f"herdr pane list --workspace {endpoint!r} does not show the probe pane "
+                        f"{pane_id!r} labeled {probe_label!r} — this backend cannot resolve the "
+                        f"panes it creates")
                 return PreflightResult(True, "")
             finally:
                 close_res = self._herdr("close", pane_id)
@@ -253,6 +283,18 @@ class HerdrBackend:
                 raise _PaneListError(
                     f"herdr pane list returned a malformed pane entry (missing/invalid "
                     f"pane_id): {pane!r}")
+            # ...and a PRESENT `label` must be a string (Step-11 finding, pass 4: validating
+            # only pane_id left `{"pane_id": "w1:p9", "label": []}` passing, where the
+            # malformed label silently compares unequal in `_resolve_pane_id` -> a DEFINITIVE
+            # "not found" for a job that is actually alive, sending a healthy record to
+            # quarantine/kill; a falsey malformed label is likewise dropped by
+            # `list_sessions`, letting reap() put the live process in kill_tree). Absent/None
+            # stays legitimate — that is a pane this backend does not manage.
+            label = pane.get("label")
+            if label is not None and not isinstance(label, str):
+                raise _PaneListError(
+                    f"herdr pane list returned a pane whose 'label' is present but not a "
+                    f"string ({type(label).__name__}): {pane!r}")
         return panes
 
     def _resolve_pane_id(self, endpoint: str, name: str) -> Optional[str]:
@@ -287,9 +329,31 @@ class HerdrBackend:
             # not falsely satisfy the caller's success contract by returning rc=0 anyway.
             return _run_completed(["herdr", "pane", "split"], 1, "",
                                   "herdr pane split: unparseable/empty response despite rc=0")
-        pane_id = split_obj.get("result", {}).get("pane", {}).get("pane_id")
+        split_pane = split_obj.get("result", {}).get("pane", {})
+        pane_id = split_pane.get("pane_id") if isinstance(split_pane, dict) else None
         if not pane_id:
             return _run_completed(["herdr", "pane", "split"], 1, "", "herdr pane split: no pane_id in result")
+        # Step-11 finding (pass 4, HIGH): `--current` splits into the CALLING pane's workspace,
+        # which is NOT necessarily `endpoint` (the configured HERDR_WORKSPACE_ID). On a mismatch
+        # the pane is created in workspace A while every later call — pane_pid, has_session,
+        # kill_session — searches B: pane_pid reports not-found, and launch cleanup's
+        # kill_session against B finds B genuinely empty and reports IDEMPOTENT SUCCESS while
+        # the process in A stays alive, unregistered, with its permit released. Verify
+        # membership from the split response's own `workspace_id` (confirmed present live) and
+        # fail closed, cleaning up the pane we DO have the id for, rather than launching into a
+        # scope we cannot later address.
+        split_ws = split_pane.get("workspace_id")
+        if split_ws != endpoint:
+            try:
+                self._herdr("close", pane_id, timeout=timeout)
+            except Exception:  # noqa: BLE001 — best-effort; the mismatch is the reported failure
+                pass
+            return _run_completed(
+                ["herdr", "pane", "split"], 1, "",
+                f"herdr pane split created pane {pane_id!r} in workspace {split_ws!r} but this "
+                f"backend is scoped to {endpoint!r} — refusing to launch into a workspace whose "
+                f"panes it cannot address (set HERDR_WORKSPACE_ID to the calling pane's "
+                f"workspace, or run from a pane in {endpoint!r})")
         succeeded = False
         try:
             rename_res = self._herdr("rename", pane_id, name, timeout=timeout)
