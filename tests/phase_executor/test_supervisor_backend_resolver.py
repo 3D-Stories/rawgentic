@@ -201,6 +201,18 @@ def test_kill_job_resolves_backend_from_record(tmp_path):
     assert any(c[0] == "kill_session" for c in herdr.calls)
 
 
+def test_kill_job_tolerates_unresolvable_backend_on_already_dead_process(tmp_path):
+    # Self-review catch: the bookkeeping kill_session call is POST-MORTEM only (the process
+    # is already verified dead above it) -- a backend-resolution failure here (a
+    # misconfigured supervisor missing herdr_backend for a herdr-tagged record) must not
+    # un-verify a real, already-confirmed kill. _kill_job must still return True.
+    tmux = StubBackend("tmux")
+    sup = _sup(tmp_path, tmux=tmux)  # no herdr_backend configured
+    identity = _identity()
+    rec = _dead_pid_record(identity, terminal_backend="herdr")
+    assert sup._kill_job(rec) is True  # noqa: SLF001 -- never raises, never returns False
+
+
 # ---- reap()'s list_sessions union across mixed backends --------------------
 
 def test_reap_list_sessions_unions_across_mixed_backends(tmp_path):
@@ -221,6 +233,21 @@ def test_reap_list_sessions_unions_across_mixed_backends(tmp_path):
     sup.reap(run_id)
     assert any(c[0] == "list_sessions" for c in tmux.calls)
     assert any(c[0] == "list_sessions" for c in herdr.calls)
+
+
+def test_reap_kill_session_tier_tolerates_unresolvable_backend(tmp_path):
+    # Self-review catch: reap_plan's own docstring confirms every plan.kill_session record
+    # is already dead_fn-verified dead -- a backend-resolution failure on the bookkeeping
+    # kill_session call must not skip the permit release for an already-dead job.
+    tmux = StubBackend("tmux")
+    sup = _sup(tmp_path, tmux=tmux)  # no herdr_backend configured
+    identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
+    rec = _dead_pid_record(identity, terminal_backend="herdr")
+    sup._registry.upsert(rec)  # noqa: SLF001
+    # force the kill_session tier regardless of a real git worktree existing at rec.worktree_path
+    plan = sup.reap(rec.identity.run_id, clean_fn=lambda _r: True)
+    assert rec in plan.kill_session  # confirm the test actually exercised that tier
+    # must not raise -- release_permit still runs for the already-dead record
 
 
 # ---- kill_server tears down every configured backend ------------------------

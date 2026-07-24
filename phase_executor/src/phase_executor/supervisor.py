@@ -756,8 +756,17 @@ class TmuxSupervisor:
             time.sleep(0.1)
         residue = any(_pid_alive(p) for p in snapshot) or _pane_group() or _provider_group()
         if not residue:
-            self._resolve_backend(record.terminal_backend).kill_session(
-                record.run_socket, record.session_name)
+            # Self-review catch (#638): this is POST-MORTEM bookkeeping only — the process is
+            # already verified dead above, and the ORIGINAL code never checked kill_session's
+            # own result either. A backend-resolution failure here (e.g. a misconfigured
+            # supervisor missing herdr_backend for a herdr-tagged record) must not un-verify a
+            # real, already-confirmed kill or strand the caller's _finish/_release_permit —
+            # swallow it exactly as any other best-effort bookkeeping failure in this file.
+            try:
+                self._resolve_backend(record.terminal_backend).kill_session(
+                    record.run_socket, record.session_name)
+            except Exception:  # noqa: BLE001 — best-effort bookkeeping after a verified kill
+                pass
             return True
         return False
 
@@ -1302,9 +1311,17 @@ class TmuxSupervisor:
         # these records — one fixed self._backend.list_sessions() call would leave a
         # herdr-backed job invisible to a tmux-only listing (and vice versa), landing it
         # outside live_fresh below even though it's genuinely alive (Step-4 review Finding #2).
+        # A backend-resolution failure here (a misconfigured supervisor missing herdr_backend
+        # for a herdr-tagged record) must not abort the WHOLE sweep for every other record's
+        # sake — skip that record's contribution to live_names. Safe: live_fresh is only a
+        # fast-path optimization; _default_dead_fn's REAL aliveness check (OS-level PID/group
+        # reads, entirely independent of list_sessions) still runs for every record regardless.
         by_backend: dict = {}
         for r in records:
-            by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
+            try:
+                by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
+            except SupervisorError:
+                continue
         for backend, run_socket in by_backend.items():
             res = backend.list_sessions(run_socket)
             if res.returncode == 0:
@@ -1333,8 +1350,15 @@ class TmuxSupervisor:
                          + ("" if killed else "; kill unverified: residue"))
             self._retain(record)
         for record in plan.kill_session:
-            self._resolve_backend(record.terminal_backend).kill_session(
-                record.run_socket, record.session_name)
+            # Self-review catch (#638), same as _kill_job's tail: reap_plan's own docstring
+            # confirms every plan.kill_session record is already dead_fn-verified dead — this
+            # is bookkeeping-only cleanup, and a backend-resolution failure must not skip the
+            # permit release for an already-dead job.
+            try:
+                self._resolve_backend(record.terminal_backend).kill_session(
+                    record.run_socket, record.session_name)
+            except Exception:  # noqa: BLE001 — best-effort bookkeeping on an already-dead record
+                pass
             self._release_permit(record)
         for record in plan.retain_worktree:
             # repeat-safety stamp: without it every future sweep re-invokes W3 finalize on
