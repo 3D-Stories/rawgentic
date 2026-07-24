@@ -360,7 +360,8 @@ class TmuxSupervisor:
                  runtime_dir: Optional[str] = None, state_dir: Optional[str] = None,
                  pane_env: Optional[dict] = None, worktree_manager=None,
                  allow_adapter_override: bool = False,
-                 backend: Optional[TerminalBackend] = None):
+                 backend: Optional[TerminalBackend] = None,
+                 herdr_backend: Optional[TerminalBackend] = None):
         self._snapshot = snapshot
         self._quota = quota
         self._capture_root = capture_root
@@ -383,19 +384,42 @@ class TmuxSupervisor:
         self._backend = backend if backend is not None else TmuxBackend(
             run=self._run, env=self._env, runtime_dir=self._runtime_dir,
             state_dir=self._state_dir)
+        # #638 (epic #635 C2): the OPTIONAL second backend slot, config-gated for the build
+        # seat. None when herdr isn't configured for this supervisor instance — resolving a
+        # "herdr" record then refuses loud (`_resolve_backend`) rather than silently falling
+        # back to tmux, which would issue a wrong-backend liveness/kill check against a real
+        # live job under a different runtime.
+        self._herdr_backend = herdr_backend
 
-    # -- tmux plumbing (delegated to the TerminalBackend, #636) ---------------
+    def _resolve_backend(self, terminal_backend: Optional[str]) -> TerminalBackend:
+        """Resolve which `TerminalBackend` a call concerns. `None`/`"tmux"` (the vast
+        majority — every pre-#638 record, and every non-build-seat job) resolves to the
+        single `self._backend` this supervisor has always had. `"herdr"` resolves to
+        `self._herdr_backend` — refusing loud if this instance wasn't given one, rather
+        than silently defaulting to tmux (a wrong-backend answer here means a liveness
+        check or kill_session call against the WRONG runtime for a real live job)."""
+        if terminal_backend == "herdr":
+            if self._herdr_backend is None:
+                raise SupervisorError(
+                    "job requires the herdr TerminalBackend but this supervisor instance "
+                    "has none configured (herdr_backend=None)")
+            return self._herdr_backend
+        return self._backend
 
-    def resolve_socket(self, run_id: str) -> str:
-        return self._backend.resolve_endpoint(run_id)
+    # -- tmux plumbing (delegated to the TerminalBackend, #636/#638) ----------
+
+    def resolve_socket(self, run_id: str, *, terminal_backend: str = "tmux") -> str:
+        return self._resolve_backend(terminal_backend).resolve_endpoint(run_id)
 
     # -- preflight (AC-E1) ---------------------------------------------------
 
-    def preflight(self, run_socket: str) -> PreflightResult:
+    def preflight(self, run_socket: str, *, terminal_backend: str = "tmux") -> PreflightResult:
         """Fail-closed BOTH ways (CF-13): tmux resolvable, version floor, socket dir usable,
         and every verb the supervisor uses probed ON the private socket. #636: delegates to
-        the injected TerminalBackend — the logic itself now lives there."""
-        return self._backend.preflight(run_socket)
+        the injected TerminalBackend — the logic itself now lives there. #638:
+        `terminal_backend` selects WHICH backend to preflight (defaults to tmux, unchanged
+        behavior for every existing caller)."""
+        return self._resolve_backend(terminal_backend).preflight(run_socket)
 
     # -- launch (AC-E2/E3/E5) ------------------------------------------------
 
@@ -409,9 +433,18 @@ class TmuxSupervisor:
                snapshot_digest: Optional[str] = None,
                correlation_id: Optional[str] = None,
                recovered_from: Optional[str] = None,
-               quota_classification: Optional[dict] = None) -> JobRecord:
+               quota_classification: Optional[dict] = None,
+               terminal_backend: str = "tmux") -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
         for the job's lifetime), write the FIXED pane spec, and spawn the pane.
+
+        #638: ``terminal_backend`` (default ``"tmux"``, unchanged behavior for every existing
+        caller) selects which configured backend actually launches this job — the CALLER (the
+        seat + config-gate check) decides this before calling, never guessed here. The choice
+        is stamped onto the returned ``JobRecord`` so every LATER per-record call (`_live`,
+        `_kill_job`, `recover`, `reap`) resolves the SAME backend this job actually launched
+        under, not whatever backend the supervisor instance handling that later call happens
+        to default to.
 
         #470 Task-3: ``snapshot_dir`` + ``snapshot_digest`` (a supervised mutating launch, staged
         by the dispatch choke-point) are bound into the spec so ``pane_runner`` re-verifies the
@@ -438,8 +471,10 @@ class TmuxSupervisor:
             manifest = None
         timeout = _effective_timeout(manifest, timeout)
 
+        resolved_backend = self._resolve_backend(terminal_backend)  # refuses loud here, before
+        # any pane spawns, if terminal_backend=="herdr" but this instance has none configured
         name = session_name(identity)
-        sock = self.resolve_socket(identity.run_id)
+        sock = resolved_backend.resolve_endpoint(identity.run_id)
         attempt_id = f"{resume_attempts}-{uuid.uuid4().hex[:8]}"
         cap_dir = expected_capture_dir(self._capture_root, identity.run_id, seat, attempt_id)
 
@@ -493,11 +528,11 @@ class TmuxSupervisor:
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
-            res = self._backend.new_session(sock, name, handle.path, argv)
+            res = resolved_backend.new_session(sock, name, handle.path, argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
             spawned = True
-            shown = self._backend.pane_pid(sock, name)
+            shown = resolved_backend.pane_pid(sock, name)
             if shown.returncode != 0 or not (shown.stdout or "").strip().isdigit():
                 raise SupervisorError(f"pane_pid unreadable: {(shown.stderr or '').strip()}")
             pane_pid = int(shown.stdout.strip())
@@ -517,7 +552,8 @@ class TmuxSupervisor:
                 resume_attempts=resume_attempts, state="running",
                 created_at=self._clock(), quarantine_reason=None,
                 receipt_nonce=receipt_nonce, recovered_from=recovered_from,
-                quota_classification=quota_classification)
+                quota_classification=quota_classification,
+                terminal_backend=terminal_backend)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
@@ -527,7 +563,7 @@ class TmuxSupervisor:
             # kill the session first, then release the permit
             if spawned:
                 try:
-                    self._backend.kill_session(sock, name)
+                    resolved_backend.kill_session(sock, name)
                 except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
                     pass
             cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
@@ -536,7 +572,8 @@ class TmuxSupervisor:
     # -- status / sentinel ----------------------------------------------------
 
     def _live(self, record: JobRecord) -> bool:
-        return self._backend.has_session(record.run_socket, record.session_name).returncode == 0
+        backend = self._resolve_backend(record.terminal_backend)
+        return backend.has_session(record.run_socket, record.session_name).returncode == 0
 
     def _sentinel(self, record: JobRecord) -> Optional[dict]:
         return read_sentinel(record)
@@ -719,7 +756,8 @@ class TmuxSupervisor:
             time.sleep(0.1)
         residue = any(_pid_alive(p) for p in snapshot) or _pane_group() or _provider_group()
         if not residue:
-            self._backend.kill_session(record.run_socket, record.session_name)
+            self._resolve_backend(record.terminal_backend).kill_session(
+                record.run_socket, record.session_name)
             return True
         return False
 
@@ -970,8 +1008,14 @@ class TmuxSupervisor:
         return parse_stream_events(proc.stdout)
 
     def kill_server(self, run_id: str) -> None:
-        """Tear down the whole private server for ``run_id`` (test/run cleanup)."""
+        """Tear down the whole private server for ``run_id`` (test/run cleanup). #638: tears
+        down EVERY configured backend for this run_id, not just tmux — a mixed-backend run may
+        have live state under either. herdr's `teardown_endpoint` is a documented no-op (no
+        per-run herdr server exists to tear down), so calling it when configured is harmless."""
         self._backend.teardown_endpoint(self.resolve_socket(run_id))
+        if self._herdr_backend is not None:
+            self._herdr_backend.teardown_endpoint(
+                self.resolve_socket(run_id, terminal_backend="herdr"))
 
     # -- recover (OQ-8, CF-6/CF-7/CF-10) ----------------------------------------
 
@@ -1254,10 +1298,17 @@ class TmuxSupervisor:
         records = [r for r in self._registry.by_run(run_id) if r.state != "quota_paused"]
         now = self._clock()
         live_names = set()
-        if records:
-            res = self._backend.list_sessions(records[0].run_socket)
+        # #638: union list_sessions() across every DISTINCT backend actually present among
+        # these records — one fixed self._backend.list_sessions() call would leave a
+        # herdr-backed job invisible to a tmux-only listing (and vice versa), landing it
+        # outside live_fresh below even though it's genuinely alive (Step-4 review Finding #2).
+        by_backend: dict = {}
+        for r in records:
+            by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
+        for backend, run_socket in by_backend.items():
+            res = backend.list_sessions(run_socket)
             if res.returncode == 0:
-                live_names = {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
+                live_names |= {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
 
         def _fresh(record: JobRecord) -> bool:
             # an INFANT job (younger than fresh_s) is fresh by age — a just-launched pane
@@ -1282,7 +1333,8 @@ class TmuxSupervisor:
                          + ("" if killed else "; kill unverified: residue"))
             self._retain(record)
         for record in plan.kill_session:
-            self._backend.kill_session(record.run_socket, record.session_name)
+            self._resolve_backend(record.terminal_backend).kill_session(
+                record.run_socket, record.session_name)
             self._release_permit(record)
         for record in plan.retain_worktree:
             # repeat-safety stamp: without it every future sweep re-invokes W3 finalize on
