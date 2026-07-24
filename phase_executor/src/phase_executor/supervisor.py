@@ -25,8 +25,6 @@ import errno
 import hashlib
 import json
 import os
-import re
-import shutil
 import signal
 import stat as stat_mod
 import subprocess
@@ -46,6 +44,7 @@ from .pane_runner import _descendants, expected_capture_dir, sidecar_path
 from .quota import QuotaTimeout
 from .registry import (JobRecord, JobRegistry, ReapPlan, ReapPolicy, classify_recovery,
                        command_digest, handle_from_record, reap_plan, session_name)
+from .terminal_backend import TerminalBackend, TmuxBackend
 from .worktree import WorktreeHandle, WorktreeIdentity, component_for
 
 TMUX_VERSION_FLOOR = (3, 0)  # verbs probed individually below; 3.4 is the spike-verified build
@@ -360,7 +359,8 @@ class TmuxSupervisor:
                  registry: Optional[JobRegistry] = None, run=_default_run, clock=time.time,
                  runtime_dir: Optional[str] = None, state_dir: Optional[str] = None,
                  pane_env: Optional[dict] = None, worktree_manager=None,
-                 allow_adapter_override: bool = False):
+                 allow_adapter_override: bool = False,
+                 backend: Optional[TerminalBackend] = None):
         self._snapshot = snapshot
         self._quota = quota
         self._capture_root = capture_root
@@ -377,53 +377,25 @@ class TmuxSupervisor:
         self._worktree_manager = worktree_manager
         # test harnesses only: lets the pane honor RAWGENTIC_PANE_ADAPTER (spec-gated)
         self._allow_adapter_override = allow_adapter_override
+        # #636 (epic #635 C1): the injected TerminalBackend seam. Absent -> construct the
+        # default TmuxBackend from the SAME run/env/runtime_dir/state_dir this supervisor
+        # already threads through resolve_socket/_tmux — byte-identical to pre-#636 (AC2).
+        self._backend = backend if backend is not None else TmuxBackend(
+            run=self._run, env=self._env, runtime_dir=self._runtime_dir,
+            state_dir=self._state_dir)
 
-    # -- tmux plumbing -------------------------------------------------------
-
-    def _tmux(self, sock: str, *args, timeout=30):
-        return self._run(["tmux", "-S", sock, *args], env=self._env, timeout=timeout)
+    # -- tmux plumbing (delegated to the TerminalBackend, #636) ---------------
 
     def resolve_socket(self, run_id: str) -> str:
-        return resolve_socket(run_id, runtime_dir=self._runtime_dir, state_dir=self._state_dir)
+        return self._backend.resolve_endpoint(run_id)
 
     # -- preflight (AC-E1) ---------------------------------------------------
 
     def preflight(self, run_socket: str) -> PreflightResult:
         """Fail-closed BOTH ways (CF-13): tmux resolvable, version floor, socket dir usable,
-        and every verb the supervisor uses probed ON the private socket."""
-        try:
-            if shutil.which("tmux") is None and self._run is _default_run:
-                return PreflightResult(False, "tmux binary not found")
-            sock_dir = os.path.dirname(run_socket)
-            try:
-                os.makedirs(sock_dir, exist_ok=True)
-            except OSError as exc:
-                return PreflightResult(False, f"socket dir not creatable: {exc}")
-            if not os.access(sock_dir, os.W_OK):
-                return PreflightResult(False, f"socket dir not writable: {sock_dir}")
-            ver = self._run(["tmux", "-V"], env=self._env)
-            if ver.returncode != 0:
-                return PreflightResult(False, f"tmux -V failed: {ver.stderr.strip()}")
-            m = re.search(r"(\d+)\.(\d+)", ver.stdout or "")
-            if not m or (int(m.group(1)), int(m.group(2))) < TMUX_VERSION_FLOOR:
-                return PreflightResult(
-                    False, f"tmux version below floor {TMUX_VERSION_FLOOR}: {ver.stdout.strip()!r}")
-            probe = f"rg-preflight-{uuid.uuid4().hex[:8]}"
-            steps = (
-                ("new-session", ("new-session", "-d", "-s", probe, "--", "sleep", "30")),
-                ("has-session", ("has-session", "-t", probe)),
-                ("display-message", ("display-message", "-p", "-t", probe, "#{pane_pid}")),
-                ("list-sessions", ("list-sessions", "-F", "#{session_name}")),
-                ("kill-session", ("kill-session", "-t", probe)),
-            )
-            for verb, args in steps:
-                res = self._tmux(run_socket, *args)
-                if res.returncode != 0:
-                    self._tmux(run_socket, "kill-session", "-t", probe)
-                    return PreflightResult(False, f"tmux {verb} failed: {(res.stderr or '').strip()}")
-            return PreflightResult(True, "")
-        except Exception as exc:  # noqa: BLE001 — preflight NEVER raises; unusable == unsupported
-            return PreflightResult(False, f"preflight error: {exc}")
+        and every verb the supervisor uses probed ON the private socket. #636: delegates to
+        the injected TerminalBackend — the logic itself now lives there."""
+        return self._backend.preflight(run_socket)
 
     # -- launch (AC-E2/E3/E5) ------------------------------------------------
 
@@ -521,11 +493,11 @@ class TmuxSupervisor:
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
-            res = self._tmux(sock, "new-session", "-d", "-s", name, "-c", handle.path, "--", *argv)
+            res = self._backend.new_session(sock, name, handle.path, argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
             spawned = True
-            shown = self._tmux(sock, "display-message", "-p", "-t", name, "#{pane_pid}")
+            shown = self._backend.pane_pid(sock, name)
             if shown.returncode != 0 or not (shown.stdout or "").strip().isdigit():
                 raise SupervisorError(f"pane_pid unreadable: {(shown.stderr or '').strip()}")
             pane_pid = int(shown.stdout.strip())
@@ -555,7 +527,7 @@ class TmuxSupervisor:
             # kill the session first, then release the permit
             if spawned:
                 try:
-                    self._tmux(sock, "kill-session", "-t", name)
+                    self._backend.kill_session(sock, name)
                 except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
                     pass
             cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
@@ -564,7 +536,7 @@ class TmuxSupervisor:
     # -- status / sentinel ----------------------------------------------------
 
     def _live(self, record: JobRecord) -> bool:
-        return self._tmux(record.run_socket, "has-session", "-t", record.session_name).returncode == 0
+        return self._backend.has_session(record.run_socket, record.session_name).returncode == 0
 
     def _sentinel(self, record: JobRecord) -> Optional[dict]:
         return read_sentinel(record)
@@ -747,7 +719,7 @@ class TmuxSupervisor:
             time.sleep(0.1)
         residue = any(_pid_alive(p) for p in snapshot) or _pane_group() or _provider_group()
         if not residue:
-            self._tmux(record.run_socket, "kill-session", "-t", record.session_name)
+            self._backend.kill_session(record.run_socket, record.session_name)
             return True
         return False
 
@@ -999,7 +971,7 @@ class TmuxSupervisor:
 
     def kill_server(self, run_id: str) -> None:
         """Tear down the whole private server for ``run_id`` (test/run cleanup)."""
-        self._tmux(self.resolve_socket(run_id), "kill-server")
+        self._backend.teardown_endpoint(self.resolve_socket(run_id))
 
     # -- recover (OQ-8, CF-6/CF-7/CF-10) ----------------------------------------
 
@@ -1283,7 +1255,7 @@ class TmuxSupervisor:
         now = self._clock()
         live_names = set()
         if records:
-            res = self._tmux(records[0].run_socket, "list-sessions", "-F", "#{session_name}")
+            res = self._backend.list_sessions(records[0].run_socket)
             if res.returncode == 0:
                 live_names = {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
 
@@ -1310,7 +1282,7 @@ class TmuxSupervisor:
                          + ("" if killed else "; kill unverified: residue"))
             self._retain(record)
         for record in plan.kill_session:
-            self._tmux(record.run_socket, "kill-session", "-t", record.session_name)
+            self._backend.kill_session(record.run_socket, record.session_name)
             self._release_permit(record)
         for record in plan.retain_worktree:
             # repeat-safety stamp: without it every future sweep re-invokes W3 finalize on
