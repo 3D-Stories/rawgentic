@@ -47,6 +47,18 @@ def test_capture_files_written(tmp_path):
     assert (cap.path / "stderr.txt").read_text() == "err trailer"
 
 
+def test_write_dispatch_claim_writes_json_inside_capture_dir(tmp_path):
+    # #640: the claim is the wal-bind-guard executor-dispatch fallback's provenance —
+    # existence at a path under a project's own .rawgentic/runs/ tree IS the proof, so it
+    # must live inside THIS capture dir (already 0700, already rooted there by construction).
+    cap = create_capture(tmp_path, "r1", "analysis", "0-x")
+    claim_path = cap.write_dispatch_claim(run_id="r1", seat="analysis", attempt_id="0-x")
+    assert claim_path == cap.path / "dispatch-claim.json"
+    assert claim_path.exists()
+    import json as _json
+    assert _json.loads(claim_path.read_text()) == {"run_id": "r1", "seat": "analysis", "attempt_id": "0-x"}
+
+
 @pytest.mark.parametrize("bad", ["..", ".", "...", "   ", ""])
 def test_sanitize_rejects_dot_and_empty(bad):
     with pytest.raises(ValueError):

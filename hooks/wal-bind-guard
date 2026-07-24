@@ -63,6 +63,40 @@ CLAUDE_DOCS="$WAL_CLAUDE_DOCS"
 wal_resolve_project
 BOUND_PROJECT="$WAL_PROJECT"
 
+# --- Executor-dispatch env fallback (#640) ---
+# A subprocess spawned by hooks/executor_routing_lib.py's executor-seat dispatch
+# (phase_executor's claude_cli adapter) is a fresh, unregistered
+# `claude --print --no-session-persistence` session — it can never appear in
+# session_registry.jsonl, so the registry lookup above always returns empty and
+# Gate 1 denies it in any workspace with >1 active project, including reads of
+# its OWN project's files. The dispatch code writes a claim marker file INSIDE
+# its own capture dir (`.rawgentic/runs/<run>/<seat>/<attempt>/dispatch-claim.json`
+# — already rooted under the dispatching project's own tree by construction,
+# since only that trusted dispatch path ever creates files there) and sets
+# RAWGENTIC_DISPATCH_CLAIM to its path. Trust is by PATH CONTAINMENT, never by
+# trusting the env var's value as a bare project-name string: accept it ONLY
+# when the registry lookup found nothing (never override a real binding), the
+# claim file actually EXISTS, and its realpath resolves under a real ACTIVE
+# project's own `.rawgentic/runs/` tree (a symlink or `../` escape is defeated
+# by realpath canonicalization before the prefix check). Gate 2 still enforces
+# the cross-project boundary using whichever project name this resolves to.
+if [ -z "$BOUND_PROJECT" ] && [ -n "${RAWGENTIC_DISPATCH_CLAIM:-}" ]; then
+    CLAIM_REAL=$(realpath -m "$RAWGENTIC_DISPATCH_CLAIM" 2>/dev/null || true)
+    if [ -n "$CLAIM_REAL" ] && [ -f "$CLAIM_REAL" ]; then
+        while IFS=$'\t' read -r _pname _ppath; do
+            [ -z "$_pname" ] && continue
+            _pabs=$(realpath -m "$WORKSPACE_ROOT/${_ppath#./}" 2>/dev/null || true)
+            [ -z "$_pabs" ] && continue
+            case "$CLAIM_REAL" in
+                "$_pabs/.rawgentic/runs/"*)
+                    BOUND_PROJECT="$_pname"
+                    break
+                    ;;
+            esac
+        done < <("$JQ" -r '.projects[] | select(.active == true) | "\(.name)\t\(.path)"' "$WORKSPACE_FILE" 2>/dev/null || true)
+    fi
+fi
+
 # --- Gate 1: Unbound session check ---
 if [ -z "$BOUND_PROJECT" ]; then
     ACTIVE_COUNT=$("$JQ" '[.projects[] | select(.active == true)] | length' "$WORKSPACE_FILE" 2>/dev/null || echo "0")

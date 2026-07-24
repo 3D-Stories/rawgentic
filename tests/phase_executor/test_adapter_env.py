@@ -44,6 +44,32 @@ def test_claude_env_non_string_is_none():
     assert _claude_env(123) is None
 
 
+# --- #640: RAWGENTIC_DISPATCH_CLAIM (wal-bind-guard executor-dispatch fallback) ---
+
+
+def test_claude_env_sets_dispatch_claim():
+    assert _claude_env(None, "/repo/.rawgentic/runs/r1/analysis/0-x/.dispatch-claim") == {
+        "RAWGENTIC_DISPATCH_CLAIM": "/repo/.rawgentic/runs/r1/analysis/0-x/.dispatch-claim"
+    }
+
+
+def test_claude_env_claim_and_credential_ref_both_set():
+    assert _claude_env("/home/u/.claude-acct2", "/repo/.rawgentic/runs/r1/a/0/.dispatch-claim") == {
+        "CLAUDE_CONFIG_DIR": "/home/u/.claude-acct2",
+        "RAWGENTIC_DISPATCH_CLAIM": "/repo/.rawgentic/runs/r1/a/0/.dispatch-claim",
+    }
+
+
+def test_claude_env_no_claim_no_credential_is_none():
+    assert _claude_env(None, None) is None
+    assert _claude_env(None, "") is None
+
+
+def test_claude_env_non_string_claim_is_ignored():
+    # defensive: a non-string claim path (schema drift) must not build a bogus env
+    assert _claude_env(None, 123) is None
+
+
 # --- #465 T3: claude launch profile composition ---
 
 from phase_executor import contract as _c
@@ -261,3 +287,69 @@ class TestClaudeMutatingContainment:
         with pytest.raises(contract.CompositionError, match="containment_root is required"):
             claude_cli.run(req, run_id="r", attempt_id="0-a", capture_root=tmp_path,
                            routing_config_digest="sha256:d")
+
+
+class TestDispatchClaim640:
+    """#640: claude_cli.run() writes a dispatch-claim marker inside its OWN capture dir and
+    threads its path into the subprocess env via RAWGENTIC_DISPATCH_CLAIM (wal-bind-guard's
+    executor-dispatch fallback). This is caller-agnostic — the ONLY thing every dispatch
+    mechanism (sync dispatch_seat, resume_dispatch's pane_runner, run_competitive's bake-off)
+    supplies to reach this function is `capture_root`, so proving run() itself does this,
+    given a project-scoped capture_root, proves ALL THREE mechanisms are covered — confirmed
+    by reading supervisor.py:484 (TmuxSupervisor.launch threads self._capture_root into the
+    pane spec pane_runner.py reads) and engine.py's _run_candidate (threads capture_root into
+    its dispatch(...) call) — neither needed a code change, since neither ever bypasses this
+    function for a claude-engine dispatch."""
+
+    def _stub_subprocess(self, monkeypatch, captured_env: dict):
+        from phase_executor.adapters import claude_cli as _claude_cli_mod
+        from phase_executor.adapters.base import ProcOutcome
+
+        def _fake_run_subprocess(cmd, stdin, timeout, *, env=None, cwd=None):
+            captured_env["env"] = env
+            captured_env["cwd"] = cwd
+            return ProcOutcome(returncode=0, stdout='{"result": "ok", "modelUsage": {}}',
+                               stderr="", timed_out=False)
+        monkeypatch.setattr(_claude_cli_mod, "run_subprocess", _fake_run_subprocess)
+
+    def test_run_writes_claim_and_sets_env(self, tmp_path, monkeypatch):
+        from phase_executor.adapters import claude_cli
+        from phase_executor.adapters.base import AdapterRequest
+        captured: dict = {}
+        self._stub_subprocess(monkeypatch, captured)
+        req = AdapterRequest(seat="analysis", requested_model="claude-sonnet-5", prompt="hi")
+        claude_cli.run(req, run_id="r1", attempt_id="0-x", capture_root=tmp_path,
+                       routing_config_digest="sha256:d")
+        claim_path = tmp_path / "r1" / "analysis" / "0-x" / "dispatch-claim.json"
+        assert claim_path.exists()
+        assert captured["env"]["RAWGENTIC_DISPATCH_CLAIM"] == str(claim_path.resolve())
+
+    def test_run_claim_path_is_absolute_and_under_capture_root(self, tmp_path, monkeypatch):
+        from phase_executor.adapters import claude_cli
+        from phase_executor.adapters.base import AdapterRequest
+        captured: dict = {}
+        self._stub_subprocess(monkeypatch, captured)
+        req = AdapterRequest(seat="review", requested_model="claude-sonnet-5", prompt="hi")
+        claude_cli.run(req, run_id="r2", attempt_id="0-y", capture_root=tmp_path,
+                       routing_config_digest="sha256:d")
+        claim = captured["env"]["RAWGENTIC_DISPATCH_CLAIM"]
+        import os as _os
+        assert _os.path.isabs(claim)
+        assert claim.startswith(str(tmp_path.resolve()))
+
+    def test_run_via_capture_root_mirrors_resume_and_competitive_callers(self, tmp_path, monkeypatch):
+        """Simulates the exact capture_root pass-through both resume_dispatch (via
+        TmuxSupervisor.launch's pane spec, supervisor.py:484) and run_competitive (via
+        _run_candidate, engine.py) perform — neither caller does anything ELSE relevant to
+        claim provenance, so this is the caller-agnostic proof both paths are covered."""
+        from phase_executor.adapters import claude_cli
+        from phase_executor.adapters.base import AdapterRequest
+        project_scoped_capture_root = tmp_path / "projects" / "rawgentic" / ".rawgentic" / "runs"
+        captured: dict = {}
+        self._stub_subprocess(monkeypatch, captured)
+        req = AdapterRequest(seat="build", requested_model="claude-sonnet-5", prompt="hi")
+        claude_cli.run(req, run_id="r3", attempt_id="0-z", capture_root=project_scoped_capture_root,
+                       routing_config_digest="sha256:d")
+        claim = captured["env"]["RAWGENTIC_DISPATCH_CLAIM"]
+        assert claim.startswith(str(project_scoped_capture_root.resolve()))
+        assert (project_scoped_capture_root / "r3" / "build" / "0-z" / "dispatch-claim.json").exists()

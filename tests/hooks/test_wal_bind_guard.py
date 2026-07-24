@@ -243,6 +243,174 @@ class TestUnboundSession:
         assert _decision(stdout) == "allow"
 
 
+# ── Executor-dispatch env fallback (#640) ────────────────────────────────
+
+
+class TestExecutorDispatchClaimFallback:
+    """#640: an executor-dispatched subprocess (hooks/executor_routing_lib.py
+    dispatch -> phase_executor's claude_cli adapter) is a fresh, unregistered
+    `claude --print --no-session-persistence` session — it can never appear in
+    session_registry.jsonl, so Gate 1 denies it in any workspace with >1 active
+    project. The dispatch writes a claim marker file INSIDE its own capture
+    dir (already rooted under the dispatching project's `.rawgentic/runs/`
+    tree) and points RAWGENTIC_DISPATCH_CLAIM at its path. wal-bind-guard
+    trusts this by PATH CONTAINMENT — the claim must actually EXIST and
+    resolve under a real ACTIVE project's own `.rawgentic/runs/` tree — never
+    by trusting an env value as a bare project-name string. Gate 2's
+    cross-project check still applies using whichever project this resolves
+    to.
+    """
+
+    def _write_claim(self, ws, project_dirname: str) -> str:
+        """Write a real claim file under project_dirname's own .rawgentic/runs/
+        tree, mirroring where phase_executor's claude_cli adapter actually
+        writes one, and return its absolute path."""
+        claim_dir = ws.root / "projects" / project_dirname / ".rawgentic" / "runs" / "r1" / "analysis" / "0-x"
+        claim_dir.mkdir(parents=True, exist_ok=True)
+        claim_path = claim_dir / "dispatch-claim.json"
+        claim_path.write_text("{}", encoding="utf-8")
+        return str(claim_path)
+
+    def test_claim_binds_unregistered_session_same_project_allows(
+        self, make_workspace
+    ) -> None:
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        claim = self._write_claim(ws, "alpha")
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": claim}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "allow"
+
+    def test_claim_still_denies_cross_project(self, make_workspace) -> None:
+        """Bound via the claim fallback to alpha; touching beta still denies —
+        the fallback must feed Gate 2, not bypass it."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        claim = self._write_claim(ws, "alpha")
+        file_path = str(ws.root / "projects" / "beta" / "lib" / "utils.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": claim}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_nonexistent_claim_path_denies(self, make_workspace) -> None:
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        fake_claim = str(
+            ws.root / "projects" / "alpha" / ".rawgentic" / "runs" / "r1" / "analysis" / "0-x" / "dispatch-claim.json"
+        )  # never actually written
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": fake_claim}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_claim_under_inactive_project_denies(self, make_workspace) -> None:
+        """A claim rooted under a project that exists but is active:false must
+        not be trusted — the fallback only scans ACTIVE projects, same bar as
+        a real registry bind. Isolated against an ACTIVE project's file
+        (alpha), not the inactive project's own file: an inactive project's
+        OWN files fall through Gate 1's separate "not under any active
+        project" exception regardless of BOUND_PROJECT (a pre-existing quirk,
+        tracked separately, out of scope here) — that would validate this
+        test even if the claim fallback wrongly bound to gamma. Pointing at
+        alpha's file means an incorrect bind to "gamma" would wrongly ALLOW;
+        the correct behavior (BOUND_PROJECT stays empty since gamma isn't
+        scanned) DENIES via the normal unbound-in-multi-active path."""
+        inactive = {
+            "name": "gamma", "path": "./projects/gamma", "active": False,
+            "configured": True, "lastUsed": "2026-03-08T00:00:00Z",
+        }
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT, inactive])
+        claim = self._write_claim(ws, "gamma")
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": claim}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_claim_outside_any_project_runs_tree_denies(self, make_workspace, tmp_path) -> None:
+        """A claim path that exists but sits OUTSIDE every active project's own
+        .rawgentic/runs/ tree (e.g. a bare project-name string reinterpreted
+        as a path, or any other file) must not be trusted — existence alone
+        is not provenance, containment is."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        outside = tmp_path / "not-under-any-project.json"
+        outside.write_text("{}", encoding="utf-8")
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": str(outside)}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_claim_prefix_lookalike_directory_denies(self, make_workspace) -> None:
+        """AC8-style guard: a claim under a sibling dir that merely SHARES the
+        `.rawgentic/runs` prefix as a string (e.g. `.rawgentic/runs-evil/`)
+        must not false-match the containment check."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        lookalike_dir = ws.root / "projects" / "alpha" / ".rawgentic" / "runs-evil"
+        lookalike_dir.mkdir(parents=True, exist_ok=True)
+        claim = lookalike_dir / "dispatch-claim.json"
+        claim.write_text("{}", encoding="utf-8")
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": str(claim)}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_symlinked_claim_escaping_project_tree_denies(self, make_workspace) -> None:
+        """A claim path that is itself a symlink pointing OUTSIDE the project
+        tree must not be trusted — realpath canonicalization must resolve the
+        symlink before the containment check, same posture as Gate 2's own
+        symlink-escape guard."""
+        ws: Workspace = make_workspace(projects=[ALPHA_PROJECT, BETA_PROJECT])
+        runs_dir = ws.root / "projects" / "alpha" / ".rawgentic" / "runs" / "r1" / "analysis" / "0-x"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        outside_target = ws.root.parent / "outside-claim.json"
+        outside_target.write_text("{}", encoding="utf-8")
+        symlinked_claim = runs_dir / "dispatch-claim.json"
+        symlinked_claim.symlink_to(outside_target)
+        file_path = str(ws.root / "projects" / "alpha" / "src" / "main.py")
+        stdin = _make_stdin("Read", "unregistered-s9", str(ws.root), {"file_path": file_path})
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": str(symlinked_claim)}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+    def test_registry_binding_takes_precedence_over_claim(self, make_workspace) -> None:
+        """A session ALREADY bound via the registry must not be re-bound by a
+        (possibly stale/conflicting) claim — the fallback only fires when the
+        registry lookup is empty."""
+        ws: Workspace = make_workspace(
+            projects=[ALPHA_PROJECT, BETA_PROJECT],
+            registry_entries=[
+                {"session_id": "s1", "project": "alpha", "ts": "2026-03-08T00:00:00Z"},
+            ],
+        )
+        claim = self._write_claim(ws, "beta")
+        file_path = str(ws.root / "projects" / "beta" / "lib" / "utils.py")
+        stdin = _make_stdin("Read", "s1", str(ws.root), {"file_path": file_path})
+        # Claim points at beta, but the registry already bound this exact session to alpha —
+        # the registry must win, so a beta file still denies.
+        stdout, _stderr, rc = run_hook(
+            HOOK, stdin, cwd=ws.root, env_override={"RAWGENTIC_DISPATCH_CLAIM": claim}
+        )
+        assert rc == 0
+        assert _decision(stdout) == "deny"
+
+
 # ── Fail-open tests ─────────────────────────────────────────────────────
 
 

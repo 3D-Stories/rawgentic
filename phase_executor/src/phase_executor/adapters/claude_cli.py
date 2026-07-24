@@ -119,14 +119,25 @@ def parse_claude(raw: Union[str, dict], *, requested_model: str) -> ParsedResult
     )
 
 
-def _claude_env(credential_ref: Optional[str]) -> Optional[dict]:
+def _claude_env(credential_ref: Optional[str], dispatch_claim_path: Optional[str] = None) -> Optional[dict]:
     """#431: a lane's ``credential_ref`` names an isolated Claude config dir → set
-    ``CLAUDE_CONFIG_DIR`` so this invocation uses that account's independent quota pool. A missing /
-    empty ``credential_ref`` returns None (env inherited unchanged — the single-account default).
+    ``CLAUDE_CONFIG_DIR`` so this invocation uses that account's independent quota pool.
+    #640: ``dispatch_claim_path`` (the absolute path to this dispatch's own claim marker,
+    written inside its OWN capture directory — see ``run()`` below) → set
+    ``RAWGENTIC_DISPATCH_CLAIM`` so ``hooks/wal-bind-guard`` can bind this otherwise-
+    unregistered ``--no-session-persistence`` subprocess to its own project in a
+    multi-active-project workspace, instead of denying every Read/Edit/Write it attempts.
+    The guard trusts this by PATH CONTAINMENT (the claim file must resolve under a real
+    active project's own ``.rawgentic/runs/`` tree — only this trusted dispatch path ever
+    writes there), never by trusting the env var's value as a bare project-name string.
+    Neither set → None (env inherited unchanged — byte-identical to pre-#640 behavior).
     Claude-only: codex has its own ``CODEX_HOME``, zhipu its own key."""
+    env: dict = {}
     if isinstance(credential_ref, str) and credential_ref:
-        return {"CLAUDE_CONFIG_DIR": credential_ref}
-    return None
+        env["CLAUDE_CONFIG_DIR"] = credential_ref
+    if isinstance(dispatch_claim_path, str) and dispatch_claim_path:
+        env["RAWGENTIC_DISPATCH_CLAIM"] = dispatch_claim_path
+    return env or None
 
 
 def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, routing_config_digest: str, queued_ms: int = 0, fallback_reason: Optional[str] = None) -> contract.Observation:
@@ -144,8 +155,14 @@ def run(req: AdapterRequest, *, run_id: str, attempt_id: str, capture_root, rout
         cwd = contract.canonical_contained_worktree(req.profile.worktree, req.containment_root)
     cap = create_capture(capture_root, run_id, req.seat, attempt_id)
     cap.write_input(req.prompt)
+    # #640: the claim lives inside THIS dispatch's own capture dir (already 0700, already
+    # rooted under the dispatching project's `.rawgentic/runs/` tree) — its path is the
+    # provenance wal-bind-guard trusts for an otherwise-unregistered subprocess.
+    claim_path = str(cap.write_dispatch_claim(
+        run_id=run_id, seat=req.seat, attempt_id=attempt_id).resolve())
     started = time.monotonic()
-    proc = run_subprocess(cmd, req.prompt, req.timeout, env=_claude_env(req.credential_ref), cwd=cwd)
+    proc = run_subprocess(cmd, req.prompt, req.timeout,
+                         env=_claude_env(req.credential_ref, claim_path), cwd=cwd)
     timing_ms = int((time.monotonic() - started) * 1000)
     cap.write_transport(proc.stdout)
     cap.write_stderr(proc.stderr)
