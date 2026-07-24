@@ -64,7 +64,7 @@ def test_seat_selection_and_token_burn(env):
 
 
 def test_recovery_exercises_real_fallback(env):
-    # attempt-0 nonzero_exit must make run_seat fall back to attempt 1 (claude-opus-4-8) -> recovered
+    # attempt-0 nonzero_exit must make run_seat fall back to attempt 1 (claude-opus-5) -> recovered
     s = db.run_fixture(_fx("f03-ship-recovery"), **env)
     assert s["recovery"] == 1.0 and s["seat_selection"] == 1.0
 
@@ -93,7 +93,7 @@ def test_audit_completeness(env):
 # ---- discrimination: the scorers actually compare (red-if-broken) -----------------------------
 def test_wrong_expected_docks_the_dimension(env):
     fx = copy.deepcopy(_fx("f01-intake-clean"))
-    fx["expected"]["seat_model"] = "claude-sonnet-5"      # the run returns opus-4-8, so this must fail
+    fx["expected"]["seat_model"] = "claude-sonnet-5"      # the run returns opus-5, so this must fail
     assert db.run_fixture(fx, **env)["seat_selection"] == 0.0
     fx2 = copy.deepcopy(_fx("f08-enforcement-breach"))
     fx2["enforcement"]["expected_ok"] = True              # it's a real breach (ok=False), so expect 0
@@ -232,7 +232,7 @@ class TestLiveDispatch:
         # through opaquely; a stub with the two attrs the seam reads suffices.
         class R:  # pylint: disable=too-few-public-methods
             seat = "intake"
-            requested_model = "claude-opus-4-8"
+            requested_model = "claude-opus-5"
             transport = "native"
         return R()
 

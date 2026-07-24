@@ -1238,7 +1238,7 @@ class TestApplyTable:
     def test_validate_only_prints_pointer_and_writes_nothing(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
         before = sorted(p.name for p in repo.iterdir())
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == 0
         out = json.loads(r.stdout)
@@ -1248,23 +1248,23 @@ class TestApplyTable:
 
     def test_validate_only_combined_with_reset_uses_package_base(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only", "--reset-to-default"])
         assert r.returncode == 0
 
     def test_candidate_digest_forbidden_in_validate_only(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), candidate="sha256:deadbeef", extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "forbidden with --validate-only" in json.loads(r.stdout)["error"]["message"]
 
     def test_materialize_requires_matching_candidate_digest(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        missing = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}}, expected=_pkg_digest())
+        missing = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}}, expected=_pkg_digest())
         assert missing.returncode == er.EXIT_MALFORMED
         assert "requires --expected-candidate-digest" in json.loads(missing.stdout)["error"]["message"]
-        stale = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        stale = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                        expected=_pkg_digest(), candidate="sha256:deadbeef")
         assert stale.returncode == er.EXIT_MALFORMED
         assert "candidate changed since validated" in json.loads(stale.stdout)["error"]["message"]
@@ -1272,17 +1272,17 @@ class TestApplyTable:
 
     def test_fresh_create_end_to_end(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only"])
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), candidate=cand)
         assert r.returncode == 0
         dest = repo / "claude_docs" / "routing" / "phase-executor-table.json"
         assert dest.is_file()
         assert routing.snapshot_from_file(dest).config_digest == cand
         table = json.loads(dest.read_text(encoding="utf-8"))
-        assert table["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        assert table["seats"]["ship"]["primary"]["model"] == "claude-opus-5"
         # lane came from the base table's existing opus rows
         assert table["seats"]["ship"]["primary"]["lane"]["provider"] == "anthropic"
 
@@ -1294,16 +1294,16 @@ class TestApplyTable:
         dst.parent.mkdir(parents=True)
         dst.write_text(json.dumps(base), encoding="utf-8")
         base_digest = routing.snapshot_from_file(dst).config_digest
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=base_digest, extra=["--validate-only"])
         assert v.returncode == 0
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=base_digest, candidate=cand)
         assert r.returncode == 0
         after = json.loads(dst.read_text(encoding="utf-8"))
         assert after["seats"]["intake"]["primary"]["model"] == "claude-fable-5"  # kept (A3)
-        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-5"
 
     def test_reseed_divergent_dest_refused(self, tmp_path):
         # 8a-B2: reach the P3-G4 guard for REAL — validated candidate digest first, then
@@ -1316,10 +1316,10 @@ class TestApplyTable:
         other = repo / "claude_docs" / "other.json"
         other.write_bytes(routing.default_table_path().read_bytes())
         d = routing.snapshot_from_file(dst).config_digest
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/other.json", expected=d, extra=["--validate-only"])
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/other.json", expected=d, candidate=cand)
         assert r.returncode == er.EXIT_MALFORMED
         assert "is not the current phaseExecutorTable file" in json.loads(r.stdout)["error"]["message"]
@@ -1335,18 +1335,18 @@ class TestApplyTable:
         dst.parent.mkdir(parents=True)
         dst.write_text(json.dumps(base), encoding="utf-8")
         cur = routing.snapshot_from_file(dst).config_digest  # diff-DF1: guard = CURRENT resolution
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=cur,
                    extra=["--validate-only", "--reset-to-default"])
         assert v.returncode == 0
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=cur, candidate=cand,
                    extra=["--reset-to-default"])
         assert r.returncode == 0
         after = json.loads(dst.read_text(encoding="utf-8"))
         assert after["seats"]["intake"]["primary"]["model"] != "claude-fable-5"  # reset took
-        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-5"
 
     def test_symlinked_parent_dest_escape_refused(self, tmp_path):
         # 8a-B1: an in-repo symlink dir pointing OUTSIDE the root must not let a
@@ -1356,7 +1356,7 @@ class TestApplyTable:
         repo, ws = _proj_ws(tmp_path)
         (repo / "claude_docs").mkdir(exist_ok=True)
         (repo / "claude_docs" / "routing").symlink_to(outside)
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only"])
         assert v.returncode == er.EXIT_MALFORMED
         assert "outside the project root" in json.loads(v.stdout)["error"]["message"]
@@ -1364,7 +1364,7 @@ class TestApplyTable:
 
     def test_stale_base_digest_exit2(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected="sha256:stale", extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "base table changed since shown" in json.loads(r.stdout)["error"]["message"]
@@ -1384,7 +1384,7 @@ class TestApplyTable:
         assert not (repo / "claude_docs" / "routing").exists()
 
     @pytest.mark.parametrize("patch,frag", [
-        ({"wombat": {"primary": "claude-opus-4-8"}}, "unknown seat"),
+        ({"wombat": {"primary": "claude-opus-5"}}, "unknown seat"),
         ({"ship": {"floor": "opus"}}, "unknown field"),
         ({"ship": {"primary": "claude-haiku-4-5"}}, "no known lane"),
     ])
@@ -1396,7 +1396,7 @@ class TestApplyTable:
 
     def test_escaping_dest_refused_in_validate_only(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="../outside.json", expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "outside the project root" in json.loads(r.stdout)["error"]["message"]

@@ -18,6 +18,10 @@ _ALL = EFFORT_LADDER
 # CLI accepts all 5 for its models; glm-5.2 accepts all 5.
 SUPPORTED_EFFORT: dict = {
     "claude-fable-5": _ALL,
+    # claude-opus-5 is the shipped table's opus row since the 2026-07-24 owner retune;
+    # claude-opus-4-8 is KEPT (the registry is a documented SUPERSET, not an exact match)
+    # so a persisted record/Observation minted against the older id still resolves.
+    "claude-opus-5": _ALL,
     "claude-opus-4-8": _ALL,
     "claude-sonnet-5": _ALL,
     "gpt-5.6-sol": _ALL,

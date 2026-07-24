@@ -25,10 +25,13 @@ _REPO = Path(__file__).resolve().parent.parent
 RUBRIC_DIR = Path(__file__).resolve().parent / "data" / "bakeoff_rubrics"
 DEFAULT_SINK_PATH = _REPO / "docs" / "measurements" / "bakeoff_results.jsonl"
 
-# Competitor sets (models resolved to lanes from the routing table at call time).
-DESIGN_MODELS: tuple = ("gpt-5.6-sol", "claude-opus-4-8")                       # sol vs opus, every round
-BUILD_MODELS: tuple = ("claude-sonnet-5", "claude-opus-4-8", "gpt-5.6-terra")   # gate-flagged bake-off
-INCUMBENT_MODEL = "claude-opus-4-8"   # the headless judge-degrade fallback (owner-picked, §3.3)
+# Competitor sets (models resolved to lanes from the routing table at call time — so every
+# model named here MUST appear somewhere in that table, or _lane_for_model refuses; the
+# owner retune 2026-07-24 retired claude-opus-4-8 from the table in favour of claude-opus-5,
+# and a drift guard pins DESIGN_MODELS to the design seat's own model set).
+DESIGN_MODELS: tuple = ("gpt-5.6-sol", "claude-opus-5")                       # sol vs opus, every round
+BUILD_MODELS: tuple = ("claude-sonnet-5", "claude-opus-5", "gpt-5.6-terra")   # gate-flagged bake-off
+INCUMBENT_MODEL = "claude-opus-5"   # the headless judge-degrade fallback (owner-picked, §3.3)
 
 
 class RubricUnavailable(RuntimeError):

@@ -159,14 +159,17 @@ def test_shipped_table_digest_stable_and_pools():
 # --- #464 W1: full 7-seat table (intake/analysis/design/plan/build/review/ship) + manifest ×7
 #     + top-level policy section (extends the #426 5-seat set with analysis + design) ---
 
+# Owner retune 2026-07-24: claude-opus-4-8 retired for claude-opus-5 everywhere it appeared;
+# intake/analysis/plan primaries moved to claude-opus-5; analysis and plan chains normalised
+# to fable-5 -> sonnet-5 (plan's gpt-5.6-terra fallback dropped).
 _EXPECTED_SEATS_464 = {
-    "intake": ("claude-opus-4-8", ["claude-fable-5", "claude-sonnet-5"]),
-    "analysis": ("claude-sonnet-5", ["claude-opus-4-8", "claude-fable-5"]),
-    "design": ("gpt-5.6-sol", ["claude-opus-4-8"]),
-    "plan": ("claude-opus-4-8", ["claude-fable-5", "gpt-5.6-terra"]),
-    "build": ("claude-sonnet-5", ["claude-opus-4-8", "gpt-5.6-terra"]),
+    "intake": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"]),
+    "analysis": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"]),
+    "design": ("gpt-5.6-sol", ["claude-opus-5"]),
+    "plan": ("claude-opus-5", ["claude-fable-5", "claude-sonnet-5"]),
+    "build": ("claude-sonnet-5", ["claude-opus-5", "gpt-5.6-terra"]),
     "review": ("claude-fable-5", ["gpt-5.6-sol", "claude-sonnet-5"]),
-    "ship": ("claude-sonnet-5", ["claude-opus-4-8", "claude-fable-5"]),
+    "ship": ("claude-sonnet-5", ["claude-opus-5", "claude-fable-5"]),
     "offload": ("hermes-agent", ["claude-sonnet-5"]),  # #568 Phase-2: Hermes + analysis fallback
 }
 
@@ -182,10 +185,11 @@ def test_shipped_table_full_seat_set_464():
 
 # Normative seat-value matrix — design §A (the shipped table's EXACT manifest values).
 _EXPECTED_MANIFEST_464 = {
-    "intake":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+    # owner retune 2026-07-24: intake + analysis effort medium -> high
+    "intake":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
                  "confinement": {"anthropic": "hooks"},
                  "bounds": {"timeout_s": 900, "max_budget_usd": 5.0}},   # 558 AC2
-    "analysis": {"session_policy": "fresh", "tool_grants": ["read"], "effort": "medium",
+    "analysis": {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",
                  "confinement": {"anthropic": "hooks"},
                  "bounds": {"timeout_s": 1200, "max_budget_usd": 2.0}},  # 558 AC2
     "design":   {"session_policy": "fresh", "tool_grants": ["read"], "effort": "high",

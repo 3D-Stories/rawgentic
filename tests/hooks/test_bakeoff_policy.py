@@ -245,7 +245,7 @@ def test_reviewer_backend_non_gpt_uses_default():
 def test_lane_for_model():
     snap = pe.snapshot_from_file(TABLE)
     assert bp._lane_for_model(snap, "gpt-5.6-sol")["pool"] == "codex"
-    assert bp._lane_for_model(snap, "claude-opus-4-8")["pool"] == "claude"
+    assert bp._lane_for_model(snap, "claude-opus-5")["pool"] == "claude"
     assert bp._lane_for_model(snap, "no-such-model") is None
 
 
