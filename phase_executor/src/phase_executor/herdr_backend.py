@@ -87,6 +87,15 @@ class _PaneListError(RuntimeError):
     close and `reap()`'s liveness union silently dropped)."""
 
 
+class _PaneGetError(RuntimeError):
+    """`pane get` on an already-resolved pane_id failed with something OTHER than a
+    confirmed `error.code == "pane_not_found"` (Step-11 finding, round-2 confirming pass:
+    the `list` step can succeed and resolve a real pane_id, but the FOLLOW-UP `get` call
+    can still fail operationally — daemon hiccup, timeout, malformed body — and that is
+    genuinely indeterminate, not "confirmed gone"; conflating the two let `has_session()`
+    forward an ordinary nonzero result that `_live()` read as definitively dead)."""
+
+
 def _run_completed(args: list, returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
     """Synthesize the `subprocess.CompletedProcess`-shaped result every `TerminalBackend`
     method returns — `TmuxSupervisor` reads only `.returncode`/`.stdout`/`.stderr`, never
@@ -231,7 +240,20 @@ class HerdrBackend:
             raise _PaneListError(
                 f"herdr pane list returned rc=0 with an unexpected shape (missing/invalid "
                 f"'result.panes'): {(res.stdout or '').strip()[:200]}")
-        return result_obj["panes"]
+        panes = result_obj["panes"]
+        # Step-11 finding (round 2, confirming pass): the top-level shape check alone isn't
+        # enough — a malformed ENTRY (not a dict, or missing "pane_id") must not silently
+        # read as "not one of ours" the same way an unlabeled entry legitimately does.
+        # Every real pane herdr reports always carries a pane_id (only "label" is ever
+        # absent, for a pane this backend doesn't manage) — an entry missing it is
+        # corrupted data, not a foreign pane, and must fail loud rather than be dropped.
+        for pane in panes:
+            if not isinstance(pane, dict) or not isinstance(pane.get("pane_id"), str) \
+                    or not pane["pane_id"]:
+                raise _PaneListError(
+                    f"herdr pane list returned a malformed pane entry (missing/invalid "
+                    f"pane_id): {pane!r}")
+        return panes
 
     def _resolve_pane_id(self, endpoint: str, name: str) -> Optional[str]:
         """Resolve a caller-chosen `name` to herdr's own current `pane_id` via `pane list` +
@@ -244,7 +266,7 @@ class HerdrBackend:
         consideration). Raises plain `RuntimeError` on a genuine ambiguity (>1 match) —
         never an arbitrary pick."""
         panes = self._list_panes(endpoint)
-        matches = [p["pane_id"] for p in panes if isinstance(p, dict) and p.get("label") == name]
+        matches = [p["pane_id"] for p in panes if p.get("label") == name]  # every entry is a validated dict, _list_panes
         if len(matches) > 1:
             raise RuntimeError(f"herdr: duplicate label match for {name!r}: {matches}")
         return matches[0] if matches else None
@@ -323,7 +345,22 @@ class HerdrBackend:
         if pane_id is None:
             return _run_completed(["herdr", "pane", "get"], 1, "", f"pane {name!r} not found")
         res = self._herdr("get", pane_id, timeout=timeout)
-        return _run_completed(["herdr", "pane", "get"], res.returncode, res.stdout or "", res.stderr or "")
+        if res.returncode == 0:
+            return _run_completed(["herdr", "pane", "get"], 0, res.stdout or "", "")
+        # Step-11 finding (round 2, confirming pass): `list` can succeed and resolve a real
+        # pane_id, but the FOLLOW-UP `get` call can still fail for a reason OTHER than the
+        # pane genuinely being gone — a daemon hiccup, timeout, or malformed body. Only a
+        # confirmed `error.code == "pane_not_found"` (e.g. a genuine list-then-get race) is
+        # "confirmed dead"; anything else is indeterminate and must raise, not return an
+        # ordinary nonzero result `_live()` would read as "definitively dead".
+        err_obj = self._parse_json(res)
+        err = err_obj.get("error") if isinstance(err_obj, dict) else None
+        err_code = err.get("code") if isinstance(err, dict) else None
+        if err_code == "pane_not_found":
+            return _run_completed(["herdr", "pane", "get"], res.returncode, "", res.stderr or "")
+        raise _PaneGetError(
+            f"herdr pane get failed for a resolved pane (rc={res.returncode}): "
+            f"{(res.stderr or res.stdout or '').strip()}")
 
     def list_sessions(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess:
         """Raises `_PaneListError` (via `_list_panes`) on a genuine list-command failure or
@@ -335,7 +372,7 @@ class HerdrBackend:
         panes = self._list_panes(endpoint, timeout=timeout)
         # only panes THIS supervisor labeled are "sessions" it manages — an unrelated host
         # pane (a human's own terminal tab, no label) is never surfaced as one.
-        names = [p["label"] for p in panes if isinstance(p, dict) and p.get("label")]
+        names = [p["label"] for p in panes if p.get("label")]  # every entry is a validated dict, _list_panes
         return _run_completed(["herdr", "pane", "list"], 0, "\n".join(names), "")
 
     def kill_session(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:

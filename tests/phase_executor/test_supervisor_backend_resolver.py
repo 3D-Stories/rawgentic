@@ -43,7 +43,7 @@ class StubBackend:
     result by default (THIS test process's own pid, so downstream /proc reads succeed)."""
 
     def __init__(self, name, *, raise_has_session=False, raise_list_sessions=False,
-                 list_sessions_returncode=0):
+                 list_sessions_returncode=0, raise_list_sessions_for_endpoints=frozenset()):
         self.name = name
         self.calls = []
         # #638 Step-11 finding (round 2): a PROPERLY CONFIGURED backend whose underlying
@@ -53,6 +53,10 @@ class StubBackend:
         self._raise_has_session = raise_has_session
         self._raise_list_sessions = raise_list_sessions
         self._list_sessions_returncode = list_sessions_returncode
+        # per-ENDPOINT failure, for the round-2-confirming-pass finding: one backend OBJECT
+        # serving two DIFFERENT endpoints (e.g. two herdr workspaces under one run) must not
+        # let a failure on one endpoint silently swallow the other's real records.
+        self._raise_list_sessions_for_endpoints = raise_list_sessions_for_endpoints
 
     def resolve_endpoint(self, run_id):
         self.calls.append(("resolve_endpoint", run_id))
@@ -79,7 +83,7 @@ class StubBackend:
 
     def list_sessions(self, endpoint, timeout=30):
         self.calls.append(("list_sessions", endpoint))
-        if self._raise_list_sessions:
+        if self._raise_list_sessions or endpoint in self._raise_list_sessions_for_endpoints:
             raise RuntimeError("herdr pane list failed: daemon unreachable")
         return subprocess.CompletedProcess([], self._list_sessions_returncode, "", "")
 
@@ -330,6 +334,38 @@ def test_reap_excludes_records_when_list_sessions_raises_transiently(tmp_path):
     assert rec not in plan.quarantine
     assert rec not in plan.retain_worktree
     assert rec not in plan.keep
+
+
+def test_reap_excludes_only_the_failing_endpoint_when_one_backend_serves_two(tmp_path):
+    # Step-11 finding (round 2, confirming pass): `by_backend` was keyed on the backend
+    # OBJECT alone, so two records sharing one herdr backend but DIFFERENT run_socket
+    # endpoints (two workspaces under one run) silently shared only the FIRST endpoint
+    # seen -- the second endpoint's sessions were never listed, and a genuinely-alive
+    # record there could still reach kill_tree. Endpoint "w1" fails; endpoint "w2" is
+    # healthy and must be listed and protected independently.
+    herdr = StubBackend("herdr", raise_list_sessions_for_endpoints=frozenset({"w1"}))
+    sup = _sup(tmp_path, herdr=herdr)
+    run_id = f"r{uuid.uuid4().hex[:6]}"
+    bad_identity = WorktreeIdentity(run_id=run_id, seat="build", attempt=1)
+    good_identity = WorktreeIdentity(run_id=run_id, seat="build", attempt=2)
+    bad_rec = JobRecord(**{**_dead_pid_record(bad_identity, terminal_backend="herdr").__dict__,
+                          "session_name": "rg-w1", "run_socket": "w1"})
+    good_rec = JobRecord(**{**_dead_pid_record(good_identity, terminal_backend="herdr").__dict__,
+                            "session_name": "rg-w2", "run_socket": "w2"})
+    sup._registry.upsert(bad_rec)  # noqa: SLF001
+    sup._registry.upsert(good_rec)  # noqa: SLF001
+    plan = sup.reap(run_id, clean_fn=lambda _r: True)
+    # the failing endpoint's record is excluded from every tier (no destructive guess)
+    assert bad_rec not in plan.kill_tree
+    assert bad_rec not in plan.kill_session
+    assert bad_rec not in plan.quarantine
+    assert bad_rec not in plan.retain_worktree
+    assert bad_rec not in plan.keep
+    # the healthy endpoint's record was still queried and actually considered (landed in
+    # a REAL tier, not silently dropped the way an excluded record would be) -- both are
+    # confirmed-dead pids, so it lands in the ordinary dead-session cleanup tier
+    assert any(c == ("list_sessions", "w2") for c in herdr.calls)
+    assert good_rec in plan.kill_session
 
 
 def test_recover_excludes_records_when_live_check_raises_transiently(tmp_path):

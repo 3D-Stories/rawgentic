@@ -1350,32 +1350,39 @@ class TmuxSupervisor:
             records.append(r)
         now = self._clock()
         live_names = set()
-        # union list_sessions() across every DISTINCT backend actually present among these
-        # records — one fixed self._backend.list_sessions() call would leave a herdr-backed
-        # job invisible to a tmux-only listing (and vice versa), landing it outside
-        # live_fresh below even though it's genuinely alive (Step-4 review Finding #2).
-        by_backend: dict = {}
+        # union list_sessions() across every DISTINCT (backend, endpoint) pair actually
+        # present among these records — one fixed self._backend.list_sessions() call would
+        # leave a herdr-backed job invisible to a tmux-only listing (and vice versa),
+        # landing it outside live_fresh below even though it's genuinely alive (Step-4
+        # review Finding #2). Keyed on the PAIR, not the backend object alone (Step-11
+        # finding, round 2 confirming pass): two records sharing one backend but a
+        # DIFFERENT run_socket/endpoint — e.g. two herdr workspaces under one run — would
+        # otherwise silently share only the FIRST endpoint seen, leaving the second
+        # endpoint's sessions never listed at all.
+        by_backend_socket: dict = {}
         for r in records:
-            by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
-        unusable_backends = set()
-        for backend, run_socket in by_backend.items():
+            by_backend_socket[(self._resolve_backend(r.terminal_backend), r.run_socket)] = True
+        unusable_pairs = set()
+        for backend, run_socket in by_backend_socket:
             # #638 Step-11 finding (round 2): a genuine list_sessions() failure (raised,
-            # per the Protocol contract) must exclude EVERY record on that backend from
-            # this cycle's plan — dead_fn is an independent OS-level PID check, so a
-            # genuinely-alive-but-unlisted record would otherwise be correctly reported
-            # "not dead" and routed to kill_tree, letting a transient list failure kill a
-            # healthy job. A plain nonzero RETURN (never raised) is TmuxBackend's routine
-            # "no sessions on this socket" — confirmed-empty, not excluded.
+            # per the Protocol contract) must exclude EVERY record on that (backend,
+            # endpoint) pair from this cycle's plan — dead_fn is an independent OS-level
+            # PID check, so a genuinely-alive-but-unlisted record would otherwise be
+            # correctly reported "not dead" and routed to kill_tree, letting a transient
+            # list failure kill a healthy job. A plain nonzero RETURN (never raised) is
+            # TmuxBackend's routine "no sessions on this socket" — confirmed-empty, not
+            # excluded.
             try:
                 res = backend.list_sessions(run_socket)
             except Exception:  # noqa: BLE001 — genuinely indeterminate, not a returncode
-                unusable_backends.add(backend)
+                unusable_pairs.add((backend, run_socket))
                 continue
             if res.returncode == 0:
                 live_names |= {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
-        if unusable_backends:
+        if unusable_pairs:
             records = [r for r in records
-                       if self._resolve_backend(r.terminal_backend) not in unusable_backends]
+                       if (self._resolve_backend(r.terminal_backend), r.run_socket)
+                       not in unusable_pairs]
 
         def _fresh(record: JobRecord) -> bool:
             # an INFANT job (younger than fresh_s) is fresh by age — a just-launched pane

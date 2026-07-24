@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from phase_executor.herdr_backend import HerdrBackend, _PaneListError
+from phase_executor.herdr_backend import HerdrBackend, _PaneGetError, _PaneListError
 
 
 def _herdr_run(cmd, *, env=None, timeout=30):  # pragma: no cover - overridden per test
@@ -203,6 +203,46 @@ def test_has_session_unresolvable_name_returns_dead_shape():
     assert res.returncode != 0
 
 
+def test_has_session_get_confirmed_not_found_stays_nonzero_not_raised():
+    # Step-11 finding (round 2, confirming pass): `list` resolves a real pane_id, but the
+    # pane closes itself between resolve and get (a genuine race) -- error.code
+    # "pane_not_found" is a CONFIRMED dead signal, must stay a plain nonzero return.
+    calls = []
+    responses = [
+        _list_response([{"pane_id": "w1:p9", "label": "sess1"}]),
+        _json_err(None, code="pane_not_found", message="pane gone"),
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.has_session("w1", "sess1")
+    assert res.returncode != 0
+
+
+def test_has_session_get_operational_failure_raises():
+    # Step-11 finding (round 2, confirming pass): `list` resolves a real pane_id, but the
+    # FOLLOW-UP `get` fails for a reason OTHER than "gone" (daemon hiccup, internal error)
+    # -- genuinely indeterminate, must raise, not be forwarded as an ordinary nonzero
+    # result that _live() would read as "definitively dead".
+    calls = []
+    responses = [
+        _list_response([{"pane_id": "w1:p9", "label": "sess1"}]),
+        _json_err(None, code="internal_error", message="daemon busy"),
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneGetError):
+        be.has_session("w1", "sess1")
+
+
+def test_has_session_get_malformed_error_body_raises():
+    calls = []
+    responses = [
+        _list_response([{"pane_id": "w1:p9", "label": "sess1"}]),
+        subprocess.CompletedProcess(None, 1, "", "not json at all"),
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneGetError):
+        be.has_session("w1", "sess1")
+
+
 def test_kill_session_resolves_then_close():
     calls = []
     responses = [
@@ -279,6 +319,33 @@ def test_resolve_pane_id_malformed_shape_despite_rc0_raises():
     be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
     with pytest.raises(_PaneListError):
         be.has_session("w1", "ghost")
+
+
+def test_list_panes_malformed_entry_not_a_dict_raises():
+    # Step-11 finding (round 2, confirming pass): a malformed ENTRY (not just a malformed
+    # top-level shape) must not silently read as "not one of ours" the way an unlabeled
+    # entry legitimately does -- every real pane always carries a pane_id.
+    calls = []
+    responses = [_list_response([{"pane_id": "w1:p9", "label": "sess1"}, 42])]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.has_session("w1", "sess1")
+
+
+def test_list_panes_malformed_entry_missing_pane_id_raises():
+    calls = []
+    responses = [_list_response([{"label": "sess1"}])]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.has_session("w1", "sess1")
+
+
+def test_list_sessions_malformed_entry_raises():
+    calls = []
+    responses = [_list_response([{"pane_id": "w1:p9", "label": "sess1"}, {"no_pane_id": True}])]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.list_sessions("w1")
 
 
 def test_pane_pid_list_failure_does_not_crash():
