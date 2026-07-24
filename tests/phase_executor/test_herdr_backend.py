@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from phase_executor.herdr_backend import HerdrBackend
+from phase_executor.herdr_backend import HerdrBackend, _PaneListError
 
 
 def _herdr_run(cmd, *, env=None, timeout=30):  # pragma: no cover - overridden per test
@@ -241,14 +241,44 @@ def test_kill_session_list_failure_is_not_idempotent_success():
     assert res.returncode != 0
 
 
-def test_has_session_list_failure_is_not_confused_with_not_found():
-    # both currently map to "not alive" (returncode != 0) -- matching TmuxBackend's own
-    # existing behavior on a raw command failure, not a new regression -- but must not raise.
+def test_has_session_list_failure_raises_not_confused_with_not_found():
+    # Step-11 finding (round 2): a list-command failure must PROPAGATE, not collapse to an
+    # ordinary nonzero CompletedProcess -- _live() treats every nonzero result as
+    # "definitively dead", so a swallowed failure here would let a transient herdr list
+    # error kill a healthy job. Genuinely-not-found (empty list) stays a plain nonzero
+    # return (test_has_session_unresolvable_name_returns_dead_shape, above).
     calls = []
     responses = [_failed_list()]
     be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
-    res = be.has_session("w1", "ghost")
-    assert res.returncode != 0
+    with pytest.raises(_PaneListError):
+        be.has_session("w1", "ghost")
+
+
+def test_list_sessions_list_command_failure_raises():
+    calls = []
+    responses = [_failed_list()]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.list_sessions("w1")
+
+
+def test_list_sessions_malformed_shape_despite_rc0_raises():
+    # Step-11 finding (round 2): rc=0 with a valid-JSON-but-wrong-shape body (missing
+    # "panes" entirely) must not silently read as "zero sessions" -- that is a false
+    # success that fed reap()'s liveness union an empty-but-wrong live-names set.
+    calls = []
+    responses = [_json_ok(None, {"result": {}})]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.list_sessions("w1")
+
+
+def test_resolve_pane_id_malformed_shape_despite_rc0_raises():
+    calls = []
+    responses = [_json_ok(None, {"result": {}})]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    with pytest.raises(_PaneListError):
+        be.has_session("w1", "ghost")
 
 
 def test_pane_pid_list_failure_does_not_crash():

@@ -50,9 +50,24 @@ class TerminalBackend(Protocol):
 
     def pane_pid(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess: ...
 
-    def has_session(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess: ...
+    def has_session(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:
+        """MAY raise instead of returning a CompletedProcess when the underlying liveness
+        check itself failed/was unparseable (herdr's ``_PaneListError`` case, #638 Step-11
+        finding round 2) — genuinely indeterminate, NOT the same as a clean nonzero "not
+        found". Supervisor._live() catches this and re-raises SupervisorError so
+        recover()/reap() exclude the record for this cycle rather than reading it as
+        confirmed dead. TmuxBackend never raises here (tmux has-session's own nonzero exit
+        already means "not found", never "couldn't tell")."""
+        ...
 
-    def list_sessions(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess: ...
+    def list_sessions(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess:
+        """MAY raise instead of returning a CompletedProcess when the enumeration itself
+        failed/was unparseable — genuinely indeterminate (#638 Step-11 finding round 2),
+        distinct from TmuxBackend's routine nonzero exit on "no sessions on this socket",
+        which IS a confirmed-empty result and must never raise. `reap()` relies on this
+        split: it excludes a backend's records from the sweep only on a raised exception,
+        never merely on a nonzero returncode (TmuxBackend's normal empty-socket case)."""
+        ...
 
     def kill_session(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess: ...
 

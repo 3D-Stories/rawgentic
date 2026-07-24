@@ -46,6 +46,18 @@ supervisor never sees the intermediate pane id. A successful split (`returncode 
 body is empty/malformed is also treated as a failure (Step-11 finding: it previously returned the
 split's own `returncode` of 0, falsely satisfying the caller's success contract).
 
+**Malformed-split residual risk (Step-11 finding, round 2 — accepted, not fixed).** In the
+`not split_obj` / missing-`pane_id` early-return paths, the split call itself may have
+already created a real pane on the daemon before its response came back unparseable — and
+this code has no `pane_id` at all in that branch (structurally: the ONLY place herdr hands
+us the id is the very body we just failed to parse), so no `close` cleanup is possible from
+here. This differs from the exception/malformed-run-result cases above, which DO have a
+`pane_id` and are cleaned up. Residual: an unlabeled pane can leak on this narrow,
+malformed-response path. Accepted per the pane_env risk's same standard (host-local,
+disappears when the pane is closed/destroyed) — not fixed because reliably identifying the
+new pane without an id would require a list-diff-by-timing heuristic (racy, adds its own
+false-positive risk) for a path that requires the daemon to return `rc=0` with a broken body.
+
 **Pane environment (Step-11 review, accepted risk).** herdr has no private-per-run channel for
 environment variables the way tmux's `subprocess.run(..., env=...)` on a per-run socket does — the
 only mechanism is `pane split --env KEY=VALUE`, passed as CLI arguments to a HOST-WIDE SHARED
@@ -197,24 +209,42 @@ class HerdrBackend:
         except Exception as exc:  # noqa: BLE001 — preflight NEVER raises; unusable == unsupported
             return PreflightResult(False, f"preflight error: {exc}")
 
-    def _resolve_pane_id(self, endpoint: str, name: str) -> Optional[str]:
-        """Resolve a caller-chosen `name` to herdr's own current `pane_id` via `pane list` +
-        filter by `label == name` — the durable, cross-process resolution mechanism (module
-        docstring). Returns None ONLY for a genuinely-empty SUCCESSFUL list (pane not
-        found); raises `_PaneListError` if the list command itself failed or returned
-        unparseable output (Step-11 finding: conflating these let a transient list failure
-        masquerade as "not found", so `kill_session` would falsely report a clean
-        idempotent close, and `reap()`'s liveness union would silently drop a live job's
-        session from consideration). Raises plain `RuntimeError` on a genuine ambiguity
-        (>1 match) — never an arbitrary pick."""
-        res = self._herdr("list", "--workspace", endpoint)
+    def _list_panes(self, endpoint: str, timeout: float = 30) -> list:
+        """Fetch this workspace's current pane list, strictly validated. Raises
+        `_PaneListError` if the list command itself failed, OR if it returned rc=0 with
+        an unparseable/wrong-shape body (Step-11 finding, round 2: a valid-JSON-but-
+        wrong-SHAPE success — e.g. `{"result": {}}`, missing "panes" entirely — must NOT
+        silently default to "zero panes" via a bare `.get(..., [])`; that reads as the
+        SAME false-success class as a bare truthiness check on the parsed body). This is
+        the single shared source of the list-failure-vs-empty distinction used by both
+        `_resolve_pane_id` and `list_sessions` — a caller that gets a return value back
+        has a CONFIRMED (possibly empty) enumeration; a caller that catches the
+        exception has genuinely indeterminate information, never "empty"."""
+        res = self._herdr("list", "--workspace", endpoint, timeout=timeout)
         obj = self._parse_json(res)
         if res.returncode != 0 or not obj:
             raise _PaneListError(
                 f"herdr pane list failed or returned unparseable output (rc={res.returncode}): "
                 f"{(res.stderr or res.stdout or '').strip()}")
-        panes = obj.get("result", {}).get("panes", [])
-        matches = [p["pane_id"] for p in panes if p.get("label") == name]
+        result_obj = obj.get("result")
+        if not isinstance(result_obj, dict) or not isinstance(result_obj.get("panes"), list):
+            raise _PaneListError(
+                f"herdr pane list returned rc=0 with an unexpected shape (missing/invalid "
+                f"'result.panes'): {(res.stdout or '').strip()[:200]}")
+        return result_obj["panes"]
+
+    def _resolve_pane_id(self, endpoint: str, name: str) -> Optional[str]:
+        """Resolve a caller-chosen `name` to herdr's own current `pane_id` via `pane list` +
+        filter by `label == name` — the durable, cross-process resolution mechanism (module
+        docstring). Returns None ONLY for a genuinely-empty SUCCESSFUL list (pane not
+        found); propagates `_PaneListError` from `_list_panes` untouched (Step-11 finding:
+        conflating "list failed" with "not found" let a transient list failure masquerade
+        as "not found", so `kill_session` would falsely report a clean idempotent close,
+        and `reap()`'s liveness union would silently drop a live job's session from
+        consideration). Raises plain `RuntimeError` on a genuine ambiguity (>1 match) —
+        never an arbitrary pick."""
+        panes = self._list_panes(endpoint)
+        matches = [p["pane_id"] for p in panes if isinstance(p, dict) and p.get("label") == name]
         if len(matches) > 1:
             raise RuntimeError(f"herdr: duplicate label match for {name!r}: {matches}")
         return matches[0] if matches else None
@@ -257,7 +287,14 @@ class HerdrBackend:
             # means a pane_not_found close on a genuine failure path is common (the exec'd
             # process may have already auto-closed its own pane on exit), never itself a failure.
             if not succeeded:
-                self._herdr("close", pane_id, timeout=timeout)
+                # #638 Step-11 finding (round 2): an exception raised HERE (e.g. a runner
+                # timeout on close itself) would replace whatever `return` is pending from
+                # the try/except above (Python `finally`-exception semantics) — masking the
+                # real failure with an unrelated cleanup error. Cleanup is best-effort only.
+                try:
+                    self._herdr("close", pane_id, timeout=timeout)
+                except Exception:  # noqa: BLE001 — never let cleanup mask the real result
+                    pass
 
     def pane_pid(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:
         try:
@@ -277,28 +314,28 @@ class HerdrBackend:
         return _run_completed(["herdr", "pane", "process-info"], 0, str(shell_pid), "")
 
     def has_session(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:
-        try:
-            pane_id = self._resolve_pane_id(endpoint, name)
-        except _PaneListError as exc:
-            # matches TmuxBackend's existing behavior on a raw command failure (has_session
-            # just returns whatever the tmux invocation's own returncode was) — a transient
-            # list failure reads as "not live" either way; this is not a NEW regression, the
-            # binary CompletedProcess contract has no distinct "unknown" state to report.
-            return _run_completed(["herdr", "pane", "get"], 1, "", str(exc))
+        # Step-11 finding (round 2): a transient `pane list` failure must NOT collapse to
+        # an ordinary nonzero CompletedProcess here — `_live()` treats every nonzero
+        # result as "definitively dead" and routes a healthy-but-unlisted job to
+        # `_kill_job()`. Let `_PaneListError` propagate so the supervisor can distinguish
+        # "confirmed not found" from "couldn't tell" and skip the record for this cycle.
+        pane_id = self._resolve_pane_id(endpoint, name)
         if pane_id is None:
             return _run_completed(["herdr", "pane", "get"], 1, "", f"pane {name!r} not found")
         res = self._herdr("get", pane_id, timeout=timeout)
         return _run_completed(["herdr", "pane", "get"], res.returncode, res.stdout or "", res.stderr or "")
 
     def list_sessions(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess:
-        res = self._herdr("list", "--workspace", endpoint, timeout=timeout)
-        obj = self._parse_json(res)
-        if res.returncode != 0 or not obj:
-            return _run_completed(["herdr", "pane", "list"], res.returncode, "", res.stderr or "")
-        panes = obj.get("result", {}).get("panes", [])
+        """Raises `_PaneListError` (via `_list_panes`) on a genuine list-command failure or
+        an rc=0-but-malformed body — NEVER returns a nonzero CompletedProcess for that case
+        (Step-11 finding, round 2: returning rc!=0 here reads, to a generic Protocol caller,
+        the same as TmuxBackend's routine "no sessions on this socket" nonzero exit, which
+        `reap()` correctly treats as reliable-confirmed-empty; herdr's failure is NOT that —
+        it's "couldn't tell" — so it must be distinguishable by exception, not returncode)."""
+        panes = self._list_panes(endpoint, timeout=timeout)
         # only panes THIS supervisor labeled are "sessions" it manages — an unrelated host
         # pane (a human's own terminal tab, no label) is never surfaced as one.
-        names = [p["label"] for p in panes if p.get("label")]
+        names = [p["label"] for p in panes if isinstance(p, dict) and p.get("label")]
         return _run_completed(["herdr", "pane", "list"], 0, "\n".join(names), "")
 
     def kill_session(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:

@@ -42,9 +42,17 @@ class StubBackend:
     """Records every call; `new_session`/`pane_pid` return a controllable, always-successful
     result by default (THIS test process's own pid, so downstream /proc reads succeed)."""
 
-    def __init__(self, name):
+    def __init__(self, name, *, raise_has_session=False, raise_list_sessions=False,
+                 list_sessions_returncode=0):
         self.name = name
         self.calls = []
+        # #638 Step-11 finding (round 2): a PROPERLY CONFIGURED backend whose underlying
+        # liveness/list check itself transiently fails must be distinguishable from
+        # TmuxBackend's routine nonzero "no sessions on this socket" -- the former raises,
+        # the latter returns a plain nonzero CompletedProcess (see terminal_backend.py).
+        self._raise_has_session = raise_has_session
+        self._raise_list_sessions = raise_list_sessions
+        self._list_sessions_returncode = list_sessions_returncode
 
     def resolve_endpoint(self, run_id):
         self.calls.append(("resolve_endpoint", run_id))
@@ -65,11 +73,15 @@ class StubBackend:
 
     def has_session(self, endpoint, name, timeout=30):
         self.calls.append(("has_session", endpoint, name))
+        if self._raise_has_session:
+            raise RuntimeError("herdr pane list failed: daemon unreachable")
         return subprocess.CompletedProcess([], 0, "", "")
 
     def list_sessions(self, endpoint, timeout=30):
         self.calls.append(("list_sessions", endpoint))
-        return subprocess.CompletedProcess([], 0, "", "")
+        if self._raise_list_sessions:
+            raise RuntimeError("herdr pane list failed: daemon unreachable")
+        return subprocess.CompletedProcess([], self._list_sessions_returncode, "", "")
 
     def kill_session(self, endpoint, name, timeout=30):
         self.calls.append(("kill_session", endpoint, name))
@@ -175,6 +187,25 @@ def test_live_resolves_backend_from_record(tmp_path):
     assert any(c[0] == "has_session" for c in herdr.calls)
 
 
+def test_live_raises_supervisor_error_when_has_session_raises(tmp_path):
+    # #638 Step-11 finding (round 2): has_session() raising (a herdr list-command failure,
+    # NOT a clean "not found") must translate to SupervisorError here, never read as
+    # "definitively dead" -- that distinction is what lets recover()/reap() exclude the
+    # record instead of misclassifying a possibly-live job.
+    herdr = StubBackend("herdr", raise_has_session=True)
+    sup = _sup(tmp_path, herdr=herdr)
+    identity = _identity()
+    rec = JobRecord(
+        identity=identity, session_name="rg-h", run_socket="herdr-endpoint",
+        pane_pid=os.getpid(), pane_pgid=os.getpid(), provider_pgid=None, pane_start_time="0",
+        worktree_path="/wt", worktree_base_sha="0" * 40, worktree_root="/wt", worktree_gitdir="/g",
+        worktree_repo="/r", capture_dir="/cap", attempt_id="0-a", permit_ref="p", command_digest="d",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0, state="running",
+        created_at=1.0, quarantine_reason=None, terminal_backend="herdr")
+    with pytest.raises(SupervisorError):
+        sup._live(rec)  # noqa: SLF001
+
+
 # ---- _kill_job resolves per-record for its bookkeeping kill_session call ----
 
 def _dead_pid_record(identity, *, terminal_backend):
@@ -255,6 +286,73 @@ def test_reap_excludes_unresolvable_backend_records_from_every_tier(tmp_path):
     assert rec not in plan.retain_worktree
     assert rec not in plan.keep
     assert tmux.calls == []  # never even touched the resolvable (tmux) backend for this record
+
+
+def test_reap_tmux_no_sessions_return_is_not_excluded(tmp_path):
+    # Regression guard: TmuxBackend's routine "no sessions on this socket" is a PLAIN
+    # nonzero return (never raised) -- it must NOT be treated the same as a herdr genuine
+    # list failure. Excluding on a bare nonzero broke the ordinary dead-job sweep (a real
+    # tmux session that already exited closes its own socket entry, so list-sessions
+    # legitimately returns nonzero for a completely normal dead job) -- this must still
+    # reach dead_fn/kill_tree/retain_worktree as before, not be silently excluded.
+    tmux = StubBackend("tmux", list_sessions_returncode=1)
+    sup = _sup(tmp_path, tmux=tmux)
+    identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
+    rec = _dead_pid_record(identity, terminal_backend="tmux")
+    sup._registry.upsert(rec)  # noqa: SLF001
+    plan = sup.reap(rec.identity.run_id, clean_fn=lambda _r: True)
+    # a dead-pid record with no live session name still finds its way into a real tier
+    # (never silently dropped from consideration the way an EXCLUDED record would be)
+    assert (rec in plan.kill_tree or rec in plan.kill_session
+            or rec in plan.quarantine or rec in plan.retain_worktree or rec in plan.keep)
+
+
+def test_reap_excludes_records_when_list_sessions_raises_transiently(tmp_path):
+    # #638 Step-11 finding (round 2): a CONFIGURED herdr backend whose list_sessions()
+    # itself transiently fails (raises) must exclude its records from the WHOLE sweep --
+    # dead_fn is an independent OS-level PID check, so a genuinely-alive record (real pid
+    # of THIS test process) would otherwise be correctly reported "not dead" and routed to
+    # kill_tree, killing a healthy process on a transient herdr failure.
+    herdr = StubBackend("herdr", raise_list_sessions=True)
+    sup = _sup(tmp_path, herdr=herdr)
+    identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
+    rec = JobRecord(
+        identity=identity, session_name="rg-h", run_socket="herdr-endpoint",
+        pane_pid=os.getpid(), pane_pgid=os.getpid(), provider_pgid=None, pane_start_time="0",
+        worktree_path="/wt", worktree_base_sha="0" * 40, worktree_root="/wt", worktree_gitdir="/g",
+        worktree_repo="/r", capture_dir="/cap", attempt_id="0-a", permit_ref="p", command_digest="d",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0, state="running",
+        created_at=1.0, quarantine_reason=None, terminal_backend="herdr")
+    sup._registry.upsert(rec)  # noqa: SLF001
+    plan = sup.reap(rec.identity.run_id, clean_fn=lambda _r: True)
+    assert rec not in plan.kill_tree
+    assert rec not in plan.kill_session
+    assert rec not in plan.quarantine
+    assert rec not in plan.retain_worktree
+    assert rec not in plan.keep
+
+
+def test_recover_excludes_records_when_live_check_raises_transiently(tmp_path):
+    # Same class of finding as above, in recover(): a CONFIGURED backend's transient
+    # has_session() failure must exclude the record from this cycle, not crash recovery
+    # for every other record nor read as "definitively dead".
+    herdr = StubBackend("herdr", raise_has_session=True)
+    sup = _sup(tmp_path, herdr=herdr)
+    identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
+    rec = JobRecord(
+        identity=identity, session_name="rg-h", run_socket="herdr-endpoint",
+        pane_pid=os.getpid(), pane_pgid=os.getpid(), provider_pgid=None, pane_start_time="0",
+        worktree_path="/wt", worktree_base_sha="0" * 40, worktree_root="/wt", worktree_gitdir="/g",
+        worktree_repo="/r", capture_dir="/cap", attempt_id="0-a", permit_ref="p", command_digest="d",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0, state="running",
+        created_at=1.0, quarantine_reason=None, terminal_backend="herdr")
+    sup._registry.upsert(rec)  # noqa: SLF001
+
+    def gate(*, record, correlation_id, recovered_from):  # pragma: no cover - never reached
+        raise AssertionError("should never be reached for an excluded record")
+
+    actions = sup.recover(identity.run_id, dispatch_gate=gate)  # must not raise
+    assert actions == []
 
 
 def test_recover_excludes_unresolvable_backend_records(tmp_path):

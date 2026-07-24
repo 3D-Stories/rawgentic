@@ -573,7 +573,18 @@ class TmuxSupervisor:
 
     def _live(self, record: JobRecord) -> bool:
         backend = self._resolve_backend(record.terminal_backend)
-        return backend.has_session(record.run_socket, record.session_name).returncode == 0
+        try:
+            res = backend.has_session(record.run_socket, record.session_name)
+        except Exception as exc:
+            # #638 Step-11 finding (round 2): has_session() may raise when the backend's
+            # own liveness check itself failed/was unparseable (herdr's list command
+            # erroring) rather than cleanly confirming "not found" — that is NOT
+            # "confirmed dead" and must not read as one here. Surface as SupervisorError
+            # so recover()/reap() can exclude the record from this cycle instead of
+            # killing a possibly-live job on a transient check failure.
+            raise SupervisorError(
+                f"liveness check failed for {record.session_name!r}: {exc}") from exc
+        return res.returncode == 0
 
     def _sentinel(self, record: JobRecord) -> Optional[dict]:
         return read_sentinel(record)
@@ -1100,16 +1111,17 @@ class TmuxSupervisor:
                 continue
             # #638 Step-11 finding (found by inspection while fixing the same class of bug in
             # reap()): a record whose backend cannot be resolved (a misconfigured supervisor
-            # missing herdr_backend for a herdr-tagged record) must not crash recovery for
-            # EVERY OTHER record in this run — self._live() below raises SupervisorError
-            # uncaught otherwise. Not considered this cycle, same treatment as an
-            # already-terminal record just above (silently absent from `actions`, never a
-            # destructive guess).
+            # missing herdr_backend for a herdr-tagged record), OR whose backend IS configured
+            # but the liveness check itself transiently fails (round 2: `_live()` now raises
+            # SupervisorError for that case too, not just resolution failure), must not crash
+            # recovery for EVERY OTHER record in this run, NOR be misread as "confirmed dead".
+            # Not considered this cycle — same treatment as an already-terminal record just
+            # above (silently absent from `actions`, never a destructive guess).
             try:
                 self._resolve_backend(record.terminal_backend)
+                live = self._live(record)
             except SupervisorError:
                 continue
-            live = self._live(record)
             matches = self._identity_matches(record)
             # spec content must also still parse for a live adopt (tamper evidence)
             sentinel_valid = self._sentinel(record) is not None
@@ -1345,10 +1357,25 @@ class TmuxSupervisor:
         by_backend: dict = {}
         for r in records:
             by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
+        unusable_backends = set()
         for backend, run_socket in by_backend.items():
-            res = backend.list_sessions(run_socket)
+            # #638 Step-11 finding (round 2): a genuine list_sessions() failure (raised,
+            # per the Protocol contract) must exclude EVERY record on that backend from
+            # this cycle's plan — dead_fn is an independent OS-level PID check, so a
+            # genuinely-alive-but-unlisted record would otherwise be correctly reported
+            # "not dead" and routed to kill_tree, letting a transient list failure kill a
+            # healthy job. A plain nonzero RETURN (never raised) is TmuxBackend's routine
+            # "no sessions on this socket" — confirmed-empty, not excluded.
+            try:
+                res = backend.list_sessions(run_socket)
+            except Exception:  # noqa: BLE001 — genuinely indeterminate, not a returncode
+                unusable_backends.add(backend)
+                continue
             if res.returncode == 0:
                 live_names |= {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
+        if unusable_backends:
+            records = [r for r in records
+                       if self._resolve_backend(r.terminal_backend) not in unusable_backends]
 
         def _fresh(record: JobRecord) -> bool:
             # an INFANT job (younger than fresh_s) is fresh by age — a just-launched pane
