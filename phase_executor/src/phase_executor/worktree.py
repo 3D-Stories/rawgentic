@@ -70,6 +70,50 @@ class WorktreeInspection:
 
 
 @dataclass(frozen=True)
+class ParkRecord:
+    """#637 (epic #635 C4) — the result of ``WorktreeManager.park_and_reset``. ``parked``
+    is False when the worktree was already clean (nothing to stash) — a valid, non-error
+    outcome, not a failure. ``stash_name`` is always the deterministic name this call
+    would use/used, so a caller can log it for the audit trail even when ``parked`` is
+    False (a complete record of the loop-back happening, not just the eventful case).
+
+    ``stash_oid`` (Step-8a review finding, hardened three times more at Step 11) is the
+    ACTUAL stash commit this call created — resolved by searching the ``refs/stash``
+    REFLOG for the most recent entry matching a message unique to THIS WORKTREE, never
+    inferred from a before/after comparison of the ref's TIP. ``refs/stash`` is a
+    repository-GLOBAL ref shared by EVERY linked worktree of one canonical repo
+    (empirically confirmed: two ``git worktree add`` checkouts of the same repo share one
+    ``refs/stash``), so a before/after TIP comparison is racy across worktrees, not just
+    within one — another worktree's concurrent park can advance the ref between this
+    call's push and its own read, misattributing a foreign OID as this call's own.
+    Searching by MESSAGE instead of POSITION sidesteps that TIP race — but ``stash_name``
+    alone (run_id + design_version + task_id) is NOT guaranteed unique per WORKTREE: a
+    competitive/bake-off dispatch can run several attempts of the same task under the same
+    run concurrently, each in its OWN worktree, sharing an identical ``stash_name`` (a
+    second Step-11 finding on the message-search hardening itself). A first fix attempt
+    folded in ``handle.identity.attempt``, but that field is only unique BY CONVENTION at
+    its one current minting call site (``uuid4()``-based) — nothing in ``WorktreeIdentity``
+    enforces it, so a third Step-11 finding correctly rejected it as a safety anchor. The
+    actual git push message therefore folds in a hash of ``handle.gitdir`` instead — git's
+    OWN linked-worktree admin-dir path, which git itself guarantees is distinct for every
+    linked worktree of one canonical repo (an invariant enforced by ``git worktree add``,
+    not by any caller convention this method has to trust). ``stash_name`` itself (the
+    audit-facing value returned here and passed to ``append_park``) is untouched and stays
+    a prefix of the real message. ``None`` when ``parked`` is False. Two loop-backs on the
+    SAME worktree sharing the same ``run_id``/``design_version``/``task_id`` produce
+    identical ``stash_name``s but DISTINCT ``stash_oid``s — the OID, not the name, is the
+    collision-proof recovery identity (``git stash apply <oid>``)."""
+
+    stash_name: str
+    parked: bool
+    run_id: str
+    design_version: str
+    task_id: str
+    worktree_path: str
+    stash_oid: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class RetentionRecord:
     path: str
     identity: WorktreeIdentity
@@ -303,6 +347,20 @@ class WorktreeError(RuntimeError):
     """A worktree lifecycle operation that must fail loud (create/inspect/promote)."""
 
 
+class ParkThenResetError(WorktreeError):
+    """#637 Step-8a review finding: a reset or clean failure AFTER a successful (or
+    not-needed) park must not lose the park's own audit reference. ``park_record``
+    carries whatever ``park_and_reset`` had already confirmed (``parked``/``stash_oid``)
+    at the moment reset/clean failed, so the caller can still call
+    ``RoutingAuditLog.append_park(...)`` before propagating the failure — the parked
+    diff (if any) is genuinely recoverable via ``park_record.stash_oid`` regardless of
+    what happened to reset/clean."""
+
+    def __init__(self, message: str, park_record: "ParkRecord"):
+        super().__init__(message)
+        self.park_record = park_record
+
+
 def _identity_dict(identity: WorktreeIdentity) -> dict:
     return {"run_id": identity.run_id, "seat": identity.seat, "attempt": identity.attempt}
 
@@ -506,6 +564,122 @@ class WorktreeManager:
         if rc != 0:
             raise WorktreeError(f"base tree resolve failed: {err.strip()}")
         return out.strip()
+
+    # -- park_and_reset (#637, epic #635 C4) ------------------------------
+
+    def park_and_reset(self, handle: WorktreeHandle, *, run_id: str, design_version: str,
+                       task_id: str) -> ParkRecord:
+        """Park this worktree's OWN current diff (tracked + untracked) recoverably, then
+        reset it clean to ``handle.base_sha`` — the WF2/WF3 design-level loop-back
+        contract (Step 4->3 / Step 8->3): a build seat's worktree may carry uncommitted
+        work coupled to a now-invalidated design, and it must never be destroyed without
+        a named, recoverable stash first.
+
+        PRECONDITION (caller's responsibility, not enforced here): the prior build-seat
+        process for this worktree must already be terminated/reaped before calling this
+        — a still-running process writing to the worktree between the internal
+        ``inspect()`` and the stash push is a real (low-severity) TOCTOU window this
+        method cannot close on its own.
+
+        Ordering is the safety invariant: park is attempted and its success CONFIRMED
+        before reset/clean ever runs. Success is confirmed by resolving OUR OWN stash
+        commit out of the ``refs/stash`` reflog BY MESSAGE (Step-8a finding, hardened
+        at Step 11 — see ``ParkRecord.stash_oid``'s docstring for why a positional
+        before/after read of the ref's TIP is racy across linked worktrees, and a
+        message-keyed reflog search is not), never by a bare ``rc == 0``: if our own
+        message doesn't turn up in the reflog right after a claimed-successful push,
+        that raises here rather than silently claiming ``parked=True`` for a stash that
+        doesn't exist. A park failure (real or not-actually-created) raises immediately
+        and reset is NEVER attempted (the dirty diff is left exactly as-is — the caller
+        can retry).
+
+        A reset or clean failure AFTER a successful (or not-needed) park raises
+        ``ParkThenResetError`` (carrying the already-confirmed ``ParkRecord``, including
+        ``stash_oid``) rather than a bare ``WorktreeError`` — the parked diff (if any)
+        stays recoverable via that OID regardless of what happens to reset/clean, and
+        the caller can still audit-log it before propagating the failure.
+
+        Never touches the shared main checkout — every git call here uses ONLY this
+        worktree's own trusted ``--git-dir``/``--work-tree`` (never the canonical repo).
+
+        Returns a ``ParkRecord`` even when nothing needed parking (``parked=False``,
+        ``stash_oid=None``) — idempotent on an already-clean worktree, and a complete
+        audit trail either way.
+        """
+        stash_name = f"rawgentic-parked:{run_id}:{design_version}:{task_id}"
+        inspection = self.inspect(handle)
+        parked = False
+        stash_oid = None
+        if inspection.dirty:
+            # Codex Step-11 finding (round 1): `stash_name` alone (run_id+design_version+
+            # task_id) is NOT guaranteed unique per WORKTREE — a competitive/bake-off
+            # dispatch can run several attempts of the SAME task under the SAME run
+            # concurrently, so two DIFFERENT worktrees could push the identical message
+            # and make a message-only reflog search ambiguous between them.
+            #
+            # Codex Step-11 finding (round 2, on the FIRST fix): `handle.identity.attempt`
+            # is NOT a safe disambiguator either — it is a plain caller-supplied string
+            # with no enforced uniqueness invariant; the one production caller happens to
+            # mint it via `uuid4()`, but nothing in `WorktreeIdentity`'s type or this
+            # method's contract stops two different worktrees (e.g. under different
+            # seats) from sharing an `attempt` value.
+            #
+            # `handle.gitdir` is airtight where `attempt` is not: it is git's OWN linked-
+            # worktree admin-dir path (`_discover_gitdir`), and git itself guarantees no
+            # two linked worktrees of one canonical repo ever share an admin dir — that
+            # invariant is enforced by `git worktree add` itself, not by any caller
+            # convention this method has to trust. Hash it (never embed a raw filesystem
+            # path into a git commit message) to build the disambiguator.
+            push_message = f"{stash_name}:{hashlib.sha256(handle.gitdir.encode('utf-8')).hexdigest()[:12]}"
+            # `stash push` (not `stash create`): `create` silently produces NO commit
+            # for an untracked-only dirty tree even with `-u` (confirmed empirically —
+            # a real git limitation, not a version quirk) even though `push` handles
+            # every dirty shape (tracked/untracked/mixed) correctly and is the
+            # well-tested path.
+            rc, _out, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path,
+                "stash", "push", "-u", "-m", push_message,
+            )
+            if rc != 0:
+                raise WorktreeError(f"park failed (stash push): {err.strip()}")
+            # Resolve OUR OWN entry by REFLOG MESSAGE, not ref position: `refs/stash`
+            # is a repository-GLOBAL ref (shared by every linked worktree of the
+            # canonical repo), so its TIP can be advanced by a foreign worktree's
+            # concurrent push between our push and this read. `push_message` is unique
+            # to this WORKTREE (not just this run/design/task), so the most recent
+            # (`-n 1`) reflog entry matching it is unambiguously the one we just
+            # created, regardless of how many foreign entries — including same-task
+            # foreign attempts — race in before or after.
+            rc, out, err = self._git(
+                "--git-dir", handle.gitdir, "--work-tree", handle.path,
+                "log", "-g", "--grep", push_message, "-F", "--format=%H", "-n", "1", "refs/stash",
+            )
+            resolved_oid = out.strip() if rc == 0 else ""
+            if not resolved_oid:
+                raise WorktreeError(
+                    "park claimed success (stash push rc=0) but no matching refs/stash "
+                    "reflog entry was found for our own stash_name — refusing to reset "
+                    "without a confirmed-real park")
+            parked = True
+            stash_oid = resolved_oid
+        record = ParkRecord(
+            stash_name=stash_name, parked=parked, run_id=run_id,
+            design_version=design_version, task_id=task_id, worktree_path=handle.path,
+            stash_oid=stash_oid,
+        )
+        rc, _out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "reset", "--hard", handle.base_sha,
+        )
+        if rc != 0:
+            raise ParkThenResetError(f"reset failed after park (parked={parked}): {err.strip()}", record)
+        rc, _out, err = self._git(
+            "--git-dir", handle.gitdir, "--work-tree", handle.path,
+            "clean", "-fd",
+        )
+        if rc != 0:
+            raise ParkThenResetError(f"clean failed after reset (parked={parked}): {err.strip()}", record)
+        return record
 
     def _candidate_tree(self, handle: WorktreeHandle, *, strict: bool = False) -> str:
         """Build the immutable candidate tree capturing the whole filesystem work product

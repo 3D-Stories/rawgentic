@@ -290,6 +290,9 @@ _WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sh
 # whose receipt_nonce has no matching work_product record. It keys off what the production collect
 # path actually writes, unlike Observation.work_product (which no production path ever sets).
 _EXPECTED_WORK_PRODUCT_REQUIRED = ("kind", "receipt_nonce", "candidate_tree_sha", "new_sha")
+# #637 (epic #635 C4): a WF2/WF3 design-level loop-back's park_and_reset record.
+_PARK_REQUIRED = ("kind", "run_id", "task_id", "design_version", "stash_name",
+                  "worktree_path", "parked")
 _VERDICTS = ("pass", "fail")
 
 
@@ -301,7 +304,8 @@ def _validate_record(obj, lineno: int) -> None:
     kind = obj.get("kind")
     req = {"receipt": _RECEIPT_REQUIRED, "observation": _OBS_ENVELOPE_REQUIRED,
            "epoch": _EPOCH_REQUIRED, "work_product": _WORK_PRODUCT_REQUIRED,
-           "expected_work_product": _EXPECTED_WORK_PRODUCT_REQUIRED}.get(kind)
+           "expected_work_product": _EXPECTED_WORK_PRODUCT_REQUIRED,
+           "park": _PARK_REQUIRED}.get(kind)
     if req is None:
         raise ValueError(f"audit line {lineno}: unknown kind {kind!r}")
     missing = [k for k in req if k not in obj]
@@ -351,6 +355,16 @@ def _validate_record(obj, lineno: int) -> None:
             if not isinstance(obj.get(field), str) or not obj[field]:
                 raise ValueError(
                     f"audit line {lineno}: expected_work_product {field} not a non-empty string")
+    if kind == "park":  # #637
+        for field in ("run_id", "task_id", "design_version", "stash_name", "worktree_path"):
+            if not isinstance(obj.get(field), str) or not obj[field]:
+                raise ValueError(f"audit line {lineno}: park {field} not a non-empty string")
+        if not isinstance(obj.get("parked"), bool):
+            raise ValueError(f"audit line {lineno}: park 'parked' not a bool")
+        # stash_oid is optional (None when parked=False) — str-or-null, same precedent as
+        # the receipt's recovered_from field just above.
+        if "stash_oid" in obj and not (obj["stash_oid"] is None or isinstance(obj["stash_oid"], str)):
+            raise ValueError(f"audit line {lineno}: park 'stash_oid' not a string-or-null")
 
 
 class RoutingAuditLog:
@@ -416,6 +430,44 @@ class RoutingAuditLog:
             self._write_locked({
                 "kind": "expected_work_product", "receipt_nonce": receipt_nonce,
                 "candidate_tree_sha": candidate_tree_sha, "new_sha": new_sha})
+
+    def append_park(self, *, run_id: str, task_id: str, design_version: str, stash_name: str,
+                    worktree_path: str, parked: bool, stash_oid: Optional[str] = None) -> None:
+        """#637 (epic #635 C4): record a WF2/WF3 design-level loop-back's
+        ``WorktreeManager.park_and_reset`` call — the orchestrator/executor-routing layer
+        appends this immediately after the call returns (or, on a
+        ``ParkThenResetError``, from its ``.park_record``) — never inside
+        ``WorktreeManager`` itself; ``worktree.py`` does not import this module.
+        Recorded even when ``parked`` is False (nothing needed parking) — a complete
+        audit trail of the loop-back happening, not just the eventful case.
+
+        ``stash_oid`` (Step-8a review finding) is the COLLISION-PROOF recovery identity
+        — two loop-backs sharing the same ``run_id``/``design_version``/``task_id``
+        produce an identical ``stash_name`` but DISTINCT ``stash_oid``s, so the OID
+        (``git stash apply <oid>``), not the name, is what a human should actually use
+        to recover a specific parked diff. ``None`` when ``parked`` is False.
+
+        Step-11 review finding: ``parked``/``stash_oid`` consistency is enforced HERE,
+        at the writer, not just read-checked by ``_validate_record`` — this integration
+        is prose-orchestrated (a human/future-session calls ``park_and_reset`` then this
+        method), so a permissive writer that accepted ``parked=True`` with no OID (or
+        ``parked=False`` with a stray OID) would be a real footgun, not just a
+        theoretical one. The reader stays backward-compatible with pre-existing records
+        that predate this field."""
+        if parked and not stash_oid:
+            raise ValueError(
+                "append_park: parked=True requires a non-empty stash_oid — "
+                "WorktreeManager.park_and_reset always returns one when parked is True; "
+                "a caller passing parked=True with no OID has a bug upstream")
+        if not parked and stash_oid is not None:
+            raise ValueError(
+                "append_park: parked=False must carry stash_oid=None — a non-null OID "
+                "here would record a stash that this call didn't actually create")
+        with self._lock:
+            self._write_locked({
+                "kind": "park", "run_id": run_id, "task_id": task_id,
+                "design_version": design_version, "stash_name": stash_name,
+                "worktree_path": worktree_path, "parked": parked, "stash_oid": stash_oid})
 
     def records(self) -> list:
         """Parse + fail-closed-validate every line. A malformed line raises (never silently dropped)."""

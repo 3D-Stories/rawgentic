@@ -284,6 +284,85 @@ def test_records_fail_closed_malformed_json(tmp_path):
         log.records()
 
 
+def test_append_park_and_records_roundtrip(tmp_path):
+    # #637 (epic #635 C4)
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.append_park(run_id="run1", task_id="t1", design_version="v2",
+                    stash_name="rawgentic-parked:run1:v2:t1", worktree_path="/wt/path",
+                    parked=True, stash_oid="abc123")
+    recs = log.records()
+    assert recs[0]["kind"] == "park"
+    assert recs[0]["stash_name"] == "rawgentic-parked:run1:v2:t1"
+    assert recs[0]["parked"] is True
+    assert recs[0]["stash_oid"] == "abc123"
+
+
+def test_append_park_recorded_even_when_nothing_parked(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.append_park(run_id="run1", task_id="t1", design_version="v2",
+                    stash_name="rawgentic-parked:run1:v2:t1", worktree_path="/wt/path",
+                    parked=False)
+    recs = log.records()
+    assert recs[0]["parked"] is False
+    assert recs[0]["stash_oid"] is None
+
+
+def test_records_fail_closed_park_bad_stash_oid_type(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text(
+        '{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2",'
+        '"stash_name":"s","worktree_path":"/wt","parked":true,"stash_oid":123}\n')
+    with pytest.raises(ValueError, match="stash_oid"):
+        log.records()
+
+
+def test_records_fail_closed_park_missing_field(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text('{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2","stash_name":"s","parked":true}\n')
+    with pytest.raises(ValueError, match="missing fields"):
+        log.records()
+
+
+def test_records_fail_closed_park_bad_parked_type(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text(
+        '{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2",'
+        '"stash_name":"s","worktree_path":"/wt","parked":"yes"}\n')
+    with pytest.raises(ValueError, match="not a bool"):
+        log.records()
+
+
+def test_records_reads_legacy_park_record_missing_stash_oid_key(tmp_path):
+    # Step-11 review: the reader must stay backward-compatible with a park record
+    # written before stash_oid existed (the key entirely absent, not merely null).
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text(
+        '{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2",'
+        '"stash_name":"s","worktree_path":"/wt","parked":true}\n')
+    recs = log.records()
+    assert recs[0]["parked"] is True
+    assert "stash_oid" not in recs[0]
+
+
+def test_append_park_rejects_parked_true_with_no_stash_oid(tmp_path):
+    # Step-11 review finding #2: the WRITER, not just the reader, must refuse an
+    # inconsistent record -- parked=True with a missing/empty OID is a caller bug
+    # upstream, not a valid audit line.
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    with pytest.raises(ValueError, match="parked=True requires a non-empty stash_oid"):
+        log.append_park(run_id="run1", task_id="t1", design_version="v2",
+                        stash_name="s", worktree_path="/wt", parked=True, stash_oid=None)
+    assert log.records() == []
+
+
+def test_append_park_rejects_parked_false_with_stash_oid(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    with pytest.raises(ValueError, match="parked=False must carry stash_oid=None"):
+        log.append_park(run_id="run1", task_id="t1", design_version="v2",
+                        stash_name="s", worktree_path="/wt", parked=False, stash_oid="abc123")
+    assert log.records() == []
+
+
 def test_audited_digests_valid_chain(tmp_path):
     recs = [{"kind": "epoch", "seq": 1, "from": "sha256:a", "to": "sha256:b"},
             {"kind": "epoch", "seq": 2, "from": "sha256:b", "to": "sha256:c"}]
