@@ -259,3 +259,49 @@ def test_registry_quota_classification_survives_upsert_in_place(tmp_path):
     got = r.get(_idn())
     assert got.state == "quota_paused"
     assert got.quota_classification == qc
+
+
+# ---- terminal_backend (#638) -----------------------------------------------
+
+def test_registry_persists_terminal_backend(tmp_path):
+    """#638: which TerminalBackend a job actually launched under must survive the
+    durable round-trip -- recover()/reap() read this to resolve the RIGHT backend
+    per record, not a single fixed one."""
+    root = str(tmp_path / "reg")
+    reg.JobRegistry(root, clock=lambda: 1.0).upsert(
+        _rec(session_name="rg-h", terminal_backend="herdr"))
+    fresh = reg.JobRegistry(root, clock=lambda: 1.0)
+    assert fresh.get(_idn()).terminal_backend == "herdr"
+    # absent field in a pre-#638 record stays None (additive, no KeyError)
+    assert _rec().terminal_backend is None
+
+
+def test_registry_terminal_backend_backward_read(tmp_path):
+    # a pre-#638 jobs.json record dict (no terminal_backend key) loads -> None
+    d = reg._record_to_dict(_rec(session_name="rg-old"))
+    d.pop("terminal_backend", None)
+    key = reg.session_name(_idn())
+    (tmp_path / "jobs.json").write_text(json.dumps({key: d}), encoding="utf-8")
+    recs = reg.read_all(str(tmp_path))
+    assert len(recs) == 1 and recs[0].terminal_backend is None
+
+
+def test_registry_terminal_backend_unknown_value_raises_corrupt(tmp_path):
+    """An unknown terminal_backend value (neither tmux/herdr/null) must fail closed --
+    silently defaulting to tmux could issue a wrong-backend liveness/kill check
+    against a real live job under a different backend."""
+    d = reg._record_to_dict(_rec())
+    d["terminal_backend"] = "not-a-real-backend"
+    key = reg.session_name(_idn())
+    (tmp_path / "jobs.json").write_text(json.dumps({key: d}), encoding="utf-8")
+    with pytest.raises(reg.RegistryCorrupt):
+        reg.read_all(str(tmp_path))
+
+
+def test_registry_terminal_backend_survives_upsert_in_place(tmp_path):
+    r = reg.JobRegistry(str(tmp_path / "reg"), clock=lambda: 1.0)
+    r.upsert(_rec(session_name="rg-1", state="running", terminal_backend="herdr"))
+    r.upsert(_rec(session_name="rg-1", state="quota_paused", terminal_backend="herdr"))
+    got = r.get(_idn())
+    assert got.state == "quota_paused"
+    assert got.terminal_backend == "herdr"
