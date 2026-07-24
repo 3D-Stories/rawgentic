@@ -51,19 +51,23 @@ class PreflightResultLike(Protocol):
     reason: str
 
 
-def _default_run(cmd, *, env=None, cwd=None, timeout=30):
-    return subprocess.run(list(cmd), capture_output=True, text=True, env=env, cwd=cwd,
-                          timeout=timeout, check=False)
-
-
 class TmuxBackend:
     """Default `TerminalBackend` — the EXACT current tmux invocations, self-contained (owns
     its own `run`/`env`/socket-addressing state; never reaches into a supervisor's private
-    attributes)."""
+    attributes).
 
-    def __init__(self, *, run=_default_run, env: Optional[dict] = None,
+    ``run`` defaults to ``supervisor._default_run`` itself (deferred import — supervisor
+    imports THIS module), never a locally-duplicated copy: `preflight`'s ``self._run is
+    _default_run`` identity check (the tmux-binary-presence short-circuit) must compare
+    against the SAME function object regardless of whether this backend was constructed
+    directly or via `TmuxSupervisor`'s default-backend passthrough."""
+
+    def __init__(self, *, run=None, env: Optional[dict] = None,
                  runtime_dir: Optional[str] = None, state_dir: Optional[str] = None,
                  tmpdir: Optional[str] = None):
+        if run is None:
+            from .supervisor import _default_run  # noqa: PLC0415 — supervisor imports THIS module
+            run = _default_run
         self._run = run
         self._env = env
         self._runtime_dir = runtime_dir

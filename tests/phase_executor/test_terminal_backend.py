@@ -123,6 +123,20 @@ def test_preflight_version_floor_enforced():
     assert "version" in result.reason.lower()
 
 
+def test_bare_construction_default_run_identity_matches_supervisor(monkeypatch, tmp_path):
+    # A TmuxBackend() with no run= override must default to supervisor._default_run
+    # ITSELF (not a locally-duplicated copy) so preflight's `self._run is _default_run`
+    # tmux-binary-presence short-circuit fires correctly regardless of construction path.
+    import phase_executor.supervisor as _sup
+    from phase_executor.terminal_backend import TmuxBackend
+    be = TmuxBackend()
+    assert be._run is _sup._default_run  # pylint: disable=protected-access
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    result = be.preflight(str(tmp_path / "run" / "rg-x.sock"))
+    assert result.supported is False
+    assert "tmux binary not found" in result.reason
+
+
 def test_env_none_default_matches_run_subprocess_env_none():
     # A TmuxBackend constructed with no env= must pass env=None through (byte-identical to
     # the pre-extraction _tmux, which always passed self._env — never omitted the kwarg).
