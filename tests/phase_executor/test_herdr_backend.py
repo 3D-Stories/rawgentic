@@ -200,6 +200,40 @@ def test_teardown_endpoint_is_a_documented_noop():
 
 # ---- preflight ---------------------------------------------------------------
 
+def test_preflight_with_injected_run_ignores_missing_real_binary(monkeypatch):
+    # CI regression: preflight must mirror TmuxBackend's identity check -- a mocked run=
+    # (as EVERY test in this file uses) must never be blocked by shutil.which finding no
+    # real herdr binary. This is the exact bug that passed locally on a dev machine with a
+    # real herdr installed and failed in CI (no herdr binary at all).
+    monkeypatch.setattr("shutil.which", lambda _: None)
+
+    def run(cmd, *, env=None, timeout=30):
+        if cmd[:2] == ["herdr", "--version"]:
+            return subprocess.CompletedProcess(cmd, 0, "herdr 0.7.5\n", "")
+        if cmd[2] == "split":
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:pprobe"}}})
+        if cmd[2] == "close":
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    result = be.preflight("w1")
+    assert result.supported is True, result.reason
+
+
+def test_preflight_bare_construction_checks_real_binary(monkeypatch):
+    # The identity check's OTHER half: a HerdrBackend() with NO run= override (defaults to
+    # supervisor._default_run itself) DOES check the real host PATH -- mirrors TmuxBackend's
+    # own test_bare_construction_default_run_identity_matches_supervisor.
+    import phase_executor.supervisor as _sup
+    be = HerdrBackend(workspace_id="w1")
+    assert be._run is _sup._default_run  # pylint: disable=protected-access
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    result = be.preflight("w1")
+    assert result.supported is False
+    assert "herdr binary not found" in result.reason
+
+
 def test_preflight_all_verbs_pass():
     calls = []
 

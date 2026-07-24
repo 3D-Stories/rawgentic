@@ -51,7 +51,10 @@ class HerdrBackend:
     ``run(cmd, *, env=None, cwd=None, timeout=30) -> subprocess.CompletedProcess`` contract
     `TmuxBackend`/`supervisor._default_run` already use — never a locally-invented shape."""
 
-    def __init__(self, *, run, env: Optional[dict] = None, workspace_id: Optional[str] = None):
+    def __init__(self, *, run=None, env: Optional[dict] = None, workspace_id: Optional[str] = None):
+        if run is None:
+            from .supervisor import _default_run  # noqa: PLC0415 — supervisor imports THIS module
+            run = _default_run
         self._run = run
         self._env = env
         self._workspace_id = workspace_id
@@ -82,12 +85,18 @@ class HerdrBackend:
         return self._workspace_id
 
     def preflight(self, endpoint: str):
-        from .supervisor import PreflightResult  # noqa: PLC0415 — supervisor imports THIS module
+        from .supervisor import PreflightResult, _default_run as _sup_default_run  # noqa: PLC0415
         import shutil
         import uuid
 
         try:
-            if shutil.which("herdr") is None:
+            # CI-caught bug: this must mirror TmuxBackend.preflight's identity check exactly —
+            # only probe the REAL host PATH when NO custom runner was injected (self._run is
+            # still the default). A test supplying its own mock run= is never planning to
+            # invoke a real herdr binary at all; checking shutil.which unconditionally made
+            # every mocked-runner preflight test pass on a dev machine that happens to have a
+            # real herdr installed (this one) and fail everywhere else, including CI.
+            if shutil.which("herdr") is None and self._run is _sup_default_run:
                 return PreflightResult(False, "herdr binary not found")
             ver = self._run(["herdr", "--version"], env=self._env)
             if ver.returncode != 0:
