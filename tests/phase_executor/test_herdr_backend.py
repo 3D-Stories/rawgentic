@@ -42,10 +42,71 @@ def test_new_session_split_rename_run_in_order():
     be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
     res = be.new_session("w1", "sess1", "/wt/path", ["python3", "-m", "phase_executor.pane_runner", "spec.json"])
     assert res.returncode == 0
-    assert calls[0] == ["herdr", "pane", "split", "--workspace", "w1", "--cwd", "/wt/path"]
+    # Step-11 finding: `pane split` has no --workspace option (confirmed live against the
+    # pinned real binary: "unknown option: --workspace") -- --current + --direction is the
+    # correct, live-confirmed targeting.
+    assert calls[0] == ["herdr", "pane", "split", "--current", "--direction", "right", "--cwd", "/wt/path"]
     assert calls[1] == ["herdr", "pane", "rename", "w1:p9", "sess1"]
     assert calls[2] == ["herdr", "pane", "run", "w1:p9", "exec",
                        "python3", "-m", "phase_executor.pane_runner", "spec.json"]
+
+
+def test_new_session_threads_pane_env_into_split():
+    calls = []
+    responses = [
+        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "sess1"}}}),  # rename
+        subprocess.CompletedProcess(None, 0, "", ""),  # run
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1",
+                      pane_env={"PYTHONPATH": "/repo/src"})
+    be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert calls[0] == ["herdr", "pane", "split", "--current", "--direction", "right",
+                       "--cwd", "/wt", "--env", "PYTHONPATH=/repo/src"]
+
+
+def test_new_session_split_success_with_malformed_body_is_a_failure():
+    # Step-11 finding: a successful split (rc=0) with an unparseable/empty body must not
+    # falsely satisfy new_session's success contract by returning rc=0 anyway.
+    calls = []
+    responses = [subprocess.CompletedProcess(None, 0, "not json", "")]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode != 0
+
+
+def test_new_session_exception_from_rename_still_closes_orphan():
+    # Step-11 finding: an EXCEPTION (e.g. a runner timeout) from rename/run must not bypass
+    # orphan cleanup the way a bare `if returncode != 0` check would.
+    calls = []
+
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        if cmd[2] == "split":
+            return _json_ok(cmd, {"result": {"pane": {"pane_id": "w1:p9"}}})
+        if cmd[2] == "rename":
+            raise TimeoutError("stub: rename timed out")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode != 0
+    assert calls[-1] == ["herdr", "pane", "close", "w1:p9"]
+
+
+def test_new_session_success_never_closes_the_pane():
+    # The bug caught during self-review before it shipped: a bare `finally: close(...)`
+    # would immediately kill the just-launched process on the SUCCESS path too.
+    calls = []
+    responses = [
+        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9"}}}),  # split
+        _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "sess1"}}}),  # rename
+        subprocess.CompletedProcess(None, 0, "", ""),  # run succeeds
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.new_session("w1", "sess1", "/wt", ["argv"])
+    assert res.returncode == 0
+    assert not any(c[2] == "close" for c in calls if len(c) > 2)
 
 
 def test_new_session_split_failure_returns_failure_no_further_calls():
@@ -162,6 +223,40 @@ def test_kill_session_unresolvable_name_is_idempotent_success():
     be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
     res = be.kill_session("w1", "ghost")
     assert res.returncode == 0
+
+
+# ---- Step-11 finding: a FAILED/malformed `pane list` is NOT the same as "not found" -----
+
+def _failed_list():
+    return subprocess.CompletedProcess(None, 1, "", "daemon unreachable")
+
+
+def test_kill_session_list_failure_is_not_idempotent_success():
+    # THE finding: a transient list failure must never be reported as a clean close --
+    # unlike a genuinely-empty successful list, we have no idea whether the pane exists.
+    calls = []
+    responses = [_failed_list()]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.kill_session("w1", "ghost")
+    assert res.returncode != 0
+
+
+def test_has_session_list_failure_is_not_confused_with_not_found():
+    # both currently map to "not alive" (returncode != 0) -- matching TmuxBackend's own
+    # existing behavior on a raw command failure, not a new regression -- but must not raise.
+    calls = []
+    responses = [_failed_list()]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.has_session("w1", "ghost")
+    assert res.returncode != 0
+
+
+def test_pane_pid_list_failure_does_not_crash():
+    calls = []
+    responses = [_failed_list()]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.pane_pid("w1", "ghost")
+    assert res.returncode != 0
 
 
 # ---- list_sessions ----------------------------------------------------------

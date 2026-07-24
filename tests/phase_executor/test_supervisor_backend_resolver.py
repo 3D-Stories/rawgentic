@@ -235,19 +235,43 @@ def test_reap_list_sessions_unions_across_mixed_backends(tmp_path):
     assert any(c[0] == "list_sessions" for c in herdr.calls)
 
 
-def test_reap_kill_session_tier_tolerates_unresolvable_backend(tmp_path):
-    # Self-review catch: reap_plan's own docstring confirms every plan.kill_session record
-    # is already dead_fn-verified dead -- a backend-resolution failure on the bookkeeping
-    # kill_session call must not skip the permit release for an already-dead job.
+def test_reap_excludes_unresolvable_backend_records_from_every_tier(tmp_path):
+    # Step-11 finding (round 2): the EARLIER "tolerate it" fix here was itself wrong. A
+    # record whose backend cannot be resolved must be excluded from the WHOLE sweep, not
+    # merely have its list_sessions/kill_session bookkeeping skipped -- skipping only the
+    # listing left a genuinely-alive record outside live_fresh, which reap_plan's REAL
+    # OS-level dead_fn would then (correctly, on its own terms) call "not dead" -- routing
+    # it to kill_tree and killing a healthy process. Excluding it upstream means NO action
+    # (destructive or not) is taken on it this cycle -- it appears in NO tier.
     tmux = StubBackend("tmux")
     sup = _sup(tmp_path, tmux=tmux)  # no herdr_backend configured
     identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
     rec = _dead_pid_record(identity, terminal_backend="herdr")
     sup._registry.upsert(rec)  # noqa: SLF001
-    # force the kill_session tier regardless of a real git worktree existing at rec.worktree_path
     plan = sup.reap(rec.identity.run_id, clean_fn=lambda _r: True)
-    assert rec in plan.kill_session  # confirm the test actually exercised that tier
-    # must not raise -- release_permit still runs for the already-dead record
+    assert rec not in plan.kill_session
+    assert rec not in plan.kill_tree
+    assert rec not in plan.quarantine
+    assert rec not in plan.retain_worktree
+    assert rec not in plan.keep
+    assert tmux.calls == []  # never even touched the resolvable (tmux) backend for this record
+
+
+def test_recover_excludes_unresolvable_backend_records(tmp_path):
+    # The same class of bug also existed in recover() (found by inspection, not by the
+    # reviewer) -- self._live(record) raised uncaught, which would crash recovery for
+    # EVERY OTHER record in the run, not just the one with the unresolvable backend.
+    tmux = StubBackend("tmux")
+    sup = _sup(tmp_path, tmux=tmux)  # no herdr_backend configured
+    identity = WorktreeIdentity(run_id=f"r{uuid.uuid4().hex[:6]}", seat="build", attempt=1)
+    unresolvable = _dead_pid_record(identity, terminal_backend="herdr")
+    sup._registry.upsert(unresolvable)  # noqa: SLF001
+
+    def gate(*, record, correlation_id, recovered_from):  # pragma: no cover - never reached
+        raise AssertionError("should never be reached for an excluded record")
+
+    actions = sup.recover(identity.run_id, dispatch_gate=gate)  # must not raise
+    assert actions == []
 
 
 # ---- kill_server tears down every configured backend ------------------------

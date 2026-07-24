@@ -2154,7 +2154,8 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             snapshot=snap, quota=quota, capture_root=paths["capture_root"],
             registry_root=str(registry_root), worktree_manager=wm,
             pane_env={"PYTHONPATH": _pane_pythonpath()},
-            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID")))
+            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
+                                          pane_env={"PYTHONPATH": _pane_pythonpath()}))
         seat_role = (snap.seat(args.seat).get("role") if snap else None)
         terminal_backend = select_launch_terminal_backend(
             seat_role, resolve_terminal_backend(repo_root))
@@ -2262,7 +2263,8 @@ def _run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt) -> dict:
             snapshot=snap, quota=quota, capture_root=paths["capture_root"],
             registry_root=str(registry_root), worktree_manager=wm,
             pane_env={"PYTHONPATH": _pane_pythonpath()},
-            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID")))
+            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
+                                          pane_env={"PYTHONPATH": _pane_pythonpath()}))
 
         def provision():
             handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
@@ -2569,7 +2571,8 @@ def _do_recover_run(args) -> int:
             capture_root=paths["capture_root"], registry_root=str(registry_root),
             registry=registry, worktree_manager=wm,
             pane_env={"PYTHONPATH": _pane_pythonpath()},
-            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID")))
+            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
+                                          pane_env={"PYTHONPATH": _pane_pythonpath()}))
     except (OSError, ValueError, RegistryCorrupt) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
                           retryable=False, correlation_id=args.correlation_id))

@@ -1098,6 +1098,17 @@ class TmuxSupervisor:
         for record in self._registry.by_run(run_id):
             if record.state in ("completed", "completed_with_residue", "failed", "quarantined"):
                 continue
+            # #638 Step-11 finding (found by inspection while fixing the same class of bug in
+            # reap()): a record whose backend cannot be resolved (a misconfigured supervisor
+            # missing herdr_backend for a herdr-tagged record) must not crash recovery for
+            # EVERY OTHER record in this run — self._live() below raises SupervisorError
+            # uncaught otherwise. Not considered this cycle, same treatment as an
+            # already-terminal record just above (silently absent from `actions`, never a
+            # destructive guess).
+            try:
+                self._resolve_backend(record.terminal_backend)
+            except SupervisorError:
+                continue
             live = self._live(record)
             matches = self._identity_matches(record)
             # spec content must also still parse for a live adopt (tamper evidence)
@@ -1304,24 +1315,36 @@ class TmuxSupervisor:
         # quota_paused records belong to recover() (a pending --resume needs its worktree
         # and cwd intact) — reap never retains/kills what recover is about to relaunch
         # (Step-11 R2 finding; masked today by worktree_manager=None, real once W3-wired)
-        records = [r for r in self._registry.by_run(run_id) if r.state != "quota_paused"]
-        now = self._clock()
-        live_names = set()
-        # #638: union list_sessions() across every DISTINCT backend actually present among
-        # these records — one fixed self._backend.list_sessions() call would leave a
-        # herdr-backed job invisible to a tmux-only listing (and vice versa), landing it
-        # outside live_fresh below even though it's genuinely alive (Step-4 review Finding #2).
-        # A backend-resolution failure here (a misconfigured supervisor missing herdr_backend
-        # for a herdr-tagged record) must not abort the WHOLE sweep for every other record's
-        # sake — skip that record's contribution to live_names. Safe: live_fresh is only a
-        # fast-path optimization; _default_dead_fn's REAL aliveness check (OS-level PID/group
-        # reads, entirely independent of list_sessions) still runs for every record regardless.
-        by_backend: dict = {}
-        for r in records:
+        #
+        # #638 Step-11 finding (round 2 — the FIRST "tolerate it" fix here was itself wrong):
+        # a record whose backend cannot be resolved (a misconfigured supervisor missing
+        # herdr_backend for a herdr-tagged record) must be EXCLUDED from this whole sweep,
+        # not merely skipped for its list_sessions contribution. Skipping only the listing
+        # is NOT safe: a genuinely alive record excluded from live_names still lands outside
+        # live_fresh below, and reap_plan's dead_fn (a REAL OS-level PID check, independent
+        # of list_sessions) would then correctly report it as "not dead" — which routes it
+        # to kill_tree, not to "keep". A resolution FAULT would thus get misread as "this
+        # job is wedged" and _kill_job a healthy, live process. Filtering it out here (same
+        # treatment as quota_paused) means we take NO action on it this cycle rather than a
+        # wrong destructive one.
+        records = []
+        for r in self._registry.by_run(run_id):
+            if r.state == "quota_paused":
+                continue
             try:
-                by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
+                self._resolve_backend(r.terminal_backend)
             except SupervisorError:
                 continue
+            records.append(r)
+        now = self._clock()
+        live_names = set()
+        # union list_sessions() across every DISTINCT backend actually present among these
+        # records — one fixed self._backend.list_sessions() call would leave a herdr-backed
+        # job invisible to a tmux-only listing (and vice versa), landing it outside
+        # live_fresh below even though it's genuinely alive (Step-4 review Finding #2).
+        by_backend: dict = {}
+        for r in records:
+            by_backend.setdefault(self._resolve_backend(r.terminal_backend), r.run_socket)
         for backend, run_socket in by_backend.items():
             res = backend.list_sessions(run_socket)
             if res.returncode == 0:
