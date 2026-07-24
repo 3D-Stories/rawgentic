@@ -1053,7 +1053,19 @@ original failure lived — a mid-UAT fix that never went back through Step 3/4.
 
 **Design flaw discovery:** If implementation reveals a fundamental design flaw:
 - Check: `tdd_loopback_used == false` AND `global_loopback_total < GLOBAL_LOOPBACK_BUDGET`
-- If allowed: loop back to Step 3 with the flaw identified
+- If allowed: **park-then-reset the build seat's worktree first** (#637, epic #635 —
+  a design-level loop-back INVALIDATES the current diff, unlike the same-design retry at
+  item 4 above, which discards a still-valid-design attempt via a bare `reset --hard` +
+  `clean -fd` with no park). Before re-dispatching Step 3, and only after confirming the
+  prior build-seat process is terminated: call
+  `WorktreeManager.park_and_reset(handle, run_id=..., design_version=..., task_id=...)`
+  (`phase_executor/src/phase_executor/worktree.py`) — it stashes the current diff
+  recoverably (`git stash push -u -m "rawgentic-parked:<run_id>:<design_version>:<task_id>"`)
+  BEFORE resetting the worktree clean to its base, never the reverse. Then append
+  `RoutingAuditLog.append_park(...)` (`phase_executor/src/phase_executor/enforce.py`) with
+  the returned `ParkRecord` so the parked stash is discoverable from the run's audit log,
+  and log the stash name in session notes. Then loop back to Step 3 with the flaw
+  identified — the fresh build-seat context never observes a half-reset worktree.
 - If budget exhausted: STOP and escalate to user. **[Headless: ERROR — post error comment with design flaw description + loop-back history, add rawgentic:ai-error label, exit.]**
 
 **Session checkpoint (APPEND, every 2-3 tasks).** After each batch of 2-3 tasks, APPEND a
@@ -1102,7 +1114,7 @@ Dispatch these reviewers on the executor `review`/`review_fast` seats per the `<
    - **High:** fix before Step 9 unless deferred-with-rationale. Persist the deferral via `plan_lib.append_deferral(<deferrals_path>, finding)` (the `finding` needs at least `finding_id`, `severity`, `originator_reviewer_slot`) — it **must be re-presented to Step 11** for resolution.
    - **Medium/Low:** advisory; log to review log only.
 5. **Ambiguity circuit breaker:** if any finding is ambiguous or two findings conflict, STOP and ask user. **[Headless: QUESTION — post comment with the ambiguous findings, suspend.]**
-6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters and return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
+6. **Design flaw detection:** if the review surfaces a design-level flaw (not a code-level issue), consume a loop-back via `plan_lib.consume_loopback(<counters_path>, "review_design")`. On success, increment counters — **park-then-reset the build seat's worktree** (same #637 contract as Step 8's design-flaw-discovery bullet above: `WorktreeManager.park_and_reset` before re-dispatching, `RoutingAuditLog.append_park` after, confirm the prior build-seat process is terminated first) — then return to Step 3. On exhaustion, STOP and escalate. **[Headless: ERROR — post error comment with design flaw + loop-back history, add `rawgentic:ai-error` label, exit.]**
 7. **Dispatch failure fallback:** if the Agent tool errors on a reviewer dispatch, retry once after 30s. On second failure, append an entry to the review log with `verdict: "REVIEW_DISPATCH_FAILED"` and **[Headless: QUESTION — post comment with failure details, suspend]**. **Dead-return detection:** A reviewer return that is vacuous (no findings AND no substantive content) is a DEAD dispatch, not a clean pass — relaunch that reviewer once; on a second death treat it as a dispatch failure (item 7's REVIEW_DISPATCH_FAILED path).
 8. **Append to the review log** via `plan_lib.append_review_log(<log_path>, entry)` — ONE entry per high-risk task the wave covered, written ONLY when both reviewers acknowledged that task's sha (item 2); an unacknowledged sha is UNCOVERED and re-dispatches to the wave's reviewers before Step 9 (same wave, same reviewers; this is what keeps `assert_review_coverage` honest under #492). Each entry is:
    ```json
