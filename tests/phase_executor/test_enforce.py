@@ -284,6 +284,43 @@ def test_records_fail_closed_malformed_json(tmp_path):
         log.records()
 
 
+def test_append_park_and_records_roundtrip(tmp_path):
+    # #637 (epic #635 C4)
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.append_park(run_id="run1", task_id="t1", design_version="v2",
+                    stash_name="rawgentic-parked:run1:v2:t1", worktree_path="/wt/path",
+                    parked=True)
+    recs = log.records()
+    assert recs[0]["kind"] == "park"
+    assert recs[0]["stash_name"] == "rawgentic-parked:run1:v2:t1"
+    assert recs[0]["parked"] is True
+
+
+def test_append_park_recorded_even_when_nothing_parked(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.append_park(run_id="run1", task_id="t1", design_version="v2",
+                    stash_name="rawgentic-parked:run1:v2:t1", worktree_path="/wt/path",
+                    parked=False)
+    recs = log.records()
+    assert recs[0]["parked"] is False
+
+
+def test_records_fail_closed_park_missing_field(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text('{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2","stash_name":"s","parked":true}\n')
+    with pytest.raises(ValueError, match="missing fields"):
+        log.records()
+
+
+def test_records_fail_closed_park_bad_parked_type(tmp_path):
+    log = enforce.RoutingAuditLog(tmp_path, "run-1")
+    log.path.write_text(
+        '{"kind":"park","run_id":"r1","task_id":"t1","design_version":"v2",'
+        '"stash_name":"s","worktree_path":"/wt","parked":"yes"}\n')
+    with pytest.raises(ValueError, match="not a bool"):
+        log.records()
+
+
 def test_audited_digests_valid_chain(tmp_path):
     recs = [{"kind": "epoch", "seq": 1, "from": "sha256:a", "to": "sha256:b"},
             {"kind": "epoch", "seq": 2, "from": "sha256:b", "to": "sha256:c"}]
