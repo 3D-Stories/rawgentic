@@ -28,6 +28,20 @@ maintain its own internal ``name -> native-id`` mapping (e.g. tag/rename the pan
 so every subsequent call using ``name`` still resolves to the correct underlying pane —
 this backend-internal translation is deliberately NOT part of the protocol surface (kept
 minimal) and is each backend implementation's own responsibility, never the supervisor's.
+**KNOWN LIMITATION — permit release vs. process-tree death (#638 Step-11 pass 8, owner scope
+decision 2026-07-24).** `CONFIRMED_GONE` is evidence about the NAMESPACE (the session/pane is
+absent), NOT proof the process tree is dead. Those differ: the adapter starts the provider with
+`start_new_session` in its OWN process group (`adapters/base.py`), so a pane/session can be
+legitimately gone while the provider survives — `pane_runner`'s own docstring names this. Any
+permit release that treats session-absence as death is therefore making an inference, and
+`await_job`'s pre-existing `exited_no_sentinel` path does exactly that (it releases without
+`_kill_job` verifying either group). Settling this needs a death-proof protocol — identity
+established BEFORE the provider starts, or a launch handshake — which is #467-era supervisor
+machinery, outside this issue's ACs (a HerdrBackend + its build-seat config gate). It is filed
+separately; four successive attempts to substitute something cheaper each produced a new defect
+class, so the substitution is deliberately NOT repeated here. The tri-state above is still a
+strict improvement: it removes the "couldn't query" ⇄ "confirmed absent" conflation, which was
+the cause of every finding in review passes 1-7.
 """
 from __future__ import annotations
 
@@ -71,6 +85,12 @@ _TMUX_GONE_PATTERNS = (
     re.compile(r"can't find session", re.I),          # server up, session absent
     re.compile(r"no server running on", re.I),        # socket present, no tmux server
     re.compile(r"error connecting to .*\(no such file or directory\)", re.I),
+    # tmux 3.4's exact diagnostic for an EMPTY but still-running server (confirmed present in
+    # the installed binary via `strings`). Reachable when a user's config sets `exit-empty off`
+    # — this backend deliberately does not isolate user tmux configuration. Without this row an
+    # ordinary absent target classified INDETERMINATE, which holds permits and excludes records
+    # (pass-8 finding). Anchored so it cannot match a longer unrelated message.
+    re.compile(r"^\s*no sessions\s*$", re.I | re.M),
 )
 
 

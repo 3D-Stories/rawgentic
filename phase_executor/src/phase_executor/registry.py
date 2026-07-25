@@ -77,16 +77,6 @@ class JobRecord:
     #                                       persisted at collection (positive OR negative/refused —
     #                                       the persistence trigger is classifier invocation);
     #                                       what #559 calibration + recovery read (additive; None pre-#558)
-    identity_unknown: bool = False  # #638 Step-11 pass 7: this record's process identity was
-    #                                 NEVER captured (a launch that failed before pane_pid could
-    #                                 be read, persisted so its held quota permit stays
-    #                                 reclaimable). Its pane_pid/pane_pgid are 0, so no kill path
-    #                                 will signal on it — and crucially it must NOT read as
-    #                                 "verified dead": the only acceptable death evidence is a
-    #                                 backend-CONFIRMED teardown, else cancel()/reap() would
-    #                                 release the permit for a possibly-live pane. An EXPLICIT
-    #                                 flag, not an inferred pid sentinel — `pane_pid=1` is an
-    #                                 established test idiom for "verifies dead immediately".
     terminal_backend: Optional[str] = None  # #638: which TerminalBackend this job actually
     #                                       launched under ("tmux"/"herdr"); None on any pre-#638
     #                                       record, read as "tmux". recover()/reap() resolve THIS
@@ -212,7 +202,7 @@ def _record_to_dict(r: JobRecord) -> dict:
         "spec_digest": r.spec_digest, "receipt_nonce": r.receipt_nonce,
         "recovered_from": r.recovered_from,
         "quota_classification": r.quota_classification,
-        "terminal_backend": r.terminal_backend, "identity_unknown": r.identity_unknown,
+        "terminal_backend": r.terminal_backend,
         "provider_session_id": r.provider_session_id, "provider_exit_code": r.provider_exit_code,
         "resume_attempts": r.resume_attempts, "state": r.state, "created_at": r.created_at,
         "quarantine_reason": r.quarantine_reason,
@@ -248,8 +238,7 @@ def _record_from_dict(d: dict) -> JobRecord:
         provider_session_id=d.get("provider_session_id"),
         provider_exit_code=d.get("provider_exit_code"), resume_attempts=d["resume_attempts"],
         state=d["state"], created_at=d["created_at"], quarantine_reason=d.get("quarantine_reason"),
-        quota_classification=qc, terminal_backend=tb,
-        identity_unknown=bool(d.get("identity_unknown", False)))
+        quota_classification=qc, terminal_backend=tb)
 
 
 class JobRegistry:

@@ -595,38 +595,28 @@ class TmuxSupervisor:
             if teardown_confirmed:
                 cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
             else:
-                # #638 Step-11 finding (pass 6): holding the permit in `self._permits` alone was
-                # NOT reclaimable — `_release_permit` looks the cm up by `record.session_name`,
-                # and on this path (e.g. an unreadable pane_pid) NO JobRecord was ever
-                # persisted, so nothing could ever reach it; `reap()` only REPORTS unknown
-                # sessions, and the quota stale-reaper deliberately spares a token whose holder
-                # pid is still alive. Two such failures would pin both Claude slots until the
-                # process exited. Persist a quarantined residue record so the permit is
-                # reclaimable by the ordinary machinery.
+                # #638 Step-11 pass 8 (scope decision, owner 2026-07-24): the permit is
+                # released here even though teardown could not be CONFIRMED, and that is a
+                # DELIBERATE, documented limitation rather than an oversight.
                 #
-                # pane_pid/pane_pgid are stamped 0 DELIBERATELY: every kill path refuses
-                # pid <= 1 (the 2026-07-19 pane_pid=1 incident guard), so this record can never
-                # signal anything, while `_release_permit`/reap can still find it by session
-                # name and free the slot once teardown is confirmed.
-                self._permits[name] = cm
-                try:
-                    self._registry.upsert(JobRecord(
-                        identity=identity, session_name=name, run_socket=sock,
-                        pane_pid=0, pane_pgid=0, provider_pgid=None, pane_start_time="",
-                        worktree_path=handle.path, worktree_base_sha=handle.base_sha,
-                        worktree_root=handle.root, worktree_gitdir=handle.gitdir,
-                        worktree_repo=handle.repo, capture_dir=str(cap_dir),
-                        attempt_id=attempt_id, permit_ref=permit_ref,
-                        command_digest="", provider_session_id=resume_session_id,
-                        provider_exit_code=None, resume_attempts=resume_attempts,
-                        state="quarantined", created_at=self._clock(), identity_unknown=True,
-                        quarantine_reason=("launch failed with teardown UNCONFIRMED: a pane may "
-                                           "still be live on this endpoint; permit held"),
-                        terminal_backend=terminal_backend))
-                except Exception:  # noqa: BLE001 — the raise below is the real failure; a
-                    # registry write problem must not replace it (the permit is still held in
-                    # self._permits, so this degrades to the pre-fix posture, never worse).
-                    pass
+                # Why: the correct behaviour needs proof the process TREE is dead, and on this
+                # path no process identity was ever captured, so no such proof is obtainable.
+                # Passes 5-8 each tried a cheaper substitute and each substitute was itself a
+                # defect: releasing unconditionally over-admits the pool (pass 5); holding it
+                # in memory alone is unreclaimable (pass 6); persisting a pid-0 residue record
+                # to make it reclaimable made "session absent" masquerade as "process dead",
+                # let a recovery relaunch erase it and free the new permit, never released it
+                # from reap's `keep` tier, and was not crash-durable (passes 7-8).
+                #
+                # So the invariant is NOT settled inside #638 — whose ACs are the HerdrBackend
+                # and its build-seat config gate. It is filed as its own issue with the design
+                # work it needs (see the KNOWN LIMITATION note in the module docstring). Until
+                # then this fails toward the PRE-#638 behaviour, unchanged for tmux: release the
+                # slot, and let reap()'s CF-11 unknown-session reporting surface any pane that
+                # is live on the endpoint but absent from the registry — visible to the owner,
+                # never blind-killed. A leaked pane is recoverable; a permanently pinned pool
+                # and three new defect classes are worse.
+                cm.__exit__(None, None, None)
             raise
 
     # -- status / sentinel ----------------------------------------------------
@@ -768,12 +758,6 @@ class TmuxSupervisor:
         - a pane_pid whose /proc start-time no longer matches the record is a REUSED pid —
           a foreign process; it is treated as already dead and never snapshotted;
         - the caller's own pid and ancestor chain are excluded from any kill set."""
-        # #638 Step-11 pass 7: an unknown-identity record (no pane_pid ever captured) cannot
-        # be verified by PID at all — verify via the BACKEND instead. Returning True here
-        # (which the pid guards used to do by finding nothing to kill) let cancel()/reap()
-        # release the permit for a pane that may still have been live.
-        if self._identity_is_unknown(record):
-            return self._teardown_confirmed(record)
         pane_identity_ok = (record.pane_pid > 1
                             and _pid_alive(record.pane_pid)
                             and _proc_start_time(record.pane_pid) == record.pane_start_time)
@@ -847,33 +831,6 @@ class TmuxSupervisor:
                 pass
             return True
         return False
-
-    def _identity_is_unknown(self, record: JobRecord) -> bool:
-        """A record whose process identity was never captured (`pane_pid <= 1`) — the
-        launch-residue record `launch()` persists when a spawn fails with teardown
-        UNCONFIRMED. #638 Step-11 pass 7: such a record must read as identity-UNKNOWN, never
-        as "verified dead". The pid guards correctly refuse to signal on it, but that made
-        `_kill_job` find no targets, no residue, and return True — so `cancel()` and reap's
-        `retain_worktree` tier released its quota permit while the pane may still have been
-        live. For these records the ONLY acceptable death evidence is a backend-CONFIRMED
-        teardown.
-
-        Keyed on the EXPLICIT `identity_unknown` flag, never on a pid sentinel: `pane_pid=1`
-        is a long-established idiom in this repo's own suite for "no real process, verifies
-        dead immediately", and conflating the two changed behaviour for ~20 unrelated tests."""
-        return bool(record.identity_unknown)
-
-    def _teardown_confirmed(self, record: JobRecord) -> bool:
-        """Backend-confirmed teardown for an unknown-identity record: CONFIRMED_GONE only."""
-        try:
-            backend = self._resolve_backend(record.terminal_backend)
-        except SupervisorError:
-            return False  # cannot even address it ⇒ cannot confirm
-        try:
-            return backend.close_session(
-                record.run_socket, record.session_name) is Liveness.CONFIRMED_GONE
-        except Exception:  # noqa: BLE001 — an unusable close is not a confirmation
-            return False
 
     def _release_permit(self, record: JobRecord) -> None:
         cm = self._permits.pop(record.session_name, None)
@@ -1410,12 +1367,6 @@ class TmuxSupervisor:
         live process (the 2026-07-19 pane_pid=1 incident class). The provider group counts
         only when its identity VERIFIES (start-time-matched leader) — a recycled pgid must
         not wedge the reaper reporting a foreign group as \"not dead\" forever."""
-        # #638 Step-11 pass 7: an unknown-identity record has NO pid to reason over, so every
-        # pid test below vacuously reports "dead" — which sent it to a tier that releases its
-        # quota permit (retain_worktree) while the pane may still be live. Its death is only
-        # ever established by a backend-CONFIRMED teardown.
-        if self._identity_is_unknown(record):
-            return self._teardown_confirmed(record)
         if record.pane_pid > 1 and _pid_alive(record.pane_pid) and (
                 _proc_start_time(record.pane_pid) == record.pane_start_time):
             return False

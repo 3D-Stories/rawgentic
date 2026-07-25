@@ -128,3 +128,30 @@ def test_raising_runner_is_always_indeterminate():
     assert be.probe_session("/tmp/s.sock", "x") is Liveness.INDETERMINATE
     assert be.close_session("/tmp/s.sock", "x") is Liveness.INDETERMINATE
     assert be.enumerate_sessions("/tmp/s.sock")[0] is Liveness.INDETERMINATE
+
+
+# ---- Step-11 pass 8: the `no sessions` absence diagnostic --------------------
+
+def test_no_sessions_is_confirmed_gone():
+    # tmux 3.4's exact diagnostic for an EMPTY but still-running server (confirmed present in
+    # the installed binary via `strings`), reachable when a user's config sets `exit-empty off`.
+    # Missing it classified an ORDINARY absent target as INDETERMINATE, which holds permits and
+    # excludes records from the sweep.
+    assert classify_tmux_result(_cp(1, "no sessions")) is Liveness.CONFIRMED_GONE
+    assert classify_tmux_result(_cp(1, "no sessions\n")) is Liveness.CONFIRMED_GONE
+
+
+def test_no_sessions_pattern_is_anchored():
+    # ...but it must not swallow a longer, unrelated message.
+    assert classify_tmux_result(
+        _cp(1, "no sessions available for the widget")) is Liveness.INDETERMINATE
+
+
+def test_no_sessions_through_the_backend_surfaces():
+    be = _tmux({"list-sessions": _cp(1, "no sessions")})
+    verdict, names = be.enumerate_sessions("/tmp/s.sock")
+    assert verdict is Liveness.CONFIRMED_GONE and names == []
+    be2 = _tmux({"has-session": _cp(1, "no sessions")})
+    assert be2.probe_session("/tmp/s.sock", "x") is Liveness.CONFIRMED_GONE
+    be3 = _tmux({"kill-session": _cp(1, "no sessions")})
+    assert be3.close_session("/tmp/s.sock", "x") is Liveness.CONFIRMED_GONE
