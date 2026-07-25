@@ -183,3 +183,28 @@ def test_nonzero_with_no_message_at_all_is_indeterminate():
 def test_absence_in_every_nonempty_stream_is_confirmed_gone():
     res = subprocess.CompletedProcess(["tmux"], 1, "no sessions", "can't find session: x")
     assert classify_tmux_result(res) is Liveness.CONFIRMED_GONE
+
+
+# ---- pass-10 self-audit: absence messages may contain SPACES -----------------
+
+@pytest.mark.parametrize("stderr", [
+    # every one of these was produced by the real pinned binary during a live probe
+    "can't find session: has space",
+    "can't find session: a b c",
+    "can't find session: we'ird",
+    "can't find session",                                   # no name at all
+    "no server running on /tmp/tm x.8CCa/s p.sock",         # socket PATH with spaces
+    "error connecting to /tmp/tm x.8CCa/s p.sock (No such file or directory)",
+])
+def test_absence_messages_with_spaces_still_classify_gone(stderr):
+    """Found by self-audit before the reviewer's report landed: the first allowlist used `\\S+`
+    for the variable parts, so a tmux SESSION NAME or SOCKET PATH containing spaces made an
+    ORDINARY absence message classify INDETERMINATE. That direction of miss is not harmless --
+    it holds quota permits and excludes records from the sweep indefinitely."""
+    assert classify_tmux_result(_cp(1, stderr)) is Liveness.CONFIRMED_GONE
+
+
+def test_multiline_body_still_cannot_whole_match_despite_dot():
+    # `.` excludes newlines (no DOTALL), so widening to `.*` did not reopen the mixed-body hole
+    assert classify_tmux_result(
+        _cp(1, "can't find session: x\nPermission denied")) is Liveness.INDETERMINATE

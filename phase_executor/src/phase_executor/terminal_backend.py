@@ -95,9 +95,15 @@ class Liveness(str, enum.Enum):
 # `(No such file or directory)` means the socket does not exist, so no server, so the session
 # verifiably does not exist; `(Permission denied)` means we could not look at all.
 _TMUX_ABSENCE_MESSAGES = (
-    re.compile(r"\A\s*can't find session:?\s*\S*\s*\Z", re.I),   # server up, session absent
-    re.compile(r"\A\s*no server running on\s+\S+\s*\Z", re.I),   # socket present, no server
-    re.compile(r"\A\s*error connecting to\s+\S+\s*\(no such file or directory\)\s*\Z", re.I),
+    # NOTE the variable parts use `.*`, never `\S+`: a tmux SESSION NAME and a SOCKET PATH may
+    # both contain spaces, and a live probe confirmed the real messages then failed to match —
+    # e.g. `can't find session: has space`, `no server running on /tmp/tm x/s p.sock`. That
+    # direction of miss is not harmless: an ORDINARY absence would classify INDETERMINATE, which
+    # holds quota permits and excludes records from the sweep (pass 10 self-audit). `.` still
+    # excludes newlines (no DOTALL), so a multi-line/mixed body cannot whole-match.
+    re.compile(r"\A\s*can't find session:?.*\Z", re.I),          # server up, session absent
+    re.compile(r"\A\s*no server running on\s+.*\Z", re.I),       # socket present, no server
+    re.compile(r"\A\s*error connecting to\s+.*\(no such file or directory\)\s*\Z", re.I),
     re.compile(r"\A\s*no sessions\s*\Z", re.I),                  # empty but running server
 )
 
