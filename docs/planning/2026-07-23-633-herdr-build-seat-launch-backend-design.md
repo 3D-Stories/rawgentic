@@ -171,7 +171,7 @@ safe contract can be selected" branch does not trigger.
    trusting the herdr backend on a new herdr version:
 
    ```bash
-   PYTHONPATH=phase_executor/src python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate
+   python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate
    ```
 
    The threshold is encoded in the check (`GO_MAX_FAILURES = 0`), not left to a human reading a

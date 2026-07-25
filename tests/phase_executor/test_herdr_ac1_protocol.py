@@ -381,10 +381,13 @@ def test_gate_exit_codes_reserve_zero_for_go():
 
 def test_gate_reports_unavailable_rather_than_success_without_herdr(tmp_path):
     """Run for real as a subprocess with herdr off PATH: the gate must NOT exit 0."""
-    env = {**os.environ, "PATH": "/usr/bin:/bin", "PYTHONPATH": str(
-        pathlib.Path(__file__).resolve().parents[2] / "phase_executor" / "src")}
+    # Deliberately NO PYTHONPATH: the documented gate command carries none, so this also pins the
+    # standalone-import bootstrap (without it the gate died with ModuleNotFoundError).
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PATH"] = "/usr/bin:/bin"
     proc = subprocess.run([sys.executable, str(HARNESS_PATH), "--gate"],
-                          capture_output=True, text=True, env=env, timeout=60, check=False)
+                          capture_output=True, text=True, env=env, timeout=60,
+                          cwd=str(pathlib.Path(__file__).resolve().parents[2]), check=False)
     assert proc.returncode == ac1.GATE_EXIT_UNAVAILABLE, (proc.returncode, proc.stderr)
     assert "not a pass" in proc.stderr, proc.stderr
 

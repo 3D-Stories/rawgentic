@@ -326,7 +326,7 @@ tracks and kills a shell while the real worker runs on. Re-qualify (do not re-de
 committed #633 §AC1 protocol before trusting the backend on a new herdr version:
 
 ```bash
-PYTHONPATH=phase_executor/src python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate
+python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate
 ```
 
 20 cold-pane + 20 reused-pane reps; the GO threshold (0 failures per condition) is encoded in the

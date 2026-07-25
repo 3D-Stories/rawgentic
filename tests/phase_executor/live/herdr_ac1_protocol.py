@@ -216,6 +216,24 @@ def _wait_for_file(path, predicate, *, deadline_s: float, poll_s: float) -> bool
         time.sleep(poll_s)
 
 
+def _ensure_phase_executor_importable() -> None:
+    """Make the STANDALONE gate work as documented, with no PYTHONPATH ceremony. Under pytest the
+    package is already importable (tests/phase_executor/conftest.py's shim); run directly, nothing
+    puts `phase_executor/src` on the path — and because the repo has a `phase_executor/` DIRECTORY,
+    a bare import can resolve to an empty NAMESPACE package instead of failing cleanly, so the
+    failure surfaces later as a missing submodule. Insert the real src dir ahead of everything; a
+    genuine absence still raises at the call site rather than being swallowed here."""
+    try:
+        from phase_executor import herdr_backend  # noqa: PLC0415,F401
+        return
+    except ImportError:
+        pass
+    src = pathlib.Path(MODULE_PATH).resolve().parents[3] / "phase_executor" / "src"
+    if src.is_dir() and str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+        sys.modules.pop("phase_executor", None)   # drop any namespace-package placeholder
+
+
 def default_runner():
     """The SAME runner `HerdrBackend` uses by default, so the harness's own calls and the
     backend's calls cannot diverge in timeout/decoding behaviour."""
@@ -247,6 +265,7 @@ def herdr_available(*, which=None, run=None, env=None):
     (#639 AC2): the binary, the qualified version floor, and a RESOLVABLE CALLING PANE —
     `pane split --current` resolves the caller's own pane, so a pane-less process (cron, a plain
     headless shell) can never run this check."""
+    _ensure_phase_executor_importable()
     from phase_executor.herdr_backend import HERDR_VERSION_FLOOR  # noqa: PLC0415
 
     which = shutil.which if which is None else which
@@ -553,6 +572,7 @@ def gate_exit_code(verdict: Verdict) -> int:
 def _gate_main(reps: int = REPS_PER_CONDITION) -> int:
     import tempfile  # noqa: PLC0415 — gate path only
 
+    _ensure_phase_executor_importable()
     ok, detail = herdr_available()
     if not ok:
         print(f"UNAVAILABLE: {detail}\nThe gate did NOT run — this is not a pass.", file=sys.stderr)
