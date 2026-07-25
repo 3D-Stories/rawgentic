@@ -163,6 +163,25 @@ safe contract can be selected" branch does not trigger.
    plain non-`exec` form) — a real, silent regression risk on a future herdr upgrade. The AC1
    protocol + runner used for this qualification should be re-run (not re-derived) against any
    herdr version bump before trusting this backend again.
+
+   **CLOSED by #639 — this is now the committed pre-upgrade gate.** The protocol above (20
+   cold-pane + 20 reused-pane reps, GO threshold 0 failures per condition) lives in
+   `tests/phase_executor/live/herdr_ac1_protocol.py` with the check itself in
+   `tests/phase_executor/live/test_herdr_pid_identity_live.py`, and is the REQUIRED step before
+   trusting the herdr backend on a new herdr version:
+
+   ```bash
+   RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v
+   ```
+
+   The threshold is encoded in the check (`GO_MAX_FAILURES = 0`), not left to a human reading a
+   table, and the verdict is tri-state: `NO_GO` is a confirmed identity regression, `ERROR` means
+   the run could not answer the question (environment fault — never a pass, never a regression
+   claim), `GO` re-qualifies. Two deliberate deltas from the original session-tmp runner, stated
+   rather than papered over: the reps provision their own pane (because `new_session` always splits
+   a fresh one, and the `reused` condition needs a pane that already ran a plain non-`exec`
+   command), and the additional rep that goes through `new_session` end-to-end cannot observe a
+   pre-`exec` pid, since split/rename/run are atomic from the caller's side.
 2. The two-call create+launch (vs tmux's one atomic call) — safe today, single-threaded per
    spawn only; don't parallelize split+run against one target pane.
 3. herdr is a host-wide singleton daemon (per #608/HD1.0) — any herdr upgrade affects every

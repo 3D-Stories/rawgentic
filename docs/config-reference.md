@@ -317,6 +317,25 @@ only silent default. **Present** → `version` must be `1` and `build` must be o
 two known values, or derive refuses (exit non-zero) — a malformed section never silently
 falls back to tmux. Capability surface: [`executor_terminal_backend`](#config-loading-protocol).
 
+**REQUIRED before trusting `build: "herdr"` across a herdr version bump (#639).** The herdr
+backend launches via `pane run <pane> exec <argv>`, which herdr neither documents nor endorses —
+its own guidance is the plain non-`exec` form. A future herdr release could wrap the command in a
+child process instead of `exec`-replacing the pane's shell, and every PID the supervisor holds
+would then name the wrong process. That regression is silent: nothing fails, the supervisor simply
+tracks and kills a shell while the real worker runs on. Re-qualify (do not re-derive) with the
+committed #633 §AC1 protocol before trusting the backend on a new herdr version:
+
+```bash
+RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v
+```
+
+20 cold-pane + 20 reused-pane reps; the GO threshold (0 failures per condition) is encoded in the
+check, and its verdict is tri-state — `NO_GO` is a real regression, `ERROR` means the run could not
+answer (environment), and only `GO` re-qualifies the backend. It must be run from a session that is
+itself inside a herdr pane (`pane split --current` needs a calling pane); anywhere else — including
+CI, which has no herdr at all — it SKIPS with a named reason rather than failing or passing
+silently.
+
 ### `telemetryAlerts`
 
 Optional per-project config for the #473 **I3 seat-outcomes advisory alerts** (AC-K5). It
