@@ -57,6 +57,11 @@ malformed-response path. Accepted per the pane_env risk's same standard (host-lo
 disappears when the pane is closed/destroyed) — not fixed because reliably identifying the
 new pane without an id would require a list-diff-by-timing heuristic (racy, adds its own
 false-positive risk) for a path that requires the daemon to return `rc=0` with a broken body.
+Note (pass 9): the SUPERVISOR could never have cleaned this pane either, so the residual is a
+property of the malformed response and not of where cleanup lives. Its teardown addresses panes
+by the caller-chosen NAME; the leaked pane was never renamed (rename runs after split), and
+`kill_session` on an unlabeled pane resolves to no match and reports an idempotent success —
+confirmed by driving it.
 
 **Pane environment (Step-11 review, accepted risk).** herdr has no private-per-run channel for
 environment variables the way tmux's `subprocess.run(..., env=...)` on a per-run socket does — the
@@ -331,6 +336,35 @@ class HerdrBackend:
             raise RuntimeError(f"herdr: duplicate label match for {name!r}: {matches}")
         return matches[0] if matches else None
 
+    def _close_and_verify(self, pane_id: str, *, timeout: float = 30, attempts: int = 3) -> bool:
+        """Best-effort but PERSISTENT orphan cleanup for a pane this call created. Returns True
+        only when the pane is verifiably gone — either `close` succeeded, or it reported
+        `pane_not_found` (#633: the exec'd process auto-closes its own pane on exit), or a
+        follow-up `pane get` confirms absence. Never raises: a cleanup failure must not replace
+        the real failure the caller is already returning (Python `finally` semantics)."""
+        for _ in range(max(1, attempts)):
+            try:
+                res = self._herdr("close", pane_id, timeout=timeout)
+                if res.returncode == 0:
+                    return True
+                err = self._parse_json(res)
+                err_obj = err.get("error") if isinstance(err, dict) else None
+                if isinstance(err_obj, dict) and err_obj.get("code") == "pane_not_found":
+                    return True          # already gone: the outcome cleanup exists to produce
+            except Exception:  # noqa: BLE001 — retry; never propagate out of a finally block
+                pass
+            # close did not confirm — ask directly whether the pane still exists
+            try:
+                got = self._herdr("get", pane_id, timeout=timeout)
+                if got.returncode != 0:
+                    err = self._parse_json(got)
+                    err_obj = err.get("error") if isinstance(err, dict) else None
+                    if isinstance(err_obj, dict) and err_obj.get("code") == "pane_not_found":
+                        return True      # verifiably absent despite the close's own complaint
+            except Exception:  # noqa: BLE001
+                pass
+        return False
+
     def new_session(self, endpoint: str, name: str, cwd: str, argv: list,  # noqa: ARG002 — endpoint
                     timeout: float = 30) -> subprocess.CompletedProcess:
         # unused for split (workspace is implicit via --current); kept for Protocol parity.
@@ -401,19 +435,16 @@ class HerdrBackend:
                 # that on the returned result. NOTE (pass 9): the supervisor's launch teardown
                 # releases the permit UNCONDITIONALLY (documented KNOWN LIMITATION, #648), so
                 # this is an operator-visible breadcrumb only — not a safety signal.
-                self._last_cleanup_confirmed = False
-                try:
-                    close_res = self._herdr("close", pane_id, timeout=timeout)
-                    self._last_cleanup_confirmed = close_res.returncode == 0
-                    if close_res.returncode != 0:
-                        err = self._parse_json(close_res) or {}
-                        code = (err.get("error") or {}).get("code") \
-                            if isinstance(err.get("error"), dict) else None
-                        # an already-gone pane IS a clean outcome (#633: the exec'd process
-                        # auto-closes its own pane on exit)
-                        self._last_cleanup_confirmed = code == "pane_not_found"
-                except Exception:  # noqa: BLE001 — never let cleanup mask the real result
-                    self._last_cleanup_confirmed = False
+                # Step-11 pass 10: cleanup RETRIES and then VERIFIES, using the pane_id we
+                # already hold. Previously a single close attempt was made and a failure just
+                # set the breadcrumb — and since pass 9 correctly stopped the supervisor from
+                # making a second, NAME-based attempt (that name-based cleanup is what let a
+                # `duplicate session` refusal destroy a pre-existing session), this backend is
+                # now the ONLY thing that can clean the pane it created. So it must actually
+                # try: bounded retries, then a `pane get` probe to confirm absence. Retrying by
+                # pane_id is safe in a way retrying by NAME never was — the id addresses only
+                # the pane this call created.
+                self._last_cleanup_confirmed = self._close_and_verify(pane_id, timeout=timeout)
 
     def pane_pid(self, endpoint: str, name: str, timeout: float = 30) -> subprocess.CompletedProcess:
         try:

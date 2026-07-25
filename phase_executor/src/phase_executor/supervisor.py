@@ -533,13 +533,21 @@ class TmuxSupervisor:
             # partial spawn could not read as "nothing created", but that was both unnecessary
             # and destructive: unnecessary because EACH BACKEND already cleans up its own
             # partial spawn (HerdrBackend's new_session closes the pane it created if rename or
-            # run fails — see its try/finally; tmux's new-session is atomic, so there is no
-            # partial state to clean), and destructive because session names are DETERMINISTIC:
-            # on tmux's ordinary `duplicate session: <name>` refusal (confirmed present in the
-            # installed binary and reproduced live) the cleanup below would have called
-            # kill-session on the ALREADY-EXISTING same-name session — killing something this
-            # launch never created. Partial-spawn cleanup belongs to the backend that knows what
-            # it created; the supervisor must not guess from a returncode.
+            # run fails — see its try/finally), and destructive because session names are
+            # DETERMINISTIC: on tmux's ordinary `duplicate session: <name>` refusal (confirmed
+            # present in the installed binary and reproduced live) the cleanup below would have
+            # called kill-session on the ALREADY-EXISTING same-name session — killing something
+            # this launch never created. Partial-spawn cleanup belongs to the backend that knows
+            # what it created; the supervisor must not guess from a returncode.
+            #
+            # Precision about tmux, probed live rather than assumed (pass 9): a NONZERO
+            # `new-session` means no session was created — the `duplicate session` refusal
+            # creates nothing. The cases that DO create something (a bad `-c` cwd, a bad argv)
+            # return rc=0 instead, so they take the ordinary post-spawn path below where
+            # `spawned` is already True and teardown works by name. So the case this guard must
+            # be right about is exactly the one where nothing exists to tear down. (An earlier
+            # draft of this comment claimed "new-session is atomic", which is looser than what
+            # was actually observed.)
             res = resolved_backend.new_session(sock, name, handle.path, argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")

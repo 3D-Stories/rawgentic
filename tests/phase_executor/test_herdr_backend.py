@@ -762,3 +762,76 @@ def test_kill_session_other_close_error_is_still_a_failure():
     be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
     res = be.kill_session("w1", "sess1")
     assert res.returncode != 0
+
+
+# ---- pass 10: partial-spawn cleanup must RETRY and VERIFY, by pane_id ----
+
+def test_new_session_run_failure_retries_close_then_verifies():
+    """Pass-10 High: with split+rename succeeded and `pane run` failing, this backend's close is
+    the ONLY cleanup (pass 9 correctly stopped the supervisor from making a second NAME-based
+    attempt -- that name-based path is what let a `duplicate session` refusal destroy a
+    pre-existing session). So a single failed close left a labeled pane with a possibly-live
+    payload. Cleanup now retries by pane_id and then probes `pane get` to confirm absence."""
+    calls = []
+
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        verb = cmd[2]
+        if verb == "split":
+            return _split_ok()
+        if verb == "rename":
+            return _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "s1"}}})
+        if verb == "run":
+            return _json_err(None, code="internal_error", message="exec failed")
+        if verb == "close":
+            return _json_err(None, code="internal_error", message="close failed")
+        if verb == "get":
+            return _json_err(None, code="pane_not_found", message="gone")   # verifiably absent
+        return subprocess.CompletedProcess(None, 0, "", "")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    res = be.new_session("w1", "s1", "/wt", ["argv"])
+    assert res.returncode != 0
+    closes = [c for c in calls if len(c) > 2 and c[2] == "close"]
+    gets = [c for c in calls if len(c) > 2 and c[2] == "get"]
+    assert closes, "no close was attempted"
+    assert all(c[3] == "w1:p9" for c in closes), "cleanup must address the pane by ID, not name"
+    assert gets, "a failed close must be followed by a verification probe"
+    assert be._last_cleanup_confirmed is True   # noqa: SLF001 -- verified absent
+
+
+def test_new_session_cleanup_unconfirmed_when_close_and_probe_both_fail():
+    calls = []
+
+    def run(cmd, *, env=None, timeout=30):
+        calls.append(list(cmd))
+        verb = cmd[2]
+        if verb == "split":
+            return _split_ok()
+        if verb == "rename":
+            return _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "s1"}}})
+        return _json_err(None, code="internal_error", message="daemon down")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    res = be.new_session("w1", "s1", "/wt", ["argv"])
+    assert res.returncode != 0
+    assert be._last_cleanup_confirmed is False  # noqa: SLF001 -- honest: could not confirm
+    closes = [c for c in calls if len(c) > 2 and c[2] == "close"]
+    assert len(closes) >= 2, "cleanup must RETRY, not give up after one failed close"
+
+
+def test_new_session_cleanup_survives_a_raising_close():
+    def run(cmd, *, env=None, timeout=30):
+        verb = cmd[2]
+        if verb == "split":
+            return _split_ok()
+        if verb == "rename":
+            return _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "s1"}}})
+        if verb == "run":
+            return _json_err(None, code="internal_error", message="exec failed")
+        raise TimeoutError("stub: cleanup call timed out")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    res = be.new_session("w1", "s1", "/wt", ["argv"])
+    assert res.returncode != 0, "the REAL failure must survive a raising cleanup"
+    assert be._last_cleanup_confirmed is False  # noqa: SLF001

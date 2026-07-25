@@ -83,52 +83,44 @@ class Liveness(str, enum.Enum):
 # <sock>" splits on its PARENTHETICAL — `(No such file or directory)` means the socket does
 # not exist, so no server exists, so the session verifiably does not exist; `(Permission
 # denied)` means we could not look at all. Same prefix, OPPOSITE verdicts.
-_TMUX_GONE_PATTERNS = (
-    re.compile(r"can't find session", re.I),          # server up, session absent
-    re.compile(r"no server running on", re.I),        # socket present, no tmux server
-    re.compile(r"error connecting to .*\(no such file or directory\)", re.I),
-)
-
-# tmux 3.4's exact diagnostic for an EMPTY but still-running server (confirmed in the installed
-# binary via `strings`), reachable when a user's config sets `exit-empty off`. It gets a
-# WHOLE-MESSAGE match, not a search: it is a short generic phrase, and pass 9 confirmed that a
-# line-anchored `re.M` search let `"Permission denied\nno sessions"` classify as CONFIRMED_GONE
-# — recreating the exact operational-failure-as-death class the tri-state exists to eliminate.
-_TMUX_NO_SESSIONS = re.compile(r"\A\s*no sessions\s*\Z", re.I)
-
-# Messages that prove the probe ITSELF could not answer. These take PRECEDENCE over any absence
-# pattern (pass 9): if a stream carries an operational error, no co-occurring absence phrase may
-# promote the result to "gone". Fail-safe by construction, not by ordering luck.
-_TMUX_OPERATIONAL_PATTERNS = (
-    re.compile(r"permission denied", re.I),
-    re.compile(r"protocol version mismatch", re.I),
-    re.compile(r"\(operation not permitted\)", re.I),
+# tmux's ABSENCE diagnostics, as WHOLE-MESSAGE patterns — an ALLOWLIST, not a denylist of
+# operational errors (Step-11 pass 10). Every string was OBSERVED from the pinned binary. The
+# earlier design searched for absence phrases as substrings and separately denylisted known
+# operational phrases, which could never be airtight: a real tmux operational diagnostic absent
+# from the denylist (`failed to send command`) sitting beside an absence phrase still classified
+# CONFIRMED_GONE. Inverting it removes the failure mode by construction — a message must MATCH a
+# known absence diagnostic in full to mean "gone"; anything unrecognised is INDETERMINATE.
+#
+# The sharp edge: `error connecting to <sock>` splits on its PARENTHETICAL —
+# `(No such file or directory)` means the socket does not exist, so no server, so the session
+# verifiably does not exist; `(Permission denied)` means we could not look at all.
+_TMUX_ABSENCE_MESSAGES = (
+    re.compile(r"\A\s*can't find session:?\s*\S*\s*\Z", re.I),   # server up, session absent
+    re.compile(r"\A\s*no server running on\s+\S+\s*\Z", re.I),   # socket present, no server
+    re.compile(r"\A\s*error connecting to\s+\S+\s*\(no such file or directory\)\s*\Z", re.I),
+    re.compile(r"\A\s*no sessions\s*\Z", re.I),                  # empty but running server
 )
 
 
 def classify_tmux_result(res: subprocess.CompletedProcess) -> Liveness:
     """Classify a raw tmux invocation into the tri-state. rc=0 is ALIVE/confirmed-success.
-    A nonzero is CONFIRMED_GONE only when a stream carries a known ABSENCE message AND no
-    operational-failure indicator; anything else nonzero (permission denied, protocol error, an
-    unrecognised or mixed message) is INDETERMINATE — fail-safe, because mistaking "couldn't
-    look" for "it's dead" is what kills healthy jobs.
 
-    Each stream is examined SEPARATELY: concatenating stderr and stdout previously let an
-    operational error in one stream sit beside an absence phrase in the other and match (pass 9).
+    A nonzero is CONFIRMED_GONE only when EVERY non-empty stream matches a known absence
+    diagnostic IN FULL. Anything else — an unrecognised message, a mixed/multi-line body, an
+    operational error beside an absence phrase, a stream this function does not understand — is
+    INDETERMINATE. Fail-safe by construction: mistaking "couldn't look" for "it's dead" is what
+    kills healthy jobs, and an allowlist cannot be defeated by a tmux diagnostic nobody
+    enumerated (Step-11 pass 10).
     """
     if res.returncode == 0:
         return Liveness.CONFIRMED_ALIVE
-    streams = [(res.stderr or "").strip(), (res.stdout or "").strip()]
-    if any(pat.search(t) for t in streams if t for pat in _TMUX_OPERATIONAL_PATTERNS):
-        return Liveness.INDETERMINATE       # operational evidence WINS over any absence phrase
-    for text in streams:
-        if not text:
-            continue
-        if _TMUX_NO_SESSIONS.match(text):
-            return Liveness.CONFIRMED_GONE
-        if any(pat.search(text) for pat in _TMUX_GONE_PATTERNS):
-            return Liveness.CONFIRMED_GONE
+    streams = [t for t in ((res.stderr or "").strip(), (res.stdout or "").strip()) if t]
+    if not streams:
+        return Liveness.INDETERMINATE       # nonzero with no message at all explains nothing
+    if all(any(pat.match(t) for pat in _TMUX_ABSENCE_MESSAGES) for t in streams):
+        return Liveness.CONFIRMED_GONE
     return Liveness.INDETERMINATE
+
 
 
 
