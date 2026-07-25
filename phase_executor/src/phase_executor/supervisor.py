@@ -528,19 +528,22 @@ class TmuxSupervisor:
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
-            # #638 Step-11 finding (pass 6): `spawned` used to flip only AFTER a rc=0
-            # new_session, so a PARTIAL spawn read as "nothing was created". A backend's
-            # new_session is not necessarily atomic — HerdrBackend splits a pane, renames it and
-            # issues `pane run` before returning, and tmux's own `new-session` can time out
-            # after the server accepted it. So a NONZERO new_session means creation is
-            # INDETERMINATE, not "nothing happened": mark it possibly-spawned BEFORE the call
-            # and let the teardown below decide, since teardown is the only thing that can
-            # actually confirm. A genuine pre-spawn failure costs one idempotent kill_session
-            # (which confirms "already gone" and frees the permit normally).
-            spawned = True
+            # `spawned` flips only AFTER a confirmed-successful new_session — the
+            # origin/main behaviour, restored in pass 9. Pass 6 moved it BEFORE the call so a
+            # partial spawn could not read as "nothing created", but that was both unnecessary
+            # and destructive: unnecessary because EACH BACKEND already cleans up its own
+            # partial spawn (HerdrBackend's new_session closes the pane it created if rename or
+            # run fails — see its try/finally; tmux's new-session is atomic, so there is no
+            # partial state to clean), and destructive because session names are DETERMINISTIC:
+            # on tmux's ordinary `duplicate session: <name>` refusal (confirmed present in the
+            # installed binary and reproduced live) the cleanup below would have called
+            # kill-session on the ALREADY-EXISTING same-name session — killing something this
+            # launch never created. Partial-spawn cleanup belongs to the backend that knows what
+            # it created; the supervisor must not guess from a returncode.
             res = resolved_backend.new_session(sock, name, handle.path, argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
+            spawned = True
             shown = resolved_backend.pane_pid(sock, name)
             if shown.returncode != 0 or not (shown.stdout or "").strip().isdigit():
                 raise SupervisorError(f"pane_pid unreadable: {(shown.stderr or '').strip()}")

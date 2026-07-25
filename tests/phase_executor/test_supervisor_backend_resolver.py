@@ -549,40 +549,41 @@ class _RefusingSpawn(StubBackend):
         return subprocess.CompletedProcess([], 1, "", "new_session refused")
 
 
-def test_launch_nonzero_new_session_attempts_teardown_then_frees_on_confirmation(tmp_path):
-    # Step-11 pass 6 (High): `spawned` used to flip only AFTER a rc=0 new_session, so a
-    # PARTIAL spawn (pane created, `pane run` timed out, cleanup failed) read as "nothing was
-    # created" -- teardown skipped, permit released, possibly-live payload left behind. A
-    # nonzero new_session must now be treated as possibly-spawned: teardown IS attempted, and
-    # the permit is freed only because that teardown CONFIRMS (rc 0 / already-gone).
-    be = _RefusingSpawn("herdr", kill_session_returncode=0)
+def test_launch_refusal_that_created_nothing_attempts_no_teardown(tmp_path):
+    """Pass 9 replaces the pass-6 contract these two tests used to assert. Pass 6 set
+    `spawned = True` BEFORE new_session so a nonzero return was treated as possibly-created and
+    always triggered teardown. That was unnecessary AND destructive: unnecessary because each
+    backend already cleans up its own partial spawn (HerdrBackend closes the pane it created if
+    rename/run fails; tmux's new-session is atomic), and destructive because deterministic
+    session names meant tmux's `duplicate session` refusal made cleanup kill the ALREADY-EXISTING
+    same-name session. `spawned` therefore flips only after a CONFIRMED-successful new_session,
+    matching origin/main -- so a refusal attempts no teardown, and the permit is still freed."""
+    be = _RefusingSpawn("herdr")
     sup = _sup(tmp_path, herdr=be)
     identity = _identity()
     with pytest.raises(SupervisorError):
         sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
                    terminal_backend="herdr")
-    assert any(c[0] == "kill_session" for c in be.calls), \
-        "a nonzero new_session is INDETERMINATE — teardown must still be attempted"
-    assert sup._permits == {}, \
-        "a CONFIRMED teardown must free the slot (else every ordinary spawn refusal leaks one)"
-
-
-def test_launch_nonzero_new_session_unconfirmed_teardown_releases_per_the_documented_limitation(tmp_path):
-    """The other half of the owner scope decision (pass 8): new_session failed AND teardown
-    cannot confirm, so a pane may genuinely be live -- yet the slot is still released, because
-    every alternative tried in passes 5-8 was itself a defect (see the sibling test's docstring
-    and the KNOWN LIMITATION note in terminal_backend.py). What must NOT happen is inventing a
-    residue JobRecord: that was the root of three separate pass-8 findings."""
-    be = _RefusingSpawn("herdr", kill_session_returncode=1)
-    sup = _sup(tmp_path, herdr=be)
-    identity = _identity()
-    with pytest.raises(SupervisorError):
-        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
-                   terminal_backend="herdr")
-    assert any(c[0] == "kill_session" for c in be.calls), "teardown must still be ATTEMPTED"
-    assert sup._permits == {}                                        # noqa: SLF001
-    assert list(sup._registry.by_run(identity.run_id)) == [], (      # noqa: SLF001
+    assert not any(c[0] == "kill_session" for c in be.calls), (
+        "nothing was created, so nothing may be torn down (pass-9 duplicate-session finding)")
+    assert sup._permits == {}, "the permit must still be released"     # noqa: SLF001
+    assert list(sup._registry.by_run(identity.run_id)) == [], (        # noqa: SLF001
         "no residue record may be invented on this path")
+
+
+def test_launch_post_spawn_failure_does_attempt_teardown(tmp_path):
+    """The other side: once new_session SUCCEEDED, a later failure (an unreadable pane_pid) has
+    a real session to clean up, so teardown IS attempted -- and the permit is released either
+    way per the documented KNOWN LIMITATION (#648)."""
+    be = StubBackend("herdr", pane_pid_returncode=1)
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    with pytest.raises(SupervisorError):
+        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
+                   terminal_backend="herdr")
+    assert any(c[0] == "kill_session" for c in be.calls), (
+        "a CONFIRMED spawn followed by a failure must tear the session down")
+    assert sup._permits == {}                                          # noqa: SLF001
 
 
 def _running_record(tmp_path, identity, name="rg-h"):
@@ -649,3 +650,47 @@ def test_await_deadline_verified_kill_with_late_sentinel_frees_the_permit(tmp_pa
     assert seen["n"] >= 2, "the deadline re-check branch was never reached"
     assert state == "completed", state
     assert rec.session_name not in sup._permits                      # noqa: SLF001
+
+
+# ---- restored in pass 9: this predates the residue record and guards RETAINED behaviour ----
+
+def test_await_job_indeterminate_probe_does_not_abort_and_is_bounded(tmp_path):
+    """Added by e13d812 (pass 6), before the residue record existed, and deleted BY MISTAKE in
+    the pass-8 revert (pass-9 finding: the revert removed unrelated, still-load-bearing
+    coverage). The behaviour it guards is retained: _live() raises SupervisorError on an
+    INDETERMINATE probe, and await_job() must catch it -- letting it propagate aborted a healthy
+    dispatch with its permit held (the pass-4 regression). An indeterminate probe means "not
+    known dead": keep polling to the EXISTING deadline, then take the ordinary timeout path.
+    """
+    be = StubBackend("herdr", raise_has_session=True)
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    rec = _running_record(tmp_path, identity)
+    sup._registry.upsert(rec)  # noqa: SLF001
+    # must NOT raise, and must terminate on its own deadline rather than spinning forever
+    state, obs = sup.await_job(rec, poll_s=0.01, timeout_s=0.05)
+    assert state == "timed_out", state
+    assert obs is not None
+    assert any(c[0] == "has_session" for c in be.calls), "the probe was never attempted"
+
+
+def test_launch_tmux_duplicate_session_refusal_never_kills_the_existing_session(tmp_path):
+    """Pass-9 High: session names are DETERMINISTIC, so tmux's ordinary
+    `duplicate session: <name>` refusal (confirmed in the installed binary, reproduced live)
+    meant the pass-6 `spawned = True`-before-new_session made cleanup kill-session the
+    ALREADY-EXISTING same-name session -- destroying something this launch never created. No
+    teardown may be attempted for a refusal that created nothing; the permit is still released.
+    """
+    class _Duplicate(StubBackend):
+        def new_session(self, endpoint, name, cwd, argv, timeout=30):
+            self.calls.append(("new_session", endpoint, name, cwd, tuple(argv)))
+            return subprocess.CompletedProcess([], 1, "", f"duplicate session: {name}")
+
+    be = _Duplicate("tmux")
+    sup = _sup(tmp_path, tmux=be)
+    identity = _identity()
+    with pytest.raises(SupervisorError):
+        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity))
+    assert not any(c[0] == "kill_session" for c in be.calls), (
+        "a refusal that created NOTHING must never tear down the pre-existing same-name session")
+    assert sup._permits == {}, "the permit must still be released"  # noqa: SLF001

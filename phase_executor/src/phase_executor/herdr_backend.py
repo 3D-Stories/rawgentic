@@ -131,7 +131,10 @@ class HerdrBackend:
         # Step-11 pass 5 breadcrumb: whether the LAST orphan-cleanup `close` confirmed the
         # pane is gone. None = no cleanup has run. The supervisor does not read this (its own
         # `kill_session` result is the load-bearing safety signal); it exists so an
-        # unconfirmed cleanup is inspectable rather than silently swallowed.
+        # unconfirmed cleanup is inspectable rather than silently swallowed. NOTE (pass 9):
+        # the supervisor no longer branches on this — its launch teardown releases the permit
+        # unconditionally per the documented KNOWN LIMITATION (#648). This stays purely as an
+        # inspectable breadcrumb; it is NOT load-bearing for any safety decision.
         self._last_cleanup_confirmed: Optional[bool] = None
 
     def _herdr(self, *args, timeout: float = 30) -> subprocess.CompletedProcess:
@@ -395,10 +398,9 @@ class HerdrBackend:
                 #
                 # Step-11 pass 5: it is best-effort but no longer SILENT. A cleanup that
                 # cannot confirm the pane is gone means a possibly-live payload, so record
-                # that on the returned result — the supervisor's own launch teardown makes
-                # the load-bearing safety call (it holds the quota permit unless
-                # `kill_session` CONFIRMS teardown), and this note is the operator-visible
-                # breadcrumb for the pane itself.
+                # that on the returned result. NOTE (pass 9): the supervisor's launch teardown
+                # releases the permit UNCONDITIONALLY (documented KNOWN LIMITATION, #648), so
+                # this is an operator-visible breadcrumb only — not a safety signal.
                 self._last_cleanup_confirmed = False
                 try:
                     close_res = self._herdr("close", pane_id, timeout=timeout)

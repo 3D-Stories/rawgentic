@@ -64,8 +64,10 @@ class Liveness(str, enum.Enum):
     instead of on a returncode:
 
     - ``CONFIRMED_ALIVE``   — the pane/session verifiably exists.
-    - ``CONFIRMED_GONE``    — it verifiably does NOT exist. Safe to release a quota permit,
-      safe to treat as dead. For a teardown, this is the ONLY outcome that confirms it.
+    - ``CONFIRMED_GONE``    — the SESSION/PANE verifiably does not exist. This is evidence
+      about the NAMESPACE only: it does NOT establish that the process tree is dead (see the
+      KNOWN LIMITATION above — the provider runs in its own process group and can outlive its
+      pane). For a teardown it is the only outcome that confirms the session is gone.
     - ``INDETERMINATE``     — the probe itself failed (socket permission error, daemon
       hiccup, timeout, unparseable body). NOT a fact about the job: the supervisor holds
       the permit and excludes the record from destructive sweeps for that cycle.
@@ -85,27 +87,49 @@ _TMUX_GONE_PATTERNS = (
     re.compile(r"can't find session", re.I),          # server up, session absent
     re.compile(r"no server running on", re.I),        # socket present, no tmux server
     re.compile(r"error connecting to .*\(no such file or directory\)", re.I),
-    # tmux 3.4's exact diagnostic for an EMPTY but still-running server (confirmed present in
-    # the installed binary via `strings`). Reachable when a user's config sets `exit-empty off`
-    # — this backend deliberately does not isolate user tmux configuration. Without this row an
-    # ordinary absent target classified INDETERMINATE, which holds permits and excludes records
-    # (pass-8 finding). Anchored so it cannot match a longer unrelated message.
-    re.compile(r"^\s*no sessions\s*$", re.I | re.M),
+)
+
+# tmux 3.4's exact diagnostic for an EMPTY but still-running server (confirmed in the installed
+# binary via `strings`), reachable when a user's config sets `exit-empty off`. It gets a
+# WHOLE-MESSAGE match, not a search: it is a short generic phrase, and pass 9 confirmed that a
+# line-anchored `re.M` search let `"Permission denied\nno sessions"` classify as CONFIRMED_GONE
+# — recreating the exact operational-failure-as-death class the tri-state exists to eliminate.
+_TMUX_NO_SESSIONS = re.compile(r"\A\s*no sessions\s*\Z", re.I)
+
+# Messages that prove the probe ITSELF could not answer. These take PRECEDENCE over any absence
+# pattern (pass 9): if a stream carries an operational error, no co-occurring absence phrase may
+# promote the result to "gone". Fail-safe by construction, not by ordering luck.
+_TMUX_OPERATIONAL_PATTERNS = (
+    re.compile(r"permission denied", re.I),
+    re.compile(r"protocol version mismatch", re.I),
+    re.compile(r"\(operation not permitted\)", re.I),
 )
 
 
 def classify_tmux_result(res: subprocess.CompletedProcess) -> Liveness:
-    """Classify a raw tmux invocation into the tri-state. rc=0 is ALIVE/confirmed-success;
-    a nonzero whose stderr matches a known ABSENCE message is CONFIRMED_GONE; anything else
-    nonzero (permission denied, protocol error, an unrecognised message) is INDETERMINATE —
-    fail-safe, because mistaking "couldn't look" for "it's dead" is what kills healthy jobs."""
+    """Classify a raw tmux invocation into the tri-state. rc=0 is ALIVE/confirmed-success.
+    A nonzero is CONFIRMED_GONE only when a stream carries a known ABSENCE message AND no
+    operational-failure indicator; anything else nonzero (permission denied, protocol error, an
+    unrecognised or mixed message) is INDETERMINATE — fail-safe, because mistaking "couldn't
+    look" for "it's dead" is what kills healthy jobs.
+
+    Each stream is examined SEPARATELY: concatenating stderr and stdout previously let an
+    operational error in one stream sit beside an absence phrase in the other and match (pass 9).
+    """
     if res.returncode == 0:
         return Liveness.CONFIRMED_ALIVE
-    text = f"{res.stderr or ''}\n{res.stdout or ''}"
-    for pat in _TMUX_GONE_PATTERNS:
-        if pat.search(text):
+    streams = [(res.stderr or "").strip(), (res.stdout or "").strip()]
+    if any(pat.search(t) for t in streams if t for pat in _TMUX_OPERATIONAL_PATTERNS):
+        return Liveness.INDETERMINATE       # operational evidence WINS over any absence phrase
+    for text in streams:
+        if not text:
+            continue
+        if _TMUX_NO_SESSIONS.match(text):
+            return Liveness.CONFIRMED_GONE
+        if any(pat.search(text) for pat in _TMUX_GONE_PATTERNS):
             return Liveness.CONFIRMED_GONE
     return Liveness.INDETERMINATE
+
 
 
 class TerminalBackend(Protocol):

@@ -155,3 +155,29 @@ def test_no_sessions_through_the_backend_surfaces():
     assert be2.probe_session("/tmp/s.sock", "x") is Liveness.CONFIRMED_GONE
     be3 = _tmux({"kill-session": _cp(1, "no sessions")})
     assert be3.close_session("/tmp/s.sock", "x") is Liveness.CONFIRMED_GONE
+
+
+# ---- pass 9: operational evidence must WIN over a co-occurring absence phrase ----
+
+@pytest.mark.parametrize("stderr", [
+    "Permission denied\nno sessions",          # THE pass-9 bug: re.M matched line 2 -> "gone"
+    "no sessions\nPermission denied",          # order must not matter
+    "protocol version mismatch\nno sessions",
+])
+def test_operational_message_beside_an_absence_phrase_is_indeterminate(stderr):
+    # `no sessions` is a short generic phrase, so it gets a WHOLE-MESSAGE match, and any
+    # operational indicator takes PRECEDENCE by construction -- not by ordering luck. Without
+    # this, a live server behind a permission error classified as dead: exactly the
+    # operational-failure-as-death class the tri-state exists to eliminate.
+    assert classify_tmux_result(_cp(1, stderr)) is Liveness.INDETERMINATE
+
+
+def test_absence_in_one_stream_beside_an_operational_error_in_the_other_is_indeterminate():
+    # the classifier used to CONCATENATE stderr+stdout, so a mixed pair could match
+    res = subprocess.CompletedProcess(["tmux"], 1, "can't find session: x", "Permission denied")
+    assert classify_tmux_result(res) is Liveness.INDETERMINATE
+
+
+def test_no_sessions_on_stdout_only_still_classifies():
+    res = subprocess.CompletedProcess(["tmux"], 1, "no sessions", "")
+    assert classify_tmux_result(res) is Liveness.CONFIRMED_GONE
