@@ -21,6 +21,7 @@ reported as a regression either.
 """
 import pathlib
 import sys
+import uuid
 
 import pytest
 
@@ -68,7 +69,10 @@ def test_production_path_new_session_preserves_identity(tmp_path):
     from phase_executor.terminal_backend import Liveness
 
     backend = HerdrBackend(workspace_id=WORKSPACE)
-    label = f"{ac1.LABEL_PREFIX}newsession"
+    # uuid-suffixed like every qualify() rep: a FIXED label collides with any pane a crashed
+    # earlier run left behind, and `_resolve_pane_id` raises on a duplicate label — which would
+    # surface as a confusing hard failure instead of a clean run.
+    label = f"{ac1.LABEL_PREFIX}newsession-{uuid.uuid4().hex[:6]}"
     workdir = tmp_path / label
     workdir.mkdir(parents=True, exist_ok=True)
     observation = workdir / "observation.json"

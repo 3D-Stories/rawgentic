@@ -254,6 +254,42 @@ def test_provisioning_failure_is_an_env_fault_not_a_regression(tmp_path):
     assert ac1.decide([rep], leaked=(), expected_reps=1) is ac1.Verdict.ERROR
 
 
+def test_self_timed_out_worker_is_an_env_fault_not_a_pass(tmp_path):
+    """A worker that hit its own self-timeout was never released, so the "mid-run" read is not
+    provably mid-run — the rep's guarantee is weakened and must not count as a clean pass."""
+    daemon = FakeDaemon()
+    original = daemon._write_sentinel
+
+    def timed_out(argv):
+        original(argv)
+        obs = pathlib.Path(argv[argv.index("--sentinel") + 1])
+        payload = json.loads(obs.read_text(encoding="utf-8"))
+        payload["timed_out"] = True
+        obs.write_text(json.dumps(payload), encoding="utf-8")
+
+    daemon._write_sentinel = timed_out
+    rep = _run_one(daemon, tmp_path)
+    assert rep.env_faults and not rep.identity_failures, rep
+    assert any("SENTINEL_SELF_TIMEOUT_S" in f for f in rep.env_faults), rep.env_faults
+    assert ac1.decide([rep], leaked=(), expected_reps=1) is ac1.Verdict.ERROR
+
+
+def test_unreadable_proc_cmdline_is_an_env_fault_not_a_regression(tmp_path):
+    """`/proc` unreadable means we could not observe the transition. The pid-identity chain is
+    the definitive signal; an unobserved cmdline must not be reported as a regression."""
+    daemon = FakeDaemon()
+    rep = ac1.run_rep(
+        "cold",
+        backend=__import__("phase_executor.herdr_backend", fromlist=["HerdrBackend"]).HerdrBackend(
+            run=daemon, workspace_id=daemon.workspace),
+        endpoint=daemon.workspace, run_herdr=daemon, workdir=tmp_path,
+        label=f"{ac1.LABEL_PREFIX}unreadable",
+        read_cmdline=lambda _pid: None, deadline_s=1.0, poll_s=0.01,
+    )
+    assert rep.env_faults and not rep.identity_failures, rep
+    assert any("cmdline" in f for f in rep.env_faults), rep.env_faults
+
+
 def test_missing_sentinel_is_an_env_fault(tmp_path):
     daemon = FakeDaemon(write_sentinel=False)
     rep = _run_one(daemon, tmp_path)

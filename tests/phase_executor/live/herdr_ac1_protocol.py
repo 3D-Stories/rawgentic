@@ -306,7 +306,13 @@ def _assess(rep: RepResult, worker_argv: list) -> None:
         rep.identity_failures.append(
             f"worker's own os.getpid() {rep.sentinel_pid} != pre-exec shell pid {rep.pre_pid} — "
             f"exec did not replace the shell (a wrapping child would look exactly like this)")
-    if rep.post_cmdline != worker_argv:
+    if rep.post_cmdline is None:
+        # Self-review finding: an UNREADABLE /proc entry is "could not observe", not "the exec
+        # transition failed" — the pid-identity assertions above are the definitive signal and
+        # stand on their own, so this must not be dressed up as a regression.
+        rep.env_faults.append(
+            f"could not read /proc/{rep.mid_pid}/cmdline — cmdline transition unobserved")
+    elif rep.post_cmdline != worker_argv:
         rep.identity_failures.append(
             f"post-exec /proc cmdline did not become the worker argv (got {rep.post_cmdline!r})")
     if rep.pre_cmdline is not None and rep.pre_cmdline == worker_argv:
@@ -318,6 +324,15 @@ def _assess(rep: RepResult, worker_argv: list) -> None:
         rep.identity_failures.append(
             f"worker did not record a clean completion (phase={payload.get('phase')!r}, "
             f"exit_code={payload.get('exit_code')!r})")
+    elif payload.get("timed_out"):
+        # Self-review finding: the worker self-timed-out instead of being released, so the
+        # release handshake did NOT hold — which means the "mid-run" read is not provably
+        # mid-run and this rep's identity chain proves less than it appears to. A rep whose
+        # guarantee was weakened must not be counted as a clean pass; it is an env fault
+        # (slow host / stalled harness), never a regression claim.
+        rep.env_faults.append(
+            "worker hit its own SENTINEL_SELF_TIMEOUT_S instead of being released — the mid-run "
+            "read is not provably mid-run, so this rep does not qualify anything")
 
 
 def run_rep(condition: str, *, backend, endpoint: str, run_herdr, workdir, label: str,
