@@ -346,7 +346,7 @@ def test_kill_job_refuses_pid_one(tmp_path, recording_signals):
     record must produce ZERO signal attempts."""
     sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
                          registry_root=str(tmp_path / "reg"),
-                         run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+                         run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "can't find session: t"))
     rec = _make_record(WorktreeIdentity(run_id="r1", seat="build", attempt=1), tmp_path,
                        pane_pid=1, pane_pgid=1, provider_pgid=1)
     sup._kill_job(rec, grace_s=0.2)
@@ -360,7 +360,7 @@ def test_kill_job_refuses_reused_pid(tmp_path, recording_signals):
     try:
         sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
                              registry_root=str(tmp_path / "reg"),
-                             run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+                             run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "can't find session: t"))
         rec = _make_record(WorktreeIdentity(run_id="r1", seat="build", attempt=1), tmp_path,
                            pane_pid=bystander.pid, pane_pgid=os.getpgid(bystander.pid),
                            pane_start_time="not-the-real-start-time")
@@ -381,7 +381,7 @@ def test_provider_target_requires_verified_starttime(tmp_path, recording_signals
     try:
         sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
                              registry_root=str(tmp_path / "reg"),
-                             run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+                             run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "can't find session: t"))
         rec = _make_record(WorktreeIdentity(run_id="r1", seat="build", attempt=1), tmp_path,
                            capture_dir=str(tmp_path / "cd"))
         side = Path(tmp_path / "cd")
@@ -432,7 +432,9 @@ def test_recover_fail_at_resume_cap(tmp_path):
     reg.upsert(rec)
 
     def dead_run(cmd, **kw):
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="no session")
+        # real tmux wording (pass-7: the classifier keys on the ACTUAL message; an
+        # invented one is indeterminate, not confirmed-dead)
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="can't find session: t")
 
     sup = TmuxSupervisor(snapshot=_snapshot(), quota=QuotaCoordinator(str(tmp_path / "q"), {}),
                          capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"),
@@ -512,7 +514,7 @@ def _quota_sup(tmp_path):
     reg = JobRegistry(str(tmp_path / "reg"))
     sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
                          registry_root=str(tmp_path / "reg"), registry=reg,
-                         run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+                         run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "can't find session: t"))
     return sup, reg
 
 

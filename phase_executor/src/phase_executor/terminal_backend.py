@@ -31,8 +31,61 @@ minimal) and is each backend implementation's own responsibility, never the supe
 """
 from __future__ import annotations
 
+import enum
+import re
 import subprocess
 from typing import Optional, Protocol
+
+
+class Liveness(str, enum.Enum):
+    """The TRI-STATE a liveness/teardown probe can actually report (#638 Step-11 pass 7).
+
+    Seven review passes on #638 each found the same bug class: an OPERATIONAL failure being
+    read as a definitive answer. The root cause was structural, not a series of unrelated
+    slips — every probe returned a ``CompletedProcess`` whose ``returncode`` conflates "I
+    confirmed it is gone" with "I could not tell", so every call site had to guess, and each
+    guess-site fixed in isolation created a new wrong guess somewhere adjacent.
+
+    A probe therefore reports one of THREE things, and the supervisor branches on the enum
+    instead of on a returncode:
+
+    - ``CONFIRMED_ALIVE``   — the pane/session verifiably exists.
+    - ``CONFIRMED_GONE``    — it verifiably does NOT exist. Safe to release a quota permit,
+      safe to treat as dead. For a teardown, this is the ONLY outcome that confirms it.
+    - ``INDETERMINATE``     — the probe itself failed (socket permission error, daemon
+      hiccup, timeout, unparseable body). NOT a fact about the job: the supervisor holds
+      the permit and excludes the record from destructive sweeps for that cycle.
+    """
+
+    CONFIRMED_ALIVE = "confirmed_alive"
+    CONFIRMED_GONE = "confirmed_gone"
+    INDETERMINATE = "indeterminate"
+
+
+# tmux's own stderr, classified from a live probe against the pinned binary (#638 pass 7 —
+# every string below was OBSERVED, none inferred). The sharp edge: "error connecting to
+# <sock>" splits on its PARENTHETICAL — `(No such file or directory)` means the socket does
+# not exist, so no server exists, so the session verifiably does not exist; `(Permission
+# denied)` means we could not look at all. Same prefix, OPPOSITE verdicts.
+_TMUX_GONE_PATTERNS = (
+    re.compile(r"can't find session", re.I),          # server up, session absent
+    re.compile(r"no server running on", re.I),        # socket present, no tmux server
+    re.compile(r"error connecting to .*\(no such file or directory\)", re.I),
+)
+
+
+def classify_tmux_result(res: subprocess.CompletedProcess) -> Liveness:
+    """Classify a raw tmux invocation into the tri-state. rc=0 is ALIVE/confirmed-success;
+    a nonzero whose stderr matches a known ABSENCE message is CONFIRMED_GONE; anything else
+    nonzero (permission denied, protocol error, an unrecognised message) is INDETERMINATE —
+    fail-safe, because mistaking "couldn't look" for "it's dead" is what kills healthy jobs."""
+    if res.returncode == 0:
+        return Liveness.CONFIRMED_ALIVE
+    text = f"{res.stderr or ''}\n{res.stdout or ''}"
+    for pat in _TMUX_GONE_PATTERNS:
+        if pat.search(text):
+            return Liveness.CONFIRMED_GONE
+    return Liveness.INDETERMINATE
 
 
 class TerminalBackend(Protocol):
@@ -74,6 +127,29 @@ class TerminalBackend(Protocol):
     def resolve_endpoint(self, run_id: str) -> str: ...
 
     def teardown_endpoint(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess: ...
+
+    # -- the TRI-STATE surface (#638 Step-11 pass 7) --------------------------------------
+    # These are what the supervisor actually calls for any decision with a destructive or
+    # quota consequence. They wrap the raw methods above and classify the result, so a
+    # backend's own knowledge of what its errors MEAN stays inside that backend and the
+    # supervisor never re-derives it from a returncode. The raw methods remain for callers
+    # that only need transport.
+
+    def probe_session(self, endpoint: str, name: str, timeout: float = 30) -> "Liveness":
+        """Does this session exist? Never raises — an unusable probe is INDETERMINATE."""
+        ...
+
+    def close_session(self, endpoint: str, name: str, timeout: float = 30) -> "Liveness":
+        """Tear it down. CONFIRMED_GONE is the ONLY outcome that confirms teardown (an
+        already-absent session counts — that is the idempotent case). Never raises."""
+        ...
+
+    def enumerate_sessions(self, endpoint: str,
+                           timeout: float = 30) -> "tuple[Liveness, list]":
+        """(verdict, names). CONFIRMED_* ⇒ `names` is a reliable enumeration (possibly
+        empty). INDETERMINATE ⇒ `names` is meaningless and the caller must not treat an
+        absent name as evidence of death. Never raises."""
+        ...
 
 
 class PreflightResultLike(Protocol):
@@ -176,3 +252,40 @@ class TmuxBackend:
 
     def teardown_endpoint(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess:
         return self._tmux(endpoint, "kill-server", timeout=timeout)
+
+    # -- tri-state surface (#638 Step-11 pass 7) -----------------------------------------
+
+    def probe_session(self, endpoint: str, name: str, timeout: float = 30) -> Liveness:
+        try:
+            return classify_tmux_result(self.has_session(endpoint, name, timeout=timeout))
+        except Exception:  # noqa: BLE001 — a raising runner (timeout) is "couldn't tell"
+            return Liveness.INDETERMINATE
+
+    def close_session(self, endpoint: str, name: str, timeout: float = 30) -> Liveness:
+        """A tmux `kill-session` against an ALREADY-ABSENT session/server exits nonzero with
+        an absence message — confirmed-gone, i.e. teardown IS confirmed (the idempotent case).
+        Pass-7 finding: treating that ordinary nonzero as an unconfirmed teardown made every
+        routine spawn refusal pin a quota permit until the process exited."""
+        try:
+            res = self.kill_session(endpoint, name, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return Liveness.INDETERMINATE
+        if res.returncode == 0:
+            return Liveness.CONFIRMED_GONE  # kill-session succeeded ⇒ it is gone
+        return (Liveness.CONFIRMED_GONE
+                if classify_tmux_result(res) is Liveness.CONFIRMED_GONE
+                else Liveness.INDETERMINATE)
+
+    def enumerate_sessions(self, endpoint: str, timeout: float = 30) -> "tuple[Liveness, list]":
+        try:
+            res = self.list_sessions(endpoint, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return Liveness.INDETERMINATE, []
+        verdict = classify_tmux_result(res)
+        if verdict is Liveness.INDETERMINATE:
+            return verdict, []
+        # CONFIRMED_GONE here means "no server / no sessions" — a RELIABLE empty enumeration,
+        # which is exactly tmux's routine idle-socket answer and must keep flowing through the
+        # ordinary dead-job sweep rather than excluding the records.
+        names = [l.strip() for l in (res.stdout or "").splitlines() if l.strip()]
+        return verdict, names

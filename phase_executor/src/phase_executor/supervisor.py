@@ -44,7 +44,7 @@ from .pane_runner import _descendants, expected_capture_dir, sidecar_path
 from .quota import QuotaTimeout
 from .registry import (JobRecord, JobRegistry, ReapPlan, ReapPolicy, classify_recovery,
                        command_digest, handle_from_record, reap_plan, session_name)
-from .terminal_backend import TerminalBackend, TmuxBackend
+from .terminal_backend import Liveness, TerminalBackend, TmuxBackend
 from .worktree import WorktreeHandle, WorktreeIdentity, component_for
 
 TMUX_VERSION_FLOOR = (3, 0)  # verbs probed individually below; 3.4 is the spike-verified build
@@ -584,11 +584,14 @@ class TmuxSupervisor:
             # reporting (live on the endpoint, absent from the registry) — never blind-killed.
             teardown_confirmed = not spawned  # nothing spawned ⇒ nothing to tear down
             if spawned:
-                try:
-                    kres = resolved_backend.kill_session(sock, name)
-                    teardown_confirmed = kres.returncode == 0
-                except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
-                    teardown_confirmed = False
+                # #638 Step-11 pass 7: use the TRI-STATE close. CONFIRMED_GONE covers both a
+                # successful close AND an already-absent session — which is what an ORDINARY
+                # spawn refusal produces (real tmux `kill-session` against a nonexistent
+                # session/server exits nonzero with an absence message). The pass-6 code read
+                # that ordinary nonzero as an unconfirmed teardown and pinned the quota permit,
+                # so two routine refusals could exhaust the pool.
+                teardown_confirmed = (
+                    resolved_backend.close_session(sock, name) is Liveness.CONFIRMED_GONE)
             if teardown_confirmed:
                 cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
             else:
@@ -616,7 +619,7 @@ class TmuxSupervisor:
                         attempt_id=attempt_id, permit_ref=permit_ref,
                         command_digest="", provider_session_id=resume_session_id,
                         provider_exit_code=None, resume_attempts=resume_attempts,
-                        state="quarantined", created_at=self._clock(),
+                        state="quarantined", created_at=self._clock(), identity_unknown=True,
                         quarantine_reason=("launch failed with teardown UNCONFIRMED: a pane may "
                                            "still be live on this endpoint; permit held"),
                         terminal_backend=terminal_backend))
@@ -630,18 +633,19 @@ class TmuxSupervisor:
 
     def _live(self, record: JobRecord) -> bool:
         backend = self._resolve_backend(record.terminal_backend)
-        try:
-            res = backend.has_session(record.run_socket, record.session_name)
-        except Exception as exc:
-            # #638 Step-11 finding (round 2): has_session() may raise when the backend's
-            # own liveness check itself failed/was unparseable (herdr's list command
-            # erroring) rather than cleanly confirming "not found" — that is NOT
-            # "confirmed dead" and must not read as one here. Surface as SupervisorError
-            # so recover()/reap() can exclude the record from this cycle instead of
-            # killing a possibly-live job on a transient check failure.
+        # #638 Step-11 pass 7: branch on the backend's TRI-STATE verdict, never on a
+        # returncode. Seven passes each found the same class of bug — an operational failure
+        # read as a definitive answer — because `returncode != 0` conflates "confirmed gone"
+        # with "couldn't tell". INDETERMINATE surfaces as SupervisorError so recover()/reap()
+        # exclude the record for this cycle instead of killing a possibly-live job. (This is
+        # now correct for TMUX too: previously every tmux nonzero — including a socket
+        # permission error against a LIVE server — read as dead.)
+        verdict = backend.probe_session(record.run_socket, record.session_name)
+        if verdict is Liveness.INDETERMINATE:
             raise SupervisorError(
-                f"liveness check failed for {record.session_name!r}: {exc}") from exc
-        return res.returncode == 0
+                f"liveness check indeterminate for {record.session_name!r} "
+                f"(probe failed; not evidence of death)")
+        return verdict is Liveness.CONFIRMED_ALIVE
 
     def _sentinel(self, record: JobRecord) -> Optional[dict]:
         return read_sentinel(record)
@@ -764,6 +768,12 @@ class TmuxSupervisor:
         - a pane_pid whose /proc start-time no longer matches the record is a REUSED pid —
           a foreign process; it is treated as already dead and never snapshotted;
         - the caller's own pid and ancestor chain are excluded from any kill set."""
+        # #638 Step-11 pass 7: an unknown-identity record (no pane_pid ever captured) cannot
+        # be verified by PID at all — verify via the BACKEND instead. Returning True here
+        # (which the pid guards used to do by finding nothing to kill) let cancel()/reap()
+        # release the permit for a pane that may still have been live.
+        if self._identity_is_unknown(record):
+            return self._teardown_confirmed(record)
         pane_identity_ok = (record.pane_pid > 1
                             and _pid_alive(record.pane_pid)
                             and _proc_start_time(record.pane_pid) == record.pane_start_time)
@@ -837,6 +847,33 @@ class TmuxSupervisor:
                 pass
             return True
         return False
+
+    def _identity_is_unknown(self, record: JobRecord) -> bool:
+        """A record whose process identity was never captured (`pane_pid <= 1`) — the
+        launch-residue record `launch()` persists when a spawn fails with teardown
+        UNCONFIRMED. #638 Step-11 pass 7: such a record must read as identity-UNKNOWN, never
+        as "verified dead". The pid guards correctly refuse to signal on it, but that made
+        `_kill_job` find no targets, no residue, and return True — so `cancel()` and reap's
+        `retain_worktree` tier released its quota permit while the pane may still have been
+        live. For these records the ONLY acceptable death evidence is a backend-CONFIRMED
+        teardown.
+
+        Keyed on the EXPLICIT `identity_unknown` flag, never on a pid sentinel: `pane_pid=1`
+        is a long-established idiom in this repo's own suite for "no real process, verifies
+        dead immediately", and conflating the two changed behaviour for ~20 unrelated tests."""
+        return bool(record.identity_unknown)
+
+    def _teardown_confirmed(self, record: JobRecord) -> bool:
+        """Backend-confirmed teardown for an unknown-identity record: CONFIRMED_GONE only."""
+        try:
+            backend = self._resolve_backend(record.terminal_backend)
+        except SupervisorError:
+            return False  # cannot even address it ⇒ cannot confirm
+        try:
+            return backend.close_session(
+                record.run_socket, record.session_name) is Liveness.CONFIRMED_GONE
+        except Exception:  # noqa: BLE001 — an unusable close is not a confirmation
+            return False
 
     def _release_permit(self, record: JobRecord) -> None:
         cm = self._permits.pop(record.session_name, None)
@@ -1373,6 +1410,12 @@ class TmuxSupervisor:
         live process (the 2026-07-19 pane_pid=1 incident class). The provider group counts
         only when its identity VERIFIES (start-time-matched leader) — a recycled pgid must
         not wedge the reaper reporting a foreign group as \"not dead\" forever."""
+        # #638 Step-11 pass 7: an unknown-identity record has NO pid to reason over, so every
+        # pid test below vacuously reports "dead" — which sent it to a tier that releases its
+        # quota permit (retain_worktree) while the pane may still be live. Its death is only
+        # ever established by a backend-CONFIRMED teardown.
+        if self._identity_is_unknown(record):
+            return self._teardown_confirmed(record)
         if record.pane_pid > 1 and _pid_alive(record.pane_pid) and (
                 _proc_start_time(record.pane_pid) == record.pane_start_time):
             return False
@@ -1449,13 +1492,13 @@ class TmuxSupervisor:
             # list failure kill a healthy job. A plain nonzero RETURN (never raised) is
             # TmuxBackend's routine "no sessions on this socket" — confirmed-empty, not
             # excluded.
-            try:
-                res = backend.list_sessions(run_socket)
-            except Exception:  # noqa: BLE001 — genuinely indeterminate, not a returncode
+            verdict, names = backend.enumerate_sessions(run_socket)
+            if verdict is Liveness.INDETERMINATE:
                 unusable_pairs.add((backend, run_socket))
                 continue
-            if res.returncode == 0:
-                live_names |= {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
+            # a CONFIRMED verdict is a RELIABLE enumeration (possibly empty — tmux's routine
+            # idle-socket answer), so those records keep flowing through the ordinary sweep.
+            live_names |= set(names)
         if unusable_pairs:
             records = [r for r in records
                        if (self._resolve_backend(r.terminal_backend), r.run_socket)

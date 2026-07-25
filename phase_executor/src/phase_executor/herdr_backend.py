@@ -498,6 +498,44 @@ class HerdrBackend:
                                   "pane already gone (pane_not_found): idempotent close")
         return _run_completed(["herdr", "pane", "close"], res.returncode, res.stdout or "", res.stderr or "")
 
+    # -- tri-state surface (#638 Step-11 pass 7) -----------------------------------------
+    # herdr already distinguishes the three states internally: a confirmed `pane_not_found`
+    # vs a raised _PaneListError/_PaneGetError (the probe itself failed). Those map straight
+    # onto the shared `Liveness` enum, so the supervisor consumes ONE vocabulary for both
+    # backends instead of re-deriving meaning from a returncode.
+
+    def probe_session(self, endpoint: str, name: str, timeout: float = 30) -> "Liveness":
+        from .terminal_backend import Liveness  # noqa: PLC0415 — avoids an import cycle
+        try:
+            res = self.has_session(endpoint, name, timeout=timeout)
+        except (_PaneListError, _PaneGetError):
+            return Liveness.INDETERMINATE      # the probe failed; NOT a fact about the job
+        except Exception:  # noqa: BLE001 — a raising runner (timeout) is also "couldn't tell"
+            return Liveness.INDETERMINATE
+        return Liveness.CONFIRMED_ALIVE if res.returncode == 0 else Liveness.CONFIRMED_GONE
+
+    def close_session(self, endpoint: str, name: str, timeout: float = 30) -> "Liveness":
+        from .terminal_backend import Liveness  # noqa: PLC0415
+        try:
+            res = self.kill_session(endpoint, name, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return Liveness.INDETERMINATE
+        # kill_session already normalises the two confirmed-gone cases to rc=0 (a successful
+        # close, and the list-then-close `pane_not_found` race); every remaining nonzero is a
+        # list/close failure we could not confirm.
+        return Liveness.CONFIRMED_GONE if res.returncode == 0 else Liveness.INDETERMINATE
+
+    def enumerate_sessions(self, endpoint: str, timeout: float = 30) -> "tuple[Liveness, list]":
+        from .terminal_backend import Liveness  # noqa: PLC0415
+        try:
+            res = self.list_sessions(endpoint, timeout=timeout)
+        except Exception:  # noqa: BLE001 — _PaneListError and friends: enumeration unusable
+            return Liveness.INDETERMINATE, []
+        if res.returncode != 0:
+            return Liveness.INDETERMINATE, []
+        names = [l.strip() for l in (res.stdout or "").splitlines() if l.strip()]
+        return Liveness.CONFIRMED_ALIVE, names
+
     def teardown_endpoint(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess:  # noqa: ARG002
         # herdr is a host-wide singleton daemon — there is no per-run server to tear down
         # (unlike tmux's kill-server). Intentional no-op, not a stub.

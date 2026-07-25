@@ -35,8 +35,10 @@ SUPPORTED_EFFORT: dict = {
     "glm-5.2": _ALL,
     # #568 Phase-2: the Hermes gateway has a FIXED internal model + no effort control; the seat
     # pins medium so routing validation is satisfied, and the adapter accepts-but-does-not-forward
-    # it. Additive new-engine row — CAPABILITY_REVISION is deliberately NOT bumped (no existing
-    # model's capability changed; test_engine pins the produced revision at 1).
+    # it. Additive new-engine row — CAPABILITY_REVISION was deliberately NOT bumped for THIS row
+    # (no existing model's capability changed). Historical note: the pins that comment referred
+    # to now expect revision 2 — the claude-opus-5 row DID bump it, because that row flips a
+    # model from refused to supported (pass-7 review caught this comment going stale).
     "hermes-agent": ("medium",),
 }
 

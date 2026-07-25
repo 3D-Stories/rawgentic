@@ -99,6 +99,36 @@ class StubBackend:
         return subprocess.CompletedProcess([], self._kill_session_returncode, "",
                                            "close failed" if self._kill_session_returncode else "")
 
+    # -- tri-state surface (#638 Step-11 pass 7) -- derived from the raw knobs above so a
+    # test's intent is expressed once. A raising probe is INDETERMINATE; a nonzero
+    # kill_session models an UNCONFIRMED teardown (the stub's "close failed" is an
+    # operational error, not an absence message); a nonzero list_sessions models tmux's
+    # routine "no sessions on this socket", which is a RELIABLE empty enumeration.
+    def probe_session(self, endpoint, name, timeout=30):
+        from phase_executor.terminal_backend import Liveness  # noqa: PLC0415
+        try:
+            res = self.has_session(endpoint, name, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return Liveness.INDETERMINATE
+        return Liveness.CONFIRMED_ALIVE if res.returncode == 0 else Liveness.CONFIRMED_GONE
+
+    def close_session(self, endpoint, name, timeout=30):
+        from phase_executor.terminal_backend import Liveness  # noqa: PLC0415
+        try:
+            res = self.kill_session(endpoint, name, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return Liveness.INDETERMINATE
+        return Liveness.CONFIRMED_GONE if res.returncode == 0 else Liveness.INDETERMINATE
+
+    def enumerate_sessions(self, endpoint, timeout=30):
+        from phase_executor.terminal_backend import Liveness  # noqa: PLC0415
+        try:
+            res = self.list_sessions(endpoint, timeout=timeout)
+        except Exception:  # noqa: BLE001
+            return Liveness.INDETERMINATE, []
+        names = [l.strip() for l in (res.stdout or "").splitlines() if l.strip()]
+        return Liveness.CONFIRMED_ALIVE, names
+
     def teardown_endpoint(self, endpoint, timeout=30):
         self.calls.append(("teardown_endpoint", endpoint))
         return subprocess.CompletedProcess([], 0, "", "")
@@ -647,3 +677,92 @@ def test_await_deadline_verified_kill_with_late_sentinel_frees_the_permit(tmp_pa
     assert seen["n"] >= 2, "the deadline re-check branch was never reached"
     assert state == "completed", state
     assert rec.session_name not in sup._permits                      # noqa: SLF001
+
+
+# ---- Step-11 pass 7: an unknown-identity record is NOT "verified dead" ----
+
+def _unknown_identity_record(tmp_path, identity, name="rg-unknown"):
+    """The launch-residue record: identity never captured, permit held, pane maybe live."""
+    return JobRecord(
+        identity=identity, session_name=name, run_socket="herdr-endpoint",
+        pane_pid=0, pane_pgid=0, provider_pgid=None, pane_start_time="",
+        worktree_path=str(tmp_path), worktree_base_sha="0" * 40, worktree_root=str(tmp_path),
+        worktree_gitdir="/g", worktree_repo="/r", capture_dir=str(tmp_path / "cap"),
+        attempt_id="0-a", permit_ref="unbounded", command_digest="",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0,
+        state="quarantined", created_at=1.0,
+        quarantine_reason="launch failed with teardown UNCONFIRMED",
+        terminal_backend="herdr", identity_unknown=True)
+
+
+def test_kill_job_unknown_identity_requires_backend_confirmation(tmp_path):
+    # THE finding (High, pass 7): the pid guards correctly refuse to signal on pane_pid=0, but
+    # that made _kill_job find no targets, no residue, and return True -- "verified dead" for a
+    # record whose pane may still be live. cancel() and reap's retain_worktree tier then
+    # released its quota permit. Death must come from a backend-CONFIRMED teardown.
+    unconfirmed = StubBackend("herdr", kill_session_returncode=1)   # close cannot confirm
+    sup = _sup(tmp_path, herdr=unconfirmed)
+    rec = _unknown_identity_record(tmp_path, _identity())
+    assert sup._kill_job(rec) is False, (                          # noqa: SLF001
+        "an unconfirmed teardown must NOT report a possibly-live pane as verified dead")
+
+    confirmed = StubBackend("herdr", kill_session_returncode=0)     # close confirms gone
+    sup2 = _sup(tmp_path, herdr=confirmed)
+    assert sup2._kill_job(rec) is True                             # noqa: SLF001
+
+
+def test_cancel_holds_permit_when_unknown_identity_teardown_unconfirmed(tmp_path):
+    # The consequence the finding named: cancel() releases on _kill_job's verdict.
+    be = StubBackend("herdr", kill_session_returncode=1)
+    sup = _sup(tmp_path, herdr=be)
+    rec = _unknown_identity_record(tmp_path, _identity())
+    sup._registry.upsert(rec)                                      # noqa: SLF001
+    sup._permits[rec.session_name] = _FakeCM()                     # noqa: SLF001
+    sup.cancel(rec)
+    assert rec.session_name in sup._permits, (                     # noqa: SLF001
+        "cancel() must not free the slot for a pane whose teardown is unconfirmed")
+
+
+def test_cancel_frees_permit_when_unknown_identity_teardown_confirmed(tmp_path):
+    be = StubBackend("herdr", kill_session_returncode=0)
+    sup = _sup(tmp_path, herdr=be)
+    rec = _unknown_identity_record(tmp_path, _identity(), name="rg-unknown2")
+    sup._registry.upsert(rec)                                      # noqa: SLF001
+    sup._permits[rec.session_name] = _FakeCM()                     # noqa: SLF001
+    sup.cancel(rec)
+    assert rec.session_name not in sup._permits                    # noqa: SLF001
+
+
+def test_dead_fn_unknown_identity_requires_backend_confirmation(tmp_path):
+    # reap()'s half of the same finding: every pid test vacuously reports "dead" for pid 0, so
+    # the record reached a tier that releases its permit without closing the live pane.
+    be = StubBackend("herdr", kill_session_returncode=1)
+    sup = _sup(tmp_path, herdr=be)
+    rec = _unknown_identity_record(tmp_path, _identity())
+    assert sup._default_dead_fn(rec) is False                      # noqa: SLF001
+    sup2 = _sup(tmp_path, herdr=StubBackend("herdr", kill_session_returncode=0))
+    assert sup2._default_dead_fn(rec) is True                      # noqa: SLF001
+
+
+def test_unknown_identity_flag_survives_the_registry_round_trip(tmp_path):
+    # the marker is an EXPLICIT additive field, not an inferred pid sentinel (pane_pid=1 is a
+    # long-standing idiom in this suite for "verifies dead immediately") -- so it must persist.
+    be = StubBackend("herdr")
+    sup = _sup(tmp_path, herdr=be)
+    rec = _unknown_identity_record(tmp_path, _identity())
+    sup._registry.upsert(rec)                                      # noqa: SLF001
+    back = [r for r in sup._registry.by_run(rec.identity.run_id)   # noqa: SLF001
+            if r.session_name == rec.session_name][0]
+    assert back.identity_unknown is True
+    assert back.pane_pid == 0 and back.pane_pgid == 0
+
+
+def test_pane_pid_one_still_verifies_dead_immediately(tmp_path):
+    # Regression guard for the over-broad first attempt: keying on `pane_pid <= 1` swallowed
+    # this suite's established pane_pid=1 idiom and changed behaviour for ~20 unrelated tests.
+    be = StubBackend("tmux")
+    sup = _sup(tmp_path, tmux=be)
+    rec = _dead_pid_record(_identity(), terminal_backend="tmux")
+    rec = JobRecord(**{**rec.__dict__, "pane_pid": 1, "pane_pgid": 1})
+    assert rec.identity_unknown is False
+    assert sup._kill_job(rec) is True                              # noqa: SLF001
