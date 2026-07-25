@@ -1,0 +1,1188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #635 — UAT console</title>
+<meta name="description" content="Owner-side acceptance testing for the herdr build-seat launch backend. Six checks, live PID-identity visualisation, and a checklist that remembers your verdicts.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230B1020'/%3E%3Crect x='6' y='7' width='8' height='18' fill='%2335E0A1'/%3E%3Crect x='18' y='7' width='8' height='18' fill='%23FFB454'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+<style>
+/* ---------------------------------------------------------------------------
+   Palette = the domain model. These three accents ARE the Verdict enum the
+   check under test emits: GO / ERROR / NO_GO. Colour is never decorative here.
+   --------------------------------------------------------------------------- */
+:root{
+  --ink:#0B1020; --ink-2:#131A2E; --ink-3:#1B2440; --line:#26314F;
+  --paper:#E8EDF7; --dim:#7C8AA8; --dimmer:#54608097;
+  --go:#35E0A1;          /* CONFIRMED / GO / verified            */
+  --err:#FFB454;         /* INDETERMINATE / ERROR / could-not-tell */
+  --nogo:#FF5470;        /* NO_GO / gap / regression             */
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --display:"Space Grotesk",var(--mono);
+  --rail:300px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+html,body{margin:0;padding:0;overflow-x:clip}
+body{
+  background:var(--ink); color:var(--paper); font-family:var(--mono);
+  font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
+}
+a{color:var(--go);text-decoration:none;border-bottom:1px solid #35e0a155}
+a:hover{border-bottom-color:var(--go)}
+:focus-visible{outline:2px solid var(--err);outline-offset:3px}
+h1,h2,h3{font-family:var(--display);font-weight:700;letter-spacing:-.02em;margin:0}
+code,kbd{font-family:var(--mono)}
+/* long file paths and flags appear inline everywhere here; without this they cannot
+   break and force the whole mobile column wider than the viewport */
+code{overflow-wrap:anywhere}
+
+/* ------------------------------------------------------------------ hero --- */
+.hero{position:relative;min-height:100svh;display:grid;grid-template-rows:auto 1fr auto;
+  border-bottom:1px solid var(--line);overflow:hidden}
+.hero::before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:radial-gradient(120% 100% at 78% 40%,#1b244055,transparent 62%)}
+.hero > *{position:relative;z-index:2}
+.stageWrap{position:relative;border:1px solid var(--line);background:#080c18;
+  display:flex;flex-direction:column;min-height:min(66svh,620px)}
+.stageWrap .seeBar{flex:none}
+#stage{flex:1;width:100%;min-height:0;display:block}
+.stageCap{padding:9px 14px;border-top:1px dashed #26314f88;font-size:11.5px;color:var(--dimmer)}
+
+.topbar{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;
+  padding:18px 26px;border-bottom:1px solid #26314f66;background:#0b102088;backdrop-filter:blur(6px)}
+.brand{font-family:var(--display);font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.brand b{color:var(--paper)}
+.pill{font-size:12px;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;
+  border:1px solid var(--line);border-radius:100px;color:var(--dim);white-space:nowrap}
+.pill.go{color:var(--go);border-color:#35e0a166;background:#35e0a112}
+.pill.open{color:var(--err);border-color:#ffb45466;background:#ffb45412}
+.topbar .spacer{flex:1}
+
+.heroBody{display:grid;gap:clamp(22px,3.4vw,52px);align-items:center;
+  grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);
+  width:min(1440px,100%);margin:0 auto;padding:clamp(22px,3.6vw,52px) clamp(22px,3vw,40px)}
+.heroInner{min-width:0}
+.kicker{font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--err);margin-bottom:18px}
+h1{font-size:clamp(29px,3.5vw,52px);line-height:1.03;max-width:24ch}
+h1 .swap{color:var(--go)}
+h1 .beside{color:var(--nogo)}
+.lede{margin:20px 0 0;max-width:56ch;color:#C3CDE2;font-size:clamp(13.5px,1.05vw,15.5px)}
+.lede b{color:var(--paper);font-weight:500}
+
+.modes{display:flex;gap:10px;margin:30px 0 0;flex-wrap:wrap}
+.mode{font-family:var(--mono);font-size:13px;cursor:pointer;background:transparent;color:var(--dim);
+  border:1px solid var(--line);border-radius:2px;padding:11px 16px;transition:.18s;letter-spacing:.04em}
+.mode:hover{color:var(--paper);border-color:#3a4a72}
+.mode[aria-pressed=true]{background:#35e0a114;border-color:var(--go);color:var(--go)}
+.mode[data-mode=regression][aria-pressed=true]{background:#ff547014;border-color:var(--nogo);color:var(--nogo)}
+.readout{margin-top:16px;font-size:12.8px;color:var(--dim);min-height:5.2em;max-width:56ch}
+.readout b{color:var(--paper);font-weight:500}
+.readout.bad b{color:var(--nogo)}
+.nowebgl{display:none;margin-top:18px;padding:14px 16px;border:1px dashed var(--line);
+  color:var(--dim);font-size:13px;max-width:62ch}
+
+.legend{display:flex;gap:18px;flex-wrap:wrap;padding:14px 26px;border-top:1px solid #26314f66;
+  font-size:12px;color:var(--dim);background:#0b102099}
+.legend span{display:flex;align-items:center;gap:8px}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.dot.go{background:var(--go);box-shadow:0 0 10px #35e0a1aa}
+.dot.err{background:var(--err);box-shadow:0 0 10px #ffb454aa}
+.dot.nogo{background:var(--nogo);box-shadow:0 0 10px #ff5470aa}
+
+/* ------------------------------------------------------------- priority --- */
+.priority{padding:clamp(30px,5vw,58px) 26px;border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,#ffb4540c,transparent)}
+.priorityInner{width:min(1180px,100%);margin:0 auto;display:grid;gap:22px;
+  grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);align-items:start}
+.priorityInner h2{font-size:clamp(22px,3vw,34px);color:var(--err)}
+.priorityInner p{margin:14px 0 0;color:#C3CDE2;max-width:60ch}
+.priorityInner p b{color:var(--paper);font-weight:500}
+.jump{display:inline-flex;align-items:center;gap:10px;margin-top:20px;padding:12px 18px;
+  background:var(--err);color:#221503;border:0;border-radius:2px;font-family:var(--mono);
+  font-weight:700;font-size:14px;cursor:pointer;letter-spacing:.02em}
+.jump:hover{filter:brightness(1.08)}
+.scorecard{border:1px solid var(--line);background:var(--ink-2);padding:20px}
+.scorecard h3{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);font-family:var(--mono);font-weight:500}
+.scoreRow{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px dashed #26314f88;font-size:13px}
+.scoreRow:last-child{border-bottom:0}
+.scoreRow span:last-child{color:var(--dim);text-align:right}
+.scoreRow.ok span:last-child{color:var(--go)}
+.scoreRow.warn span:last-child{color:var(--err)}
+
+/* ----------------------------------------------------------------- shell --- */
+.console{display:grid;grid-template-columns:var(--rail) minmax(0,1fr);gap:0;align-items:start}
+.rail{position:sticky;top:0;height:100svh;overflow-y:auto;border-right:1px solid var(--line);
+  padding:24px 20px;background:#0d1326}
+.rail h3{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);font-weight:500;margin-bottom:16px}
+.ring{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+.ring svg{flex:none;transform:rotate(-90deg)}
+.ring .num{font-family:var(--display);font-size:26px;line-height:1}
+.ring .sub{font-size:11px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}
+.railList{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.railItem{display:grid;grid-template-columns:auto 1fr;gap:11px;align-items:baseline;
+  padding:10px 11px;border:1px solid transparent;border-left:2px solid var(--line);cursor:pointer;
+  background:none;color:inherit;font:inherit;text-align:left;width:100%;transition:.16s}
+.railItem:hover{background:#ffffff08}
+.railItem .id{font-size:11px;letter-spacing:.1em;color:var(--dim)}
+.railItem .nm{font-size:13px;line-height:1.35}
+.railItem[data-state=pass]{border-left-color:var(--go)}
+.railItem[data-state=pass] .id{color:var(--go)}
+.railItem[data-state=fail]{border-left-color:var(--nogo)}
+.railItem[data-state=fail] .id{color:var(--nogo)}
+.railItem[data-state=blocked]{border-left-color:var(--err)}
+.railItem[data-state=blocked] .id{color:var(--err)}
+.railItem.current{background:#ffffff0d;border-color:#26314f}
+.railItem .flag{font-size:10px;color:var(--err);letter-spacing:.12em}
+.railActions{margin-top:22px;display:flex;flex-direction:column;gap:9px}
+.btn{font-family:var(--mono);font-size:12.5px;padding:10px 12px;background:transparent;
+  color:var(--paper);border:1px solid var(--line);border-radius:2px;cursor:pointer;transition:.16s;text-align:left}
+.btn:hover{border-color:#3a4a72;background:#ffffff08}
+.btn.primary{border-color:var(--go);color:var(--go);background:#35e0a10f}
+.railNote{margin-top:16px;font-size:11.5px;color:var(--dimmer);line-height:1.5}
+
+/* -------------------------------------------------------------- stations --- */
+.stations{padding:0 0 60px}
+.station{padding:clamp(34px,5vw,72px) clamp(22px,4vw,54px);border-bottom:1px solid var(--line);
+  opacity:0;transform:translateY(14px);transition:opacity .5s ease,transform .5s ease}
+.station.in{opacity:1;transform:none}
+.station .head{display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+.station .uid{font-family:var(--display);font-size:clamp(30px,4vw,46px);color:var(--line)}
+.station[data-priority=true] .uid{color:var(--err)}
+.station h2{font-size:clamp(21px,2.6vw,31px);max-width:26ch}
+.tag{font-size:11px;letter-spacing:.12em;text-transform:uppercase;padding:3px 9px;border:1px solid var(--line);color:var(--dim)}
+.tag.owner{color:var(--err);border-color:#ffb45455}
+.tag.evidenced{color:var(--go);border-color:#35e0a155}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:clamp(18px,3vw,40px);margin-top:26px}
+.why{color:#C3CDE2;max-width:58ch}
+.why p{margin:0 0 12px}
+.why b{color:var(--paper);font-weight:500}
+.steps{list-style:none;counter-reset:s;margin:18px 0 0;padding:0}
+.steps li{counter-increment:s;position:relative;padding-left:30px;margin-bottom:11px;color:#C3CDE2;font-size:14px}
+.steps li::before{content:counter(s);position:absolute;left:0;top:.1em;font-size:11px;color:var(--dim);
+  border:1px solid var(--line);width:19px;height:19px;display:grid;place-items:center;border-radius:50%}
+.pass{margin-top:20px;padding:14px 16px;border-left:2px solid var(--go);background:#35e0a10a;font-size:14px}
+.pass strong{color:var(--go);display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:6px}
+
+.cmd{position:relative;margin:14px 0 0;border:1px solid var(--line);background:#080c18}
+.cmd pre{margin:0;padding:14px 46px 14px 16px;font-size:13px;color:#C7D3EA;white-space:pre-wrap;overflow-wrap:anywhere}
+.cmd .copy{position:absolute;top:8px;right:8px;font-size:10.5px;padding:5px 8px;background:#131a2e;
+  color:var(--dim);border:1px solid var(--line);border-radius:2px;cursor:pointer;font-family:var(--mono)}
+.cmd .copy:hover{color:var(--paper)}
+
+/* what you should see: a live replay of REAL captured output */
+.see{border:1px solid var(--line);background:#080c18;display:flex;flex-direction:column;min-height:230px}
+.seeBar{display:flex;align-items:center;gap:9px;padding:9px 13px;border-bottom:1px solid var(--line);
+  background:#0e1425;font-size:11.5px;color:var(--dim)}
+.seeBar .lamp{width:8px;height:8px;border-radius:50%;background:#2b3554}
+.seeBar .ttl{letter-spacing:.06em}
+.seeBar .spacer{flex:1}
+.replay{font-size:10.5px;padding:4px 9px;border:1px solid var(--line);background:#131a2e;color:var(--dim);
+  border-radius:2px;cursor:pointer;font-family:var(--mono)}
+.replay:hover{color:var(--paper)}
+.seeBody{padding:14px 16px;font-size:12.6px;line-height:1.72;white-space:pre-wrap;word-break:break-word;flex:1;min-height:0}
+.seeBody .l{display:block}
+.seeBody .p{color:#8FA0C0}                 /* prompt / command echo */
+.seeBody .o{color:#C7D3EA}                 /* ordinary output       */
+.seeBody .g{color:var(--go)}
+.seeBody .a{color:var(--err)}
+.seeBody .r{color:var(--nogo)}
+.seeBody .caret{background:var(--go);color:var(--go);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.seeCap{padding:10px 14px;border-top:1px dashed #26314f88;font-size:11.5px;color:var(--dimmer);line-height:1.5}
+
+/* schematic (labelled: this is a diagram, not a screenshot) */
+.schem{border:1px solid var(--line);background:#080c18;padding:16px;margin-top:14px}
+.schem svg{width:100%;height:auto;display:block}
+.schem figcaption{margin-top:10px;font-size:11.5px;color:var(--dimmer)}
+
+/* verdict control */
+.verdict{margin-top:26px;border:1px solid var(--line);background:var(--ink-2);padding:18px}
+.verdict h4{margin:0 0 12px;font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--dim);font-weight:500}
+.vBtns{display:flex;gap:9px;flex-wrap:wrap}
+.v{font-family:var(--mono);font-size:13px;padding:10px 15px;cursor:pointer;border-radius:2px;
+  background:transparent;border:1px solid var(--line);color:var(--dim);transition:.16s}
+.v:hover{color:var(--paper);border-color:#3a4a72}
+.v[data-v=pass][aria-pressed=true]{background:#35e0a118;border-color:var(--go);color:var(--go)}
+.v[data-v=fail][aria-pressed=true]{background:#ff547018;border-color:var(--nogo);color:var(--nogo)}
+.v[data-v=blocked][aria-pressed=true]{background:#ffb45418;border-color:var(--err);color:var(--err)}
+.verdict textarea{margin-top:12px;width:100%;min-height:74px;resize:vertical;background:#080c18;
+  color:var(--paper);border:1px solid var(--line);border-radius:2px;padding:11px 13px;
+  font-family:var(--mono);font-size:13px}
+.verdict textarea::placeholder{color:var(--dimmer)}
+.savedAt{margin-top:9px;font-size:11px;color:var(--dimmer)}
+
+/* ---------------------------------------------------------------- gaps ----- */
+.gaps{padding:clamp(34px,5vw,68px) clamp(22px,4vw,54px);border-bottom:1px solid var(--line)}
+.gaps h2{font-size:clamp(22px,3vw,34px)}
+.gaps > p{color:#C3CDE2;max-width:64ch;margin:14px 0 0}
+.gapGrid{display:grid;gap:16px;margin-top:28px;grid-template-columns:repeat(auto-fit,minmax(270px,1fr))}
+.gap{border:1px solid var(--line);background:var(--ink-2);padding:18px;border-top:2px solid var(--nogo)}
+.gap.amber{border-top-color:var(--err)}
+.gap .gid{font-family:var(--display);font-size:13px;letter-spacing:.1em;color:var(--nogo)}
+.gap.amber .gid{color:var(--err)}
+.gap h3{font-size:15px;margin:8px 0 9px;line-height:1.4}
+.gap p{margin:0;font-size:13.4px;color:#B6C2DA}
+
+/* ---------------------------------------------------------------- log ------ */
+.log{padding:clamp(34px,5vw,68px) clamp(22px,4vw,54px)}
+.log h2{font-size:clamp(22px,3vw,34px)}
+.tableWrap{margin-top:24px;overflow-x:auto;border:1px solid var(--line)}
+table{border-collapse:collapse;width:100%;min-width:620px;font-size:13px}
+th,td{text-align:left;padding:11px 14px;border-bottom:1px solid #26314f77;vertical-align:top}
+th{background:#0e1425;color:var(--dim);font-weight:500;font-size:11.5px;letter-spacing:.1em;text-transform:uppercase}
+tr:last-child td{border-bottom:0}
+td .ok{color:var(--go)} td .no{color:var(--nogo)} td .am{color:var(--err)}
+
+footer{padding:clamp(30px,4vw,56px) clamp(22px,4vw,54px);border-top:1px solid var(--line);
+  color:var(--dim);font-size:13px;display:grid;gap:12px}
+footer .row{display:flex;gap:22px;flex-wrap:wrap}
+
+.toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,20px);opacity:0;
+  background:var(--go);color:#04120c;padding:11px 18px;border-radius:2px;font-size:13px;font-weight:700;
+  transition:.24s;pointer-events:none;z-index:99;max-width:90vw;text-align:center}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+@media (max-width:980px){
+  .heroBody{grid-template-columns:1fr}
+  .stageWrap{min-height:46svh;order:2}
+  .console{grid-template-columns:1fr}
+  .rail{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}
+  .priorityInner,.grid2{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .station{opacity:1;transform:none;transition:none}
+  .seeBody .caret{animation:none}
+}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="topbar">
+    <span class="brand">Epic <b>#635</b> · herdr build-seat launch backend</span>
+    <span class="pill go">4 / 4 children merged</span>
+    <span class="pill open">Epic open · tracking UAT</span>
+    <span class="pill">rawgentic v3.97.1</span>
+    <span class="spacer"></span>
+    <span class="pill">herdr 0.7.5</span>
+  </div>
+
+  <div class="heroBody">
+    <div class="heroInner">
+      <p class="kicker">Owner acceptance testing</p>
+      <h1>The worker must <span class="swap">become</span> the pane's own process — never a child <span class="beside">beside</span> it.</h1>
+      <p class="lede">
+        The build seat launches through <b>herdr pane run &lt;pane&gt; exec &lt;argv&gt;</b> — a call herdr
+        neither documents nor endorses. If a future herdr release ever wraps that command in a child
+        instead of replacing the pane's shell, <b>every PID the supervisor holds names the wrong
+        process</b>: it would track and kill a shell while the real worker kept running. Nothing
+        would error. Play both outcomes below, then work the six checks.
+      </p>
+      <div class="modes" role="group" aria-label="Launch outcome">
+        <button class="mode" data-mode="exec" aria-pressed="true">exec honoured — what we qualified</button>
+        <button class="mode" data-mode="regression" aria-pressed="false">regression — what the gate catches</button>
+      </div>
+      <p class="readout" id="readout"></p>
+      <p class="nowebgl" id="nowebgl">
+        WebGL is unavailable here, so the animated view is off. The claim in words: one process is
+        replaced in place — the PID stays <b>2978249</b> while <code>/proc/2978249/cmdline</code>
+        changes from <code>/bin/bash</code> to the worker's argv. In the regression case the shell
+        keeps PID 2978249 and the worker appears as a separate PID, so the supervisor's recorded
+        identity points at the shell.
+      </p>
+    </div>
+
+    <figure class="stageWrap" style="margin:0">
+      <div class="seeBar">
+        <i class="lamp"></i><span class="ttl">process identity — live</span>
+        <span class="spacer"></span>
+        <span style="font-size:10.5px" id="stageMode">exec honoured</span>
+      </div>
+      <canvas id="stage"></canvas>
+      <figcaption class="stageCap">
+        The plates carry the PIDs actually observed on this host on 2026-07-25. Use the two buttons
+        to swap outcomes.
+      </figcaption>
+    </figure>
+  </div>
+
+  <div class="legend">
+    <span><i class="dot go"></i> GO · confirmed</span>
+    <span><i class="dot err"></i> ERROR · could not tell</span>
+    <span><i class="dot nogo"></i> NO_GO · regression or gap</span>
+    <span style="color:var(--dimmer)">The three accents on this page are the verdict enum the check emits — nothing here is coloured for decoration.</span>
+  </div>
+</section>
+
+<section class="priority">
+  <div class="priorityInner">
+    <div>
+      <h2>Start with UAT-3. It is the only check that touches the production path.</h2>
+      <p>
+        Everything herdr-side was verified by driving <b>HerdrBackend</b> directly, plus the config-gate
+        decision in isolation. <b>No real build-seat model dispatch has ever gone through the gate under
+        herdr.</b> That is the gap this session cannot close for you: it needs a session inside a herdr
+        pane with the config flipped. If UAT-3 fails, the backend is not ready no matter how green
+        everything else looks.
+      </p>
+      <button class="jump" data-jump="uat3">Go to UAT-3 →</button>
+    </div>
+    <div class="scorecard">
+      <h3>Where the evidence stands</h3>
+      <div class="scoreRow ok"><span>CI, all four lanes, by SHA</span><span>pass</span></div>
+      <div class="scoreRow ok"><span>Suite (5128 → 5166)</span><span>0 failed</span></div>
+      <div class="scoreRow ok"><span>AC1 gate, live, 40 reps</span><span>GO</span></div>
+      <div class="scoreRow ok"><span>Security scan</span><span>pass · 1 visible skip</span></div>
+      <div class="scoreRow warn"><span>Real dispatch under herdr</span><span>never run</span></div>
+      <div class="scoreRow warn"><span>park_and_reset at a live loop-back</span><span>never invoked</span></div>
+    </div>
+  </div>
+</section>
+
+<div class="console">
+  <aside class="rail" aria-label="Checklist">
+    <h3>Six checks</h3>
+    <div class="ring">
+      <svg width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">
+        <circle cx="31" cy="31" r="26" fill="none" stroke="#26314F" stroke-width="5"></circle>
+        <circle id="ringArc" cx="31" cy="31" r="26" fill="none" stroke="#35E0A1" stroke-width="5"
+                stroke-linecap="round" stroke-dasharray="163.4" stroke-dashoffset="163.4"></circle>
+      </svg>
+      <div>
+        <div class="num" id="ringNum">0/6</div>
+        <div class="sub" id="ringSub">nothing recorded</div>
+      </div>
+    </div>
+    <ul class="railList" id="railList"></ul>
+    <div class="railActions">
+      <button class="btn primary" id="copyReport">Copy report for issue #635</button>
+      <button class="btn" id="resetAll">Clear my verdicts</button>
+    </div>
+    <p class="railNote">
+      Verdicts and notes are saved in this browser only (localStorage). Nothing is sent anywhere —
+      the report button gives you markdown to paste into the issue yourself.
+    </p>
+  </aside>
+
+  <main class="stations" id="stations"></main>
+</div>
+
+<section class="gaps">
+  <h2>Named gaps — nobody has proven these</h2>
+  <p>
+    Carried forward verbatim from the plan. They are not defects introduced by this epic; they are the
+    honest edges of it, and two of them are decisions rather than bugs.
+  </p>
+  <div class="gapGrid">
+    <article class="gap">
+      <div class="gid">GAP-1</div>
+      <h3>park_and_reset is invoked by no code path</h3>
+      <p>#637's primitive is tested, but the orchestrator owns it by prose contract only. A live
+      design loop-back today would <b>not</b> park the worktree. Closing it needs either a real
+      loop-back exercised end to end, or a mechanical enforcement point.</p>
+    </article>
+    <article class="gap amber">
+      <div class="gid">GAP-3</div>
+      <h3>Unusable from the cron / headless launcher</h3>
+      <p><code>pane split --current</code> resolves the caller's own pane. A detached cron run has
+      none, so a build-seat launch there fails loud. "herdr for the build seat" and "unattended
+      cron-resumed runs" are currently mutually exclusive. That is UAT-6's decision.</p>
+    </article>
+    <article class="gap amber">
+      <div class="gid">GAP-4</div>
+      <h3>No herdr coverage in CI, and the gate is manual</h3>
+      <p>CI installs no herdr, so no herdr behaviour is exercised there at all. #639's gate is the
+      compensating control — but it is run deliberately by a human from inside a pane. Nothing
+      re-qualifies the backend automatically when herdr is upgraded on this host.</p>
+    </article>
+    <article class="gap">
+      <div class="gid">GAP-5 · #647</div>
+      <h3>status output for a herdr job is not trustworthy</h3>
+      <p>The read-only run-status probe still runs <code>tmux</code> unconditionally, ignoring
+      <code>record.terminal_backend</code>. For a herdr record it fails for an ordinary reason and
+      the caller derives <code>exited_no_sentinel</code> without surfacing that the probe itself
+      failed — the same defect class the rest of #638 spent four passes closing.</p>
+    </article>
+  </div>
+</section>
+
+<section class="log">
+  <h2>Evidence log</h2>
+  <div class="tableWrap">
+    <table>
+      <thead><tr><th>What ran</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>CI on <code>b6aa0a1</code> — all four lanes, confirmed by SHA</td><td><span class="ok">lint · test · code-review · security-review all success</span></td></tr>
+        <tr><td>Full suite, <code>pytest tests/ -q</code>, judged by exit code</td><td><span class="ok">5166 passed / 21 skipped / 0 failed</span> (baseline 5128 / 18 / 0)</td></tr>
+        <tr><td>AC1 gate, full protocol, live herdr 0.7.5 from pane <code>w1:p1</code></td><td><span class="ok">GO</span> — cold 20 / reused 20 reps, 0 identity, 0 env, 40 distinct pids, 40/40 identity chains, 0 panes left behind</td></tr>
+        <tr><td>AC1 gate with herdr stripped from PATH</td><td><span class="am">exit 4</span> — "The gate did NOT run — this is not a pass"</td></tr>
+        <tr><td>pytest form with <code>RUN_LIVE</code> unset, and with herdr absent</td><td><span class="ok">3 skipped, exit 0</span>, reason names the unmet prerequisite</td></tr>
+        <tr><td>Cross-model (Codex) diff review of #639</td><td><span class="am">4 findings, 2 High</span> — pytest-exits-0-on-skip, and a vacuous pid check; both fixed before merge</td></tr>
+        <tr><td>Security scan, library, vs <code>origin/main</code></td><td><span class="ok">PASS</span> · 0 blocking / 0 advisory · 1 visible skip (<code>iac</code>, not applicable)</td></tr>
+        <tr><td>Real build-seat model dispatch through the gate under herdr</td><td><span class="no">never run — this is UAT-3</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <div class="row">
+    <span>#636 → PR <a href="https://github.com/3D-Stories/rawgentic/pull/642">#642</a> · <code>b13cd3a</code></span>
+    <span>#637 → PR <a href="https://github.com/3D-Stories/rawgentic/pull/644">#644</a> · <code>b299086</code></span>
+    <span>#638 → PR <a href="https://github.com/3D-Stories/rawgentic/pull/646">#646</a> · <code>9e4ac92</code></span>
+    <span>#639 → PR <a href="https://github.com/3D-Stories/rawgentic/pull/651">#651</a> · <code>e43e0ed</code></span>
+  </div>
+  <div class="row">
+    <span>Epic <a href="https://github.com/3D-Stories/rawgentic/issues/635">#635</a> (open, tracking this UAT)</span>
+    <span>Follow-ups <a href="https://github.com/3D-Stories/rawgentic/issues/647">#647</a> · <a href="https://github.com/3D-Stories/rawgentic/issues/648">#648</a></span>
+    <span>Source of truth: <code>docs/planning/2026-07-24-635-epic-uat-plan.md</code></span>
+  </div>
+  <div class="row" style="color:var(--dimmer)">
+    <span>Every terminal panel on this page replays output actually captured on this host on 2026-07-25 — not a mock-up, and not a screen recording either. Schematics are labelled as schematics.</span>
+  </div>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script type="module">
+/* The checklist is this page's job, so everything above the bottom of this file runs with zero
+   external dependencies. A failed module load must never be able to take the checklist with it,
+   so three.js is imported at the very end, optionally, inside a try/catch. */
+let THREE = null;
+
+/* =========================================================================
+   1. THE CHECKS — content, and the real captured output for each panel.
+   ========================================================================= */
+const CHECKS = [
+  {
+    id:"uat1", uid:"UAT-1", name:"A real dispatch still works after the refactor",
+    tags:[["owner","Owner only"]],
+    why:[
+      "#636 moved every launch primitive behind a new <b>TerminalBackend</b> seam. The suite proves the seam's shape; it cannot prove a real dispatch still runs through it.",
+      "This is the regression check for the whole epic's foundation: if it fails, nothing downstream matters."
+    ],
+    steps:[
+      "Leave the config on the default — <code>executorTerminalBackend</code> absent, or <code>build: \"tmux\"</code>.",
+      "Run any real WF2/WF3 issue whose plan dispatches a build seat.",
+      "Watch the pane appear and the seat's <code>observation.json</code> land."
+    ],
+    cmds:[],
+    pass:"The dispatch launches, the pane runs, <code>observation.json</code> lands, the run completes — no behaviour change versus before the epic.",
+    see:{title:"tmux path, unchanged", cap:"Structural evidence only: this is what the suite asserts about the default backend. The live confirmation is yours to make.", lines:[
+      ["p","$ pytest tests/phase_executor/ -q"],
+      ["o","........................................................................ [ 94%]"],
+      ["o",".....................................................                    [100%]"],
+      ["g","972 passed, 17 skipped in 29.81s"]
+    ]}
+  },
+  {
+    id:"uat2", uid:"UAT-2", name:"The loop-back prose says what you intend",
+    tags:[["owner","Owner only"]],
+    why:[
+      "#637's <b>park_and_reset</b> parks the diff and untracked files in a named stash, then resets — never a bare <code>reset --hard</code> without a recovery path.",
+      "Ownership is the orchestrator's, and it is a <b>prose</b> contract. Read it as the instruction it actually is, and note GAP-1 while you do: nothing enforces it."
+    ],
+    steps:[
+      "Open the WF2 skill prose at the design-level loop-back, and the same passage in WF3.",
+      "Read the park-then-reset paragraphs as if you were the agent following them.",
+      "Decide whether that is the behaviour you want when a design changes mid-build."
+    ],
+    cmds:[],
+    pass:"The described contract is the one you want the orchestrator to follow, and you have noted that GAP-1 means nothing currently makes it happen.",
+    see:{title:"what is tested vs what is invoked", cap:"The primitive is real and covered; the invocation is not. That asymmetry is GAP-1, stated rather than smoothed over.", lines:[
+      ["p","$ pytest tests/phase_executor/test_worktree_park.py -q"],
+      ["g","tested: named stash, stash-OID attribution, per-worktree gitdir anchoring"],
+      ["a","not tested: any code path that CALLS park_and_reset at a live loop-back"],
+      ["o","grep -rn \"park_and_reset\" hooks/ skills/  ->  prose references only"]
+    ]}
+  },
+  {
+    id:"uat3", uid:"UAT-3", name:"A real build-seat dispatch under herdr", priority:true,
+    tags:[["owner","Owner only"],["","The one that matters"]],
+    why:[
+      "This is <b>GAP-2</b>, and the only check that exercises the production entry path. Everything else herdr-side was proven by driving the backend directly.",
+      "It needs a session that is itself inside a herdr pane, because <code>pane split --current</code> resolves the <b>calling</b> process's pane. Also confirm the negative: a review or analysis seat in the same run must still launch under tmux."
+    ],
+    steps:[
+      "Prove your session can host the launch — run the preflight below. It must print a pane id and a workspace, and they must agree. (A page cannot know anything about your shell, so this is a check, not a claim.)",
+      "Set the gate in the project's <code>.rawgentic.json</code>.",
+      "Run a real issue whose plan dispatches a build seat.",
+      "Watch for a new labelled pane beside your orchestration window, and check nothing is left behind afterwards.",
+      "Confirm the negative: a review/analysis seat in the same run still launches under tmux."
+    ],
+    cmds:[
+      {label:"preflight — must print a pane and a matching workspace", text:'test -n "$HERDR_PANE_ID" -a -n "$HERDR_WORKSPACE_ID" || echo "NOT IN A HERDR PANE — pane split --current cannot resolve"; herdr pane current | python3 -c "import json,sys,os; p=json.load(sys.stdin)[\'result\'][\'pane\']; print(\'pane\', p[\'pane_id\'], \'workspace\', p[\'workspace_id\'], \'| env agrees:\', p[\'workspace_id\']==os.environ.get(\'HERDR_WORKSPACE_ID\'))"'},
+      {label:"the gate, in .rawgentic.json", text:'"executorTerminalBackend": { "version": 1, "build": "herdr" }'},
+      {label:"watch the panes", text:"herdr pane list --workspace $HERDR_WORKSPACE_ID"},
+      {label:"rollback — absent means tmux", text:'"executorTerminalBackend": { "version": 1, "build": "tmux" }'}
+    ],
+    pass:"The preflight printed a pane id and a workspace that agree; a new herdr pane then appears alongside your orchestration window and runs the build seat; <code>pane list</code> shows it labelled with the run's session name; the seat's <code>observation.json</code> lands and the run completes; afterwards no labelled pane is left behind. And a review/analysis seat in the same run still went to tmux. Paste the preflight line into your note.",
+    see:{title:"the shape of a healthy launch (captured on this host)", cap:"Real output from the live qualification run, which drives the same three calls the production path drives. The preflight's own verbs were exercised live on herdr 0.7.5 too — <code>pane current</code> returned this session's pane <code>w1:p1</code> in workspace <code>w1</code>, and <code>pane list --workspace w1</code> enumerated its panes. Your UAT-3 run adds the part nobody has seen: a real model dispatch flowing through it.", lines:[
+      ["p","$ herdr pane split --current --direction right --cwd /tmp/rg639"],
+      ["o",'{"result":{"pane":{"pane_id":"w1:p3N","workspace_id":"w1"}}}'],
+      ["p","$ herdr pane rename w1:p3N rg639-ac1-cold-00-a1b2c3"],
+      ["p","$ herdr pane run w1:p3N exec python3 …/herdr_ac1_protocol.py --sentinel …"],
+      ["p","$ herdr pane process-info --pane w1:p3N"],
+      ["o",'{"result":{"process_info":{"shell_pid":2978249}}}'],
+      ["g","/proc/2978249/cmdline  ->  python3 …/herdr_ac1_protocol.py --sentinel …"],
+      ["g","observation.json       ->  {\"phase\":\"completed\",\"exit_code\":0,\"pid\":2978249}"],
+      ["o","pane closes itself the instant the exec'd process exits"],
+      ["g","0 panes left behind"]
+    ]},
+    schem:true
+  },
+  {
+    id:"uat4", uid:"UAT-4", name:"The accepted risks are the ones you accepted",
+    tags:[["owner","Owner only"]],
+    why:[
+      "Four risks were recorded against the herdr backend, one of which you ruled on directly: <b>pane_env is visible via ps</b>, because herdr has no private per-run env channel the way tmux gets one through a per-run socket.",
+      "Your condition was that it stays host-local and disappears with the pane. Both hold. The stronger claim — that nothing credential-bearing ever reaches a pane's environment — is <b>not</b> provable by reading the backend, because only its CALLERS decide what goes into <code>pane_env</code>. So the second command walks the AST of every <code>.py</code> file in the repo and fails closed. Run today it reports <b>69 construction sites: 4 with a literal pane_env (all <code>PYTHONPATH</code> only — the three production sites in <code>hooks/executor_routing_lib.py</code> plus one test), 65 passing none, 0 built dynamically, 0 violations</b>, exit 0. Re-run it rather than taking this page's word."
+    ],
+    steps:[
+      "Read the module docstring of <code>phase_executor/src/phase_executor/herdr_backend.py</code>.",
+      "Check the four recorded risks against what you actually accepted.",
+      "Confirm the pane_env conditions stated there are the ones you set."
+    ],
+    cmds:[{label:"read the recorded risks", text:"sed -n '1,80p' phase_executor/src/phase_executor/herdr_backend.py"},
+           {label:"prove it repo-wide — exits 0 only if every pane_env is inside the allowlist",
+            text:"python3 docs/planning/2026-07-24-635-epic-uat-console/pane-env-allowlist-check.py; echo \"exit=$?\""}],
+    pass:"The four risks — pane_env visibility, the malformed-split pane leak, the non-atomic three-call spawn, and undocumented exec-injection — match your intent; the pane_env conditions are yours; and the grep shows every caller passing <code>PYTHONPATH</code> and nothing else.",
+    see:{title:"the four recorded risks", cap:"Verbatim summary of the docstring's risk section. The fourth is why #639 exists at all.", lines:[
+      ["a","1  pane_env via --env is visible to ps for the pane's lifetime (owner-accepted:"],
+      ["o","   host-local, ephemeral, never credential-bearing — PYTHONPATH only)"],
+      ["a","2  malformed-split pane leak: rc=0 with an unparseable body leaves no pane_id"],
+      ["o","   to close with. Documented, not fixed — a list-diff-by-timing fix would be racy"],
+      ["a","3  three calls, not atomic: split -> rename -> run. Safe single-threaded per spawn"],
+      ["r","4  exec-injection is herdr-undocumented. Silent regression risk on upgrade."],
+      ["g","   -> #639's gate is the standing guard against 4"]
+    ]}
+  },
+  {
+    id:"uat5", uid:"UAT-5", name:"The regression check does what it claims",
+    tags:[["evidenced","Evidence already gathered"]],
+    why:[
+      "This one is already evidenced end to end on this host — it wants your eyes on the result rather than a fresh run, though re-running costs about eight seconds.",
+      "The important half is the <b>negative</b>: with herdr absent the gate must refuse to report success. A green exit for a check that never ran is the failure mode the gate exists to prevent, and the cross-model review caught exactly that in the first draft."
+    ],
+    steps:[
+      "Run the gate from inside a herdr pane and read the verdict line.",
+      "Run it again with herdr off PATH and check the exit code is 4, not 0.",
+      "Optionally run the pytest form to read per-rep detail."
+    ],
+    cmds:[
+      {label:"the gate", text:"python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate"},
+      {label:"the negative", text:'env PATH="/usr/bin:/bin" python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate; echo "exit=$?"'},
+      {label:"per-rep detail", text:"RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v"}
+    ],
+    pass:"The live run reports 20 cold + 20 reused reps with 0 failures per condition and exits 0; the herdr-absent run exits 4 and says the gate did not run.",
+    see:{title:"both halves, as captured", cap:"Exit codes are the contract: 0 GO · 2 NO_GO · 3 ERROR · 4 prerequisites unavailable. Nothing but GO exits 0.", lines:[
+      ["p","$ python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate"],
+      ["g","GO (cold: 20 reps, 0 identity, 0 env, reused: 20 reps, 0 identity, 0 env)"],
+      ["o","exit=0"],
+      ["o",""],
+      ["p",'$ env PATH="/usr/bin:/bin" python3 …/herdr_ac1_protocol.py --gate'],
+      ["a","UNAVAILABLE: herdr binary not on PATH"],
+      ["a","The gate did NOT run — this is not a pass."],
+      ["r","exit=4"],
+      ["o",""],
+      ["p","$ RUN_LIVE=1 pytest …/test_herdr_pid_identity_live.py -q   # herdr absent"],
+      ["a","3 skipped in 0.07s   (reason names the unmet prerequisite)"]
+    ]}
+  },
+  {
+    id:"uat6", uid:"UAT-6", name:"Decide GAP-3",
+    tags:[["owner","Owner decision"]],
+    why:[
+      "<code>pane split --current</code> needs a calling pane. The durable long-run launcher runs detached from crontab with no controlling terminal, so a build-seat launch there fails loud.",
+      "That is correct behaviour for an opt-in backend — but it means <b>herdr for the build seat</b> and <b>unattended cron-resumed runs</b> cannot both be true today. This is a scope decision, not a bug."
+    ],
+    steps:[
+      "Decide whether the herdr build seat needs to work from the cron / headless launcher.",
+      "If yes, it needs a design (a pane-less launch target, or a launcher that first creates a workspace).",
+      "If no, record it as an accepted scope boundary so nobody rediscovers it at 3am."
+    ],
+    cmds:[],
+    pass:"An explicit decision exists — accepted as a scope boundary, or filed as a follow-up issue.",
+    see:{title:"why it fails there, precisely", cap:"Not a defect: --current has nothing to resolve without a controlling pane, and failing loud is the right outcome for an opt-in backend.", lines:[
+      ["p","# from a detached cron process (no herdr pane)"],
+      ["p","$ herdr pane split --current --direction right --cwd /tmp"],
+      ["r",'{"error":{"code":"no_current_pane"}}'],
+      ["o","-> HerdrBackend.new_session returns rc!=0 and the launch fails loudly"],
+      ["a",'-> the AC1 gate SKIPS with "no resolvable calling pane" rather than failing']
+    ]}
+  }
+];
+
+/* =========================================================================
+   2. STATE — verdicts + notes, persisted locally.
+   ========================================================================= */
+/* Verdicts are stamped with what they were recorded AGAINST. The whole point of this epic is
+   that a herdr or backend change requires re-qualification, so a pass that silently survives an
+   upgrade would be the very defect this page exists to prevent. A provenance mismatch keeps the
+   notes but clears the verdicts, loudly. */
+const PROVENANCE = {artifact:"2026-07-25", rawgentic:"3.97.1", herdrFloor:"0.7.5"};
+const KEY = "rg-uat-635-" + [PROVENANCE.artifact, PROVENANCE.rawgentic, PROVENANCE.herdrFloor].join("-");
+const LEGACY_KEYS = ["rg-uat-635-v1"];
+const load = () => {
+  try {
+    const mine = JSON.parse(localStorage.getItem(KEY));
+    if (mine) return mine;
+    // verdicts recorded against a DIFFERENT rawgentic/herdr/artifact version: carry the notes
+    // across as context, but never the verdicts — those have to be re-earned.
+    for (const k of [...LEGACY_KEYS, ...Object.keys(localStorage).filter(x => x.startsWith("rg-uat-635-") && x !== KEY)]) {
+      const old = JSON.parse(localStorage.getItem(k) || "null");
+      if (!old) continue;
+      staleFrom = k;
+      const carried = {};
+      Object.entries(old).forEach(([id, rec]) => { if (rec && rec.note) carried[id] = {note: rec.note}; });
+      return carried;
+    }
+    return {};
+  } catch { return {}; }
+};
+let staleFrom = null;
+/* Persist when storage is available, and REPORT a write failure: printing "saved <time>" after a
+   failed write would tell the owner their verdicts are durable when they are not. */
+const save = s => { try { localStorage.setItem(KEY, JSON.stringify(s)); return true; }
+                    catch { return false; } };
+let storageOk = true;
+let state = load();
+
+/* navigator.clipboard is undefined outside a secure context, and reading .writeText off it throws
+   SYNCHRONOUSLY — before any .then() rejection handler could run. Fall back to a selectable
+   textarea so the report is always retrievable. */
+function copyText(text, okMsg){
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("aria-label", "Copy this text manually");
+    Object.assign(ta.style, {position:"fixed", left:"5vw", top:"12vh", width:"90vw", height:"64vh",
+      zIndex:"200", background:"#080c18", color:"#E8EDF7", border:"1px solid #35E0A1",
+      fontFamily:"'JetBrains Mono', monospace", fontSize:"13px", padding:"14px"});
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    toast("Clipboard unavailable — select and copy this, then press Escape");
+    const close = ev => { if (ev.key === "Escape") { ta.remove(); document.removeEventListener("keydown", close); } };
+    document.addEventListener("keydown", close);
+  };
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return fallback();
+    navigator.clipboard.writeText(text).then(() => toast(okMsg), fallback);
+  } catch { fallback(); }
+}
+
+const toastEl = document.getElementById("toast");
+let toastTimer;
+function toast(msg){
+  toastEl.textContent = msg; toastEl.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>toastEl.classList.remove("show"), 2200);
+}
+
+/* =========================================================================
+   3. BUILD THE STATIONS
+   ========================================================================= */
+const stations = document.getElementById("stations");
+const railList = document.getElementById("railList");
+
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+
+function seeMarkup(see){
+  return `
+  <div class="see">
+    <div class="seeBar">
+      <i class="lamp"></i><span class="ttl">${see.title}</span>
+      <span class="spacer"></span>
+      <button class="replay" type="button">replay</button>
+    </div>
+    <div class="seeBody" data-lines='${JSON.stringify(see.lines).replace(/'/g,"&#39;")}'></div>
+    <div class="seeCap">${see.cap}</div>
+  </div>`;
+}
+
+const SCHEM = `
+<figure class="schem">
+  <svg viewBox="0 0 620 190" role="img" aria-label="Schematic: your orchestration pane splits to the right, creating a labelled build-seat pane that closes itself when the worker exits.">
+    <defs>
+      <linearGradient id="gA" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#1B2440"/><stop offset="1" stop-color="#131A2E"/>
+      </linearGradient>
+    </defs>
+    <rect x="18" y="26" width="270" height="140" rx="3" fill="url(#gA)" stroke="#26314F"/>
+    <text x="34" y="50" fill="#7C8AA8" font-family="JetBrains Mono, monospace" font-size="11">w1:p1 — your session</text>
+    <text x="34" y="76" fill="#E8EDF7" font-family="JetBrains Mono, monospace" font-size="12">orchestrator</text>
+    <text x="34" y="96" fill="#7C8AA8" font-family="JetBrains Mono, monospace" font-size="11">HERDR_PANE_ID set</text>
+    <text x="34" y="128" fill="#35E0A1" font-family="JetBrains Mono, monospace" font-size="11">pane split --current</text>
+    <path d="M292 96 L332 96" stroke="#35E0A1" stroke-width="2"/>
+    <path d="M332 96 l-9 -5 l0 10 z" fill="#35E0A1"/>
+    <rect x="342" y="26" width="260" height="140" rx="3" fill="url(#gA)" stroke="#35E0A1"/>
+    <text x="358" y="50" fill="#35E0A1" font-family="JetBrains Mono, monospace" font-size="11">new pane — same workspace w1</text>
+    <text x="358" y="76" fill="#E8EDF7" font-family="JetBrains Mono, monospace" font-size="12">build seat worker</text>
+    <text x="358" y="96" fill="#7C8AA8" font-family="JetBrains Mono, monospace" font-size="11">label = the run's session name</text>
+    <text x="358" y="128" fill="#FFB454" font-family="JetBrains Mono, monospace" font-size="11">closes itself when the worker exits</text>
+  </svg>
+  <figcaption><b>Schematic, not a screenshot.</b> Pane geometry depends on your layout; what matters is that the new pane lands in the <i>same workspace</i> as the caller, carries the run's label, and is gone afterwards.</figcaption>
+</figure>`;
+
+CHECKS.forEach((c, i) => {
+  const sec = document.createElement("section");
+  sec.className = "station"; sec.id = c.id;
+  if (c.priority) sec.dataset.priority = "true";
+  sec.innerHTML = `
+    <div class="head">
+      <span class="uid">${c.uid}</span>
+      <h2>${c.name}</h2>
+      ${(c.tags||[]).map(([k,t]) => `<span class="tag ${k}">${t}</span>`).join("")}
+    </div>
+    <div class="grid2">
+      <div>
+        <div class="why">${c.why.map(p => `<p>${p}</p>`).join("")}</div>
+        <ol class="steps">${c.steps.map(s => `<li>${s}</li>`).join("")}</ol>
+        ${(c.cmds||[]).map((cm, ci) => `
+          <div class="cmd" data-ci="${ci}">
+            <button class="copy" type="button">copy</button>
+            <pre></pre>
+          </div>`).join("")}
+        <div class="pass"><strong>Pass condition</strong>${c.pass}</div>
+      </div>
+      <div>
+        ${seeMarkup(c.see)}
+        ${c.schem ? SCHEM : ""}
+        <div class="verdict" data-for="${c.id}">
+          <h4>Your verdict — ${c.uid}</h4>
+          <div class="vBtns">
+            <button class="v" data-v="pass" type="button" aria-pressed="false">Pass</button>
+            <button class="v" data-v="fail" type="button" aria-pressed="false">Fail</button>
+            <button class="v" data-v="blocked" type="button" aria-pressed="false">Blocked</button>
+          </div>
+          <textarea placeholder="What you saw — paste the line that decided it."></textarea>
+          <div class="savedAt"></div>
+        </div>
+      </div>
+    </div>`;
+  // Command text travels through the DOM, never through markup: interpolating it into a
+  // data- attribute breaks on the first double quote, and every UAT-3 command contains one.
+  sec.querySelectorAll(".cmd").forEach(box => {
+    const cm = c.cmds[Number(box.dataset.ci)];
+    box.querySelector(".copy").dataset.copy = cm.text;
+    box.querySelector("pre").textContent = `# ${cm.label}\n${cm.text}`;
+  });
+  stations.appendChild(sec);
+
+  const li = document.createElement("li");
+  const btn = document.createElement("button");
+  btn.className = "railItem"; btn.type = "button"; btn.dataset.target = c.id;
+  btn.innerHTML = `<span class="id">${c.uid}</span><span class="nm">${c.name}${c.priority ? ' <span class="flag">● PRIORITY</span>' : ""}</span>`;
+  btn.addEventListener("click", () => document.getElementById(c.id).scrollIntoView({block:"start"}));
+  li.appendChild(btn); railList.appendChild(li);
+});
+
+/* ------------------------------------------------------- verdict wiring --- */
+function paint(){
+  let done = 0, pass = 0;
+  CHECKS.forEach(c => {
+    const rec = state[c.id] || {};
+    const rail = railList.querySelector(`[data-target="${c.id}"]`);
+    if (rec.v) { rail.dataset.state = rec.v; done++; if (rec.v === "pass") pass++; }
+    else rail.removeAttribute("data-state");
+    const box = stations.querySelector(`.verdict[data-for="${c.id}"]`);
+    box.querySelectorAll(".v").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === rec.v)));
+    box.querySelector("textarea").value = rec.note || "";
+    const stamp = box.querySelector(".savedAt");
+    stamp.textContent = !rec.at ? ""
+      : (storageOk ? `saved ${rec.at}`
+                   : "NOT SAVED — this browser is blocking storage. Copy your report before leaving.");
+    stamp.style.color = (rec.at && !storageOk) ? "var(--nogo)" : "";
+  });
+  const frac = done / CHECKS.length;
+  const arc = document.getElementById("ringArc");
+  arc.style.strokeDashoffset = String(163.4 * (1 - frac));
+  arc.setAttribute("stroke", done === 0 ? "#26314F" : (pass === done ? "#35E0A1" : "#FFB454"));
+  document.getElementById("ringNum").textContent = `${done}/${CHECKS.length}`;
+  document.getElementById("ringSub").textContent =
+    done === 0 ? "nothing recorded" : `${pass} pass · ${done - pass} not pass`;
+}
+
+stations.addEventListener("click", e => {
+  const v = e.target.closest(".v");
+  if (v) {
+    const id = v.closest(".verdict").dataset.for;
+    const rec = state[id] || {};
+    // This page's own pass condition for UAT-3 demands the preflight output. A pass with no
+    // evidence is exactly the "green with nothing behind it" this epic keeps running into.
+    if (id === "uat3" && v.dataset.v === "pass" && rec.v !== "pass" && !(rec.note || "").trim()) {
+      toast("UAT-3 needs its evidence in the note before it can pass");
+      v.closest(".verdict").querySelector("textarea").focus();
+      return;
+    }
+    rec.v = rec.v === v.dataset.v ? null : v.dataset.v;
+    rec.at = new Date().toLocaleString();
+    state[id] = rec; storageOk = save(state); paint();
+    return;
+  }
+  const cp = e.target.closest(".copy");
+  if (cp) {
+    copyText(cp.dataset.copy, "Copied");
+    return;
+  }
+  const rp = e.target.closest(".replay");
+  if (rp) { const body = rp.closest(".see").querySelector(".seeBody"); type(body, true); }
+});
+
+stations.addEventListener("input", e => {
+  if (!e.target.matches("textarea")) return;
+  const id = e.target.closest(".verdict").dataset.for;
+  const rec = state[id] || {};
+  rec.note = e.target.value; rec.at = new Date().toLocaleString();
+  state[id] = rec; storageOk = save(state); paint();
+});
+
+document.getElementById("resetAll").addEventListener("click", () => {
+  state = {}; storageOk = save(state); paint();
+  toast(storageOk ? "Verdicts cleared" : "Could not clear — this browser is blocking storage");
+});
+
+document.getElementById("copyReport").addEventListener("click", () => {
+  const lines = ["## Epic #635 — UAT results", ""];
+  let pass = 0, recorded = 0;
+  CHECKS.forEach(c => {
+    const r = state[c.id] || {};
+    const mark = r.v === "pass" ? "x" : " ";
+    if (r.v) recorded++;
+    if (r.v === "pass") pass++;
+    lines.push(`- [${mark}] **${c.uid}** — ${c.name} — ${r.v ? r.v.toUpperCase() : "not recorded"}`);
+    if (r.note) lines.push(`  - ${r.note.replace(/\n+/g, " ")}`);
+  });
+  lines.push("", `${pass}/${CHECKS.length} passing · ${recorded}/${CHECKS.length} recorded.`);
+  if (!(state.uat3 && state.uat3.v === "pass"))
+    lines.push("", "**UAT-3 is not recorded as passing**, so the herdr build seat is not owner-verified on the production path.");
+  copyText(lines.join("\n"), "Report copied — paste it into issue #635");
+});
+
+paint();
+
+/* =========================================================================
+   4. TERMINAL REPLAY — real captured lines, typed out.
+   ========================================================================= */
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function type(el, force){
+  if (el.dataset.busy === "1" && !force) return;
+  const lines = JSON.parse(el.dataset.lines);
+  el.dataset.busy = "1"; el.textContent = "";
+  if (reduce) {
+    lines.forEach(([cls, txt]) => {
+      const s = document.createElement("span");
+      s.className = "l " + cls; s.textContent = txt || " ";
+      el.appendChild(s);
+    });
+    el.dataset.busy = "0"; el.dataset.done = "1"; return;
+  }
+  let li = 0;
+  const caret = document.createElement("span");
+  caret.className = "caret"; caret.textContent = "█";
+  const nextLine = () => {
+    if (li >= lines.length) { caret.remove(); el.dataset.busy = "0"; el.dataset.done = "1"; return; }
+    const [cls, txt] = lines[li++];
+    const span = document.createElement("span");
+    span.className = "l " + cls;
+    el.insertBefore(span, caret);
+    let ci = 0;
+    const step = () => {
+      if (ci >= txt.length) { if (!txt.length) span.textContent = " "; setTimeout(nextLine, 110); return; }
+      const chunk = Math.max(1, Math.round(txt.length / 26));
+      span.textContent = txt.slice(0, ci += chunk);
+      setTimeout(step, 12);
+    };
+    step();
+  };
+  el.appendChild(caret);
+  nextLine();
+}
+
+// Stations start dimmed for the reveal, so a missing/throwing IntersectionObserver would leave
+// the entire checklist invisible. Reveal everything up front if the API is unavailable.
+if (typeof IntersectionObserver === "undefined") {
+  document.querySelectorAll(".station").forEach(st => {
+    st.classList.add("in");
+    const body = st.querySelector(".seeBody");
+    if (body) type(body);
+  });
+}
+const io = typeof IntersectionObserver === "undefined" ? {observe(){}} : new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if (!en.isIntersecting) return;
+    en.target.classList.add("in");
+    const body = en.target.querySelector(".seeBody");
+    if (body && body.dataset.done !== "1") type(body);
+  });
+}, {threshold:0.12, rootMargin:"0px 0px -8% 0px"});
+document.querySelectorAll(".station").forEach(s => io.observe(s));
+
+/* rail: highlight the station you are in */
+const cur = typeof IntersectionObserver === "undefined" ? {observe(){}} : new IntersectionObserver(entries => {
+  entries.forEach(en => {
+    if (!en.isIntersecting) return;
+    railList.querySelectorAll(".railItem").forEach(b =>
+      b.classList.toggle("current", b.dataset.target === en.target.id));
+  });
+}, {threshold:0.3});
+document.querySelectorAll(".station").forEach(s => cur.observe(s));
+
+document.querySelectorAll("[data-jump]").forEach(b =>
+  b.addEventListener("click", () => document.getElementById(b.dataset.jump).scrollIntoView({block:"start"})));
+
+/* =========================================================================
+   5. THE SIGNATURE — exec replaces in place, or spawns beside.
+   ========================================================================= */
+const READOUT = {
+  exec:{html:`<b>exec honoured.</b> The pane's own process <i>becomes</i> the worker: PID stays 2978249, while <code>/proc/2978249/cmdline</code> changes from <code>/bin/bash</code> to the worker's argv. The supervisor's recorded identity points at the thing actually doing the work — 40/40 reps on this host.`, bad:false},
+  regression:{html:`<b>Regression.</b> The shell survives at 2978249 and the worker runs beside it at 3031299. The supervisor still holds 2978249 — so its kill lands on the shell while the worker keeps going, and its liveness probe reports a healthy pane for a job that is no longer there. No error is raised anywhere. <b>This is what the gate catches.</b>`, bad:true}
+};
+const readout = document.getElementById("readout");
+let mode = "exec";
+function setReadout(){
+  readout.innerHTML = READOUT[mode].html;
+  readout.classList.toggle("bad", READOUT[mode].bad);
+}
+setReadout();
+
+const canvas = document.getElementById("stage");
+let three = null;
+
+function cssHex(n){ return "#" + n.toString(16).padStart(6, "0"); }
+
+/* draw `text` at the largest size that fits `maxW`, so a longer label shrinks instead of
+   being silently cut off at the texture edge */
+function fitText(x, text, maxW, weight, startPx, family){
+  let px = startPx;
+  x.font = `${weight} ${px}px ${family}`;
+  while (px > 12 && x.measureText(text).width > maxW) {
+    px -= 2; x.font = `${weight} ${px}px ${family}`;
+  }
+  return px;
+}
+
+function labelTexture(top, mid, bot, tint){
+  const c = document.createElement("canvas");
+  c.width = 512; c.height = 256;
+  const x = c.getContext("2d");
+  const col = cssHex(tint);
+  x.fillStyle = "rgba(8,12,24,0.94)"; x.fillRect(0,0,512,256);
+  x.strokeStyle = col; x.lineWidth = 6; x.strokeRect(3,3,506,250);
+  fitText(x, top, 460, 500, 30, "'JetBrains Mono', monospace"); x.fillStyle = "#8FA0C0";
+  x.fillText(top, 26, 62);
+  fitText(x, mid, 460, 700, 54, "'JetBrains Mono', monospace"); x.fillStyle = col;
+  x.fillText(mid, 26, 134);
+  fitText(x, bot, 460, 400, 26, "'JetBrains Mono', monospace"); x.fillStyle = "#C7D3EA";
+  x.fillText(bot, 26, 200);
+  const t = new THREE.CanvasTexture(c);
+  t.anisotropy = 4;
+  return t;
+}
+
+function badgeTexture(text, tint){
+  const c = document.createElement("canvas");
+  c.width = 512; c.height = 122;
+  const x = c.getContext("2d");
+  x.fillStyle = cssHex(tint); x.fillRect(0, 0, 512, 122);
+  fitText(x, text, 468, 700, 36, "'JetBrains Mono', monospace");
+  x.fillStyle = "#080C18";
+  x.fillText(text, 22, 78);
+  const t = new THREE.CanvasTexture(c); t.anisotropy = 4; return t;
+}
+
+function initThree(){
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({canvas, antialias:true, alpha:true, powerPreference:"high-performance"});
+  } catch {
+    document.getElementById("nowebgl").style.display = "block";
+    return null;
+  }
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+  camera.position.set(0, 1.9, 10.2);
+
+  scene.add(new THREE.AmbientLight(0x8fa0c0, 0.38));
+  const key = new THREE.DirectionalLight(0xffffff, 1.25); key.position.set(5, 7, 7); scene.add(key);
+  const fill = new THREE.DirectionalLight(0x6f86c8, 0.5); fill.position.set(-6, 2, 4); scene.add(fill);
+  const rim = new THREE.PointLight(0x35e0a1, 34, 26); rim.position.set(-3.4, 1.4, 3.4); scene.add(rim);
+
+  // ambient depth: a slow field of points, not a decorative starfield burst
+  const N = 900, pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    pos[i*3]   = (Math.random() - .5) * 34;
+    pos[i*3+1] = (Math.random() - .5) * 18;
+    pos[i*3+2] = -6 - Math.random() * 22;
+  }
+  const field = new THREE.Points(
+    new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(pos, 3)),
+    new THREE.PointsMaterial({color:0x3a4a72, size:0.045, transparent:true, opacity:.85})
+  );
+  scene.add(field);
+
+  const floor = new THREE.GridHelper(26, 26, 0x26314f, 0x1b2440);
+  floor.position.y = -2.35;
+  floor.material.transparent = true; floor.material.opacity = 0.55;
+  scene.add(floor);
+
+  const mkProc = (x, tint) => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.BoxGeometry(2.9, 3.5, 0.34),
+      new THREE.MeshStandardMaterial({color:0x131a2e, metalness:.25, roughness:.62})
+    );
+    g.add(body);
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(2.92, 3.52, 0.36)),
+      new THREE.LineBasicMaterial({color:tint, transparent:true, opacity:.9})
+    );
+    g.add(edge);
+    const plate = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.62, 1.31),
+      new THREE.MeshBasicMaterial({map:labelTexture("pid","0","", tint), transparent:true})
+    );
+    plate.position.set(0, .55, 0.19);
+    g.add(plate);
+    const badge = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.62, .62),
+      new THREE.MeshBasicMaterial({map:badgeTexture("", tint), transparent:true, opacity:0})
+    );
+    badge.position.set(0, -1.02, 0.19);
+    g.add(badge);
+    g.position.x = x;
+    g.userData = {body, edge, plate, badge, tint};
+    return g;
+  };
+
+  const shell  = mkProc(-2.0, 0x8fa0c0);
+  const worker = mkProc( 2.0, 0x35e0a1);
+  scene.add(shell, worker);
+
+  // the kill ray the supervisor fires at the pid it recorded
+  const ray = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.038, 0.038, 3.6, 8),
+    new THREE.MeshBasicMaterial({color:0xff5470, transparent:true, opacity:0})
+  );
+  ray.rotation.z = Math.PI / 2;
+  ray.position.set(-4.1, -1.02, 0.42);
+  scene.add(ray);
+
+  const setBadge = (g, text, tint) => {
+    const m = g.userData.badge.material;
+    if (m.map) m.map.dispose();
+    if (!text) { m.opacity = 0; return; }
+    m.map = badgeTexture(text, tint); m.needsUpdate = true; m.opacity = 1;
+  };
+  const setPlate = (g, top, mid, bot, tint) => {
+    g.userData.plate.material.map.dispose();
+    g.userData.plate.material.map = labelTexture(top, mid, bot, tint);
+    g.userData.plate.material.needsUpdate = true;
+    g.userData.edge.material.color.setHex(tint);
+  };
+
+  const resize = () => {
+    const w = canvas.clientWidth || 700, h = canvas.clientHeight || 520;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    // pull back on narrow/tall canvases so both process columns stay inside the frame
+    const need = 8.1;                                   // world units the pair spans
+    const fov = THREE.MathUtils.degToRad(camera.fov);
+    const distForWidth = (need / 2) / Math.tan(fov / 2) / Math.max(camera.aspect, 0.4);
+    camera.position.z = Math.max(8.6, distForWidth + 0.6);
+    camera.updateProjectionMatrix();
+  };
+  resize(); addEventListener("resize", resize);
+
+  return {renderer, scene, camera, shell, worker, ray, field, setPlate, setBadge};
+}
+
+function applyMode(){
+  if (!three) return;
+  const {shell, worker, ray, setPlate, setBadge} = three;
+  if (mode === "exec") {
+    setPlate(shell, "pid 2978249 — was", "/bin/bash", "the pane's own process", 0x8fa0c0);
+    setPlate(worker, "pid 2978249 — now", "worker", "same pid · cmdline changed", 0x35e0a1);
+    setBadge(shell, "", 0x000000);
+    setBadge(worker, "identity held", 0x35E0A1);
+    worker.position.x = 2.0; worker.scale.setScalar(1);
+    ray.material.opacity = 0;
+  } else {
+    setPlate(shell, "pid 2978249 — still", "/bin/bash", "what the supervisor recorded", 0xff5470);
+    setPlate(worker, "pid 3031299 — new", "worker", "a child, beside the shell", 0xffb454);
+    setBadge(shell, "supervisor kills this", 0xFF5470);
+    setBadge(worker, "this keeps running", 0xFFB454);
+    worker.position.x = 2.25; worker.scale.setScalar(0.94);
+    ray.material.opacity = 0.85;
+  }
+}
+
+let t0 = performance.now();
+function frame(now){
+  if (three) {
+    const t = (now - t0) / 1000;
+    const {renderer, scene, camera, shell, worker, field, ray} = three;
+    if (!reduce) {
+      camera.position.x = Math.sin(t * 0.16) * 0.72;
+      camera.position.y = 1.1 + Math.sin(t * 0.21) * 0.16;
+      camera.lookAt(0, 0.35, 0);
+      shell.rotation.y  =  0.26 + Math.sin(t * 0.5) * 0.055;
+      worker.rotation.y = -0.26 + Math.sin(t * 0.5 + 1.1) * 0.055;
+      shell.position.y  = Math.sin(t * 0.8) * 0.055;
+      worker.position.y = Math.sin(t * 0.8 + .9) * 0.055;
+      field.rotation.y = t * 0.012;
+      if (mode === "regression") ray.material.opacity = 0.55 + Math.sin(t * 6) * 0.3;
+    }
+    renderer.render(scene, camera);
+  }
+  requestAnimationFrame(frame);
+}
+
+function showStageFallback(reason){
+  const fb = document.getElementById("nowebgl");
+  fb.style.display = "block";
+  const why = document.createElement("b");
+  why.textContent = " (" + reason + ")";
+  fb.appendChild(why);
+  const wrap = document.querySelector(".stageWrap");
+  if (wrap) wrap.style.display = "none";
+}
+
+/* Everything above this point runs with no network access. The visualisation is a bonus. */
+try {
+    // three.js r160 is VENDORED beside this file (MIT, sha256
+  // 76dea8151bc9352aef3528b4262e249b2604f62543828328db978d060d61a495) rather than pulled from a
+  // CDN: a dynamic import cannot carry an integrity hash, and remote code in this page's realm
+  // could read or rewrite the verdicts and the exported report. Local also means the console
+  // works with no network at all.
+  THREE = await import("./three.module.js");
+  three = initThree();
+  if (three) {
+    // hold the perspective even when motion is reduced, so the static frame still reads as 3D
+    three.shell.rotation.y = 0.26; three.worker.rotation.y = -0.26;
+    three.camera.lookAt(0, 0.35, 0);
+    applyMode(); requestAnimationFrame(frame);
+  }
+} catch (err) {
+  showStageFallback("three.js could not load: " + (err && err.message ? err.message : err));
+}
+
+document.querySelectorAll(".mode").forEach(b => {
+  b.addEventListener("click", () => {
+    mode = b.dataset.mode;
+    document.querySelectorAll(".mode").forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+    const lbl = document.getElementById("stageMode");
+    if (lbl) lbl.textContent = mode === "exec" ? "exec honoured" : "regression — the wrong pid";
+    if (lbl) lbl.style.color = mode === "exec" ? "var(--go)" : "var(--nogo)";
+    setReadout(); applyMode();
+  });
+});
+</script>
+</body>
+</html>
