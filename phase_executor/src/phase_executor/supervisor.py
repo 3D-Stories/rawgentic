@@ -44,7 +44,7 @@ from .pane_runner import _descendants, expected_capture_dir, sidecar_path
 from .quota import QuotaTimeout
 from .registry import (JobRecord, JobRegistry, ReapPlan, ReapPolicy, classify_recovery,
                        command_digest, handle_from_record, reap_plan, session_name)
-from .terminal_backend import TerminalBackend, TmuxBackend
+from .terminal_backend import Liveness, TerminalBackend, TmuxBackend
 from .worktree import WorktreeHandle, WorktreeIdentity, component_for
 
 TMUX_VERSION_FLOOR = (3, 0)  # verbs probed individually below; 3.4 is the spike-verified build
@@ -360,7 +360,8 @@ class TmuxSupervisor:
                  runtime_dir: Optional[str] = None, state_dir: Optional[str] = None,
                  pane_env: Optional[dict] = None, worktree_manager=None,
                  allow_adapter_override: bool = False,
-                 backend: Optional[TerminalBackend] = None):
+                 backend: Optional[TerminalBackend] = None,
+                 herdr_backend: Optional[TerminalBackend] = None):
         self._snapshot = snapshot
         self._quota = quota
         self._capture_root = capture_root
@@ -383,19 +384,42 @@ class TmuxSupervisor:
         self._backend = backend if backend is not None else TmuxBackend(
             run=self._run, env=self._env, runtime_dir=self._runtime_dir,
             state_dir=self._state_dir)
+        # #638 (epic #635 C2): the OPTIONAL second backend slot, config-gated for the build
+        # seat. None when herdr isn't configured for this supervisor instance — resolving a
+        # "herdr" record then refuses loud (`_resolve_backend`) rather than silently falling
+        # back to tmux, which would issue a wrong-backend liveness/kill check against a real
+        # live job under a different runtime.
+        self._herdr_backend = herdr_backend
 
-    # -- tmux plumbing (delegated to the TerminalBackend, #636) ---------------
+    def _resolve_backend(self, terminal_backend: Optional[str]) -> TerminalBackend:
+        """Resolve which `TerminalBackend` a call concerns. `None`/`"tmux"` (the vast
+        majority — every pre-#638 record, and every non-build-seat job) resolves to the
+        single `self._backend` this supervisor has always had. `"herdr"` resolves to
+        `self._herdr_backend` — refusing loud if this instance wasn't given one, rather
+        than silently defaulting to tmux (a wrong-backend answer here means a liveness
+        check or kill_session call against the WRONG runtime for a real live job)."""
+        if terminal_backend == "herdr":
+            if self._herdr_backend is None:
+                raise SupervisorError(
+                    "job requires the herdr TerminalBackend but this supervisor instance "
+                    "has none configured (herdr_backend=None)")
+            return self._herdr_backend
+        return self._backend
 
-    def resolve_socket(self, run_id: str) -> str:
-        return self._backend.resolve_endpoint(run_id)
+    # -- tmux plumbing (delegated to the TerminalBackend, #636/#638) ----------
+
+    def resolve_socket(self, run_id: str, *, terminal_backend: str = "tmux") -> str:
+        return self._resolve_backend(terminal_backend).resolve_endpoint(run_id)
 
     # -- preflight (AC-E1) ---------------------------------------------------
 
-    def preflight(self, run_socket: str) -> PreflightResult:
+    def preflight(self, run_socket: str, *, terminal_backend: str = "tmux") -> PreflightResult:
         """Fail-closed BOTH ways (CF-13): tmux resolvable, version floor, socket dir usable,
         and every verb the supervisor uses probed ON the private socket. #636: delegates to
-        the injected TerminalBackend — the logic itself now lives there."""
-        return self._backend.preflight(run_socket)
+        the injected TerminalBackend — the logic itself now lives there. #638:
+        `terminal_backend` selects WHICH backend to preflight (defaults to tmux, unchanged
+        behavior for every existing caller)."""
+        return self._resolve_backend(terminal_backend).preflight(run_socket)
 
     # -- launch (AC-E2/E3/E5) ------------------------------------------------
 
@@ -409,9 +433,18 @@ class TmuxSupervisor:
                snapshot_digest: Optional[str] = None,
                correlation_id: Optional[str] = None,
                recovered_from: Optional[str] = None,
-               quota_classification: Optional[dict] = None) -> JobRecord:
+               quota_classification: Optional[dict] = None,
+               terminal_backend: str = "tmux") -> JobRecord:
         """Resolve routing + acquire the quota permit HERE (AC-E5 — the supervisor holds it
         for the job's lifetime), write the FIXED pane spec, and spawn the pane.
+
+        #638: ``terminal_backend`` (default ``"tmux"``, unchanged behavior for every existing
+        caller) selects which configured backend actually launches this job — the CALLER (the
+        seat + config-gate check) decides this before calling, never guessed here. The choice
+        is stamped onto the returned ``JobRecord`` so every LATER per-record call (`_live`,
+        `_kill_job`, `recover`, `reap`) resolves the SAME backend this job actually launched
+        under, not whatever backend the supervisor instance handling that later call happens
+        to default to.
 
         #470 Task-3: ``snapshot_dir`` + ``snapshot_digest`` (a supervised mutating launch, staged
         by the dispatch choke-point) are bound into the spec so ``pane_runner`` re-verifies the
@@ -438,8 +471,10 @@ class TmuxSupervisor:
             manifest = None
         timeout = _effective_timeout(manifest, timeout)
 
+        resolved_backend = self._resolve_backend(terminal_backend)  # refuses loud here, before
+        # any pane spawns, if terminal_backend=="herdr" but this instance has none configured
         name = session_name(identity)
-        sock = self.resolve_socket(identity.run_id)
+        sock = resolved_backend.resolve_endpoint(identity.run_id)
         attempt_id = f"{resume_attempts}-{uuid.uuid4().hex[:8]}"
         cap_dir = expected_capture_dir(self._capture_root, identity.run_id, seat, attempt_id)
 
@@ -493,11 +528,31 @@ class TmuxSupervisor:
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
-            res = self._backend.new_session(sock, name, handle.path, argv)
+            # `spawned` flips only AFTER a confirmed-successful new_session — the
+            # origin/main behaviour, restored in pass 9. Pass 6 moved it BEFORE the call so a
+            # partial spawn could not read as "nothing created", but that was both unnecessary
+            # and destructive: unnecessary because EACH BACKEND already cleans up its own
+            # partial spawn (HerdrBackend's new_session closes the pane it created if rename or
+            # run fails — see its try/finally), and destructive because session names are
+            # DETERMINISTIC: on tmux's ordinary `duplicate session: <name>` refusal (confirmed
+            # present in the installed binary and reproduced live) the cleanup below would have
+            # called kill-session on the ALREADY-EXISTING same-name session — killing something
+            # this launch never created. Partial-spawn cleanup belongs to the backend that knows
+            # what it created; the supervisor must not guess from a returncode.
+            #
+            # Precision about tmux, probed live rather than assumed (pass 9): a NONZERO
+            # `new-session` means no session was created — the `duplicate session` refusal
+            # creates nothing. The cases that DO create something (a bad `-c` cwd, a bad argv)
+            # return rc=0 instead, so they take the ordinary post-spawn path below where
+            # `spawned` is already True and teardown works by name. So the case this guard must
+            # be right about is exactly the one where nothing exists to tear down. (An earlier
+            # draft of this comment claimed "new-session is atomic", which is looser than what
+            # was actually observed.)
+            res = resolved_backend.new_session(sock, name, handle.path, argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
             spawned = True
-            shown = self._backend.pane_pid(sock, name)
+            shown = resolved_backend.pane_pid(sock, name)
             if shown.returncode != 0 or not (shown.stdout or "").strip().isdigit():
                 raise SupervisorError(f"pane_pid unreadable: {(shown.stderr or '').strip()}")
             pane_pid = int(shown.stdout.strip())
@@ -517,17 +572,54 @@ class TmuxSupervisor:
                 resume_attempts=resume_attempts, state="running",
                 created_at=self._clock(), quarantine_reason=None,
                 receipt_nonce=receipt_nonce, recovered_from=recovered_from,
-                quota_classification=quota_classification)
+                quota_classification=quota_classification,
+                terminal_backend=terminal_backend)
             self._registry.upsert(record)
             self._permits[name] = cm
             return record
         except BaseException:
             # a post-spawn failure (unreadable pane_pid, registry write error) must not
             # leak a LIVE unregistered pane outside the ceiling (Step-11 R1/codex #5):
-            # kill the session first, then release the permit
+            # kill the session first, then release the permit.
+            #
+            # #638 Step-11 finding (pass 5): the permit release was UNCONDITIONAL and the
+            # kill's own result was ignored, so an unconfirmed teardown (nonzero close, or a
+            # runner timeout) released the slot while a possibly-live, unregistered process
+            # kept running — letting the pool over-admit past its ceiling. Same class as the
+            # pass-4 orphan finding. Release ONLY on a CONFIRMED teardown; otherwise hold the
+            # slot, exactly as `_finish(release_permit=False)` does for every other
+            # death-not-verified path. The permit stays in `self._permits` under this
+            # session name so a later `_release_permit` for that record reclaims it, and
+            # QuotaCoordinator's stale-reap (dead holder pid) remains the leak backstop.
+            # The possibly-live pane itself is surfaced by reap()'s CF-11 unknown-session
+            # reporting (live on the endpoint, absent from the registry) — never blind-killed.
+            # Teardown is ATTEMPTED for any possibly-spawned session (a nonzero new_session
+            # means creation is INDETERMINATE — a backend's new_session is not atomic: herdr
+            # splits, renames and runs before returning, and tmux's own can time out after the
+            # server accepted it). The tri-state close normalises the ordinary
+            # already-absent case to CONFIRMED_GONE.
+            #
+            # The permit is then released UNCONDITIONALLY, and that is a DELIBERATE, documented
+            # limitation rather than an oversight (#638 Step-11 pass 8, owner scope decision
+            # 2026-07-24 — see the KNOWN LIMITATION note in terminal_backend.py and issue #648).
+            # Correct behaviour needs proof the process TREE is dead; on this path no process
+            # identity was ever captured, so no such proof is obtainable. Passes 5-8 each tried
+            # a cheaper substitute and each was itself a defect: releasing unconditionally
+            # over-admits the pool (p5); holding it in memory alone is unreclaimable (p6);
+            # persisting a pid-0 residue record to make it reclaimable made "session absent"
+            # masquerade as "process dead", let a recovery relaunch erase it and free the new
+            # permit, never released it from reap's `keep` tier, and was not crash-durable
+            # (p7-p8). So this fails toward the PRE-#638 behaviour, unchanged for tmux: release
+            # the slot, and let reap()'s CF-11 unknown-session reporting surface any pane live
+            # on the endpoint but absent from the registry — owner-visible, never blind-killed.
+            # A leaked pane is recoverable; a permanently pinned pool is not.
+            #
+            # Deliberately ONE unconditional release, not a two-armed branch that did the same
+            # thing in both arms (a self-review catch: that shape invites a later "fix" to one
+            # arm and silently reintroduces the p6-p8 defect chain).
             if spawned:
                 try:
-                    self._backend.kill_session(sock, name)
+                    resolved_backend.close_session(sock, name)
                 except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
                     pass
             cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
@@ -536,7 +628,20 @@ class TmuxSupervisor:
     # -- status / sentinel ----------------------------------------------------
 
     def _live(self, record: JobRecord) -> bool:
-        return self._backend.has_session(record.run_socket, record.session_name).returncode == 0
+        backend = self._resolve_backend(record.terminal_backend)
+        # #638 Step-11 pass 7: branch on the backend's TRI-STATE verdict, never on a
+        # returncode. Seven passes each found the same class of bug — an operational failure
+        # read as a definitive answer — because `returncode != 0` conflates "confirmed gone"
+        # with "couldn't tell". INDETERMINATE surfaces as SupervisorError so recover()/reap()
+        # exclude the record for this cycle instead of killing a possibly-live job. (This is
+        # now correct for TMUX too: previously every tmux nonzero — including a socket
+        # permission error against a LIVE server — read as dead.)
+        verdict = backend.probe_session(record.run_socket, record.session_name)
+        if verdict is Liveness.INDETERMINATE:
+            raise SupervisorError(
+                f"liveness check indeterminate for {record.session_name!r} "
+                f"(probe failed; not evidence of death)")
+        return verdict is Liveness.CONFIRMED_ALIVE
 
     def _sentinel(self, record: JobRecord) -> Optional[dict]:
         return read_sentinel(record)
@@ -719,7 +824,17 @@ class TmuxSupervisor:
             time.sleep(0.1)
         residue = any(_pid_alive(p) for p in snapshot) or _pane_group() or _provider_group()
         if not residue:
-            self._backend.kill_session(record.run_socket, record.session_name)
+            # Self-review catch (#638): this is POST-MORTEM bookkeeping only — the process is
+            # already verified dead above, and the ORIGINAL code never checked kill_session's
+            # own result either. A backend-resolution failure here (e.g. a misconfigured
+            # supervisor missing herdr_backend for a herdr-tagged record) must not un-verify a
+            # real, already-confirmed kill or strand the caller's _finish/_release_permit —
+            # swallow it exactly as any other best-effort bookkeeping failure in this file.
+            try:
+                self._resolve_backend(record.terminal_backend).kill_session(
+                    record.run_socket, record.session_name)
+            except Exception:  # noqa: BLE001 — best-effort bookkeeping after a verified kill
+                pass
             return True
         return False
 
@@ -838,7 +953,19 @@ class TmuxSupervisor:
                 self._finish(record, state, release_permit=killed,
                              provider_exit_code=_exit_code_of(obs), **extra)
                 return state, obs
-            if not self._live(record):
+            # #638 Step-11 finding (pass 4): `_live()` now RAISES SupervisorError when the
+            # backend's liveness probe is genuinely indeterminate (a herdr list/get failure,
+            # as opposed to a confirmed "not found"). That must NOT abort an otherwise healthy
+            # supervised dispatch — doing so left the record running with its permit held.
+            # An unknown probe is treated as "not known dead": keep polling to the EXISTING
+            # deadline, which still bounds the wait, and let the on-disk sentinel (the
+            # authoritative completion signal) or the deadline decide. Only a DEFINITIVE
+            # not-live answer takes the death path below.
+            try:
+                definitely_dead = not self._live(record)
+            except SupervisorError:
+                definitely_dead = False
+            if definitely_dead:
                 obs = self._sentinel(record)  # one post-exit re-check (write vs exit race)
                 if obs is not None:
                     continue
@@ -893,7 +1020,15 @@ class TmuxSupervisor:
                 obs = self._sentinel(record)
                 if obs is not None:  # CF-12: the child's validated result wins
                     state = "completed" if kill_clean else "completed_with_residue"
-                    self._finish(record, state, provider_exit_code=_exit_code_of(obs))
+                    # #638 Step-11 finding (pass 6): this `_finish` omitted
+                    # `release_permit=`, taking the default True — so on the deadline race
+                    # where the kill was NOT verified but a concurrently-written valid
+                    # sentinel then won, the slot was released while residue may still have
+                    # been executing. `completed_with_residue` is by definition a
+                    # death-NOT-verified state; gate the release on `kill_clean` exactly as
+                    # every other residue path does.
+                    self._finish(record, state, release_permit=kill_clean,
+                                 provider_exit_code=_exit_code_of(obs))
                     return state, obs
                 spec = self._read_spec(record)
                 obs = synthetic_observation(
@@ -970,8 +1105,14 @@ class TmuxSupervisor:
         return parse_stream_events(proc.stdout)
 
     def kill_server(self, run_id: str) -> None:
-        """Tear down the whole private server for ``run_id`` (test/run cleanup)."""
+        """Tear down the whole private server for ``run_id`` (test/run cleanup). #638: tears
+        down EVERY configured backend for this run_id, not just tmux — a mixed-backend run may
+        have live state under either. herdr's `teardown_endpoint` is a documented no-op (no
+        per-run herdr server exists to tear down), so calling it when configured is harmless."""
         self._backend.teardown_endpoint(self.resolve_socket(run_id))
+        if self._herdr_backend is not None:
+            self._herdr_backend.teardown_endpoint(
+                self.resolve_socket(run_id, terminal_backend="herdr"))
 
     # -- recover (OQ-8, CF-6/CF-7/CF-10) ----------------------------------------
 
@@ -1045,7 +1186,19 @@ class TmuxSupervisor:
         for record in self._registry.by_run(run_id):
             if record.state in ("completed", "completed_with_residue", "failed", "quarantined"):
                 continue
-            live = self._live(record)
+            # #638 Step-11 finding (found by inspection while fixing the same class of bug in
+            # reap()): a record whose backend cannot be resolved (a misconfigured supervisor
+            # missing herdr_backend for a herdr-tagged record), OR whose backend IS configured
+            # but the liveness check itself transiently fails (round 2: `_live()` now raises
+            # SupervisorError for that case too, not just resolution failure), must not crash
+            # recovery for EVERY OTHER record in this run, NOR be misread as "confirmed dead".
+            # Not considered this cycle — same treatment as an already-terminal record just
+            # above (silently absent from `actions`, never a destructive guess).
+            try:
+                self._resolve_backend(record.terminal_backend)
+                live = self._live(record)
+            except SupervisorError:
+                continue
             matches = self._identity_matches(record)
             # spec content must also still parse for a live adopt (tamper evidence)
             sentinel_valid = self._sentinel(record) is not None
@@ -1251,13 +1404,62 @@ class TmuxSupervisor:
         # quota_paused records belong to recover() (a pending --resume needs its worktree
         # and cwd intact) — reap never retains/kills what recover is about to relaunch
         # (Step-11 R2 finding; masked today by worktree_manager=None, real once W3-wired)
-        records = [r for r in self._registry.by_run(run_id) if r.state != "quota_paused"]
+        #
+        # #638 Step-11 finding (round 2 — the FIRST "tolerate it" fix here was itself wrong):
+        # a record whose backend cannot be resolved (a misconfigured supervisor missing
+        # herdr_backend for a herdr-tagged record) must be EXCLUDED from this whole sweep,
+        # not merely skipped for its list_sessions contribution. Skipping only the listing
+        # is NOT safe: a genuinely alive record excluded from live_names still lands outside
+        # live_fresh below, and reap_plan's dead_fn (a REAL OS-level PID check, independent
+        # of list_sessions) would then correctly report it as "not dead" — which routes it
+        # to kill_tree, not to "keep". A resolution FAULT would thus get misread as "this
+        # job is wedged" and _kill_job a healthy, live process. Filtering it out here (same
+        # treatment as quota_paused) means we take NO action on it this cycle rather than a
+        # wrong destructive one.
+        records = []
+        for r in self._registry.by_run(run_id):
+            if r.state == "quota_paused":
+                continue
+            try:
+                self._resolve_backend(r.terminal_backend)
+            except SupervisorError:
+                continue
+            records.append(r)
         now = self._clock()
         live_names = set()
-        if records:
-            res = self._backend.list_sessions(records[0].run_socket)
-            if res.returncode == 0:
-                live_names = {l.strip() for l in (res.stdout or "").splitlines() if l.strip()}
+        # union list_sessions() across every DISTINCT (backend, endpoint) pair actually
+        # present among these records — one fixed self._backend.list_sessions() call would
+        # leave a herdr-backed job invisible to a tmux-only listing (and vice versa),
+        # landing it outside live_fresh below even though it's genuinely alive (Step-4
+        # review Finding #2). Keyed on the PAIR, not the backend object alone (Step-11
+        # finding, round 2 confirming pass): two records sharing one backend but a
+        # DIFFERENT run_socket/endpoint — e.g. two herdr workspaces under one run — would
+        # otherwise silently share only the FIRST endpoint seen, leaving the second
+        # endpoint's sessions never listed at all.
+        by_backend_socket: dict = {}
+        for r in records:
+            by_backend_socket[(self._resolve_backend(r.terminal_backend), r.run_socket)] = True
+        unusable_pairs = set()
+        for backend, run_socket in by_backend_socket:
+            # #638 Step-11 finding (round 2): a genuine list_sessions() failure (raised,
+            # per the Protocol contract) must exclude EVERY record on that (backend,
+            # endpoint) pair from this cycle's plan — dead_fn is an independent OS-level
+            # PID check, so a genuinely-alive-but-unlisted record would otherwise be
+            # correctly reported "not dead" and routed to kill_tree, letting a transient
+            # list failure kill a healthy job. A plain nonzero RETURN (never raised) is
+            # TmuxBackend's routine "no sessions on this socket" — confirmed-empty, not
+            # excluded.
+            verdict, names = backend.enumerate_sessions(run_socket)
+            if verdict is Liveness.INDETERMINATE:
+                unusable_pairs.add((backend, run_socket))
+                continue
+            # a CONFIRMED verdict is a RELIABLE enumeration (possibly empty — tmux's routine
+            # idle-socket answer), so those records keep flowing through the ordinary sweep.
+            live_names |= set(names)
+        if unusable_pairs:
+            records = [r for r in records
+                       if (self._resolve_backend(r.terminal_backend), r.run_socket)
+                       not in unusable_pairs]
 
         def _fresh(record: JobRecord) -> bool:
             # an INFANT job (younger than fresh_s) is fresh by age — a just-launched pane
@@ -1282,7 +1484,15 @@ class TmuxSupervisor:
                          + ("" if killed else "; kill unverified: residue"))
             self._retain(record)
         for record in plan.kill_session:
-            self._backend.kill_session(record.run_socket, record.session_name)
+            # Self-review catch (#638), same as _kill_job's tail: reap_plan's own docstring
+            # confirms every plan.kill_session record is already dead_fn-verified dead — this
+            # is bookkeeping-only cleanup, and a backend-resolution failure must not skip the
+            # permit release for an already-dead job.
+            try:
+                self._resolve_backend(record.terminal_backend).kill_session(
+                    record.run_socket, record.session_name)
+            except Exception:  # noqa: BLE001 — best-effort bookkeeping on an already-dead record
+                pass
             self._release_permit(record)
         for record in plan.retain_worktree:
             # repeat-safety stamp: without it every future sweep re-invokes W3 finalize on

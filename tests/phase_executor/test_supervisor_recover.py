@@ -334,7 +334,7 @@ def _dead_sup(tmp_path, **kw):
     reg = JobRegistry(str(tmp_path / "reg"))
     sup = TmuxSupervisor(snapshot=None, quota=None, capture_root=str(tmp_path / "cap"),
                          registry_root=str(tmp_path / "reg"), registry=reg,
-                         run=lambda cmd, **kw2: subprocess.CompletedProcess(cmd, 1, "", ""), **kw)
+                         run=lambda cmd, **kw2: subprocess.CompletedProcess(cmd, 1, "", "can't find session: t"), **kw)
     return sup, reg
 
 
@@ -388,7 +388,7 @@ def _snap_sup(tmp_path):
     sup = TmuxSupervisor(
         snapshot=_snapshot(), quota=QuotaCoordinator(str(tmp_path / "q"), {"claude": 1}),
         capture_root=str(tmp_path / "cap"), registry_root=str(tmp_path / "reg"), registry=reg,
-        run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", ""))
+        run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "can't find session: t"))
     return sup, reg
 
 

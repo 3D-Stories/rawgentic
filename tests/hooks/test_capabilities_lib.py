@@ -601,6 +601,50 @@ class TestPhaseExecutorTable:
             self._derive(phaseExecutorTable={"file": None})
 
 
+# --- #638: executorTerminalBackend (build-seat backend config-gate) ---------
+
+class TestExecutorTerminalBackend:
+    def _derive(self, **cfg_kwargs):
+        from capabilities_lib import derive_capabilities
+        return derive_capabilities(_base_config(**cfg_kwargs))
+
+    def test_absent_section_defaults_to_tmux(self):
+        assert self._derive()["executor_terminal_backend"] == "tmux"
+
+    def test_valid_tmux_descriptor(self):
+        caps = self._derive(executorTerminalBackend={"version": 1, "build": "tmux"})
+        assert caps["executor_terminal_backend"] == "tmux"
+
+    def test_valid_herdr_descriptor(self):
+        caps = self._derive(executorTerminalBackend={"version": 1, "build": "herdr"})
+        assert caps["executor_terminal_backend"] == "herdr"
+
+    def test_comment_key_is_tolerated(self):
+        caps = self._derive(executorTerminalBackend={
+            "$comment": "docs", "version": 1, "build": "herdr"})
+        assert caps["executor_terminal_backend"] == "herdr"
+
+    @pytest.mark.parametrize("bad", [
+        "a-string", 7, [], True,                       # section not an object
+        {"build": "herdr"},                            # version missing
+        {"version": 2, "build": "herdr"},               # unsupported version
+        {"version": True, "build": "herdr"},            # bool masquerading as int
+        {"version": 1},                                 # build missing (no silent tmux fallback)
+        {"version": 1, "build": ""},                    # empty
+        {"version": 1, "build": 3},                     # wrong type
+        {"version": 1, "build": "not-a-backend"},        # unknown backend name
+        {"version": 1, "build": None},                   # no answered-defaults sentinel here
+    ])
+    def test_present_but_invalid_raises_never_silently_falls_back(self, bad):
+        from capabilities_lib import CapabilitiesError
+        with pytest.raises(CapabilitiesError):
+            self._derive(executorTerminalBackend=bad)
+
+    def test_field_registered_in_canonical_set(self):
+        from capabilities_lib import CAPABILITY_FIELDS
+        assert "executor_terminal_backend" in CAPABILITY_FIELDS
+
+
 class TestConfigTemplateDocumentsPhaseExecutorTable:
     """#445 AC3/PL-6: the annotated example template and config-reference document the new field.
     The template is a reference EXAMPLE consumed by /rawgentic:setup (not a validating schema) —
@@ -621,6 +665,27 @@ class TestConfigTemplateDocumentsPhaseExecutorTable:
         with open(self._REPO / "docs" / "config-reference.md") as f:
             text = f.read()
         assert "### `phaseExecutorTable`" in text
+
+
+class TestConfigTemplateDocumentsExecutorTerminalBackend:
+    """#638: the annotated example template and config-reference document the new field,
+    mirroring TestConfigTemplateDocumentsPhaseExecutorTable's pattern."""
+    _REPO = Path(__file__).resolve().parent.parent.parent
+
+    def test_template_parses_and_carries_example(self):
+        with open(self._REPO / "templates" / "rawgentic-json-schema.json") as f:
+            tpl = json.load(f)
+        etb = tpl.get("executorTerminalBackend")
+        assert isinstance(etb, dict), "template must carry an executorTerminalBackend example section"
+        assert etb.get("version") == 1
+        assert etb.get("build") in ("tmux", "herdr")
+        comment = etb.get("$comment", "")
+        assert "capabilities_lib" in comment and "build seat" in comment
+
+    def test_config_reference_has_section(self):
+        with open(self._REPO / "docs" / "config-reference.md") as f:
+            text = f.read()
+        assert "### `executorTerminalBackend`" in text
 
 
 class TestPhaseExecutorTableControlChars:

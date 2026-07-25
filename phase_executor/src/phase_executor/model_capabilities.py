@@ -8,7 +8,7 @@ recorded on every Observation.effort object).
 """
 from __future__ import annotations
 
-CAPABILITY_REVISION: int = 1
+CAPABILITY_REVISION: int = 2  # 2: +claude-opus-5 row (owner seat retune 2026-07-24)
 
 EFFORT_LADDER: tuple = ("low", "medium", "high", "xhigh", "max")
 
@@ -18,6 +18,14 @@ _ALL = EFFORT_LADDER
 # CLI accepts all 5 for its models; glm-5.2 accepts all 5.
 SUPPORTED_EFFORT: dict = {
     "claude-fable-5": _ALL,
+    # claude-opus-5 is the shipped table's opus row since the 2026-07-24 owner retune;
+    # claude-opus-4-8 is KEPT (the registry is a documented SUPERSET, not an exact match)
+    # so a persisted record/Observation minted against the older id still resolves.
+    # Step-11 pass 6: this row DID bump CAPABILITY_REVISION (1 -> 2). The hermes-agent
+    # precedent below does not cover it — adding claude-opus-5 flips its resolution from
+    # unknown/REFUSED to supported, so leaving revision 1 would make the old and new
+    # capability sets indistinguishable in every effort Observation that records it.
+    "claude-opus-5": _ALL,
     "claude-opus-4-8": _ALL,
     "claude-sonnet-5": _ALL,
     "gpt-5.6-sol": _ALL,
@@ -27,8 +35,10 @@ SUPPORTED_EFFORT: dict = {
     "glm-5.2": _ALL,
     # #568 Phase-2: the Hermes gateway has a FIXED internal model + no effort control; the seat
     # pins medium so routing validation is satisfied, and the adapter accepts-but-does-not-forward
-    # it. Additive new-engine row — CAPABILITY_REVISION is deliberately NOT bumped (no existing
-    # model's capability changed; test_engine pins the produced revision at 1).
+    # it. Additive new-engine row — CAPABILITY_REVISION was deliberately NOT bumped for THIS row
+    # (no existing model's capability changed). Historical note: the pins that comment referred
+    # to now expect revision 2 — the claude-opus-5 row DID bump it, because that row flips a
+    # model from refused to supported (pass-7 review caught this comment going stale).
     "hermes-agent": ("medium",),
 }
 

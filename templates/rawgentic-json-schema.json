@@ -18,6 +18,11 @@
     "version": 1,
     "file": "claude_docs/routing/phase-executor-table.json"
   },
+  "executorTerminalBackend": {
+    "$comment": "OPTIONAL versioned descriptor selecting which TerminalBackend the executor's build seat launches under (#638, epic #635 C2): \"tmux\" (package default) or \"herdr\" — tmux stays the default until herdr is independently proven; every other seat is unaffected. Absent section = \"tmux\", the only silent default. This template is a reference example only — the executable validation contract lives in capabilities_lib (derive fails closed on any present-but-invalid section: version must be 1; build must be \"tmux\" or \"herdr\").",
+    "version": 1,
+    "build": "tmux"
+  },
   "telemetryAlerts": {
     "$comment": "OPTIONAL per-project config for the #473 I3 seat-outcomes advisory alerts (AC-K5). ADVISORY only — no rule here can ever gate/block a run. Absent section (or the answered-defaults sentinel {\"version\": 1}) = all defaults. `enabled: false` disables evaluation (harvest still runs). windowSize (int 1..1000, default 30) + minSamples (int 1..windowSize, default 5) size the rolling baselines. thresholds: COUNT rules (fallback_fired, dispatch_failures) take false|non-negative-int (false disables that rule); TOGGLE rules (model_mismatch, parse_failure, seat_wall_time_p90, seat_cost_p90, review_findings_p90) take a bool. This template is a reference example only — the executable STRICT validation contract lives in hooks/seat_outcomes_lib.py (validate_telemetry_alerts; the `validate-config` CLI verb; setup Step 2j stages it, runtime load_thresholds fails open to these defaults). Seeded/tweaked by /rawgentic:setup Step 2j (#446).",
     "version": 1,

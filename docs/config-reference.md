@@ -42,6 +42,7 @@ truth (skills no longer hand-derive it in prose). The fields are:
 | `has_docker` | `config.infrastructure.docker.composeFiles` is a non-empty array |
 | `migration_dir` | `config.database.migrationsDir` (else `null`) |
 | `phase_executor_table` | `config.phaseExecutorTable.file` when the versioned descriptor is present and valid (`version` must be 1; `file` a project-relative path, no `..`); `null` when the section is absent OR carries the answered-defaults sentinel `"file": null` (#531) — any other present-but-invalid section raises, never silently falls back (#445) |
+| `executor_terminal_backend` | `config.executorTerminalBackend.build` (`"tmux"` or `"herdr"`) when the versioned descriptor is present and valid (`version` must be 1); `"tmux"` when the section is absent — any other present-but-invalid section raises, never silently falls back (#638) |
 
 **Parallelism probe (`probe-parallelism`, #136).** Separate from the config-derived
 capabilities above (it inspects git, not `.rawgentic.json`), a sibling subcommand
@@ -300,6 +301,21 @@ routes on. Capability surface: [`phase_executor_table`](#config-loading-protocol
 The official workflow diagram (`docs/workflow-diagram.html`) renders this resolved table
 per WF2 phase — seat, default model, fallback chain, routing-mode classification — generated
 from `resolve_table` by `hooks/diagram_seat_data.py` (#447), never hand-hardcoded.
+
+### `executorTerminalBackend`
+
+Optional versioned descriptor selecting which `TerminalBackend` the executor's `build`
+seat launches under (#638, epic #635 C2 — tmux stays the default until herdr is
+independently proven; every other seat is unaffected):
+
+```json
+"executorTerminalBackend": { "version": 1, "build": "herdr" }
+```
+
+`build` is `"tmux"` (the package default) or `"herdr"`. **Absent section** → `"tmux"`, the
+only silent default. **Present** → `version` must be `1` and `build` must be one of the
+two known values, or derive refuses (exit non-zero) — a malformed section never silently
+falls back to tmux. Capability surface: [`executor_terminal_backend`](#config-loading-protocol).
 
 ### `telemetryAlerts`
 

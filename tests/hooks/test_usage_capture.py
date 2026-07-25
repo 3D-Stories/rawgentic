@@ -278,3 +278,38 @@ def test_drift_guard_catches_zero_token_no_marker(tmp_path):
                  if not _has_positive_input(r["usage"])
                  and r["usage"].get("capture_status") not in {"unrecoverable", "unavailable"}]
     assert offenders, "a 0/0 usage object with no marker must be flagged as an offender"
+
+
+# --- #638 Step-11 pass 7 (Low): the shipped table's models must all have a rate row ---
+
+def test_rate_card_covers_every_shipped_routing_table_model():
+    """An unknown model keeps its token counts but silently estimates cost as ZERO. The
+    pass-7 review caught `claude-opus-5` being added to the routing table with a rate row
+    but NO test -- so removing the row would not have failed the tracked suite. This pins
+    the rate card to the shipped table itself rather than to a hand-listed set, so the next
+    seat retune that introduces a model fails loudly here instead of silently costing 0.
+    """
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+    # Read the shipped table as the DATA FILE it is. A `from phase_executor.routing import
+    # ...` here would need a runtime sys.path shim that pylint (static) cannot follow, and
+    # `--disable=import-error` suppresses E0401 but NOT E0611 -- that combination turned the
+    # CI lint lane red while passing on a dev box where phase_executor happens to resolve.
+    # tests/hooks/ has no conftest sys.path shim; only tests/phase_executor/ does.
+    table_path = (Path(__file__).resolve().parents[2] / "phase_executor" / "src"
+                  / "phase_executor" / "routing" / "rawgentic.routing-table.json")
+    assert table_path.is_file(), f"shipped routing table not found at {table_path}"
+    table = json.loads(table_path.read_text(encoding="utf-8"))
+    shipped = set()
+    for seat in table["seats"].values():
+        for entry in (seat["primary"], *seat.get("chain", [])):
+            shipped.add(entry["model"])
+    # only the anthropic-lane models are billed through this rate card
+    claude_models = {m for m in shipped if m.startswith("claude-")}
+    missing = sorted(m for m in claude_models if m not in uc.RATE_CARD)
+    assert not missing, f"RATE_CARD lacks rows for shipped models (cost would be 0): {missing}"
+
+
+def test_claude_opus_5_has_a_nonzero_rate_row():
+    o = uc.RATE_CARD["claude-opus-5"]
+    assert all(o[k] > 0 for k in ("input", "cache_write", "cache_read", "output"))

@@ -926,6 +926,71 @@ class TestResolveTable:
         with pytest.raises(er.MalformedConfig, match="missing.json"):
             er.resolve_table(repo, routing)
 
+
+class TestResolveTerminalBackend:
+    """#638: resolve_terminal_backend mirrors resolve_table's config-read pattern (absent
+    config/section -> "tmux"; present-but-malformed fails closed, never a silent tmux)."""
+
+    def test_absent_config_file_resolves_tmux(self, tmp_path):
+        repo = tmp_path / "noconfig"
+        repo.mkdir()
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+    def test_absent_section_resolves_tmux(self, tmp_path):
+        repo = tmp_path / "p"
+        _cfg(repo)  # complete config, no executorTerminalBackend
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+    def test_valid_herdr_descriptor_resolves_herdr(self, tmp_path):
+        repo = tmp_path / "p"
+        cfg_path = _cfg(repo)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["executorTerminalBackend"] = {"version": 1, "build": "herdr"}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        assert er.resolve_terminal_backend(repo) == "herdr"
+
+    def test_valid_tmux_descriptor_resolves_tmux(self, tmp_path):
+        repo = tmp_path / "p"
+        cfg_path = _cfg(repo)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["executorTerminalBackend"] = {"version": 1, "build": "tmux"}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+    def test_malformed_section_never_falls_back_silently(self, tmp_path):
+        repo = tmp_path / "p"
+        cfg_path = _cfg(repo)
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg["executorTerminalBackend"] = {"version": 1, "build": "not-a-backend"}
+        cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+        with pytest.raises(er.MalformedConfig):
+            er.resolve_terminal_backend(repo)
+
+    def test_real_repo_resolves_tmux(self):
+        # rawgentic's own .rawgentic.json declares no executorTerminalBackend -> package default.
+        repo = Path(er.__file__).resolve().parent.parent
+        assert er.resolve_terminal_backend(repo) == "tmux"
+
+
+class TestSelectLaunchTerminalBackend:
+    """#638 AC4: the build-seat-only gate decision, tested directly (not just its two
+    ingredients) so a bug in the COMBINING logic — a swapped condition, wrong role string —
+    can't slip through untested."""
+
+    def test_build_seat_herdr_configured_selects_herdr(self):
+        assert er.select_launch_terminal_backend("build", "herdr") == "herdr"
+
+    def test_build_seat_tmux_configured_selects_tmux(self):
+        assert er.select_launch_terminal_backend("build", "tmux") == "tmux"
+
+    def test_non_build_seat_never_selects_herdr_even_if_configured(self):
+        assert er.select_launch_terminal_backend("review", "herdr") == "tmux"
+        assert er.select_launch_terminal_backend("analysis", "herdr") == "tmux"
+
+    def test_none_role_never_selects_herdr(self):
+        # no snapshot / unresolvable seat role -> never herdr, regardless of config
+        assert er.select_launch_terminal_backend(None, "herdr") == "tmux"
+
     def test_pointer_names_a_directory(self, tmp_path):
         repo = tmp_path / "p"
         _cfg(repo, pointer="somedir")
@@ -1173,7 +1238,7 @@ class TestApplyTable:
     def test_validate_only_prints_pointer_and_writes_nothing(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
         before = sorted(p.name for p in repo.iterdir())
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == 0
         out = json.loads(r.stdout)
@@ -1183,23 +1248,23 @@ class TestApplyTable:
 
     def test_validate_only_combined_with_reset_uses_package_base(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only", "--reset-to-default"])
         assert r.returncode == 0
 
     def test_candidate_digest_forbidden_in_validate_only(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), candidate="sha256:deadbeef", extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "forbidden with --validate-only" in json.loads(r.stdout)["error"]["message"]
 
     def test_materialize_requires_matching_candidate_digest(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        missing = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}}, expected=_pkg_digest())
+        missing = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}}, expected=_pkg_digest())
         assert missing.returncode == er.EXIT_MALFORMED
         assert "requires --expected-candidate-digest" in json.loads(missing.stdout)["error"]["message"]
-        stale = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        stale = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                        expected=_pkg_digest(), candidate="sha256:deadbeef")
         assert stale.returncode == er.EXIT_MALFORMED
         assert "candidate changed since validated" in json.loads(stale.stdout)["error"]["message"]
@@ -1207,17 +1272,17 @@ class TestApplyTable:
 
     def test_fresh_create_end_to_end(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only"])
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), candidate=cand)
         assert r.returncode == 0
         dest = repo / "claude_docs" / "routing" / "phase-executor-table.json"
         assert dest.is_file()
         assert routing.snapshot_from_file(dest).config_digest == cand
         table = json.loads(dest.read_text(encoding="utf-8"))
-        assert table["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        assert table["seats"]["ship"]["primary"]["model"] == "claude-opus-5"
         # lane came from the base table's existing opus rows
         assert table["seats"]["ship"]["primary"]["lane"]["provider"] == "anthropic"
 
@@ -1229,16 +1294,16 @@ class TestApplyTable:
         dst.parent.mkdir(parents=True)
         dst.write_text(json.dumps(base), encoding="utf-8")
         base_digest = routing.snapshot_from_file(dst).config_digest
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=base_digest, extra=["--validate-only"])
         assert v.returncode == 0
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=base_digest, candidate=cand)
         assert r.returncode == 0
         after = json.loads(dst.read_text(encoding="utf-8"))
         assert after["seats"]["intake"]["primary"]["model"] == "claude-fable-5"  # kept (A3)
-        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-5"
 
     def test_reseed_divergent_dest_refused(self, tmp_path):
         # 8a-B2: reach the P3-G4 guard for REAL — validated candidate digest first, then
@@ -1251,10 +1316,10 @@ class TestApplyTable:
         other = repo / "claude_docs" / "other.json"
         other.write_bytes(routing.default_table_path().read_bytes())
         d = routing.snapshot_from_file(dst).config_digest
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/other.json", expected=d, extra=["--validate-only"])
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/other.json", expected=d, candidate=cand)
         assert r.returncode == er.EXIT_MALFORMED
         assert "is not the current phaseExecutorTable file" in json.loads(r.stdout)["error"]["message"]
@@ -1270,18 +1335,18 @@ class TestApplyTable:
         dst.parent.mkdir(parents=True)
         dst.write_text(json.dumps(base), encoding="utf-8")
         cur = routing.snapshot_from_file(dst).config_digest  # diff-DF1: guard = CURRENT resolution
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=cur,
                    extra=["--validate-only", "--reset-to-default"])
         assert v.returncode == 0
         cand = json.loads(v.stdout)["config_digest"]
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="claude_docs/t.json", expected=cur, candidate=cand,
                    extra=["--reset-to-default"])
         assert r.returncode == 0
         after = json.loads(dst.read_text(encoding="utf-8"))
         assert after["seats"]["intake"]["primary"]["model"] != "claude-fable-5"  # reset took
-        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-4-8"
+        assert after["seats"]["ship"]["primary"]["model"] == "claude-opus-5"
 
     def test_symlinked_parent_dest_escape_refused(self, tmp_path):
         # 8a-B1: an in-repo symlink dir pointing OUTSIDE the root must not let a
@@ -1291,7 +1356,7 @@ class TestApplyTable:
         repo, ws = _proj_ws(tmp_path)
         (repo / "claude_docs").mkdir(exist_ok=True)
         (repo / "claude_docs" / "routing").symlink_to(outside)
-        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        v = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected=_pkg_digest(), extra=["--validate-only"])
         assert v.returncode == er.EXIT_MALFORMED
         assert "outside the project root" in json.loads(v.stdout)["error"]["message"]
@@ -1299,7 +1364,7 @@ class TestApplyTable:
 
     def test_stale_base_digest_exit2(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    expected="sha256:stale", extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "base table changed since shown" in json.loads(r.stdout)["error"]["message"]
@@ -1319,7 +1384,7 @@ class TestApplyTable:
         assert not (repo / "claude_docs" / "routing").exists()
 
     @pytest.mark.parametrize("patch,frag", [
-        ({"wombat": {"primary": "claude-opus-4-8"}}, "unknown seat"),
+        ({"wombat": {"primary": "claude-opus-5"}}, "unknown seat"),
         ({"ship": {"floor": "opus"}}, "unknown field"),
         ({"ship": {"primary": "claude-haiku-4-5"}}, "no known lane"),
     ])
@@ -1331,7 +1396,7 @@ class TestApplyTable:
 
     def test_escaping_dest_refused_in_validate_only(self, tmp_path):
         repo, ws = _proj_ws(tmp_path)
-        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-4-8"}},
+        r = _apply(ws, tmp_path, {"ship": {"primary": "claude-opus-5"}},
                    dest="../outside.json", expected=_pkg_digest(), extra=["--validate-only"])
         assert r.returncode == er.EXIT_MALFORMED
         assert "outside the project root" in json.loads(r.stdout)["error"]["message"]
@@ -1420,7 +1485,8 @@ class _StubSupervisor:
 
 
 def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="completed",
-                probe_raises=False, provision_calls=None, monkeypatch=None):
+                probe_raises=False, provision_calls=None, monkeypatch=None,
+                terminal_backend="tmux"):
     # The rich claude_mutating machinery (probes, init event) stays unit-tested even though
     # production refuses mutating-claude (STEP 0, MUTATING_FS_SANDBOXED): tests widen the module
     # constant — a monkeypatch of module state, NOT a caller input; production has no such knob.
@@ -1454,7 +1520,8 @@ def _supervised(tmp_path, *, probe_stream=None, final_argv=None, state="complete
         canary=_canary, canary_evidence=_cev, supervisor=sup, probe_session=probe_session,
         provision=provision, gate_decision=gd, plan_context=ctx,
         target=tgt, snapshot=snap, enforce=enforce,
-        mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}")
+        mk_nonce=lambda: "NONCE-1", mk_probe_cid=lambda cls: f"probe-{cls[:3]}",
+        terminal_backend=terminal_backend)
     return res, sup, qc, calls
 
 
@@ -1468,6 +1535,19 @@ def test_supervised_happy_path_launches_after_canary(tmp_path, monkeypatch):
     assert len(sup.launched) == 1 and calls == [True]
     # the staged snapshot digest reached launch (TOCTOU binding)
     assert sup.launched[0][1]["snapshot_digest"] == _canary.compute_registration_digest(str(REPO_ROOT))
+
+
+def test_supervised_default_terminal_backend_is_tmux(tmp_path, monkeypatch):
+    _res, sup, _qc, _calls = _supervised(tmp_path, monkeypatch=monkeypatch)
+    assert sup.launched[0][1]["terminal_backend"] == "tmux"
+
+
+def test_supervised_threads_herdr_terminal_backend_into_launch(tmp_path, monkeypatch):
+    # #638: supervised_dispatch's own terminal_backend param reaches supervisor.launch() —
+    # the caller (_run_supervised, the seat+config-gate check) decides this before calling.
+    _res, sup, _qc, _calls = _supervised(
+        tmp_path, monkeypatch=monkeypatch, terminal_backend="herdr")
+    assert sup.launched[0][1]["terminal_backend"] == "herdr"
 
 
 def test_supervised_phase2_refusal_exits_six_and_creates_nothing(tmp_path, monkeypatch):

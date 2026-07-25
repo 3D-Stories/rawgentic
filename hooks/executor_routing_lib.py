@@ -423,6 +423,38 @@ def resolve_table(repo_root: Path, routing_module) -> "ResolvedTable":
     return ResolvedTable(snapshot=snap, source="project_file", path=resolved)
 
 
+def resolve_terminal_backend(repo_root: Path) -> str:
+    """#638: which `TerminalBackend` the `build` seat launches under — `"tmux"` (package
+    default) or `"herdr"` (config-gated). Mirrors `resolve_table`'s config-read pattern:
+    an absent/missing `.rawgentic.json` means "not configured" -> `"tmux"`; a PRESENT but
+    malformed `executorTerminalBackend` section fails closed (`MalformedConfig`), never a
+    silent fallback to tmux."""
+    cfg_path = repo_root / ".rawgentic.json"
+    try:
+        os.lstat(cfg_path)
+        cfg_present = True
+    except FileNotFoundError:
+        cfg_present = False
+    except OSError as exc:
+        raise MalformedConfig(f"cannot probe project config {cfg_path}: {exc}") from exc
+    if not cfg_present:
+        return "tmux"
+    try:
+        caps = capabilities_lib.derive_capabilities(capabilities_lib.load_config(str(cfg_path)))
+    except capabilities_lib.CapabilitiesError as exc:
+        raise MalformedConfig(
+            f"project config {cfg_path} cannot be evaluated (fail-closed): {exc}") from exc
+    return caps["executor_terminal_backend"]
+
+
+def select_launch_terminal_backend(seat_role: Optional[str], configured_backend: str) -> str:
+    """#638 AC4: the build-seat-only gate decision. `"herdr"` ONLY when the seat's DECLARED
+    ROLE (never its literal name — a renamed seat still gates correctly) is `"build"` AND the
+    project config selected herdr; every other seat always gets `"tmux"` regardless of what
+    the config says, since AC4 scopes the config-gate to the build seat only."""
+    return "herdr" if seat_role == "build" and configured_backend == "herdr" else "tmux"
+
+
 def _assert_no_dead_seat(snap, routing_module, path) -> None:
     """Pass (d) (#445, hooks layer by design — A2): a seat whose ENTIRE primary+chain is
     forbidden by CONTEXT-FREE forbidden_combinations rows is statically dead — fail at
@@ -1091,6 +1123,7 @@ def supervised_dispatch(
     await_timeout_s: float = 3600.0,
     containment_root: Optional[str] = None,
     author_provider: Optional[str] = None,
+    terminal_backend: str = "tmux",
 ) -> dict:
     """#470 §1/§2a — the SUPERVISED internal branch for a MUTATING seat. Runs the fail-closed
     guardrail canary strictly BEFORE the task pane exists, in this EXACT order (all in the trusted
@@ -1256,7 +1289,8 @@ def supervised_dispatch(
         seat, prompt, identity=identity, handle=handle, profile=profile,
         effort=effort, timeout=timeout, target=target, author_provider=author_provider,
         receipt_nonce=receipt.nonce, correlation_id=ce,
-        snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest)
+        snapshot_dir=snapshot_dir, snapshot_digest=snapshot_digest,
+        terminal_backend=terminal_backend)
     # #558 S-F6 (3-reviewer converged): ONE effective timeout — the same
     # min(caller, manifest bound) that launch writes into the pane spec also
     # clamps the supervisor await deadline, so a hung pane cannot outlive the
@@ -1802,6 +1836,7 @@ def _import_phase_executor():
     from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: PLC0415
     from phase_executor.supervisor import TmuxSupervisor  # noqa: PLC0415
     import phase_executor.supervisor as supervisor_mod  # noqa: PLC0415 — #471 status surface
+    from phase_executor.herdr_backend import HerdrBackend  # noqa: PLC0415 — #638
     from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
     from phase_executor.registry import read_all as registry_read_all  # noqa: PLC0415
     from phase_executor.registry import session_name as registry_session_name  # noqa: PLC0415
@@ -1813,6 +1848,7 @@ def _import_phase_executor():
         dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator, QuotaTimeout=QuotaTimeout,
         canary=canary, canary_evidence=canary_evidence, contract=contract,
         PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
+        HerdrBackend=HerdrBackend,
         supervisor=supervisor_mod, JobRegistry=JobRegistry, RegistryCorrupt=RegistryCorrupt,
         ledger=ledger, capture=capture,
         registry_read_all=registry_read_all,
@@ -2110,10 +2146,19 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
                         correlation_id=ce, audit_path=str(audit.path))
         base_sha = out.strip()
 
+        # #638: HerdrBackend is constructed UNCONDITIONALLY (cheap — no connection opens
+        # until a method call) so this supervisor can always correctly resolve/recover a
+        # herdr-backed record even if the config gate later changes; only NEW launches on
+        # the build seat with the gate on actually get routed to it (terminal_backend below).
         supervisor = pe.TmuxSupervisor(
             snapshot=snap, quota=quota, capture_root=paths["capture_root"],
             registry_root=str(registry_root), worktree_manager=wm,
-            pane_env={"PYTHONPATH": _pane_pythonpath()})
+            pane_env={"PYTHONPATH": _pane_pythonpath()},
+            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
+                                          pane_env={"PYTHONPATH": _pane_pythonpath()}))
+        seat_role = (snap.seat(args.seat).get("role") if snap else None)
+        terminal_backend = select_launch_terminal_backend(
+            seat_role, resolve_terminal_backend(repo_root))
 
         pool = lane["pool"]
         account = lane.get("credential_ref") or "default"
@@ -2149,7 +2194,8 @@ def _run_supervised(args, pe, snap, manifest, quota, audit, paths, repo_root,
             mk_probe_cid=lambda cls: f"probe-{uuid.uuid4().hex[:8]}",
             containment_root=str(wt_root),
             target=target, snapshot=snap, enforce=pe.enforce,
-            author_provider=args.author_provider)
+            author_provider=args.author_provider,
+            terminal_backend=terminal_backend)
     except pe.routing.RoutingError as e:
         return _err(EXIT_MALFORMED, "routing_table_invalid", str(e), retryable=False,
                     correlation_id=ce, audit_path=str(audit.path))
@@ -2207,10 +2253,18 @@ def _run_resume(args, pe, snap, quota, audit, paths, repo_root, prompt) -> dict:
                         "cannot resolve base_sha (git rev-parse HEAD)", retryable=False,
                         correlation_id=ce, audit_path=str(audit.path))
         base_sha = out.strip()
+        # #638: herdr_backend is configured here too (unconditionally, cheap) even though
+        # resume_dispatch below always refuses a mutating profile before ever launching — a
+        # build-seat job is never resumed through this path, so no NEW herdr launch can
+        # originate here. Configuring it anyway keeps this supervisor instance consistent
+        # with the other two sites and correct if this path is ever extended to touch an
+        # existing build-seat record.
         supervisor = pe.TmuxSupervisor(
             snapshot=snap, quota=quota, capture_root=paths["capture_root"],
             registry_root=str(registry_root), worktree_manager=wm,
-            pane_env={"PYTHONPATH": _pane_pythonpath()})
+            pane_env={"PYTHONPATH": _pane_pythonpath()},
+            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
+                                          pane_env={"PYTHONPATH": _pane_pythonpath()}))
 
         def provision():
             handle = wm.create(str(repo_root), identity, base_sha, root=str(wt_root))
@@ -2509,11 +2563,16 @@ def _do_recover_run(args) -> int:
         led = pe.ledger.ExpectedCallLedger(run_dir, args.run_id)
         ledger_closed = led.is_closed()
         wm = pe.WorktreeManager(_git_runner, forbid_tmp=True)
+        # #638: herdr_backend configured unconditionally — recover()'s per-record loop can
+        # resolve an EXISTING herdr-backed record correctly (record.terminal_backend), even
+        # though this path never launches a NEW job.
         supervisor = pe.TmuxSupervisor(
             snapshot=snap, quota=pe.QuotaCoordinator(paths["permits_dir"], snap.pool_concurrency()),
             capture_root=paths["capture_root"], registry_root=str(registry_root),
             registry=registry, worktree_manager=wm,
-            pane_env={"PYTHONPATH": _pane_pythonpath()})
+            pane_env={"PYTHONPATH": _pane_pythonpath()},
+            herdr_backend=pe.HerdrBackend(workspace_id=os.environ.get("HERDR_WORKSPACE_ID"),
+                                          pane_env={"PYTHONPATH": _pane_pythonpath()}))
     except (OSError, ValueError, RegistryCorrupt) as e:
         return _emit(_err(EXIT_INTERNAL, "runtime_init_failed", f"{type(e).__name__}: {e}",
                           retryable=False, correlation_id=args.correlation_id))

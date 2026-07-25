@@ -3,7 +3,7 @@
   "provenance": {
     "source": "bench #14",
     "plan": "docs/planning/2026-07-16-per-phase-model-routing.md \u00a71",
-    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design is now a static row (#464) whose DISPATCH remains competitive (bake-off owns it, E5/#428). Per-seat capability manifests and the top-level policy section land with #464 (W1, epic #475). #558 AC2: per-call max_budget_usd on every claude-bearing seat (analysis/ship 2.0, review/plan/intake/design 5.0, build 10.0 \u2014 multiples of the observed 1.48 per-dispatch cost proxy; plain config, #473 retunes); codex-only bounds keep timeout_s as THE compensating bound (AC-B4 as amended D-13)."
+    "note": "6-model GLM-5.2-judged evidence; owner-approved rev-3 seat table (E3/#426). Floors declared for the enforcement seats (review/build); intake/plan/ship floors deferred (the engine does not gate on floor). design is now a static row (#464) whose DISPATCH remains competitive (bake-off owns it, E5/#428). Per-seat capability manifests and the top-level policy section land with #464 (W1, epic #475). #558 AC2: per-call max_budget_usd on every claude-bearing seat (analysis/ship 2.0, review/plan/intake/design 5.0, build 10.0 \u2014 multiples of the observed 1.48 per-dispatch cost proxy; plain config, #473 retunes); codex-only bounds keep timeout_s as THE compensating bound (AC-B4 as amended D-13). OWNER RETUNE 2026-07-24: seat table set to the owner's explicitly specified primary/effort/chain matrix \u2014 claude-opus-4-8 retired in favour of claude-opus-5 everywhere it appeared; intake/analysis/plan primaries moved to claude-opus-5 with effort high; analysis and plan chains normalised to fable-5 -> sonnet-5 (plan's gpt-5.6-terra fallback dropped). design/build/review/ship/offload primaries unchanged."
   },
   "policy": {
     "enforced_roles": [
@@ -32,7 +32,7 @@
         "tool_grants": [
           "read"
         ],
-        "effort": "medium",
+        "effort": "high",
         "confinement": {
           "anthropic": "hooks"
         },
@@ -42,7 +42,7 @@
         }
       },
       "primary": {
-        "model": "claude-opus-4-8",
+        "model": "claude-opus-5",
         "lane": {
           "provider": "anthropic",
           "transport": "native",
@@ -80,7 +80,7 @@
         "tool_grants": [
           "read"
         ],
-        "effort": "medium",
+        "effort": "high",
         "confinement": {
           "anthropic": "hooks"
         },
@@ -90,7 +90,7 @@
         }
       },
       "primary": {
-        "model": "claude-sonnet-5",
+        "model": "claude-opus-5",
         "lane": {
           "provider": "anthropic",
           "transport": "native",
@@ -101,7 +101,7 @@
       },
       "chain": [
         {
-          "model": "claude-opus-4-8",
+          "model": "claude-fable-5",
           "lane": {
             "provider": "anthropic",
             "transport": "native",
@@ -111,7 +111,7 @@
           }
         },
         {
-          "model": "claude-fable-5",
+          "model": "claude-sonnet-5",
           "lane": {
             "provider": "anthropic",
             "transport": "native",
@@ -150,7 +150,7 @@
       },
       "chain": [
         {
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "lane": {
             "provider": "anthropic",
             "transport": "native",
@@ -178,7 +178,7 @@
         }
       },
       "primary": {
-        "model": "claude-opus-4-8",
+        "model": "claude-opus-5",
         "lane": {
           "provider": "anthropic",
           "transport": "native",
@@ -199,13 +199,13 @@
           }
         },
         {
-          "model": "gpt-5.6-terra",
+          "model": "claude-sonnet-5",
           "lane": {
-            "provider": "openai",
+            "provider": "anthropic",
             "transport": "native",
             "auth_mode": "subscription_oauth",
             "credential_ref": null,
-            "pool": "codex"
+            "pool": "claude"
           }
         }
       ]
@@ -242,7 +242,7 @@
       },
       "chain": [
         {
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "lane": {
             "provider": "anthropic",
             "transport": "native",
@@ -341,7 +341,7 @@
       },
       "chain": [
         {
-          "model": "claude-opus-4-8",
+          "model": "claude-opus-5",
           "lane": {
             "provider": "anthropic",
             "transport": "native",

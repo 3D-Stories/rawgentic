@@ -36,6 +36,9 @@ JOB_STATES = frozenset({
 })
 _FINALIZED = frozenset({"completed", "completed_with_residue"})
 
+# #638: the only TerminalBackend names a JobRecord may carry (None reads as "tmux").
+KNOWN_TERMINAL_BACKENDS = frozenset({"tmux", "herdr"})
+
 
 @dataclass(frozen=True)
 class JobRecord:
@@ -74,6 +77,11 @@ class JobRecord:
     #                                       persisted at collection (positive OR negative/refused —
     #                                       the persistence trigger is classifier invocation);
     #                                       what #559 calibration + recovery read (additive; None pre-#558)
+    terminal_backend: Optional[str] = None  # #638: which TerminalBackend this job actually
+    #                                       launched under ("tmux"/"herdr"); None on any pre-#638
+    #                                       record, read as "tmux". recover()/reap() resolve THIS
+    #                                       record's own backend from it — never a single fixed
+    #                                       backend — so a mixed-backend run recovers correctly.
 
 
 @dataclass(frozen=True)
@@ -194,6 +202,7 @@ def _record_to_dict(r: JobRecord) -> dict:
         "spec_digest": r.spec_digest, "receipt_nonce": r.receipt_nonce,
         "recovered_from": r.recovered_from,
         "quota_classification": r.quota_classification,
+        "terminal_backend": r.terminal_backend,
         "provider_session_id": r.provider_session_id, "provider_exit_code": r.provider_exit_code,
         "resume_attempts": r.resume_attempts, "state": r.state, "created_at": r.created_at,
         "quarantine_reason": r.quarantine_reason,
@@ -208,6 +217,14 @@ def _record_from_dict(d: dict) -> JobRecord:
         # must never see a silently-coerced classification (#558 AC3)
         raise RegistryCorrupt(
             f"quota_classification must be an object or null (got {type(qc).__name__})")
+    tb = d.get("terminal_backend")
+    if tb is not None and tb not in KNOWN_TERMINAL_BACKENDS:
+        # #638: an unknown backend name must fail closed here — recover()/reap() resolve
+        # THIS record's backend from this field, and a silently-coerced/guessed value
+        # could issue a wrong-backend liveness or kill check against a real live job.
+        raise RegistryCorrupt(
+            f"terminal_backend must be one of {sorted(KNOWN_TERMINAL_BACKENDS)} or null "
+            f"(got {tb!r})")
     return JobRecord(
         identity=WorktreeIdentity(run_id=idn["run_id"], seat=idn["seat"], attempt=idn["attempt"]),
         session_name=d["session_name"], run_socket=d["run_socket"], pane_pid=d["pane_pid"],
@@ -221,7 +238,7 @@ def _record_from_dict(d: dict) -> JobRecord:
         provider_session_id=d.get("provider_session_id"),
         provider_exit_code=d.get("provider_exit_code"), resume_attempts=d["resume_attempts"],
         state=d["state"], created_at=d["created_at"], quarantine_reason=d.get("quarantine_reason"),
-        quota_classification=qc)
+        quota_classification=qc, terminal_backend=tb)
 
 
 class JobRegistry:

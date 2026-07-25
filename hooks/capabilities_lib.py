@@ -47,6 +47,7 @@ CAPABILITY_FIELDS = (
     "has_docker",
     "migration_dir",
     "phase_executor_table",
+    "executor_terminal_backend",
 )
 
 
@@ -284,6 +285,32 @@ def derive_capabilities(config) -> dict:
                     f"config.phaseExecutorTable.file contains control or backslash characters "
                     f"(got {file_val!r}). Run /rawgentic:setup.")
             caps["phase_executor_table"] = file_val
+
+    # --- executorTerminalBackend -> executor_terminal_backend (#638) ---
+    # Which TerminalBackend the executor's `build` seat launches under. `null` section
+    # (absent) -> "tmux" (the package default, unchanged behavior). A PRESENT section
+    # must be fully valid or derive errors (fail-closed) — never silently falls back to
+    # "tmux" on a malformed override, same posture as phaseExecutorTable above.
+    etb = _optional_section(config, "executorTerminalBackend")
+    if etb is _MISSING:
+        caps["executor_terminal_backend"] = "tmux"
+    else:
+        version = etb.get("version", _MISSING)
+        if version is _MISSING or not isinstance(version, int) or isinstance(version, bool) or version != 1:
+            raise CapabilitiesError(
+                f"config.executorTerminalBackend.version must be 1 "
+                f"(got {None if version is _MISSING else version!r}). Run /rawgentic:setup.")
+        build_raw = etb.get("build", _MISSING)
+        if build_raw is _MISSING:
+            raise CapabilitiesError(
+                "config.executorTerminalBackend.build is required when the section is "
+                "present. Run /rawgentic:setup.")
+        build = _require_nonempty_str(build_raw, "config.executorTerminalBackend.build")
+        if build not in ("tmux", "herdr"):
+            raise CapabilitiesError(
+                f"config.executorTerminalBackend.build must be \"tmux\" or \"herdr\" "
+                f"(got {build!r}). Run /rawgentic:setup.")
+        caps["executor_terminal_backend"] = build
 
     # --- infrastructure.docker -> has_docker (must null-guard the docker object:
     #     infrastructure can legitimately exist with only `hosts` and no docker) ---
