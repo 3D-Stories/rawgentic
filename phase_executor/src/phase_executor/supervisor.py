@@ -528,10 +528,19 @@ class TmuxSupervisor:
             # digest EXCLUDES the interpreter path (argv[0]) — a venv rebuild / python
             # upgrade must not quarantine-kill adoptable work on recovery (8a R2 finding)
             digest = command_digest(argv[1:])
+            # #638 Step-11 finding (pass 6): `spawned` used to flip only AFTER a rc=0
+            # new_session, so a PARTIAL spawn read as "nothing was created". A backend's
+            # new_session is not necessarily atomic — HerdrBackend splits a pane, renames it and
+            # issues `pane run` before returning, and tmux's own `new-session` can time out
+            # after the server accepted it. So a NONZERO new_session means creation is
+            # INDETERMINATE, not "nothing happened": mark it possibly-spawned BEFORE the call
+            # and let the teardown below decide, since teardown is the only thing that can
+            # actually confirm. A genuine pre-spawn failure costs one idempotent kill_session
+            # (which confirms "already gone" and frees the permit normally).
+            spawned = True
             res = resolved_backend.new_session(sock, name, handle.path, argv)
             if res.returncode != 0:
                 raise SupervisorError(f"tmux new-session failed: {(res.stderr or '').strip()}")
-            spawned = True
             shown = resolved_backend.pane_pid(sock, name)
             if shown.returncode != 0 or not (shown.stdout or "").strip().isdigit():
                 raise SupervisorError(f"pane_pid unreadable: {(shown.stderr or '').strip()}")
@@ -583,7 +592,38 @@ class TmuxSupervisor:
             if teardown_confirmed:
                 cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
             else:
+                # #638 Step-11 finding (pass 6): holding the permit in `self._permits` alone was
+                # NOT reclaimable — `_release_permit` looks the cm up by `record.session_name`,
+                # and on this path (e.g. an unreadable pane_pid) NO JobRecord was ever
+                # persisted, so nothing could ever reach it; `reap()` only REPORTS unknown
+                # sessions, and the quota stale-reaper deliberately spares a token whose holder
+                # pid is still alive. Two such failures would pin both Claude slots until the
+                # process exited. Persist a quarantined residue record so the permit is
+                # reclaimable by the ordinary machinery.
+                #
+                # pane_pid/pane_pgid are stamped 0 DELIBERATELY: every kill path refuses
+                # pid <= 1 (the 2026-07-19 pane_pid=1 incident guard), so this record can never
+                # signal anything, while `_release_permit`/reap can still find it by session
+                # name and free the slot once teardown is confirmed.
                 self._permits[name] = cm
+                try:
+                    self._registry.upsert(JobRecord(
+                        identity=identity, session_name=name, run_socket=sock,
+                        pane_pid=0, pane_pgid=0, provider_pgid=None, pane_start_time="",
+                        worktree_path=handle.path, worktree_base_sha=handle.base_sha,
+                        worktree_root=handle.root, worktree_gitdir=handle.gitdir,
+                        worktree_repo=handle.repo, capture_dir=str(cap_dir),
+                        attempt_id=attempt_id, permit_ref=permit_ref,
+                        command_digest="", provider_session_id=resume_session_id,
+                        provider_exit_code=None, resume_attempts=resume_attempts,
+                        state="quarantined", created_at=self._clock(),
+                        quarantine_reason=("launch failed with teardown UNCONFIRMED: a pane may "
+                                           "still be live on this endpoint; permit held"),
+                        terminal_backend=terminal_backend))
+                except Exception:  # noqa: BLE001 — the raise below is the real failure; a
+                    # registry write problem must not replace it (the permit is still held in
+                    # self._permits, so this degrades to the pre-fix posture, never worse).
+                    pass
             raise
 
     # -- status / sentinel ----------------------------------------------------
@@ -980,7 +1020,15 @@ class TmuxSupervisor:
                 obs = self._sentinel(record)
                 if obs is not None:  # CF-12: the child's validated result wins
                     state = "completed" if kill_clean else "completed_with_residue"
-                    self._finish(record, state, provider_exit_code=_exit_code_of(obs))
+                    # #638 Step-11 finding (pass 6): this `_finish` omitted
+                    # `release_permit=`, taking the default True — so on the deadline race
+                    # where the kill was NOT verified but a concurrently-written valid
+                    # sentinel then won, the slot was released while residue may still have
+                    # been executing. `completed_with_residue` is by definition a
+                    # death-NOT-verified state; gate the release on `kill_clean` exactly as
+                    # every other residue path does.
+                    self._finish(record, state, release_permit=kill_clean,
+                                 provider_exit_code=_exit_code_of(obs))
                     return state, obs
                 spec = self._read_spec(record)
                 obs = synthetic_observation(

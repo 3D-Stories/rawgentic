@@ -453,6 +453,17 @@ def test_resolve_socket_terminal_backend_param_delegates_to_herdr(tmp_path):
 
 # ---- Step-11 pass 5: an UNCONFIRMED launch teardown must not release the quota permit ----
 
+class _FakeCM:
+    """Minimal permit context-manager stand-in: records that __exit__ ran."""
+
+    def __init__(self):
+        self.exited = False
+
+    def __exit__(self, *_a):
+        self.exited = True
+        return False
+
+
 def _permit_held(sup, name):
     return name in sup._permits  # noqa: SLF001
 
@@ -489,23 +500,59 @@ def test_launch_failure_with_unconfirmed_teardown_holds_the_permit(tmp_path):
         "unconfirmed teardown must HOLD the slot (possibly-live unregistered process)"
 
 
-def test_launch_prespawn_failure_still_releases_the_permit(tmp_path):
-    # Guard the other side: a failure BEFORE anything spawned has nothing to tear down, so
-    # the permit must still be freed -- holding it here would leak a slot on every ordinary
-    # pre-spawn error.
-    class NoSpawn(StubBackend):
-        def new_session(self, endpoint, name, cwd, argv, timeout=30):
-            self.calls.append(("new_session", endpoint, name, cwd, tuple(argv)))
-            return subprocess.CompletedProcess([], 1, "", "new_session refused")
+class _RefusingSpawn(StubBackend):
+    """new_session returns NONZERO -- which since Step-11 pass 6 means creation is
+    INDETERMINATE, not 'nothing happened' (a backend's new_session is not atomic: herdr
+    splits + renames + runs before returning, and tmux's new-session can time out after the
+    server accepted it)."""
 
-    be = NoSpawn("herdr")
+    def new_session(self, endpoint, name, cwd, argv, timeout=30):
+        self.calls.append(("new_session", endpoint, name, cwd, tuple(argv)))
+        return subprocess.CompletedProcess([], 1, "", "new_session refused")
+
+
+def test_launch_nonzero_new_session_attempts_teardown_then_frees_on_confirmation(tmp_path):
+    # Step-11 pass 6 (High): `spawned` used to flip only AFTER a rc=0 new_session, so a
+    # PARTIAL spawn (pane created, `pane run` timed out, cleanup failed) read as "nothing was
+    # created" -- teardown skipped, permit released, possibly-live payload left behind. A
+    # nonzero new_session must now be treated as possibly-spawned: teardown IS attempted, and
+    # the permit is freed only because that teardown CONFIRMS (rc 0 / already-gone).
+    be = _RefusingSpawn("herdr", kill_session_returncode=0)
     sup = _sup(tmp_path, herdr=be)
     identity = _identity()
     with pytest.raises(SupervisorError):
         sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
                    terminal_backend="herdr")
-    assert not any(c[0] == "kill_session" for c in be.calls)  # nothing spawned, nothing killed
-    assert sup._permits == {}, "a pre-spawn failure must not hold a slot"  # noqa: SLF001
+    assert any(c[0] == "kill_session" for c in be.calls), \
+        "a nonzero new_session is INDETERMINATE — teardown must still be attempted"
+    assert sup._permits == {}, \
+        "a CONFIRMED teardown must free the slot (else every ordinary spawn refusal leaks one)"
+
+
+def test_launch_nonzero_new_session_holds_permit_when_teardown_unconfirmed(tmp_path):
+    # The dangerous half of the same finding: new_session failed AND teardown cannot confirm,
+    # so a pane may genuinely be live. The slot must stay held...
+    be = _RefusingSpawn("herdr", kill_session_returncode=1)
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    with pytest.raises(SupervisorError):
+        sup.launch("build", "hello", identity=identity, handle=_handle(tmp_path, identity),
+                   terminal_backend="herdr")
+    assert sup._permits, "unconfirmed teardown after a failed spawn must HOLD the slot"
+    # ...and (pass 6, High) that held permit must be RECLAIMABLE: _release_permit looks the cm
+    # up by record.session_name, so a residue record must exist for it to be reachable at all.
+    held = next(iter(sup._permits))                                  # noqa: SLF001
+    recs = [r for r in sup._registry.by_run(identity.run_id)         # noqa: SLF001
+            if r.session_name == held]
+    assert recs, "no residue record persisted — the held permit would be unreclaimable"
+    rec = recs[0]
+    assert rec.state == "quarantined"
+    assert rec.permit_ref
+    # structurally un-killable by design: every kill path refuses pid <= 1
+    assert rec.pane_pid == 0 and rec.pane_pgid == 0
+    # and it is genuinely reclaimable through the ordinary machinery
+    sup._release_permit(rec)                                         # noqa: SLF001
+    assert sup._permits == {}, "_release_permit could not reach the held cm"
 
 
 # ---- Step-11 pass 5 (Medium): await_job's indeterminate-probe policy had no test ----
@@ -532,3 +579,71 @@ def test_await_job_indeterminate_probe_does_not_abort_and_is_bounded(tmp_path):
     assert state == "timed_out", state
     assert obs is not None
     assert any(c[0] == "has_session" for c in be.calls), "the probe was never attempted"
+
+
+# ---- Step-11 pass 6: the deadline/result race must not free an unverified slot ----
+
+def _running_record(tmp_path, identity, name="rg-h"):
+    return JobRecord(
+        identity=identity, session_name=name, run_socket="herdr-endpoint",
+        pane_pid=os.getpid(), pane_pgid=os.getpid(), provider_pgid=None, pane_start_time="0",
+        worktree_path=str(tmp_path), worktree_base_sha="0" * 40, worktree_root=str(tmp_path),
+        worktree_gitdir="/g", worktree_repo="/r", capture_dir=str(tmp_path / "cap"),
+        attempt_id="0-a", permit_ref="unbounded", command_digest="d",
+        provider_session_id=None, provider_exit_code=None, resume_attempts=0, state="running",
+        created_at=1.0, quarantine_reason=None, terminal_backend="herdr")
+
+
+def test_await_deadline_unverified_kill_with_late_sentinel_holds_the_permit(tmp_path):
+    # THE finding (High, pass 6): at the deadline _kill_job() can return False, and a
+    # concurrently-written valid sentinel then wins -> state completed_with_residue. That
+    # _finish() call omitted `release_permit=`, taking the default True, so the slot was freed
+    # while residue may still have been executing. completed_with_residue is BY DEFINITION a
+    # death-not-verified state; the release must be gated on kill_clean like every other
+    # residue path. Existing coverage only exercised the clean-kill branch.
+    be = StubBackend("herdr")
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    rec = _running_record(tmp_path, identity)
+    sup._registry.upsert(rec)                                        # noqa: SLF001
+    sup._permits[rec.session_name] = _FakeCM()                       # noqa: SLF001
+    sup._kill_job = lambda _r: False                                 # noqa: SLF001 — UNVERIFIED
+    # the sentinel must be ABSENT on the first poll and appear only at the DEADLINE re-check --
+    # that is the branch under test. (A sentinel present from poll 1 takes the top-of-loop
+    # branch instead, which already gated the release correctly; an earlier draft of this test
+    # did exactly that and passed against the pre-fix code -- a false green.)
+    seen = {"n": 0}
+
+    def _late_sentinel(_r):
+        seen["n"] += 1
+        return None if seen["n"] == 1 else {"parse_status": "ok", "exit_code": 0}
+
+    sup._sentinel = _late_sentinel                                   # noqa: SLF001
+    state, obs = sup.await_job(rec, poll_s=0.01, timeout_s=0.0)
+    assert seen["n"] >= 2, "the deadline re-check branch was never reached"
+    assert state == "completed_with_residue", state
+    assert obs is not None
+    assert rec.session_name in sup._permits, (                       # noqa: SLF001
+        "an UNVERIFIED kill must keep the slot held even when the child's result wins")
+
+
+def test_await_deadline_verified_kill_with_late_sentinel_frees_the_permit(tmp_path):
+    # The other side, so the fix is not just "always hold": a CONFIRMED kill still releases.
+    be = StubBackend("herdr")
+    sup = _sup(tmp_path, herdr=be)
+    identity = _identity()
+    rec = _running_record(tmp_path, identity, name="rg-h2")
+    sup._registry.upsert(rec)                                        # noqa: SLF001
+    sup._permits[rec.session_name] = _FakeCM()                       # noqa: SLF001
+    sup._kill_job = lambda _r: True                                  # noqa: SLF001 — VERIFIED
+    seen = {"n": 0}
+
+    def _late_sentinel(_r):
+        seen["n"] += 1
+        return None if seen["n"] == 1 else {"parse_status": "ok", "exit_code": 0}
+
+    sup._sentinel = _late_sentinel                                   # noqa: SLF001
+    state, _ = sup.await_job(rec, poll_s=0.01, timeout_s=0.0)
+    assert seen["n"] >= 2, "the deadline re-check branch was never reached"
+    assert state == "completed", state
+    assert rec.session_name not in sup._permits                      # noqa: SLF001

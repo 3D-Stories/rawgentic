@@ -306,7 +306,7 @@ def test_run_seat_resolves_effort_passes_native_and_stamps(tmp_path):
     # native passed to the adapter (solo = claude-opus-4-8, supports max -> identity)
     assert calls[0][1] == "claude-opus-4-8"
     assert obs.effort == {"requested": "max", "native": "max", "resolution": "identity",
-                          "capability_revision": 1}
+                          "capability_revision": 2}
 
 
 def test_run_seat_none_effort_claude_identity_null(tmp_path):
@@ -314,7 +314,7 @@ def test_run_seat_none_effort_claude_identity_null(tmp_path):
     obs = run_seat("solo", "hi", snapshot=_snapshot(), quota=qc, capture_root=tmp_path,
                    dispatch=_stub())
     assert obs.effort == {"requested": None, "native": None, "resolution": "identity",
-                          "capability_revision": 1}
+                          "capability_revision": 2}
 
 
 def test_run_seat_none_effort_codex_adapter_default_high(tmp_path):
@@ -327,7 +327,7 @@ def test_run_seat_none_effort_codex_adapter_default_high(tmp_path):
                    capture_root=tmp_path, dispatch=dispatch)
     assert seen["effort"] == "high"  # native passed to the adapter
     assert obs.effort == {"requested": None, "native": "high", "resolution": "adapter_default",
-                          "capability_revision": 1}
+                          "capability_revision": 2}
 
 
 def test_run_seat_stepdown_recorded(tmp_path):

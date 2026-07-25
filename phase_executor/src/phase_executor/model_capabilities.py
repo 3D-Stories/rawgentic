@@ -8,7 +8,7 @@ recorded on every Observation.effort object).
 """
 from __future__ import annotations
 
-CAPABILITY_REVISION: int = 1
+CAPABILITY_REVISION: int = 2  # 2: +claude-opus-5 row (owner seat retune 2026-07-24)
 
 EFFORT_LADDER: tuple = ("low", "medium", "high", "xhigh", "max")
 
@@ -21,6 +21,10 @@ SUPPORTED_EFFORT: dict = {
     # claude-opus-5 is the shipped table's opus row since the 2026-07-24 owner retune;
     # claude-opus-4-8 is KEPT (the registry is a documented SUPERSET, not an exact match)
     # so a persisted record/Observation minted against the older id still resolves.
+    # Step-11 pass 6: this row DID bump CAPABILITY_REVISION (1 -> 2). The hermes-agent
+    # precedent below does not cover it — adding claude-opus-5 flips its resolution from
+    # unknown/REFUSED to supported, so leaving revision 1 would make the old and new
+    # capability sets indistinguishable in every effort Observation that records it.
     "claude-opus-5": _ALL,
     "claude-opus-4-8": _ALL,
     "claude-sonnet-5": _ALL,

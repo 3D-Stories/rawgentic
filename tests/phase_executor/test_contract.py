@@ -357,7 +357,7 @@ class TestResolveEffort:
             parse_status=contract.OK, parsed_payload="t", raw_capture_path=None,
             fallback_reason=None, routing_config_digest="sha256:d",
             effort={"requested": None, "native": "high", "resolution": "adapter_default",
-                    "capability_revision": 1},
+                    "capability_revision": 2},
         )
         d = obs.to_dict()
         contract.validate_observation(d)  # schema accepts the new optional object

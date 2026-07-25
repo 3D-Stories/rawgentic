@@ -482,6 +482,20 @@ class HerdrBackend:
         if pane_id is None:
             return _run_completed(["herdr", "pane", "close"], 0, "", "")  # already gone: idempotent
         res = self._herdr("close", pane_id, timeout=timeout)
+        if res.returncode == 0:
+            return _run_completed(["herdr", "pane", "close"], 0, res.stdout or "", "")
+        # Step-11 finding (pass 6): the ORDINARY list-then-close disappearance race — the list
+        # resolved the pane, then the exec'd process exited and auto-closed its own pane before
+        # `close` landed (#633's confirmed behaviour) — came back as a structured
+        # `pane_not_found` and was forwarded as a teardown FAILURE. That is confirmed-gone, the
+        # very outcome kill_session exists to produce; this backend already treats the same code
+        # as confirmed during its own orphan cleanup. Forwarding it as failure made the
+        # supervisor hold a quota permit for a pane that verifiably no longer exists.
+        err = self._parse_json(res)
+        err_obj = err.get("error") if isinstance(err, dict) else None
+        if isinstance(err_obj, dict) and err_obj.get("code") == "pane_not_found":
+            return _run_completed(["herdr", "pane", "close"], 0, "",
+                                  "pane already gone (pane_not_found): idempotent close")
         return _run_completed(["herdr", "pane", "close"], res.returncode, res.stdout or "", res.stderr or "")
 
     def teardown_endpoint(self, endpoint: str, timeout: float = 30) -> subprocess.CompletedProcess:  # noqa: ARG002

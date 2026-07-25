@@ -731,3 +731,34 @@ def test_new_session_pane_not_found_on_cleanup_counts_as_confirmed():
     res = be.new_session("w1", "sess1", "/wt", ["argv"])
     assert res.returncode != 0
     assert be._last_cleanup_confirmed is True    # noqa: SLF001
+
+
+# ---- Step-11 pass 6: the ordinary list-then-close disappearance race -------
+
+def test_kill_session_pane_not_found_on_close_is_idempotent_success():
+    # THE finding (Medium, pass 6): list resolved the pane, then the exec'd process exited and
+    # auto-closed its own pane before `close` landed (#633's confirmed behaviour) -- a
+    # structured pane_not_found. That is CONFIRMED-GONE, the exact outcome kill_session exists
+    # to produce, and this backend already treats the code as confirmed during its own orphan
+    # cleanup. Forwarding it as a teardown FAILURE made the supervisor hold a quota permit for
+    # a pane that verifiably no longer exists.
+    calls = []
+    responses = [
+        _list_response([{"pane_id": "w1:p9", "label": "sess1"}]),          # list resolves it
+        _json_err(None, code="pane_not_found", message="already gone"),    # ...then it's gone
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.kill_session("w1", "sess1")
+    assert res.returncode == 0, res.stderr
+
+
+def test_kill_session_other_close_error_is_still_a_failure():
+    # The distinction must stay sharp: a REAL close failure is not "already gone".
+    calls = []
+    responses = [
+        _list_response([{"pane_id": "w1:p9", "label": "sess1"}]),
+        _json_err(None, code="internal_error", message="daemon busy"),
+    ]
+    be = HerdrBackend(run=_capturing_run(calls, responses), workspace_id="w1")
+    res = be.kill_session("w1", "sess1")
+    assert res.returncode != 0

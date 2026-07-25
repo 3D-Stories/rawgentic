@@ -51,6 +51,7 @@ SYNTHETIC_MODEL: Final[str] = "<synthetic>"
 # update when Anthropic pricing changes. An unknown model contributes 0 to cost
 # (honest best-effort) while its tokens are still counted in model_mix/totals.
 RATE_CARD: Final[dict[str, dict[str, float]]] = {
+    "claude-opus-5":     {"input": 15.0, "cache_write": 18.75, "cache_read": 1.50, "output": 75.0},
     "claude-opus-4-8":   {"input": 15.0, "cache_write": 18.75, "cache_read": 1.50, "output": 75.0},
     "claude-opus-4-7":   {"input": 15.0, "cache_write": 18.75, "cache_read": 1.50, "output": 75.0},
     "claude-sonnet-5":   {"input": 3.0,  "cache_write": 3.75,  "cache_read": 0.30, "output": 15.0},
