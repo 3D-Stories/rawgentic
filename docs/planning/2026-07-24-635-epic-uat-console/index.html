@@ -452,10 +452,9 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script type="module">
-/* Review finding (High): a top-level CDN import aborts the WHOLE module when unpkg is blocked —
-   the checklist would never be built and even the textual fallback would never appear. The
-   checklist is this page's job, so everything above the bottom of this file works with no network
-   at all, and three.js is loaded afterwards, optionally. */
+/* The checklist is this page's job, so everything above the bottom of this file runs with zero
+   external dependencies. A failed module load must never be able to take the checklist with it,
+   so three.js is imported at the very end, optionally, inside a try/catch. */
 let THREE = null;
 
 /* =========================================================================
@@ -525,7 +524,7 @@ const CHECKS = [
       {label:"rollback — absent means tmux", text:'"executorTerminalBackend": { "version": 1, "build": "tmux" }'}
     ],
     pass:"The preflight printed a pane id and a workspace that agree; a new herdr pane then appears alongside your orchestration window and runs the build seat; <code>pane list</code> shows it labelled with the run's session name; the seat's <code>observation.json</code> lands and the run completes; afterwards no labelled pane is left behind. And a review/analysis seat in the same run still went to tmux. Paste the preflight line into your note.",
-    see:{title:"the shape of a healthy launch (captured on this host)", cap:"Real output from the live qualification run, which drives the same three calls the production path drives. Your UAT-3 run adds the part nobody has seen: a real model dispatch flowing through it.", lines:[
+    see:{title:"the shape of a healthy launch (captured on this host)", cap:"Real output from the live qualification run, which drives the same three calls the production path drives. The preflight's own verbs were exercised live on herdr 0.7.5 too — <code>pane current</code> returned this session's pane <code>w1:p1</code> in workspace <code>w1</code>, and <code>pane list --workspace w1</code> enumerated its panes. Your UAT-3 run adds the part nobody has seen: a real model dispatch flowing through it.", lines:[
       ["p","$ herdr pane split --current --direction right --cwd /tmp/rg639"],
       ["o",'{"result":{"pane":{"pane_id":"w1:p3N","workspace_id":"w1"}}}'],
       ["p","$ herdr pane rename w1:p3N rg639-ac1-cold-00-a1b2c3"],
@@ -544,7 +543,7 @@ const CHECKS = [
     tags:[["owner","Owner only"]],
     why:[
       "Four risks were recorded against the herdr backend, one of which you ruled on directly: <b>pane_env is visible via ps</b>, because herdr has no private per-run env channel the way tmux gets one through a per-run socket.",
-      "Your condition was that it stays host-local and disappears with the pane. Both hold. The stronger claim — that the backend is never handed anything credential-bearing — is <b>not</b> provable by reading the backend: only its CALLERS decide what goes in. Verified at all three call sites in <code>hooks/executor_routing_lib.py</code> (lines 2158, 2267, 2575), each passing <code>pane_env={\"PYTHONPATH\": _pane_pythonpath()}</code> and nothing else. Re-check it yourself with the second command rather than taking this page's word for it."
+      "Your condition was that it stays host-local and disappears with the pane. Both hold. The stronger claim — that nothing credential-bearing ever reaches a pane's environment — is <b>not</b> provable by reading the backend, because only its CALLERS decide what goes into <code>pane_env</code>. So the second command walks the AST of every <code>.py</code> file in the repo and fails closed. Run today it reports <b>69 construction sites: 4 with a literal pane_env (all <code>PYTHONPATH</code> only — the three production sites in <code>hooks/executor_routing_lib.py</code> plus one test), 65 passing none, 0 built dynamically, 0 violations</b>, exit 0. Re-run it rather than taking this page's word."
     ],
     steps:[
       "Read the module docstring of <code>phase_executor/src/phase_executor/herdr_backend.py</code>.",
@@ -552,7 +551,8 @@ const CHECKS = [
       "Confirm the pane_env conditions stated there are the ones you set."
     ],
     cmds:[{label:"read the recorded risks", text:"sed -n '1,80p' phase_executor/src/phase_executor/herdr_backend.py"},
-           {label:"every key any caller puts in a pane's env — expect PYTHONPATH only", text:"grep -n -A 2 'pe.HerdrBackend(' hooks/executor_routing_lib.py | grep -o 'pane_env={[^}]*}' | sort -u"}],
+           {label:"prove it repo-wide — exits 0 only if every pane_env is inside the allowlist",
+            text:"python3 docs/planning/2026-07-24-635-epic-uat-console/pane-env-allowlist-check.py; echo \"exit=$?\""}],
     pass:"The four risks — pane_env visibility, the malformed-split pane leak, the non-atomic three-call spawn, and undocumented exec-injection — match your intent; the pane_env conditions are yours; and the grep shows every caller passing <code>PYTHONPATH</code> and nothing else.",
     see:{title:"the four recorded risks", cap:"Verbatim summary of the docstring's risk section. The fourth is why #639 exists at all.", lines:[
       ["a","1  pane_env via --env is visible to ps for the pane's lifetime (owner-accepted:"],
@@ -623,18 +623,41 @@ const CHECKS = [
 /* =========================================================================
    2. STATE — verdicts + notes, persisted locally.
    ========================================================================= */
-const KEY = "rg-uat-635-v1";
-const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
-/* Review finding: swallowing the write error while still printing "saved <time>" tells the owner
-   their verdicts are durable when they are not. Report the truth instead. */
+/* Verdicts are stamped with what they were recorded AGAINST. The whole point of this epic is
+   that a herdr or backend change requires re-qualification, so a pass that silently survives an
+   upgrade would be the very defect this page exists to prevent. A provenance mismatch keeps the
+   notes but clears the verdicts, loudly. */
+const PROVENANCE = {artifact:"2026-07-25", rawgentic:"3.97.1", herdrFloor:"0.7.5"};
+const KEY = "rg-uat-635-" + [PROVENANCE.artifact, PROVENANCE.rawgentic, PROVENANCE.herdrFloor].join("-");
+const LEGACY_KEYS = ["rg-uat-635-v1"];
+const load = () => {
+  try {
+    const mine = JSON.parse(localStorage.getItem(KEY));
+    if (mine) return mine;
+    // verdicts recorded against a DIFFERENT rawgentic/herdr/artifact version: carry the notes
+    // across as context, but never the verdicts — those have to be re-earned.
+    for (const k of [...LEGACY_KEYS, ...Object.keys(localStorage).filter(x => x.startsWith("rg-uat-635-") && x !== KEY)]) {
+      const old = JSON.parse(localStorage.getItem(k) || "null");
+      if (!old) continue;
+      staleFrom = k;
+      const carried = {};
+      Object.entries(old).forEach(([id, rec]) => { if (rec && rec.note) carried[id] = {note: rec.note}; });
+      return carried;
+    }
+    return {};
+  } catch { return {}; }
+};
+let staleFrom = null;
+/* Persist when storage is available, and REPORT a write failure: printing "saved <time>" after a
+   failed write would tell the owner their verdicts are durable when they are not. */
 const save = s => { try { localStorage.setItem(KEY, JSON.stringify(s)); return true; }
                     catch { return false; } };
 let storageOk = true;
 let state = load();
 
-/* Review finding: navigator.clipboard is undefined outside a secure context, and reading
-   .writeText off it throws SYNCHRONOUSLY — before any .then() rejection handler could run. Fall
-   back to a selectable textarea so the report is always retrievable. */
+/* navigator.clipboard is undefined outside a secure context, and reading .writeText off it throws
+   SYNCHRONOUSLY — before any .then() rejection handler could run. Fall back to a selectable
+   textarea so the report is always retrievable. */
 function copyText(text, okMsg){
   const fallback = () => {
     const ta = document.createElement("textarea");
@@ -741,9 +764,8 @@ CHECKS.forEach((c, i) => {
         </div>
       </div>
     </div>`;
-  // Review finding: esc() escaped only & and <, so a command containing a double quote — which
-  // every UAT-3 command does — closed the attribute early and the copy button yielded an EMPTY
-  // string. Command text now travels through the DOM, never through markup.
+  // Command text travels through the DOM, never through markup: interpolating it into a
+  // data- attribute breaks on the first double quote, and every UAT-3 command contains one.
   sec.querySelectorAll(".cmd").forEach(box => {
     const cm = c.cmds[Number(box.dataset.ci)];
     box.querySelector(".copy").dataset.copy = cm.text;
@@ -790,6 +812,13 @@ stations.addEventListener("click", e => {
   if (v) {
     const id = v.closest(".verdict").dataset.for;
     const rec = state[id] || {};
+    // This page's own pass condition for UAT-3 demands the preflight output. A pass with no
+    // evidence is exactly the "green with nothing behind it" this epic keeps running into.
+    if (id === "uat3" && v.dataset.v === "pass" && rec.v !== "pass" && !(rec.note || "").trim()) {
+      toast("UAT-3 needs its evidence in the note before it can pass");
+      v.closest(".verdict").querySelector("textarea").focus();
+      return;
+    }
     rec.v = rec.v === v.dataset.v ? null : v.dataset.v;
     rec.at = new Date().toLocaleString();
     state[id] = rec; storageOk = save(state); paint();
@@ -875,7 +904,16 @@ function type(el, force){
   nextLine();
 }
 
-const io = new IntersectionObserver(entries => {
+// Stations start dimmed for the reveal, so a missing/throwing IntersectionObserver would leave
+// the entire checklist invisible. Reveal everything up front if the API is unavailable.
+if (typeof IntersectionObserver === "undefined") {
+  document.querySelectorAll(".station").forEach(st => {
+    st.classList.add("in");
+    const body = st.querySelector(".seeBody");
+    if (body) type(body);
+  });
+}
+const io = typeof IntersectionObserver === "undefined" ? {observe(){}} : new IntersectionObserver(entries => {
   entries.forEach(en => {
     if (!en.isIntersecting) return;
     en.target.classList.add("in");
@@ -886,7 +924,7 @@ const io = new IntersectionObserver(entries => {
 document.querySelectorAll(".station").forEach(s => io.observe(s));
 
 /* rail: highlight the station you are in */
-const cur = new IntersectionObserver(entries => {
+const cur = typeof IntersectionObserver === "undefined" ? {observe(){}} : new IntersectionObserver(entries => {
   entries.forEach(en => {
     if (!en.isIntersecting) return;
     railList.querySelectorAll(".railItem").forEach(b =>
@@ -1118,7 +1156,12 @@ function showStageFallback(reason){
 
 /* Everything above this point runs with no network access. The visualisation is a bonus. */
 try {
-  THREE = await import("https://unpkg.com/three@0.160.0/build/three.module.js");
+    // three.js r160 is VENDORED beside this file (MIT, sha256
+  // 76dea8151bc9352aef3528b4262e249b2604f62543828328db978d060d61a495) rather than pulled from a
+  // CDN: a dynamic import cannot carry an integrity hash, and remote code in this page's realm
+  // could read or rewrite the verdicts and the exported report. Local also means the console
+  // works with no network at all.
+  THREE = await import("./three.module.js");
   three = initThree();
   if (three) {
     // hold the perspective even when motion is reduced, so the static frame still reads as 3D
