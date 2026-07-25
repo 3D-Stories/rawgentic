@@ -290,13 +290,16 @@ def test_rate_card_covers_every_shipped_routing_table_model():
     seat retune that introduces a model fails loudly here instead of silently costing 0.
     """
     import json  # noqa: PLC0415
-    import sys  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
-    src = Path(__file__).resolve().parents[2] / "phase_executor" / "src"
-    sys.path.insert(0, str(src))
-    from phase_executor.routing import default_table_path  # noqa: PLC0415
-
-    table = json.loads(Path(default_table_path()).read_text(encoding="utf-8"))
+    # Read the shipped table as the DATA FILE it is. A `from phase_executor.routing import
+    # ...` here would need a runtime sys.path shim that pylint (static) cannot follow, and
+    # `--disable=import-error` suppresses E0401 but NOT E0611 -- that combination turned the
+    # CI lint lane red while passing on a dev box where phase_executor happens to resolve.
+    # tests/hooks/ has no conftest sys.path shim; only tests/phase_executor/ does.
+    table_path = (Path(__file__).resolve().parents[2] / "phase_executor" / "src"
+                  / "phase_executor" / "routing" / "rawgentic.routing-table.json")
+    assert table_path.is_file(), f"shipped routing table not found at {table_path}"
+    table = json.loads(table_path.read_text(encoding="utf-8"))
     shipped = set()
     for seat in table["seats"].values():
         for entry in (seat["primary"], *seat.get("chain", [])):
