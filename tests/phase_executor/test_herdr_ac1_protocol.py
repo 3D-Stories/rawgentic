@@ -15,6 +15,7 @@ RUN_LIVE=1). These tests cover everything about the harness that does NOT need a
 """
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -124,6 +125,19 @@ class FakeDaemon:
                 return list(argv)
         return ["/bin/bash"]
 
+
+
+def _patched(daemon, call):
+    """A FakeDaemon whose __call__ is replaced (instance-level), so a test can corrupt ONE verb's
+    response without reimplementing the whole daemon."""
+    class _Patched:
+        def __init__(self, inner):
+            self.__dict__["_inner"] = inner
+        def __call__(self, cmd, **kwargs):
+            return call(cmd, **kwargs)
+        def __getattr__(self, name):
+            return getattr(self.__dict__["_inner"], name)
+    return _Patched(daemon)
 
 def _run_one(daemon, tmp_path, condition="cold"):
     from phase_executor.herdr_backend import HerdrBackend
@@ -349,6 +363,77 @@ def test_availability_resolves_workspace_from_pane_current():
 
     ok, workspace = ac1.herdr_available(which=lambda _n: "/usr/bin/herdr", run=run, env={})
     assert ok and workspace == "w9"
+
+
+# --------------------------------------------------------------------------- the gate entry point
+
+
+def test_gate_exit_codes_reserve_zero_for_go():
+    """`pytest` exits 0 when every test SKIPS, so the pytest form cannot BE the pre-upgrade gate:
+    an operator reading only the exit status would accept an upgrade the gate never evaluated.
+    This entry point exits 0 for GO and nothing else."""
+    assert ac1.gate_exit_code(ac1.Verdict.GO) == 0
+    assert ac1.gate_exit_code(ac1.Verdict.NO_GO) != 0
+    assert ac1.gate_exit_code(ac1.Verdict.ERROR) != 0
+    assert len({ac1.gate_exit_code(v) for v in ac1.Verdict}) == 3, "each verdict is distinguishable"
+    assert ac1.GATE_EXIT_UNAVAILABLE != 0
+
+
+def test_gate_reports_unavailable_rather_than_success_without_herdr(tmp_path):
+    """Run for real as a subprocess with herdr off PATH: the gate must NOT exit 0."""
+    env = {**os.environ, "PATH": "/usr/bin:/bin", "PYTHONPATH": str(
+        pathlib.Path(__file__).resolve().parents[2] / "phase_executor" / "src")}
+    proc = subprocess.run([sys.executable, str(HARNESS_PATH), "--gate"],
+                          capture_output=True, text=True, env=env, timeout=60, check=False)
+    assert proc.returncode == ac1.GATE_EXIT_UNAVAILABLE, (proc.returncode, proc.stderr)
+    assert "not a pass" in proc.stderr, proc.stderr
+
+
+def test_gate_rejects_a_malformed_invocation_without_claiming_success():
+    proc = subprocess.run([sys.executable, str(HARNESS_PATH)], capture_output=True, text=True,
+                          timeout=60, check=False)
+    assert proc.returncode not in (0, ac1.GATE_EXIT_GO), proc.stderr
+    assert "usage:" in proc.stderr
+
+
+# --------------------------------------------------------------------------- vacuous-check guards
+
+
+@pytest.mark.parametrize("stdout", ["", "   ", "unknown", "0", "1", "-5"])
+def test_unusable_pane_pid_is_an_env_fault_never_a_vacuous_pass(tmp_path, stdout):
+    """`pane_pid` returns rc=0 carrying whatever herdr reported. If that is not a usable pid, every
+    identity comparison would silently evaporate and the rep would count toward GO having observed
+    nothing at all."""
+    daemon = FakeDaemon()
+    real_call = daemon.__call__
+
+    def broken(cmd, **kwargs):
+        res = real_call(cmd, **kwargs)
+        if len(cmd) > 2 and cmd[2] == "process-info":
+            return _completed(cmd, 0, json.dumps({"result": {"process_info": {"shell_pid": stdout}}}))
+        return res
+
+    rep = _run_one(_patched(daemon, broken), tmp_path)
+    assert rep.env_faults, f"unusable pid {stdout!r} must be an env fault: {rep}"
+    assert not rep.identity_failures, rep
+    assert ac1.decide([rep], leaked=(), expected_reps=1) is ac1.Verdict.ERROR
+
+
+def test_identity_comparisons_are_unconditional_once_pids_are_valid(tmp_path):
+    """The pid chain must be compared, not skipped: a mid-run pid differing from the pre-exec pid
+    is the primary regression signal."""
+    daemon = FakeDaemon(shell_pid=5555, exec_pid=6666, sentinel_pid=6666)
+    rep = _run_one(daemon, tmp_path)
+    assert any("5555" in f and "6666" in f for f in rep.identity_failures), rep.identity_failures
+
+
+def test_availability_treats_a_wedged_daemon_as_unavailable():
+    """A raising/hanging probe must resolve to UNAVAILABLE, not propagate out of collection."""
+    def raising(_cmd, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="herdr --version", timeout=5)
+
+    ok, reason = ac1.herdr_available(which=lambda _n: "/usr/bin/herdr", run=raising, env={})
+    assert not ok and "raised" in reason
 
 
 # --------------------------------------------------------------------------- the sentinel itself

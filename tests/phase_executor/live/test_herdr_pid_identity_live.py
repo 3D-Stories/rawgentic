@@ -19,6 +19,7 @@ The GO threshold (0 failures per condition) lives in `herdr_ac1_protocol.decide`
 here as a tri-state verdict — `ERROR` (environment) is never accepted as a pass, and is never
 reported as a regression either.
 """
+import os
 import pathlib
 import sys
 import uuid
@@ -32,9 +33,13 @@ from phase_executor.herdr_backend import HerdrBackend  # noqa: E402
 
 pytestmark = pytest.mark.live
 
-# Evaluated once at collection. Cheap when herdr is absent (the PATH check short-circuits before
-# any subprocess), so CI pays nothing for this module existing.
-_HERDR_OK, _HERDR_DETAIL = ac1.herdr_available()
+# Evaluated once at collection, and ONLY under RUN_LIVE=1 (cross-model review finding): probing
+# eagerly meant an ordinary suite run on any herdr-installed host spawned two herdr subprocesses at
+# COLLECTION time, where a wedged daemon could stall or fail collection for opt-in tests that were
+# never going to run. With RUN_LIVE unset the shared conftest skips this module anyway.
+_HERDR_OK, _HERDR_DETAIL = (
+    ac1.herdr_available() if os.environ.get("RUN_LIVE") == "1"
+    else (False, "RUN_LIVE is not set (this check is opt-in)"))
 requires_herdr = pytest.mark.skipif(
     not _HERDR_OK, reason=f"herdr unavailable for the AC1 live check: {_HERDR_DETAIL}")
 WORKSPACE = _HERDR_DETAIL if _HERDR_OK else None

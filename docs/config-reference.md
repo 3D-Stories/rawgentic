@@ -326,15 +326,29 @@ tracks and kills a shell while the real worker runs on. Re-qualify (do not re-de
 committed #633 §AC1 protocol before trusting the backend on a new herdr version:
 
 ```bash
-RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v
+PYTHONPATH=phase_executor/src python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate
 ```
 
 20 cold-pane + 20 reused-pane reps; the GO threshold (0 failures per condition) is encoded in the
-check, and its verdict is tri-state — `NO_GO` is a real regression, `ERROR` means the run could not
-answer (environment), and only `GO` re-qualifies the backend. It must be run from a session that is
-itself inside a herdr pane (`pane split --current` needs a calling pane); anywhere else — including
-CI, which has no herdr at all — it SKIPS with a named reason rather than failing or passing
-silently.
+check, and the verdict is tri-state, carried in the **exit code** so a script can gate on it:
+`0` = `GO` (re-qualified), `2` = `NO_GO` (a real PID-identity regression), `3` = `ERROR` (the run
+could not answer — environment fault, never a pass), `4` = prerequisites unavailable, i.e. **the
+gate did not run**. Nothing but `GO` exits 0.
+
+It must be run from a session that is itself inside a herdr pane (`pane split --current` needs a
+calling pane); elsewhere it exits `4`.
+
+The same protocol is also wired as a pytest module for ordinary suite collection:
+
+```bash
+RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v
+```
+
+Use that form to read per-rep detail, **not** as the gate: `pytest` exits `0` when every test
+SKIPS, so on a host without herdr (CI, or any pane-less process) a green exit there means "the
+check did not run", not "the backend is qualified". Skipping is deliberate for CI — herdr is absent
+from it entirely, so the module must skip visibly rather than redden a lane — which is exactly why
+the pre-upgrade gate is the `--gate` entry point above.
 
 ### `telemetryAlerts`
 

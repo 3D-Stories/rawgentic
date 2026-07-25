@@ -73,6 +73,10 @@ SENTINEL_POLL_S = 0.05
 DEFAULT_DEADLINE_S = 30.0
 DEFAULT_POLL_S = 0.05
 SPLIT_DIRECTION = "right"
+# Short leash on the availability probes: they run at pytest COLLECTION time, and a wedged
+# daemon on the runner's 30s default would stall the whole suite twice over (cross-model
+# review finding).
+AVAILABILITY_TIMEOUT_S = 5.0
 
 MODULE_PATH = str(pathlib.Path(__file__).resolve())
 ENUMERATION_FAILED = "<pane enumeration failed>"
@@ -227,6 +231,13 @@ def _int_or_none(text):
         return None
 
 
+def _valid_pid(pid) -> bool:
+    """A pid this protocol can reason about. `<= 1` is refused for the same reason every kill
+    path in `supervisor.py` refuses it — 0/1 are never a launched worker, and treating one as a
+    real observation is how a vacuous check passes."""
+    return isinstance(pid, int) and pid > 1
+
+
 # --------------------------------------------------------------------------- availability / skip
 
 
@@ -244,7 +255,10 @@ def herdr_available(*, which=None, run=None, env=None):
         return False, "herdr binary not on PATH"
     run = default_runner() if run is None else run
 
-    ver = run(["herdr", "--version"])
+    try:
+        ver = run(["herdr", "--version"], timeout=AVAILABILITY_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 — a wedged daemon means UNAVAILABLE, never a crash
+        return False, f"herdr --version raised ({exc!r})"
     if ver.returncode != 0:
         return False, f"herdr --version failed: {_msg(ver)}"
     parts = (ver.stdout or "").strip().split()
@@ -257,7 +271,10 @@ def herdr_available(*, which=None, run=None, env=None):
         return False, (f"herdr {version_str!r} is below the qualified floor "
                        f"{'.'.join(str(p) for p in HERDR_VERSION_FLOOR)}")
 
-    res = run(["herdr", "pane", "current"])
+    try:
+        res = run(["herdr", "pane", "current"], timeout=AVAILABILITY_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001
+        return False, f"herdr pane current raised ({exc!r})"
     pane = ((_json_body(res) or {}).get("result") or {}).get("pane") or {}
     workspace = pane.get("workspace_id") or env.get("HERDR_WORKSPACE_ID")
     if res.returncode != 0 or not workspace:
@@ -295,14 +312,19 @@ def _teardown(rep: RepResult, *, backend, endpoint, run_herdr, pane_id, labeled:
 
 def _assess(rep: RepResult, worker_argv: list) -> None:
     """#633's success criteria, evaluated. Every failure here is an IDENTITY failure — a
-    statement about herdr's exec behaviour, not about our ability to observe it."""
-    if rep.pre_pid is not None and rep.mid_pid is not None and rep.pre_pid != rep.mid_pid:
+    statement about herdr's exec behaviour, not about our ability to observe it.
+
+    `run_rep` guarantees `pre_pid`/`mid_pid` are valid pids before this runs (an unusable pid is
+    an env fault that returns early), so these comparisons are UNCONDITIONAL — a cross-model
+    review found the earlier `is not None` guards made the whole chain evaporate on a rep that
+    never observed a pid."""
+    if rep.pre_pid != rep.mid_pid:
         rep.identity_failures.append(
             f"pre-exec shell pid {rep.pre_pid} != mid-run pid {rep.mid_pid} — the exec'd process "
             f"is not the pane's own process")
     if rep.sentinel_pid is None:
         rep.identity_failures.append("the worker recorded no pid of its own")
-    elif rep.pre_pid is not None and rep.sentinel_pid != rep.pre_pid:
+    elif rep.sentinel_pid != rep.pre_pid:
         rep.identity_failures.append(
             f"worker's own os.getpid() {rep.sentinel_pid} != pre-exec shell pid {rep.pre_pid} — "
             f"exec did not replace the shell (a wrapping child would look exactly like this)")
@@ -383,6 +405,14 @@ def run_rep(condition: str, *, backend, endpoint: str, run_herdr, workdir, label
             rep.env_faults.append(f"pre-exec pane_pid failed: {_msg(pre)}")
             return rep
         rep.pre_pid = _int_or_none(pre.stdout)
+        # Cross-model review finding (High): `pane_pid` returns rc=0 carrying whatever herdr put
+        # in `shell_pid`, so an unparseable value (or a nonsense pid <= 1) yields pre_pid=None and
+        # every downstream comparison in _assess — each guarded by `is not None` — silently
+        # evaporates, letting a rep that observed NO pid at all count toward GO. Refuse here.
+        if not _valid_pid(rep.pre_pid):
+            rep.env_faults.append(
+                f"pre-exec pane_pid returned rc=0 but no usable pid ({(pre.stdout or '').strip()!r})")
+            return rep
         rep.pre_cmdline = read_cmdline(rep.pre_pid)
 
         res = run_herdr(launch_argv(pane_id, worker_argv))
@@ -400,6 +430,10 @@ def run_rep(condition: str, *, backend, endpoint: str, run_herdr, workdir, label
             rep.env_faults.append(f"mid-run pane_pid failed: {_msg(mid)}")
             return rep
         rep.mid_pid = _int_or_none(mid.stdout)
+        if not _valid_pid(rep.mid_pid):
+            rep.env_faults.append(
+                f"mid-run pane_pid returned rc=0 but no usable pid ({(mid.stdout or '').strip()!r})")
+            return rep
         rep.post_cmdline = read_cmdline(rep.mid_pid)
 
         release.touch()
@@ -494,12 +528,64 @@ def _sentinel_main(observation: str, release: str, timeout: float) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- the gate entry point
+
+# Cross-model review finding (High): `pytest` exits 0 when every test SKIPS, so the pytest form of
+# this check reports SUCCESS on a host where the gate never ran — an operator or a script reading
+# only the exit status would accept a herdr upgrade with no GO verdict, which is the very
+# no-answer-as-success failure this protocol exists to prevent. The pytest module stays as the
+# suite-collection surface (AC2 requires a visible SKIP there, never a red CI lane); THIS is the
+# documented pre-upgrade gate, and it cannot exit 0 without a GO.
+GATE_EXIT_GO = 0
+GATE_EXIT_NO_GO = 2
+GATE_EXIT_ERROR = 3
+GATE_EXIT_UNAVAILABLE = 4
+
+_GATE_EXITS = {Verdict.GO: GATE_EXIT_GO, Verdict.NO_GO: GATE_EXIT_NO_GO,
+               Verdict.ERROR: GATE_EXIT_ERROR}
+
+
+def gate_exit_code(verdict: Verdict) -> int:
+    """Only `GO` maps to 0. Unavailable prerequisites map to GATE_EXIT_UNAVAILABLE, never 0."""
+    return _GATE_EXITS[verdict]
+
+
+def _gate_main(reps: int = REPS_PER_CONDITION) -> int:
+    import tempfile  # noqa: PLC0415 — gate path only
+
+    ok, detail = herdr_available()
+    if not ok:
+        print(f"UNAVAILABLE: {detail}\nThe gate did NOT run — this is not a pass.", file=sys.stderr)
+        return GATE_EXIT_UNAVAILABLE
+    from phase_executor.herdr_backend import HerdrBackend  # noqa: PLC0415
+
+    backend = HerdrBackend(workspace_id=detail)
+    with tempfile.TemporaryDirectory(prefix="rg639-gate-") as workdir:
+        report = qualify(backend=backend, endpoint=detail, run_herdr=default_runner(),
+                         workdir=workdir, reps=reps)
+    print(report.summary())
+    for failure in report.failures():
+        print(f"  {failure}")
+    return gate_exit_code(report.verdict)
+
+
+_USAGE = ("usage: herdr_ac1_protocol.py --gate [reps]\n"
+          "       herdr_ac1_protocol.py --sentinel <observation.json> <release-file> "
+          "[timeout-seconds]")
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "--gate" and len(argv) in (1, 2):
+        try:
+            reps = int(argv[1]) if len(argv) == 2 else REPS_PER_CONDITION
+        except ValueError:
+            print(_USAGE, file=sys.stderr)
+            return 1
+        return _gate_main(reps)
     if not argv or argv[0] != "--sentinel" or len(argv) not in (3, 4):
-        print("usage: herdr_ac1_protocol.py --sentinel <observation.json> <release-file> "
-              "[timeout-seconds]", file=sys.stderr)
-        return 2
+        print(_USAGE, file=sys.stderr)
+        return 1
     timeout = float(argv[3]) if len(argv) == 4 else SENTINEL_SELF_TIMEOUT_S
     return _sentinel_main(argv[1], argv[2], timeout)
 
