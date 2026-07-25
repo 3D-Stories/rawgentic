@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Epic #635 — UAT Plan</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media(prefers-color-scheme:dark){:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#a16207;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+.tpl-spec table th{color:var(--accent)}
+.tpl-spec li{margin:.2em 0}
+</style>
+</head>
+<body class="tpl-spec">
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-24 21:20 MDT</div>
+<h1>Epic #635 — UAT Plan</h1>
+<p class="sub">AC-derived acceptance testing for the herdr build-seat launch backend</p>
+</header>
+<main>
+<h1>Epic #635 — UAT plan (AC-derived)</h1>
+<p><strong>Epic:</strong> #635 &quot;herdr build-seat launch backend&quot; <strong>Children:</strong> #636 (TerminalBackend seam) · #637 (worktree park-then-reset) · #638 (HerdrBackend + config-gate) · #639 (PID-identity regression check) <strong>Author:</strong> generated during the epic auto-run, 2026-07-24 <strong>Status:</strong> live — updated as children land</p>
+<h2>How UAT works for this epic</h2>
+<p>Owner directive (2026-07-24): *&quot;All issues should be tested and verified working through CI and smoketesting. UAT should be conducted with user with a UAT plan created based on ACs. UAT can be done at the conclusion of the epic unless there are items that need to be verified after an issue that the next issue heavily relies on.&quot;*</p>
+<p>So:</p>
+<ul>
+<li>UAT is <strong>retroactive</strong> — it covers #636 and #637 (already merged) as well as #638/#639.</li>
+<li>UAT is <strong>conducted with the owner</strong>, at <strong>epic conclusion</strong>, from this plan.</li>
+<li><strong>Exception:</strong> any behavior a *later* child heavily depends on is verified <strong>mid-stream</strong>,</li>
+</ul>
+<p>  not deferred. Those items are marked <strong>[MID-STREAM]</strong> below with their result.</p>
+<h3>Evidence tiers used in this plan</h3>
+<table>
+<thead><tr><th>Tier</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><strong>CI</strong></td><td>Proven by the committed suite running in GitHub Actions on the merge commit</td></tr>
+<tr><td><strong>LOCAL</strong></td><td>Proven by a full-suite / lint / scan run on this host, recorded with counts</td></tr>
+<tr><td><strong>LIVE</strong></td><td>Proven against the real herdr daemon or real git worktrees on this host</td></tr>
+<tr><td><strong>OWNER</strong></td><td>Requires the owner&#x27;s own eyes/judgment — the actual UAT items</td></tr>
+<tr><td><strong>GAP</strong></td><td>Not proven by anyone yet. Named honestly, not laundered.</td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>Standing constraint that shapes every herdr item</h2>
+<p><strong>herdr is absent from CI by design.</strong> <code>.github/workflows/ci.yml</code> installs no herdr binary. Every <code>HerdrBackend</code> test mocks the injected <code>run</code> callable, exactly as <code>TmuxBackend</code>&#x27;s tests mock tmux. Consequence: <strong>no herdr behavior is exercised in CI at all</strong> — CI proves the supervisor/gate logic and the mocked contracts, never that the real daemon behaves as assumed. That is precisely why #639 exists (a re-runnable live re-qualification gate) and why the LIVE tier below is load-bearing rather than decorative.</p>
+<p><strong><code>--current</code> requires a herdr pane.</strong> <code>pane split --current</code> resolves the *calling process&#x27;s* own pane. This matches the owner&#x27;s stated model (&quot;I&#x27;m in a session, my orchestrators are working away, and it pane-splits itself from that orchestration window&quot;) — confirmed live. It does <strong>not</strong> hold for a process with no pane (a cron-launched headless run): there <code>--current</code> has nothing to resolve and the split fails loud. That is the intended outcome for an opt-in non-default backend, but it means <strong>the herdr backend is not usable from the cron/headless launcher</strong> — see GAP-3.</p>
+<p>---</p>
+<h2>#636 — TerminalBackend protocol + TmuxBackend (merged)</h2>
+<p>Pure refactor, no behavior change. ACs 1–4 are structural; AC5 is the regression proof.</p>
+<table>
+<thead><tr><th>#</th><th>AC (abbreviated)</th><th>Tier</th><th>Evidence / what the owner does</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Protocol captures exactly the runtime-varying primitives</td><td>CI</td><td>Protocol defined in <code>phase_executor/src/phase_executor/terminal_backend.py</code>; every extracted call site cited in the issue</td></tr>
+<tr><td>2</td><td><code>TmuxBackend</code> uses the EXACT current tmux invocations; default backend</td><td>CI</td><td>Byte-identical argv confirmed against each cited call site during implementation; suite green with no assertion changes beyond mechanical mocking</td></tr>
+<tr><td>3</td><td>Kill/sentinel/recover machinery STAYS in the supervisor</td><td>CI</td><td><code>os.killpg</code> two-group kill, <code>read_sentinel</code>, <code>recover</code>/<code>reap</code> verdicts all still in <code>supervisor.py</code></td></tr>
+<tr><td>4</td><td>The 3 <code>TmuxSupervisor(...)</code> sites construct the default backend</td><td>CI</td><td>All three sites in <code>hooks/executor_routing_lib.py</code></td></tr>
+<tr><td>5</td><td><strong>No behavior change, proven</strong></td><td>CI</td><td>Full suite green on the merge commit</td></tr>
+<tr><td>—</td><td><strong>A real executor dispatch still works post-refactor</strong></td><td><strong>OWNER</strong></td><td><strong>UAT-1</strong> below — the suite is a proxy; nothing yet drove a real model dispatch through the refactored seam</td></tr>
+</tbody>
+</table>
+<h2>#637 — worktree park-then-reset (merged)</h2>
+<table>
+<thead><tr><th>#</th><th>AC (abbreviated)</th><th>Tier</th><th>Evidence / what the owner does</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>park_and_reset</code> parks diff+untracked via a <strong>named</strong> stash, then resets; never <code>reset --hard</code> without a recovery path</td><td>CI + LIVE</td><td><code>test_worktree_park.py</code>; three Step-11 rounds hardened the stash-OID attribution against real concurrent linked worktrees</td></tr>
+<tr><td>2</td><td><strong>Ownership is the orchestrator</strong>, invoked atomically at the design-level loop-back</td><td><strong>GAP</strong></td><td><strong>GAP-1</strong> — the primitive exists and is tested, but nothing *invokes* it at a live loop-back; WF2 loop-backs are prose-orchestrated, so this AC is satisfied by documentation only</td></tr>
+<tr><td>3</td><td>Parked entry referenced in the run&#x27;s audit record, retained, not auto-deleted</td><td>CI</td><td><code>RoutingAuditLog.append_park</code>, writer-side invariant enforced (<code>parked=True ⟹ non-empty stash_oid</code>)</td></tr>
+<tr><td>4</td><td>Operates ONLY inside that task&#x27;s isolated worktree, never the shared checkout</td><td>CI + LIVE</td><td>Anchored on <code>handle.gitdir</code> (git&#x27;s own per-linked-worktree admin dir); two-real-worktree regressions</td></tr>
+<tr><td>5</td><td>Contract documented in WF2/WF3 skill prose at the loop-back</td><td>OWNER</td><td><strong>UAT-2</strong> — owner reads the prose and confirms it says what they intend</td></tr>
+</tbody>
+</table>
+<h2>#638 — HerdrBackend + build-seat config-gate ✅ MERGED (<code>9e4ac92</code>, PR #646)</h2>
+<table>
+<thead><tr><th>#</th><th>AC (abbreviated)</th><th>Tier</th><th>Evidence / what the owner does</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Launch via <code>pane split</code> → <code>pane run &lt;pane&gt; exec &lt;argv&gt;</code>; identity via <code>process-info</code> → <code>shell_pid</code></td><td><strong>LIVE</strong> [MID-STREAM]</td><td><strong>Verified</strong> — see MID-STREAM-1. Note two AC-text drifts vs the real CLI, both caught by testing the real binary: <code>pane split</code> has <strong>no</strong> <code>--workspace</code> flag (the shipped code uses <code>--current --direction</code>), and <code>pane get</code> takes a <strong>positional</strong> <code>&lt;pane_id&gt;</code>, not the <code>--pane &lt;pane&gt;</code> the AC text specifies</td></tr>
+<tr><td>2</td><td>Liveness/enumeration/close mapped; <code>os.killpg</code>-first order UNCHANGED</td><td>LIVE + CI</td><td>Live: <code>has_session</code>/<code>list_sessions</code>/<code>kill_session</code> round-trip, process confirmed terminated. CI: kill order untouched in <code>supervisor.py</code></td></tr>
+<tr><td>3</td><td><code>read_sentinel</code> unchanged under either backend</td><td>CI</td><td>No change to the sentinel path</td></tr>
+<tr><td>4</td><td>Config-gate selects herdr for the <strong>build seat only</strong>; tmux default</td><td><strong>LIVE</strong></td><td>Gate decision verified against real on-disk <code>.rawgentic.json</code> files: 3 valid forms resolve correctly, 4 malformed forms fail closed, and all 8 seat roles gate correctly (only <code>build</code> → herdr). <strong>Remaining:</strong> UAT-3 — a real build-seat *model dispatch* under herdr</td></tr>
+<tr><td>5</td><td>herdr&#x27;s singleton addressing handled inside the backend; herdr preflight probes its verbs</td><td>LIVE</td><td><code>preflight</code> probes split/rename/run/get/process-info/list/close against the real daemon</td></tr>
+<tr><td>6</td><td>Named risks encoded as comments/guards at the call site</td><td>OWNER</td><td><strong>UAT-4</strong> — owner reads the module docstring and confirms the accepted risks match what they accepted</td></tr>
+</tbody>
+</table>
+<h3>#638 accepted risks (owner already ruled on these — recorded for UAT confirmation)</h3>
+<p>1. <strong><code>pane_env</code> via <code>--env</code> is visible to <code>ps</code>.</strong> herdr has no private per-run env channel    (tmux gets one via <code>subprocess.run(env=...)</code> on a per-run socket). Owner accepted    2026-07-24, conditional on: contained to the host it runs on, and gone when the pane is    closed/destroyed. <strong>Both conditions confirmed</strong> — values are CLI args to a host-local    daemon, not persisted beyond the pane. Guard: this backend is never handed anything    credential-bearing (<code>PYTHONPATH</code> only at all three call sites). 2. <strong>Malformed-split pane leak.</strong> If <code>pane split</code> returns <code>rc=0</code> with an unparseable body,    a real pane may exist but the code has no <code>pane_id</code> to close it (the id lives in the very    body that failed to parse). Documented, not fixed — a list-diff-by-timing recovery would    be racy and could close a concurrently created pane. 3. <strong>Three calls, not atomic.</strong> <code>split</code> → <code>rename</code> → <code>run</code> is safe only single-threaded per    spawn; never parallelize against one target pane. 4. <strong>exec-injection is herdr-undocumented.</strong> A silent regression on a herdr upgrade is the    standing risk — #639 is the guard.</p>
+<h2>#639 — PID-identity regression check (not started)</h2>
+<table>
+<thead><tr><th>#</th><th>AC (abbreviated)</th><th>Tier</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>AC1 protocol committed as a re-runnable check (20 cold + 20 reused reps) exercising #638&#x27;s backend</td><td>pending</td><td>Depends on MID-STREAM-1 holding — it does</td></tr>
+<tr><td>2</td><td>Gated so it never runs in herdr-absent CI; SKIPS visibly</td><td>pending</td><td></td></tr>
+<tr><td>3</td><td>GO threshold (0 failures/condition) encoded in the check, not left to human reading</td><td>pending</td><td></td></tr>
+<tr><td>4</td><td>Docs name it as the required pre-upgrade gate</td><td>pending</td><td></td></tr>
+</tbody>
+</table>
+<p>---</p>
+<h2>MID-STREAM verifications (done, not deferred)</h2>
+<h3>MID-STREAM-1 — PID identity, the fact #639 is built on ✅ VERIFIED</h3>
+<p>#639&#x27;s entire regression check reads a PID back through <code>HerdrBackend.pane_pid()</code>. If that reports anything other than the real launched process, #639 measures the wrong process. So this was verified <strong>against <code>/proc</code></strong>, not against herdr&#x27;s own self-report:</p>
+<pre><code>launched argv:            [&#x27;sleep&#x27;, &#x27;45&#x27;]
+pane_pid() reported:      623128
+/proc/623128/cmdline:     [&#x27;sleep&#x27;, &#x27;45&#x27;]      &lt;-- identity preserved
+/proc/623128/comm:        sleep
+5 repeated reads:         all 623128            &lt;-- stable, no drift
+kill_session -&gt; /proc/623128 gone               &lt;-- genuinely terminated</code></pre>
+<p>The reported PID <strong>is</strong> the exec&#x27;d process, not a wrapping shell — despite herdr naming the field <code>shell_pid</code>. #639 is unblocked on its load-bearing precondition.</p>
+<p>---</p>
+<h2>Named GAPs (not proven by anyone)</h2>
+<p><strong>GAP-1 — #637&#x27;s AC2 is documentation-only.</strong> <code>park_and_reset</code> is tested, but no code path invokes it at a live WF2/WF3 design loop-back; the orchestrator &quot;owns&quot; it by prose contract with nothing enforcing that. A loop-back run today would *not* automatically park. Closing this needs either a real WF2 loop-back exercised end-to-end (owner UAT) or a mechanical enforcement point (a follow-up issue).</p>
+<p><strong>GAP-2 — no real build-seat dispatch under herdr.</strong> Everything herdr-side was verified by driving <code>HerdrBackend</code> directly plus the gate decision in isolation. Nothing has driven a real <code>executor_routing_lib dispatch</code> of the build seat with the gate flipped to herdr — the actual entry path in production. That is UAT-3, and it is the single most important UAT item in this plan.</p>
+<p><strong>GAP-3 — herdr backend unusable from the cron/headless launcher.</strong> <code>--current</code> needs a calling pane. The durable long-run launcher (<code>epic-635-resume.sh</code> via crontab) runs detached with no controlling terminal and therefore no herdr pane, so a build-seat launch there would fail loud. Fine for an opt-in backend, but it means &quot;herdr for the build seat&quot; and &quot;unattended cron-resumed runs&quot; are currently mutually exclusive. Not a defect in #638; a scope boundary worth an explicit decision.</p>
+<p><strong>GAP-4 — no herdr coverage in CI at all</strong> (see standing constraint). Structural, by design; #639 is the compensating control.</p>
+<p><strong>GAP-5 — the read-only run-status surface is still tmux-only (filed as #647).</strong> Found in #638&#x27;s Step-11 pass 4 and deliberately left out of scope: <code>hooks/executor_routing_lib.py</code>&#x27;s status probe ignores <code>record.terminal_backend</code> and always runs <code>tmux -S &lt;run_socket&gt;</code>. For a herdr record <code>run_socket</code> is a workspace id, so the probe fails for an ordinary reason and <code>run_status()</code> derives <code>exited_no_sentinel</code> without surfacing that the probe itself failed. Same defect class the rest of #638 spent four passes closing. Tracked in #647, not a #638 blocker — but it means <strong><code>status</code> output for a herdr-backed job is not trustworthy yet</strong>, which matters for UAT-3.</p>
+<h3>Review history for #638 (why the evidence tier above is worth trusting)</h3>
+<p>ELEVEN Step-11 review passes ran on this PR; the first ten EACH found real defects in the fix that preceded them, all of one class — *an operational failure being read as a definitive answer*, which in this subsystem means killing a healthy job. Sequence: per-pass yield <code>4H / 4 / 3H / 2H+2M / 2H+1M / 3H+2M+1L / 3H+1L / 3H+2M+1L / 2H+1M+1L / 2H / 1H</code> — flat, not converging, which is what drove the owner&#x27;s scope decision to split the remaining permit-vs-process-death invariant into <strong>#648</strong>. Several findings were defects introduced BY the fix for the previous round. Mocked tests never caught any of them; every one needed either the real binary or a hand-traced call chain. Two of the findings were defects the author introduced *while fixing* the previous round. That history is the argument for UAT-3 being run for real rather than trusted.</p>
+<p>---</p>
+<h2>The UAT session — what the owner actually does</h2>
+<p>Run at epic conclusion. Each item is a concrete action with a pass condition.</p>
+<h3>UAT-1 — a real executor dispatch still works after #636&#x27;s refactor</h3>
+<p><strong>Why:</strong> the suite is a proxy; #636 moved every launch primitive behind a new seam. <strong>Do:</strong> with the config on the default (<code>executorTerminalBackend</code> absent or <code>build: tmux</code>), run any real WF2/WF3 issue that dispatches a build seat. <strong>Pass:</strong> the dispatch launches, the pane runs, <code>observation.json</code> lands, the run completes normally — no change in behavior vs before the epic.</p>
+<h3>UAT-2 — #637&#x27;s loop-back prose says what you intend</h3>
+<p><strong>Do:</strong> read the park-then-reset paragraphs in the WF2 (and WF3) skill prose at the design-level loop-back. <strong>Pass:</strong> the described contract is the one you want the orchestrator to follow. Note GAP-1 while reading: nothing enforces it.</p>
+<h3>UAT-3 — a real build-seat dispatch under herdr ⚠️ the important one</h3>
+<p><strong>Why:</strong> GAP-2. This is the only item that exercises the production entry path. <strong>Do:</strong> 1. From a session that is itself inside a herdr pane (so <code>--current</code> resolves). 2. Set <code>&quot;executorTerminalBackend&quot;: {&quot;version&quot;: 1, &quot;build&quot;: &quot;herdr&quot;}</code> in the project&#x27;s    <code>.rawgentic.json</code>. 3. Run a real issue whose plan dispatches a build seat. <strong>Pass:</strong> a new herdr pane appears alongside your orchestration window and runs the build seat; <code>herdr pane list --workspace &lt;ws&gt;</code> shows it labeled with the run&#x27;s session name; the seat&#x27;s <code>observation.json</code> lands and the run completes; afterward no labeled pane is left behind. <strong>Also confirm the negative:</strong> a review/analysis seat in the same run still launches under tmux, not herdr. <strong>Rollback:</strong> set <code>build</code> back to <code>&quot;tmux&quot;</code> (or delete the section) — absent means tmux.</p>
+<h3>UAT-4 — the accepted risks are the ones you accepted</h3>
+<p><strong>Do:</strong> read the module docstring of <code>phase_executor/src/phase_executor/herdr_backend.py</code>. <strong>Pass:</strong> the four recorded risks (pane_env visibility, malformed-split leak, non-atomic three-call spawn, undocumented exec-injection) match your intent, and the pane_env conditions you set (host-contained, gone when the pane closes) are the ones stated.</p>
+<h3>UAT-5 — #639&#x27;s regression check does what it claims</h3>
+<p><strong>Do:</strong> after #639 lands, run it live (<code>RUN_LIVE=1</code>) once, and once with herdr removed from PATH. <strong>Pass:</strong> live run does 20 cold + 20 reused reps and reports 0 failures per condition; herdr-absent run <strong>skips visibly</strong> rather than failing or silently passing.</p>
+<h3>UAT-6 — decide GAP-3</h3>
+<p><strong>Do:</strong> decide whether &quot;herdr build seat&quot; needs to work from the cron/headless launcher. <strong>Pass:</strong> an explicit decision — either accepted as a scope boundary, or filed as a follow-up issue.</p>
+<p>---</p>
+<h2>Verification log (evidence, appended as it accrues)</h2>
+<table>
+<thead><tr><th>Date</th><th>What ran</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>2026-07-24</td><td>Full suite, herdr present (after Step-11 pass-4 fixes)</td><td>5067 passed / 18 skipped / 0 failed</td></tr>
+<tr><td>2026-07-24</td><td>CI on <code>575fdea</code> — all 4 lanes, confirmed by SHA</td><td><code>CI</code> · <code>Lint</code> · <code>Claude Code Review</code> · <code>Claude Security Review</code> all success</td></tr>
+<tr><td>2026-07-24</td><td>LIVE herdr end-to-end re-run after the pass-4 fixes</td><td>all pass; 0 labeled panes left behind</td></tr>
+<tr><td>2026-07-24</td><td>Full suite, herdr present (pass-3 fixes)</td><td>5060 passed / 18 skipped / 0 failed</td></tr>
+<tr><td>2026-07-24</td><td>Full suite, herdr stripped from PATH (CI parity)</td><td>5051 passed / 20 skipped / 0 failed (2-skip delta = <code>claude</code>/<code>codex</code> CLI absence from the same stripped dir, not herdr)</td></tr>
+<tr><td>2026-07-24</td><td>Both repo pylint lanes + the 3 touched <code>phase_executor/src</code> files</td><td>10.00/10, clean</td></tr>
+<tr><td>2026-07-24</td><td><code>security_scan.py</code> (library, vs <code>origin/main</code>)</td><td>PASS; 1 visible skip (<code>iac</code>: not applicable)</td></tr>
+<tr><td>2026-07-24</td><td>CI on <code>eb19c43</code> — all 4 lanes, confirmed by SHA</td><td><code>CI</code> success · <code>Lint</code> success · <code>Claude Code Review</code> success · <code>Claude Security Review</code> success</td></tr>
+<tr><td>2026-07-24</td><td>LIVE herdr end-to-end (split→rename→run→pane_pid→has_session→list_sessions→kill_session)</td><td>all pass; 0 labeled panes left behind</td></tr>
+<tr><td>2026-07-24</td><td>LIVE PID identity vs <code>/proc</code> (MID-STREAM-1)</td><td>identity preserved, stable across 5 reads, terminated by <code>kill_session</code></td></tr>
+<tr><td>2026-07-24</td><td>LIVE config-gate vs real on-disk configs</td><td>3 valid resolve correctly; 4 malformed fail closed; 8/8 roles gate correctly</td></tr>
+<tr><td>2026-07-25</td><td><strong>#638 MERGED</strong> as <code>9e4ac92</code> (PR #646), verified content-level on <code>origin/main</code></td><td>4/4 CI lanes green by SHA on <code>7fa2444</code>; suite 5128 passed / 18 skipped, all gates judged by EXIT CODE</td></tr>
+<tr><td>2026-07-25</td><td>#638 Step-16 run-record persisted (PR #649, <code>3b47275</code>)</td><td>store 157→158 records, verified by reading the store rather than trusting rc=0</td></tr>
+<tr><td>2026-07-25</td><td>LIVE real-tmux tri-state + duplicate-session survival</td><td>no-server probe/close/enumerate <code>confirmed_gone</code>; a pre-existing <code>victim</code> session survives the refusal</td></tr>
+</tbody>
+</table>
+
+</main>
+<footer>Last updated: 2026-07-24 21:20 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
