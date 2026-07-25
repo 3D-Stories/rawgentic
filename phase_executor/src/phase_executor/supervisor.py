@@ -582,41 +582,36 @@ class TmuxSupervisor:
             # QuotaCoordinator's stale-reap (dead holder pid) remains the leak backstop.
             # The possibly-live pane itself is surfaced by reap()'s CF-11 unknown-session
             # reporting (live on the endpoint, absent from the registry) — never blind-killed.
-            teardown_confirmed = not spawned  # nothing spawned ⇒ nothing to tear down
+            # Teardown is ATTEMPTED for any possibly-spawned session (a nonzero new_session
+            # means creation is INDETERMINATE — a backend's new_session is not atomic: herdr
+            # splits, renames and runs before returning, and tmux's own can time out after the
+            # server accepted it). The tri-state close normalises the ordinary
+            # already-absent case to CONFIRMED_GONE.
+            #
+            # The permit is then released UNCONDITIONALLY, and that is a DELIBERATE, documented
+            # limitation rather than an oversight (#638 Step-11 pass 8, owner scope decision
+            # 2026-07-24 — see the KNOWN LIMITATION note in terminal_backend.py and issue #648).
+            # Correct behaviour needs proof the process TREE is dead; on this path no process
+            # identity was ever captured, so no such proof is obtainable. Passes 5-8 each tried
+            # a cheaper substitute and each was itself a defect: releasing unconditionally
+            # over-admits the pool (p5); holding it in memory alone is unreclaimable (p6);
+            # persisting a pid-0 residue record to make it reclaimable made "session absent"
+            # masquerade as "process dead", let a recovery relaunch erase it and free the new
+            # permit, never released it from reap's `keep` tier, and was not crash-durable
+            # (p7-p8). So this fails toward the PRE-#638 behaviour, unchanged for tmux: release
+            # the slot, and let reap()'s CF-11 unknown-session reporting surface any pane live
+            # on the endpoint but absent from the registry — owner-visible, never blind-killed.
+            # A leaked pane is recoverable; a permanently pinned pool is not.
+            #
+            # Deliberately ONE unconditional release, not a two-armed branch that did the same
+            # thing in both arms (a self-review catch: that shape invites a later "fix" to one
+            # arm and silently reintroduces the p6-p8 defect chain).
             if spawned:
-                # #638 Step-11 pass 7: use the TRI-STATE close. CONFIRMED_GONE covers both a
-                # successful close AND an already-absent session — which is what an ORDINARY
-                # spawn refusal produces (real tmux `kill-session` against a nonexistent
-                # session/server exits nonzero with an absence message). The pass-6 code read
-                # that ordinary nonzero as an unconfirmed teardown and pinned the quota permit,
-                # so two routine refusals could exhaust the pool.
-                teardown_confirmed = (
-                    resolved_backend.close_session(sock, name) is Liveness.CONFIRMED_GONE)
-            if teardown_confirmed:
-                cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
-            else:
-                # #638 Step-11 pass 8 (scope decision, owner 2026-07-24): the permit is
-                # released here even though teardown could not be CONFIRMED, and that is a
-                # DELIBERATE, documented limitation rather than an oversight.
-                #
-                # Why: the correct behaviour needs proof the process TREE is dead, and on this
-                # path no process identity was ever captured, so no such proof is obtainable.
-                # Passes 5-8 each tried a cheaper substitute and each substitute was itself a
-                # defect: releasing unconditionally over-admits the pool (pass 5); holding it
-                # in memory alone is unreclaimable (pass 6); persisting a pid-0 residue record
-                # to make it reclaimable made "session absent" masquerade as "process dead",
-                # let a recovery relaunch erase it and free the new permit, never released it
-                # from reap's `keep` tier, and was not crash-durable (passes 7-8).
-                #
-                # So the invariant is NOT settled inside #638 — whose ACs are the HerdrBackend
-                # and its build-seat config gate. It is filed as its own issue with the design
-                # work it needs (see the KNOWN LIMITATION note in the module docstring). Until
-                # then this fails toward the PRE-#638 behaviour, unchanged for tmux: release the
-                # slot, and let reap()'s CF-11 unknown-session reporting surface any pane that
-                # is live on the endpoint but absent from the registry — visible to the owner,
-                # never blind-killed. A leaked pane is recoverable; a permanently pinned pool
-                # and three new defect classes are worse.
-                cm.__exit__(None, None, None)
+                try:
+                    resolved_backend.close_session(sock, name)
+                except Exception:  # noqa: BLE001 — best-effort teardown on the raise path
+                    pass
+            cm.__exit__(None, None, None)  # never leak a permit on a failed launch (AC-E5)
             raise
 
     # -- status / sentinel ----------------------------------------------------
