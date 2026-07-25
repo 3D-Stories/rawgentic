@@ -452,7 +452,11 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script type="module">
-import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+/* Review finding (High): a top-level CDN import aborts the WHOLE module when unpkg is blocked —
+   the checklist would never be built and even the textual fallback would never appear. The
+   checklist is this page's job, so everything above the bottom of this file works with no network
+   at all, and three.js is loaded afterwards, optionally. */
+let THREE = null;
 
 /* =========================================================================
    1. THE CHECKS — content, and the real captured output for each panel.
@@ -508,18 +512,19 @@ const CHECKS = [
       "It needs a session that is itself inside a herdr pane, because <code>pane split --current</code> resolves the <b>calling</b> process's pane. Also confirm the negative: a review or analysis seat in the same run must still launch under tmux."
     ],
     steps:[
-      "Work from a session that is itself inside a herdr pane (this one qualifies — <code>HERDR_PANE_ID</code> is set).",
+      "Prove your session can host the launch — run the preflight below. It must print a pane id and a workspace, and they must agree. (A page cannot know anything about your shell, so this is a check, not a claim.)",
       "Set the gate in the project's <code>.rawgentic.json</code>.",
       "Run a real issue whose plan dispatches a build seat.",
       "Watch for a new labelled pane beside your orchestration window, and check nothing is left behind afterwards.",
       "Confirm the negative: a review/analysis seat in the same run still launches under tmux."
     ],
     cmds:[
+      {label:"preflight — must print a pane and a matching workspace", text:'test -n "$HERDR_PANE_ID" -a -n "$HERDR_WORKSPACE_ID" || echo "NOT IN A HERDR PANE — pane split --current cannot resolve"; herdr pane current | python3 -c "import json,sys,os; p=json.load(sys.stdin)[\'result\'][\'pane\']; print(\'pane\', p[\'pane_id\'], \'workspace\', p[\'workspace_id\'], \'| env agrees:\', p[\'workspace_id\']==os.environ.get(\'HERDR_WORKSPACE_ID\'))"'},
       {label:"the gate, in .rawgentic.json", text:'"executorTerminalBackend": { "version": 1, "build": "herdr" }'},
       {label:"watch the panes", text:"herdr pane list --workspace $HERDR_WORKSPACE_ID"},
       {label:"rollback — absent means tmux", text:'"executorTerminalBackend": { "version": 1, "build": "tmux" }'}
     ],
-    pass:"A new herdr pane appears alongside your orchestration window and runs the build seat; <code>pane list</code> shows it labelled with the run's session name; the seat's <code>observation.json</code> lands and the run completes; afterwards no labelled pane is left behind. And a review/analysis seat in the same run still went to tmux.",
+    pass:"The preflight printed a pane id and a workspace that agree; a new herdr pane then appears alongside your orchestration window and runs the build seat; <code>pane list</code> shows it labelled with the run's session name; the seat's <code>observation.json</code> lands and the run completes; afterwards no labelled pane is left behind. And a review/analysis seat in the same run still went to tmux. Paste the preflight line into your note.",
     see:{title:"the shape of a healthy launch (captured on this host)", cap:"Real output from the live qualification run, which drives the same three calls the production path drives. Your UAT-3 run adds the part nobody has seen: a real model dispatch flowing through it.", lines:[
       ["p","$ herdr pane split --current --direction right --cwd /tmp/rg639"],
       ["o",'{"result":{"pane":{"pane_id":"w1:p3N","workspace_id":"w1"}}}'],
@@ -539,15 +544,16 @@ const CHECKS = [
     tags:[["owner","Owner only"]],
     why:[
       "Four risks were recorded against the herdr backend, one of which you ruled on directly: <b>pane_env is visible via ps</b>, because herdr has no private per-run env channel the way tmux gets one through a per-run socket.",
-      "Your condition was that it stays host-local and disappears with the pane. Both hold — and the backend is never handed anything credential-bearing (<code>PYTHONPATH</code> only, at all three call sites)."
+      "Your condition was that it stays host-local and disappears with the pane. Both hold. The stronger claim — that the backend is never handed anything credential-bearing — is <b>not</b> provable by reading the backend: only its CALLERS decide what goes in. Verified at all three call sites in <code>hooks/executor_routing_lib.py</code> (lines 2158, 2267, 2575), each passing <code>pane_env={\"PYTHONPATH\": _pane_pythonpath()}</code> and nothing else. Re-check it yourself with the second command rather than taking this page's word for it."
     ],
     steps:[
       "Read the module docstring of <code>phase_executor/src/phase_executor/herdr_backend.py</code>.",
       "Check the four recorded risks against what you actually accepted.",
       "Confirm the pane_env conditions stated there are the ones you set."
     ],
-    cmds:[{label:"read the recorded risks", text:"sed -n '1,80p' phase_executor/src/phase_executor/herdr_backend.py"}],
-    pass:"The four risks — pane_env visibility, the malformed-split pane leak, the non-atomic three-call spawn, and undocumented exec-injection — match your intent, and the pane_env conditions are yours.",
+    cmds:[{label:"read the recorded risks", text:"sed -n '1,80p' phase_executor/src/phase_executor/herdr_backend.py"},
+           {label:"every key any caller puts in a pane's env — expect PYTHONPATH only", text:"grep -n -A 2 'pe.HerdrBackend(' hooks/executor_routing_lib.py | grep -o 'pane_env={[^}]*}' | sort -u"}],
+    pass:"The four risks — pane_env visibility, the malformed-split pane leak, the non-atomic three-call spawn, and undocumented exec-injection — match your intent; the pane_env conditions are yours; and the grep shows every caller passing <code>PYTHONPATH</code> and nothing else.",
     see:{title:"the four recorded risks", cap:"Verbatim summary of the docstring's risk section. The fourth is why #639 exists at all.", lines:[
       ["a","1  pane_env via --env is visible to ps for the pane's lifetime (owner-accepted:"],
       ["o","   host-local, ephemeral, never credential-bearing — PYTHONPATH only)"],
@@ -619,8 +625,33 @@ const CHECKS = [
    ========================================================================= */
 const KEY = "rg-uat-635-v1";
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; } };
-const save = s => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} };
+/* Review finding: swallowing the write error while still printing "saved <time>" tells the owner
+   their verdicts are durable when they are not. Report the truth instead. */
+const save = s => { try { localStorage.setItem(KEY, JSON.stringify(s)); return true; }
+                    catch { return false; } };
+let storageOk = true;
 let state = load();
+
+/* Review finding: navigator.clipboard is undefined outside a secure context, and reading
+   .writeText off it throws SYNCHRONOUSLY — before any .then() rejection handler could run. Fall
+   back to a selectable textarea so the report is always retrievable. */
+function copyText(text, okMsg){
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("aria-label", "Copy this text manually");
+    Object.assign(ta.style, {position:"fixed", left:"5vw", top:"12vh", width:"90vw", height:"64vh",
+      zIndex:"200", background:"#080c18", color:"#E8EDF7", border:"1px solid #35E0A1",
+      fontFamily:"'JetBrains Mono', monospace", fontSize:"13px", padding:"14px"});
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    toast("Clipboard unavailable — select and copy this, then press Escape");
+    const close = ev => { if (ev.key === "Escape") { ta.remove(); document.removeEventListener("keydown", close); } };
+    document.addEventListener("keydown", close);
+  };
+  try {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return fallback();
+    navigator.clipboard.writeText(text).then(() => toast(okMsg), fallback);
+  } catch { fallback(); }
+}
 
 const toastEl = document.getElementById("toast");
 let toastTimer;
@@ -688,10 +719,10 @@ CHECKS.forEach((c, i) => {
       <div>
         <div class="why">${c.why.map(p => `<p>${p}</p>`).join("")}</div>
         <ol class="steps">${c.steps.map(s => `<li>${s}</li>`).join("")}</ol>
-        ${(c.cmds||[]).map(cm => `
-          <div class="cmd">
-            <button class="copy" type="button" data-copy="${esc(cm.text)}">copy</button>
-            <pre># ${cm.label}\n${esc(cm.text)}</pre>
+        ${(c.cmds||[]).map((cm, ci) => `
+          <div class="cmd" data-ci="${ci}">
+            <button class="copy" type="button">copy</button>
+            <pre></pre>
           </div>`).join("")}
         <div class="pass"><strong>Pass condition</strong>${c.pass}</div>
       </div>
@@ -710,6 +741,14 @@ CHECKS.forEach((c, i) => {
         </div>
       </div>
     </div>`;
+  // Review finding: esc() escaped only & and <, so a command containing a double quote — which
+  // every UAT-3 command does — closed the attribute early and the copy button yielded an EMPTY
+  // string. Command text now travels through the DOM, never through markup.
+  sec.querySelectorAll(".cmd").forEach(box => {
+    const cm = c.cmds[Number(box.dataset.ci)];
+    box.querySelector(".copy").dataset.copy = cm.text;
+    box.querySelector("pre").textContent = `# ${cm.label}\n${cm.text}`;
+  });
   stations.appendChild(sec);
 
   const li = document.createElement("li");
@@ -731,7 +770,11 @@ function paint(){
     const box = stations.querySelector(`.verdict[data-for="${c.id}"]`);
     box.querySelectorAll(".v").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === rec.v)));
     box.querySelector("textarea").value = rec.note || "";
-    box.querySelector(".savedAt").textContent = rec.at ? `saved ${rec.at}` : "";
+    const stamp = box.querySelector(".savedAt");
+    stamp.textContent = !rec.at ? ""
+      : (storageOk ? `saved ${rec.at}`
+                   : "NOT SAVED — this browser is blocking storage. Copy your report before leaving.");
+    stamp.style.color = (rec.at && !storageOk) ? "var(--nogo)" : "";
   });
   const frac = done / CHECKS.length;
   const arc = document.getElementById("ringArc");
@@ -749,12 +792,12 @@ stations.addEventListener("click", e => {
     const rec = state[id] || {};
     rec.v = rec.v === v.dataset.v ? null : v.dataset.v;
     rec.at = new Date().toLocaleString();
-    state[id] = rec; save(state); paint();
+    state[id] = rec; storageOk = save(state); paint();
     return;
   }
   const cp = e.target.closest(".copy");
   if (cp) {
-    navigator.clipboard.writeText(cp.dataset.copy).then(() => toast("Copied"), () => toast("Copy blocked by the browser"));
+    copyText(cp.dataset.copy, "Copied");
     return;
   }
   const rp = e.target.closest(".replay");
@@ -766,11 +809,12 @@ stations.addEventListener("input", e => {
   const id = e.target.closest(".verdict").dataset.for;
   const rec = state[id] || {};
   rec.note = e.target.value; rec.at = new Date().toLocaleString();
-  state[id] = rec; save(state); paint();
+  state[id] = rec; storageOk = save(state); paint();
 });
 
 document.getElementById("resetAll").addEventListener("click", () => {
-  state = {}; save(state); paint(); toast("Verdicts cleared");
+  state = {}; storageOk = save(state); paint();
+  toast(storageOk ? "Verdicts cleared" : "Could not clear — this browser is blocking storage");
 });
 
 document.getElementById("copyReport").addEventListener("click", () => {
@@ -787,9 +831,7 @@ document.getElementById("copyReport").addEventListener("click", () => {
   lines.push("", `${pass}/${CHECKS.length} passing · ${recorded}/${CHECKS.length} recorded.`);
   if (!(state.uat3 && state.uat3.v === "pass"))
     lines.push("", "**UAT-3 is not recorded as passing**, so the herdr build seat is not owner-verified on the production path.");
-  navigator.clipboard.writeText(lines.join("\n")).then(
-    () => toast("Report copied — paste it into issue #635"),
-    () => toast("Copy blocked by the browser"));
+  copyText(lines.join("\n"), "Report copied — paste it into issue #635");
 });
 
 paint();
@@ -1064,8 +1106,29 @@ function frame(now){
   requestAnimationFrame(frame);
 }
 
-three = initThree();
-if (three) { applyMode(); requestAnimationFrame(frame); }
+function showStageFallback(reason){
+  const fb = document.getElementById("nowebgl");
+  fb.style.display = "block";
+  const why = document.createElement("b");
+  why.textContent = " (" + reason + ")";
+  fb.appendChild(why);
+  const wrap = document.querySelector(".stageWrap");
+  if (wrap) wrap.style.display = "none";
+}
+
+/* Everything above this point runs with no network access. The visualisation is a bonus. */
+try {
+  THREE = await import("https://unpkg.com/three@0.160.0/build/three.module.js");
+  three = initThree();
+  if (three) {
+    // hold the perspective even when motion is reduced, so the static frame still reads as 3D
+    three.shell.rotation.y = 0.26; three.worker.rotation.y = -0.26;
+    three.camera.lookAt(0, 0.35, 0);
+    applyMode(); requestAnimationFrame(frame);
+  }
+} catch (err) {
+  showStageFallback("three.js could not load: " + (err && err.message ? err.message : err));
+}
 
 document.querySelectorAll(".mode").forEach(b => {
   b.addEventListener("click", () => {
