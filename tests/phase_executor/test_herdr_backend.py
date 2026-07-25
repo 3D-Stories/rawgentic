@@ -835,3 +835,27 @@ def test_new_session_cleanup_survives_a_raising_close():
     res = be.new_session("w1", "s1", "/wt", ["argv"])
     assert res.returncode != 0, "the REAL failure must survive a raising cleanup"
     assert be._last_cleanup_confirmed is False  # noqa: SLF001
+
+
+def test_cleanup_calls_use_a_short_leash_not_the_callers_timeout():
+    """Pass-11 review note: 3 attempts x (close + verifying get) at the caller's 30s timeout put
+    the worst case near 180s of cleanup on a path that has already failed and is about to raise,
+    with the caller blocked on it. Cleanup gets a short leash instead."""
+    seen = []
+
+    def run(cmd, *, env=None, timeout=30):
+        seen.append((cmd[2] if len(cmd) > 2 else cmd[-1], timeout))
+        verb = cmd[2]
+        if verb == "split":
+            return _split_ok()
+        if verb == "rename":
+            return _json_ok(None, {"result": {"pane": {"pane_id": "w1:p9", "label": "s1"}}})
+        return _json_err(None, code="internal_error", message="down")
+
+    be = HerdrBackend(run=run, workspace_id="w1")
+    be.new_session("w1", "s1", "/wt", ["argv"], timeout=30)
+    cleanup = [(v, t) for v, t in seen if v in ("close", "get")]
+    assert cleanup, "no cleanup calls were made"
+    assert all(t <= HerdrBackend._CLEANUP_CALL_TIMEOUT for _, t in cleanup), cleanup  # noqa: SLF001
+    # ...while the real operation still used the caller's timeout
+    assert any(t == 30 for v, t in seen if v == "split")

@@ -208,3 +208,25 @@ def test_multiline_body_still_cannot_whole_match_despite_dot():
     # `.` excludes newlines (no DOTALL), so widening to `.*` did not reopen the mixed-body hole
     assert classify_tmux_result(
         _cp(1, "can't find session: x\nPermission denied")) is Liveness.INDETERMINATE
+
+
+@pytest.mark.parametrize("stderr", [
+    # the pass-11 reviewer's own examples, in their exact form
+    "can't find session: has space",
+    "no server running on /home/me/Raw Gentic/run.sock",
+    "error connecting to /home/me/Raw Gentic/run.sock (No such file or directory)",
+])
+def test_reviewer_reported_space_bearing_messages(stderr):
+    assert classify_tmux_result(_cp(1, stderr)) is Liveness.CONFIRMED_GONE
+
+
+@pytest.mark.parametrize("verb_result", ["probe", "close", "enumerate"])
+def test_space_bearing_absence_through_every_backend_surface(verb_result):
+    # the reviewer asked for coverage through classifier AND probe/close/enumerate
+    msg = "no server running on /home/me/Raw Gentic/run.sock"
+    be = TmuxBackend(run=lambda cmd, **k: subprocess.CompletedProcess(cmd, 1, "", msg))
+    sock = "/home/me/Raw Gentic/run.sock"
+    got = {"probe": lambda: be.probe_session(sock, "x"),
+           "close": lambda: be.close_session(sock, "x"),
+           "enumerate": lambda: be.enumerate_sessions(sock)[0]}[verb_result]()
+    assert got is Liveness.CONFIRMED_GONE

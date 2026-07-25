@@ -336,15 +336,22 @@ class HerdrBackend:
             raise RuntimeError(f"herdr: duplicate label match for {name!r}: {matches}")
         return matches[0] if matches else None
 
+    # Cleanup calls are capped WELL below the caller's own timeout (pass-11 review note): with
+    # 3 attempts each making a `close` plus a verifying `get`, a 30s per-call timeout put the
+    # worst case near 180s of cleanup on a path that has ALREADY failed and is about to raise.
+    # The caller is waiting on that, so cleanup gets a short leash.
+    _CLEANUP_CALL_TIMEOUT = 5.0
+
     def _close_and_verify(self, pane_id: str, *, timeout: float = 30, attempts: int = 3) -> bool:
         """Best-effort but PERSISTENT orphan cleanup for a pane this call created. Returns True
         only when the pane is verifiably gone — either `close` succeeded, or it reported
         `pane_not_found` (#633: the exec'd process auto-closes its own pane on exit), or a
         follow-up `pane get` confirms absence. Never raises: a cleanup failure must not replace
         the real failure the caller is already returning (Python `finally` semantics)."""
+        cleanup_timeout = min(timeout, self._CLEANUP_CALL_TIMEOUT)
         for _ in range(max(1, attempts)):
             try:
-                res = self._herdr("close", pane_id, timeout=timeout)
+                res = self._herdr("close", pane_id, timeout=cleanup_timeout)
                 if res.returncode == 0:
                     return True
                 err = self._parse_json(res)
@@ -355,7 +362,7 @@ class HerdrBackend:
                 pass
             # close did not confirm — ask directly whether the pane still exists
             try:
-                got = self._herdr("get", pane_id, timeout=timeout)
+                got = self._herdr("get", pane_id, timeout=cleanup_timeout)
                 if got.returncode != 0:
                     err = self._parse_json(got)
                     err_obj = err.get("error") if isinstance(err, dict) else None
