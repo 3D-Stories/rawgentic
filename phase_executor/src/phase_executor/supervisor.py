@@ -303,16 +303,33 @@ def resolve_backend(terminal_backend: Optional[str], *, tmux: TerminalBackend,
     return tmux
 
 
-def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool) -> str:
+def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool,
+                 liveness_unknown: bool = False) -> str:
     """Derived state: terminal recorded state passes through; valid sentinel → completed;
-    live session → running; else exited_no_sentinel (NEVER quota_paused — that
-    classification is injected, CF-6)."""
+    live session → running; probe could not tell → liveness_unknown; else
+    exited_no_sentinel (NEVER quota_paused — that classification is injected, CF-6).
+
+    ``liveness_unknown`` (#647) is the tri-state's INDETERMINATE arriving here: the probe
+    itself failed, which is not evidence about the job. It ranks BELOW a sentinel and a
+    terminal recorded state (a job that demonstrably finished is not downgraded to "we
+    could not look") and ABOVE the exited_no_sentinel default, because reading "could not
+    probe" as "dead" is exactly the bug class #638 spent seven review passes closing.
+
+    It defaults to False so every existing caller's derivation is byte-identical — in
+    particular ``TmuxSupervisor.status()``, which never sees an indeterminate probe because
+    ``_live()`` raises ``SupervisorError`` on INDETERMINATE before reaching this function.
+    ``liveness_unknown`` is DERIVED-ONLY: it is never written to the registry, so the
+    recorded-state vocabulary (``registry.JOB_STATES``) is unchanged and ``recorded_state``
+    still distinguishes every OQ-8 state on the row.
+    """
     if record.state in _TERMINAL_STATES:
         return record.state
     if sentinel is not None:
         return "completed"
     if live:
         return "running"
+    if liveness_unknown:
+        return "liveness_unknown"
     return "exited_no_sentinel"
 
 
@@ -321,7 +338,11 @@ def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) ->
     status surface reads registry/spec/capture only, never mutates run state).
 
     Injected contracts: ``live_fn(record) -> (live: bool, probe_error: Optional[str])``
-    (gpt-diff A3 — a failed/unavailable probe is visible per row, never silently "dead");
+    (gpt-diff A3 — a failed/unavailable probe is visible per row, never silently "dead").
+    **A non-None ``probe_error`` means the probe could not DETERMINE liveness** (#647), so it
+    is the signal this function turns into ``liveness_unknown``; a probe that confirmed an
+    absence must report ``(False, None)``, never a message. Do not reuse ``probe_error`` for
+    a degradation that is not an indeterminate verdict.
     ``spec_fn(record) -> (spec: Optional[dict], status: "ok"|"missing"|"corrupt")``
     (gpt-diff A5); ``sentinel_fn(record) -> Optional[dict]``.
 
@@ -348,7 +369,8 @@ def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) ->
         rows.append({
             "seat": record.identity.seat,
             "attempt": record.attempt_id,
-            "state": derive_state(record, sentinel=sentinel, live=live),
+            "state": derive_state(record, sentinel=sentinel, live=live,
+                                  liveness_unknown=probe_error is not None),
             "recorded_state": record.state,
             "session_name": record.session_name,
             "run_socket": record.run_socket,
