@@ -664,13 +664,13 @@ class TestProjectConfigSource:
 
 class TestExecutorTerminalBackendGap:
     """#638 setup Step 2k: the executorTerminalBackend choice is project_config-sourced,
-    exactly like phaseExecutorTable. Pinned at 3.97.4 (its `since`) — at any earlier
+    exactly like phaseExecutorTable. Pinned at 3.98.0 (its `since`) — at any earlier
     `current` the feature does not exist yet and must not nudge."""
 
     KEY = "executorTerminalBackend"
     LABEL = "executor terminal backend (setup Step 2k)"
 
-    def _gaps(self, tmp_path, cfg, current="3.97.4"):
+    def _gaps(self, tmp_path, cfg, current="3.98.0"):
         ws, entry = _ws_with_project(tmp_path, config=cfg)
         state, pcfg = pur._project_config_state(str(ws), entry)
         return pur.project_feature_gaps(
@@ -681,9 +681,9 @@ class TestExecutorTerminalBackendGap:
         assert (self.KEY, self.LABEL) in self._gaps(tmp_path, BASE_CFG)
 
     def test_no_gap_before_its_since(self, tmp_path):
-        # the whole point of `since`: a project on 3.97.3 is not "behind" on a feature
-        # that ships in 3.97.4.
-        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, BASE_CFG, current="3.97.3"))
+        # the whole point of `since`: a project on 3.97.4 is not "behind" on a feature
+        # that ships in 3.98.0.
+        assert all(k != self.KEY for k, _ in self._gaps(tmp_path, BASE_CFG, current="3.97.4"))
 
     def test_no_gap_when_herdr_chosen(self, tmp_path):
         cfg = dict(BASE_CFG, executorTerminalBackend={"version": 1, "build": "herdr"})

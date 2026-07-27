@@ -76,7 +76,7 @@ FEATURE_MANIFEST = [
     # "tmux" (package default, unchanged behavior), so the nudge exists to surface the
     # CHOICE, never to imply the project is broken without it.
     {"key": "executorTerminalBackend", "policy": "needs-question",
-     "nudge": "executor terminal backend (setup Step 2k)", "since": "3.97.4",
+     "nudge": "executor terminal backend (setup Step 2k)", "since": "3.98.0",
      "source": "project_config"},
 ]
 
