@@ -757,14 +757,27 @@ project repo's git-ignored `.rawgentic/runs/` + `.rawgentic/runtime/`.
 
 **Live run status (#471, W8 — AC-J):** `status --workspace <ws> --project <name> --run <id>`
 prints one JSON doc of per-seat rows derived from the durable job registry + launch specs +
-capture dirs — derived `state` (valid sentinel → `completed`; live tmux session → `running`;
-dead+no-sentinel → `exited_no_sentinel`; terminal recorded states pass through) alongside
+capture dirs — derived `state` (valid sentinel → `completed`; live session → `running`;
+probe could not determine liveness → `liveness_unknown`; confirmed-dead+no-sentinel →
+`exited_no_sentinel`; terminal recorded states pass through) alongside
 `recorded_state` (so every OQ-8 state, including `launched`, stays distinguishable and stale
 entries are visible, never hidden), requested vs actual model/effort, elapsed times, an honest
 `"eta": "no estimate"` until AC-I3 history exists (#449), and the latest capture write + tail
-line. **Read-only invariant (AC-J3):** the verb reads registry/spec/capture and probes
-`tmux has-session` only — it never mutates run state (a corrupt `jobs.json` is a structured
-exit 5, `registry_corrupt`, never an empty view).
+line. **Read-only invariant (AC-J3):** the verb reads registry/spec/capture and probes the
+record's own terminal backend only — it never mutates run state (a corrupt `jobs.json` is a
+structured exit 5, `registry_corrupt`, never an empty view).
+
+**Backend-resolved liveness (#647).** The probe resolves each record's backend from
+`record.terminal_backend` (the lifted `supervisor.resolve_backend`, the same rule
+`TmuxSupervisor._resolve_backend` applies) instead of always invoking tmux — a herdr record's
+`run_socket` is a herdr *workspace id*, so an unconditional `tmux -S <run_socket>` failed for
+an ordinary reason and the row reported `exited_no_sentinel` as established fact. `state` is
+now `liveness_unknown` whenever the probe itself could not answer (daemon unreachable, socket
+permission error, unparseable body, or a herdr record with no herdr backend configured), and
+the row's `probe_error` carries why. A *confirmed* absence — tmux's routine "no sessions on
+this socket" — still derives `exited_no_sentinel` with `probe_error: null`, unchanged.
+`liveness_unknown` is derived-only and is never written to the registry, so the recorded-state
+vocabulary is untouched.
 
 ### Adversarial Review Data Handling
 

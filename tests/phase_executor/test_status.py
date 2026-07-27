@@ -112,6 +112,36 @@ def test_derive_state_dead_no_sentinel():
     assert supervisor.derive_state(_rec(state="running"), sentinel=None, live=False) == "exited_no_sentinel"
 
 
+# ---- indeterminate liveness (#647) -----------------------------------------------------
+
+
+def test_derive_state_indeterminate_is_not_exited_no_sentinel():
+    """#647 AC2: a probe that could not determine liveness must NOT derive
+    `exited_no_sentinel` — that reads 'I could not look' as 'it is dead'."""
+    rec = _rec(state="running")
+    assert supervisor.derive_state(
+        rec, sentinel=None, live=False, liveness_unknown=True) == "liveness_unknown"
+
+
+def test_derive_state_liveness_unknown_defaults_false():
+    """The default MUST preserve today's derivation byte-for-byte — that is what keeps
+    TmuxSupervisor.status() unchanged (it never sees an indeterminate probe, because
+    _live() raises SupervisorError on INDETERMINATE first)."""
+    rec = _rec(state="running")
+    assert supervisor.derive_state(rec, sentinel=None, live=False) == "exited_no_sentinel"
+
+
+def test_derive_state_sentinel_and_terminal_outrank_liveness_unknown():
+    """Ordering: a valid sentinel means the job DID finish, and a terminal recorded state is
+    settled — neither is downgraded to 'we could not probe'."""
+    rec = _rec(state="running")
+    assert supervisor.derive_state(
+        rec, sentinel={"x": 1}, live=False, liveness_unknown=True) == "completed"
+    assert supervisor.derive_state(
+        _rec(state="timed_out"), sentinel=None, live=False,
+        liveness_unknown=True) == "timed_out"
+
+
 # ---- run_status rows -------------------------------------------------------------------
 
 
@@ -123,6 +153,25 @@ def _row(records, *, live=lambda r: (False, None), sentinel=lambda r: None,
 
 def test_run_status_empty():
     assert _row([]) == []
+
+
+def test_run_status_probe_error_derives_liveness_unknown():
+    """#647 AC2 at the row level: `probe_error` non-None IS the 'could not tell' signal on
+    this surface, so the row's derived state must be liveness_unknown — not the
+    exited_no_sentinel that today's code reports as established fact."""
+    rec = _rec(state="running")
+    rows = _row([rec], live=lambda r: (False, "liveness probe failed: PaneListError"))
+    assert rows[0]["probe_error"] == "liveness probe failed: PaneListError"
+    assert rows[0]["state"] == "liveness_unknown"
+    assert rows[0]["recorded_state"] == "running"
+
+
+def test_run_status_clean_absence_still_exited_no_sentinel():
+    """#647 AC3 at the row level: a CONFIRMED absence carries no probe_error, so the
+    derivation is byte-identical to today."""
+    rows = _row([_rec(state="running")], live=lambda r: (False, None))
+    assert rows[0]["probe_error"] is None
+    assert rows[0]["state"] == "exited_no_sentinel"
 
 
 def test_run_status_row_fields():
@@ -225,9 +274,18 @@ def test_run_status_terminal_record_still_surfaces_observation_metadata():
 
 def test_run_status_probe_error_visible():
     """gpt-diff A3: a failed/unavailable liveness probe is visible per row, never silently
-    'dead' — the state derivation stays conservative but the degradation is legible."""
+    'dead'.
+
+    #647 SUPERSEDES this test's original assertion. It used to require
+    `state == "exited_no_sentinel"` with the degradation merely legible beside it ("the
+    state derivation stays conservative but the degradation is legible"). That is precisely
+    the defect #647 names in AC2: `exited_no_sentinel` is a claim the job EXITED, so pairing
+    it with "I could not probe" states a fact the probe never established. The derived state
+    is now `liveness_unknown`; A3's intent — the degradation is never invisible — is
+    strengthened, not dropped, because `probe_error` is still asserted here.
+    """
     (row,) = _row([_rec()], live=lambda r: (False, "tmux unavailable"))
-    assert row["state"] == "exited_no_sentinel"
+    assert row["state"] == "liveness_unknown"
     assert row["probe_error"] == "tmux unavailable"
     (row2,) = _row([_rec()], live=lambda r: (True, None))
     assert row2["state"] == "running" and row2["probe_error"] is None

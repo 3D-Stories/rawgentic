@@ -700,3 +700,27 @@ def test_phase_executor_table_version_float_rejected():
     from capabilities_lib import derive_capabilities, CapabilitiesError
     with pytest.raises(CapabilitiesError, match="version must be 1"):
         derive_capabilities(_base_config(phaseExecutorTable={"version": 1.0, "file": "t.json"}))
+
+
+class TestConfigReferenceDocumentsBackendResolvedLiveness:
+    """#647 (Step-11 review finding, Low): the status surface's derived-state contract is
+    public behavior, but nothing pinned the prose — a doc edit reverting it to "tmux only",
+    or dropping `liveness_unknown`, would leave every implementation test green. Anchored on
+    ONE canonical section in ONE file, header-sliced and whitespace-normalized so the pins
+    survive re-wrapping.
+    """
+    _REPO = Path(__file__).resolve().parent.parent.parent
+
+    def test_backend_resolved_liveness_section_pins_the_contract(self):
+        with open(self._REPO / "docs" / "config-reference.md", encoding="utf-8") as f:
+            text = f.read()
+        marker = "**Backend-resolved liveness (#647).**"
+        assert marker in text, "the #647 status-derivation section is missing"
+        # Slice to the PARAGRAPH, not to the next `## ` heading: the enclosing section runs
+        # thousands of characters and a stray match elsewhere in it would false-pass.
+        section = text.split(marker, 1)[1].split("\n\n", 1)[0]
+        assert len(section) < 1500, "slice escaped the paragraph — re-anchor before trusting it"
+        norm = " ".join(section.split())
+        assert "resolves each record's backend from `record.terminal_backend`" in norm
+        assert "`liveness_unknown` whenever the probe itself could not answer" in norm
+        assert "still derives `exited_no_sentinel` with `probe_error: null`" in norm

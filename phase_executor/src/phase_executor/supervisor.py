@@ -278,16 +278,67 @@ def read_sentinel(record: JobRecord) -> Optional[dict]:
     return None
 
 
-def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool) -> str:
+def resolve_backend(terminal_backend: Optional[str], *, tmux: TerminalBackend,
+                    herdr: "Optional[TerminalBackend]") -> TerminalBackend:
+    """The backend-resolution RULE, lifted to module level (#647).
+
+    `None`/`"tmux"` (the vast majority — every pre-#638 record, and every non-build-seat
+    job) resolves to the tmux backend. `"herdr"` resolves to the herdr backend, refusing
+    loud when there isn't one rather than silently defaulting to tmux (a wrong-backend
+    answer means a liveness check or kill_session against the WRONG runtime for a real
+    live job).
+
+    Lifted because the read-only status surface cannot reach the instance method:
+    ``TmuxSupervisor.__init__`` builds a ``JobRegistry``, whose own ``__init__``
+    mkdir/chmods the registry root — a metadata write the AC-J3 read-only surface must not
+    perform. Same reason #471 W8 lifted ``read_sentinel``/``derive_state``/``run_status``:
+    one rule for the method and the read-only surface, never two copies to drift apart.
+    """
+    if terminal_backend == "herdr":
+        if herdr is None:
+            raise SupervisorError(
+                "job requires the herdr TerminalBackend but this supervisor instance "
+                "has none configured (herdr_backend=None)")
+        return herdr
+    if terminal_backend in (None, "tmux"):
+        return tmux
+    # Adversarial-review finding (#647): an else-branch returning tmux means ANY unrecognised
+    # value silently probes the wrong runtime and reports its answer as fact — the exact bug
+    # class this subsystem keeps paying for. `registry.KNOWN_TERMINAL_BACKENDS` makes this
+    # unreachable for a decoded JobRecord TODAY, so this is defence in depth against the
+    # concrete future slip: adding a third backend to that frozenset without teaching this
+    # resolver about it. Raising (rather than guessing) means `status_live_verdict` derives
+    # `liveness_unknown` instead of a confident wrong state.
+    raise SupervisorError(f"unsupported terminal backend: {terminal_backend!r}")
+
+
+def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool,
+                 liveness_unknown: bool = False) -> str:
     """Derived state: terminal recorded state passes through; valid sentinel → completed;
-    live session → running; else exited_no_sentinel (NEVER quota_paused — that
-    classification is injected, CF-6)."""
+    live session → running; probe could not tell → liveness_unknown; else
+    exited_no_sentinel (NEVER quota_paused — that classification is injected, CF-6).
+
+    ``liveness_unknown`` (#647) is the tri-state's INDETERMINATE arriving here: the probe
+    itself failed, which is not evidence about the job. It ranks BELOW a sentinel and a
+    terminal recorded state (a job that demonstrably finished is not downgraded to "we
+    could not look") and ABOVE the exited_no_sentinel default, because reading "could not
+    probe" as "dead" is exactly the bug class #638 spent seven review passes closing.
+
+    It defaults to False so every existing caller's derivation is byte-identical — in
+    particular ``TmuxSupervisor.status()``, which never sees an indeterminate probe because
+    ``_live()`` raises ``SupervisorError`` on INDETERMINATE before reaching this function.
+    ``liveness_unknown`` is DERIVED-ONLY: it is never written to the registry, so the
+    recorded-state vocabulary (``registry.JOB_STATES``) is unchanged and ``recorded_state``
+    still distinguishes every OQ-8 state on the row.
+    """
     if record.state in _TERMINAL_STATES:
         return record.state
     if sentinel is not None:
         return "completed"
     if live:
         return "running"
+    if liveness_unknown:
+        return "liveness_unknown"
     return "exited_no_sentinel"
 
 
@@ -296,7 +347,11 @@ def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) ->
     status surface reads registry/spec/capture only, never mutates run state).
 
     Injected contracts: ``live_fn(record) -> (live: bool, probe_error: Optional[str])``
-    (gpt-diff A3 — a failed/unavailable probe is visible per row, never silently "dead");
+    (gpt-diff A3 — a failed/unavailable probe is visible per row, never silently "dead").
+    **A non-None ``probe_error`` means the probe could not DETERMINE liveness** (#647), so it
+    is the signal this function turns into ``liveness_unknown``; a probe that confirmed an
+    absence must report ``(False, None)``, never a message. Do not reuse ``probe_error`` for
+    a degradation that is not an indeterminate verdict.
     ``spec_fn(record) -> (spec: Optional[dict], status: "ok"|"missing"|"corrupt")``
     (gpt-diff A5); ``sentinel_fn(record) -> Optional[dict]``.
 
@@ -323,7 +378,8 @@ def run_status(records, *, live_fn, sentinel_fn, spec_fn, activity_fn, clock) ->
         rows.append({
             "seat": record.identity.seat,
             "attempt": record.attempt_id,
-            "state": derive_state(record, sentinel=sentinel, live=live),
+            "state": derive_state(record, sentinel=sentinel, live=live,
+                                  liveness_unknown=probe_error is not None),
             "recorded_state": record.state,
             "session_name": record.session_name,
             "run_socket": record.run_socket,
@@ -392,19 +448,12 @@ class TmuxSupervisor:
         self._herdr_backend = herdr_backend
 
     def _resolve_backend(self, terminal_backend: Optional[str]) -> TerminalBackend:
-        """Resolve which `TerminalBackend` a call concerns. `None`/`"tmux"` (the vast
-        majority — every pre-#638 record, and every non-build-seat job) resolves to the
-        single `self._backend` this supervisor has always had. `"herdr"` resolves to
-        `self._herdr_backend` — refusing loud if this instance wasn't given one, rather
-        than silently defaulting to tmux (a wrong-backend answer here means a liveness
-        check or kill_session call against the WRONG runtime for a real live job)."""
-        if terminal_backend == "herdr":
-            if self._herdr_backend is None:
-                raise SupervisorError(
-                    "job requires the herdr TerminalBackend but this supervisor instance "
-                    "has none configured (herdr_backend=None)")
-            return self._herdr_backend
-        return self._backend
+        """Resolve which `TerminalBackend` a call concerns — delegates to the module-level
+        `resolve_backend` (#647), which the read-only status surface also uses, so the rule
+        lives in exactly one place. See that function for the semantics and for why it is
+        not an instance method."""
+        return resolve_backend(terminal_backend, tmux=self._backend,
+                               herdr=self._herdr_backend)
 
     # -- tmux plumbing (delegated to the TerminalBackend, #636/#638) ----------
 

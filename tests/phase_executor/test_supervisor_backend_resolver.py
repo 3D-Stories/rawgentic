@@ -20,7 +20,7 @@ import pytest
 from phase_executor import routing
 from phase_executor.quota import QuotaCoordinator
 from phase_executor.registry import JobRegistry, JobRecord
-from phase_executor.supervisor import SupervisorError, TmuxSupervisor
+from phase_executor.supervisor import SupervisorError, TmuxSupervisor, resolve_backend
 from phase_executor.worktree import WorktreeHandle, WorktreeIdentity
 
 
@@ -173,6 +173,28 @@ def test_resolve_backend_herdr_unconfigured_refuses_loud(tmp_path):
     sup = _sup(tmp_path)  # no herdr_backend
     with pytest.raises(SupervisorError, match="herdr"):
         sup._resolve_backend("herdr")  # noqa: SLF001
+
+
+# ---- the lifted module-level resolver (#647) --------------------------------
+
+def test_lifted_resolve_backend_agrees_with_the_method(tmp_path):
+    """#647: the read-only status surface CANNOT construct a TmuxSupervisor to reach the
+    resolver — `__init__` does `self._registry = registry or JobRegistry(registry_root)`
+    and JobRegistry's own `__init__` mkdir/chmods the root, a metadata write the AC-J3
+    read-only surface must not perform. So the resolution RULE is lifted to module level
+    and the method delegates to it: one rule, two callers, no second source of truth.
+    """
+    tmux, herdr = StubBackend("tmux"), StubBackend("herdr")
+    sup = _sup(tmp_path, tmux=tmux, herdr=herdr)
+    for tb in (None, "tmux", "herdr"):
+        assert resolve_backend(tb, tmux=tmux, herdr=herdr) is sup._resolve_backend(tb)  # noqa: SLF001
+
+
+def test_lifted_resolve_backend_herdr_absent_refuses_loud():
+    """Same fail-loud contract as the method: a herdr record must never silently fall back
+    to tmux, which would probe the WRONG runtime for a real live job."""
+    with pytest.raises(SupervisorError, match="herdr"):
+        resolve_backend("herdr", tmux=StubBackend("tmux"), herdr=None)
 
 
 # ---- launch() routes to the resolved backend + stamps the record -----------
@@ -694,3 +716,20 @@ def test_launch_tmux_duplicate_session_refusal_never_kills_the_existing_session(
     assert not any(c[0] == "kill_session" for c in be.calls), (
         "a refusal that created NOTHING must never tear down the pre-existing same-name session")
     assert sup._permits == {}, "the permit must still be released"  # noqa: SLF001
+
+
+def test_lifted_resolve_backend_rejects_an_unrecognised_backend():
+    """Adversarial-review finding (#647, Medium/correctness): an else-branch returning tmux
+    means any unrecognised value silently probes the WRONG runtime and reports the answer as
+    fact. `registry.KNOWN_TERMINAL_BACKENDS` makes that unreachable for a decoded JobRecord
+    today, so this guards the concrete future slip — a third backend added to that frozenset
+    without teaching the resolver about it."""
+    with pytest.raises(SupervisorError, match="unsupported terminal backend"):
+        resolve_backend("screen", tmux=StubBackend("tmux"), herdr=StubBackend("herdr"))
+
+
+def test_method_also_rejects_an_unrecognised_backend(tmp_path):
+    """The delegation must inherit the guard — one rule, both callers."""
+    sup = _sup(tmp_path, tmux=StubBackend("tmux"), herdr=StubBackend("herdr"))
+    with pytest.raises(SupervisorError, match="unsupported terminal backend"):
+        sup._resolve_backend("screen")  # noqa: SLF001

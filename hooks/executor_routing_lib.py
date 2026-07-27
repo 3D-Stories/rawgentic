@@ -1837,6 +1837,7 @@ def _import_phase_executor():
     from phase_executor.supervisor import TmuxSupervisor  # noqa: PLC0415
     import phase_executor.supervisor as supervisor_mod  # noqa: PLC0415 — #471 status surface
     from phase_executor.herdr_backend import HerdrBackend  # noqa: PLC0415 — #638
+    from phase_executor.terminal_backend import TmuxBackend  # noqa: PLC0415 — #647 status surface
     from phase_executor.registry import JobRegistry, RegistryCorrupt  # noqa: PLC0415
     from phase_executor.registry import read_all as registry_read_all  # noqa: PLC0415
     from phase_executor.registry import session_name as registry_session_name  # noqa: PLC0415
@@ -1848,7 +1849,7 @@ def _import_phase_executor():
         dispatch_real=_dispatch_real, QuotaCoordinator=QuotaCoordinator, QuotaTimeout=QuotaTimeout,
         canary=canary, canary_evidence=canary_evidence, contract=contract,
         PROVIDER_ENGINE=PROVIDER_ENGINE, TmuxSupervisor=TmuxSupervisor,
-        HerdrBackend=HerdrBackend,
+        HerdrBackend=HerdrBackend, TmuxBackend=TmuxBackend,
         supervisor=supervisor_mod, JobRegistry=JobRegistry, RegistryCorrupt=RegistryCorrupt,
         ledger=ledger, capture=capture,
         registry_read_all=registry_read_all,
@@ -2660,6 +2661,57 @@ def _status_activity(record, *, clock=time.time) -> Optional[dict]:
         return None
 
 
+def status_live_verdict(record, *, tmux, herdr, tmux_present: bool) -> tuple:
+    """`(live, probe_error)` for one record on the READ-ONLY status surface (#647).
+
+    Backends are INJECTED rather than constructed here: that is what makes the three AC4
+    cases unit-testable (a closure has no substitution seam, and driving the real thing
+    would need a herdr binary CI does not have).
+
+    Resolution uses the lifted `supervisor.resolve_backend`, the SAME rule
+    `TmuxSupervisor._resolve_backend` applies — the status surface cannot call the method
+    itself, because constructing a supervisor builds a `JobRegistry` whose `__init__`
+    mkdir/chmods the registry root, a write the AC-J3 read-only invariant forbids.
+
+    The verdict mapping is the whole point of the fix: `probe_error` is returned ONLY when
+    liveness could not be DETERMINED, because `run_status` turns a non-None `probe_error`
+    into the derived `liveness_unknown` state. A CONFIRMED absence therefore reports
+    `(False, None)` — byte-identical to the pre-fix behavior for an ordinary tmux
+    "no sessions on this socket" (AC3).
+    """
+    _ensure_pe_importable()
+    # phase_executor resolves at runtime via _ensure_pe_importable, so astroid cannot see
+    # these names statically — a scoped false positive, not a blanket disable.
+    # pylint: disable=no-name-in-module
+    from phase_executor.supervisor import SupervisorError, resolve_backend  # noqa: PLC0415
+    from phase_executor.terminal_backend import Liveness  # noqa: PLC0415
+    # pylint: enable=no-name-in-module
+    try:
+        backend = resolve_backend(record.terminal_backend, tmux=tmux, herdr=herdr)
+    except SupervisorError as e:
+        # A herdr record with no herdr backend is a CONFIGURATION fault, not a dead job —
+        # surfacing it as an indeterminate probe keeps it out of the "it exited" bucket.
+        return False, f"backend unresolvable: {e}"
+    if backend is tmux:
+        # Checked AFTER resolution, deliberately: evaluated first (as the pre-#647 code did)
+        # a HERDR record on a tmux-less host reported "tmux unavailable on this host" — a
+        # true degradation flag carrying a false reason.
+        if not tmux_present:
+            return False, "tmux unavailable on this host"
+    if backend is None:
+        return False, "no terminal backend available for this record"
+    try:
+        verdict = backend.probe_session(record.run_socket, record.session_name, timeout=10)
+    except Exception as e:  # noqa: BLE001 — probe_session is contract-bound not to raise;
+        # if one ever does, ONE bad record must not empty the whole status view.
+        return False, f"liveness probe failed: {type(e).__name__}"
+    if verdict is Liveness.CONFIRMED_ALIVE:
+        return True, None
+    if verdict is Liveness.CONFIRMED_GONE:
+        return False, None
+    return False, "liveness indeterminate: the probe could not determine liveness"
+
+
 def _do_status(args) -> int:
     """#471 W8 (AC-J2): the read-only run-status verb — JSON derived from the job registry +
     launch specs + capture dirs. AC-J3: reads only; never constructs a supervisor, never
@@ -2692,19 +2744,21 @@ def _do_status(args) -> int:
         return _emit(out)
 
     has_tmux = shutil.which("tmux") is not None
+    # #647: both backends, constructed the same way the launch/recover/reap sites do
+    # (:2157/:2266/:2574). Construction opens no connection, so building the herdr one
+    # unconditionally is cheap and lets a herdr-backed record resolve correctly even when
+    # the config gate is currently off.
+    _status_tmux_backend = pe.TmuxBackend()
+    _status_herdr_backend = pe.HerdrBackend(
+        workspace_id=os.environ.get("HERDR_WORKSPACE_ID"))
 
     def live_fn(record) -> tuple:
         """(live, probe_error) — a failed/unavailable probe is NEVER silently 'dead'
-        (gpt-diff A3): the row carries the degradation."""
-        if not has_tmux:
-            return False, "tmux unavailable on this host"
-        try:
-            res = subprocess.run(
-                ["tmux", "-S", record.run_socket, "has-session", "-t", record.session_name],
-                capture_output=True, text=True, timeout=10, check=False)
-            return res.returncode == 0, None
-        except (OSError, subprocess.TimeoutExpired) as e:
-            return False, f"liveness probe failed: {type(e).__name__}"
+        (gpt-diff A3): the row carries the degradation. #647: a thin binding over the
+        module-level `status_live_verdict`, which resolves the record's OWN backend instead
+        of assuming tmux."""
+        return status_live_verdict(record, tmux=_status_tmux_backend,
+                                   herdr=_status_herdr_backend, tmux_present=has_tmux)
 
     def spec_fn(record) -> tuple:
         """(spec, status) — missing vs corrupt launch specs stay distinguishable per row

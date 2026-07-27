@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,7 @@ from phase_executor import contract, enforce, ledger, routing  # noqa: E402
 from phase_executor.adapters import codex_cli  # noqa: E402
 from phase_executor.engine import run_seat, PROVIDER_ENGINE as _PROVIDER_ENGINE  # noqa: E402
 from phase_executor.quota import QuotaCoordinator, QuotaTimeout  # noqa: E402
+from phase_executor.terminal_backend import Liveness  # noqa: E402
 # pylint: enable=no-name-in-module
 import jsonschema  # noqa: E402
 import complexity_gate as cg  # noqa: E402
@@ -2661,7 +2663,7 @@ from phase_executor.worktree import WorktreeIdentity as _WId  # noqa: E402
 
 
 def _status_repo(tmp_path, *, state="running", with_obs=False, with_spec=True,
-                 with_activity=False, run_id="run1"):
+                 with_activity=False, run_id="run1", terminal_backend=None):
     """A fake project repo with a seeded job registry + optional spec/observation/capture."""
     repo = tmp_path / "projects" / "statusrepo"
     _cfg(repo)
@@ -2677,7 +2679,8 @@ def _status_repo(tmp_path, *, state="running", with_obs=False, with_spec=True,
         worktree_gitdir=str(repo / ".git"), worktree_repo=str(repo), capture_dir=str(cap),
         attempt_id="0-aaaa1111", permit_ref="claude:default", command_digest="sha256:abc",
         provider_session_id=None, provider_exit_code=None, resume_attempts=0,
-        state=state, created_at=1.0, quarantine_reason=None)
+        state=state, created_at=1.0, quarantine_reason=None,
+        terminal_backend=terminal_backend)
     JobRegistry(str(reg_root)).upsert(rec)
     if with_spec:
         specs = reg_root / "specs"
@@ -3373,3 +3376,137 @@ def test_cli_recover_refuses_run_digest_conflict(tmp_path, capsys):
     rc = er.main(["recover-run", "--run-id", "run1", "--workspace", ws, "--project", "rawgentic"])
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert rc == er.EXIT_ENFORCEMENT and out["error"]["code"] == "run_digest_conflict"
+
+
+# ---- #647: the read-only status surface resolves the record's backend -------------------
+# The mapping lives in a module-level function with the backends INJECTED, precisely so
+# these three cases are unit-testable: a closure would have no substitution seam, and
+# driving the real thing would need a herdr binary CI does not have (GAP-4).
+
+class _ProbeStub:
+    """A TerminalBackend stand-in that returns a fixed Liveness and records its calls."""
+
+    def __init__(self, verdict):
+        self.verdict = verdict
+        self.calls = []
+
+    def probe_session(self, endpoint, name, timeout=30):  # noqa: ARG002 — signature is the seam
+        self.calls.append((endpoint, name))
+        return self.verdict
+
+
+def _status_rec(terminal_backend=None, run_socket="/run/user/1000/rg-x.sock",
+                session_name="rg-x"):
+    class _R:  # minimal JobRecord stand-in: the verdict helper reads only these three
+        pass
+    r = _R()
+    r.terminal_backend = terminal_backend
+    r.run_socket = run_socket
+    r.session_name = session_name
+    return r
+
+
+def test_status_live_verdict_herdr_record_probes_the_herdr_backend():
+    """AC1/AC4: a herdr-backed record must be probed through the herdr backend. Before this
+    fix the status surface ran `tmux -S <run_socket>` unconditionally, and a herdr
+    run_socket is a WORKSPACE ID, so tmux failed for an ordinary reason."""
+    tmux = _ProbeStub(Liveness.CONFIRMED_GONE)
+    herdr = _ProbeStub(Liveness.CONFIRMED_ALIVE)
+    rec = _status_rec(terminal_backend="herdr", run_socket="w1")
+    live, probe_error = er.status_live_verdict(rec, tmux=tmux, herdr=herdr,
+                                              tmux_present=True)
+    assert (live, probe_error) == (True, None)
+    assert herdr.calls == [("w1", "rg-x")]
+    assert tmux.calls == []          # the wrong backend is never consulted
+
+
+def test_status_live_verdict_indeterminate_surfaces_as_probe_error():
+    """AC2: INDETERMINATE is not evidence of death — it must come back with a probe_error
+    so the row derives liveness_unknown rather than exited_no_sentinel."""
+    herdr = _ProbeStub(Liveness.INDETERMINATE)
+    live, probe_error = er.status_live_verdict(
+        _status_rec(terminal_backend="herdr"), tmux=_ProbeStub(Liveness.CONFIRMED_GONE),
+        herdr=herdr, tmux_present=True)
+    assert live is False
+    assert probe_error and "indeterminate" in probe_error.lower()
+
+
+def test_status_live_verdict_tmux_confirmed_gone_is_not_a_degradation():
+    """AC3: tmux's routine 'no sessions on this socket' classifies CONFIRMED_GONE, which
+    must stay a clean (False, None) — byte-identical to the pre-fix behavior, so an ordinary
+    absence never starts reporting as 'unknown'."""
+    tmux = _ProbeStub(Liveness.CONFIRMED_GONE)
+    assert er.status_live_verdict(_status_rec(), tmux=tmux, herdr=None,
+                                  tmux_present=True) == (False, None)
+    assert tmux.calls == [("/run/user/1000/rg-x.sock", "rg-x")]
+
+
+def test_status_live_verdict_absent_tmux_only_degrades_tmux_records():
+    """Step-4 Finding #1: the tmux-availability check must be evaluated AFTER backend
+    resolution. Pre-fix it was checked first, so on a tmux-less host a HERDR record would
+    carry probe_error 'tmux unavailable on this host' — a true flag with a false reason."""
+    herdr = _ProbeStub(Liveness.CONFIRMED_ALIVE)
+    assert er.status_live_verdict(_status_rec(terminal_backend="herdr"), tmux=None,
+                                  herdr=herdr, tmux_present=False) == (True, None)
+    live, probe_error = er.status_live_verdict(_status_rec(), tmux=None, herdr=None,
+                                              tmux_present=False)
+    assert live is False and probe_error == "tmux unavailable on this host"
+
+
+def test_status_live_verdict_herdr_record_without_backend_refuses_loud():
+    """The lifted resolver's fail-loud contract must not be swallowed into a bare False: a
+    herdr record with no herdr backend is a configuration fault, not a dead job."""
+    live, probe_error = er.status_live_verdict(_status_rec(terminal_backend="herdr"),
+                                              tmux=_ProbeStub(None), herdr=None,
+                                              tmux_present=True)
+    assert live is False
+    assert probe_error and "herdr" in probe_error.lower()
+
+
+def test_do_status_binding_probes_the_records_own_backend(tmp_path, monkeypatch, capsys):
+    """Step-8a cross-model finding (Medium): the five `status_live_verdict` tests pin the
+    HELPER, not the `live_fn` BINDING. Reverting live_fn to the old unconditional
+    `tmux -S <record.run_socket>` while keeping the helper would leave every one of them
+    green, so this drives the real `_do_status` wiring end to end.
+
+    Deliberately in-process with an injected backend rather than through the CLI: this host
+    HAS a real herdr daemon and CI has none, so a subprocess test would assert
+    environment-dependent behavior — exactly the "local machine masks the real answer" trap
+    #638 hit. Here a stub reports CONFIRMED_ALIVE, so the row can only be `running` if the
+    binding actually consulted the record's OWN backend.
+    """
+    ws, _, _ = _status_repo(tmp_path, with_obs=False, terminal_backend="herdr")
+    seen = []
+
+    class _AliveHerdr:
+        def __init__(self, **kwargs):
+            pass
+
+        def probe_session(self, endpoint, name, timeout=30):  # noqa: ARG002
+            seen.append((endpoint, name))
+            return Liveness.CONFIRMED_ALIVE
+
+    real_import = er._import_phase_executor
+
+    def _patched_import():
+        pe = real_import()
+        pe.HerdrBackend = _AliveHerdr
+        return pe
+
+    monkeypatch.setattr(er, "_import_phase_executor", _patched_import)
+    rc = er._do_status(types.SimpleNamespace(workspace=ws, project="rawgentic", run="run1"))
+    assert rc == 0
+    (row,) = json.loads(capsys.readouterr().out)["seats"]
+    assert row["state"] == "running"        # pre-fix this was exited_no_sentinel
+    assert row["probe_error"] is None
+    assert len(seen) == 1                   # the herdr backend WAS the one consulted
+
+
+def test_status_live_verdict_unrecognised_backend_is_indeterminate():
+    """The resolver's new fail-loud guard must surface as an INDETERMINATE row, never as a
+    confident state: status catches SupervisorError and reports it as a probe failure."""
+    live, probe_error = er.status_live_verdict(
+        _status_rec(terminal_backend="screen"), tmux=_ProbeStub(Liveness.CONFIRMED_ALIVE),
+        herdr=_ProbeStub(Liveness.CONFIRMED_ALIVE), tmux_present=True)
+    assert live is False
+    assert probe_error and "unsupported terminal backend" in probe_error
