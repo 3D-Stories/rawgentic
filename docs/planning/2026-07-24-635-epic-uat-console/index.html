@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Epic #635 — UAT console</title>
-<meta name="description" content="Owner-side acceptance testing for the herdr build-seat launch backend. Six checks, live PID-identity visualisation, and a checklist that remembers your verdicts.">
+<meta name="description" content="Owner-side acceptance testing for the herdr build-seat launch backend. Three open checks, live PID-identity visualisation, and a checklist that remembers your verdicts.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230B1020'/%3E%3Crect x='6' y='7' width='8' height='18' fill='%2335E0A1'/%3E%3Crect x='18' y='7' width='8' height='18' fill='%23FFB454'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -228,6 +228,36 @@ h1 .beside{color:var(--nogo)}
 .gap.amber .gid{color:var(--err)}
 .gap h3{font-size:15px;margin:8px 0 9px;line-height:1.4}
 .gap p{margin:0;font-size:13.4px;color:#B6C2DA}
+.gap p + p{margin-top:10px}
+/* A gap that has been closed keeps its card — a deleted one reads as forgotten. */
+.gap.resolved{border-top-color:var(--go)}
+.gap.resolved .gid{color:var(--go)}
+.gap .gstate{
+  font-family:var(--display);font-size:10.5px;letter-spacing:.11em;
+  border:1px solid var(--line);border-radius:2px;padding:1px 6px;
+  margin-left:6px;vertical-align:2px;white-space:nowrap;color:var(--dim);
+}
+.gap.resolved .gstate{color:var(--go);border-color:#35e0a155;background:#35e0a112}
+.gap.amber .gstate{color:var(--err);border-color:#ffb45455;background:#ffb45412}
+.gap .outcome{
+  border-left:2px solid var(--line);padding-left:11px;color:#C3CDE2;
+}
+.gap.resolved .outcome{border-left-color:var(--go)}
+.gap.amber .outcome{border-left-color:var(--err)}
+
+/* The redeploy notice in the priority panel — load-bearing, not decoration. */
+.reissue{
+  margin-top:14px;padding:12px 14px;border:1px solid #ffb45444;
+  border-left:3px solid var(--err);background:#ffb4540e;
+  font-size:13.4px;color:#D6DEEE;
+}
+.reissue code{font-size:12.6px;word-break:break-all}
+
+/* Settled items: same station shell, visibly demoted, no verdict controls. */
+.station.settledIntro{border-top:2px solid var(--go)}
+.station.settled{opacity:.82}
+.station.settled .head .uid{color:var(--go)}
+.station.settled:hover{opacity:1}
 
 /* ---------------------------------------------------------------- log ------ */
 .log{padding:clamp(34px,5vw,68px) clamp(22px,4vw,54px)}
@@ -268,8 +298,8 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
   <div class="topbar">
     <span class="brand">Epic <b>#635</b> · herdr build-seat launch backend</span>
     <span class="pill go">4 / 4 children merged</span>
-    <span class="pill open">Epic open · tracking UAT</span>
-    <span class="pill">rawgentic v3.97.1</span>
+    <span class="pill open">Epic closed · UAT tracked in #656</span>
+    <span class="pill">rawgentic v3.97.2 · cache 3.97.2 ✓</span>
     <span class="spacer"></span>
     <span class="pill">herdr 0.7.5</span>
   </div>
@@ -283,7 +313,7 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
         neither documents nor endorses. If a future herdr release ever wraps that command in a child
         instead of replacing the pane's shell, <b>every PID the supervisor holds names the wrong
         process</b>: it would track and kill a shell while the real worker kept running. Nothing
-        would error. Play both outcomes below, then work the six checks.
+        would error. Play both outcomes below, then work the three remaining checks.
       </p>
       <div class="modes" role="group" aria-label="Launch outcome">
         <button class="mode" data-mode="exec" aria-pressed="true">exec honoured — what we qualified</button>
@@ -324,31 +354,40 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 <section class="priority">
   <div class="priorityInner">
     <div>
-      <h2>Start with UAT-3. It is the only check that touches the production path.</h2>
+      <h2>Prefer the plain step-by-step list.</h2>
       <p>
-        Everything herdr-side was verified by driving <b>HerdrBackend</b> directly, plus the config-gate
-        decision in isolation. <b>No real build-seat model dispatch has ever gone through the gate under
-        herdr.</b> That is the gap this session cannot close for you: it needs a session inside a herdr
-        pane with the config flipped. If UAT-3 fails, the backend is not ready no matter how green
-        everything else looks.
+        This console records your verdicts, but if you just want to <b>do</b> the UAT, the markdown
+        plan is one flat numbered list — <b>steps 1 to 17, straight down</b>, every command inline,
+        no jumping between sections:
+        <a href="https://rawgentic-epic-635-uat.vercel.app">rawgentic-epic-635-uat.vercel.app</a>
+      </p>
+      <p>
+        Either way: <b>these are terminal commands</b>, not things to paste into Claude. Run them in
+        <code>/home/rocky00717/rawgentic/projects/rawgentic</code>. Order is
+        <b>UAT-2 → UAT-4 → UAT-3</b>; UAT-3 must be run from a terminal inside a herdr pane, in a
+        session started after the 3.97.2 reinstall.
       </p>
       <button class="jump" data-jump="uat3">Go to UAT-3 →</button>
     </div>
     <div class="scorecard">
       <h3>Where the evidence stands</h3>
       <div class="scoreRow ok"><span>CI, all four lanes, by SHA</span><span>pass</span></div>
-      <div class="scoreRow ok"><span>Suite (5128 → 5166)</span><span>0 failed</span></div>
+      <div class="scoreRow ok"><span>Suite (5166 → 5183)</span><span>0 failed</span></div>
       <div class="scoreRow ok"><span>AC1 gate, live, 40 reps</span><span>GO</span></div>
       <div class="scoreRow ok"><span>Security scan</span><span>pass · 1 visible skip</span></div>
-      <div class="scoreRow warn"><span>Real dispatch under herdr</span><span>never run</span></div>
-      <div class="scoreRow warn"><span>park_and_reset at a live loop-back</span><span>never invoked</span></div>
+      <div class="scoreRow ok"><span>Status surface for herdr jobs (#647)</span><span>shipped</span></div>
+      <div class="scoreRow ok"><span>GAP-3 cron/herdr exclusivity</span><span>decided · accepted</span></div>
+      <div class="scoreRow ok"><span>Build-seat launch path under herdr</span><span>proven 2026-07-27</span></div>
+      <div class="scoreRow warn"><span>Build seat doing REAL work under herdr</span><span>never run — UAT-3a</span></div>
+      <div class="scoreRow warn"><span>Live negative: review seat still on tmux</span><span>logic-checked only — UAT-3b</span></div>
+      <div class="scoreRow warn"><span>park_and_reset at a live loop-back</span><span>filed as #661</span></div>
     </div>
   </div>
 </section>
 
 <div class="console">
   <aside class="rail" aria-label="Checklist">
-    <h3>Six checks</h3>
+    <h3>Three checks</h3>
     <div class="ring">
       <svg width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">
         <circle cx="31" cy="31" r="26" fill="none" stroke="#26314F" stroke-width="5"></circle>
@@ -356,7 +395,7 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
                 stroke-linecap="round" stroke-dasharray="163.4" stroke-dashoffset="163.4"></circle>
       </svg>
       <div>
-        <div class="num" id="ringNum">0/6</div>
+        <div class="num" id="ringNum">0/3</div>
         <div class="sub" id="ringSub">nothing recorded</div>
       </div>
     </div>
@@ -375,40 +414,52 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 </div>
 
 <section class="gaps">
-  <h2>Named gaps — nobody has proven these</h2>
+  <h2>Named gaps — where each one now stands</h2>
   <p>
-    Carried forward verbatim from the plan. They are not defects introduced by this epic; they are the
-    honest edges of it, and two of them are decisions rather than bugs.
+    Carried forward from the plan. They are not defects introduced by this epic; they are the honest
+    edges of it. <b>As of 2026-07-27 three of the four are resolved</b> — one shipped, one decided,
+    one filed — and each is left visible with its outcome rather than quietly deleted.
   </p>
   <div class="gapGrid">
-    <article class="gap">
-      <div class="gid">GAP-1</div>
-      <h3>park_and_reset is invoked by no code path</h3>
+    <article class="gap resolved">
+      <div class="gid">GAP-1 · #661</div>
+      <h3>park_and_reset is invoked by no code path <span class="gstate">FILED</span></h3>
       <p>#637's primitive is tested, but the orchestrator owns it by prose contract only. A live
-      design loop-back today would <b>not</b> park the worktree. Closing it needs either a real
-      loop-back exercised end to end, or a mechanical enforcement point.</p>
+      design loop-back today would <b>not</b> park the worktree.</p>
+      <p class="outcome"><b>Filed as #661</b> (owner decision D-5) rather than carried as an open
+      gap. Tracked work now — nothing for you to do here.</p>
     </article>
-    <article class="gap amber">
+    <article class="gap resolved">
       <div class="gid">GAP-3</div>
-      <h3>Unusable from the cron / headless launcher</h3>
+      <h3>Unusable from the cron / headless launcher <span class="gstate">ACCEPTED</span></h3>
       <p><code>pane split --current</code> resolves the caller's own pane. A detached cron run has
       none, so a build-seat launch there fails loud. "herdr for the build seat" and "unattended
-      cron-resumed runs" are currently mutually exclusive. That is UAT-6's decision.</p>
+      cron-resumed runs" are mutually exclusive.</p>
+      <p class="outcome"><b>Decided 2026-07-27 (D-4, "A-656: accept"):</b> accepted as a scope
+      boundary. No follow-up issue. This closed UAT-6.</p>
     </article>
     <article class="gap amber">
-      <div class="gid">GAP-4</div>
-      <h3>No herdr coverage in CI, and the gate is manual</h3>
+      <div class="gid">GAP-4 · #659</div>
+      <h3>No herdr coverage in CI, and the gate is manual <span class="gstate">PARTLY</span></h3>
       <p>CI installs no herdr, so no herdr behaviour is exercised there at all. #639's gate is the
-      compensating control — but it is run deliberately by a human from inside a pane. Nothing
-      re-qualifies the backend automatically when herdr is upgraded on this host.</p>
+      compensating control — but it is run deliberately by a human from inside a pane.</p>
+      <p class="outcome">The structural CI gap stays by design. The <i>"nobody noticed herdr
+      changed"</i> half is now <b>#659</b>. A live instance turned up the same day: <code>herdr
+      wait …</code>, which the herdr skill documents, does not exist in the installed 0.7.5 binary.</p>
     </article>
-    <article class="gap">
+    <article class="gap resolved">
       <div class="gid">GAP-5 · #647</div>
-      <h3>status output for a herdr job is not trustworthy</h3>
-      <p>The read-only run-status probe still runs <code>tmux</code> unconditionally, ignoring
-      <code>record.terminal_backend</code>. For a herdr record it fails for an ordinary reason and
-      the caller derives <code>exited_no_sentinel</code> without surfacing that the probe itself
-      failed — the same defect class the rest of #638 spent four passes closing.</p>
+      <h3>status output for a herdr job is not trustworthy <span class="gstate">SHIPPED</span></h3>
+      <p>The read-only run-status probe ran <code>tmux</code> unconditionally, ignoring
+      <code>record.terminal_backend</code>. For a herdr record it failed for an ordinary reason and
+      the caller derived <code>exited_no_sentinel</code> without surfacing that the probe itself
+      had failed.</p>
+      <p class="outcome"><b>Fixed and merged: <code>6ef34c5</code> (PR #657, v3.97.2).</b> The probe
+      now resolves the record's own backend, and an operational failure derives
+      <code>liveness_unknown</code> instead of asserting the job is dead (D-3 chose AC2). Rollback
+      anchor <code>c3baac5</code>. <b>Installed: cache is at 3.97.2 as of 2026-07-27</b>, verified to
+      carry <code>liveness_unknown</code>, <code>status_live_verdict</code> and the lifted
+      <code>resolve_backend</code>.</p>
     </article>
   </div>
 </section>
@@ -426,7 +477,12 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
         <tr><td>pytest form with <code>RUN_LIVE</code> unset, and with herdr absent</td><td><span class="ok">3 skipped, exit 0</span>, reason names the unmet prerequisite</td></tr>
         <tr><td>Cross-model (Codex) diff review of #639</td><td><span class="am">4 findings, 2 High</span> — pytest-exits-0-on-skip, and a vacuous pid check; both fixed before merge</td></tr>
         <tr><td>Security scan, library, vs <code>origin/main</code></td><td><span class="ok">PASS</span> · 0 blocking / 0 advisory · 1 visible skip (<code>iac</code>, not applicable)</td></tr>
-        <tr><td>Real build-seat model dispatch through the gate under herdr</td><td><span class="no">never run — this is UAT-3</span></td></tr>
+        <tr><td><b>#647 merged</b> as <code>6ef34c5</code> (PR #657, v3.97.2) — GAP-5 closed</td><td><span class="ok">4/4 CI lanes green</span> · suite <b>5183 passed / 21 skipped / 0 failed</b>, exit 0 · 17 tests added · rollback anchor <code>c3baac5</code></td></tr>
+        <tr><td>#647 WF2 run — real executor dispatches through #636's seam, tmux default</td><td><span class="ok">review seats launched and reported</span> (<code>reviewer_kind: codex</code>, Steps 8a + 11); receipts at <code>.rawgentic/runs/wf2-647-50e7e132/routing-audit.jsonl</code>. Retires UAT-1 — <span class="am">build seat itself still rides UAT-3</span></td></tr>
+        <tr><td><b>Epic #635 closed</b>; owner-side UAT moved to tracker <b>#656</b></td><td><span class="ok">comment 5093464885</span></td></tr>
+        <tr><td>Follow-ups filed from the remaining gaps</td><td><span class="ok">#658</span> call-site inventory · <span class="ok">#659</span> herdr version-drift (GAP-4) · <span class="ok">#660</span> run-record usage is session-cumulative · <span class="ok">#661</span> GAP-1</td></tr>
+        <tr><td>Live: herdr CLI drift found while probing</td><td><span class="am"><code>herdr wait …</code> is documented by the skill but absent from the 0.7.5 binary</span> — a live instance of exactly what #659 is for</td></tr>
+        <tr><td>Real build-seat model dispatch through the gate under herdr</td><td><span class="no">never run — this is UAT-3, the one open item</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -462,161 +518,215 @@ let THREE = null;
    ========================================================================= */
 const CHECKS = [
   {
-    id:"uat1", uid:"UAT-1", name:"A real dispatch still works after the refactor",
-    tags:[["owner","Owner only"]],
+    id:"uat2", uid:"UAT-2", name:"Is #637's park-then-reset contract what you want?",
+    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"]],
     why:[
-      "#636 moved every launch primitive behind a new <b>TerminalBackend</b> seam. The suite proves the seam's shape; it cannot prove a real dispatch still runs through it.",
-      "This is the regression check for the whole epic's foundation: if it fails, nothing downstream matters."
+      "<b>Do this one first.</b> Nothing here changes any config or touches the herdr daemon — you are printing two passages and deciding whether the behaviour they describe is the behaviour you want.",
+      "#637 shipped <code>park_and_reset</code>. Its AC5 is satisfied by <b>documentation only</b>, so the acceptance question is about the contract, not the code.",
+      "<b>Correction to this page's own earlier wording:</b> it used to say \"the WF2 <b>(and WF3)</b> skill prose\". That was wrong — <code>skills/fix-bug/</code> (WF3) has <b>zero</b> <code>park</code>, <code>worktree</code> and build-seat references. WF3 never puts a build seat in a worktree, so it has nothing to park; its design-flaw path hands off to WF2. <b>Read WF2 only.</b>"
     ],
     steps:[
-      "Leave the config on the default — <code>executorTerminalBackend</code> absent, or <code>build: \"tmux\"</code>.",
-      "Run any real WF2/WF3 issue whose plan dispatches a build seat.",
-      "Watch the pane appear and the seat's <code>observation.json</code> land."
-    ],
-    cmds:[],
-    pass:"The dispatch launches, the pane runs, <code>observation.json</code> lands, the run completes — no behaviour change versus before the epic.",
-    see:{title:"tmux path, unchanged", cap:"Structural evidence only: this is what the suite asserts about the default backend. The live confirmation is yours to make.", lines:[
-      ["p","$ pytest tests/phase_executor/ -q"],
-      ["o","........................................................................ [ 94%]"],
-      ["o",".....................................................                    [100%]"],
-      ["g","972 passed, 17 skipped in 29.81s"]
-    ]}
-  },
-  {
-    id:"uat2", uid:"UAT-2", name:"The loop-back prose says what you intend",
-    tags:[["owner","Owner only"]],
-    why:[
-      "#637's <b>park_and_reset</b> parks the diff and untracked files in a named stash, then resets — never a bare <code>reset --hard</code> without a recovery path.",
-      "Ownership is the orchestrator's, and it is a <b>prose</b> contract. Read it as the instruction it actually is, and note GAP-1 while you do: nothing enforces it."
-    ],
-    steps:[
-      "Open the WF2 skill prose at the design-level loop-back, and the same passage in WF3.",
-      "Read the park-then-reset paragraphs as if you were the agent following them.",
-      "Decide whether that is the behaviour you want when a design changes mid-build."
-    ],
-    cmds:[],
-    pass:"The described contract is the one you want the orchestrator to follow, and you have noted that GAP-1 means nothing currently makes it happen.",
-    see:{title:"what is tested vs what is invoked", cap:"The primitive is real and covered; the invocation is not. That asymmetry is GAP-1, stated rather than smoothed over.", lines:[
-      ["p","$ pytest tests/phase_executor/test_worktree_park.py -q"],
-      ["g","tested: named stash, stash-OID attribution, per-worktree gitdir anchoring"],
-      ["a","not tested: any code path that CALLS park_and_reset at a live loop-back"],
-      ["o","grep -rn \"park_and_reset\" hooks/ skills/  ->  prose references only"]
-    ]}
-  },
-  {
-    id:"uat3", uid:"UAT-3", name:"A real build-seat dispatch under herdr", priority:true,
-    tags:[["owner","Owner only"],["","The one that matters"]],
-    why:[
-      "This is <b>GAP-2</b>, and the only check that exercises the production entry path. Everything else herdr-side was proven by driving the backend directly.",
-      "It needs a session that is itself inside a herdr pane, because <code>pane split --current</code> resolves the <b>calling</b> process's pane. Also confirm the negative: a review or analysis seat in the same run must still launch under tmux."
-    ],
-    steps:[
-      "Prove your session can host the launch — run the preflight below. It must print a pane id and a workspace, and they must agree. (A page cannot know anything about your shell, so this is a check, not a claim.)",
-      "Set the gate in the project's <code>.rawgentic.json</code>.",
-      "Run a real issue whose plan dispatches a build seat.",
-      "Watch for a new labelled pane beside your orchestration window, and check nothing is left behind afterwards.",
-      "Confirm the negative: a review/analysis seat in the same run still launches under tmux."
+      "<b>Open a terminal</b> (not Claude) and go to the project directory. Everything in UAT-2 runs here:",
+      "Print the <b>primary</b> statement of the contract — Step 8's \"Design flaw discovery\" in the WF2 steps reference:",
+      "Print the <b>second</b> site — Step 11 item 6, which references the same contract from the review loop-back:",
+      "<i>Optional.</i> Satisfy yourself that WF3 really has none of this, so you are not left wondering whether you missed a file:",
+      "<b>Now decide.</b> Read the six plain claims in the panel to the right — that is the dense prose restated so you can judge it without decoding code identifiers. Then answer the two questions in the pass condition below, and record your verdict."
     ],
     cmds:[
-      {label:"preflight — must print a pane and a matching workspace", text:'test -n "$HERDR_PANE_ID" -a -n "$HERDR_WORKSPACE_ID" || echo "NOT IN A HERDR PANE — pane split --current cannot resolve"; herdr pane current | python3 -c "import json,sys,os; p=json.load(sys.stdin)[\'result\'][\'pane\']; print(\'pane\', p[\'pane_id\'], \'workspace\', p[\'workspace_id\'], \'| env agrees:\', p[\'workspace_id\']==os.environ.get(\'HERDR_WORKSPACE_ID\'))"'},
-      {label:"the gate, in .rawgentic.json", text:'"executorTerminalBackend": { "version": 1, "build": "herdr" }'},
-      {label:"watch the panes", text:"herdr pane list --workspace $HERDR_WORKSPACE_ID"},
-      {label:"rollback — absent means tmux", text:'"executorTerminalBackend": { "version": 1, "build": "tmux" }'}
+      {step:1, label:"go to the project", text:'cd /home/rocky00717/rawgentic/projects/rawgentic'},
+      {step:2, label:"site 1 of 2 — the primary statement", text:'awk \'/\\*\\*Design flaw discovery:\\*\\*/{f=1} f&&c++<24\' skills/implement-feature/references/steps.md'},
+      {step:3, label:"site 2 of 2 — the review loop-back reference", text:'grep -n \'park-then-reset the build seat\' skills/implement-feature/references/steps.md'},
+      {step:4, label:"optional — prove WF3 has none of it", text:'grep -rc \'park\' skills/fix-bug/ | grep -v \':0\' || echo "0 park references in WF3 — correct, nothing to park there"'}
     ],
-    pass:"The preflight printed a pane id and a workspace that agree; a new herdr pane then appears alongside your orchestration window and runs the build seat; <code>pane list</code> shows it labelled with the run's session name; the seat's <code>observation.json</code> lands and the run completes; afterwards no labelled pane is left behind. And a review/analysis seat in the same run still went to tmux. Paste the preflight line into your note.",
-    see:{title:"the shape of a healthy launch (captured on this host)", cap:"Real output from the live qualification run, which drives the same three calls the production path drives. The preflight's own verbs were exercised live on herdr 0.7.5 too — <code>pane current</code> returned this session's pane <code>w1:p1</code> in workspace <code>w1</code>, and <code>pane list --workspace w1</code> enumerated its panes. Your UAT-3 run adds the part nobody has seen: a real model dispatch flowing through it.", lines:[
-      ["p","$ herdr pane split --current --direction right --cwd /tmp/rg639"],
-      ["o",'{"result":{"pane":{"pane_id":"w1:p3N","workspace_id":"w1"}}}'],
-      ["p","$ herdr pane rename w1:p3N rg639-ac1-cold-00-a1b2c3"],
-      ["p","$ herdr pane run w1:p3N exec python3 …/herdr_ac1_protocol.py --sentinel …"],
-      ["p","$ herdr pane process-info --pane w1:p3N"],
-      ["o",'{"result":{"process_info":{"shell_pid":2978249}}}'],
-      ["g","/proc/2978249/cmdline  ->  python3 …/herdr_ac1_protocol.py --sentinel …"],
-      ["g","observation.json       ->  {\"phase\":\"completed\",\"exit_code\":0,\"pid\":2978249}"],
-      ["o","pane closes itself the instant the exec'd process exits"],
-      ["g","0 panes left behind"]
-    ]},
-    schem:true
+    pass:"Both: (1) <b>the split is right</b> — a same-design retry throws the work away, a design change parks it recoverably; that asymmetry is the whole design. (2) <b>\"park before reset, verified by stash identity\" is the safety level you want</b> for work a design change just invalidated. Fails if it is not what you want — name which of the six claims is wrong, and it becomes a change to #661's scope rather than a defect in #637.",
+    see:{title:"the contract, as six plain claims", cap:"The two WF2 passages restated so you can judge the behaviour without decoding a 20-line paragraph of code identifiers. Steps 2 and 3 print the real prose; this is the summary you are accepting or rejecting.", lines:[
+      ["g","1  A design-level flaw INVALIDATES the current diff — treated differently from"],
+      ["o","   an ordinary failed attempt, because what the work was built against changed."],
+      ["a","2  A SAME-DESIGN retry does NOT park. It discards outright: reset --hard +"],
+      ["o","   clean -fd, no stash — the design is still valid."],
+      ["g","3  A DESIGN-LEVEL loop-back DOES park, stashed recoverably and tagged"],
+      ["o","   rawgentic-parked:<run_id>:<design_version>:<task_id>"],
+      ["g","4  Park strictly BEFORE reset, never the reverse — confirmed by the stash"],
+      ["o","   really existing, never by trusting rc == 0."],
+      ["g","5  The prior build worker must be CONFIRMED DEAD first."],
+      ["g","6  The stash OID is written to the run's audit log, so parked work is findable."],
+      ["o","   The OID matters: two loop-backs on one run+task share the same stash NAME."],
+      ["o",""],
+      ["o","Failure clause: if the reset fails AFTER a confirmed park, the audit record is"],
+      ["o","still written before the error propagates — a parked diff is never orphaned."],
+      ["o",""],
+      ["g","VERIFIED FOR YOU 2026-07-27 — the prose matches the code:"],
+      ["g","  worktree.py:585-593  park before reset; park failure raises, reset NEVER runs"],
+      ["g","  worktree.py:585-589  confirmed via the refs/stash reflog BY MESSAGE, not rc==0"],
+      ["g","  worktree.py:596-599  failure after park still audits (ParkThenResetError)"],
+      ["o",""],
+      ["r","GAP-1 / #661: NOTHING INVOKES park_and_reset. You are accepting intent here,"],
+      ["r","not a running behaviour. That is exactly why it is filed."]
+    ]}
   },
   {
-    id:"uat4", uid:"UAT-4", name:"The accepted risks are the ones you accepted",
-    tags:[["owner","Owner only"]],
+    id:"uat4", uid:"UAT-4", name:"Are the four accepted risks the ones you accepted?",
+    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"],["evidenced","3 of 4 are at the call site — see finding"]],
     why:[
-      "Four risks were recorded against the herdr backend, one of which you ruled on directly: <b>pane_env is visible via ps</b>, because herdr has no private per-run env channel the way tmux gets one through a per-run socket.",
-      "Your condition was that it stays host-local and disappears with the pane. Both hold. The stronger claim — that nothing credential-bearing ever reaches a pane's environment — is <b>not</b> provable by reading the backend, because only its CALLERS decide what goes into <code>pane_env</code>. So the second command walks the AST of every <code>.py</code> file in the repo and fails closed. Run today it reports <b>69 construction sites: 4 with a literal pane_env (all <code>PYTHONPATH</code> only — the three production sites in <code>hooks/executor_routing_lib.py</code> plus one test), 65 passing none, 0 built dynamically, 0 violations</b>, exit 0. Re-run it rather than taking this page's word."
+      "<b>Do this one second.</b> Like UAT-2 it changes nothing — you print one docstring and decide whether the decisions it records are yours.",
+      "#638's AC6 requires the named risks to be encoded at the call site rather than living only in a review thread. You ruled on these on 2026-07-24.",
+      "<b>Already run for you 2026-07-27 — and it found something.</b> The three risks that ARE in the module docstring accurately describe the code. But the fourth (<code>exec</code>-injection is herdr-undocumented) is <b>not in <code>herdr_backend.py</code> at all</b> — it lives in <code>tests/phase_executor/live/herdr_ac1_protocol.py:144</code> and <code>README.md:745</code>. It is named and it is guarded (#639's gate exists for it), but not <i>at the call site</i> the way AC6 words it. That is the one thing to decide."
     ],
     steps:[
-      "Read the module docstring of <code>phase_executor/src/phase_executor/herdr_backend.py</code>.",
-      "Check the four recorded risks against what you actually accepted.",
-      "Confirm the pane_env conditions stated there are the ones you set."
+      "<b>In a terminal</b>, go to the project directory (skip if you are still there from UAT-2):",
+      "Print the 76-line module docstring. This is the whole reading — no editor needed:",
+      "<b>Risk 1 — <code>pane_env</code> is visible to <code>ps</code>.</b> herdr has no private per-run env channel; the only mechanism is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <b>host-wide shared daemon</b>. <i>Your call:</i> are <b>host-local + ephemeral + non-credential</b> the conditions you set? Optional — see the mechanism yourself:",
+      "<b>Risk 2 — malformed-split pane leak, accepted and NOT fixed.</b> If <code>pane split</code> returns rc=0 with an unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it — the id lives in the very body that failed to parse. <i>Your call:</i> do you accept an unlabeled pane leaking on that narrow path? (Not fixed because recovering the id needs a racy list-diff-by-timing heuristic.)",
+      "<b>Risk 3 — three calls, not atomic.</b> <code>new_session</code> is split → rename → run…exec. <i>Your call:</i> do you accept \"never parallelize split+run against one target pane\"?",
+      "<b>Risk 4 — <code>exec</code>-injection is herdr-undocumented.</b> A future herdr release could wrap rather than exec-replace, and every PID the supervisor holds would name the wrong process. <i>Your call:</i> do you accept this with <b>#639's gate as the compensating control</b> — a manual pre-upgrade check, nothing automatic? (That is GAP-4; the \"remembering to run it\" half is now #659.)",
+      "<b>Record your verdict</b> below."
     ],
-    cmds:[{label:"read the recorded risks", text:"sed -n '1,80p' phase_executor/src/phase_executor/herdr_backend.py"},
-           {label:"prove it repo-wide — exits 0 only if every pane_env is inside the allowlist",
-            text:"python3 docs/planning/2026-07-24-635-epic-uat-console/pane-env-allowlist-check.py; echo \"exit=$?\""}],
-    pass:"The four risks — pane_env visibility, the malformed-split pane leak, the non-atomic three-call spawn, and undocumented exec-injection — match your intent; the pane_env conditions are yours; and the grep shows every caller passing <code>PYTHONPATH</code> and nothing else.",
-    see:{title:"the four recorded risks", cap:"Verbatim summary of the docstring's risk section. The fourth is why #639 exists at all.", lines:[
-      ["a","1  pane_env via --env is visible to ps for the pane's lifetime (owner-accepted:"],
-      ["o","   host-local, ephemeral, never credential-bearing — PYTHONPATH only)"],
-      ["a","2  malformed-split pane leak: rc=0 with an unparseable body leaves no pane_id"],
-      ["o","   to close with. Documented, not fixed — a list-diff-by-timing fix would be racy"],
-      ["a","3  three calls, not atomic: split -> rename -> run. Safe single-threaded per spawn"],
-      ["r","4  exec-injection is herdr-undocumented. Silent regression risk on upgrade."],
-      ["g","   -> #639's gate is the standing guard against 4"]
+    cmds:[
+      {step:1, label:"go to the project", text:'cd /home/rocky00717/rawgentic/projects/rawgentic'},
+      {step:2, label:"print the docstring — this is the whole reading", text:'python3 -c "import ast;print(ast.get_docstring(ast.parse(open(\'phase_executor/src/phase_executor/herdr_backend.py\').read())))"'},
+      {step:3, label:"optional — see the risk-1 mechanism in the code", text:'grep -n \'\\-\\-env\' phase_executor/src/phase_executor/herdr_backend.py'}
+    ],
+    pass:"All three: (1) the four risks are ones you knowingly accepted, with the same conditions attached; (2) risk 1's conditions in the code — <b>host-local, ephemeral, never credential-bearing</b> — are the conditions you actually set on 2026-07-24; (3) you are content that risks 2 and 4 are <b>documented and accepted rather than fixed</b>, and that #639's manual gate is what stands behind risk 4. Fails if any risk is recorded with conditions you did not agree to — name it and it becomes a follow-up.",
+    see:{title:"run for you 2026-07-27 — 3 of 4 risks are at the call site", cap:"Each risk was checked against the module. The three in the docstring accurately describe the code. The fourth is recorded elsewhere — named and guarded, but not at the call site. An earlier version of this page claimed 4/4; that was wrong and is corrected here.", lines:[
+      ["p","risk 1 — pane_env visible to ps"],
+      ["g","  herdr_backend.py:149   ('--env', f'{k}={v}')  -> CLI arg to a shared daemon"],
+      ["g","  herdr_backend.py:128   comment states the ps-visibility explicitly"],
+      ["o","  guard: only PYTHONPATH is threaded through today; never credentials"],
+      ["o",""],
+      ["p","risk 2 — malformed split leaks an unlabeled pane"],
+      ["g","  herdr_backend.py:389-394  returns BEFORE any pane_id exists"],
+      ["o","  -> nothing to close; confirmed structural, not an oversight"],
+      ["o",""],
+      ["p","risk 3 — three calls, not atomic"],
+      ["g","  herdr_backend.py:380  pane split --current --direction … --cwd …"],
+      ["g","  herdr_backend.py:418  pane rename <pane_id> <name>"],
+      ["g","  herdr_backend.py:422  pane run <pane_id> exec <argv…>"],
+      ["o",""],
+      ["p","risk 4 — exec-injection, herdr-undocumented"],
+      ["g","  herdr_backend.py:422  self._herdr('run', pane_id, 'exec', *argv)"],
+      ["a","  compensating control is #639's gate — MANUAL, pre-upgrade, never automatic"],
+      ["o",""],
+      ["a","risk 4 — exec-injection: NOT in herdr_backend.py"],
+      ["o","  recorded instead at herdr_ac1_protocol.py:144 (launch_argv docstring,"],
+      ["o","  pinned EQUAL to new_session's real call by a CI-safe test) + README.md:745"],
+      ["o",""],
+      ["g","VERDICT: 3 of 4 risks are at the call site and accurate. The 4th is named"],
+      ["g","and guarded by #639's gate, just not in this file. Your call whether that"],
+      ["g","satisfies AC6 'encoded at the call site'."]
     ]}
+  },
+  {
+    id:"uat3", uid:"UAT-3", name:"A build seat doing REAL work under herdr", priority:true,
+    tags:[["owner","Owner only"],["","Do this LAST · ~20 min"],["evidenced","Launch path already proven"]],
+    why:[
+      "<b>Do this one last</b>, and only from a terminal that is <b>inside a herdr pane</b> — <code>pane split --current</code> resolves the calling process's own pane, so a plain terminal cannot host the launch.",
+      "<b>The plumbing is not in question.</b> On 2026-07-27 the launch path was driven twice through the real entry path: both exited 0 <code>state: completed</code>, the registry showed <code>terminal_backend: \"herdr\"</code> with <code>run_socket: \"w1\"</code>, a watcher caught pane <code>w1:pAK</code>, and 0 panes were left behind.",
+      "That drill used a <b>no-op brief</b> and ran ~10 seconds. <b>3a</b> (a build seat that actually CHANGES FILES) and <b>3b</b> (watching a review seat still go to tmux) are the two things nobody has run — and they are all that is left."
+    ],
+    steps:[
+      "<b>Terminal 1 — must be inside a herdr pane.</b> Go to the project and confirm the pane resolves. If either value prints empty, stop: you are not in a herdr pane and the launch cannot work.",
+      "Create the throwaway plan and a brief that does <b>real work</b>. The <code>- riskLevel:</code> line is mandatory — the plan parser fails closed without it:",
+      "Mint the gate and declare the run. A build seat requires an authenticated gate bound to that exact plan by digest:",
+      "Flip the gate to herdr. <b>This edits a git-tracked file</b> — the command does it for you so you do not hand-edit JSON, and the last step puts it back:",
+      "<b>Terminal 2 — open a SECOND terminal now and leave this running.</b> A real build runs for minutes, so you should get a good look at the pane. (The plumbing drill's pane vanished in 10 seconds, which is why a watcher is required rather than optional.)",
+      "<b>Back in Terminal 1 — 3a: dispatch the real build.</b> Expect exit 0 and <code>\"state\":\"completed\"</code>. Two things look wrong but are not: it routes to <b>codex / gpt-5.6-terra</b> (the build seat's anthropic primary falls through to its cross-model chain entry), and a real brief will report a real <code>parse_status</code>:",
+      "<b>3a evidence.</b> Print the run's status, take <code>worktree_path</code> from the output, then check that worktree contains the new file <i>and</i> that your main checkout is untouched. That contrast is the point of 3a:",
+      "<b>3b — with the gate STILL flipped</b>, dispatch a review seat in the same run. <code>--author-provider anthropic</code> is required; omit it and enforcement fails closed with <code>pre_check_denied: author_provider_missing</code>:",
+      "<b>3b evidence.</b> Print both registry rows at once: the <b>build</b> row should be herdr-backed (<code>run_socket: 'w1'</code>) and the <b>review</b> row should not. That contrast in a single run is the whole negative test:",
+      "<b>Teardown — run this even if either half failed.</b> It restores the config, removes the worktrees through git, and clears the run directory:"
+    ],
+    cmds:[
+      {step:1, label:"Terminal 1 — go to the project and confirm you are in a herdr pane", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\necho "pane=$HERDR_PANE_ID workspace=$HERDR_WORKSPACE_ID"\n# both must be non-empty, e.g.  pane=w1:p1 workspace=w1'},
+      {step:2, label:"create the plan + a brief that does REAL work", text:'mkdir -p /tmp/uat3 && cat > /tmp/uat3/plan.md <<\'EOF\'\n### Task 1: create a scratch note file with three lines of content\n- riskLevel: standard\n- files: docs/planning/UAT3-REALWORK-SCRATCH.md\nEOF\ncat > /tmp/uat3/brief.md <<\'EOF\'\nCreate the file docs/planning/UAT3-REALWORK-SCRATCH.md with exactly three lines:\n\n  # UAT-3 real-work probe\n  Written by a build seat running under the herdr terminal backend.\n  If you are reading this in a worktree, the worker really did work.\n\nThen stop. Do not commit. Do not touch any other file.\nEOF'},
+      {step:3, label:"mint the gate, then declare the run", text:'python3 hooks/executor_routing_lib.py mint-gate \\\n  --plan-file /tmp/uat3/plan.md --issue-complexity trivial --plan-est-lines 5 \\\n  --out /tmp/uat3/gate.json\n\npython3 hooks/executor_routing_lib.py begin-run --run-id uat3-real \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {step:4, label:"flip the gate to herdr (no hand-editing)", text:'python3 -c "\nimport json; p=\'.rawgentic.json\'; d=json.load(open(p))\nd[\'executorTerminalBackend\']={\'version\':1,\'build\':\'herdr\'}\njson.dump(d,open(p,\'w\'),indent=2); open(p,\'a\').write(chr(10))\nprint(\'gate now:\', d[\'executorTerminalBackend\'])"'},
+      {step:5, label:"Terminal 2 — start the watcher and LEAVE IT RUNNING", text:'cd /home/rocky00717/rawgentic/projects/rawgentic\nfor i in $(seq 1 600); do\n  herdr pane list --workspace "$HERDR_WORKSPACE_ID" \\\n  | python3 -c "import sys,json;[print(p[\'pane_id\'],\'|\',p.get(\'label\',\'\')) for p in json.load(sys.stdin)[\'result\'][\'panes\'] if \'uat3-real\' in (p.get(\'label\') or \'\')]"\n  sleep 0.5\ndone | sort -u'},
+      {step:6, label:"Terminal 1 — 3a: dispatch the REAL build", text:'python3 hooks/executor_routing_lib.py dispatch --seat build \\\n  --prompt-file /tmp/uat3/brief.md --run-id uat3-real \\\n  --gate-file /tmp/uat3/gate.json --plan-file /tmp/uat3/plan.md \\\n  --correlation-id uat3-real-1 --timeout 900 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {step:7, label:"3a evidence — did the worker really mutate its worktree?", text:'python3 hooks/executor_routing_lib.py status --run uat3-real \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic\n\n# copy worktree_path out of that JSON, then:\ngit -C <worktree_path> status --porcelain\ngit -C <worktree_path> diff -- docs/planning/UAT3-REALWORK-SCRATCH.md\n\n# and your MAIN checkout must still be clean:\ngit status --porcelain'},
+      {step:8, label:"3b — dispatch a review seat, gate still flipped", text:'printf \'Reply with the single word OK.\\n\' > /tmp/uat3/review-brief.md\n\npython3 hooks/executor_routing_lib.py dispatch --seat review \\\n  --prompt-file /tmp/uat3/review-brief.md --run-id uat3-real \\\n  --correlation-id uat3-real-review --author-provider anthropic --timeout 300 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {step:9, label:"3b evidence — both rows, one run", text:'python3 -c "import json;[print({k:r.get(k) for k in (\'session_name\',\'terminal_backend\',\'run_socket\')}) for r in json.load(open(\'.rawgentic/runtime/registry/jobs.json\')).values() if \'uat3-real\' in json.dumps(r)]"'},
+      {step:10, label:"teardown — ALWAYS run this", text:'python3 -c "\nimport json; p=\'.rawgentic.json\'; d=json.load(open(p)); d.pop(\'executorTerminalBackend\',None)\njson.dump(d,open(p,\'w\'),indent=2); open(p,\'a\').write(chr(10))"\ngit status --porcelain .rawgentic.json    # must print NOTHING\n\nfor w in $(git worktree list --porcelain | grep \'^worktree \' | cut -d\' \' -f2- | grep uat3-real); do\n  git worktree remove --force "$w"; done\ngit worktree prune\n\nrm -rf .rawgentic/runs/uat3-real .rawgentic/runtime/worktrees/uat3-real-* \\\n       .rawgentic/runtime/worktrees/.meta/uat3-real-*.json'}
+    ],
+    pass:"<b>3a:</b> the watcher showed a pane labelled <code>rg-uat3-real-…-build-…</code> running for the duration; <code>git -C &lt;worktree_path&gt; status --porcelain</code> shows the new file; your main checkout stayed clean; <code>status --run</code> says <code>\"state\":\"completed\"</code> with <code>\"probe_error\":null</code>; no pane left behind. <b>3b:</b> in the same run the build row is herdr-backed (<code>run_socket: 'w1'</code>) and the review row is NOT, and no herdr pane appeared for the review seat. Paste the step-9 output into your note — it shows both rows at once.",
+    see:{title:"the launch path, as it actually ran here (2026-07-27) — this part is done", cap:"Captured from the two verification runs on herdr 0.7.5. This is the half you do NOT need to repeat; 3a and 3b are the parts nobody has run.", lines:[
+      ["p","$ python3 hooks/executor_routing_lib.py mint-gate --plan-file /tmp/uat3/plan.md …"],
+      ["g",'{"ok":true,"action":"mint-gate","decision":false,"reason_codes":[]}'],
+      ["p","$ python3 hooks/executor_routing_lib.py begin-run --run-id uat3-drill …"],
+      ["g",'{"run_id":"uat3-drill","architecture":"executor"}'],
+      ["o",""],
+      ["p","# watcher, running in the second terminal during the dispatch"],
+      ["g","w1:pAK | rg-uat3-drill-3eab3245-c5830e1d-build-44575cf5-0-e14e5728-229c44fb"],
+      ["o","   … and it self-closed the moment the worker exited"],
+      ["o",""],
+      ["p","$ dispatch --seat build … --run-id uat3-drill"],
+      ["g",'{"ok":true,"action":"executor_supervised","seat":"build","state":"completed"}'],
+      ["a",'   model: gpt-5.6-terra  (codex chain entry, not the anthropic primary — expected)'],
+      ["o",""],
+      ["g",'registry:  {"terminal_backend": "herdr", "run_socket": "w1"}'],
+      ["g",'status:    {"state":"completed","probe_error":null}'],
+      ["g","0 panes left behind"],
+      ["o",""],
+      ["r","NOT YET RUN BY ANYONE:  3a real-work worktree mutation  ·  3b live review-seat negative"]
+    ]},
+    schem:true
+  }
+];
+
+/* =========================================================================
+   1b. SETTLED — items that were on this checklist and are now closed.
+   Kept visible with their evidence, deliberately OUTSIDE `CHECKS` so they no
+   longer count toward the ring, the rail, or the report. Nothing here is an
+   ask; removing them from the checklist is the point (2026-07-27 refresh).
+   ========================================================================= */
+const SETTLED = [
+  {
+    id:"uat1", uid:"UAT-1", name:"A real dispatch still works after the refactor",
+    verdict:"EVIDENCED",
+    closed:"Settled by the #647 WF2 run, 2026-07-27 — under the tmux default, post-refactor.",
+    body:[
+      "#636 moved every launch primitive behind a new <b>TerminalBackend</b> seam, and the suite could only prove the seam's shape. The <b>#647 WF2 run</b> then drove real executor dispatches through it and completed normally: PR #657 merged, 4/4 CI lanes green, suite 5183 passed / 21 skipped / 0 failed.",
+      "<b>Stated precisely, not laundered:</b> the seats that launched were <b>review</b> seats — the run's audit log at <code>.rawgentic/runs/wf2-647-50e7e132/routing-audit.jsonl</code> carries <code>seat: review</code> rows only, and Steps 8a and 11 recorded <code>reviewer_kind: codex</code>. So the seam is proven live end to end, but the <b>build-seat</b> argv path specifically rides on UAT-3, which you are running anyway. Re-running a whole WF2 issue purely to exercise the tmux build seat is not worth your time."
+    ],
+    lines:[
+      ["p","$ python3 hooks/work_summary.py find --issue 647"],
+      ["g",'"tests": {"added": 17, "passing": 5183, "total": 5204}'],
+      ["g",'"gates": [ … {"step":"8a","reviewer_kind":"codex"}, {"step":"11","reviewer_kind":"codex"} ]'],
+      ["o",'"outcome": {"pr_number": 657, "ci": "passed"}'],
+      ["a","residual: seat: review rows only — no build-seat row in this run"]
+    ]
   },
   {
     id:"uat5", uid:"UAT-5", name:"The regression check does what it claims",
-    tags:[["evidenced","Evidence already gathered"]],
-    why:[
-      "This one is already evidenced end to end on this host — it wants your eyes on the result rather than a fresh run, though re-running costs about eight seconds.",
-      "The important half is the <b>negative</b>: with herdr absent the gate must refuse to report success. A green exit for a check that never ran is the failure mode the gate exists to prevent, and the cross-model review caught exactly that in the first draft."
+    verdict:"EVIDENCED",
+    closed:"All three arms observed 2026-07-25 on herdr 0.7.5, from pane w1:p1.",
+    body:[
+      "Already evidenced end to end on this host. The important half is the <b>negative</b>: with herdr absent the gate must refuse to report success. A green exit for a check that never ran is the failure mode the gate exists to prevent, and the cross-model review caught exactly that in the first draft.",
+      "Still re-runnable whenever you want it — <code>python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate</code>, where the exit code <i>is</i> the verdict (0 GO · 2 NO_GO · 3 ERROR · 4 prerequisites unavailable). It has answered, so it is no longer an ask."
     ],
-    steps:[
-      "Run the gate from inside a herdr pane and read the verdict line.",
-      "Run it again with herdr off PATH and check the exit code is 4, not 0.",
-      "Optionally run the pytest form to read per-rep detail."
-    ],
-    cmds:[
-      {label:"the gate", text:"python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate"},
-      {label:"the negative", text:'env PATH="/usr/bin:/bin" python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate; echo "exit=$?"'},
-      {label:"per-rep detail", text:"RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v"}
-    ],
-    pass:"The live run reports 20 cold + 20 reused reps with 0 failures per condition and exits 0; the herdr-absent run exits 4 and says the gate did not run.",
-    see:{title:"both halves, as captured", cap:"Exit codes are the contract: 0 GO · 2 NO_GO · 3 ERROR · 4 prerequisites unavailable. Nothing but GO exits 0.", lines:[
+    lines:[
       ["p","$ python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate"],
       ["g","GO (cold: 20 reps, 0 identity, 0 env, reused: 20 reps, 0 identity, 0 env)"],
       ["o","exit=0"],
       ["o",""],
       ["p",'$ env PATH="/usr/bin:/bin" python3 …/herdr_ac1_protocol.py --gate'],
-      ["a","UNAVAILABLE: herdr binary not on PATH"],
       ["a","The gate did NOT run — this is not a pass."],
-      ["r","exit=4"],
-      ["o",""],
-      ["p","$ RUN_LIVE=1 pytest …/test_herdr_pid_identity_live.py -q   # herdr absent"],
-      ["a","3 skipped in 0.07s   (reason names the unmet prerequisite)"]
-    ]}
+      ["r","exit=4"]
+    ]
   },
   {
     id:"uat6", uid:"UAT-6", name:"Decide GAP-3",
-    tags:[["owner","Owner decision"]],
-    why:[
-      "<code>pane split --current</code> needs a calling pane. The durable long-run launcher runs detached from crontab with no controlling terminal, so a build-seat launch there fails loud.",
-      "That is correct behaviour for an opt-in backend — but it means <b>herdr for the build seat</b> and <b>unattended cron-resumed runs</b> cannot both be true today. This is a scope decision, not a bug."
+    verdict:"CLOSED",
+    closed:'Owner decision D-4, 2026-07-27 — "A-656: accept". Accepted as a scope boundary; no follow-up issue.',
+    body:[
+      "<code>pane split --current</code> needs a calling pane. The durable long-run launcher runs detached from crontab with no controlling terminal, so a build-seat launch there fails loud. That is correct behaviour for an opt-in backend — but it means <b>herdr for the build seat</b> and <b>unattended cron-resumed runs</b> cannot both be true.",
+      "<b>Decided: accepted as a scope boundary.</b> The two stay mutually exclusive. Recorded here so nobody rediscovers it at 3am."
     ],
-    steps:[
-      "Decide whether the herdr build seat needs to work from the cron / headless launcher.",
-      "If yes, it needs a design (a pane-less launch target, or a launcher that first creates a workspace).",
-      "If no, record it as an accepted scope boundary so nobody rediscovers it at 3am."
-    ],
-    cmds:[],
-    pass:"An explicit decision exists — accepted as a scope boundary, or filed as a follow-up issue.",
-    see:{title:"why it fails there, precisely", cap:"Not a defect: --current has nothing to resolve without a controlling pane, and failing loud is the right outcome for an opt-in backend.", lines:[
+    lines:[
       ["p","# from a detached cron process (no herdr pane)"],
       ["p","$ herdr pane split --current --direction right --cwd /tmp"],
       ["r",'{"error":{"code":"no_current_pane"}}'],
-      ["o","-> HerdrBackend.new_session returns rc!=0 and the launch fails loudly"],
-      ["a",'-> the AC1 gate SKIPS with "no resolvable calling pane" rather than failing']
-    ]}
+      ["g","-> accepted 2026-07-27: opt-in backend, failing loud is correct"]
+    ]
   }
 ];
 
@@ -627,7 +737,7 @@ const CHECKS = [
    that a herdr or backend change requires re-qualification, so a pass that silently survives an
    upgrade would be the very defect this page exists to prevent. A provenance mismatch keeps the
    notes but clears the verdicts, loudly. */
-const PROVENANCE = {artifact:"2026-07-25", rawgentic:"3.97.1", herdrFloor:"0.7.5"};
+const PROVENANCE = {artifact:"2026-07-27", rawgentic:"3.97.2", herdrFloor:"0.7.5"};
 const KEY = "rg-uat-635-" + [PROVENANCE.artifact, PROVENANCE.rawgentic, PROVENANCE.herdrFloor].join("-");
 const LEGACY_KEYS = ["rg-uat-635-v1"];
 const load = () => {
@@ -741,8 +851,19 @@ CHECKS.forEach((c, i) => {
     <div class="grid2">
       <div>
         <div class="why">${c.why.map(p => `<p>${p}</p>`).join("")}</div>
-        <ol class="steps">${c.steps.map(s => `<li>${s}</li>`).join("")}</ol>
-        ${(c.cmds||[]).map((cm, ci) => `
+        <ol class="steps">${c.steps.map((s, si) => {
+          /* Each step owns its command INLINE. Referring to "command 1" from prose and
+             rendering the box further down forced the reader to scroll and match numbers
+             by hand — owner feedback 2026-07-27, the defect this layout exists to fix. */
+          const own = (c.cmds||[]).map((cm, ci) => [cm, ci]).filter(([cm]) => cm.step === si + 1);
+          const boxes = own.map(([cm, ci]) => `
+            <div class="cmd" data-ci="${ci}">
+              <button class="copy" type="button">copy</button>
+              <pre></pre>
+            </div>`).join("");
+          return `<li>${s}${boxes}</li>`;
+        }).join("")}</ol>
+        ${(c.cmds||[]).map((cm, ci) => cm.step ? "" : `
           <div class="cmd" data-ci="${ci}">
             <button class="copy" type="button">copy</button>
             <pre></pre>
@@ -780,6 +901,46 @@ CHECKS.forEach((c, i) => {
   btn.addEventListener("click", () => document.getElementById(c.id).scrollIntoView({block:"start"}));
   li.appendChild(btn); railList.appendChild(li);
 });
+
+/* --------------------------------------------------- settled, not asked --- */
+/* Rendered as plain stations with NO verdict box and NO rail entry: they are
+   evidence, not work. Keeping them visible is why they were retired rather
+   than deleted — a removed item reads as a forgotten one. */
+if (SETTLED.length) {
+  const intro = document.createElement("section");
+  intro.className = "station settledIntro";
+  intro.id = "settled";
+  intro.innerHTML = `
+    <div class="head">
+      <span class="uid">DONE</span>
+      <h2>Already settled — no action needed</h2>
+      <span class="tag evidenced">${SETTLED.length} retired from the checklist</span>
+    </div>
+    <p class="why">These were on the checklist and are now closed. They are kept here with their
+    evidence so nothing is silently dropped, but they no longer count toward the ring, the rail,
+    or the report — you are not being asked to re-run them.</p>`;
+  stations.appendChild(intro);
+
+  SETTLED.forEach(s => {
+    const sec = document.createElement("section");
+    sec.className = "station settled";
+    sec.id = s.id;
+    sec.innerHTML = `
+      <div class="head">
+        <span class="uid">${s.uid}</span>
+        <h2>${s.name}</h2>
+        <span class="tag evidenced">${s.verdict}</span>
+      </div>
+      <div class="grid2">
+        <div>
+          <div class="why">${s.body.map(p => `<p>${p}</p>`).join("")}</div>
+          <div class="pass"><strong>How it closed</strong>${s.closed}</div>
+        </div>
+        <div>${seeMarkup({title:"recorded evidence", cap:"Captured when the item closed. Re-runnable, but not an ask.", lines:s.lines})}</div>
+      </div>`;
+    stations.appendChild(sec);
+  });
+}
 
 /* ------------------------------------------------------- verdict wiring --- */
 function paint(){
