@@ -538,35 +538,53 @@ const CHECKS = [
   },
   {
     id:"uat3", uid:"UAT-3", name:"A real build-seat dispatch under herdr", priority:true,
-    tags:[["owner","Owner only"],["","The one that matters"]],
+    tags:[["owner","Owner only"],["","The one that matters"],["evidenced","Sequence verified 2026-07-27"]],
     why:[
-      "This is <b>GAP-2</b>, and the only check that exercises the production entry path. Everything else herdr-side was proven by driving the backend directly.",
-      "It needs a session that is itself inside a herdr pane, because <code>pane split --current</code> resolves the <b>calling</b> process's pane. Also confirm the negative: a review or analysis seat in the same run must still launch under tmux."
+      "This is <b>GAP-2</b>, and the only check that exercises the production entry path — an <code>executor_routing_lib dispatch</code> of the <b>build</b> seat with the gate flipped to herdr.",
+      "It is a <b>self-contained ~20-minute drill</b>: no real issue, no waiting for your next WF2 run. Every command below was <b>executed twice on this host on 2026-07-27 and works</b>. What is not verified is your judgement on the result — that is the part only you can do.",
+      "<b>Redeploy the plugin first.</b> #647 (<code>6ef34c5</code>, v3.97.2) is what makes <code>status</code> trustworthy for a herdr-backed job, and the installed cache is still 3.97.1 — skip it and this drill measures the pre-fix behaviour."
     ],
     steps:[
-      "Prove your session can host the launch — run the preflight below. It must print a pane id and a workspace, and they must agree. (A page cannot know anything about your shell, so this is a check, not a claim.)",
-      "Set the gate in the project's <code>.rawgentic.json</code>.",
-      "Run a real issue whose plan dispatches a build seat.",
-      "Watch for a new labelled pane beside your orchestration window, and check nothing is left behind afterwards.",
-      "Confirm the negative: a review/analysis seat in the same run still launches under tmux."
+      "<b>Prereqs, not steps.</b> Be inside a herdr pane (<code>echo \"$HERDR_PANE_ID $HERDR_WORKSPACE_ID\"</code> prints two non-empty values — <code>pane split --current</code> resolves the <i>calling</i> process's pane); have the plugin redeployed to v3.97.2+; and <code>cd</code> to the project root.",
+      "Create the throwaway plan + brief (command 1). The plan must parse to at least one task and the <code>- riskLevel:</code> line is <b>mandatory</b> — its absence fails closed.",
+      "Mint the gate (command 2). A build seat needs an authenticated gate decision bound to that exact plan by digest. Expect <code>\"ok\":true</code> and <code>\"decision\":false</code>.",
+      "Declare the run (command 3). Expect <code>\"architecture\":\"executor\"</code>.",
+      "Flip the gate (command 4) — a <b>top-level</b> key in <code>.rawgentic.json</code>. That file is tracked by git; do not commit it, step 8 puts it back.",
+      "<b>Start the pane watcher in a SECOND pane (command 5) BEFORE dispatching.</b> This is not optional: the pane herdr creates closes itself the instant the worker exits, and the drill takes ~10 seconds — look afterwards and you see nothing, and wrongly conclude it failed.",
+      "Dispatch the build seat (command 6). Expect exit 0 and <code>\"state\":\"completed\"</code>. Two things look wrong but are not: it routes to <b>codex / gpt-5.6-terra</b> (the build seat's anthropic primary falls through to its cross-model chain entry), and the observation says <code>\"parse_status\":\"no_response\"</code> because a no-op brief emits no structured payload.",
+      "Check the three evidence items (commands 7a/7b), then <b>tear down (command 8), always</b> — even if the drill failed."
     ],
     cmds:[
-      {label:"preflight — must print a pane and a matching workspace", text:'test -n "$HERDR_PANE_ID" -a -n "$HERDR_WORKSPACE_ID" || echo "NOT IN A HERDR PANE — pane split --current cannot resolve"; herdr pane current | python3 -c "import json,sys,os; p=json.load(sys.stdin)[\'result\'][\'pane\']; print(\'pane\', p[\'pane_id\'], \'workspace\', p[\'workspace_id\'], \'| env agrees:\', p[\'workspace_id\']==os.environ.get(\'HERDR_WORKSPACE_ID\'))"'},
-      {label:"the gate, in .rawgentic.json", text:'"executorTerminalBackend": { "version": 1, "build": "herdr" }'},
-      {label:"watch the panes", text:"herdr pane list --workspace $HERDR_WORKSPACE_ID"},
-      {label:"rollback — absent means tmux", text:'"executorTerminalBackend": { "version": 1, "build": "tmux" }'}
+      {label:"1 — throwaway plan + brief", text:'mkdir -p /tmp/uat3 && cat > /tmp/uat3/plan.md <<\'EOF\'\n### Task 1: emit a sentinel line and change no files\n- riskLevel: standard\n- files: docs/planning/UAT3-DRILL-SCRATCH.md\nEOF\ncat > /tmp/uat3/brief.md <<\'EOF\'\nThis is a UAT drill, not real work. Do exactly one thing: print the single line\n  UAT3-DRILL-SENTINEL-OK\nto stdout, then stop. Do NOT create, edit, delete, stage or commit any file.\nEOF'},
+      {label:"2 — mint the gate", text:'python3 hooks/executor_routing_lib.py mint-gate \\\n  --plan-file /tmp/uat3/plan.md --issue-complexity trivial --plan-est-lines 5 \\\n  --out /tmp/uat3/gate.json'},
+      {label:"3 — declare the run", text:'python3 hooks/executor_routing_lib.py begin-run --run-id uat3-drill \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {label:"4 — flip the gate (top level of .rawgentic.json)", text:'"executorTerminalBackend": { "version": 1, "build": "herdr" }'},
+      {label:"5 — pane watcher, in a SECOND pane, started BEFORE the dispatch", text:'for i in $(seq 1 180); do\n  herdr pane list --workspace "$HERDR_WORKSPACE_ID" \\\n  | python3 -c "import sys,json;[print(p[\'pane_id\'],\'|\',p.get(\'label\',\'\')) for p in json.load(sys.stdin)[\'result\'][\'panes\'] if \'uat3-drill\' in (p.get(\'label\') or \'\')]"\n  sleep 0.5\ndone | sort -u'},
+      {label:"6 — dispatch the build seat", text:'python3 hooks/executor_routing_lib.py dispatch --seat build \\\n  --prompt-file /tmp/uat3/brief.md --run-id uat3-drill \\\n  --gate-file /tmp/uat3/gate.json --plan-file /tmp/uat3/plan.md \\\n  --correlation-id uat3-drill-1 --timeout 240 \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {label:"7a — the durable evidence: is the record herdr-backed?", text:'python3 -c "import json;print([{k:r.get(k) for k in (\'session_name\',\'terminal_backend\',\'run_socket\')} for r in json.load(open(\'.rawgentic/runtime/registry/jobs.json\')).values() if \'uat3-drill\' in json.dumps(r)])"'},
+      {label:"7b — does status tell the truth about it? (the #647 fix; flag is --run, not --run-id)", text:'python3 hooks/executor_routing_lib.py status --run uat3-drill \\\n  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic'},
+      {label:"8 — teardown, always", text:'python3 -c "\nimport json; p=\'.rawgentic.json\'; d=json.load(open(p)); d.pop(\'executorTerminalBackend\',None)\njson.dump(d,open(p,\'w\'),indent=2); open(p,\'a\').write(chr(10))"\ngit status --porcelain .rawgentic.json          # must print NOTHING\nfor w in $(git worktree list --porcelain | grep \'^worktree \' | cut -d\' \' -f2- | grep uat3-drill); do\n  git worktree remove --force "$w"; done\ngit worktree prune\nrm -rf .rawgentic/runs/uat3-drill .rawgentic/runtime/worktrees/uat3-drill-* \\\n       .rawgentic/runtime/worktrees/.meta/uat3-drill-*.json'}
     ],
-    pass:"The preflight printed a pane id and a workspace that agree; a new herdr pane then appears alongside your orchestration window and runs the build seat; <code>pane list</code> shows it labelled with the run's session name; the seat's <code>observation.json</code> lands and the run completes; afterwards no labelled pane is left behind. And a review/analysis seat in the same run still went to tmux. Paste the preflight line into your note.",
-    see:{title:"the shape of a healthy launch (captured on this host)", cap:"Real output from the live qualification run, which drives the same three calls the production path drives. The preflight's own verbs were exercised live on herdr 0.7.5 too — <code>pane current</code> returned this session's pane <code>w1:p1</code> in workspace <code>w1</code>, and <code>pane list --workspace w1</code> enumerated its panes. Your UAT-3 run adds the part nobody has seen: a real model dispatch flowing through it.", lines:[
-      ["p","$ herdr pane split --current --direction right --cwd /tmp/rg639"],
-      ["o",'{"result":{"pane":{"pane_id":"w1:p3N","workspace_id":"w1"}}}'],
-      ["p","$ herdr pane rename w1:p3N rg639-ac1-cold-00-a1b2c3"],
-      ["p","$ herdr pane run w1:p3N exec python3 …/herdr_ac1_protocol.py --sentinel …"],
-      ["p","$ herdr pane process-info --pane w1:p3N"],
-      ["o",'{"result":{"process_info":{"shell_pid":2978249}}}'],
-      ["g","/proc/2978249/cmdline  ->  python3 …/herdr_ac1_protocol.py --sentinel …"],
-      ["g","observation.json       ->  {\"phase\":\"completed\",\"exit_code\":0,\"pid\":2978249}"],
-      ["o","pane closes itself the instant the exec'd process exits"],
+    pass:"All three: (1) the watcher caught a herdr pane labelled with the run's session name — observed here as <code>w1:pAK | rg-uat3-drill-…-build-…</code>; (2) the job record shows <code>terminal_backend: 'herdr'</code> and <code>run_socket: 'w1'</code> — a herdr <i>workspace id</i>, not a tmux socket path, and this survives the pane closing; (3) <code>status</code> reports <code>\"state\":\"completed\"</code> with <code>\"probe_error\":null</code> — NOT <code>exited_no_sentinel</code> and not a claim the job died. The negative needs no second dispatch: only the <code>build</code> key is gated, and <code>resolve_backend</code> maps <code>tmux</code>/absent → TmuxBackend, so every other seat is untouched. Paste the 7a line into your note.",
+    see:{title:"the drill, as it actually ran here (2026-07-27)", cap:"Real output from the two verification runs of this exact sequence on herdr 0.7.5. The pane line came from the watcher — without it the pane is already gone by the time you look, which is the single most misleading thing about this check.", lines:[
+      ["p","$ python3 hooks/executor_routing_lib.py mint-gate --plan-file /tmp/uat3/plan.md …"],
+      ["g",'{"ok":true,"action":"mint-gate","decision":false,"reason_codes":[]}'],
+      ["p","$ python3 hooks/executor_routing_lib.py begin-run --run-id uat3-drill …"],
+      ["g",'{"run_id":"uat3-drill","architecture":"executor"}'],
+      ["o",""],
+      ["p","# watcher, running in a second pane during the dispatch"],
+      ["g","w1:pAK | rg-uat3-drill-3eab3245-c5830e1d-build-44575cf5-0-e14e5728-229c44fb"],
+      ["o","   … and it self-closes the moment the worker exits"],
+      ["o",""],
+      ["p","$ python3 hooks/executor_routing_lib.py dispatch --seat build … --run-id uat3-drill"],
+      ["g",'{"ok":true,"action":"executor_supervised","seat":"build","state":"completed"}'],
+      ["a",'   requested/actual model: gpt-5.6-terra  (codex chain entry — expected)'],
+      ["a",'   "parse_status":"no_response"          (no-op brief — expected)'],
+      ["o",""],
+      ["p","$ # 7a — the durable evidence"],
+      ["g",'{"terminal_backend": "herdr", "run_socket": "w1"}'],
+      ["p","$ # 7b — status, the #647 fix"],
+      ["g",'{"state":"completed","run_socket":"w1","probe_error":null}'],
       ["g","0 panes left behind"]
     ]},
     schem:true
