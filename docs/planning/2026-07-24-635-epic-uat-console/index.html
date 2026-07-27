@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Epic #635 — UAT console</title>
-<meta name="description" content="Owner-side acceptance testing for the herdr build-seat launch backend. Six checks, live PID-identity visualisation, and a checklist that remembers your verdicts.">
+<meta name="description" content="Owner-side acceptance testing for the herdr build-seat launch backend. Three open checks, live PID-identity visualisation, and a checklist that remembers your verdicts.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230B1020'/%3E%3Crect x='6' y='7' width='8' height='18' fill='%2335E0A1'/%3E%3Crect x='18' y='7' width='8' height='18' fill='%23FFB454'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -228,6 +228,36 @@ h1 .beside{color:var(--nogo)}
 .gap.amber .gid{color:var(--err)}
 .gap h3{font-size:15px;margin:8px 0 9px;line-height:1.4}
 .gap p{margin:0;font-size:13.4px;color:#B6C2DA}
+.gap p + p{margin-top:10px}
+/* A gap that has been closed keeps its card — a deleted one reads as forgotten. */
+.gap.resolved{border-top-color:var(--go)}
+.gap.resolved .gid{color:var(--go)}
+.gap .gstate{
+  font-family:var(--display);font-size:10.5px;letter-spacing:.11em;
+  border:1px solid var(--line);border-radius:2px;padding:1px 6px;
+  margin-left:6px;vertical-align:2px;white-space:nowrap;color:var(--dim);
+}
+.gap.resolved .gstate{color:var(--go);border-color:#35e0a155;background:#35e0a112}
+.gap.amber .gstate{color:var(--err);border-color:#ffb45455;background:#ffb45412}
+.gap .outcome{
+  border-left:2px solid var(--line);padding-left:11px;color:#C3CDE2;
+}
+.gap.resolved .outcome{border-left-color:var(--go)}
+.gap.amber .outcome{border-left-color:var(--err)}
+
+/* The redeploy notice in the priority panel — load-bearing, not decoration. */
+.reissue{
+  margin-top:14px;padding:12px 14px;border:1px solid #ffb45444;
+  border-left:3px solid var(--err);background:#ffb4540e;
+  font-size:13.4px;color:#D6DEEE;
+}
+.reissue code{font-size:12.6px;word-break:break-all}
+
+/* Settled items: same station shell, visibly demoted, no verdict controls. */
+.station.settledIntro{border-top:2px solid var(--go)}
+.station.settled{opacity:.82}
+.station.settled .head .uid{color:var(--go)}
+.station.settled:hover{opacity:1}
 
 /* ---------------------------------------------------------------- log ------ */
 .log{padding:clamp(34px,5vw,68px) clamp(22px,4vw,54px)}
@@ -268,8 +298,8 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
   <div class="topbar">
     <span class="brand">Epic <b>#635</b> · herdr build-seat launch backend</span>
     <span class="pill go">4 / 4 children merged</span>
-    <span class="pill open">Epic open · tracking UAT</span>
-    <span class="pill">rawgentic v3.97.1</span>
+    <span class="pill open">Epic closed · UAT tracked in #656</span>
+    <span class="pill">rawgentic v3.97.2 · cache 3.97.1</span>
     <span class="spacer"></span>
     <span class="pill">herdr 0.7.5</span>
   </div>
@@ -283,7 +313,7 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
         neither documents nor endorses. If a future herdr release ever wraps that command in a child
         instead of replacing the pane's shell, <b>every PID the supervisor holds names the wrong
         process</b>: it would track and kill a shell while the real worker kept running. Nothing
-        would error. Play both outcomes below, then work the six checks.
+        would error. Play both outcomes below, then work the three remaining checks.
       </p>
       <div class="modes" role="group" aria-label="Launch outcome">
         <button class="mode" data-mode="exec" aria-pressed="true">exec honoured — what we qualified</button>
@@ -324,31 +354,40 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 <section class="priority">
   <div class="priorityInner">
     <div>
-      <h2>Start with UAT-3. It is the only check that touches the production path.</h2>
+      <h2>UAT-3 is the only item left. Everything else is settled.</h2>
       <p>
         Everything herdr-side was verified by driving <b>HerdrBackend</b> directly, plus the config-gate
         decision in isolation. <b>No real build-seat model dispatch has ever gone through the gate under
-        herdr.</b> That is the gap this session cannot close for you: it needs a session inside a herdr
+        herdr.</b> That is the gap this page cannot close for you: it needs a session inside a herdr
         pane with the config flipped. If UAT-3 fails, the backend is not ready no matter how green
         everything else looks.
+      </p>
+      <p class="reissue">
+        <b>Redeploy the plugin before you run it.</b> #647 (merged <code>6ef34c5</code>, v3.97.2) is what
+        makes <code>status</code> trustworthy for a herdr-backed job — and the installed cache is still
+        <b>3.97.1</b>, so without a redeploy this check measures the pre-fix behaviour.
+        Exit every session using rawgentic hooks, then
+        <code>claude plugin remove rawgentic@rawgentic &amp;&amp; claude plugin install rawgentic@rawgentic</code>.
       </p>
       <button class="jump" data-jump="uat3">Go to UAT-3 →</button>
     </div>
     <div class="scorecard">
       <h3>Where the evidence stands</h3>
       <div class="scoreRow ok"><span>CI, all four lanes, by SHA</span><span>pass</span></div>
-      <div class="scoreRow ok"><span>Suite (5128 → 5166)</span><span>0 failed</span></div>
+      <div class="scoreRow ok"><span>Suite (5166 → 5183)</span><span>0 failed</span></div>
       <div class="scoreRow ok"><span>AC1 gate, live, 40 reps</span><span>GO</span></div>
       <div class="scoreRow ok"><span>Security scan</span><span>pass · 1 visible skip</span></div>
-      <div class="scoreRow warn"><span>Real dispatch under herdr</span><span>never run</span></div>
-      <div class="scoreRow warn"><span>park_and_reset at a live loop-back</span><span>never invoked</span></div>
+      <div class="scoreRow ok"><span>Status surface for herdr jobs (#647)</span><span>shipped</span></div>
+      <div class="scoreRow ok"><span>GAP-3 cron/herdr exclusivity</span><span>decided · accepted</span></div>
+      <div class="scoreRow warn"><span>Real dispatch under herdr</span><span>never run — UAT-3</span></div>
+      <div class="scoreRow warn"><span>park_and_reset at a live loop-back</span><span>filed as #661</span></div>
     </div>
   </div>
 </section>
 
 <div class="console">
   <aside class="rail" aria-label="Checklist">
-    <h3>Six checks</h3>
+    <h3>Three checks</h3>
     <div class="ring">
       <svg width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">
         <circle cx="31" cy="31" r="26" fill="none" stroke="#26314F" stroke-width="5"></circle>
@@ -356,7 +395,7 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
                 stroke-linecap="round" stroke-dasharray="163.4" stroke-dashoffset="163.4"></circle>
       </svg>
       <div>
-        <div class="num" id="ringNum">0/6</div>
+        <div class="num" id="ringNum">0/3</div>
         <div class="sub" id="ringSub">nothing recorded</div>
       </div>
     </div>
@@ -375,40 +414,50 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 </div>
 
 <section class="gaps">
-  <h2>Named gaps — nobody has proven these</h2>
+  <h2>Named gaps — where each one now stands</h2>
   <p>
-    Carried forward verbatim from the plan. They are not defects introduced by this epic; they are the
-    honest edges of it, and two of them are decisions rather than bugs.
+    Carried forward from the plan. They are not defects introduced by this epic; they are the honest
+    edges of it. <b>As of 2026-07-27 three of the four are resolved</b> — one shipped, one decided,
+    one filed — and each is left visible with its outcome rather than quietly deleted.
   </p>
   <div class="gapGrid">
-    <article class="gap">
-      <div class="gid">GAP-1</div>
-      <h3>park_and_reset is invoked by no code path</h3>
+    <article class="gap resolved">
+      <div class="gid">GAP-1 · #661</div>
+      <h3>park_and_reset is invoked by no code path <span class="gstate">FILED</span></h3>
       <p>#637's primitive is tested, but the orchestrator owns it by prose contract only. A live
-      design loop-back today would <b>not</b> park the worktree. Closing it needs either a real
-      loop-back exercised end to end, or a mechanical enforcement point.</p>
+      design loop-back today would <b>not</b> park the worktree.</p>
+      <p class="outcome"><b>Filed as #661</b> (owner decision D-5) rather than carried as an open
+      gap. Tracked work now — nothing for you to do here.</p>
     </article>
-    <article class="gap amber">
+    <article class="gap resolved">
       <div class="gid">GAP-3</div>
-      <h3>Unusable from the cron / headless launcher</h3>
+      <h3>Unusable from the cron / headless launcher <span class="gstate">ACCEPTED</span></h3>
       <p><code>pane split --current</code> resolves the caller's own pane. A detached cron run has
       none, so a build-seat launch there fails loud. "herdr for the build seat" and "unattended
-      cron-resumed runs" are currently mutually exclusive. That is UAT-6's decision.</p>
+      cron-resumed runs" are mutually exclusive.</p>
+      <p class="outcome"><b>Decided 2026-07-27 (D-4, "A-656: accept"):</b> accepted as a scope
+      boundary. No follow-up issue. This closed UAT-6.</p>
     </article>
     <article class="gap amber">
-      <div class="gid">GAP-4</div>
-      <h3>No herdr coverage in CI, and the gate is manual</h3>
+      <div class="gid">GAP-4 · #659</div>
+      <h3>No herdr coverage in CI, and the gate is manual <span class="gstate">PARTLY</span></h3>
       <p>CI installs no herdr, so no herdr behaviour is exercised there at all. #639's gate is the
-      compensating control — but it is run deliberately by a human from inside a pane. Nothing
-      re-qualifies the backend automatically when herdr is upgraded on this host.</p>
+      compensating control — but it is run deliberately by a human from inside a pane.</p>
+      <p class="outcome">The structural CI gap stays by design. The <i>"nobody noticed herdr
+      changed"</i> half is now <b>#659</b>. A live instance turned up the same day: <code>herdr
+      wait …</code>, which the herdr skill documents, does not exist in the installed 0.7.5 binary.</p>
     </article>
-    <article class="gap">
+    <article class="gap resolved">
       <div class="gid">GAP-5 · #647</div>
-      <h3>status output for a herdr job is not trustworthy</h3>
-      <p>The read-only run-status probe still runs <code>tmux</code> unconditionally, ignoring
-      <code>record.terminal_backend</code>. For a herdr record it fails for an ordinary reason and
-      the caller derives <code>exited_no_sentinel</code> without surfacing that the probe itself
-      failed — the same defect class the rest of #638 spent four passes closing.</p>
+      <h3>status output for a herdr job is not trustworthy <span class="gstate">SHIPPED</span></h3>
+      <p>The read-only run-status probe ran <code>tmux</code> unconditionally, ignoring
+      <code>record.terminal_backend</code>. For a herdr record it failed for an ordinary reason and
+      the caller derived <code>exited_no_sentinel</code> without surfacing that the probe itself
+      had failed.</p>
+      <p class="outcome"><b>Fixed and merged: <code>6ef34c5</code> (PR #657, v3.97.2).</b> The probe
+      now resolves the record's own backend, and an operational failure derives
+      <code>liveness_unknown</code> instead of asserting the job is dead (D-3 chose AC2). Rollback
+      anchor <code>c3baac5</code>. <b>Redeploy the plugin to get it — the cache is still 3.97.1.</b></p>
     </article>
   </div>
 </section>
@@ -426,7 +475,12 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
         <tr><td>pytest form with <code>RUN_LIVE</code> unset, and with herdr absent</td><td><span class="ok">3 skipped, exit 0</span>, reason names the unmet prerequisite</td></tr>
         <tr><td>Cross-model (Codex) diff review of #639</td><td><span class="am">4 findings, 2 High</span> — pytest-exits-0-on-skip, and a vacuous pid check; both fixed before merge</td></tr>
         <tr><td>Security scan, library, vs <code>origin/main</code></td><td><span class="ok">PASS</span> · 0 blocking / 0 advisory · 1 visible skip (<code>iac</code>, not applicable)</td></tr>
-        <tr><td>Real build-seat model dispatch through the gate under herdr</td><td><span class="no">never run — this is UAT-3</span></td></tr>
+        <tr><td><b>#647 merged</b> as <code>6ef34c5</code> (PR #657, v3.97.2) — GAP-5 closed</td><td><span class="ok">4/4 CI lanes green</span> · suite <b>5183 passed / 21 skipped / 0 failed</b>, exit 0 · 17 tests added · rollback anchor <code>c3baac5</code></td></tr>
+        <tr><td>#647 WF2 run — real executor dispatches through #636's seam, tmux default</td><td><span class="ok">review seats launched and reported</span> (<code>reviewer_kind: codex</code>, Steps 8a + 11); receipts at <code>.rawgentic/runs/wf2-647-50e7e132/routing-audit.jsonl</code>. Retires UAT-1 — <span class="am">build seat itself still rides UAT-3</span></td></tr>
+        <tr><td><b>Epic #635 closed</b>; owner-side UAT moved to tracker <b>#656</b></td><td><span class="ok">comment 5093464885</span></td></tr>
+        <tr><td>Follow-ups filed from the remaining gaps</td><td><span class="ok">#658</span> call-site inventory · <span class="ok">#659</span> herdr version-drift (GAP-4) · <span class="ok">#660</span> run-record usage is session-cumulative · <span class="ok">#661</span> GAP-1</td></tr>
+        <tr><td>Live: herdr CLI drift found while probing</td><td><span class="am"><code>herdr wait …</code> is documented by the skill but absent from the 0.7.5 binary</span> — a live instance of exactly what #659 is for</td></tr>
+        <tr><td>Real build-seat model dispatch through the gate under herdr</td><td><span class="no">never run — this is UAT-3, the one open item</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -461,27 +515,6 @@ let THREE = null;
    1. THE CHECKS — content, and the real captured output for each panel.
    ========================================================================= */
 const CHECKS = [
-  {
-    id:"uat1", uid:"UAT-1", name:"A real dispatch still works after the refactor",
-    tags:[["owner","Owner only"]],
-    why:[
-      "#636 moved every launch primitive behind a new <b>TerminalBackend</b> seam. The suite proves the seam's shape; it cannot prove a real dispatch still runs through it.",
-      "This is the regression check for the whole epic's foundation: if it fails, nothing downstream matters."
-    ],
-    steps:[
-      "Leave the config on the default — <code>executorTerminalBackend</code> absent, or <code>build: \"tmux\"</code>.",
-      "Run any real WF2/WF3 issue whose plan dispatches a build seat.",
-      "Watch the pane appear and the seat's <code>observation.json</code> land."
-    ],
-    cmds:[],
-    pass:"The dispatch launches, the pane runs, <code>observation.json</code> lands, the run completes — no behaviour change versus before the epic.",
-    see:{title:"tmux path, unchanged", cap:"Structural evidence only: this is what the suite asserts about the default backend. The live confirmation is yours to make.", lines:[
-      ["p","$ pytest tests/phase_executor/ -q"],
-      ["o","........................................................................ [ 94%]"],
-      ["o",".....................................................                    [100%]"],
-      ["g","972 passed, 17 skipped in 29.81s"]
-    ]}
-  },
   {
     id:"uat2", uid:"UAT-2", name:"The loop-back prose says what you intend",
     tags:[["owner","Owner only"]],
@@ -564,59 +597,63 @@ const CHECKS = [
       ["g","   -> #639's gate is the standing guard against 4"]
     ]}
   },
+];
+
+/* =========================================================================
+   1b. SETTLED — items that were on this checklist and are now closed.
+   Kept visible with their evidence, deliberately OUTSIDE `CHECKS` so they no
+   longer count toward the ring, the rail, or the report. Nothing here is an
+   ask; removing them from the checklist is the point (2026-07-27 refresh).
+   ========================================================================= */
+const SETTLED = [
+  {
+    id:"uat1", uid:"UAT-1", name:"A real dispatch still works after the refactor",
+    verdict:"EVIDENCED",
+    closed:"Settled by the #647 WF2 run, 2026-07-27 — under the tmux default, post-refactor.",
+    body:[
+      "#636 moved every launch primitive behind a new <b>TerminalBackend</b> seam, and the suite could only prove the seam's shape. The <b>#647 WF2 run</b> then drove real executor dispatches through it and completed normally: PR #657 merged, 4/4 CI lanes green, suite 5183 passed / 21 skipped / 0 failed.",
+      "<b>Stated precisely, not laundered:</b> the seats that launched were <b>review</b> seats — the run's audit log at <code>.rawgentic/runs/wf2-647-50e7e132/routing-audit.jsonl</code> carries <code>seat: review</code> rows only, and Steps 8a and 11 recorded <code>reviewer_kind: codex</code>. So the seam is proven live end to end, but the <b>build-seat</b> argv path specifically rides on UAT-3, which you are running anyway. Re-running a whole WF2 issue purely to exercise the tmux build seat is not worth your time."
+    ],
+    lines:[
+      ["p","$ python3 hooks/work_summary.py find --issue 647"],
+      ["g",'"tests": {"added": 17, "passing": 5183, "total": 5204}'],
+      ["g",'"gates": [ … {"step":"8a","reviewer_kind":"codex"}, {"step":"11","reviewer_kind":"codex"} ]'],
+      ["o",'"outcome": {"pr_number": 657, "ci": "passed"}'],
+      ["a","residual: seat: review rows only — no build-seat row in this run"]
+    ]
+  },
   {
     id:"uat5", uid:"UAT-5", name:"The regression check does what it claims",
-    tags:[["evidenced","Evidence already gathered"]],
-    why:[
-      "This one is already evidenced end to end on this host — it wants your eyes on the result rather than a fresh run, though re-running costs about eight seconds.",
-      "The important half is the <b>negative</b>: with herdr absent the gate must refuse to report success. A green exit for a check that never ran is the failure mode the gate exists to prevent, and the cross-model review caught exactly that in the first draft."
+    verdict:"EVIDENCED",
+    closed:"All three arms observed 2026-07-25 on herdr 0.7.5, from pane w1:p1.",
+    body:[
+      "Already evidenced end to end on this host. The important half is the <b>negative</b>: with herdr absent the gate must refuse to report success. A green exit for a check that never ran is the failure mode the gate exists to prevent, and the cross-model review caught exactly that in the first draft.",
+      "Still re-runnable whenever you want it — <code>python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate</code>, where the exit code <i>is</i> the verdict (0 GO · 2 NO_GO · 3 ERROR · 4 prerequisites unavailable). It has answered, so it is no longer an ask."
     ],
-    steps:[
-      "Run the gate from inside a herdr pane and read the verdict line.",
-      "Run it again with herdr off PATH and check the exit code is 4, not 0.",
-      "Optionally run the pytest form to read per-rep detail."
-    ],
-    cmds:[
-      {label:"the gate", text:"python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate"},
-      {label:"the negative", text:'env PATH="/usr/bin:/bin" python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate; echo "exit=$?"'},
-      {label:"per-rep detail", text:"RUN_LIVE=1 pytest tests/phase_executor/live/test_herdr_pid_identity_live.py -v"}
-    ],
-    pass:"The live run reports 20 cold + 20 reused reps with 0 failures per condition and exits 0; the herdr-absent run exits 4 and says the gate did not run.",
-    see:{title:"both halves, as captured", cap:"Exit codes are the contract: 0 GO · 2 NO_GO · 3 ERROR · 4 prerequisites unavailable. Nothing but GO exits 0.", lines:[
+    lines:[
       ["p","$ python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate"],
       ["g","GO (cold: 20 reps, 0 identity, 0 env, reused: 20 reps, 0 identity, 0 env)"],
       ["o","exit=0"],
       ["o",""],
       ["p",'$ env PATH="/usr/bin:/bin" python3 …/herdr_ac1_protocol.py --gate'],
-      ["a","UNAVAILABLE: herdr binary not on PATH"],
       ["a","The gate did NOT run — this is not a pass."],
-      ["r","exit=4"],
-      ["o",""],
-      ["p","$ RUN_LIVE=1 pytest …/test_herdr_pid_identity_live.py -q   # herdr absent"],
-      ["a","3 skipped in 0.07s   (reason names the unmet prerequisite)"]
-    ]}
+      ["r","exit=4"]
+    ]
   },
   {
     id:"uat6", uid:"UAT-6", name:"Decide GAP-3",
-    tags:[["owner","Owner decision"]],
-    why:[
-      "<code>pane split --current</code> needs a calling pane. The durable long-run launcher runs detached from crontab with no controlling terminal, so a build-seat launch there fails loud.",
-      "That is correct behaviour for an opt-in backend — but it means <b>herdr for the build seat</b> and <b>unattended cron-resumed runs</b> cannot both be true today. This is a scope decision, not a bug."
+    verdict:"CLOSED",
+    closed:'Owner decision D-4, 2026-07-27 — "A-656: accept". Accepted as a scope boundary; no follow-up issue.',
+    body:[
+      "<code>pane split --current</code> needs a calling pane. The durable long-run launcher runs detached from crontab with no controlling terminal, so a build-seat launch there fails loud. That is correct behaviour for an opt-in backend — but it means <b>herdr for the build seat</b> and <b>unattended cron-resumed runs</b> cannot both be true.",
+      "<b>Decided: accepted as a scope boundary.</b> The two stay mutually exclusive. Recorded here so nobody rediscovers it at 3am."
     ],
-    steps:[
-      "Decide whether the herdr build seat needs to work from the cron / headless launcher.",
-      "If yes, it needs a design (a pane-less launch target, or a launcher that first creates a workspace).",
-      "If no, record it as an accepted scope boundary so nobody rediscovers it at 3am."
-    ],
-    cmds:[],
-    pass:"An explicit decision exists — accepted as a scope boundary, or filed as a follow-up issue.",
-    see:{title:"why it fails there, precisely", cap:"Not a defect: --current has nothing to resolve without a controlling pane, and failing loud is the right outcome for an opt-in backend.", lines:[
+    lines:[
       ["p","# from a detached cron process (no herdr pane)"],
       ["p","$ herdr pane split --current --direction right --cwd /tmp"],
       ["r",'{"error":{"code":"no_current_pane"}}'],
-      ["o","-> HerdrBackend.new_session returns rc!=0 and the launch fails loudly"],
-      ["a",'-> the AC1 gate SKIPS with "no resolvable calling pane" rather than failing']
-    ]}
+      ["g","-> accepted 2026-07-27: opt-in backend, failing loud is correct"]
+    ]
   }
 ];
 
@@ -627,7 +664,7 @@ const CHECKS = [
    that a herdr or backend change requires re-qualification, so a pass that silently survives an
    upgrade would be the very defect this page exists to prevent. A provenance mismatch keeps the
    notes but clears the verdicts, loudly. */
-const PROVENANCE = {artifact:"2026-07-25", rawgentic:"3.97.1", herdrFloor:"0.7.5"};
+const PROVENANCE = {artifact:"2026-07-27", rawgentic:"3.97.2", herdrFloor:"0.7.5"};
 const KEY = "rg-uat-635-" + [PROVENANCE.artifact, PROVENANCE.rawgentic, PROVENANCE.herdrFloor].join("-");
 const LEGACY_KEYS = ["rg-uat-635-v1"];
 const load = () => {
@@ -780,6 +817,46 @@ CHECKS.forEach((c, i) => {
   btn.addEventListener("click", () => document.getElementById(c.id).scrollIntoView({block:"start"}));
   li.appendChild(btn); railList.appendChild(li);
 });
+
+/* --------------------------------------------------- settled, not asked --- */
+/* Rendered as plain stations with NO verdict box and NO rail entry: they are
+   evidence, not work. Keeping them visible is why they were retired rather
+   than deleted — a removed item reads as a forgotten one. */
+if (SETTLED.length) {
+  const intro = document.createElement("section");
+  intro.className = "station settledIntro";
+  intro.id = "settled";
+  intro.innerHTML = `
+    <div class="head">
+      <span class="uid">DONE</span>
+      <h2>Already settled — no action needed</h2>
+      <span class="tag evidenced">${SETTLED.length} retired from the checklist</span>
+    </div>
+    <p class="why">These were on the checklist and are now closed. They are kept here with their
+    evidence so nothing is silently dropped, but they no longer count toward the ring, the rail,
+    or the report — you are not being asked to re-run them.</p>`;
+  stations.appendChild(intro);
+
+  SETTLED.forEach(s => {
+    const sec = document.createElement("section");
+    sec.className = "station settled";
+    sec.id = s.id;
+    sec.innerHTML = `
+      <div class="head">
+        <span class="uid">${s.uid}</span>
+        <h2>${s.name}</h2>
+        <span class="tag evidenced">${s.verdict}</span>
+      </div>
+      <div class="grid2">
+        <div>
+          <div class="why">${s.body.map(p => `<p>${p}</p>`).join("")}</div>
+          <div class="pass"><strong>How it closed</strong>${s.closed}</div>
+        </div>
+        <div>${seeMarkup({title:"recorded evidence", cap:"Captured when the item closed. Re-runnable, but not an ask.", lines:s.lines})}</div>
+      </div>`;
+    stations.appendChild(sec);
+  });
+}
 
 /* ------------------------------------------------------- verdict wiring --- */
 function paint(){

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spike #654 — Test Plan</title>
+<style>
+:root{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;--ink-3:#7b8a92;
+--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media(prefers-color-scheme:dark){:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;
+--ink-2:#a8b6bd;--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#71808a;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#7b8a92;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 12:08 MDT</div>
+<h1>Spike #654 — Test Plan</h1>
+
+</header>
+<main>
+<h1>Spike #654 — Test Plan</h1>
+<p><strong>Written</strong> 2026-07-27. <strong>Version pins:</strong> Claude Code <strong>2.1.220</strong>, herdr <strong>0.7.5</strong>. Re-verify every binary-derived finding on any Claude Code upgrade.</p>
+<p>This is the test plan the owner asked for (&quot;need to actually test it and need a test plan&quot;). It is a *runnable* plan: each test names the question it settles, the exact commands, the pass criterion, the cost, and — deliberately — what it still cannot tell you.</p>
+<p>Spike #654 is investigation-only. <strong>Nothing in this plan implements anything.</strong> Every test either reads state or uses a temporary, env-gated rig that is removed afterwards.</p>
+<p>---</p>
+<h2>0. Status ledger — what is already settled</h2>
+<p>Do not re-run these. They are recorded so the plan does not re-derive them.</p>
+<table>
+<thead><tr><th>#</th><th>Question</th><th>Verdict</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td>Q2</td><td>Can a goal be set with no human?</td><td><strong>YES</strong></td><td><code>claude -p &quot;/goal X&quot;</code> writes a <code>goal_status</code> transcript attachment; <code>claude --resume</code> restores an unmet goal (status line <code>◎ /goal active</code>). Issue comment <code>5093356529</code>.</td></tr>
+<tr><td>Q3</td><td>Keystroke-free restart primitives</td><td><strong>No missing primitive</strong></td><td>Interactive <code>claude &quot;/goal …&quot;</code> under a pty auto-submits and arms the guard. Same comment.</td></tr>
+<tr><td>—</td><td>herdr spawn composition, composed</td><td><strong>PROVEN end to end</strong></td><td><code>pane split --cwd &lt;trusted&gt;</code> → <code>pane run &lt;new&gt; exec &lt;wrapper&gt;</code> → <code>Goal set</code> → <code>✔ Goal achieved</code>.</td></tr>
+<tr><td>—</td><td>Folder-trust hypothesis</td><td><strong>CONFIRMED, and pre-seedable</strong></td><td><code>~/.claude.json</code> → <code>projects[&quot;&lt;abs path&gt;&quot;][&quot;hasTrustDialogAccepted&quot;] = true</code>. Comment <code>5094541802</code>.</td></tr>
+<tr><td><strong>O1</strong></td><td><strong>Does a PreCompact block reason reach the model?</strong></td><td><strong>YES — settled 2026-07-27</strong></td><td>See §0.1.</td></tr>
+<tr><td><strong>O2</strong></td><td><strong>Is vetoing compaction safe (manual trigger)?</strong></td><td><strong>YES — settled 2026-07-27</strong></td><td>See §0.2.</td></tr>
+</tbody>
+</table>
+<h3>0.1 O1 — the block reason DOES reach the model (CONFIRMED)</h3>
+<p>Run live in throwaway herdr pane <code>w1:pAH</code> with <code>RG_PRECOMPACT_TEST=1</code>, using the env-gated rig <code>~/.claude/hooks/precompact-block-probe.py</code> (exit 2 + reason on stderr).</p>
+<p>The reason is delivered to the model as <strong><code>&lt;local-command-stderr&gt;</code> attached to the <code>/compact</code> command message</strong>. Proof that it reached *the model* and not merely the UI: the pane&#x27;s agent, told to answer from context with no tool call, quoted the unguessable marker back —</p>
+<pre><code>● Yes. It arrived as &lt;local-command-stderr&gt; attached to the /compact command message:
+  ▎ Compaction blocked by PreCompact hook: [python3 …/precompact-block-probe.py]:
+  ▎ RGPROBE-MARKER-9471 PreCompact veto fired. trigger=manual. …
+  Marker code: RGPROBE-MARKER-9471, trigger=manual.</code></pre>
+<p><strong>Design consequence:</strong> D3 is no longer constrained. PreCompact can carry the whole instruction itself; it does not have to degrade to &quot;set a flag and let the Stop hook do the talking&quot;.</p>
+<p><strong>Bonus confirmation for D3&#x27;s safety requirement:</strong> the payload&#x27;s <strong><code>trigger</code> field is present and correctly valued</strong> (<code>trigger=manual</code> for an owner-typed <code>/compact</code>). The &quot;never hijack a manual compact&quot; rule in D3 is therefore implementable exactly as written.</p>
+<h3>0.2 O2 — repeated manual vetoes do NOT wall the turn (CONFIRMED, bounded)</h3>
+<p>Same pane. 5 <code>/compact</code> submissions; ≥3 distinct block events directly observed, each followed by a genuine assistant reply (<code>● VETOALIVE-2</code>, <code>● VETOALIVE-4</code>, <code>● VETOALIVE-5</code>), pane ending <code>idle</code> and responsive. No <code>stopHookBlockingCount</code>-style cap was hit.</p>
+<p><strong>Scope of this result — read it narrowly.</strong> It covers <code>trigger=manual</code> on a session at ~6% context. It says <strong>nothing</strong> about the case the design actually depends on: an *auto* compaction vetoed at real context pressure, where nothing else is relieving the window. That is <strong>T4</strong>, and it remains the single most likely thing in this spike to be wrong.</p>
+<p>---</p>
+<h2>1. What this plan still has to settle</h2>
+<table>
+<thead><tr><th>Test</th><th>AC</th><th>Question</th></tr></thead>
+<tbody>
+<tr><td>T1</td><td>AC1 (Q1)</td><td>Statusline bridge reading, matched against <code>/context</code> for the same session</td></tr>
+<tr><td>T2</td><td>AC1 (Q1)</td><td>Transcript fallback reading, from a session that renders <strong>no</strong> statusline</td></tr>
+<tr><td>T3</td><td>AC4</td><td>The real auto-compact trigger percentage, on a 1M window <strong>and</strong> a 200k window</td></tr>
+<tr><td>T4</td><td>AC4 / O2-auto</td><td>Is vetoing an <strong>auto</strong> compaction under real context pressure safe?</td></tr>
+<tr><td>R1</td><td>AC5</td><td>End-to-end restart rehearsal composing D2+D3+D4</td></tr>
+</tbody>
+</table>
+<p>AC5&#x27;s recommendation and issue decomposition are written from T1–T4 + R1; they are not themselves tests.</p>
+<p>---</p>
+<h2>2. Standing rules for every test here</h2>
+<p>1. <strong>Throwaway panes only.</strong> Never the owner&#x27;s own pane. Create with    <code>herdr pane split --current --direction right --no-focus</code>, read <code>result.pane.pane_id</code> from    the JSON, <code>herdr pane close &lt;id&gt;</code> when done. 2. <strong>Every rig is env-gated and removed.</strong> The pattern that worked: the hook exits 0 immediately    unless its own <code>RG_*</code> env var is <code>1</code>, so arming it in <code>~/.claude/settings.json</code> cannot affect    any live session. Back up <code>settings.json</code> first; <code>diff</code> against the backup after removing the    entry and require *identical*. 3. **Strip <code>HERDR_*</code> from spawned children** unless you want the child reporting itself as the    agent for the *parent&#x27;s* pane (recorded trap, comment <code>5093356529</code>). 4. <strong>No repo changes.</strong> These tests touch <code>~/.claude/</code> and <code>/tmp</code> only.</p>
+<h3>2.1 Two herdr gotchas that will produce wrong results</h3>
+<p>Both cost time on 2026-07-27; neither is obvious.</p>
+<ul>
+<li><strong><code>herdr wait …</code> does not exist in 0.7.5.</strong> The skill documentation describes</li>
+</ul>
+<p>  <code>herdr wait agent-status</code>, but the installed binary has no top-level <code>wait</code> command — only   <code>herdr pane wait-output</code>. This is a live instance of the drift #659 tracks. Poll   <code>herdr pane get &lt;id&gt;</code> for <code>agent_status</code> instead.</p>
+<ul>
+<li><strong><code>pane wait-output --match</code> matches the prompt echo, not the reply.</strong> The pane transcript</li>
+</ul>
+<p>  contains your own submitted prompt, so waiting for a canary string you just *sent* returns   success immediately and reads as a pass. This nearly produced a false &quot;ALL ROUNDS SURVIVED&quot;   in the O2 run. <strong>Always confirm against the assistant-output marker</strong> — grep the transcript   for <code>^● &lt;canary&gt;</code>, not for the bare canary.</p>
+<ul>
+<li>Related: <code>pane read --source recent-unwrapped</code> returned empty in this environment while</li>
+</ul>
+<p>  <code>--source recent</code> and <code>--source visible</code> worked. Prefer <code>recent</code>. The <code>recent</code> buffer is a   rolling render (~47 lines observed), <strong>not</strong> a full transcript — counts taken from it are   lower bounds, so read incrementally rather than tallying once at the end.</p>
+<ul>
+<li><code>pane run &lt;id&gt; &quot;&lt;text&gt;&quot;</code> put text in the composer without submitting; an explicit</li>
+</ul>
+<p>  <code>pane send-keys &lt;id&gt; Enter</code> was required. Budget for it.</p>
+<p>---</p>
+<h2>3. T1 — statusline bridge reading (AC1, authoritative path)</h2>
+<p><strong>Question.</strong> Does <code>context_window.used_percentage</code>, as delivered to the statusLine command, match what the session itself reports via <code>/context</code>?</p>
+<p><strong>Why it matters.</strong> This is the primary meter. If it drifts from <code>/context</code>, every threshold built on it is wrong.</p>
+<p><strong>Method.</strong></p>
+<p>1. Back up the statusline script:    <code>cp ~/.claude/rawgentic-statusline.sh ~/.claude/rawgentic-statusline.sh.bak-t1</code> 2. The script already does <code>input=$(cat)</code>. Immediately after that line, add a tee that is    inert unless armed:</p>
+<pre><code>   [ &quot;${RG_CTX_PROBE:-}&quot; = &quot;1&quot; ] &amp;&amp; printf &#x27;%s\n&#x27; &quot;$input&quot; &gt;&gt; /tmp/rg-ctx-probe.jsonl</code></pre>
+<p>3. Spawn a throwaway pane with <code>--env RG_CTX_PROBE=1</code>, launch <code>claude</code>, and give it enough    turns to move off 0% (any few prompts). 4. In that pane run <code>/context</code> and read the reported percentage from the pane. 5. Read the last line of <code>/tmp/rg-ctx-probe.jsonl</code> and extract    <code>.context_window.used_percentage</code>, <code>.context_window.context_window_size</code>, and <code>.session_id</code>. 6. Restore the statusline script from the backup; <code>diff</code> and require identical.</p>
+<p><strong>Pass criterion.</strong> <code>|used_percentage − /context percentage| ≤ 1</code> percentage point, <strong>and</strong> the payload&#x27;s <code>session_id</code> equals the probe session&#x27;s id (not another pane&#x27;s — the statusline runs for every session, so the JSONL will interleave).</p>
+<p><strong>Fail meaning.</strong> If they disagree by more than 1pp, the statusline figure is measuring something other than what the user sees, and the meter must key on the transcript path instead.</p>
+<p><strong>Cost.</strong> ~10 minutes, one throwaway pane, no tokens beyond a few short turns.</p>
+<p><strong>What it cannot tell you.</strong> Nothing about headless — the statusline never renders there. That is T2, and it is why T2 is required rather than a nice-to-have.</p>
+<p>---</p>
+<h2>4. T2 — transcript fallback reading (AC1, headless path)</h2>
+<p><strong>Question.</strong> Does summing the last <code>message.usage</code> row reproduce the true in-context total for a session with no statusline?</p>
+<p><strong>Method.</strong></p>
+<p>1. <strong>Validate the formula against a known-good reading first.</strong> On the *same* session used in    T1, locate the transcript by <code>session_id</code> and compute    <code>input_tokens + cache_read_input_tokens + cache_creation_input_tokens</code> from the <strong>last</strong>    <code>message.usage</code> row. Compare to T1&#x27;s <code>used_percentage × context_window_size</code>. 2. Only once the formula validates, apply it headless: run    <code>claude -p &quot;&lt;short prompt&gt;&quot;</code> in a trusted directory, capture the emitted session id, and    compute the same sum from that transcript.</p>
+<p><strong>Pass criterion.</strong> Step 1 agrees with T1 within <strong>2 percentage points</strong>. Step 2 yields a non-zero reading resolved <strong>by <code>session_id</code> / <code>transcript_path</code></strong>.</p>
+<p><strong>Hard requirement, already burned once.</strong> Resolve the transcript by <code>session_id</code>, <strong>never by newest mtime</strong> — that error reported 138k against a true 538k (recorded in the issue). A test that picks the newest file can pass by luck on a quiet machine and fail silently under the concurrent sessions this workspace always has.</p>
+<p><strong>Cost.</strong> ~10 minutes.</p>
+<p><strong>What it cannot tell you.</strong> Whether the sum stays correct *across* a compaction — the usage rows after a compact describe the compacted context. If the meter must survive a compact, add a step reading one row either side of a real compaction.</p>
+<p>---</p>
+<h2>5. T3 — the real auto-compact trigger percentage (AC4)</h2>
+<p><strong>Question.</strong> At what percentage does auto-compaction actually fire, on a 1M window and on a 200k window? The ~77% figure in the issue was measured on 200k and is <strong>explicitly unverified</strong> for 1M — treat it as unknown, not as a default.</p>
+<p><strong>Why not just fill a 1M window.</strong> Because that costs a fortune in tokens and hours. Use the window-size knob instead.</p>
+<p><strong>Method.</strong></p>
+<p>1. Arm a <strong>logging-only</strong> variant of the rig — same env gate, but it writes the payload and    exits <strong>0</strong> (no veto), so the compaction proceeds and you observe the natural trigger point:</p>
+<pre><code>   # exits 0 always; only records
+   sys.stderr.write(&quot;&quot;)            # no reason — do not block
+   open(&quot;/tmp/rg-precompact-log.jsonl&quot;,&quot;a&quot;).write(raw + &quot;\n&quot;)
+   sys.exit(0)</code></pre>
+<p>2. Spawn a throwaway pane with <code>--env CLAUDE_CODE_MAX_CONTEXT_TOKENS=20000</code> (confirmed knob) so    the window fills in minutes rather than hours, plus <code>--env RG_CTX_PROBE=1</code> so T1&#x27;s statusline    tee records the percentage at the same moment. 3. Drive filler turns until the log records an entry with <code>trigger</code> = <code>auto</code>. 4. Cross-reference the statusline tee line nearest that timestamp to get <code>used_percentage</code> at    the moment of firing. 5. Repeat on a 200k-window model and on a 1M-window model, to see whether the reserve is a    fixed fraction or a fixed token count.</p>
+<p><strong>Pass criterion.</strong> A recorded <code>trigger=auto</code> payload for each window size, each paired with a statusline <code>used_percentage</code> — i.e. two numbers, not one inference.</p>
+<p><strong>Fail meaning.</strong> If the shrunken window changes the *fraction* at which it fires, the reserve is a token count, not a percentage, and no percentage threshold is portable. That result would strengthen D3 (PreCompact as a self-calibrating detector) rather than weaken it.</p>
+<p><strong>Cost.</strong> Moderate — filler turns against a 20k window. Keep prompts short and cheap; the point is bulk, not quality.</p>
+<p><strong>Honest caveat.</strong> <code>CLAUDE_CODE_MAX_CONTEXT_TOKENS</code> may itself change the reserve arithmetic. If the two window sizes disagree, that is a finding, not a broken test — record both.</p>
+<p>---</p>
+<h2>6. T4 — is vetoing an AUTO compaction safe? (the dangerous one)</h2>
+<p><strong>Question.</strong> When the harness decides it *must* compact and a hook vetoes it, and nothing else relieves the window, does the session continue, degrade, or hard-fail?</p>
+<p><strong>This is the claim most likely to be wrong in the whole spike.</strong> §0.2 proved only the manual, low-pressure case. D3 depends entirely on this one.</p>
+<p><strong>Method.</strong></p>
+<p>1. Re-arm the <strong>blocking</strong> rig, but gate the veto on the trigger so it only fires on auto:</p>
+<pre><code>   if payload.get(&quot;trigger&quot;) != &quot;auto&quot;:
+       sys.exit(0)          # never hijack a manual /compact — D3&#x27;s rule</code></pre>
+<p>   (<code>trigger</code> is confirmed present and correctly valued — §0.1.) 2. Throwaway pane, <code>--env CLAUDE_CODE_MAX_CONTEXT_TOKENS=20000 --env RG_PRECOMPACT_TEST=1</code>. 3. Fill until the first auto-compact attempt is vetoed. 4. Then keep issuing work prompts. After <strong>each</strong> veto, require a genuine assistant reply    (<code>^● &lt;canary&gt;</code> in the transcript — see §2.1; do not match the prompt echo). 5. Continue for at least <strong>3 consecutive auto-vetoes</strong> past the first.</p>
+<p><strong>Pass criterion.</strong> The session answers a fresh canary after each of ≥3 consecutive auto-vetoes, and ends <code>idle</code>.</p>
+<p><strong>Fail criteria — any of these means D3 needs a fallback:</strong> the turn errors; the session stops accepting input; replies arrive but are visibly truncated or lose earlier context; or the harness escalates (watch for <code>consecutiveRapidRefills</code>, which the harness already tracks).</p>
+<p><strong>Fail consequence, stated in advance so the result is actionable.</strong> If vetoing auto-compaction walls the session, D3 inverts: PreCompact must <strong>allow</strong> the compaction and merely record that a restart is due, with D2&#x27;s Stop hook carrying the instruction. That is a strictly smaller design and it is already half-written — so a failure here is survivable, not fatal.</p>
+<p><strong>Cost.</strong> Highest of the plan. Budget an hour and a throwaway pane you are willing to lose.</p>
+<p><strong>Safety.</strong> Throwaway pane only, shrunken window only, blocking gated to <code>trigger=auto</code> only. Remove the settings entry and <code>diff</code> against the backup afterwards.</p>
+<p>---</p>
+<h2>7. R1 — end-to-end restart rehearsal (AC5)</h2>
+<p><strong>Question.</strong> Do D2 + D3 + D4 actually compose into a keystroke-free generational handoff?</p>
+<p>Every individual link is now proven; the composition is not.</p>
+<p><strong>Method — one rehearsal, scripted, in throwaway panes.</strong></p>
+<p>1. <strong>Predecessor.</strong> Throwaway pane in an already-trusted cwd, launched with a goal:    <code>claude &quot;/goal &lt;short condition&gt;&quot;</code>. Confirm <code>◎ /goal active</code>. 2. <strong>Detector.</strong> Armed PreCompact rig (auto-gated per T4) sets a restart-pending flag file. 3. <strong>Instruction.</strong> A temporary Stop hook that blocks <strong>once</strong> (per-session latch — required, or    it ping-pongs against <code>stopHookBlockingCount</code>) and emits: run clear-prep, write the handoff,    spawn the successor. 4. <strong>Handoff.</strong> The predecessor writes a successor-state file naming the handoff path. 5. <strong>Spawn.</strong> <code>herdr pane split --cwd &lt;trusted&gt; --env …</code> → read the new pane id from JSON →    <code>pane run &lt;new&gt; exec &lt;space-free wrapper script&gt;</code>. <strong>The wrapper is mandatory:</strong> <code>pane run</code>    re-splits every argument on spaces, so a multi-word <code>/goal</code> condition passed inline arrives    as separate argv entries and <code>claude</code> opens the goal picker instead. The wrapper reads its    prompt from a file. Strip <code>HERDR_*</code> inside it. 6. <strong>Brief.</strong> A temporary <code>SessionStart</code> hook injects <code>resume from &lt;handoff path&gt;</code> as    <code>additionalContext</code>, landing before the successor&#x27;s first turn. 7. <strong>Verify the successor</strong>, in this order: status line shows <code>◎ /goal active</code>; the goal    condition is byte-identical to the predecessor&#x27;s (D4 says verbatim); the handoff path is    present in its context; it takes a first action consistent with the handoff.</p>
+<p><strong>Pass criterion.</strong> All four successor checks pass with <strong>zero keystrokes</strong> after step 1.</p>
+<p><strong>Do not use these signals — both read as false negatives.</strong> A restored goal appends <strong>no new <code>goal_status</code> row</strong> (it is in-memory plus the status line), so counting transcript rows across a resume is wrong. And a spawned successor fires the whole user Stop-hook chain, including the mempalace AUTO-SAVE checkpoint — expect it, and do not read it as the successor misbehaving.</p>
+<p><strong>Also check the goal length budget.</strong> Cap is <strong>4000 chars</strong> (<code>Jdr=4000</code>); a live epic-style goal measured 1458. If R1&#x27;s condition is near the cap, verify the <code>goal_set/&quot;too_long&quot;</code> telemetry path rather than assuming truncation is graceful.</p>
+<p><strong>Cost.</strong> Half a day, several throwaway panes, several temporary hooks. Remove every hook and <code>diff</code> <code>settings.json</code> against its backup at the end.</p>
+<p>---</p>
+<h2>8. Deliberately not tested — and why</h2>
+<ul>
+<li><strong>Any implementation.</strong> <code>context_meter.py</code>, the statusline edit, <code>hooks.json</code> registration,</li>
+</ul>
+<p>  a new skill: all out of scope per the issue. T1&#x27;s statusline tee is temporary and reverted.</p>
+<ul>
+<li><strong>Replacing Claude Code&#x27;s own auto-compaction.</strong> Out of scope by the issue&#x27;s own Scope section.</li>
+<li><strong>Making a hook run <code>/clear</code> or start a session.</strong> Named in the issue as a known wall; the best</li>
+</ul>
+<p>  prior art (<code>enigma/claude-streaming-compactor</code>) still makes the user paste <code>claude --resume</code>.</p>
+<ul>
+<li><strong>The unattended/cron branch of D1.</strong> D1 chose interactive-first; cron launchers already start a</li>
+</ul>
+<p>  fresh <code>claude --print</code> per firing, so they are mostly fresh already. Revisit only if D1 changes.</p>
+<ul>
+<li><strong>Multi-generation chains (successor spawns its own successor).</strong> R1 rehearses one hop. Chain</li>
+</ul>
+<p>  depth is a separate question and should be its own test once one hop is reliable.</p>
+<p>---</p>
+<h2>9. Suggested order, and where to stop</h2>
+<p>Run <strong>T1 → T2 → T3 → T4 → R1</strong>, and treat <strong>T4 as the decision gate</strong>:</p>
+<ul>
+<li><strong>T4 passes</strong> → D3 stands as written; R1 rehearses the full composition.</li>
+<li><strong>T4 fails</strong> → invert D3 (allow the compaction, record the restart) *before* running R1, so</li>
+</ul>
+<p>  the rehearsal exercises the design that will actually ship.</p>
+<p>T1 and T2 are cheap and independent — run them first regardless, because AC1 is a deliverable in its own right and neither depends on the compaction questions.</p>
+<p>---</p>
+<h2>10. Rig inventory</h2>
+<table>
+<thead><tr><th>Path</th><th>State</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td><code>~/.claude/hooks/precompact-block-probe.py</code></td><td><strong>exists, unwired, env-gated on <code>RG_PRECOMPACT_TEST=1</code></strong></td><td>O1/O2 (done); reusable for T4 after adding the <code>trigger != &quot;auto&quot;</code> early-exit</td></tr>
+<tr><td><code>~/.claude/rawgentic-statusline.sh</code></td><td>untouched</td><td>T1 tee point (add the gated line, back up first)</td></tr>
+<tr><td>logging-only PreCompact variant</td><td><strong>not yet written</strong></td><td>T3</td></tr>
+<tr><td>Stop-hook latch + SessionStart brief</td><td><strong>not yet written</strong></td><td>R1</td></tr>
+</tbody>
+</table>
+<p>The blocking rig was intentionally <strong>kept</strong> after O1/O2 rather than deleted, because T4 needs it. It is unwired from <code>settings.json</code> and inert without its env var; <code>settings.json</code> was verified byte-identical to its pre-arm backup.</p>
+
+</main>
+<footer>Last updated: 2026-07-27 12:08 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
