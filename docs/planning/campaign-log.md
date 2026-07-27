@@ -14,6 +14,56 @@ shipped; live run owner-gated). M1–M4 **COMPLETE**; the **epic #188 fast-follo
 
 ---
 
+## Standalone — #647: backend-resolved run-status probe + `liveness_unknown` · v3.97.2
+
+**The last instance of the #638 defect class, in the read-only status surface (small-standard
+lane).** `hooks/executor_routing_lib.py`'s `live_fn` probed `tmux -S <record.run_socket>
+has-session` unconditionally. A herdr-backed record's `run_socket` is a herdr *workspace id*, so
+tmux exited nonzero for an ordinary reason, the closure returned `(False, None)` with no
+`probe_error`, and `derive_state` reported `exited_no_sentinel` — a positive claim that the job
+EXITED, from a probe that never addressed the right runtime. Same shape as the eleven #638 review
+passes: an operational failure read as a definitive answer.
+
+**What shipped.** `supervisor.resolve_backend()` lifted to module level with
+`TmuxSupervisor._resolve_backend` delegating to it — necessary, not cosmetic: the status surface
+cannot construct a supervisor, because `__init__` builds a `JobRegistry` whose own `__init__`
+mkdir/chmods the registry root, a write `AC-J3` forbids (the same reason #471 W8 lifted
+`read_sentinel`/`derive_state`/`run_status`). New module-level
+`status_live_verdict(record, *, tmux, herdr, tmux_present)` with the backends INJECTED, mapping
+the existing `Liveness` tri-state; `derive_state` gains keyword-only `liveness_unknown`
+(default `False`, so `TmuxSupervisor.status()` is byte-identical) and `run_status` derives it
+from `probe_error is not None`, so `live_fn`'s injected contract never changed. The new state is
+derived-only — never written to the registry, so `JOB_STATES` and `recorded_state` still
+distinguish every OQ-8 state. The tmux-availability check moved after resolution: evaluated
+first, a herdr record on a tmux-less host reported `"tmux unavailable on this host"` — a true
+flag with a false reason. Beyond the ACs and flagged as such, `resolve_backend` now raises on an
+unrecognised backend instead of falling through to tmux.
+
+**Reviews.** Step-8a ran two cross-model lenses on the executor `review` seat
+(`cross_model_author` enforcement routed both to gpt-5.6-sol, the author being Claude/anthropic).
+Mechanical: 1 Medium — the five helper tests pinned the verdict function but left the `live_fn`
+BINDING free to regress; accepted, and the fix is a test driving the real `_do_status` with an
+injected backend, its red-before-green proven by a throwaway discriminator. Silent-failure/
+security: PASS, having independently traced that an absent `HERDR_WORKSPACE_ID` cannot mislead
+status (the surface passes the persisted `record.run_socket` straight to `probe_session`; that
+variable is only used by `resolve_endpoint()` on the LAUNCH path). Step-11 whole-diff: PASS,
+mergeable, plus 1 Low — the new public contract in `docs/config-reference.md` was unpinned, now
+guarded on a paragraph-sliced anchor. Step-11 adversarial diff (WF5, gpt backend): 2 Medium —
+one REFUTED against the code (`HerdrBackend.__init__` neither rejects an absent `workspace_id`
+nor performs I/O), one accepted (the resolver fallthrough above). Security scan PASS, 1 visible
+skip (`iac`, not applicable).
+
+**Notable.** The first WF2 attempt dispatched Step 8a via the Agent tool and both reviewers
+correctly REFUSED (`architecture_self_check`: the bundled agents are the legacy rollback target
+and this workspace declares no `defaultArchitecture`). The executor path then denied on
+`author_provider_missing` — `enforce.py:193` fails closed for a `role: "review"` seat so the
+cross-model rule cannot be silently inert. Both denials were the system working.
+
+**Status.** Suite 5166→5183, 0 failing, exit 0. Both pylint lanes exit 0. No workflow-spine
+change → no diagram REV.
+
+---
+
 ## Standalone — #535: rev-diagram snapshot script — fullPage dual-theme capture + gate · v3.94.0
 
 **First WF2 run under the executor architecture (owner-ordered smoke, small-standard
