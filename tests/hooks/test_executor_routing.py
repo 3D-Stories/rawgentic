@@ -968,10 +968,14 @@ class TestResolveTerminalBackend:
         with pytest.raises(er.MalformedConfig):
             er.resolve_terminal_backend(repo)
 
-    def test_real_repo_resolves_tmux(self):
-        # rawgentic's own .rawgentic.json declares no executorTerminalBackend -> package default.
+    def test_real_repo_resolves_herdr(self):
+        # Smoke test on the REAL config file, not the logic (that is TestSelectLaunch...
+        # below): rawgentic's own .rawgentic.json must parse and resolve to what it
+        # declares. It declared nothing -> "tmux" until 2026-07-27, when the herdr build
+        # seat was switched on for this project after UAT-3 passed live (epic #635).
+        # If the gate is ever flipped back, update this line with the config.
         repo = Path(er.__file__).resolve().parent.parent
-        assert er.resolve_terminal_backend(repo) == "tmux"
+        assert er.resolve_terminal_backend(repo) == "herdr"
 
 
 class TestSelectLaunchTerminalBackend:

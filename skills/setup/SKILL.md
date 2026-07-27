@@ -285,6 +285,39 @@ a workspace field).
 
 ---
 
+## Step 2k: Executor Terminal Backend (optional, #638)
+
+Runs on **every** setup invocation. Chooses which `TerminalBackend` the executor's **`build`
+seat** launches under — `tmux` (the package default) or `herdr`. Only the build seat is
+gateable; review/analysis and every other seat always launch under tmux regardless of this
+answer, so say that when you present the choice.
+
+**State the operational precondition before accepting `herdr`, because it is the one that
+bites:** `herdr pane split --current` resolves the **calling process's own pane**, so a
+build-seat dispatch from a process with no controlling pane — a cron-launched or otherwise
+detached headless run — has nothing to resolve and **fails loud**. Choosing `herdr` means
+build-seat dispatches and unattended cron-resumed runs are **mutually exclusive** for that
+project. Confirm the user accepts that before staging it; default to `tmux` if they are unsure.
+
+Validate any answer through the sanctioned reader before staging:
+```bash
+python3 hooks/capabilities_lib.py derive --config <the drafted .rawgentic.json>
+```
+(`capabilities.executor_terminal_backend` must equal the chosen value; a present-but-invalid
+section raises rather than falling back — never stage a block that does not derive.)
+
+When the config has no `executorTerminalBackend` key, declining or accepting the default
+**stages the answered-defaults sentinel `"executorTerminalBackend": {"version": 1, "build":
+"tmux"}`** — resolution is byte-identical to an absent section, and key presence records the
+answer so the `post_update_reconcile` staleness nudge stops re-firing (#531). An existing key is
+kept verbatim on decline — never rewritten. This step only COLLECTS: the validated block (or
+sentinel) is merged into the `.rawgentic.json` draft at Step 3 and applied at the Step 6 write
+(a project-config field, never a workspace field — it does not ride Step 8).
+
+**Read `references/integrations.md` before executing Step 2k.**
+
+---
+
 ## Step 3: Detect or Brainstorm
 
 Read `templates/rawgentic-json-schema.json` from the rawgentic plugin directory to
@@ -353,6 +386,9 @@ Requirements:
   a warning, never auto-deleted). When Step 2i staged the answered-defaults **sentinel**
   (`{"version": 1, "file": null}`, #531) instead, include it as-is — no table file exists
   or is materialized for the sentinel
+- Include the `executorTerminalBackend` block Step 2k staged — either the chosen value or the
+  answered-defaults sentinel `{"version": 1, "build": "tmux"}` (#638). Nothing is materialized
+  for it; it is config-only
 - Omit optional sections that have no content (don't write empty objects/arrays for undetected capabilities)
 - Format as pretty-printed JSON (2-space indent)
 - Show the user the exact content before writing and get a final "go ahead"

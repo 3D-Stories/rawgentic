@@ -11,6 +11,7 @@
     "defaultBranch": "main"
   },
   "protectionLevel": "sandbox",
+  "executorTerminalBackend": { "version": 1, "build": "herdr" },
   "techStack": ["bash", "markdown", "python"],
   "laneImplExtensions": [".md"],
   "testing": {

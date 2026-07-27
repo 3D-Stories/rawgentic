@@ -321,3 +321,53 @@ layer). **Advisory only** — no setting here can gate/block a run or change an 
    project-config field, never a workspace field — it does not ride Step 8). No file to
    materialize (unlike `phaseExecutorTable`): the sidecar store is created at run time by
    `hooks/seat_outcomes_lib.py`, not at setup.
+
+---
+
+## Step 2k: Executor Terminal Backend (#638) Integration
+
+Chooses which `TerminalBackend` the executor's **`build` seat** launches under. Two valid
+values: `"tmux"` (package default) and `"herdr"`.
+
+1. **Scope the question honestly.** Only the **build** seat is gateable. `select_launch_terminal_backend`
+   returns `tmux` for every other role no matter what this key says (`review`, `analysis`, and a
+   `None`/unresolvable role are all pinned tmux, test-enforced). So this is not "run the project
+   on herdr" — it is one seat.
+
+2. **State the operational precondition BEFORE accepting `herdr`.** This is the trap, and it is
+   not recoverable at run time:
+   - `herdr pane split --current` resolves the **calling process's own pane**.
+   - A detached process — cron-launched resume script, headless run with no controlling
+     terminal — has no pane, so `--current` resolves nothing and the launch **fails loud**.
+   - Therefore choosing `herdr` makes build-seat dispatches and **unattended cron-resumed runs
+     mutually exclusive** for that project.
+   Ask the user to confirm they accept that. If they are unsure, stage `tmux`.
+
+3. **Also surface, briefly, what herdr costs:** herdr must be installed and its daemon
+   reachable (version floor 0.7.5, the version #633 qualified live); CI installs no herdr, so
+   nothing herdr-side is exercised there; and `#639`'s pre-upgrade gate
+   (`python3 tests/phase_executor/live/herdr_ac1_protocol.py --gate`, exit code IS the verdict)
+   is a **manual** step a human must remember to run after any herdr upgrade.
+
+4. **Validate before staging**, through the sanctioned reader — never by eye:
+   ```bash
+   python3 hooks/capabilities_lib.py derive --config <drafted .rawgentic.json>
+   ```
+   `capabilities.executor_terminal_backend` must equal the chosen value. A present-but-invalid
+   section **raises** (`build must be "tmux" or "herdr"`, `version` must be `1`) rather than
+   silently falling back to tmux — so a non-zero exit means re-offer, never stage.
+
+5. **Decide what to stage:**
+   - Choose `herdr` (precondition accepted) → stage `{"version": 1, "build": "herdr"}`.
+   - Choose `tmux`, decline, or accept defaults, and the config has **no** key → stage the
+     answered-defaults sentinel `{"version": 1, "build": "tmux"}`. Resolution is byte-identical
+     to an absent section; key presence records the answer so the `post_update_reconcile`
+     staleness nudge stops re-firing (#531).
+   - Existing key present → keep verbatim on decline; only an explicit change rewrites it.
+
+   The staged block merges into the Step-3 `.rawgentic.json` draft and is written at Step 6 (a
+   project-config field, never a workspace field — it does not ride Step 8). Nothing is
+   materialized; it is config-only.
+
+6. **Rollback, worth telling the user:** deleting the key restores tmux, because absent derives
+   the package default.
