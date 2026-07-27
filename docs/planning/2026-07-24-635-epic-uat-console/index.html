@@ -566,11 +566,11 @@ const CHECKS = [
   },
   {
     id:"uat4", uid:"UAT-4", name:"Are the four accepted risks the ones you accepted?",
-    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"],["evidenced","4/4 verified accurate vs code"]],
+    tags:[["owner","Owner only"],["","Read &amp; decide · ~5 min"],["evidenced","3 of 4 are at the call site — see finding"]],
     why:[
       "<b>Do this one second.</b> Like UAT-2 it changes nothing — you print one docstring and decide whether the decisions it records are yours.",
       "#638's AC6 requires the named risks to be encoded at the call site rather than living only in a review thread. You ruled on these on 2026-07-24.",
-      "<b>Already done for you:</b> all four risks were checked against the code on 2026-07-27 and every one is an <b>accurate</b> description of what the module does (file:line in the panel). So you are not checking whether the description is true — only whether the decision it records is yours."
+      "<b>Already run for you 2026-07-27 — and it found something.</b> The three risks that ARE in the module docstring accurately describe the code. But the fourth (<code>exec</code>-injection is herdr-undocumented) is <b>not in <code>herdr_backend.py</code> at all</b> — it lives in <code>tests/phase_executor/live/herdr_ac1_protocol.py:144</code> and <code>README.md:745</code>. It is named and it is guarded (#639's gate exists for it), but not <i>at the call site</i> the way AC6 words it. That is the one thing to decide."
     ],
     steps:[
       "<b>In a terminal</b>, go to the project directory (skip if you are still there from UAT-2):",
@@ -587,7 +587,7 @@ const CHECKS = [
       {step:3, label:"optional — see the risk-1 mechanism in the code", text:'grep -n \'\\-\\-env\' phase_executor/src/phase_executor/herdr_backend.py'}
     ],
     pass:"All three: (1) the four risks are ones you knowingly accepted, with the same conditions attached; (2) risk 1's conditions in the code — <b>host-local, ephemeral, never credential-bearing</b> — are the conditions you actually set on 2026-07-24; (3) you are content that risks 2 and 4 are <b>documented and accepted rather than fixed</b>, and that #639's manual gate is what stands behind risk 4. Fails if any risk is recorded with conditions you did not agree to — name it and it becomes a follow-up.",
-    see:{title:"all four risks verified accurate against the code (2026-07-27)", cap:"Each recorded risk was checked against the module — every one accurately describes what the code really does, with the file:line that proves it. The reading burden is removed; the acceptance decision is still yours.", lines:[
+    see:{title:"run for you 2026-07-27 — 3 of 4 risks are at the call site", cap:"Each risk was checked against the module. The three in the docstring accurately describe the code. The fourth is recorded elsewhere — named and guarded, but not at the call site. An earlier version of this page claimed 4/4; that was wrong and is corrected here.", lines:[
       ["p","risk 1 — pane_env visible to ps"],
       ["g","  herdr_backend.py:149   ('--env', f'{k}={v}')  -> CLI arg to a shared daemon"],
       ["g","  herdr_backend.py:128   comment states the ps-visibility explicitly"],
@@ -606,7 +606,13 @@ const CHECKS = [
       ["g","  herdr_backend.py:422  self._herdr('run', pane_id, 'exec', *argv)"],
       ["a","  compensating control is #639's gate — MANUAL, pre-upgrade, never automatic"],
       ["o",""],
-      ["g","VERDICT: 4/4 recorded risks are accurate. Only the acceptance is yours."]
+      ["a","risk 4 — exec-injection: NOT in herdr_backend.py"],
+      ["o","  recorded instead at herdr_ac1_protocol.py:144 (launch_argv docstring,"],
+      ["o","  pinned EQUAL to new_session's real call by a CI-safe test) + README.md:745"],
+      ["o",""],
+      ["g","VERDICT: 3 of 4 risks are at the call site and accurate. The 4th is named"],
+      ["g","and guarded by #639's gate, just not in this file. Your call whether that"],
+      ["g","satisfies AC6 'encoded at the call site'."]
     ]}
   },
   {

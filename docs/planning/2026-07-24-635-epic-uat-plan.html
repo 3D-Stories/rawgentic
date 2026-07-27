@@ -37,7 +37,7 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 14:07 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 14:30 MDT</div>
 <h1>Epic #635 — UAT plan</h1>
 
 </header>
@@ -153,6 +153,31 @@ kill_session -&gt; /proc/623128 gone               &lt;-- genuinely terminated</
 <h3>Review history for #638 (why the evidence tier above is worth trusting)</h3>
 <p>ELEVEN Step-11 review passes ran on this PR; the first ten EACH found real defects in the fix that preceded them, all of one class — *an operational failure being read as a definitive answer*, which in this subsystem means killing a healthy job. Sequence: per-pass yield <code>4H / 4 / 3H / 2H+2M / 2H+1M / 3H+2M+1L / 3H+1L / 3H+2M+1L / 2H+1M+1L / 2H / 1H</code> — flat, not converging, which is what drove the owner&#x27;s scope decision to split the remaining permit-vs-process-death invariant into <strong>#648</strong>. Several findings were defects introduced BY the fix for the previous round. Mocked tests never caught any of them; every one needed either the real binary or a hand-traced call chain. Two of the findings were defects the author introduced *while fixing* the previous round. That history is the argument for UAT-3 being run for real rather than trusted.</p>
 <p>---</p>
+<h2>UAT results so far (updated 2026-07-27)</h2>
+<table>
+<thead><tr><th>Item</th><th>State</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td><strong>UAT-3a</strong> — build seat did real work under herdr</td><td>✅ <strong>PASS</strong></td><td>Owner ran it. Registry <code>terminal_backend: &#x27;herdr&#x27;</code>, <code>run_socket: &#x27;w1&#x27;</code>; worker wrote <code>docs/planning/UAT3-REALWORK-SCRATCH.md</code> (157 bytes, exact expected content) into worktree <code>…/uat3-real-a372ed74/build-44575cf5/0-d2e6a8a9-5ff94655</code>; <strong>main checkout stayed clean</strong>; <code>status --run</code> → <code>state: completed</code>, <code>probe_error: null</code> (#647&#x27;s fix on a real herdr job); 0 panes left behind; teardown clean</td></tr>
+<tr><td><strong>UAT-3b</strong> — review seat stayed off herdr</td><td>✅ <strong>PASS</strong></td><td>Same run: the review seat returned <code>action: &quot;executor&quot;</code> (not <code>executor_supervised</code>) and created <strong>no terminal-backed registry row at all</strong>. Only one row exists for the run — the build seat, herdr-backed</td></tr>
+<tr><td><strong>UAT-2</strong> — park-then-reset contract</td><td>⏳ read, <strong>decision pending</strong></td><td>Both passages printed; WF3 confirmed to have 0 <code>park</code> references</td></tr>
+<tr><td><strong>UAT-4</strong> — the accepted risks</td><td>⏳ read, <strong>decision pending</strong></td><td><strong>Finding: 3 of 4 risks are at the call site.</strong> <code>exec</code>-injection is not in <code>herdr_backend.py</code> — see Step 6</td></tr>
+</tbody>
+</table>
+<p><strong>Corrections to earlier versions of this page, recorded rather than quietly edited:</strong></p>
+<ul>
+<li>It claimed &quot;4/4 risks verified accurate&quot;. Only three are in the docstring — see Step 6.</li>
+<li>Step 13 used a literal <code>&lt;worktree_path&gt;</code> placeholder; pasting the block ran <code>git -C &lt;worktree_path&gt;</code></li>
+</ul>
+<p>  and failed. It is now a one-liner that resolves the path itself.</p>
+<ul>
+<li>Step 15 said to look for a review row showing tmux. <strong>There is no review row</strong> — review seats never</li>
+</ul>
+<p>  open a terminal session. The absence is the pass.</p>
+<ul>
+<li>Step 12 said &quot;this takes minutes&quot;. The real build took <strong>9.6 seconds</strong>, which is also why the</li>
+</ul>
+<p>  watcher in step 11 caught nothing.</p>
+<p>---</p>
 <h2>The UAT session — one list, top to bottom</h2>
 <p><strong>Read this first, it answers the three questions people ask:</strong></p>
 <ul>
@@ -190,9 +215,26 @@ kill_session -&gt; /proc/623128 gone               &lt;-- genuinely terminated</
 <h3>Step 5 — print the docstring (UAT-4)</h3>
 <pre><code>python3 -c &quot;import ast;print(ast.get_docstring(ast.parse(open(&#x27;phase_executor/src/phase_executor/herdr_backend.py&#x27;).read())))&quot;</code></pre>
 <h3>Step 6 — decide UAT-4, then write down PASS or FAIL</h3>
-<p>Four risks are recorded there. <strong>All four were checked against the code on 2026-07-27 and are accurate</strong> — so you are only deciding whether these are the decisions you made on 2026-07-24.</p>
-<p>1. <strong><code>pane_env</code> is visible to <code>ps</code>.</strong> herdr has no private per-run env channel; the only mechanism    is <code>pane split --env KEY=VALUE</code>, passed as CLI args to a <strong>host-wide shared daemon</strong>.    *Your call:* were <strong>host-local + ephemeral + non-credential</strong> the conditions you set?    (<code>herdr_backend.py:149</code>, comment at <code>:128</code>. Only <code>PYTHONPATH</code> goes through today.) 2. <strong>Malformed-split pane leak — accepted, not fixed.</strong> If <code>pane split</code> returns <code>rc=0</code> with an    unparseable body, a real pane may exist but the code has no <code>pane_id</code> to close it.    *Your call:* do you accept that leak on that narrow path? (<code>herdr_backend.py:389-394</code>.) 3. <strong>Three calls, not atomic</strong> — split → rename → run…exec. *Your call:* do you accept &quot;never    parallelize split+run against one target pane&quot;? (<code>herdr_backend.py:380, 418, 422</code>.) 4. <strong><code>exec</code>-injection is herdr-undocumented.</strong> A future herdr release could wrap instead of    exec-replace, and every PID the supervisor holds would name the wrong process. *Your call:* do    you accept this with <strong>#639&#x27;s manual pre-upgrade gate</strong> as the only compensating control?    (<code>herdr_backend.py:422</code>.)</p>
-<p>→ <strong>Write down: UAT-4 = PASS or FAIL.</strong> If FAIL, name the risk whose conditions are wrong.</p>
+<p><strong>Run for you on 2026-07-27 — and it found something.</strong> An earlier version of this page said &quot;4/4 risks verified accurate&quot;. That was wrong. What was actually verified is that *the code does what each risk describes*; nobody had checked that all four are <strong>recorded in the docstring</strong>. Three are. The fourth is not in <code>herdr_backend.py</code> at all.</p>
+<table>
+<thead><tr><th>#</th><th>Risk</th><th>At the call site?</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><strong>Three calls, not atomic</strong> — <code>split</code> → <code>rename</code> → <code>run…exec</code>; safe only single-threaded per spawn</td><td>✅ in the docstring (<code>:380, 418, 422</code>)</td></tr>
+<tr><td>2</td><td><strong>Malformed-split pane leak</strong>, accepted and not fixed — <code>rc=0</code> with an unparseable body may leave a real pane the code has no id to close</td><td>✅ in the docstring (<code>:389-394</code>)</td></tr>
+<tr><td>3</td><td><strong><code>pane_env</code> visible to <code>ps</code></strong> — the only mechanism is <code>pane split --env KEY=VALUE</code> to a host-wide shared daemon; <code>PYTHONPATH</code> only, never credentials</td><td>✅ in the docstring (<code>:149</code>, comment <code>:128</code>)</td></tr>
+<tr><td>4</td><td><strong><code>exec</code>-injection is herdr-undocumented</strong> — a future herdr release could wrap rather than exec-replace, and every PID the supervisor holds would name the wrong process</td><td>❌ <strong>not in <code>herdr_backend.py</code>.</strong> Recorded at <code>tests/phase_executor/live/herdr_ac1_protocol.py:144</code> (the <code>launch_argv</code> docstring, pinned EQUAL to <code>new_session</code>&#x27;s real call by a CI-safe test) and <code>README.md:745</code></td></tr>
+</tbody>
+</table>
+<p><strong>Your decision is now two questions, not four:</strong></p>
+<ul>
+<li>Are risks 1–3 the conditions you accepted on 2026-07-24 — in particular, were **host-local +</li>
+</ul>
+<p>  ephemeral + non-credential** the terms you set on <code>pane_env</code>?</p>
+<ul>
+<li>Does risk 4 being recorded in <strong>#639&#x27;s gate rather than at the call site</strong> satisfy AC6&#x27;s</li>
+</ul>
+<p>  &quot;encoded as comments/guards at the call site&quot;? It is named and it is guarded — arguably the   gate is the better home than a comment — but it is not where the other three are.</p>
+<p>→ <strong>Write down: UAT-4 = PASS or FAIL.</strong> If FAIL, say whether it is a condition you did not agree to (risks 1–3) or the placement of risk 4.</p>
 <h3>Step 7 — confirm this terminal is inside a herdr pane (UAT-3 starts here)</h3>
 <pre><code>echo &quot;pane=$HERDR_PANE_ID workspace=$HERDR_WORKSPACE_ID&quot;</code></pre>
 <p>Both must be non-empty — e.g. <code>pane=w1:p1 workspace=w1</code>. <strong>If either is empty, stop.</strong> You are not in a herdr pane and the launch cannot work; open a terminal inside one and start again from step 1.</p>
@@ -240,13 +282,17 @@ done | sort -u</code></pre>
   --gate-file /tmp/uat3/gate.json --plan-file /tmp/uat3/plan.md \
   --correlation-id uat3-real-1 --timeout 900 \
   --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic</code></pre>
-<p>Expect exit 0 and <code>&quot;state&quot;:&quot;completed&quot;</code>. This takes minutes. <strong>One thing looks wrong and is not:</strong> it routes to <strong>codex / <code>gpt-5.6-terra</code></strong> — the build seat&#x27;s anthropic primary falls through to its cross-model chain entry. That is expected.</p>
+<p>Expect exit 0 and <code>&quot;state&quot;:&quot;completed&quot;</code>. Observed: <strong>~10 seconds</strong> for this trivial task. <strong>One thing looks wrong and is not:</strong> it routes to <strong>codex / <code>gpt-5.6-terra</code></strong> — the build seat&#x27;s anthropic primary falls through to its cross-model chain entry. That is expected.</p>
 <h3>Step 13 — check the worktree the build seat was given</h3>
 <pre><code>python3 hooks/executor_routing_lib.py status --run uat3-real \
   --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic</code></pre>
-<p>Copy <code>worktree_path</code> out of that JSON, then run these three:</p>
-<pre><code>git -C &lt;worktree_path&gt; status --porcelain
-git -C &lt;worktree_path&gt; diff -- docs/planning/UAT3-REALWORK-SCRATCH.md
+<p>No copying — this resolves the path itself:</p>
+<pre><code>W=$(python3 hooks/executor_routing_lib.py status --run uat3-real \
+  --workspace /home/rocky00717/rawgentic/.rawgentic_workspace.json --project rawgentic \
+  | python3 -c &quot;import sys,json;print(json.load(sys.stdin)[&#x27;seats&#x27;][0][&#x27;worktree_path&#x27;])&quot;)
+echo &quot;worktree: $W&quot;
+git -C &quot;$W&quot; status --porcelain
+cat &quot;$W/docs/planning/UAT3-REALWORK-SCRATCH.md&quot;
 git status --porcelain</code></pre>
 <p>The first two must show the <strong>new file</strong>. The third — your main checkout — must print <strong>nothing</strong>.</p>
 <h3>Step 14 — dispatch a review seat, gate still flipped</h3>
@@ -259,15 +305,15 @@ python3 hooks/executor_routing_lib.py dispatch --seat review \
 <p><code>--author-provider anthropic</code> is <strong>required</strong> — omit it and this fails closed with <code>pre_check_denied: author_provider_missing</code>.</p>
 <h3>Step 15 — print both registry rows at once</h3>
 <pre><code>python3 -c &quot;import json;[print({k:r.get(k) for k in (&#x27;session_name&#x27;,&#x27;terminal_backend&#x27;,&#x27;run_socket&#x27;)}) for r in json.load(open(&#x27;.rawgentic/runtime/registry/jobs.json&#x27;)).values() if &#x27;uat3-real&#x27; in json.dumps(r)]&quot;</code></pre>
-<p>The <strong>build</strong> row should show <code>terminal_backend: &#x27;herdr&#x27;</code> and <code>run_socket: &#x27;w1&#x27;</code>. The <strong>review</strong> row should <strong>not</strong>. That contrast in one run is the whole negative test.</p>
+<p>You will see <strong>exactly one row</strong> — the build seat, <code>terminal_backend: &#x27;herdr&#x27;</code>, <code>run_socket: &#x27;w1&#x27;</code>.</p>
+<p><strong>That single row IS the negative test.</strong> Review seats never open a terminal session (they return <code>action: &quot;executor&quot;</code>, not <code>executor_supervised</code>), so they register no terminal-backed row at all. An earlier version of this page told you to look for a review row showing tmux; no such row exists.</p>
 <h3>Step 16 — check your watcher terminal</h3>
 <p>It should have printed a line like:</p>
 <pre><code>w1:pAK | rg-uat3-real-…-build-…</code></pre>
 <p>A pane labelled with the run&#x27;s session name. And it should be <strong>gone now</strong> — panes close themselves when the worker exits.</p>
 <h3>Step 17 — teardown (run this even if something failed)</h3>
-<pre><code>python3 -c &quot;
-import json; p=&#x27;.rawgentic.json&#x27;; d=json.load(open(p)); d.pop(&#x27;executorTerminalBackend&#x27;,None)
-json.dump(d,open(p,&#x27;w&#x27;),indent=2); open(p,&#x27;a&#x27;).write(chr(10))&quot;
+<pre><code># restore the config EXACTLY — a json round-trip reformats compact arrays and leaves it dirty
+git checkout -- .rawgentic.json
 git status --porcelain .rawgentic.json
 
 for w in $(git worktree list --porcelain | grep &#x27;^worktree &#x27; | cut -d&#x27; &#x27; -f2- | grep uat3-real); do
@@ -335,7 +381,7 @@ rm -rf .rawgentic/runs/uat3-real .rawgentic/runtime/worktrees/uat3-real-* \
 </table>
 
 </main>
-<footer>Last updated: 2026-07-27 14:07 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-27 14:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
