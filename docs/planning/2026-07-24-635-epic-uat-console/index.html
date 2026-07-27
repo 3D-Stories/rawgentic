@@ -299,7 +299,7 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
     <span class="brand">Epic <b>#635</b> · herdr build-seat launch backend</span>
     <span class="pill go">4 / 4 children merged</span>
     <span class="pill open">Epic closed · UAT tracked in #656</span>
-    <span class="pill">rawgentic v3.97.2 · cache 3.97.1</span>
+    <span class="pill">rawgentic v3.97.2 · cache 3.97.2 ✓</span>
     <span class="spacer"></span>
     <span class="pill">herdr 0.7.5</span>
   </div>
@@ -365,7 +365,8 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
       <p class="reissue">
         <b>Redeploy the plugin before you run it.</b> #647 (merged <code>6ef34c5</code>, v3.97.2) is what
         makes <code>status</code> trustworthy for a herdr-backed job — and the installed cache is still
-        <b>3.97.1</b>, so without a redeploy this check measures the pre-fix behaviour.
+        <b>3.97.2</b> as of 2026-07-27, so this is ready to run — just make sure your session was
+        started AFTER that reinstall, since a session keeps the plugin version it booted with.
         Exit every session using rawgentic hooks, then
         <code>claude plugin remove rawgentic@rawgentic &amp;&amp; claude plugin install rawgentic@rawgentic</code>.
       </p>
@@ -459,7 +460,9 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
       <p class="outcome"><b>Fixed and merged: <code>6ef34c5</code> (PR #657, v3.97.2).</b> The probe
       now resolves the record's own backend, and an operational failure derives
       <code>liveness_unknown</code> instead of asserting the job is dead (D-3 chose AC2). Rollback
-      anchor <code>c3baac5</code>. <b>Redeploy the plugin to get it — the cache is still 3.97.1.</b></p>
+      anchor <code>c3baac5</code>. <b>Installed: cache is at 3.97.2 as of 2026-07-27</b>, verified to
+      carry <code>liveness_unknown</code>, <code>status_live_verdict</code> and the lifted
+      <code>resolve_backend</code>.</p>
     </article>
   </div>
 </section>
@@ -562,7 +565,7 @@ const CHECKS = [
       "<b>The plumbing is no longer in question.</b> On 2026-07-27 the launch path was driven twice through the real entry path (<code>dispatch --seat build</code>, gate flipped to herdr): both exited 0 <code>\"state\":\"completed\"</code>, the registry row showed <code>terminal_backend: \"herdr\"</code> with <code>run_socket: \"w1\"</code> (a herdr <i>workspace id</i>, not a tmux socket), a watcher caught the labelled pane <code>w1:pAK</code>, <code>status --run</code> reported <code>probe_error: null</code>, and 0 panes were left behind.",
       "That drill used a <b>no-op brief</b> and ran ~10 seconds, which deliberately avoided the two things that matter most — so those two, and only those two, are what is left for you.",
       "<b>3a — a build seat that actually CHANGES FILES.</b> A real build mutates its isolated worktree and runs for minutes. Nothing has watched a herdr-hosted worker do that.<br><b>3b — the live negative.</b> That a review seat still goes to tmux was confirmed by reading <code>supervisor.resolve_backend</code>, <i>not</i> by watching one launch.",
-      "<b>Redeploy the plugin first</b> (v3.97.2+) — the cache is still 3.97.1, and #647 is what makes <code>status</code> trustworthy here."
+      "<b>Plugin already redeployed</b> — the cache is at <b>3.97.2</b> (verified 2026-07-27). #647 is what makes <code>status</code> trustworthy here, so just confirm this session was started AFTER that reinstall: a session keeps the plugin version it booted with."
     ],
     steps:[
       "<b>Prereqs.</b> Inside a herdr pane (<code>echo \"$HERDR_PANE_ID $HERDR_WORKSPACE_ID\"</code> prints two non-empty values); plugin redeployed; <code>cd</code> to the project root.",
