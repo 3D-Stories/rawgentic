@@ -298,8 +298,8 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
   <div class="topbar">
     <span class="brand">Epic <b>#635</b> · herdr build-seat launch backend</span>
     <span class="pill go">4 / 4 children merged</span>
-    <span class="pill open">Epic closed · UAT tracked in #656</span>
-    <span class="pill">rawgentic v3.97.2 · cache 3.97.2 ✓</span>
+    <span class="pill open">Epic closed · UAT COMPLETE · #656 closed</span>
+    <span class="pill">rawgentic v3.98.0 · herdr build seat ON</span>
     <span class="spacer"></span>
     <span class="pill">herdr 0.7.5</span>
   </div>
@@ -354,18 +354,21 @@ footer .row{display:flex;gap:22px;flex-wrap:wrap}
 <section class="priority">
   <div class="priorityInner">
     <div>
-      <h2>Prefer the plain step-by-step list.</h2>
+      <h2>✅ UAT complete — all items pass. Nothing here needs action.</h2>
       <p>
-        This console records your verdicts, but if you just want to <b>do</b> the UAT, the markdown
-        plan is one flat numbered list — <b>steps 1 to 17, straight down</b>, every command inline,
-        no jumping between sections:
-        <a href="https://rawgentic-epic-635-uat.vercel.app">rawgentic-epic-635-uat.vercel.app</a>
+        All seven UAT items passed on 2026-07-27 and tracker <b>#656 is closed</b>. The checks below
+        are kept as the record of how each was exercised, with every command still runnable.
       </p>
       <p>
-        Either way: <b>these are terminal commands</b>, not things to paste into Claude. Run them in
-        <code>/home/rocky00717/rawgentic/projects/rawgentic</code>. Order is
-        <b>UAT-2 → UAT-4 → UAT-3</b>; UAT-3 must be run from a terminal inside a herdr pane, in a
-        session started after the 3.97.2 reinstall.
+        <b>The outcome this epic existed to earn:</b> the herdr build seat is now <b>ON</b> in this
+        project's config (<code>"executorTerminalBackend": { "version": 1, "build": "herdr" }</code>,
+        merged <code>e673192</code>, v3.98.0), and <code>/rawgentic:setup</code> <b>Step 2k</b> makes
+        it a setup-time choice rather than a hand-edited key.
+      </p>
+      <p>
+        One finding, accepted rather than filed: #638's AC6 says the named risks are "encoded at the
+        call site" — <b>three of four are</b>. <code>exec</code>-injection lives in #639's CI-pinned
+        gate instead. The owner judged that satisfies AC6.
       </p>
       <button class="jump" data-jump="uat3">Go to UAT-3 →</button>
     </div>
