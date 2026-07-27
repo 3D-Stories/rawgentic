@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -2662,7 +2663,7 @@ from phase_executor.worktree import WorktreeIdentity as _WId  # noqa: E402
 
 
 def _status_repo(tmp_path, *, state="running", with_obs=False, with_spec=True,
-                 with_activity=False, run_id="run1"):
+                 with_activity=False, run_id="run1", terminal_backend=None):
     """A fake project repo with a seeded job registry + optional spec/observation/capture."""
     repo = tmp_path / "projects" / "statusrepo"
     _cfg(repo)
@@ -2678,7 +2679,8 @@ def _status_repo(tmp_path, *, state="running", with_obs=False, with_spec=True,
         worktree_gitdir=str(repo / ".git"), worktree_repo=str(repo), capture_dir=str(cap),
         attempt_id="0-aaaa1111", permit_ref="claude:default", command_digest="sha256:abc",
         provider_session_id=None, provider_exit_code=None, resume_attempts=0,
-        state=state, created_at=1.0, quarantine_reason=None)
+        state=state, created_at=1.0, quarantine_reason=None,
+        terminal_backend=terminal_backend)
     JobRegistry(str(reg_root)).upsert(rec)
     if with_spec:
         specs = reg_root / "specs"
@@ -3459,3 +3461,42 @@ def test_status_live_verdict_herdr_record_without_backend_refuses_loud():
                                               tmux_present=True)
     assert live is False
     assert probe_error and "herdr" in probe_error.lower()
+
+
+def test_do_status_binding_probes_the_records_own_backend(tmp_path, monkeypatch, capsys):
+    """Step-8a cross-model finding (Medium): the five `status_live_verdict` tests pin the
+    HELPER, not the `live_fn` BINDING. Reverting live_fn to the old unconditional
+    `tmux -S <record.run_socket>` while keeping the helper would leave every one of them
+    green, so this drives the real `_do_status` wiring end to end.
+
+    Deliberately in-process with an injected backend rather than through the CLI: this host
+    HAS a real herdr daemon and CI has none, so a subprocess test would assert
+    environment-dependent behavior — exactly the "local machine masks the real answer" trap
+    #638 hit. Here a stub reports CONFIRMED_ALIVE, so the row can only be `running` if the
+    binding actually consulted the record's OWN backend.
+    """
+    ws, _, _ = _status_repo(tmp_path, with_obs=False, terminal_backend="herdr")
+    seen = []
+
+    class _AliveHerdr:
+        def __init__(self, **kwargs):
+            pass
+
+        def probe_session(self, endpoint, name, timeout=30):  # noqa: ARG002
+            seen.append((endpoint, name))
+            return Liveness.CONFIRMED_ALIVE
+
+    real_import = er._import_phase_executor
+
+    def _patched_import():
+        pe = real_import()
+        pe.HerdrBackend = _AliveHerdr
+        return pe
+
+    monkeypatch.setattr(er, "_import_phase_executor", _patched_import)
+    rc = er._do_status(types.SimpleNamespace(workspace=ws, project="rawgentic", run="run1"))
+    assert rc == 0
+    (row,) = json.loads(capsys.readouterr().out)["seats"]
+    assert row["state"] == "running"        # pre-fix this was exited_no_sentinel
+    assert row["probe_error"] is None
+    assert len(seen) == 1                   # the herdr backend WAS the one consulted
