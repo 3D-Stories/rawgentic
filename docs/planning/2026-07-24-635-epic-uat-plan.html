@@ -37,16 +37,14 @@ footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:v
 <body>
 <div class="wrap">
 <header>
-<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 14:30 MDT</div>
+<div class="eyebrow">rawgentic design artifact · updated 2026-07-27 15:17 MDT</div>
 <h1>Epic #635 — UAT plan</h1>
 
 </header>
 <main>
 <h1>Epic #635 — UAT plan (AC-derived)</h1>
 <p><strong>Epic:</strong> #635 &quot;herdr build-seat launch backend&quot; <strong>Children:</strong> #636 (TerminalBackend seam) · #637 (worktree park-then-reset) · #638 (HerdrBackend + config-gate) · #639 (PID-identity regression check) <strong>Author:</strong> generated during the epic auto-run, 2026-07-24 · <strong>Last refreshed:</strong> 2026-07-27 <strong>Status:</strong> all four children MERGED (2026-07-25). Epic <strong>#635 is CLOSED</strong> (2026-07-27); owner-side UAT moved to tracker <strong>#656</strong>.</p>
-<p><strong>Everything you need to do is ONE numbered list: [the UAT session](#the-uat-session--one-list-top-to-bottom), steps 1 to 17.</strong></p>
-<p>They are <strong>terminal commands</strong> — copy each box, paste it into a terminal, press Enter. Step 1 puts you in the right directory and you stay there. Work straight down; do not skip or reorder. Steps 1–4 are UAT-2, steps 5–6 are UAT-4, steps 7–17 are UAT-3. About 30 minutes total.</p>
-<p>UAT-1 and UAT-5 are already evidenced and UAT-6 is closed by owner decision — all three are in [§ Retired UAT items](#retired-uat-items--evidence-recorded-no-owner-action) with their evidence, and none of them needs anything from you.</p>
+<p><strong>UAT is COMPLETE — all seven items pass (2026-07-27) and tracker #656 is closed.</strong> Nothing here needs action. The numbered runbook below is retained as the re-runnable record of how each item was exercised; the results and the corrections made along the way are in the section immediately below.</p>
 <p><strong>This markdown file is the source of truth and the easiest thing to follow.</strong> There is also a visual console at https://rawgentic-epic-635-uat-console.vercel.app which records your verdicts and emits a report for issue #656 — same steps, same commands, just with checkboxes. Source: <code>docs/planning/2026-07-24-635-epic-uat-console/index.html</code> (committed; three.js vendored beside it, so it needs no network).</p>
 <h2>How UAT works for this epic</h2>
 <p>Owner directive (2026-07-24): *&quot;All issues should be tested and verified working through CI and smoketesting. UAT should be conducted with user with a UAT plan created based on ACs. UAT can be done at the conclusion of the epic unless there are items that need to be verified after an issue that the next issue heavily relies on.&quot;*</p>
@@ -153,30 +151,56 @@ kill_session -&gt; /proc/623128 gone               &lt;-- genuinely terminated</
 <h3>Review history for #638 (why the evidence tier above is worth trusting)</h3>
 <p>ELEVEN Step-11 review passes ran on this PR; the first ten EACH found real defects in the fix that preceded them, all of one class — *an operational failure being read as a definitive answer*, which in this subsystem means killing a healthy job. Sequence: per-pass yield <code>4H / 4 / 3H / 2H+2M / 2H+1M / 3H+2M+1L / 3H+1L / 3H+2M+1L / 2H+1M+1L / 2H / 1H</code> — flat, not converging, which is what drove the owner&#x27;s scope decision to split the remaining permit-vs-process-death invariant into <strong>#648</strong>. Several findings were defects introduced BY the fix for the previous round. Mocked tests never caught any of them; every one needed either the real binary or a hand-traced call chain. Two of the findings were defects the author introduced *while fixing* the previous round. That history is the argument for UAT-3 being run for real rather than trusted.</p>
 <p>---</p>
-<h2>UAT results so far (updated 2026-07-27)</h2>
+<h2>✅ UAT COMPLETE — all items pass (2026-07-27)</h2>
+<p><strong>Nothing below is outstanding.</strong> The runbook is kept as the re-runnable record of how each item was exercised, not as a to-do list. Tracker <strong>#656 is CLOSED</strong>.</p>
 <table>
-<thead><tr><th>Item</th><th>State</th><th>Evidence</th></tr></thead>
+<thead><tr><th>Item</th><th>Verdict</th><th>Basis</th></tr></thead>
 <tbody>
-<tr><td><strong>UAT-3a</strong> — build seat did real work under herdr</td><td>✅ <strong>PASS</strong></td><td>Owner ran it. Registry <code>terminal_backend: &#x27;herdr&#x27;</code>, <code>run_socket: &#x27;w1&#x27;</code>; worker wrote <code>docs/planning/UAT3-REALWORK-SCRATCH.md</code> (157 bytes, exact expected content) into worktree <code>…/uat3-real-a372ed74/build-44575cf5/0-d2e6a8a9-5ff94655</code>; <strong>main checkout stayed clean</strong>; <code>status --run</code> → <code>state: completed</code>, <code>probe_error: null</code> (#647&#x27;s fix on a real herdr job); 0 panes left behind; teardown clean</td></tr>
-<tr><td><strong>UAT-3b</strong> — review seat stayed off herdr</td><td>✅ <strong>PASS</strong></td><td>Same run: the review seat returned <code>action: &quot;executor&quot;</code> (not <code>executor_supervised</code>) and created <strong>no terminal-backed registry row at all</strong>. Only one row exists for the run — the build seat, herdr-backed</td></tr>
-<tr><td><strong>UAT-2</strong> — park-then-reset contract</td><td>⏳ read, <strong>decision pending</strong></td><td>Both passages printed; WF3 confirmed to have 0 <code>park</code> references</td></tr>
-<tr><td><strong>UAT-4</strong> — the accepted risks</td><td>⏳ read, <strong>decision pending</strong></td><td><strong>Finding: 3 of 4 risks are at the call site.</strong> <code>exec</code>-injection is not in <code>herdr_backend.py</code> — see Step 6</td></tr>
+<tr><td><strong>UAT-1</strong></td><td>✅ PASS</td><td>The #647 WF2 run drove real executor dispatches through #636&#x27;s refactored seam under the tmux default</td></tr>
+<tr><td><strong>UAT-2</strong></td><td>✅ PASS</td><td>Owner read both WF2 passages and accepted the six park-then-reset claims</td></tr>
+<tr><td><strong>UAT-3a</strong></td><td>✅ PASS</td><td>Registry <code>terminal_backend: &quot;herdr&quot;</code>, <code>run_socket: &quot;w1&quot;</code>; the worker wrote its file into its isolated worktree; the main checkout stayed clean; <code>status --run</code> → <code>completed</code>, <code>probe_error: null</code>; 0 panes leaked</td></tr>
+<tr><td><strong>UAT-3b</strong></td><td>✅ PASS</td><td>Same run: the review seat returned <code>action: &quot;executor&quot;</code> (not <code>executor_supervised</code>) and registered no terminal-backed row at all</td></tr>
+<tr><td><strong>UAT-4</strong></td><td>✅ PASS</td><td>Owner accepted all four recorded risks, including the placement finding below</td></tr>
+<tr><td><strong>UAT-5</strong></td><td>✅ PASS</td><td>All three gate arms observed 2026-07-25</td></tr>
+<tr><td><strong>UAT-6</strong></td><td>✅ CLOSED</td><td>D-4 — GAP-3 accepted as a scope boundary</td></tr>
 </tbody>
 </table>
-<p><strong>Corrections to earlier versions of this page, recorded rather than quietly edited:</strong></p>
+<p><strong>The outcome this epic existed to earn:</strong> the herdr build seat is now <strong>ON</strong> in this project&#x27;s config (<code>&quot;executorTerminalBackend&quot;: {&quot;version&quot;: 1, &quot;build&quot;: &quot;herdr&quot;}</code>, merged <code>e673192</code>, v3.98.0), and <code>/rawgentic:setup</code> <strong>Step 2k</strong> makes it a setup-time choice rather than a hand-edited key.</p>
+<h3>Finding surfaced during UAT-4 — accepted, not filed</h3>
+<p>#638&#x27;s AC6 says the named risks are *&quot;encoded as comments/guards at the call site.&quot;* <strong>Three of four are.</strong> The fourth — <code>exec</code>-injection is herdr-undocumented — is <strong>not</strong> in <code>herdr_backend.py</code>; it lives at <code>tests/phase_executor/live/herdr_ac1_protocol.py:144</code> (the <code>launch_argv</code> docstring, pinned EQUAL to <code>new_session</code>&#x27;s real call by a CI-safe test) and <code>README.md:745</code>.</p>
+<p><strong>Owner verdict: that satisfies AC6</strong> — it is named and guarded, and a CI-pinned gate is arguably a better home than a comment. Recorded so it is not rediscovered as a defect. No follow-up issue.</p>
+<h3>Corrections made to this page during the UAT, recorded rather than quietly edited</h3>
 <ul>
-<li>It claimed &quot;4/4 risks verified accurate&quot;. Only three are in the docstring — see Step 6.</li>
-<li>Step 13 used a literal <code>&lt;worktree_path&gt;</code> placeholder; pasting the block ran <code>git -C &lt;worktree_path&gt;</code></li>
+<li>It claimed <strong>&quot;4/4 risks verified accurate&quot;</strong>. Only three are in the docstring — what had been</li>
 </ul>
-<p>  and failed. It is now a one-liner that resolves the path itself.</p>
+<p>  verified was that the *code does what each risk describes*, not where each is recorded.</p>
 <ul>
-<li>Step 15 said to look for a review row showing tmux. <strong>There is no review row</strong> — review seats never</li>
+<li>Step 13 used a literal <code>&lt;worktree_path&gt;</code> placeholder; pasting the block ran</li>
 </ul>
-<p>  open a terminal session. The absence is the pass.</p>
+<p>  <code>git -C &lt;worktree_path&gt;</code> and failed, so 3a&#x27;s key evidence was never collected by the owner   (it was collected afterwards from the surviving worktree). Now a one-liner that resolves it.</p>
 <ul>
-<li>Step 12 said &quot;this takes minutes&quot;. The real build took <strong>9.6 seconds</strong>, which is also why the</li>
+<li>Step 15 said to look for a review row showing tmux. <strong>No such row can exist</strong> — review seats</li>
 </ul>
-<p>  watcher in step 11 caught nothing.</p>
+<p>  never open a terminal session. The single build row *is* the negative test.</p>
+<ul>
+<li>Step 12 said the build &quot;takes minutes&quot;. It took <strong>9.6 seconds</strong> — which is also why the step-11</li>
+</ul>
+<p>  watcher caught nothing.</p>
+<ul>
+<li>Step 17&#x27;s teardown used a JSON round-trip that reformatted compact arrays and left the tree</li>
+</ul>
+<p>  dirty. Now <code>git checkout -- .rawgentic.json</code>.</p>
+<h3>GAP status at close</h3>
+<table>
+<thead><tr><th>Gap</th><th>Outcome</th></tr></thead>
+<tbody>
+<tr><td>GAP-1</td><td>Filed as <strong>#661</strong> — <code>park_and_reset</code> invoked by nothing</td></tr>
+<tr><td>GAP-2</td><td><strong>CLOSED</strong> by UAT-3</td></tr>
+<tr><td>GAP-3</td><td>Accepted as a scope boundary (D-4). All cron has since been disabled — 0 active entries — so the herdr/cron exclusivity is moot on this host today</td></tr>
+<tr><td>GAP-4</td><td>Structural CI gap stands by design; the &quot;nobody noticed herdr changed&quot; half filed as <strong>#659</strong></td></tr>
+<tr><td>GAP-5</td><td><strong>SHIPPED</strong> — #647, merged <code>6ef34c5</code></td></tr>
+</tbody>
+</table>
 <p>---</p>
 <h2>The UAT session — one list, top to bottom</h2>
 <p><strong>Read this first, it answers the three questions people ask:</strong></p>
@@ -381,7 +405,7 @@ rm -rf .rawgentic/runs/uat3-real .rawgentic/runtime/worktrees/uat3-real-* \
 </table>
 
 </main>
-<footer>Last updated: 2026-07-27 14:30 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-07-27 15:17 MDT · generated by hooks/render_artifact.py — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
