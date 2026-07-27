@@ -300,7 +300,16 @@ def resolve_backend(terminal_backend: Optional[str], *, tmux: TerminalBackend,
                 "job requires the herdr TerminalBackend but this supervisor instance "
                 "has none configured (herdr_backend=None)")
         return herdr
-    return tmux
+    if terminal_backend in (None, "tmux"):
+        return tmux
+    # Adversarial-review finding (#647): an else-branch returning tmux means ANY unrecognised
+    # value silently probes the wrong runtime and reports its answer as fact — the exact bug
+    # class this subsystem keeps paying for. `registry.KNOWN_TERMINAL_BACKENDS` makes this
+    # unreachable for a decoded JobRecord TODAY, so this is defence in depth against the
+    # concrete future slip: adding a third backend to that frozenset without teaching this
+    # resolver about it. Raising (rather than guessing) means `status_live_verdict` derives
+    # `liveness_unknown` instead of a confident wrong state.
+    raise SupervisorError(f"unsupported terminal backend: {terminal_backend!r}")
 
 
 def derive_state(record: JobRecord, *, sentinel: Optional[dict], live: bool,

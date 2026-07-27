@@ -3500,3 +3500,13 @@ def test_do_status_binding_probes_the_records_own_backend(tmp_path, monkeypatch,
     assert row["state"] == "running"        # pre-fix this was exited_no_sentinel
     assert row["probe_error"] is None
     assert len(seen) == 1                   # the herdr backend WAS the one consulted
+
+
+def test_status_live_verdict_unrecognised_backend_is_indeterminate():
+    """The resolver's new fail-loud guard must surface as an INDETERMINATE row, never as a
+    confident state: status catches SupervisorError and reports it as a probe failure."""
+    live, probe_error = er.status_live_verdict(
+        _status_rec(terminal_backend="screen"), tmux=_ProbeStub(Liveness.CONFIRMED_ALIVE),
+        herdr=_ProbeStub(Liveness.CONFIRMED_ALIVE), tmux_present=True)
+    assert live is False
+    assert probe_error and "unsupported terminal backend" in probe_error

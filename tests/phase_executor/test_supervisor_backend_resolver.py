@@ -716,3 +716,20 @@ def test_launch_tmux_duplicate_session_refusal_never_kills_the_existing_session(
     assert not any(c[0] == "kill_session" for c in be.calls), (
         "a refusal that created NOTHING must never tear down the pre-existing same-name session")
     assert sup._permits == {}, "the permit must still be released"  # noqa: SLF001
+
+
+def test_lifted_resolve_backend_rejects_an_unrecognised_backend():
+    """Adversarial-review finding (#647, Medium/correctness): an else-branch returning tmux
+    means any unrecognised value silently probes the WRONG runtime and reports the answer as
+    fact. `registry.KNOWN_TERMINAL_BACKENDS` makes that unreachable for a decoded JobRecord
+    today, so this guards the concrete future slip — a third backend added to that frozenset
+    without teaching the resolver about it."""
+    with pytest.raises(SupervisorError, match="unsupported terminal backend"):
+        resolve_backend("screen", tmux=StubBackend("tmux"), herdr=StubBackend("herdr"))
+
+
+def test_method_also_rejects_an_unrecognised_backend(tmp_path):
+    """The delegation must inherit the guard — one rule, both callers."""
+    sup = _sup(tmp_path, tmux=StubBackend("tmux"), herdr=StubBackend("herdr"))
+    with pytest.raises(SupervisorError, match="unsupported terminal backend"):
+        sup._resolve_backend("screen")  # noqa: SLF001
